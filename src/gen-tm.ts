@@ -470,6 +470,101 @@ function findContextualOperatorKeywords(grammar: CstGrammar): Set<string> {
 }
 
 /**
+ * Find "contextual accessibility modifiers": storage.modifier keywords that ALSO
+ * double as ordinary identifiers / property names and therefore must only be
+ * scoped `storage.modifier` when they actually stand in modifier position
+ * (`public x`, `private static y`, `protected [e]`), falling through to the
+ * surrounding identifier scoping otherwise (`var public = 1`, `x = private`,
+ * `class C { public }`, `[public]: 0`).
+ *
+ * A storage.modifier keyword is a *pure prefix modifier* — and thus safe to
+ * guard this way — when every token that can immediately follow it (its grammar
+ * FOLLOW first-set) can also begin a class member / binding name: an identifier,
+ * `[` (computed member / array binding), `*` (generator), `#` (private field),
+ * `{`/`...` (a binding pattern / rest the shared member-body rules permit), or
+ * another such modifier. Modifiers whose FOLLOW also contains a non-member token
+ * — `(` / `=>` (`async () =>`), `{` reached as a *block* / `+`/`-` (`static {…}`,
+ * `static +readonly [`), `<` (`async <T>()`), a type-operator operand
+ * (`readonly (A|B)[]`), or a declaration keyword (`declare function`) — are NOT
+ * pure prefixes: their flat unconditional match stays correct, so they are
+ * excluded. Language-agnostic: reads only the rule graph and the scope map.
+ */
+function findContextualAccessibilityModifiers(grammar: CstGrammar): Set<string> {
+  const reserved = collectReservedWords(grammar);
+  const modKws = new Set<string>();
+  for (const [lit, scopes] of grammar.scopeOverrides) {
+    if (!isKeywordLiteral(lit) || reserved.has(lit)) continue;
+    if (scopes.some(s => s.startsWith('storage.modifier'))) modKws.add(lit);
+  }
+  if (modKws.size === 0) return modKws;
+
+  const ruleByName = new Map(grammar.rules.map(r => [r.name, r]));
+
+  // Modifier literals an expression can END with (its last-set), peeking through
+  // opt/many/group/alt — used to attribute the NEXT sibling's first-set as FOLLOW.
+  const lastModifiers = (e: RuleExpr, out: Set<string>): void => {
+    switch (e.type) {
+      case 'literal': if (modKws.has(e.value)) out.add(e.value); return;
+      case 'seq': if (e.items.length) lastModifiers(e.items[e.items.length - 1], out); return;
+      case 'alt': for (const it of e.items) lastModifiers(it, out); return;
+      case 'quantifier': case 'group': lastModifiers(e.body, out); return;
+      case 'sep': lastModifiers(e.element, out); return;
+    }
+  };
+  // First-set literals of an expression, resolving rule refs (so `Block` → `{`).
+  const firstLiterals = (e: RuleExpr, out: Set<string>, seen: Set<string>): void => {
+    switch (e.type) {
+      case 'literal': out.add(e.value); return;
+      case 'ref': {
+        if (seen.has(e.name)) return;
+        seen.add(e.name);
+        const r = ruleByName.get(e.name);
+        if (r) firstLiterals(r.body, out, seen);
+        return;
+      }
+      case 'seq': if (e.items.length) firstLiterals(e.items[0], out, seen); return;
+      case 'alt': for (const it of e.items) firstLiterals(it, out, seen); return;
+      case 'quantifier': case 'group': firstLiterals(e.body, out, seen); return;
+      case 'sep': firstLiterals(e.element, out, seen); return;
+    }
+  };
+
+  const followers = new Map<string, Set<string>>();
+  for (const m of modKws) followers.set(m, new Set());
+  const walk = (e: RuleExpr): void => {
+    if (e.type === 'seq') {
+      for (let i = 0; i < e.items.length; i++) {
+        const enders = new Set<string>();
+        lastModifiers(e.items[i], enders);
+        const nxt = e.items[i + 1];
+        if (enders.size && nxt) for (const m of enders) firstLiterals(nxt, followers.get(m)!, new Set());
+      }
+      e.items.forEach(walk);
+    } else if (e.type === 'alt') e.items.forEach(walk);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+    else if (e.type === 'sep') walk(e.element);
+  };
+  for (const r of grammar.rules) walk(r.body);
+
+  // A follower literal begins a member/binding name iff its first char is an
+  // identifier-start char or one of `[ * # " ' { ...` / a digit. Spread `...`
+  // and a binding-pattern `{` are member/binding starts; `(` `<` `=>` `+` `-`
+  // `=` `:` `;` etc. are not (they reveal a non-modifier production).
+  const memberStart = (lit: string): boolean =>
+    lit.length > 0 && (/[a-zA-Z_$\p{L}\p{Nl}]/u.test(lit[0]) || '[*#"\'{.0123456789'.includes(lit[0]));
+
+  const result = new Set<string>();
+  for (const m of modKws) {
+    const f = followers.get(m)!;
+    // Require at least one known follower: a modifier that never appears before
+    // anything would never satisfy the member-start lookahead, so guarding it
+    // would silently stop it from ever being scoped. Keep such a word flat.
+    if (f.size > 0 && [...f].every(memberStart)) result.add(m);
+  }
+  return result;
+}
+
+/**
  * Build an Oniguruma character class matching the first character of any TYPE
  * or VALUE operand: identifier-start chars, string/template delimiters, the
  * grouping/opening brackets used in types & values (`(`, `{`, `[`), a digit,
@@ -1061,6 +1156,10 @@ interface RegexLiteralInfo {
   preceedingKeywords: string[];  // keywords that can precede a regex literal
   precedingChars: string[];  // single-char operators/punctuation that can precede regex
   commentSecondChars: string[];  // chars after '/' that start comments (e.g., ['/', '*'])
+  // Regex-escaped block-comment delimiter pairs that share the regex's `/` prefix
+  // (e.g. `['\\/\\*', '\\*\\/']` for `/* … */`). A comment is transparent to the
+  // regex-vs-division decision, so a regex literal may begin right after one.
+  blockComments: { begin: string; end: string }[];
 }
 
 /**
@@ -1189,17 +1288,29 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
   // Derive comment-second-chars: skip tokens starting with '/' indicate which
   // chars after '/' start a comment (e.g., '/' for //, '*' for /*).
   // The regex literal must exclude these to avoid matching comment starts.
+  // Also collect `/…`-prefixed BLOCK comment delimiter pairs (e.g. `/* … */`):
+  // a comment is transparent to the regex-vs-division decision, so a regex may
+  // begin right after one (`= /**/ /re/`). Sharing the `/` prefix is what makes
+  // them ambiguous with the regex's opening `/`, so only those are relevant.
   const commentSecondChars: string[] = [];
+  const blockComments: { begin: string; end: string }[] = [];
+  const seenBlock = new Set<string>();
   for (const tok of grammar.tokens) {
     if (!tok.flags.includes('skip')) continue;
     const prefix = extractRegexLiteralPrefix(tok.pattern);
     if (prefix.length >= 2 && prefix[0] === '/') {
       const ch = prefix[1];
       if (!commentSecondChars.includes(ch)) commentSecondChars.push(ch);
+      const delims = extractBlockDelimiters(tok.pattern);
+      if (delims) {
+        const [begin, end] = delims;
+        const sig = `${begin} ${end}`;
+        if (!seenBlock.has(sig)) { seenBlock.add(sig); blockComments.push({ begin, end }); }
+      }
     }
   }
 
-  return { flagsPattern, preceedingKeywords, precedingChars, commentSecondChars };
+  return { flagsPattern, preceedingKeywords, precedingChars, commentSecondChars, blockComments };
 }
 
 /**
@@ -1245,12 +1356,28 @@ function generateRegexLiteralPatterns(
     ? `(?![${info.commentSecondChars.map(escapeForCharClass).join('')}])`
     : '';
 
+  // A block comment is transparent to regex-vs-division: `= /**/ /re/` is a
+  // regex. The lookbehind anchors on the real context token BEFORE the comment,
+  // so consume an optional leading block comment here (scoped as a comment) and
+  // then the opening `/`. `#regex-literal` is tried before the comment token
+  // patterns, so this wins for `= /**/ /re/` while a value-context comment
+  // (`a /**/ / b`) — where the lookbehind fails — still falls through to the
+  // comment token + division operator.
+  const commentBody = info.blockComments
+    .map(c => `${c.begin}[\\s\\S]*?${c.end}`)
+    .join('|');
+  const commentPrefix = commentBody ? `(?:((?:${commentBody})\\s*))?` : '';
+  // The opening-slash capture group index shifts when a comment-prefix group is present.
+  const slashGroup = commentBody ? '2' : '1';
+  const beginCaptures: Record<string, { name: string }> = {
+    [slashGroup]: { name: `punctuation.definition.string.begin.regexp.${langName}` },
+  };
+  if (commentBody) beginCaptures['1'] = { name: `comment.block.${langName}` };
+
   result['regex-literal'] = {
     name: `string.regexp.${langName}`,
-    begin: `${fullLookbehind}\\s*(/)${commentExclude}`,
-    beginCaptures: {
-      '1': { name: `punctuation.definition.string.begin.regexp.${langName}` },
-    },
+    begin: `${fullLookbehind}\\s*${commentPrefix}(/)${commentExclude}`,
+    beginCaptures,
     end: `(/)(${info.flagsPattern})`,
     endCaptures: {
       '1': { name: `punctuation.definition.string.end.regexp.${langName}` },
@@ -1279,6 +1406,7 @@ interface DeclInfo {
   typeParamKeywords: string[];  // keywords in type param rule (e.g., ['extends'])
   endHint?: string;       // for bodyless decls: next literal after name/type-params
   midLiterals: string[];  // non-alphabetic literals between keyword and name (e.g., ['*'] for function*)
+  qualifiedName: boolean; // name is a dotted EntityName (e.g., `namespace A.B.C`): name followed by ('.' Ident)*
 }
 
 function isAngleBracketSepRule(body: RuleExpr): boolean {
@@ -1382,6 +1510,18 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
     const nameScope = inferIdentScope(keyword, grammar.scopeOverrides);
     if (!nameScope) return;
 
+    // Dotted EntityName: the name is immediately followed by a `('.' Ident)*`
+    // repetition (e.g. `namespace A.B.C { … }`, `module A.B { … }`). The whole
+    // dotted path names the declaration, so the trailing segments must read as
+    // the name scope — not fall through to value member-access. expandAlts() has
+    // already flattened the `*` quantifier to a single occurrence here, so the
+    // tail surfaces as the literal `.` + Ident token-ref pair directly.
+    const dot = items[nameIdx + 1];
+    const seg = items[nameIdx + 2];
+    const qualifiedName =
+      !!dot && dot.type === 'literal' && (dot as { value: string }).value === '.' &&
+      !!seg && seg.type === 'ref' && tokenNames.has((seg as { name: string }).name);
+
     const hasInlineBraces = items.some(i => i.type === 'literal' && (i as { value: string }).value === '{');
     const hasBlockRef = items.some(i => containsBlockRef(i));
     const hasBody = hasInlineBraces || hasBlockRef;
@@ -1434,6 +1574,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
       for (const lit of midLits) {
         if (!existing.midLiterals.includes(lit)) existing.midLiterals.push(lit);
       }
+      existing.qualifiedName = existing.qualifiedName || qualifiedName;
       return;
     }
 
@@ -1449,6 +1590,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
       typeParamKeywords,
       endHint,
       midLiterals: midLits,
+      qualifiedName,
     });
   }
 
@@ -1530,6 +1672,54 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // to `variable` (next char is `=` / `(` / `.`, none start an operand and
   // none is end-of-line).
   const ctxOpGuard = `(?=\\s+${operandStart}|\\s*$)`;
+
+  // Guard for a contextual LOOP-connector keyword (`of`): like ctxOpGuard, but the
+  // iterable can also sit DIRECTLY after the keyword (no space) when it starts with
+  // a non-identifier char — `for(x of[1])`, `for(x of(a))`, `for(x of/re/.exec())`
+  // (a word-boundary already prevents an identifier iterable from fusing: `ofx`).
+  // So the keyword fires on `\s+`+operand, EOL, or an optional-space non-identifier
+  // operand opener (brackets / string-template delimiters / `-` / a regex `/`). It
+  // still falls through to `variable` before `=`,`;`,`,`,`)`,`.`,`:` (`const of=1`,
+  // an `of` binding name / iterable). Derived from the grammar — no hardcoded chars.
+  const loopConnOpeners = new Set<string>();
+  {
+    const allLits = new Set<string>();
+    for (const rule of grammar.rules) for (const l of collectLiterals(rule.body)) allLits.add(l);
+    for (const open of ['(', '{', '[']) if (allLits.has(open)) loopConnOpeners.add(open);
+    for (const tok of grammar.tokens) {
+      if (tok.string || tok.template) {
+        const first = tok.pattern[0] === '\\' ? tok.pattern[1] : tok.pattern[0];
+        if (first && !/[a-zA-Z0-9]/.test(first)) loopConnOpeners.add(first);
+      }
+      if (tok.flags.includes('regex')) loopConnOpeners.add('/');
+    }
+    if ([...grammar.rules].some(r => r.flags.includes('type') && collectLiterals(r.body).includes('-'))) {
+      loopConnOpeners.add('-');
+    }
+  }
+  const loopConnClass = [...loopConnOpeners].map(escapeForCharClass).join('');
+  const ctxLoopGuard = loopConnClass
+    ? `(?=\\s+${operandStart}|\\s*$|\\s*[${loopConnClass}])`
+    : ctxOpGuard;
+
+  // Accessibility-style modifiers (`public`/`private`/`protected`/…) that also
+  // double as identifiers / property names. They are scoped `storage.modifier`
+  // ONLY in true modifier position — followed by whitespace then a member /
+  // binding start: a spread `...`, `[` (computed member / array binding), `*`
+  // (generator), `#` (private field), a string/number-literal member name, or
+  // an identifier-start char (the member name, or the next modifier). Anything
+  // else (`public = 1`, `public;`, `[public]`, `private[key]`, `x = private`)
+  // falls through to the surrounding identifier scoping. The flat unconditional
+  // match would otherwise mis-paint every such identifier use as a modifier.
+  const contextualModifiers = findContextualAccessibilityModifiers(grammar);
+  // Member/binding/block-start char class — the runtime mirror of the FOLLOW
+  // test in findContextualAccessibilityModifiers (memberStart): identifier-start
+  // (letters + the Ident token's non-\w extras like `$`) plus `[ * # { " '` and
+  // a digit, with the spread `...` handled separately. Must stay in sync with
+  // that predicate: a modifier is guarded iff EVERY follower begins here, so the
+  // lookahead has to accept every such follower (`static {` block, `public ...`
+  // rest, `public [e]` computed, `private #x`, the next modifier / member name).
+  const modifierGuard = `(?=\\s+(?:\\.\\.\\.|[[:alpha:]_${identExtraChars(identPattern)}\\[*#{"'0-9]))`;
 
   // ── 1. Detect angle bracket ambiguity ──
   const angleBracket = detectAngleBracketAmbiguity(grammar);
@@ -2030,6 +2220,48 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         endCaptures: { '0': { name: `punctuation.definition.typeparameters.end.${langName}` } },
         patterns: tpInner,
       };
+
+      // Type parameters of a GENERIC ARROW in expression position, e.g.
+      //   const f = <T, E extends string = string>(u: T) => u
+      //   const g = async <T>(\n    u: string\n  ) => {}
+      // The opening `<` here is NOT preceded by an identifier (that would be a
+      // generic CALL `f<T>()`, handled by #generic-call), so the declaration
+      // type-param list above — which fires only inside a named declaration's
+      // begin/end scope — never reaches it. We re-use the SAME inner patterns
+      // (`tpInner`), so `extends`/`in`/`out`/`const`, `=` defaults and nested
+      // generics are scoped identically; only the trigger differs.
+      //
+      // Trigger (mutually exclusive with #generic-call's ident lookbehind and
+      // with #comparison): the `<` sits at an arrow position — immediately
+      // after `async`, or at expression-start (NOT after a value operand, so a
+      // comparison `a < b > c` whose `<` always follows an operand is excluded)
+      // — and is followed by a balanced `<…>` whose `>` is immediately followed
+      // by a `(` that opens an arrow-shaped parameter list (`()`, `(…rest`,
+      // `(name:`, `(name,`, `(name)`, `(name?`, a destructuring `{`/`[`, or `(`
+      // at end of line for the multiline form). Requiring the trailing `(`
+      // keeps a cast WITHOUT a following paren (`<Foo>bar`) on #type-cast and
+      // never touches comparisons. When the `<…>` and `(` are all on the `<`
+      // line, the whole type-param list (which may then close on a later line)
+      // is scoped; the begin/end persists across lines until the matching `>`.
+      if (angleBracket) {
+        const balancedAngles = '(?<B>[^<>]*(?:<\\g<B>>[^<>]*)*)';
+        const arrowParamShape =
+          `\\(\\s*(?:\\)|\\.\\.\\.|${identPattern}\\s*[:,?)]|[{\\[]|$)`;
+        const arrowPos = `(?:(?<=\\basync\\s)|(?<![\\w$)\\]}]\\s*))`;
+        repository['arrow-type-parameters'] = {
+          name: `meta.type.parameters.${langName}`,
+          begin: `${arrowPos}(<)(?=${balancedAngles}>\\s*${arrowParamShape})`,
+          beginCaptures: {
+            '1': { name: `punctuation.definition.typeparameters.begin.${langName}` },
+          },
+          end: '(>)',
+          endCaptures: {
+            '1': { name: `punctuation.definition.typeparameters.end.${langName}` },
+          },
+          patterns: tpInner,
+        };
+        topPatterns.push({ include: '#arrow-type-parameters' });
+      }
     }
 
     // Per-declaration begin/end scopes
@@ -2087,6 +2319,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // e.g., function* → \\b(function)\\s*(\\*)?\\s*(identPattern)
       let beginRegex: string;
       const captures: Record<string, { name: string }> = {};
+      let nameCapIdx: number;
       if (decl.midLiterals.length > 0) {
         const midAlt = decl.midLiterals.map(escapeRegex).join('|');
         beginRegex = `\\b(${escapeRegex(decl.keyword)})\\s*(${midAlt})?\\s*(${identPattern})`;
@@ -2097,10 +2330,19 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           if (midScope) captures['2'] = { name: `${midScope}.${langName}` };
         }
         captures['3'] = { name: `${decl.nameScope}.${langName}` };
+        nameCapIdx = 3;
       } else {
         beginRegex = `\\b(${escapeRegex(decl.keyword)})\\s+(${identPattern})`;
         captures['1'] = { name: `${decl.keywordScope}.${langName}` };
         captures['2'] = { name: `${decl.nameScope}.${langName}` };
+        nameCapIdx = 2;
+      }
+      // Dotted EntityName tail (`namespace A.B.C`): the `.segment` repetition
+      // names the same declaration, so it shares the name scope. `identPattern`
+      // is wholly non-capturing, so this whole `(.x)*` run is one capture group.
+      if (decl.qualifiedName) {
+        beginRegex += `((?:\\s*\\.\\s*${identPattern})*)`;
+        captures[String(nameCapIdx + 1)] = { name: `${decl.nameScope}.${langName}` };
       }
 
       const declPattern: TmPattern = {
@@ -2116,6 +2358,42 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       }
       repository[key] = declPattern;
       topPatterns.push({ include: `#${key}` });
+
+      // Anonymous form of a function-like declaration: the keyword followed
+      // DIRECTLY by its parameter list with NO name (e.g. `function (x) {}`,
+      // `function* () {}` — a function EXPRESSION). The named begin above
+      // requires an identifier after the keyword, so without this the whole
+      // parameter list (and any parameter TYPE annotations inside it) would
+      // fall through to the flat value/property-access patterns and be
+      // mis-scoped. Only emitted for function-like declarations (named via
+      // entity.name.function) that have both a parameter list and a body —
+      // the universal JS/TS anonymous-function-expression shape. Classes are
+      // naturally excluded (their begin carries no params).
+      if (decl.hasParams && decl.hasBody && decl.nameScope.includes('entity.name.function')) {
+        const anonCaptures: Record<string, { name: string }> = {
+          '1': { name: `${decl.keywordScope}.${langName}` },
+        };
+        let anonBegin: string;
+        if (decl.midLiterals.length > 0) {
+          const midAlt = decl.midLiterals.map(escapeRegex).join('|');
+          anonBegin = `\\b(${escapeRegex(decl.keyword)})\\s*(${midAlt})?\\s*(?=\\()`;
+          if (decl.midLiterals.length === 1) {
+            const midScope = getScope(scopeOverrides, decl.midLiterals[0]);
+            if (midScope) anonCaptures['2'] = { name: `${midScope}.${langName}` };
+          }
+        } else {
+          anonBegin = `\\b(${escapeRegex(decl.keyword)})\\s*(?=\\()`;
+        }
+        const anonKey = `${decl.keyword}-anon-declaration`;
+        repository[anonKey] = {
+          name: `meta.${decl.keyword}.${langName}`,
+          begin: anonBegin,
+          beginCaptures: anonCaptures,
+          end: '(?<=\\})',
+          patterns: innerPatterns,
+        };
+        topPatterns.push({ include: `#${anonKey}` });
+      }
     }
   }
 
@@ -2718,16 +2996,34 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     for (const [scope, kws] of keywordGroups) {
       const key = `scope-${scope.replace(/\./g, '-')}`;
       const isOperatorExpr = scope.startsWith('keyword.operator.expression');
+      // A loop-connector keyword that the grammar proves is also a valid identifier
+      // (NOT in any not()-reserved set — e.g. `of`, the for-of connector) is a
+      // contextual keyword: it is the keyword ONLY in operator position (a value
+      // ahead, `x of xs`), an identifier everywhere else (`const of = 1`, an `of`
+      // binding name / iterable). Reserved loop words (`for`/`while`/`do`/`in`) stay
+      // in the unconditional flat match. Scoped to keyword.control.LOOP on purpose:
+      // other control keywords (`await`/`yield`/`return`) are real operators the
+      // official grammar always keywords, even with no operand on the same line.
+      // Same operand lookahead as the contextual-OPERATOR keywords; same reserved-
+      // word test (collectReservedWords).
+      const isContextualCtrl = scope.startsWith('keyword.control.loop');
       // Words always placed immediately before the string token (`from`) → string lookahead.
       // Contextual operator keywords (`as`/`keyof`/…) → operand lookahead.
       // Everything else → unconditional flat match.
       const beforeStringKws = kws.filter(k => alwaysBeforeString(k));
-      const ctxOpKws = isOperatorExpr ? kws.filter(k => contextualOps.has(k) && !alwaysBeforeString(k)) : [];
+      const ctxOpKws = (isOperatorExpr || isContextualCtrl)
+        ? kws.filter(k => (contextualOps.has(k) || (isContextualCtrl && !reservedWordsForCtx.has(k))) && !alwaysBeforeString(k))
+        : [];
       const ctxOpSet = new Set(ctxOpKws);
+      // Accessibility-style modifiers that double as identifiers (`public x` vs
+      // `var public = 1`): scoped only in modifier position, via a member-start
+      // lookahead. The rest of the group keeps the unconditional flat match.
+      const ctxModKws = kws.filter(k => contextualModifiers.has(k) && !alwaysBeforeString(k) && !ctxOpSet.has(k));
+      const ctxModSet = new Set(ctxModKws);
       // Drop keywords whose keyword role is owned by a dedicated declaration context
       // (e.g. `constructor` → #constructor-declaration in class bodies). They double
       // as identifiers everywhere else, so the flat match must not paint them.
-      const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k) && !contextDeclaredKws.has(k));
+      const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k) && !ctxModSet.has(k) && !contextDeclaredKws.has(k));
       if (globalKws.length > 0) {
         repository[key] = {
           match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b`,
@@ -2735,6 +3031,17 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         };
         topPatterns.push({ include: `#${key}` });
         if (isOperatorExpr) operatorExprIncludeKeys.push(key);
+      }
+      // Contextual accessibility modifiers: one guarded entry, placed at the same
+      // position as the flat group (before #ident) so a real modifier still wins,
+      // while a non-modifier use falls through to the surrounding identifier scope.
+      if (ctxModKws.length > 0) {
+        const mkey = `${key}-accessibility`;
+        repository[mkey] = {
+          match: `\\b(${ctxModKws.map(escapeRegex).join('|')})\\b${modifierGuard}`,
+          name: `${scope}.${langName}`,
+        };
+        topPatterns.push({ include: `#${mkey}` });
       }
       for (const kw of beforeStringKws) {
         const ckey = `${key}-${kw.replace(/[^a-z0-9]/gi, '')}`;
@@ -2744,13 +3051,16 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         };
         topPatterns.push({ include: `#${ckey}` });
       }
-      // One positional entry per contextual operator keyword: keyword only when
-      // followed by whitespace + an operand (a type/value start); otherwise the
-      // word falls through to identifier scoping (variable.other).
+      // One positional entry per contextual keyword: keyword only when an operand
+      // follows (a type/value start); otherwise the word falls through to identifier
+      // scoping (variable.other). Operator keywords (`as`/`keyof`/…) require the
+      // whitespace-separated operand of `ctxOpGuard`; a loop connector (`of`) also
+      // accepts a no-space non-identifier iterable opener via `ctxLoopGuard`.
+      const guard = isContextualCtrl ? ctxLoopGuard : ctxOpGuard;
       for (const kw of ctxOpKws) {
         const ckey = `${key}-${kw.replace(/[^a-z0-9]/gi, '')}`;
         repository[ckey] = {
-          match: `\\b(${escapeRegex(kw)})\\b${ctxOpGuard}`,
+          match: `\\b(${escapeRegex(kw)})\\b${guard}`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${ckey}` });
@@ -2977,6 +3287,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // Stable sort: tokens/patterns sharing an order number keep their insertion order.
   function scopeOrder(include: string): number {
     const key = include.slice(1); // remove '#'
+    // Generic-arrow type params (`<T>(…) =>`, `async <T>(…) =>`) must beat the
+    // generic-call layers, #type-cast and #comparison: its trigger is the most
+    // specific (arrow position + arrow-param confirm) and it fully scopes the
+    // type-parameter list (extends / defaults), which the others do not.
+    if (key === 'arrow-type-parameters') return -4;
     if (key === 'generic-call') return -3;
     if (key === 'generic-call-eol') return -2;
     if (key === 'generic-call-multiline') return -1;

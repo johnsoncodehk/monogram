@@ -49,6 +49,9 @@
       "include": "#function-declaration"
     },
     {
+      "include": "#function-anon-declaration"
+    },
+    {
       "include": "#class-declaration"
     },
     {
@@ -79,6 +82,9 @@
       "include": "#scope-keyword-control-loop"
     },
     {
+      "include": "#scope-keyword-control-loop-of"
+    },
+    {
       "include": "#scope-keyword-control-flow"
     },
     {
@@ -104,6 +110,9 @@
     },
     {
       "include": "#scope-storage-modifier"
+    },
+    {
+      "include": "#scope-storage-modifier-accessibility"
     },
     {
       "include": "#scope-keyword-other"
@@ -190,9 +199,12 @@
   "repository": {
     "regex-literal": {
       "name": "string.regexp.javascript",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%!~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\baccessor)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%!~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\baccessor)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:\\/\\*\\*(?!\\/)[\\s\\S]*?\\*\\/|\\/\\*[\\s\\S]*?\\*\\/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
+          "name": "comment.block.javascript"
+        },
+        "2": {
           "name": "punctuation.definition.string.begin.regexp.javascript"
         }
       },
@@ -488,6 +500,30 @@
       ],
       "end": "(?<=\\})"
     },
+    "function-anon-declaration": {
+      "name": "meta.function.javascript",
+      "begin": "\\b(function)\\s*(\\*)?\\s*(?=\\()",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.function.javascript"
+        },
+        "2": {
+          "name": "keyword.operator.arithmetic.javascript"
+        }
+      },
+      "end": "(?<=\\})",
+      "patterns": [
+        {
+          "include": "#declaration-params"
+        },
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
     "class-declaration": {
       "name": "meta.class.javascript",
       "begin": "\\b(class)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
@@ -723,7 +759,11 @@
       "name": "keyword.operator.expression.javascript"
     },
     "scope-keyword-control-loop": {
-      "match": "\\b(in|for|while|do|of)\\b",
+      "match": "\\b(in|for|while|do)\\b",
+      "name": "keyword.control.loop.javascript"
+    },
+    "scope-keyword-control-loop-of": {
+      "match": "\\b(of)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[]|\\s*$|\\s*[({\\[\"`/])",
       "name": "keyword.control.loop.javascript"
     },
     "scope-storage-type-class": {
@@ -735,7 +775,11 @@
       "name": "keyword.other.extends.javascript"
     },
     "scope-storage-modifier": {
-      "match": "\\b(async|static|accessor)\\b",
+      "match": "\\b(async)\\b",
+      "name": "storage.modifier.javascript"
+    },
+    "scope-storage-modifier-accessibility": {
+      "match": "\\b(static|accessor)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
       "name": "storage.modifier.javascript"
     },
     "scope-keyword-control-flow": {

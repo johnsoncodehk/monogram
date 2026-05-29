@@ -423,8 +423,8 @@ const Decl = rule($ => [
   ['enum', Ident, '{', sep(EnumMember, ','), '}'],
   ['declare', 'function', opt('*'), Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), opt(';')],
   ['declare', alt($, Stmt)],
-  ['namespace', Ident, '{', many(Stmt), '}'],
-  ['module', alt(String_, Ident), '{', many(Stmt), '}'],
+  ['namespace', Ident, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
+  ['module', alt([Ident, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
   ['export', alt($, Stmt)],
   ['export', 'default', alt(
     [opt('async'), 'function', opt('*'), opt(Ident), opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), alt(Block, opt(';'))],  // function
