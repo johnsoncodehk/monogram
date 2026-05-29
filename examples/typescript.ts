@@ -152,8 +152,6 @@ const Prop = rule($ => {
     [opt(alt('public', 'private', 'protected')), alt('get', 'set'), MemberName, '(', opt(sep(Param, ',')), ')', opt(':', Type), Block],
     // method: async?/generator?, any member name (incl `#x`, computed `[e]`), then ( … ) { … }
     [opt('async'), opt('*'), MemberName, opt(TypeParams), ...method],
-    // template-literal key: value | method
-    [Template, alt([':', Expr], method)],
     // value property — any member name incl computed `[e]: v` (MemberName covers `[Expr]`)
     [MemberName, ':', Expr],
     ['[', Expr, many(',', Expr), ']', ':', Expr],                      // computed comma list (lenient)
@@ -177,7 +175,10 @@ const NewTarget = rule($ => [
 ]);
 
 const Expr = rule($ => [
-  Ident,
+  // `enum` is reserved — it can't be a standalone expression identifier. Without this
+  // an invalid `enum E { a: 1 }` (where the enum Decl fails on `:`) would fall back to
+  // parsing `enum` as an identifier expr + `E` + `{…}` block, wrongly accepting it.
+  [not('enum'), Ident],
   Number_,
   String_,
   Template,
@@ -416,7 +417,7 @@ const ClassMember = rule($ => [
 ]);
 
 const EnumMember = rule($ => [
-  [alt(Ident, String_, ['[', Expr, ']']), opt('=', Expr)],
+  [MemberName, opt('=', Expr)],
 ]);
 
 const ImportSpecifier = rule($ => [

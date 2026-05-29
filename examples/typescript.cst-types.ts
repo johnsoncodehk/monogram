@@ -155,12 +155,9 @@ export interface PropNode extends CstPos {
   kind: 'node';
   rule: 'Prop';
   children: Array<
-    | $templateNode
     | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: '$punct' })
-    | (CstLeaf & { tokenType: '$templateHead' })
     | (CstLeaf & { tokenType: 'Ident' })
-    | (CstLeaf & { tokenType: 'Template' })
     | BlockNode
     | ExprNode
     | MemberNameNode
@@ -445,9 +442,8 @@ export interface EnumMemberNode extends CstPos {
   rule: 'EnumMember';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
-    | (CstLeaf & { tokenType: 'Ident' })
-    | (CstLeaf & { tokenType: 'String' })
     | ExprNode
+    | MemberNameNode
   >;
 }
 

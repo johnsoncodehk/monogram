@@ -98,7 +98,7 @@ Expr {
     Expr !l16 (Op_2b2b | Op_2d2d)
 }
 Prop {
-  (Spread Expr | (kw_public | kw_private | kw_protected)? (kw_get | kw_set) MemberName ParenL ((Param (Comma Param)*)?)? ParenR (Colon Type)? Block | kw_async? Op_2a? MemberName TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block | Template (Colon Expr | ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block) | MemberName Colon Expr | BracketL Expr (Comma Expr)* BracketR Colon Expr | Ident (Op_3d Expr | Question (Colon Expr)? | ))
+  (Spread Expr | (kw_public | kw_private | kw_protected)? (kw_get | kw_set) MemberName ParenL ((Param (Comma Param)*)?)? ParenR (Colon Type)? Block | kw_async? Op_2a? MemberName TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block | MemberName Colon Expr | BracketL Expr (Comma Expr)* BracketR Colon Expr | Ident (Op_3d Expr | Question (Colon Expr)? | ))
 }
 MemberName {
   (Ident | PrivateField | String | Number | HexNumber | OctalNumber | BinaryNumber | BigInt | BracketL Expr BracketR)
@@ -158,7 +158,7 @@ ClassMember {
   (DecoratorExpr | kw_constructor ParenL (Param (Comma Param)*)? ParenR Block Semi? | kw_static Block | (kw_public | kw_private | kw_protected | kw_static | kw_abstract | kw_readonly | kw_override | kw_accessor | kw_async)* (Op_2a MemberName Question? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block? Semi? | (kw_get | kw_set) MemberName ParenL ((Param (Comma Param)*)?)? ParenR (Colon Type)? Block? Semi? | BracketL Ident Colon Type BracketR Colon Type Semi? | MemberName (Question? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block? Semi? | Op_21? Question? (Colon Type)? (Op_3d Expr)? Semi?)) | MemberName Op_21? Question? (Colon Type)? (Op_3d Expr)? Semi? | MemberName Question? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block? Semi?)
 }
 EnumMember {
-  (Ident | String | BracketL Expr BracketR) (Op_3d Expr)?
+  MemberName (Op_3d Expr)?
 }
 ImportClause {
   (Ident (Comma (BraceL (ImportSpecifier (Comma ImportSpecifier)*)? BraceR | Op_2a kw_as Ident))? | BraceL (ImportSpecifier (Comma ImportSpecifier)*)? BraceR | Op_2a kw_as Ident)
