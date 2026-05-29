@@ -139,6 +139,16 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
     }
     case 'group':
       return renderExpr(expr.body, ctx);
+    case 'not':
+      // Zero-width negative lookahead: not expressible in a tree-sitter CFG, and
+      // it consumes nothing, so it drops to a no-op (the surrounding choice keeps
+      // the bare form, as the grammar did before the assertion was added).
+      return 'blank()';
+    case 'sameLine':
+      // Zero-width "no LineTerminator here" assertion — tree-sitter handles this
+      // class of restriction with an external scanner, not the CFG; as a CFG node
+      // it consumes nothing, so render a no-op.
+      return 'blank()';
     case 'sep': {
       // sep(elem, ',') = optional(seq(elem, repeat(seq(',', elem)), optional(',')))
       // Trailing delimiter is allowed (matches the parser's matchSep behavior).

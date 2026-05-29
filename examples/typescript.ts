@@ -1,8 +1,8 @@
 import {
   token, rule, defineGrammar,
   left, right, none,
-  op, prefix, postfix,
-  sep, opt, many, many1, alt, exclude,
+  op, prefix, postfix, sameLine,
+  sep, opt, many, many1, alt, exclude, not,
 } from '../src/api.ts';
 
 // ── Tokens ──
@@ -76,6 +76,7 @@ const TypeMember = rule($ => {
         [':', Type, ']', opt(':', Type)],                                             // index:  k: T
       )],
       [Expr, ']', opt('?'), propOrMethod],                                            // computed: expr
+      [']', opt(':', Type)],                                                          // empty index sig: []  /  []: T
     )],
     // readonly property (the readonly index signature is the bracketed branch above)
     ['readonly', Ident, opt('?'), ':', Type],
@@ -89,7 +90,7 @@ const Type = rule($ => {
   return [
     [Ident, opt('is', $)],   // T  |  type predicate `x is T`
     [$, '<', sep($, ','), '>'],
-    [$, '[', ']'],
+    [$, sameLine, '[', ']'],   // array type T[] — `[` must be on the same line (no ASI)
     [$, '|', $],
     [$, '&', $],
     ['|', $],   // leading pipe: type T = | A | B
@@ -117,7 +118,7 @@ const Type = rule($ => {
     ['unique', 'symbol'],
     ['import', '(', $, ')'],
     Template,
-    [$, '[', $, ']'],
+    [$, sameLine, '[', $, ']'],   // indexed access T[K] — `[` must be on the same line (no ASI)
     [$, '.', Ident],
   ];
 }, { type: true });
@@ -168,7 +169,10 @@ const Expr = rule($ => [
   [$, postfix],
   ['...', $],
   // instantiation / typed call / tagged template: f<T> | f<T>(…) | f<T>`…`
-  [$, '<', sep(Type, ','), '>', opt(alt(['(', sep($, ','), ')'], Template))],
+  // A bare instantiation `f<T>` (no call/tag) only when the next token can't
+  // start an expression — otherwise `<`/`>` were comparisons (`f < a, b > 7`):
+  // the same disambiguation TS makes via canFollowTypeArgumentsInExpression.
+  [$, '<', sep(Type, ','), '>', alt(['(', sep($, ','), ')'], Template, not(Expr))],
   [$, '(', sep($, ','), ')'],
   [$, '.', alt(Ident, PrivateField)],
   // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`

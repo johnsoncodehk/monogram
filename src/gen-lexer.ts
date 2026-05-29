@@ -8,6 +8,7 @@ export interface Token {
   type: string;   // token decl name (e.g. 'Ident'), or '' for punctuation literals
   text: string;
   offset: number;
+  newlineBefore?: boolean;   // a line terminator preceded this token (drives ASI / "no LineTerminator here" rules)
 }
 
 // Build a standalone lexer from the grammar's token definitions + lexer hints.
@@ -84,11 +85,20 @@ export function createLexer(grammar: CstGrammar) {
     // that to the regex-vs-division check (consulted only when prev is `)`).
     const parenHeadStack: boolean[] = [];
     let lastCloseWasParenHead = false;
+    // A line terminator was seen since the last emitted token (skipped whitespace
+    // or comments). Stamped onto the next real token as `newlineBefore`, then
+    // cleared — so the parser can honor "no LineTerminator here" restrictions
+    // (e.g. an array/indexed-access type's `[` must be on the same line).
+    let pendingNl = false;
+    function push(t: Token): void {
+      if (pendingNl) { t.newlineBefore = true; pendingNl = false; }
+      tokens.push(t);
+    }
 
     while (pos < source.length) {
       // Skip whitespace
       const wsMatch = source.slice(pos).match(/^\s+/);
-      if (wsMatch) { pos += wsMatch[0].length; continue; }
+      if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
 
       // Close an interpolation hole (interpClose at baseline depth) → resume the template span.
       if (templateStack.length > 0 && source.startsWith(tplInterpClose, pos)) {
@@ -99,10 +109,10 @@ export function createLexer(grammar: CstGrammar) {
           pos += tplInterpClose.length;
           const { endsWithInterp, end } = scanTemplateSpan(source, pos);
           if (endsWithInterp) {
-            tokens.push({ type: '$templateMiddle', text: source.slice(startPos, end), offset: startPos });
+            push({ type: '$templateMiddle', text: source.slice(startPos, end), offset: startPos });
             templateStack.push(0);
           } else {
-            tokens.push({ type: '$templateTail', text: source.slice(startPos, end), offset: startPos });
+            push({ type: '$templateTail', text: source.slice(startPos, end), offset: startPos });
           }
           pos = end;
           continue;
@@ -122,10 +132,10 @@ export function createLexer(grammar: CstGrammar) {
         pos += tplOpen.length;
         const { endsWithInterp, end } = scanTemplateSpan(source, pos);
         if (endsWithInterp) {
-          tokens.push({ type: '$templateHead', text: source.slice(startPos, end), offset: startPos });
+          push({ type: '$templateHead', text: source.slice(startPos, end), offset: startPos });
           templateStack.push(0);
         } else {
-          tokens.push({ type: templateTokenName!, text: source.slice(startPos, end), offset: startPos });
+          push({ type: templateTokenName!, text: source.slice(startPos, end), offset: startPos });
         }
         pos = end;
         continue;
@@ -152,7 +162,9 @@ export function createLexer(grammar: CstGrammar) {
         const m = remaining.match(tm.regex);
         if (m) {
           if (!tm.skip) {
-            tokens.push({ type: tm.name, text: m[0], offset: pos });
+            push({ type: tm.name, text: m[0], offset: pos });
+          } else if (m[0].includes('\n')) {
+            pendingNl = true;   // a skipped comment spanning a newline still terminates the previous line
           }
           pos += m[0].length;
           matched = true;
@@ -178,7 +190,7 @@ export function createLexer(grammar: CstGrammar) {
             } else if (lit === ')') {
               lastCloseWasParenHead = parenHeadStack.pop() ?? false;
             }
-            tokens.push({ type: '', text: lit, offset: pos });
+            push({ type: '', text: lit, offset: pos });
             pos += lit.length;
             matched = true;
             break;
@@ -191,7 +203,7 @@ export function createLexer(grammar: CstGrammar) {
         // missed (e.g. accented or non-Latin names). Tagged with that token's name.
         const identMatch = remaining.match(/^[\p{L}\p{Nl}_$][\p{L}\p{Nl}\p{Nd}\p{Mn}\p{Mc}\p{Pc}_$]*/u);
         if (identMatch) {
-          tokens.push({ type: identTokenName, text: identMatch[0], offset: pos });
+          push({ type: identTokenName, text: identMatch[0], offset: pos });
           pos += identMatch[0].length;
           matched = true;
         }

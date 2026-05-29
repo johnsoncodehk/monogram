@@ -228,6 +228,7 @@ export function createParser(grammar: CstGrammar) {
       case 'alt': return e.items.some(exprNullable);
       case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true;
       case 'group': return exprNullable(e.body);
+      case 'not': return true;                                   // zero-width assertion: consumes nothing
       case 'sep': return true;                                   // sep matches zero elements
       default: return true;                                      // op/prefix/postfix markers don't consume
     }
@@ -250,7 +251,7 @@ export function createParser(grammar: CstGrammar) {
         const acc = new Set<string>();
         for (const item of e.items) {
           if (item.type === 'prefix') return null;               // prefix op → any operator token: give up
-          if (item.type === 'op' || item.type === 'postfix') continue;  // non-consuming here
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine') continue;  // non-consuming here
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) acc.add(k);
@@ -268,6 +269,7 @@ export function createParser(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
+      case 'not': case 'sameLine': return new Set();             // zero-width: contributes no FIRST tokens
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -697,6 +699,21 @@ export function createParser(grammar: CstGrammar) {
           // rule it wraps: stage them for the next parseRule to pick up.
           if (expr.suppress && expr.suppress.length) suppressNext = new Set(expr.suppress);
           return matchExpr(expr.body);
+        case 'not': {
+          // Zero-width negative lookahead: succeed (no children) iff the body
+          // does NOT match here; never consume input either way.
+          const saved = pos;
+          const m = matchExpr(expr.body);
+          pos = saved;
+          return m === null ? [] : null;
+        }
+        case 'sameLine': {
+          // Zero-width "no LineTerminator here": succeed (no children) iff the
+          // next token isn't preceded by a newline. At EOF there's no token to
+          // continue onto, so the assertion fails (nothing same-line follows).
+          const tok = peek();
+          return tok && !tok.newlineBefore ? [] : null;
+        }
         case 'sep':
           return matchSep(expr.element, expr.delimiter);
         default:

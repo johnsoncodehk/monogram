@@ -52,6 +52,19 @@ export type RuleExpr =
   | { type: 'ref'; name: string }
   | { type: 'quantifier'; body: RuleExpr; kind: '*' | '+' | '?' }
   | { type: 'group'; body: RuleExpr; suppress?: string[] }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
+  // NOT match at the current position. Used to express disambiguations the
+  // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
+  // list in expression position is only a bare instantiation when it isn't
+  // followed by something that starts an expression). Non-consuming → invisible
+  // to highlighting / AST shape / other generators.
+  | { type: 'not'; body: RuleExpr }
+  // Zero-width "no LineTerminator here" assertion: matches (consuming nothing)
+  // iff the NEXT token is on the same line (no preceding newline). Encodes
+  // ECMAScript/TS restricted productions like an array/indexed-access type's `[`,
+  // which must not follow a line terminator. Non-consuming → invisible to other
+  // generators (they treat it as a no-op marker).
+  | { type: 'sameLine' }
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
   | { type: 'prefix' }

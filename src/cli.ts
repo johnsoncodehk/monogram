@@ -94,6 +94,8 @@ function formatExpr(expr: RuleExpr): string {
     case 'alt': return expr.items.map(formatExpr).join(' | ');
     case 'quantifier': return `${formatExpr(expr.body)}${expr.kind}`;
     case 'group': return `(${formatExpr(expr.body)})`;
+    case 'not': return `not(${formatExpr(expr.body)})`;
+    case 'sameLine': return 'sameLine';
     case 'sep': return `sep(${formatExpr(expr.element)}, '${expr.delimiter}')`;
   }
 }
