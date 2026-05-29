@@ -2260,13 +2260,15 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         keywordGroups.get(scope)!.push(ident);
       }
     }
-    // A contextual keyword that the grammar ALWAYS places immediately before the
-    // string token (e.g. `'from' String_` in every import/export rule) is a keyword
-    // ONLY in that position — everywhere else it is a plain identifier (`const from = 1`,
-    // `from()`). Matching it globally mis-scopes those identifier uses, so emit it with a
-    // lookahead for a following string literal and let other uses fall through to
-    // identifier scoping. Structural + agnostic: keyed on "always-before-the-string-token",
-    // never on the word itself.
+    // A contextual keyword that the grammar ALWAYS places immediately before the string
+    // token (e.g. `'from' String_` in every import/export rule) is a keyword ONLY in that
+    // position — everywhere else it is a plain identifier (`const from = 1`, `from()`).
+    // Matching it globally mis-scopes those identifier uses, so emit it with a lookahead
+    // for a following string literal and let other uses fall through to identifier scoping.
+    // Structural + agnostic: keyed on "always-before-the-string-token", never on the word.
+    // (Only `from` qualifies. Other contextual keywords — `as`, `keyof`, `is`, … — are
+    // scoped by several mechanisms at once here, NOT just this flat group, so they can't be
+    // de-keyworded from one place; see docs/upstream-issues.md.)
     const stringTokName = grammar.tokens.find(t => t.string)?.name;
     const alwaysBeforeString = (lit: string): boolean => {
       if (!stringTokName) return false;
