@@ -27,12 +27,18 @@ const Regex_       = token(/\/(?:[^\/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[gims
     divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],
     divisionAfterTexts: [')', ']', '++', '--', 'this', 'super', 'true', 'false', 'null', 'undefined'],
     regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new'],
+    // `kw ( … )` heads (control-flow): the closing `)` is a statement head, not a
+    // value, so `if (a) /re/` parses `/re/` as a regex rather than division.
+    regexAfterParenKeywords: ['if', 'while', 'for', 'with'],
+    // member accessors: after one, those keywords are property NAMES, so
+    // `obj.for(x) / y` stays a method call + division.
+    memberAccessTexts: ['.', '?.'],
   },
 });
 const Decorator    = token(/@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?/,                { scope: 'entity.name.function.decorator' });
 const PrivateField = token(/#[a-zA-Z_$][a-zA-Z0-9_$]*/,                     { scope: 'variable.other.property' });
 const Shebang      = token(/^#![^\n]*/,           { skip: true, scope: 'comment.line.shebang' });
-const JSDoc        = token(/\/\*\*[\s\S]*?\*\//,  { skip: true, scope: 'comment.block.documentation', embed: 'jsdoc' });
+const JSDoc        = token(/\/\*\*(?!\/)[\s\S]*?\*\//,  { skip: true, scope: 'comment.block.documentation', embed: 'jsdoc' });
 const TripleSlash  = token(/\/\/\/\s*<[^\n]*/,    { skip: true, scope: 'comment.line.triple-slash' });
 const LineComment  = token(/\/\/[^\n]*/,           { skip: true });
 const BlockComment = token(/\/\*[\s\S]*?\*\//,     { skip: true });

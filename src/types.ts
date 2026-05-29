@@ -25,6 +25,14 @@ export interface RegexContext {
   divisionAfterTypes: string[]; // token TYPE names after which `/` is division (value-producing tokens)
   divisionAfterTexts: string[]; // token TEXTs after which `/` is division (e.g. ')', 'this', 'true')
   regexAfterTexts: string[];    // keyword TEXTs that (re)enter expression position → `/` is a regex
+  // keyword TEXTs that, when they head a parenthesized group `kw ( … )`, make the
+  // matching `)` a control-head (not a value) so a following `/` is a regex, not
+  // division (e.g. `if (a) /re/.test(x)`). Overrides `)` being in divisionAfterTexts.
+  regexAfterParenKeywords?: string[];
+  // member-access TEXTs (e.g. '.', '?.'): after one of these, an identifier is a
+  // property NAME, not a keyword, so `obj.for(x) / y` is a call + division (the
+  // `regexAfterParenKeywords` control-head rule does not apply).
+  memberAccessTexts?: string[];
 }
 
 export interface PrecOperator {

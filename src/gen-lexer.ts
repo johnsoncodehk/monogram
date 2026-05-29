@@ -50,6 +50,12 @@ export function createLexer(grammar: CstGrammar) {
   const divisionPrevTypes = new Set([...(regexCtx?.divisionAfterTypes ?? []), '$templateTail']);
   const divisionPrevTexts = new Set(regexCtx?.divisionAfterTexts ?? []);
   const expressionStartKeywords = new Set(regexCtx?.regexAfterTexts ?? []);
+  // Keywords that head a `kw ( … )` control group; the matching `)` is a statement
+  // head (not a value), so a following `/` is a regex, not division.
+  const parenHeadKeywords = new Set(regexCtx?.regexAfterParenKeywords ?? []);
+  // Member-access texts (`.`/`?.`): a keyword right after one is a property name, so
+  // the control-head rule above does not apply (`obj.for(x) / y` is a call/division).
+  const memberAccessTexts = new Set(regexCtx?.memberAccessTexts ?? []);
 
   // Scan from inside a template span to its next boundary: an interpolation hole
   // (`interpOpen`) or the closing delimiter (`open`). Delimiters come from the
@@ -73,6 +79,11 @@ export function createLexer(grammar: CstGrammar) {
     const tokens: Token[] = [];
     let pos = 0;
     const templateStack: number[] = [];
+    // For each open `(`, whether it heads a control group (`if`/`while`/…) so the
+    // matching `)` is a statement head, not a value. `lastCloseWasParenHead` carries
+    // that to the regex-vs-division check (consulted only when prev is `)`).
+    const parenHeadStack: boolean[] = [];
+    let lastCloseWasParenHead = false;
 
     while (pos < source.length) {
       // Skip whitespace
@@ -131,7 +142,9 @@ export function createLexer(grammar: CstGrammar) {
           if (prev) {
             // Expression-start keywords (in, throw, return, etc.) flip back to regex context
             const isExprKeyword = prev.type === identTokenName && expressionStartKeywords.has(prev.text);
-            if (!isExprKeyword && (divisionPrevTypes.has(prev.type) || divisionPrevTexts.has(prev.text))) {
+            // A `)` that closed a control head (`if (…) /re/`) is not a value → regex.
+            const isParenHead = prev.text === ')' && lastCloseWasParenHead;
+            if (!isExprKeyword && !isParenHead && (divisionPrevTypes.has(prev.type) || divisionPrevTexts.has(prev.text))) {
               continue;
             }
           }
@@ -151,6 +164,20 @@ export function createLexer(grammar: CstGrammar) {
         // Try punctuation literals (longest first)
         for (const lit of punctLiterals) {
           if (remaining.startsWith(lit)) {
+            // Track control-head parens so a `/` after `if (…)`/`while (…)` is a regex.
+            // The keyword must be a real keyword head, not a member name: `obj.for(x) / y`
+            // is a method call + division, so skip when the keyword is itself preceded by
+            // a member accessor (e.g. `.`/`?.`, from divisionAfterTexts) → property access.
+            if (lit === '(') {
+              const prev = tokens[tokens.length - 1];
+              const beforePrev = tokens[tokens.length - 2];
+              const isMemberName = !!beforePrev && memberAccessTexts.has(beforePrev.text);
+              parenHeadStack.push(
+                !isMemberName && !!prev && prev.type === identTokenName && parenHeadKeywords.has(prev.text),
+              );
+            } else if (lit === ')') {
+              lastCloseWasParenHead = parenHeadStack.pop() ?? false;
+            }
             tokens.push({ type: '', text: lit, offset: pos });
             pos += lit.length;
             matched = true;

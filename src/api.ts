@@ -15,6 +15,8 @@ interface TokenOptions {
     divisionAfterTypes?: string[];
     divisionAfterTexts?: string[];
     regexAfterTexts?: string[];
+    regexAfterParenKeywords?: string[];
+    memberAccessTexts?: string[];
   };
   string?: boolean;
 }
@@ -284,6 +286,8 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
         divisionAfterTypes: tok.opts.regexContext.divisionAfterTypes ?? [],
         divisionAfterTexts: tok.opts.regexContext.divisionAfterTexts ?? [],
         regexAfterTexts: tok.opts.regexContext.regexAfterTexts ?? [],
+        regexAfterParenKeywords: tok.opts.regexContext.regexAfterParenKeywords ?? [],
+        memberAccessTexts: tok.opts.regexContext.memberAccessTexts ?? [],
       },
       string: tok.opts.string,
     };
