@@ -496,7 +496,7 @@ const Decl = rule($ => [
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
   [opt('async'), 'function', opt('*'), Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), alt(Block, opt(';'))],
   ['interface', Ident, opt(TypeParams), opt('extends', sep(Type, ',')), '{', many(InterfaceMember, opt(alt(';', ','))), '}'],
-  ['type', Ident, opt(TypeParams), '=', Type, opt(';')],
+  ['type', notReserved, Ident, opt(TypeParams), '=', Type, opt(';')],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
   // class decl: optional decorators + optional `abstract`. gen-tm expands the
   // opt()/many() to recover the `class Ident … { … }` shape for highlighting.
   [many(DecoratorExpr), opt('abstract'), 'class', Ident, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],

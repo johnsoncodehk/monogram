@@ -3,7 +3,6 @@ import { styleTags, tags as t } from "@lezer/highlight";
 // Contextual definition-name positions (give these their own node names):
 //   after "class" → name node should be styled t.typeName (entity.name.type)
 //   after "interface" → name node should be styled t.typeName (entity.name.type)
-//   after "type" → name node should be styled t.typeName (entity.name.type)
 //   after "enum" → name node should be styled t.typeName (entity.name.type)
 //   after "namespace" → name node should be styled t.typeName (entity.name.type)
 

@@ -1109,6 +1109,13 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
         nameIdx++;
         continue;
       }
+      // Zero-width guards (`not(...)` / `sameLine`) consume no token, so they can sit
+      // between the keyword and the name (e.g. `'type' not(reserved) Ident`) without
+      // changing the `keyword name` highlight pattern — skip past them.
+      if (item.type === 'not' || item.type === 'sameLine') {
+        nameIdx++;
+        continue;
+      }
       return; // unexpected item type — not a declaration pattern
     }
     if (nameIdx >= items.length) return;
