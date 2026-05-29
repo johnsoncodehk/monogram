@@ -65,17 +65,21 @@ const emit = (rel: string, content: string) => {
   console.log(`→ Generated ${full}`);
 };
 
-// tree-sitter: grammar.js + highlight queries + external scanner scaffold
+// tree-sitter: grammar.js + highlight queries + external scanner scaffold.
+// Namespaced under tree-sitter/<name>/ so multiple grammars coexist (a
+// tree-sitter package keeps grammar.js + queries/ + src/ together).
 const treeSitter = generateTreeSitter(grammar, langName);
-emit('tree-sitter/grammar.js', treeSitter.grammarJs);
-emit('tree-sitter/queries/highlights.scm', treeSitter.highlightsScm);
-emit('tree-sitter/src/scanner.c', treeSitter.scannerC);
+emit(`tree-sitter/${langName}/grammar.js`, treeSitter.grammarJs);
+emit(`tree-sitter/${langName}/queries/highlights.scm`, treeSitter.highlightsScm);
+emit(`tree-sitter/${langName}/src/scanner.c`, treeSitter.scannerC);
 
-// Lezer (CodeMirror 6): grammar + styleTags + external tokenizer
+// Lezer (CodeMirror 6): grammar + styleTags + external tokenizer.
+// Namespaced by <name> so multiple grammars coexist (the .grammar was already
+// namespaced; highlight.js/tokens.js now are too).
 const lezer = generateLezer(grammar);
 emit(`lezer/${langName}.grammar`, lezer.grammar);
-emit('lezer/highlight.js', lezer.styleTags);
-emit('lezer/tokens.js', lezer.externalTokenizer);
+emit(`lezer/${langName}.highlight.js`, lezer.styleTags);
+emit(`lezer/${langName}.tokens.js`, lezer.externalTokenizer);
 
 // Monaco Monarch tokenizer
 emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 2));

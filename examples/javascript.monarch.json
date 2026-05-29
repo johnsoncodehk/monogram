@@ -1,0 +1,925 @@
+{
+  "defaultToken": "invalid",
+  "tokenPostfix": ".javascript",
+  "ignoreCase": false,
+  "brackets": [
+    {
+      "open": "(",
+      "close": ")",
+      "token": "delimiter.parenthesis"
+    },
+    {
+      "open": "{",
+      "close": "}",
+      "token": "delimiter.bracket"
+    },
+    {
+      "open": "[",
+      "close": "]",
+      "token": "delimiter.square"
+    }
+  ],
+  "tokenizer": {
+    "comment_slashstarstar": [
+      [
+        "[^*]+",
+        "comment"
+      ],
+      [
+        "\\*\\/",
+        {
+          "token": "comment",
+          "next": "@pop"
+        }
+      ],
+      [
+        ".",
+        "comment"
+      ]
+    ],
+    "comment_slashstar": [
+      [
+        "[^*]+",
+        "comment"
+      ],
+      [
+        "\\*\\/",
+        {
+          "token": "comment",
+          "next": "@pop"
+        }
+      ],
+      [
+        ".",
+        "comment"
+      ]
+    ],
+    "string_dquote_body": [
+      [
+        "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+        "string.escape"
+      ],
+      [
+        "[^\"\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_dquote": [
+      {
+        "include": "@string_dquote_body"
+      },
+      [
+        "\"",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_dquoteN": [
+      {
+        "include": "@string_dquote_body"
+      },
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_squote_body": [
+      [
+        "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+        "string.escape"
+      ],
+      [
+        "[^'\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_squote": [
+      {
+        "include": "@string_squote_body"
+      },
+      [
+        "'",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_squoteN": [
+      {
+        "include": "@string_squote_body"
+      },
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "template_body": [
+      [
+        "\\\\(?:[nrtbfv0'\"\\\\`$]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+        "string.escape"
+      ],
+      [
+        "\\$\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@templateInterp"
+        }
+      ],
+      [
+        "[^`\\\\$]+",
+        "string"
+      ]
+    ],
+    "template": [
+      {
+        "include": "@template_body"
+      },
+      [
+        "`",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        ".",
+        "string"
+      ]
+    ],
+    "templateN": [
+      {
+        "include": "@template_body"
+      },
+      [
+        "`",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ],
+      [
+        ".",
+        "string"
+      ]
+    ],
+    "templateInterp": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "\\/\\*\\*(?!\\/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "\\/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@string_dquoteN"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@string_squoteN"
+        }
+      ],
+      [
+        "`",
+        {
+          "token": "string",
+          "next": "@templateN"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@bracketCounting"
+        }
+      ],
+      [
+        "\\}",
+        {
+          "token": "delimiter.bracket",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@interpExprBody"
+      }
+    ],
+    "bracketCounting": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "\\/\\*\\*(?!\\/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "\\/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@string_dquoteN"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@string_squoteN"
+        }
+      ],
+      [
+        "`",
+        {
+          "token": "string",
+          "next": "@templateN"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@bracketCounting"
+        }
+      ],
+      [
+        "\\}",
+        {
+          "token": "delimiter.bracket",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@interpExprBody"
+      }
+    ],
+    "exprBody": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "\\/\\*\\*(?!\\/)",
+        {
+          "token": "comment",
+          "next": "@comment_slashstarstar"
+        }
+      ],
+      [
+        "///.*$",
+        "comment"
+      ],
+      [
+        "//.*$",
+        "comment"
+      ],
+      [
+        "\\/\\*",
+        {
+          "token": "comment",
+          "next": "@comment_slashstar"
+        }
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "switchTo": "@string_dquote"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "switchTo": "@string_squote"
+        }
+      ],
+      [
+        "`",
+        {
+          "token": "string",
+          "switchTo": "@template"
+        }
+      ],
+      [
+        "0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*(?![0-9A-Za-z_$\\\\])",
+        {
+          "token": "number.hex",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "0[oO][0-7]+(_[0-7]+)*(?![0-9A-Za-z_$\\\\])",
+        {
+          "token": "number.octal",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\\\])",
+        {
+          "token": "number.binary",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\\\])",
+        {
+          "token": "number",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "[0-9]+(_[0-9]+)*(?:\\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
+        {
+          "token": "number.float",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?",
+        {
+          "token": "annotation",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "#[a-zA-Z_$][a-zA-Z0-9_$]*",
+        {
+          "token": "variable",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+        {
+          "cases": {
+            "true": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "false": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "null": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "undefined": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "this": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "super": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "instanceof": {
+              "token": "operator",
+              "switchTo": "@root"
+            },
+            "in": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "new": {
+              "token": "operator",
+              "switchTo": "@root"
+            },
+            "class": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "extends": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "async": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "yield": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "import": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "meta": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "function": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "get": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "set": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "let": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "const": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "var": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "if": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "else": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "for": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "await": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "while": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "do": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "switch": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "return": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "throw": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "break": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "continue": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "try": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "catch": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "finally": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "debugger": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "with": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "using": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "of": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "case": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "default": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "export": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "from": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "as": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "constructor": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "static": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "accessor": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "typeof": {
+              "token": "operator",
+              "switchTo": "@root"
+            },
+            "void": {
+              "token": "operator",
+              "switchTo": "@root"
+            },
+            "delete": {
+              "token": "operator",
+              "switchTo": "@root"
+            },
+            "Promise": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "Array": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "Map": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "Set": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "WeakMap": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "WeakSet": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "Error": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "RegExp": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "Date": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "Object": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "Function": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "Symbol": {
+              "token": "type.identifier",
+              "switchTo": "@value"
+            },
+            "console": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "window": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "document": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "process": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "module": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "require": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "exports": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "global": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "globalThis": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "@default": {
+              "token": "identifier",
+              "switchTo": "@value"
+            }
+          }
+        }
+      ],
+      [
+        "\\)",
+        {
+          "token": "delimiter.parenthesis",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "\\}",
+        {
+          "token": "delimiter.bracket",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "\\]",
+        {
+          "token": "delimiter.square",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "\\(",
+        {
+          "token": "delimiter.parenthesis",
+          "switchTo": "@root"
+        }
+      ],
+      [
+        "\\.\\.\\.|\\?\\.|,|\\.|\\?|:|;",
+        {
+          "token": "delimiter",
+          "switchTo": "@root"
+        }
+      ],
+      [
+        "\\[",
+        {
+          "token": "delimiter.square",
+          "switchTo": "@root"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "switchTo": "@root"
+        }
+      ],
+      [
+        ">>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|===|!==|>>>|=>|\\+=|-=|\\*=|%=|&=|\\|=|\\^=|\\?\\?|\\|\\||&&|==|!=|<=|>=|<<|>>|\\*\\*|\\+\\+|--|\\*|=|\\||\\^|&|<|>|\\+|-|%|!|~",
+        {
+          "token": "operator",
+          "switchTo": "@root"
+        }
+      ]
+    ],
+    "root": [
+      {
+        "include": "@exprBody"
+      },
+      [
+        "\\/(?:[^\\/\\\\\\[\\n]|\\\\.|\\[(?:[^\\]\\\\\\n]|\\\\.)*\\])+\\/[gimsuydv]*",
+        {
+          "token": "regexp",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "value": [
+      {
+        "include": "@exprBody"
+      },
+      [
+        "/=|/",
+        {
+          "token": "operator",
+          "switchTo": "@root"
+        }
+      ]
+    ],
+    "interpExprBody": [
+      [
+        "0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*(?![0-9A-Za-z_$\\\\])",
+        "number.hex"
+      ],
+      [
+        "0[oO][0-7]+(_[0-7]+)*(?![0-9A-Za-z_$\\\\])",
+        "number.octal"
+      ],
+      [
+        "0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\\\])",
+        "number.binary"
+      ],
+      [
+        "[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\\\])",
+        "number"
+      ],
+      [
+        "[0-9]+(_[0-9]+)*(?:\\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
+        "number.float"
+      ],
+      [
+        "@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?",
+        "annotation"
+      ],
+      [
+        "#[a-zA-Z_$][a-zA-Z0-9_$]*",
+        "variable"
+      ],
+      [
+        "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+        {
+          "cases": {
+            "true": "keyword",
+            "false": "keyword",
+            "null": "keyword",
+            "undefined": "keyword",
+            "this": "keyword",
+            "super": "keyword",
+            "instanceof": "operator",
+            "in": "keyword",
+            "new": "operator",
+            "class": "keyword",
+            "extends": "keyword",
+            "async": "keyword",
+            "yield": "keyword",
+            "import": "keyword",
+            "meta": "keyword",
+            "function": "keyword",
+            "get": "keyword",
+            "set": "keyword",
+            "let": "keyword",
+            "const": "keyword",
+            "var": "keyword",
+            "if": "keyword",
+            "else": "keyword",
+            "for": "keyword",
+            "await": "keyword",
+            "while": "keyword",
+            "do": "keyword",
+            "switch": "keyword",
+            "return": "keyword",
+            "throw": "keyword",
+            "break": "keyword",
+            "continue": "keyword",
+            "try": "keyword",
+            "catch": "keyword",
+            "finally": "keyword",
+            "debugger": "keyword",
+            "with": "keyword",
+            "using": "keyword",
+            "of": "keyword",
+            "case": "keyword",
+            "default": "keyword",
+            "export": "keyword",
+            "from": "keyword",
+            "as": "keyword",
+            "constructor": "keyword",
+            "static": "keyword",
+            "accessor": "keyword",
+            "typeof": "operator",
+            "void": "operator",
+            "delete": "operator",
+            "Promise": "type.identifier",
+            "Array": "type.identifier",
+            "Map": "type.identifier",
+            "Set": "type.identifier",
+            "WeakMap": "type.identifier",
+            "WeakSet": "type.identifier",
+            "Error": "type.identifier",
+            "RegExp": "type.identifier",
+            "Date": "type.identifier",
+            "Object": "type.identifier",
+            "Function": "type.identifier",
+            "Symbol": "type.identifier",
+            "console": "variable",
+            "window": "variable",
+            "document": "variable",
+            "process": "variable",
+            "module": "variable",
+            "require": "variable",
+            "exports": "variable",
+            "global": "variable",
+            "globalThis": "variable",
+            "@default": "identifier"
+          }
+        }
+      ],
+      [
+        "\\/(?:[^\\/\\\\\\[\\n]|\\\\.|\\[(?:[^\\]\\\\\\n]|\\\\.)*\\])+\\/[gimsuydv]*",
+        "regexp"
+      ],
+      [
+        "/=|/",
+        "operator"
+      ],
+      [
+        "\\(|\\)",
+        "delimiter.parenthesis"
+      ],
+      [
+        "\\.\\.\\.|\\?\\.|,|\\.|\\?|:|;",
+        "delimiter"
+      ],
+      [
+        "\\[|\\]",
+        "delimiter.square"
+      ],
+      [
+        "\\{|\\}",
+        "delimiter.bracket"
+      ],
+      [
+        ">>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|===|!==|>>>|=>|\\+=|-=|\\*=|%=|&=|\\|=|\\^=|\\?\\?|\\|\\||&&|==|!=|<=|>=|<<|>>|\\*\\*|\\+\\+|--|\\*|=|\\||\\^|&|<|>|\\+|-|%|!|~",
+        "operator"
+      ]
+    ]
+  }
+}

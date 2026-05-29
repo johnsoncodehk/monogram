@@ -1,0 +1,814 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "javascript",
+  "scopeName": "source.javascript",
+  "patterns": [
+    {
+      "include": "#shebang"
+    },
+    {
+      "include": "#jsdoc"
+    },
+    {
+      "include": "#tripleslash"
+    },
+    {
+      "include": "#linecomment"
+    },
+    {
+      "include": "#blockcomment"
+    },
+    {
+      "include": "#regex-literal"
+    },
+    {
+      "include": "#string-double"
+    },
+    {
+      "include": "#string-single"
+    },
+    {
+      "include": "#template"
+    },
+    {
+      "include": "#decorator"
+    },
+    {
+      "include": "#object-method-key"
+    },
+    {
+      "include": "#new-expression"
+    },
+    {
+      "include": "#arrow-function-params"
+    },
+    {
+      "include": "#ternary-expression"
+    },
+    {
+      "include": "#function-declaration"
+    },
+    {
+      "include": "#class-declaration"
+    },
+    {
+      "include": "#hexnumber"
+    },
+    {
+      "include": "#octalnumber"
+    },
+    {
+      "include": "#binarynumber"
+    },
+    {
+      "include": "#bigint"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#scope-keyword-operator-expression"
+    },
+    {
+      "include": "#scope-keyword-control-loop"
+    },
+    {
+      "include": "#scope-keyword-control-flow"
+    },
+    {
+      "include": "#scope-keyword-control-import"
+    },
+    {
+      "include": "#scope-keyword-control-import-from"
+    },
+    {
+      "include": "#scope-keyword-control-conditional"
+    },
+    {
+      "include": "#scope-keyword-control-trycatch"
+    },
+    {
+      "include": "#scope-keyword-control"
+    },
+    {
+      "include": "#scope-storage-type-class"
+    },
+    {
+      "include": "#scope-keyword-other-extends"
+    },
+    {
+      "include": "#scope-storage-modifier"
+    },
+    {
+      "include": "#scope-keyword-other"
+    },
+    {
+      "include": "#scope-storage-type-function"
+    },
+    {
+      "include": "#scope-storage-type-property"
+    },
+    {
+      "include": "#scope-storage-type"
+    },
+    {
+      "include": "#scope-storage-type-function-arrow"
+    },
+    {
+      "include": "#scope-constant-language-boolean"
+    },
+    {
+      "include": "#scope-constant-language-null"
+    },
+    {
+      "include": "#scope-variable-language"
+    },
+    {
+      "include": "#scope-support-class"
+    },
+    {
+      "include": "#scope-support-variable"
+    },
+    {
+      "include": "#method-call"
+    },
+    {
+      "include": "#known-property-access"
+    },
+    {
+      "include": "#property-access"
+    },
+    {
+      "include": "#operator-overrides"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#scope-punctuation-accessor"
+    },
+    {
+      "include": "#scope-punctuation-bracket-round"
+    },
+    {
+      "include": "#scope-punctuation-separator-comma"
+    },
+    {
+      "include": "#scope-punctuation-accessor-optional"
+    },
+    {
+      "include": "#scope-punctuation-bracket-square"
+    },
+    {
+      "include": "#scope-punctuation-bracket-curly"
+    },
+    {
+      "include": "#scope-punctuation-terminator-statement"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#arrow-parameter"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#ident"
+    },
+    {
+      "include": "#privatefield"
+    }
+  ],
+  "repository": {
+    "regex-literal": {
+      "name": "string.regexp.javascript",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%!~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\belse)|(?<=\\bdo)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcase)|(?<=\\bstatic)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=\\byield)|(?<=^))\\s*(/)(?![*/])",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.begin.regexp.javascript"
+        }
+      },
+      "end": "(/)([gimsuydv]*)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.regexp.javascript"
+        },
+        "2": {
+          "name": "keyword.other.regexp.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "begin": "\\[",
+          "end": "\\]",
+          "name": "constant.other.character-class.regexp.javascript"
+        },
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.regexp.javascript"
+        }
+      ]
+    },
+    "shebang": {
+      "name": "comment.line.shebang.javascript",
+      "match": "^#![^\\n]*"
+    },
+    "jsdoc": {
+      "name": "comment.block.documentation.javascript",
+      "begin": "\\/\\*\\*(?!\\/)",
+      "end": "\\*\\/",
+      "contentName": "meta.embedded.block.jsdoc"
+    },
+    "tripleslash": {
+      "name": "comment.line.triple-slash.javascript",
+      "match": "\\/\\/\\/\\s*<[^\\n]*"
+    },
+    "linecomment": {
+      "name": "comment.line.double-slash.javascript",
+      "match": "\\/\\/[^\\n]*"
+    },
+    "blockcomment": {
+      "name": "comment.block.javascript",
+      "begin": "\\/\\*",
+      "end": "\\*\\/"
+    },
+    "ident": {
+      "name": "variable.other.javascript",
+      "match": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*"
+    },
+    "hexnumber": {
+      "name": "constant.numeric.hex.javascript",
+      "match": "0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*(?![0-9A-Za-z_$\\\\])"
+    },
+    "octalnumber": {
+      "name": "constant.numeric.octal.javascript",
+      "match": "0[oO][0-7]+(_[0-7]+)*(?![0-9A-Za-z_$\\\\])"
+    },
+    "binarynumber": {
+      "name": "constant.numeric.binary.javascript",
+      "match": "0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\\\])"
+    },
+    "bigint": {
+      "name": "constant.numeric.bigint.javascript",
+      "match": "[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\\\])"
+    },
+    "number": {
+      "name": "constant.numeric.float.javascript",
+      "match": "[0-9]+(_[0-9]+)*(?:\\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+    },
+    "string-double": {
+      "name": "string.quoted.double.javascript",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.javascript"
+        }
+      },
+      "end": "\"|$",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.javascript"
+        }
+      ]
+    },
+    "string-single": {
+      "name": "string.quoted.single.javascript",
+      "begin": "'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.javascript"
+        }
+      },
+      "end": "'|$",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.javascript"
+        }
+      ]
+    },
+    "template": {
+      "name": "string.quoted.other.template.javascript",
+      "begin": "`",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.template.begin.javascript"
+        }
+      },
+      "end": "`",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.template.end.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[nrtbfv0'\"\\\\`$]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.javascript"
+        },
+        {
+          "begin": "\\$\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.template-expression.begin.javascript"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.template-expression.end.javascript"
+            }
+          },
+          "name": "meta.embedded.expression.javascript",
+          "patterns": [
+            {
+              "include": "$self"
+            }
+          ]
+        }
+      ]
+    },
+    "decorator": {
+      "name": "entity.name.function.decorator.javascript",
+      "match": "@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?"
+    },
+    "privatefield": {
+      "name": "variable.other.property.javascript",
+      "match": "#[a-zA-Z_$][a-zA-Z0-9_$]*"
+    },
+    "type-inner": {
+      "patterns": [
+        {
+          "include": "#simple-type"
+        }
+      ]
+    },
+    "code-block": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.javascript"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "declaration-body": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.javascript"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-body"
+        },
+        {
+          "include": "#constructor-declaration"
+        },
+        {
+          "include": "#method-signature"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "nested-parens": {
+      "begin": "\\(",
+      "end": "\\)",
+      "patterns": [
+        {
+          "include": "#nested-parens"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "declaration-params": {
+      "name": "meta.parameters.javascript",
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.begin.javascript"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.end.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#nested-parens"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "function-declaration": {
+      "name": "meta.function.javascript",
+      "begin": "\\b(function)\\s*(\\*)?\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.function.javascript"
+        },
+        "2": {
+          "name": "keyword.operator.arithmetic.javascript"
+        },
+        "3": {
+          "name": "entity.name.function.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-params"
+        },
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "end": "(?<=\\})"
+    },
+    "class-declaration": {
+      "name": "meta.class.javascript",
+      "begin": "\\b(class)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.class.javascript"
+        },
+        "2": {
+          "name": "entity.name.type.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-body"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "end": "(?<=\\})"
+    },
+    "constructor-declaration": {
+      "name": "meta.constructor.javascript",
+      "begin": "\\b(constructor)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.function.javascript"
+        }
+      },
+      "end": "(?<=\\})",
+      "patterns": [
+        {
+          "include": "#declaration-params"
+        },
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "method-signature": {
+      "name": "meta.method.javascript",
+      "begin": "\\b((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)\\s*(?=[<(])",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.function.javascript"
+        }
+      },
+      "end": "(?<=\\})|(?=[;\\}])",
+      "patterns": [
+        {
+          "include": "#declaration-params"
+        },
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "function-call": {
+      "match": "((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.javascript"
+        }
+      }
+    },
+    "object-method-key": {
+      "match": "((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*:\\s*(?:\\w+\\s+)?[\\(])",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.javascript"
+        }
+      }
+    },
+    "new-expression": {
+      "name": "meta.new-expr.javascript",
+      "begin": "\\b(new)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.javascript"
+        }
+      },
+      "end": "(?=[()}\\],=;])",
+      "patterns": [
+        {
+          "match": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+          "name": "entity.name.function.javascript"
+        }
+      ]
+    },
+    "method-call": {
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "punctuation.accessor.javascript"
+        },
+        "2": {
+          "name": "entity.name.function.javascript"
+        }
+      }
+    },
+    "known-property-access": {
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*(length|prototype|constructor)\\b",
+      "captures": {
+        "1": {
+          "name": "punctuation.accessor.javascript"
+        },
+        "2": {
+          "name": "support.variable.property.javascript"
+        }
+      }
+    },
+    "property-access": {
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.accessor.javascript"
+        },
+        "2": {
+          "name": "entity.other.property.javascript"
+        }
+      }
+    },
+    "arrow-parameter": {
+      "match": "\\b((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)\\s*(?==>)",
+      "captures": {
+        "1": {
+          "name": "variable.parameter.javascript"
+        }
+      }
+    },
+    "arrow-function-params": {
+      "name": "meta.parameters.arrow.javascript",
+      "begin": "(\\()(?=[^()]*\\)\\s*(?::\\s*[^=>{]*)?\\s*=>)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.parameters.begin.javascript"
+        }
+      },
+      "end": "(\\))",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.parameters.end.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,:)?=])",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.spread.javascript"
+            },
+            "2": {
+              "name": "variable.parameter.javascript"
+            }
+          }
+        },
+        {
+          "include": "#nested-parens"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "ternary-expression": {
+      "name": "meta.ternary-expression.javascript",
+      "begin": "(\\?)(?![:.?])",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.ternary.javascript"
+        }
+      },
+      "end": "(:)",
+      "endCaptures": {
+        "1": {
+          "name": "keyword.operator.ternary.javascript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#ternary-expression"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "scope-constant-language-boolean": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.javascript"
+    },
+    "scope-constant-language-null": {
+      "match": "\\b(null|undefined)\\b",
+      "name": "constant.language.null.javascript"
+    },
+    "scope-variable-language": {
+      "match": "\\b(this|super)\\b",
+      "name": "variable.language.javascript"
+    },
+    "scope-keyword-operator-expression": {
+      "match": "\\b(instanceof|new|typeof|void|delete)\\b",
+      "name": "keyword.operator.expression.javascript"
+    },
+    "scope-keyword-control-loop": {
+      "match": "\\b(in|for|while|do|of)\\b",
+      "name": "keyword.control.loop.javascript"
+    },
+    "scope-storage-type-class": {
+      "match": "\\b(class)\\b",
+      "name": "storage.type.class.javascript"
+    },
+    "scope-keyword-other-extends": {
+      "match": "\\b(extends)\\b",
+      "name": "keyword.other.extends.javascript"
+    },
+    "scope-storage-modifier": {
+      "match": "\\b(async|static|accessor)\\b",
+      "name": "storage.modifier.javascript"
+    },
+    "scope-keyword-control-flow": {
+      "match": "\\b(yield|await|return|break|continue)\\b",
+      "name": "keyword.control.flow.javascript"
+    },
+    "scope-keyword-control-import": {
+      "match": "\\b(import|export)\\b",
+      "name": "keyword.control.import.javascript"
+    },
+    "scope-keyword-control-import-from": {
+      "match": "\\bfrom\\b(?=\\s*[\"'])",
+      "name": "keyword.control.import.javascript"
+    },
+    "scope-keyword-other": {
+      "match": "\\b(meta|as)\\b",
+      "name": "keyword.other.javascript"
+    },
+    "scope-storage-type-function": {
+      "match": "\\b(function|constructor)\\b",
+      "name": "storage.type.function.javascript"
+    },
+    "scope-storage-type-property": {
+      "match": "\\b(get|set)\\b",
+      "name": "storage.type.property.javascript"
+    },
+    "scope-storage-type": {
+      "match": "\\b(let|const|var|using)\\b",
+      "name": "storage.type.javascript"
+    },
+    "scope-keyword-control-conditional": {
+      "match": "\\b(if|else|switch|case|default)\\b",
+      "name": "keyword.control.conditional.javascript"
+    },
+    "scope-keyword-control-trycatch": {
+      "match": "\\b(throw|try|catch|finally)\\b",
+      "name": "keyword.control.trycatch.javascript"
+    },
+    "scope-keyword-control": {
+      "match": "\\b(debugger|with)\\b",
+      "name": "keyword.control.javascript"
+    },
+    "scope-support-class": {
+      "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b",
+      "name": "support.class.javascript"
+    },
+    "scope-support-variable": {
+      "match": "\\b(console|window|document|process|module|require|exports|global|globalThis)\\b",
+      "name": "support.variable.javascript"
+    },
+    "scope-punctuation-accessor": {
+      "match": "\\.",
+      "name": "punctuation.accessor.javascript"
+    },
+    "scope-storage-type-function-arrow": {
+      "match": "=>",
+      "name": "storage.type.function.arrow.javascript"
+    },
+    "operator-overrides": {
+      "match": "(>>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|=)|(===|!==|==|!=)|(>>>|<<|>>)|(\\?\\?|\\|\\||&&)|(\\+\\+|--)|(\\*\\*|\\*|\\+|-|/|%)|(\\||\\^|&)|(!|~)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.assignment.javascript"
+        },
+        "2": {
+          "name": "keyword.operator.comparison.javascript"
+        },
+        "3": {
+          "name": "keyword.operator.bitwise.shift.javascript"
+        },
+        "4": {
+          "name": "keyword.operator.logical.javascript"
+        },
+        "5": {
+          "name": "keyword.operator.increment-decrement.javascript"
+        },
+        "6": {
+          "name": "keyword.operator.arithmetic.javascript"
+        },
+        "7": {
+          "name": "keyword.operator.bitwise.javascript"
+        },
+        "8": {
+          "name": "keyword.operator.logical.prefix.javascript"
+        }
+      }
+    },
+    "operators": {
+      "match": "\\.\\.\\.|<=|>=|<|>",
+      "name": "keyword.operator.javascript"
+    },
+    "scope-punctuation-bracket-round": {
+      "match": "\\(|\\)",
+      "name": "punctuation.bracket.round.javascript"
+    },
+    "scope-punctuation-separator-comma": {
+      "match": ",",
+      "name": "punctuation.separator.comma.javascript"
+    },
+    "scope-punctuation-accessor-optional": {
+      "match": "\\?\\.",
+      "name": "punctuation.accessor.optional.javascript"
+    },
+    "scope-punctuation-bracket-square": {
+      "match": "\\[|\\]",
+      "name": "punctuation.bracket.square.javascript"
+    },
+    "scope-punctuation-bracket-curly": {
+      "match": "\\{|\\}",
+      "name": "punctuation.bracket.curly.javascript"
+    },
+    "scope-punctuation-terminator-statement": {
+      "match": ";",
+      "name": "punctuation.terminator.statement.javascript"
+    },
+    "punctuation": {
+      "match": "\\?|:",
+      "name": "punctuation.javascript"
+    }
+  }
+}
