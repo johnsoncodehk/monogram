@@ -186,6 +186,33 @@ export function createParser(grammar: CstGrammar) {
     for (const led of leds) ledFirst.set(led, firstTokenOf({ type: 'seq', items: led.items } as RuleExpr));
   }
 
+  // ── Mixfix operand re-bound info ──
+  // A LED of the shape `<lit L1> $self <lit L2> …` (e.g. a ternary `? $ : $`) has
+  // an *inner* operand (`$self`, the bit between L1 and L2) that the greedy
+  // non-backtracking engine may over-consume — swallowing the L2 the operator
+  // itself needs (the classic conditional-`?:` vs arrow-return-type-`:` clash:
+  // `b ? (c) : d => e`, where `(c): d => e` parses as one arrow, leaving no `:`).
+  // When the normal match of such a LED fails, the LED loop retries the inner
+  // operand with a position cap so it stops before an L2 at the operator's own
+  // bracket-nesting depth, freeing that L2 for the operator. Language-agnostic:
+  // keyed purely on the structural shape, no knowledge of `?`/`:`/arrows.
+  function selfRefName(e: RuleExpr | undefined, ruleName: string): boolean {
+    return !!e && e.type === 'ref' && e.name === ruleName;
+  }
+  type MixfixInfo = { openLit: string; sepLit: string };
+  const ledMixfix = new Map<object, MixfixInfo>();
+  for (const [ruleName, { leds }] of prattClassified.entries()) {
+    for (const led of leds) {
+      const it = led.items;
+      if (it.length >= 4
+        && it[0]?.type === 'literal'
+        && selfRefName(it[1], ruleName)
+        && it[2]?.type === 'literal') {
+        ledMixfix.set(led, { openLit: it[0].value, sepLit: it[2].value });
+      }
+    }
+  }
+
   // ── FIRST sets ──
   // The set of tokens each rule can begin with (null = "anything" — left-recursive
   // / prefix-operator rules, which can't be characterized). Used to skip parsing a
@@ -281,8 +308,17 @@ export function createParser(grammar: CstGrammar) {
     // token splice (matchLiteral), which shifts later positions.
     const memo = new Map<string, Map<number, { node: CstNode | null; end: number }>>();
 
+    // Bounded-parse cap (token index). When >= 0, no token at index >= parseLimit
+    // may be consumed — i.e. a sub-parse is forced to stop before that token. Used
+    // for the mixfix-operand re-parse (see matchMixfixLed): re-running an over-greedy
+    // operand so it leaves a required separator for the enclosing mixfix operator.
+    // `null`-equivalent is -1 (no cap). A capped parse is position+cap dependent,
+    // so it bypasses the packrat memo (which is keyed by start position only).
+    let parseLimit = -1;
+
     function peek(): Token | null {
       if (pos > maxPos) maxPos = pos;
+      if (parseLimit >= 0 && pos >= parseLimit) return null;
       return tokens[pos] ?? null;
     }
 
@@ -402,11 +438,13 @@ export function createParser(grammar: CstGrammar) {
       suppressNext = null;
 
       // Memoizable (pratt / left-recursive): look up by start position. A
-      // suppressed parse is context-dependent (its result differs from the
-      // allow-`in` parse at the same spot), so it bypasses the memo entirely.
+      // suppressed parse (no-`in` context) or a capped parse (parseLimit active,
+      // from the mixfix re-bind retry) is context/position+cap dependent, so it
+      // bypasses the position-keyed packrat memo entirely.
+      const capped = parseLimit >= 0;
       const start = pos;
       let m = memo.get(name);
-      if (!mySup) {
+      if (!mySup && !capped) {
         const hit = m && m.get(start);
         if (hit !== undefined) { pos = hit.end; return hit.node; }
       }
@@ -422,7 +460,7 @@ export function createParser(grammar: CstGrammar) {
         currentPrattContext = prevContext;
         suppressCur = prevSup;
       }
-      if (!mySup) {
+      if (!mySup && !capped) {
         if (!m) { m = new Map(); memo.set(name, m); }
         m.set(start, { node: result, end: pos });
       }
@@ -565,7 +603,13 @@ export function createParser(grammar: CstGrammar) {
           if (!canStart(ledFirst.get(led), tok)) continue;   // first-token dispatch for LED continuations
 
           pos = ledSaved;
-          const children = matchSeq(led.items);
+          let children = matchSeq(led.items);
+          // Mixfix operand re-bound: if a `<L1> $ <L2> …` LED failed, the inner
+          // operand may have over-consumed the L2 it needs — retry it capped.
+          if (children === null && ledMixfix.has(led)) {
+            pos = ledSaved;
+            children = matchMixfixLed(led, rule.name, ledMixfix.get(led)!);
+          }
           if (children !== null) {
             lhs = {
               kind: 'node',
@@ -672,6 +716,63 @@ export function createParser(grammar: CstGrammar) {
         children.push(...result);
       }
       return children;
+    }
+
+    // Mixfix operand re-bound (see ledMixfix). The LED shape is
+    // `<openLit> $self <sepLit> …rest`; the normal match already failed. Re-parse
+    // the inner `$self` operand with a position cap so it stops before a `sepLit`
+    // token at the *same* bracket depth as `openLit`, freeing that token for the
+    // operator's own separator, then match `sepLit` and the rest uncapped.
+    // `pos` is at `openLit` on entry. Returns the LED children or null (restored).
+    function matchMixfixLed(led: { items: RuleExpr[] }, ruleName: string, info: { openLit: string; sepLit: string }): CstChild[] | null {
+      const saved = pos;
+      const openLeaf = matchLiteral(info.openLit);
+      if (!openLeaf) { pos = saved; return null; }
+      const afterOpen = pos;
+
+      // Greedy parse of the operand, to (a) confirm the separator is missing right
+      // after it (otherwise the failure is elsewhere → don't apply) and (b) bound
+      // the scan window.
+      const operand = parseRule(ruleName);
+      if (!operand) { pos = saved; return null; }
+      const greedyEnd = pos;
+      // If the separator DOES match here, the LED's failure was later in `rest`,
+      // not operand over-consumption — re-bounding wouldn't help.
+      if (matchLiteral(info.sepLit)) { pos = saved; return null; }
+
+      // Candidate separator positions: `sepLit` tokens at bracket depth 0 within
+      // (afterOpen, greedyEnd). A nested same-shape operator (e.g. a nested
+      // ternary) contributes its own depth-0 `sepLit`, so we try candidates in
+      // order and accept the first where the capped operand lands exactly on it.
+      let depth = 0;
+      const candidates: number[] = [];
+      for (let i = afterOpen; i < greedyEnd; i++) {
+        const t = tokens[i];
+        if (t.type !== '') continue;                 // only punctuation carries brackets/sep
+        if (t.text === '(' || t.text === '[' || t.text === '{') depth++;
+        else if (t.text === ')' || t.text === ']' || t.text === '}') depth--;
+        else if (depth === 0 && t.text === info.sepLit) candidates.push(i);
+      }
+
+      for (const sepIdx of candidates) {
+        // Re-parse the operand capped so it cannot consume the token at sepIdx;
+        // accept only if the operand consumes everything up to exactly there.
+        pos = afterOpen;
+        const prevLimit = parseLimit;
+        parseLimit = sepIdx;
+        const reOperand = parseRule(ruleName);
+        parseLimit = prevLimit;
+        if (!reOperand || pos !== sepIdx) continue;
+
+        const sepLeaf = matchLiteral(info.sepLit);
+        if (!sepLeaf) continue;
+        const rest = matchSeq(led.items.slice(3));
+        if (rest === null) continue;
+        return [openLeaf, reOperand, sepLeaf, ...rest];
+      }
+
+      pos = saved;
+      return null;
     }
 
     function matchQuantifier(body: RuleExpr, kind: '*' | '+' | '?'): CstChild[] | null {
