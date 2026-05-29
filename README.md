@@ -10,7 +10,7 @@ A TextMate grammar is a pile of regexes guessing at a language's structure. It's
 
 Monogram inverts the dependency:
 
-1. **Write the grammar, then prove it.** The grammar is executable. Monogram runs it as a recursive-descent + Pratt parser over the TypeScript conformance suite. Today it parses **94.8%** (3579 / 3776 files); the goal is **100% coverage of the official parser** — at which point the grammar is a *verified, complete model* of the language's syntax, not an approximation.
+1. **Write the grammar, then prove it.** The grammar is executable. Monogram runs it as a recursive-descent + Pratt parser over the TypeScript conformance suite. Today it parses **95.0%** (3589 / 3776 files); the goal is **100% coverage of the official parser** — at which point the grammar is a *verified, complete model* of the language's syntax, not an approximation.
 
 2. **Derive the highlighter from the proven grammar.** The TextMate grammar is generated from that same parser-validated grammar — never hand-written. Its correctness is underwritten by the parser conformance run, not by regex tuning.
 
@@ -34,10 +34,10 @@ And — from the same grammar — first-pass generators for the rest of the edit
 
 ## Results
 
-Validated on TypeScript (grammar: [`examples/typescript.ts`](examples/typescript.ts), 521 lines):
+Validated on TypeScript (grammar: [`examples/typescript.ts`](examples/typescript.ts), 537 lines):
 
 ```
-Parser conformance   94.8%   3579 / 3776 files from the TypeScript conformance suite   (goal: 100%)
+Parser conformance   95.0%   3589 / 3776 files from the TypeScript conformance suite   (goal: 100%)
 Highlighter          99.3%   589 / 593 tokens match VS Code's official grammar
 Generated grammar    42 KB   vs the official hand-written 226 KB
 Engine               language-agnostic — no TypeScript-specific code
@@ -184,4 +184,4 @@ Every highlighter target (TextMate, tree-sitter queries, Lezer styleTags, Monarc
 | ANTLR | yes | — | — |
 | Langium | yes | Monarch (separate) | — |
 | ungrammar | AST types | — | — |
-| **Monogram** | **CST (94.8% → 100%)** | **auto-derived (99.3%)** | **yes** |
+| **Monogram** | **CST (95.0% → 100%)** | **auto-derived (99.3%)** | **yes** |

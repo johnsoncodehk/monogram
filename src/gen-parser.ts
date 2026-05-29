@@ -334,6 +334,13 @@ export function createParser(grammar: CstGrammar) {
     }
 
     let currentPrattContext: string | null = null;
+    // LED-connector exclusion (no-`in`-style contexts). `suppressNext` is set by a
+    // `group` node carrying `suppress`, then consumed by the NEXT pratt/left-rec
+    // rule it wraps; `suppressCur` is that rule's active exclusion. Recursive
+    // parsePratt (operator RHS) inherit it; a nested parseRule (bracketed group,
+    // operand of a non-op LED) resets it — matching the spec's [~In] propagation.
+    let suppressNext: Set<string> | null = null;
+    let suppressCur: Set<string> | null = null;
 
     function parseTemplateExpr(): CstChild | null {
       const tok = peek();
@@ -389,22 +396,36 @@ export function createParser(grammar: CstGrammar) {
       // Non-recursive rules don't reset context and aren't memoized.
       if (!isPratt && !isLeftRec) return parseNonRec(rule);
 
-      // Memoizable (pratt / left-recursive): look up by start position.
+      // Consume any pending LED exclusion: it applies to THIS rule only, so clear
+      // the pending slot first (nested parseRule calls reset to allow-in).
+      const mySup = suppressNext;
+      suppressNext = null;
+
+      // Memoizable (pratt / left-recursive): look up by start position. A
+      // suppressed parse is context-dependent (its result differs from the
+      // allow-`in` parse at the same spot), so it bypasses the memo entirely.
       const start = pos;
       let m = memo.get(name);
-      const hit = m && m.get(start);
-      if (hit !== undefined) { pos = hit.end; return hit.node; }
+      if (!mySup) {
+        const hit = m && m.get(start);
+        if (hit !== undefined) { pos = hit.end; return hit.node; }
+      }
 
       const prevContext = currentPrattContext;
       currentPrattContext = name;
+      const prevSup = suppressCur;
+      suppressCur = mySup;
       let result: CstNode | null;
       try {
         result = isPratt ? parsePratt(rule, 0) : parseLeftRec(rule);
       } finally {
         currentPrattContext = prevContext;
+        suppressCur = prevSup;
       }
-      if (!m) { m = new Map(); memo.set(name, m); }
-      m.set(start, { node: result, end: pos });
+      if (!mySup) {
+        if (!m) { m = new Map(); memo.set(name, m); }
+        m.set(start, { node: result, end: pos });
+      }
       return result;
     }
 
@@ -538,6 +559,9 @@ export function createParser(grammar: CstGrammar) {
         for (const led of leds) {
           if (led.items[0]?.type === 'op' || led.items[0]?.type === 'postfix') continue;
           if (maxBp <= minBp) continue;
+          // Skip a LED whose connector is excluded in this context (e.g. `in` under
+          // a no-`in` for-head) — it rebinds to the enclosing rule instead.
+          if (suppressCur && led.items[0]?.type === 'literal' && suppressCur.has(led.items[0].value)) continue;
           if (!canStart(ledFirst.get(led), tok)) continue;   // first-token dispatch for LED continuations
 
           pos = ledSaved;
@@ -625,6 +649,9 @@ export function createParser(grammar: CstGrammar) {
         case 'quantifier':
           return matchQuantifier(expr.body, expr.kind);
         case 'group':
+          // A `suppress`-carrying group disables the listed LED connectors for the
+          // rule it wraps: stage them for the next parseRule to pick up.
+          if (expr.suppress && expr.suppress.length) suppressNext = new Set(expr.suppress);
           return matchExpr(expr.body);
         case 'sep':
           return matchSep(expr.element, expr.delimiter);

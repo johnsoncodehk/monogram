@@ -43,7 +43,7 @@ export type RuleExpr =
   | { type: 'literal'; value: string }
   | { type: 'ref'; name: string }
   | { type: 'quantifier'; body: RuleExpr; kind: '*' | '+' | '?' }
-  | { type: 'group'; body: RuleExpr }
+  | { type: 'group'; body: RuleExpr; suppress?: string[] }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
   | { type: 'prefix' }

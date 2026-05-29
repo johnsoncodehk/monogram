@@ -119,8 +119,19 @@ class AltNode {
   readonly items: Alternative[];
   constructor(items: Alternative[]) { this.items = items; }
 }
+class ExcludeNode {
+  // Parse the wrapped rule, but with the given infix/LED connectors disabled at
+  // the top level (they rebind to the enclosing context). Models grammars with a
+  // "no-`in`" production: a for-head's `var x = E` parses E so a following `in`
+  // is the for-in keyword, not the `in` operator. The excluded tokens are grammar
+  // DATA, so the engine stays language-agnostic.
+  readonly __kind = 'exclude' as const;
+  readonly connectors: string[];
+  readonly items: Element[];
+  constructor(connectors: string[], items: Element[]) { this.connectors = connectors; this.items = items; }
+}
 
-type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode;
+type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode;
 
 export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
@@ -140,6 +151,13 @@ export function many1(...items: Element[]): Many1Node {
 
 export function alt(...items: Alternative[]): AltNode {
   return new AltNode(items);
+}
+
+// Parse `items` with the given LED connector(s) disabled at the top level (a
+// no-`in`-style context). `exclude('in', Expr)` parses an Expr that stops before
+// a top-level `in`, leaving it for the enclosing rule.
+export function exclude(connectors: string | string[], ...items: Element[]): ExcludeNode {
+  return new ExcludeNode(typeof connectors === 'string' ? [connectors] : connectors, items);
 }
 
 // ── Precedence ──
@@ -212,6 +230,14 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
       ? toRuleExpr(el.items[0], names)
       : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
     return { type: 'quantifier', body, kind: '+' };
+  }
+  if (el instanceof ExcludeNode) {
+    // Reuse the transparent `group` node (every walker recurses into `body`);
+    // `suppress` is read only by the parser's expression engine.
+    const body = el.items.length === 1
+      ? toRuleExpr(el.items[0], names)
+      : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body, suppress: el.connectors };
   }
   if (el instanceof AltNode) {
     // A branch may be a single element or a sequence (array → seq).

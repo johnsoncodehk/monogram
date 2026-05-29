@@ -24,7 +24,7 @@
 
 @top Program { Program }
 Type {
-  (Ident (kw_is Type)? | Type AngleL (Type (Comma Type)*)? AngleR | Type BracketL BracketR | Type Op_7c Type | Type Op_26 Type | Op_7c Type | Op_26 Type | kw_keyof Type | kw_typeof TypeofRef | kw_readonly Type | ParenL Type ParenR | TypeParams? ParenL (Param (Comma Param)*)? ParenR Arrow Type | kw_abstract? kw_new TypeParams? ParenL (Param (Comma Param)*)? ParenR Arrow Type | BracketL (Spread? (Ident Question? Colon)? Type Question? Comma?)* BracketR | BraceL (TypeMember (Semi | Comma)?)* BraceR | kw_asserts Ident (kw_is Type)? | Type kw_extends Type Question Type Colon Type | kw_infer Ident (kw_extends Type (Question Type Colon Type)?)? | String | Number | HexNumber | OctalNumber | BinaryNumber | BigInt | Op_2d (Number | BigInt) | kw_true | kw_false | kw_null | kw_undefined | kw_void | kw_this | kw_unique kw_symbol | kw_import ParenL Type ParenR | Template | Type BracketL Type BracketR | Type Dot Ident)
+  (Ident (kw_is Type)? | Type AngleL (Type (Comma Type)*)? AngleR | Type BracketL BracketR | Type Op_7c Type | Type Op_26 Type | Op_7c Type | Op_26 Type | kw_keyof Type | kw_typeof TypeofRef | kw_readonly Type | ParenL Type ParenR | TypeParams? ParenL (Param (Comma Param)*)? ParenR Arrow Type | kw_abstract? kw_new TypeParams? ParenL (Param (Comma Param)*)? ParenR Arrow Type | BracketL (Spread? (Ident Question? Colon)? Spread? Type Question? Comma?)* BracketR | BraceL (TypeMember (Semi | Comma)?)* BraceR | kw_asserts Ident (kw_is Type)? | Type kw_extends Type Question Type Colon Type | kw_infer Ident (kw_extends Type (Question Type Colon Type)?)? | String | Number | HexNumber | OctalNumber | BinaryNumber | BigInt | Op_2d (Number | BigInt) | kw_true | kw_false | kw_null | kw_undefined | kw_void | kw_this | kw_unique kw_symbol | kw_import ParenL Type ParenR | Template | Type BracketL Type BracketR | Type Dot Ident)
 }
 TypeMember {
   (kw_new? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Op_2b | Op_2d)? kw_readonly? BracketL (Ident (kw_in Type (kw_as Type)? BracketR (Op_2b | Op_2d)? Question? Colon Type | Colon Type BracketR (Colon Type)?) | Expr BracketR Question? (TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Colon Type)?)) | kw_readonly Ident Question? Colon Type | (Ident | Number | String | PrivateField) Question? (TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Colon Type)?))
@@ -129,11 +129,14 @@ BindingPattern {
 Binding {
   (Ident Op_21? | BindingPattern) (Colon Type)? (Op_3d Expr)?
 }
+ForBinding {
+  (Ident Op_21? | BindingPattern) (Colon Type)? (Op_3d (Expr))?
+}
 Param {
   (kw_this Colon Type | DecoratorExpr? (kw_public | kw_private | kw_protected | kw_readonly)+ (Ident Question? (Colon Type)? (Op_3d Expr)? | BindingPattern Question? (Colon Type)? (Op_3d Expr)? | Spread (Ident | BindingPattern) Question? (Colon Type)?) | DecoratorExpr? (Ident Question? (Colon Type)? (Op_3d Expr)? | BindingPattern Question? (Colon Type)? (Op_3d Expr)? | Spread (Ident | BindingPattern) Question? (Colon Type)?))
 }
 ForHead {
-  ((kw_let | kw_const | kw_var | kw_using | kw_await kw_using) (Binding (Comma Binding)*)? (Semi (Expr (Comma Expr)*)? Semi (Expr (Comma Expr)*)? | (kw_in | kw_of) Expr) | (Expr (Comma Expr)*)? Semi (Expr (Comma Expr)*)? Semi (Expr (Comma Expr)*)? | Expr (kw_in | kw_of) Expr)
+  ((kw_let | kw_const | kw_var | kw_using | kw_await kw_using) (ForBinding (Comma ForBinding)*)? (Semi (Expr (Comma Expr)*)? Semi (Expr (Comma Expr)*)? | (kw_in | kw_of) Expr) | (Expr (Comma Expr)*)? Semi (Expr (Comma Expr)*)? Semi (Expr (Comma Expr)*)? | Expr (kw_in | kw_of) Expr)
 }
 SwitchCase {
   (kw_case Expr (Comma Expr)* Colon | kw_default Colon | Stmt)
@@ -142,13 +145,13 @@ TypeParams {
   AngleL (TypeParam (Comma TypeParam)*)? AngleR
 }
 TypeParam {
-  (Ident (kw_extends Type)? (Op_3d Type)? | kw_const Ident (kw_extends Type)? (Op_3d Type)? | kw_in Ident (kw_extends Type)? (Op_3d Type)? | kw_out Ident (kw_extends Type)? (Op_3d Type)? | kw_in kw_out Ident (kw_extends Type)? (Op_3d Type)?)
+  ((kw_const | kw_in | kw_out | kw_public | kw_private | kw_protected | kw_readonly)+ Ident (kw_extends Type)? (Op_3d Type)? | Ident (kw_extends Type)? (Op_3d Type)?)
 }
 Decl {
   (kw_async? kw_function Op_2a? Ident TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? (Block | Semi?) | kw_interface Ident TypeParams? (kw_extends (Type (Comma Type)*)?)? BraceL (InterfaceMember (Semi | Comma)?)* BraceR | kw_type Ident TypeParams? Op_3d Type Semi? | DecoratorExpr* kw_abstract? kw_class Ident TypeParams? (kw_extends ClassHeritage)? (kw_implements (Type (Comma Type)*)?)? BraceL ClassMember* BraceR | kw_enum Ident BraceL (EnumMember (Comma EnumMember)*)? BraceR | kw_declare kw_function Op_2a? Ident TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Semi? | kw_declare (Decl | Stmt) | kw_namespace Ident BraceL Stmt* BraceR | kw_module (String | Ident) BraceL Stmt* BraceR | kw_export (Decl | Stmt) | kw_export kw_default (kw_async? kw_function Op_2a? Ident? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? (Block | Semi?) | kw_abstract kw_class Ident TypeParams? (kw_extends ClassHeritage)? (kw_implements (Type (Comma Type)*)?)? BraceL ClassMember* BraceR | kw_abstract kw_class TypeParams? (kw_extends ClassHeritage)? (kw_implements (Type (Comma Type)*)?)? BraceL ClassMember* BraceR | Expr Semi?) | kw_export Op_2a (kw_from String Semi? | kw_as Ident kw_from String Semi?) | kw_export BraceL (ImportSpecifier (Comma ImportSpecifier)*)? BraceR (kw_from String)? Semi? | kw_export Op_3d Expr Semi? | kw_export kw_type BraceL (ImportSpecifier (Comma ImportSpecifier)*)? BraceR (kw_from String)? Semi? | kw_const kw_enum Ident BraceL (EnumMember (Comma EnumMember)*)? BraceR | kw_import (ImportClause kw_from String Semi? | kw_type ImportClause kw_from String Semi? | Ident Op_3d Expr Semi? | String Semi?) | DecoratorExpr* kw_export (Decl | Stmt))
 }
 InterfaceMember {
-  (kw_new? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (kw_get | kw_set) MemberName ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | kw_static? (Op_2b | Op_2d)? kw_readonly? BracketL Ident (kw_in Type (kw_as Type)? BracketR (Op_2b | Op_2d)? Question? Colon Type | Colon Type BracketR (Colon Type)?) | kw_readonly MemberName Question? Colon Type | MemberName Question? (TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Colon Type)?))
+  (kw_new? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (kw_get | kw_set) MemberName ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | kw_static? (Op_2b | Op_2d)? kw_readonly? BracketL Ident kw_in Type (kw_as Type)? BracketR (Op_2b | Op_2d)? Question? Colon Type | kw_readonly MemberName Question? Colon Type | MemberName Question? (TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Colon Type)?) | kw_static? kw_readonly? BracketL (Param (Comma Param)*)? BracketR (Colon Type)?)
 }
 ClassMember {
   (DecoratorExpr | kw_constructor ParenL (Param (Comma Param)*)? ParenR Block Semi? | kw_static Block | (kw_public | kw_private | kw_protected | kw_static | kw_abstract | kw_readonly | kw_override | kw_accessor | kw_async)* (Op_2a MemberName Question? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block? Semi? | (kw_get | kw_set) MemberName ParenL ((Param (Comma Param)*)?)? ParenR (Colon Type)? Block? Semi? | BracketL Ident Colon Type BracketR Colon Type Semi? | MemberName (Question? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block? Semi? | Op_21? Question? (Colon Type)? (Op_3d Expr)? Semi?)) | MemberName Op_21? Question? (Colon Type)? (Op_3d Expr)? Semi? | MemberName Question? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block? Semi?)

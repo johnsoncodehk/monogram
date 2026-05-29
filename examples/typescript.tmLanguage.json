@@ -800,16 +800,32 @@
           "include": "#declaration-type-params"
         },
         {
-          "match": "\\bextends\\b",
-          "name": "keyword.other.extends.typescript"
-        },
-        {
           "match": "\\bconst\\b",
           "name": "storage.type.typescript"
         },
         {
           "match": "\\bin\\b",
           "name": "keyword.control.loop.typescript"
+        },
+        {
+          "match": "\\bpublic\\b",
+          "name": "storage.modifier.typescript"
+        },
+        {
+          "match": "\\bprivate\\b",
+          "name": "storage.modifier.typescript"
+        },
+        {
+          "match": "\\bprotected\\b",
+          "name": "storage.modifier.typescript"
+        },
+        {
+          "match": "\\breadonly\\b",
+          "name": "storage.modifier.typescript"
+        },
+        {
+          "match": "\\bextends\\b",
+          "name": "keyword.other.extends.typescript"
         },
         {
           "include": "#type-inner"

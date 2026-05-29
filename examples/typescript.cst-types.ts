@@ -306,6 +306,19 @@ export interface BindingNode extends CstPos {
   >;
 }
 
+/** `ForBinding` node. Children (flattened, in source order) are drawn from: */
+export interface ForBindingNode extends CstPos {
+  kind: 'node';
+  rule: 'ForBinding';
+  children: Array<
+    | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: 'Ident' })
+    | BindingPatternNode
+    | ExprNode
+    | TypeNode
+  >;
+}
+
 /** `Param` node. Children (flattened, in source order) are drawn from: */
 export interface ParamNode extends CstPos {
   kind: 'node';
@@ -328,8 +341,8 @@ export interface ForHeadNode extends CstPos {
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: '$punct' })
-    | BindingNode
     | ExprNode
+    | ForBindingNode
   >;
 }
 
@@ -489,6 +502,7 @@ export type CstNode =
   | ArrayBindingElementNode
   | BindingPatternNode
   | BindingNode
+  | ForBindingNode
   | ParamNode
   | ForHeadNode
   | SwitchCaseNode
@@ -521,6 +535,7 @@ export type RuleName =
   | 'ArrayBindingElement'
   | 'BindingPattern'
   | 'Binding'
+  | 'ForBinding'
   | 'Param'
   | 'ForHead'
   | 'SwitchCase'

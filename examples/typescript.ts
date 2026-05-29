@@ -2,7 +2,7 @@ import {
   token, rule, defineGrammar,
   left, right, none,
   op, prefix, postfix,
-  sep, opt, many, many1, alt,
+  sep, opt, many, many1, alt, exclude,
 } from '../src/api.ts';
 
 // ── Tokens ──
@@ -232,6 +232,13 @@ const Binding = rule($ => [
   [alt([Ident, opt('!')], BindingPattern), opt(':', Type), opt('=', Expr)],
 ]);
 
+// A binding in a for-head: identical to Binding except the initializer is a
+// no-`in` expression, so `for (var a = 1 in xs)` reads `a = 1` then the for-in
+// `in` (TS's [~In] grammar), rather than greedily parsing `1 in xs`.
+const ForBinding = rule($ => [
+  [alt([Ident, opt('!')], BindingPattern), opt(':', Type), opt('=', exclude('in', Expr))],
+]);
+
 const Param = rule($ => {
   const tail = [opt('?'), opt(':', Type), opt('=', Expr)];   // ?  : T  = E
   const body = alt(
@@ -252,8 +259,9 @@ const Param = rule($ => {
 const ForHead = rule($ => {
   const cTail = [';', opt(Expr, many(',', Expr)), ';', opt(Expr, many(',', Expr))];  // `; cond ; update`
   return [
-    // declared head: `let/const/var/using/await using <bindings>` then C-style or in/of
-    [alt('let', 'const', 'var', 'using', ['await', 'using']), sep(Binding, ','), alt(
+    // declared head: `let/const/var/using/await using <bindings>` then C-style or in/of.
+    // ForBinding gives a no-`in` initializer so `for (var a = 1 in xs)` parses.
+    [alt('let', 'const', 'var', 'using', ['await', 'using']), sep(ForBinding, ','), alt(
       cTail,
       [alt('in', 'of'), Expr],
     )],
@@ -293,15 +301,16 @@ const Stmt = rule($ => [
 // ── Type Parameters ──
 
 const TypeParam = rule($ => {
-  // Variance/const prefix stays flattened (a greedy opt would eat `out`/`in`
-  // when they are the param NAME); the `extends`/`=` suffix is shared via `tail`.
+  // TS parses any modifier soup before a type-param name (variance `in`/`out`,
+  // `const`, even bogus `public`), then reports invalid ones post-parse. `many1`
+  // requires a name AFTER the modifiers, so a param NAMED like a modifier (`<out>`,
+  // `<in = any>`) falls through to the bare-name branch (longest-match: when a
+  // name is present the modifier branch wins because it consumes more).
   const tail = [opt('extends', Type), opt('=', Type)];
+  const mod = alt('const', 'in', 'out', 'public', 'private', 'protected', 'readonly');
   return [
+    [many1(mod), Ident, ...tail],
     [Ident, ...tail],
-    ['const', Ident, ...tail],
-    ['in', Ident, ...tail],
-    ['out', Ident, ...tail],
-    ['in', 'out', Ident, ...tail],
   ];
 });
 
@@ -471,7 +480,7 @@ export default defineGrammar({
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
     Stmt, Block,
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
-    Binding, Param, ForHead, SwitchCase,
+    Binding, ForBinding, Param, ForHead, SwitchCase,
     TypeParams, TypeParam,
     Decl, InterfaceMember, ClassMember, EnumMember,
     ImportClause, ImportSpecifier,
