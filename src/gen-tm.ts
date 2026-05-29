@@ -1,4 +1,4 @@
-import type { CstGrammar, RuleExpr } from './types.ts';
+import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 
 interface TmPattern {
@@ -162,23 +162,62 @@ function inferIdentScope(keyword: string, scopeOverrides: Map<string, string[]>)
   if (!scope) return null;
   if (scope.startsWith('storage.type.function')) return 'entity.name.function';
   if (scope.startsWith('storage.type.') && scope !== 'storage.type') return 'entity.name.type';
+  // Heritage keyword (TextMate convention `*.extends`, e.g. `keyword.other.extends`
+  // / `storage.modifier.extends`): the identifier it introduces names a superclass.
+  // Scope-convention driven (like the storage.type.* mappings above), not keyed on
+  // any specific word — a grammar that scopes its inheritance keyword `*.extends`
+  // gets `entity.other.inherited-class` for the following identifier automatically.
+  if (/(^|\.)extends$/.test(scope)) return 'entity.other.inherited-class';
   return null;
 }
 
-function findContextualPatterns(expr: RuleExpr, tokenNames: Set<string>, scopeOverrides: Map<string, string[]>): ContextualPattern[] {
+/**
+ * Does a rule, when expanded, have an alternative that begins with the given
+ * identifier token? Used so a `keyword Ident` pattern is still detected when the
+ * identifier is reached through a rule-ref (e.g. `extends ClassHeritage`, whose
+ * base alternative is `Ident`). Bounded depth guards against ref cycles.
+ */
+function ruleStartsWithIdent(
+  refName: string,
+  identTokenName: string,
+  rules: RuleDecl[],
+  seen: Set<string> = new Set(),
+): boolean {
+  if (refName === identTokenName) return true;
+  if (seen.has(refName)) return false;
+  seen.add(refName);
+  const rule = rules.find(r => r.name === refName);
+  if (!rule) return false;
+  for (const alt of expandAlts(rule.body)) {
+    const head = alt[0];
+    if (!head) continue;
+    if (head.type === 'ref' && ruleStartsWithIdent(head.name, identTokenName, rules, seen)) return true;
+  }
+  return false;
+}
+
+function findContextualPatterns(
+  expr: RuleExpr,
+  tokenNames: Set<string>,
+  scopeOverrides: Map<string, string[]>,
+  rules: RuleDecl[],
+  identTokenName: string | null,
+): ContextualPattern[] {
   const patterns: ContextualPattern[] = [];
 
   function walkSeq(items: RuleExpr[]) {
     for (let i = 0; i < items.length - 1; i++) {
       const a = items[i];
       const b = items[i + 1];
-      if (a.type === 'literal' && isKeywordLiteral(a.value) &&
-          b.type === 'ref' && tokenNames.has(b.name)) {
-        const scope = inferIdentScope(a.value, scopeOverrides);
-        if (scope) {
-          patterns.push({ keyword: a.value, identScope: scope });
-        }
-      }
+      if (a.type !== 'literal' || !isKeywordLiteral(a.value) || b.type !== 'ref') continue;
+      const scope = inferIdentScope(a.value, scopeOverrides);
+      if (!scope) continue;
+      // Direct identifier-token adjacency, or the identifier reached through a
+      // rule-ref whose base alternative starts with the identifier token.
+      const adjacent =
+        tokenNames.has(b.name) ||
+        (identTokenName !== null && ruleStartsWithIdent(b.name, identTokenName, rules));
+      if (adjacent) patterns.push({ keyword: a.value, identScope: scope });
     }
   }
 
@@ -2026,7 +2065,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // ── 4. Contextual patterns (keyword + Ident → entity.name.*) ──
   const contextualPatterns: ContextualPattern[] = [];
   for (const rule of grammar.rules) {
-    contextualPatterns.push(...findContextualPatterns(rule.body, tokenNames, scopeOverrides));
+    contextualPatterns.push(...findContextualPatterns(rule.body, tokenNames, scopeOverrides, grammar.rules, identToken?.name ?? null));
   }
 
   const seenContextual = new Set<string>();
@@ -2046,6 +2085,68 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       },
     };
     topPatterns.push({ include: `#${key}` });
+  }
+
+  // ── 4a. Import/export namespace `*` → constant.language.import-export-all ──
+  // A `*` directly after an import/export keyword (`import * as ns`, `export *`,
+  // `export * as ns`) names the whole module, not multiplication. Both the trigger
+  // keyword (scope `keyword.control.import`) and the `*` literal are read from the
+  // grammar/scope map; the rule fires only on the keyword→`*` adjacency that
+  // actually occurs in a rule, so an arithmetic `*` is never mis-scoped (import/
+  // export keywords are reserved and can never be a multiplication operand).
+  const importExportKws = new Set<string>();
+  for (const [lit, scopes] of scopeOverrides) {
+    if (scopes.some(s => s.startsWith('keyword.control.import'))) importExportKws.add(lit);
+  }
+  // Does a rule have an alternative whose first item is the `*` literal? (e.g.
+  // `import` → ImportClause, whose namespace branch begins `'*' 'as' Ident`.)
+  const ruleStartsWithStar = (refName: string, seen: Set<string> = new Set()): boolean => {
+    if (seen.has(refName)) return false;
+    seen.add(refName);
+    const rule = grammar.rules.find(r => r.name === refName);
+    if (!rule) return false;
+    for (const alt of expandAlts(rule.body)) {
+      const head = alt[0];
+      if (!head) continue;
+      if (head.type === 'literal' && head.value === '*') return true;
+      if (head.type === 'ref' && ruleStartsWithStar(head.name, seen)) return true;
+    }
+    return false;
+  };
+  const starAllKws = new Set<string>();   // import/export keywords that introduce a namespace `*`
+  {
+    const walk = (e: RuleExpr | undefined): void => {
+      if (!e) return;
+      for (const alt of expandAlts(e)) {
+        for (let i = 0; i < alt.length - 1; i++) {
+          const a = alt[i], b = alt[i + 1];
+          if (a.type !== 'literal' || !importExportKws.has(a.value)) continue;
+          // `*` directly after the keyword, or reached through the next rule-ref
+          // (e.g. `import ImportClause`, whose namespace branch starts with `*`).
+          if ((b.type === 'literal' && b.value === '*') || (b.type === 'ref' && ruleStartsWithStar(b.name))) {
+            starAllKws.add(a.value);
+          }
+        }
+        for (const item of alt) {
+          if (item.type === 'quantifier' || item.type === 'group') walk(item.body);
+          else if (item.type === 'sep') walk(item.element);
+        }
+      }
+    };
+    for (const rule of grammar.rules) walk(rule.body);
+  }
+  if (starAllKws.size > 0) {
+    // Keyword keeps the scope it carries elsewhere (read from the scope map), so
+    // capture 1 is not hardcoded to a specific scope string.
+    const kwScope = getScope(scopeOverrides, [...starAllKws][0]) ?? 'keyword.control.import';
+    repository['import-export-all'] = {
+      match: `\\b(${[...starAllKws].map(escapeRegex).join('|')})\\s+(\\*)`,
+      captures: {
+        '1': { name: `${kwScope}.${langName}` },
+        '2': { name: `constant.language.import-export-all.${langName}` },
+      },
+    };
+    topPatterns.push({ include: '#import-export-all' });
   }
 
   // ── 4b. Function call detection ──
@@ -2706,6 +2807,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (key === 'arrow-function-params') return 1.95;
     if (key === 'ternary-expression') return 1.97;
     if (key.endsWith('-declaration') || key.endsWith('-definition') || key.endsWith('-typekw')) return 2;
+    // import/export namespace `*` must beat both the import/export keyword group
+    // (which would consume the keyword alone) and the arithmetic-operator match.
+    if (key === 'import-export-all') return 2;
     if (scope.includes('constant.numeric')) return 3; // stable sort preserves DSL token order
     if (scope.includes('keyword.operator') && key.startsWith('scope-')) return 4;
     if (scope.includes('keyword.control')) return 5;

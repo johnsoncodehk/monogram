@@ -82,6 +82,12 @@
       "include": "#module-declaration"
     },
     {
+      "include": "#extends-definition"
+    },
+    {
+      "include": "#import-export-all"
+    },
+    {
       "include": "#is-typekw"
     },
     {
@@ -1147,6 +1153,28 @@
           "include": "#type-inner"
         }
       ]
+    },
+    "extends-definition": {
+      "match": "\\b(extends)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "captures": {
+        "1": {
+          "name": "keyword.other.extends.typescript"
+        },
+        "2": {
+          "name": "entity.other.inherited-class.typescript"
+        }
+      }
+    },
+    "import-export-all": {
+      "match": "\\b(export|import)\\s+(\\*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.typescript"
+        },
+        "2": {
+          "name": "constant.language.import-export-all.typescript"
+        }
+      }
     },
     "function-call": {
       "match": "((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*\\()",

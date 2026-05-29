@@ -52,6 +52,12 @@
       "include": "#class-declaration"
     },
     {
+      "include": "#extends-definition"
+    },
+    {
+      "include": "#import-export-all"
+    },
+    {
       "include": "#hexnumber"
     },
     {
@@ -544,6 +550,28 @@
           "include": "$self"
         }
       ]
+    },
+    "extends-definition": {
+      "match": "\\b(extends)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "captures": {
+        "1": {
+          "name": "keyword.other.extends.javascript"
+        },
+        "2": {
+          "name": "entity.other.inherited-class.javascript"
+        }
+      }
+    },
+    "import-export-all": {
+      "match": "\\b(export|import)\\s+(\\*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.javascript"
+        },
+        "2": {
+          "name": "constant.language.import-export-all.javascript"
+        }
+      }
     },
     "function-call": {
       "match": "((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*\\()",
