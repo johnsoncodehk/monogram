@@ -46,3 +46,19 @@ console.log('');
 console.log(`  Valid-code coverage : ${(TP / (TP + FN) * 100).toFixed(2)}%  (${TP}/${TP + FN})  ← parses every valid file when FN=0`);
 console.log(`  Bidirectional agree : ${((TP + TN) / total * 100).toFixed(2)}%  (${TP + TN}/${total})`);
 if (fns.length) console.log(`\n  MISSED valid (real gaps):\n${fns.map(x => '    - ' + x).join('\n')}`);
+
+// Over-accepts grouped by directory → the over-acceptance *categories* to tighten.
+// Run `node test/conformance-matrix.ts fp` to also list every file under each group.
+const showFiles = process.argv.includes('fp');
+const byDir = new Map<string, string[]>();
+for (const f of fps) {
+  const dir = f.split('/').slice(0, -1).join('/');
+  (byDir.get(dir) ?? byDir.set(dir, []).get(dir)!).push(f);
+}
+const groups = [...byDir.entries()].sort((a, b) => b[1].length - a[1].length);
+console.log(`\n  OVER-ACCEPTS by directory (${FP} files, ${groups.length} dirs) — these are the categories to tighten:`);
+for (const [dir, files] of groups) {
+  console.log(`    ${String(files.length).padStart(3)}  ${dir}`);
+  if (showFiles) for (const f of files) console.log(`         ${f.split('/').pop()}`);
+}
+if (!showFiles) console.log(`\n  (re-run with \`fp\` to list every file: node test/conformance-matrix.ts fp)`);
