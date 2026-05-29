@@ -8,18 +8,18 @@ A maintained accounting of [microsoft/TypeScript-TmLanguage](https://github.com/
 
 | Verdict | Count | Meaning |
 |---|---:|---|
-| ✅ **Solved** | **49** | parser-derived TM gets it right; replayed green in [`test/test-issues.ts`](../test/test-issues.ts) (310 checks). **All 49 are still open upstream.** |
-| 🔧 Backlog (our domain) | ~7 | TM-expressible + parser-derivable; not done yet, or a real residual gap. |
+| ✅ **Solved** | **50** | parser-derived TM gets it right; replayed green in [`test/test-issues.ts`](../test/test-issues.ts) (313 checks). **All 50 are still open upstream.** |
+| 🔧 Backlog (our domain) | ~6 | TM-expressible + parser-derivable; not done yet, or a residual gap. |
 | 📦 Out of scope (now) | 8 + 16 | TSX dialect (8); JSDoc *embedded-content* highlighting (16) — needs the embedded-grammar pipeline. |
 | 🧠 Needs semantics | ~6 | type/symbol resolution — **no syntax highlighter (TM or parser) can do this**; the language server's job. |
 | 🛠 Not a grammar concern | ~20 | theming, semantic-token config, scope-name data, tooling, IDE support. |
 | ⛔ Proven TM-impossible | 0 confirmed | none yet proven (requires a failing generated-TM + a passing parser-target — see discipline). |
 
-The headline: **Monogram already solves 49 of the 106 still-open official issues (~46%)** — exactly the regex-vs-division / generic-vs-comparison / multiline-context class that a hand-written grammar perpetually loses to.
+The headline: **Monogram already solves 50 of the 106 still-open official issues (~47%)** — exactly the regex-vs-division / generic-vs-comparison / multiline-context class that a hand-written grammar perpetually loses to.
 
 ---
 
-## ✅ Solved (49)
+## ✅ Solved (50)
 
 All replayed in [`test/test-issues.ts`](../test/test-issues.ts) and all still open upstream. Grouped by the ambiguity class — every one is something a regex grammar cannot reliably decide but a parser settles for free.
 
@@ -32,7 +32,7 @@ All replayed in [`test/test-issues.ts`](../test/test-issues.ts) and all still op
 **Multiline / whitespace-fragile generics, types, unions** — structure, not column position, decides; a later construct never "breaks":
 `#1002`, `#1014`, `#1019`, `#1028`, `#1035`, `#1040`, `#1041`, `#1043`, `#1051`, `#1053`, `#1056`, `#1059`, `#819`, `#876`, `#889`, `#890`, `#894`, `#896`, `#911`, `#973`, `#981`, `#983`, `#873`.
 
-**Member / call scoping, keywords-as-names, control flow:** `#736` (method call → `entity.name.function`), `#770` (call parens are punctuation), `#869` (`x in obj ? a : b` ternary), `#788` (optional chaining `?.`), `#1025` (`for…of`/`in` with no surrounding space), `#815` (a method *named* `new`), `#881` (`override` modifier), `#1066` (triple-slash `/// <reference>` directive).
+**Member / call scoping, keywords-as-names, control flow:** `#736` (method call → `entity.name.function`), `#770` (call parens are punctuation), `#869` (`x in obj ? a : b` ternary), `#788` (optional chaining `?.`), `#1025` (`for…of`/`in` with no surrounding space), `#815` (a method *named* `new`), `#881` (`override` modifier), `#1066` (triple-slash `/// <reference>` directive), `#891` (`from` as an ordinary identifier/binding is a *variable*, not a keyword — see [the contextual-keyword fix](#-backlog--our-domain-not-yet-solved-6)).
 
 > Each maps to one or more cases in `test/test-issues.ts`; grep the issue number there for the exact input + expected scopes.
 
@@ -49,13 +49,14 @@ When an issue is **not** solved, it gets exactly one verdict, and **⛔ TM-impos
 
 ---
 
-## 🔧 Backlog — our domain, not yet solved (≈7)
+## 🔧 Backlog — our domain, not yet solved (≈6)
 
-TM-expressible parse/lex disambiguation in Monogram's wheelhouse, still open after the verification pass (10 candidates that *were* here are now confirmed-correct and moved to Solved):
+TM-expressible parse/lex disambiguation in Monogram's wheelhouse, still open after the verification pass (11 candidates that *were* here are now confirmed-correct and in Solved, including #891):
 
-- `#891` default import *named* `from` (`import from from "x"`) — **confirmed gap:** the binding `from` is mis-scoped as `keyword.control.import` instead of a variable, because `from` is in the keyword scope-map regardless of position. Needs the import-clause name to override the keyword scope. (Doesn't *break* the rest, unlike upstream — but the binding color is wrong.)
 - `#1071` `import.meta.dirname` — **contested:** we scope `import` as `keyword.control.import` (defensible — it *is* the import meta-property keyword) and `meta`/`dirname` as properties, with no breakage; the reporter wants `import` non-keyworded. Left until the intended scope is settled.
 - `#1048` multiline `extends` in a generic with split parens; `#857` multiple `export default` overloads; `#497` `import` declaration / semicolon scoping; `#810` trailing newline scope in a line comment; `#1039` `String.raw` escape-token visibility.
+
+**Contextual keywords (the `#891` class).** A word that is a keyword in some positions but a valid identifier elsewhere (`from`, `as`, `of`, …) was mis-scoped as a keyword *everywhere* by the flat global keyword match. Fixed generically for the always-before-a-fixed-token case: a scope-keyword the grammar *always* places immediately before the string token (only `from`: `'from' String_`) is now emitted with a `(?=\s*["'])` lookahead, so `const from = 1` / `from()` / the `import from from "x"` binding scope as `variable`/`entity.name.function` (matching the official grammar) while the import-source `from` stays a keyword. **Still open:** `as` as a plain identifier (`const as = 1`) — official scopes it `variable`, we still over-scope it (it's entangled with the `expr as Type` cast and the `x is T` type-predicate rules); `of` as an identifier (`const of = 1`) — **the official grammar mis-scopes this too**, so it's a both-wrong case, not a gap. Closing `as` needs the same positional treatment the cast/predicate rules already use.
 
 > Action: run each through `test/test-issues.ts` to confirm before claiming. Listing here ≠ "breaks in Monogram" — it means "not yet correct-and-tested."
 
@@ -83,7 +84,7 @@ Theming / token-color config (`#1064`, `#991`), scope-name data & spelling fixes
 ### Proof B
 **A TextMate grammar is a line-oriented pushdown machine whose only inter-line memory is a finite stack of scope contexts**; each step is a single Oniguruma match (bounded even with `\g<>` subexpression recursion, which is per-line). Where correct highlighting requires context *not* captured by the enclosing-scope stack — an unbounded lookback to a token that is not an ancestor context — no TextMate grammar can express it, the official one or ours. Monogram's **tree-sitter and Lezer** targets are real incremental parsers holding the full tree, so they resolve such cases exactly; the generated TM target (like the official) can only approximate.
 
-> **But beware over-claiming this.** The 49 solved cases include heavy multiline / whitespace / nested-generic scenarios long *assumed* "impossible for TextMate" — they are not; they are TM-*expressible* once a parser tells you the right pattern. So this bucket is narrow, and we keep it empty until an issue is *proven* into it (failing generated-TM + passing parser-target). Don't reach for "TM can't" when the honest answer is "we haven't derived the pattern yet."
+> **But beware over-claiming this.** The 50 solved cases include heavy multiline / whitespace / nested-generic scenarios long *assumed* "impossible for TextMate" — they are not; they are TM-*expressible* once a parser tells you the right pattern. So this bucket is narrow, and we keep it empty until an issue is *proven* into it (failing generated-TM + passing parser-target). Don't reach for "TM can't" when the honest answer is "we haven't derived the pattern yet."
 
 ---
 

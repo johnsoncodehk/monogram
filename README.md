@@ -35,7 +35,7 @@ Take `typeof x < y`. A regex highlighter has to guess whether `<` opens a generi
 
 The remaining 2.2% bidirectional gap is **over-acceptance** — the grammar is still too permissive on some *invalid* inputs (valid-code coverage is already 100%; nothing valid is missed). Most of what's left is code `tsc`'s parser rejects via *context-sensitive* rules a context-free grammar can't express — reserved-word placement, modifier combinations like `default abstract class`, `super` type-arguments — the kind of constraint a highlighter grammar was never meant to enforce. We push as close to 100% both ways as a pure grammar can; that's the asymptote, and the highlighter rides down to it for free.
 
-That's the categorical part: a highlighter derived from a parser-proven grammar isn't *a better hand-written grammar* — it's playing a different game. You can't out-regex it, because its correctness comes from a dimension hand-written grammars never operate in. The evidence is concrete — [`test/test-issues.ts`](test/test-issues.ts) replays **49 real bugs** from the official grammar's issue tracker (the `typeof x < y` ambiguities, regex-after-keyword cases, `as`-casts inside `<>`, nested `>>`), all **310** token checks pass, and **all 49 are still open upstream** — Monogram already fixes ~46% of the 106 open official issues, because those failure modes are *structurally precluded* by a parser rather than patched one regex at a time. The [**upstream issue ledger**](docs/upstream-issues.md) tracks exactly which issues we solve and gives an honest verdict on each one we don't (backlog / out-of-scope / needs-semantics / proven-TM-impossible).
+That's the categorical part: a highlighter derived from a parser-proven grammar isn't *a better hand-written grammar* — it's playing a different game. You can't out-regex it, because its correctness comes from a dimension hand-written grammars never operate in. The evidence is concrete — [`test/test-issues.ts`](test/test-issues.ts) replays **50 real bugs** from the official grammar's issue tracker (the `typeof x < y` ambiguities, regex-after-keyword cases, `as`-casts inside `<>`, nested `>>`), all **313** token checks pass, and **all 50 are still open upstream** — Monogram already fixes ~47% of the 106 open official issues, because those failure modes are *structurally precluded* by a parser rather than patched one regex at a time. The [**upstream issue ledger**](docs/upstream-issues.md) tracks exactly which issues we solve and gives an honest verdict on each one we don't (backlog / out-of-scope / needs-semantics / proven-TM-impossible).
 
 ## Results
 
@@ -45,7 +45,7 @@ Measured against the TypeScript compiler's own conformance suite (single-file ca
 Valid-code coverage  100%    3376 / 3376 valid single-file cases parse        (zero gaps; no valid code missed)
 Bidirectional        97.8%   3585 / 3664 — also rejects what tsc rejects      (gap = over-acceptance only)
 Highlighter          99.3%   589 / 593 tokens match VS Code's official grammar
-Official-grammar bugs  49    real TypeScript-TmLanguage issues replayed (310 token checks) — all pass
+Official-grammar bugs  50    real TypeScript-TmLanguage issues replayed (313 token checks) — all pass
 Source size          628 lines — 5× fewer than the official 3331-line hand-written TextMate YAML
 Engine               language-agnostic — zero TypeScript-specific code (proven by test/agnostic.ts)
 ```
@@ -149,7 +149,7 @@ Self-contained (no external setup):
 ```bash
 node test/sanity-check.ts        # quick smoke test
 node test/agnostic.ts            # proves the engine is language-agnostic
-node test/test-issues.ts         # replays 49 official-grammar bugs against the generated grammar
+node test/test-issues.ts         # replays 50 official-grammar bugs against the generated grammar
 ```
 
 The conformance and coverage suites need external corpora and are **excluded from CI** for that reason:

@@ -2260,13 +2260,55 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         keywordGroups.get(scope)!.push(ident);
       }
     }
+    // A contextual keyword that the grammar ALWAYS places immediately before the
+    // string token (e.g. `'from' String_` in every import/export rule) is a keyword
+    // ONLY in that position — everywhere else it is a plain identifier (`const from = 1`,
+    // `from()`). Matching it globally mis-scopes those identifier uses, so emit it with a
+    // lookahead for a following string literal and let other uses fall through to
+    // identifier scoping. Structural + agnostic: keyed on "always-before-the-string-token",
+    // never on the word itself.
+    const stringTokName = grammar.tokens.find(t => t.string)?.name;
+    const alwaysBeforeString = (lit: string): boolean => {
+      if (!stringTokName) return false;
+      let seen = false, ok = true;
+      const walk = (e: RuleExpr | undefined): void => {
+        if (!e) return;
+        if (e.type === 'seq') {
+          for (let i = 0; i < e.items.length; i++) {
+            const it = e.items[i];
+            if (it.type === 'literal' && it.value === lit) {
+              seen = true;
+              const nx = e.items[i + 1];
+              if (!(nx && nx.type === 'ref' && nx.name === stringTokName)) ok = false;
+            }
+            walk(it);
+          }
+        } else if (e.type === 'alt') e.items.forEach(walk);
+        else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
+        else if (e.type === 'sep') walk(e.element);
+      };
+      for (const r of grammar.rules) walk(r.body);
+      return seen && ok;
+    };
     for (const [scope, kws] of keywordGroups) {
       const key = `scope-${scope.replace(/\./g, '-')}`;
-      repository[key] = {
-        match: `\\b(${kws.map(escapeRegex).join('|')})\\b`,
-        name: `${scope}.${langName}`,
-      };
-      topPatterns.push({ include: `#${key}` });
+      const globalKws = kws.filter(k => !alwaysBeforeString(k));
+      const ctxKws = kws.filter(k => alwaysBeforeString(k));
+      if (globalKws.length > 0) {
+        repository[key] = {
+          match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b`,
+          name: `${scope}.${langName}`,
+        };
+        topPatterns.push({ include: `#${key}` });
+      }
+      for (const kw of ctxKws) {
+        const ckey = `${key}-${kw.replace(/[^a-z0-9]/gi, '')}`;
+        repository[ckey] = {
+          match: `\\b${escapeRegex(kw)}\\b(?=\\s*["'])`,
+          name: `${scope}.${langName}`,
+        };
+        topPatterns.push({ include: `#${ckey}` });
+      }
     }
 
     // Inject type-related support patterns into type annotation contexts so

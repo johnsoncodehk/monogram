@@ -663,6 +663,21 @@ const tests: TestCase[] = [
       { text: 'number', scope: 'support.type.primitive' },
     ],
   },
+  {
+    label: '#891: `from` as an ordinary variable is not a keyword',
+    input: 'const from = 1;',
+    checks: [
+      { text: 'from', scope: 'variable.other' },
+    ],
+  },
+  {
+    label: '#891: default import named `from` — binding is a variable, source-`from` stays a keyword',
+    input: 'import from from "m";',
+    checks: [
+      { text: 'from', scope: 'variable.other' },
+      { text: 'from', scope: 'keyword.control.import' },
+    ],
+  },
 ];
 
 // ══════════════════════════════════════════════════════════════════

@@ -121,6 +121,9 @@
       "include": "#scope-keyword-control-import"
     },
     {
+      "include": "#scope-keyword-control-import-from"
+    },
+    {
       "include": "#scope-keyword-control-loop"
     },
     {
@@ -1387,7 +1390,11 @@
       "name": "keyword.other.typescript"
     },
     "scope-keyword-control-import": {
-      "match": "\\b(import|export|from)\\b",
+      "match": "\\b(import|export)\\b",
+      "name": "keyword.control.import.typescript"
+    },
+    "scope-keyword-control-import-from": {
+      "match": "\\bfrom\\b(?=\\s*[\"'])",
       "name": "keyword.control.import.typescript"
     },
     "scope-keyword-control-loop": {
