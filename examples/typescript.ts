@@ -1,6 +1,6 @@
 import {
   token, rule, defineGrammar,
-  left, right, none,
+  left, right, none, noUnaryLhs,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not,
 } from '../src/api.ts';
@@ -509,7 +509,7 @@ export default defineGrammar({
     left('<<', '>>', '>>>'),
     left('+', '-'),
     left('*', '/', '%'),
-    right('**'),
+    right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
     right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
     right(prefix('++', '--')),
     left(postfix('++', '--')),

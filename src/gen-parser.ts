@@ -42,6 +42,12 @@ export function createParser(grammar: CstGrammar) {
   // Build precedence table
   const opTable = new Map<string, OpInfo>();
   const prefixOps = new Map<string, OpInfo>();
+  // Infix ops whose LEFT operand may not be a bare unary-prefix expression (e.g. `**`).
+  // A prefix op that is NOT also a postfix op is a "pure unary" prefix (`-`/`!`/`typeof`…)
+  // as opposed to an update (`++`/`--`, which are both prefix and postfix); only the
+  // pure-unary ones are forbidden before a noUnaryLhs operator.
+  const noUnaryLhsOps = new Set<string>();
+  const postfixOpValues = new Set<string>();
 
   for (let i = 0; i < grammar.precs.length; i++) {
     const level = grammar.precs[i];
@@ -55,6 +61,7 @@ export function createParser(grammar: CstGrammar) {
           position: 'prefix',
         });
       } else if (op.position === 'postfix') {
+        postfixOpValues.add(op.value);
         opTable.set(op.value, {
           lbp: bp,
           rbp: 0,
@@ -65,6 +72,7 @@ export function createParser(grammar: CstGrammar) {
         const lbp = bp;
         const rbp = level.assoc === 'right' ? bp - 1 : bp;
         opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix' });
+        if (op.noUnaryLhs) noUnaryLhsOps.add(op.value);
       }
     }
   }
@@ -706,6 +714,20 @@ export function createParser(grammar: CstGrammar) {
               matched = true;
             }
           } else {
+            // A `noUnaryLhs` op (e.g. `**`) may not take a bare unary-prefix expression
+            // (`-x`, `typeof x` — a prefix-op node whose op is NOT also a postfix, i.e.
+            // not an update `++`/`--`) as its LEFT operand. Fail the whole expression
+            // hard (return null) rather than just declining to bind — otherwise it could
+            // reparse another way (left-assoc `(x ** -y) ** z`, or `typeof` as a bare
+            // identifier splitting the statement). `(-x) ** y` is unaffected: lhs is then
+            // a parenthesized node, not a prefix node.
+            if (noUnaryLhsOps.has(tokKey) && lhs.kind === 'node') {
+              const head = lhs.children[0];
+              if (head?.kind === 'leaf' && head.tokenType === '$operator'
+                  && prefixOps.has(head.text) && !postfixOpValues.has(head.text)) {
+                return null;
+              }
+            }
             pos++;
             const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
             const rhs = parsePratt(rule, info.rbp);

@@ -79,6 +79,7 @@ interface PostfixSlot {
 }
 interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[] }
 interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[] }
+interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
 
 type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker;
 
@@ -96,6 +97,13 @@ export const postfix: PostfixSlot = Object.assign(
   (...ops: string[]): PostfixOps => ({ __kind: 'postfix-ops' as const, ops }),
   { __kind: 'postfix' as const },
 ) as PostfixSlot;
+
+// Mark infix operators whose LEFT operand may not be a bare unary-prefix expression
+// (a prefix-op result that is NOT also an update `++`/`--`). E.g. JS `**`: `-x ** y`
+// is a syntax error (write `(-x) ** y` or `-(x ** y)`), but `x ** -y`, `(-x) ** y`,
+// and `++x ** y` are fine. A general, declarable property — Python, by contrast,
+// allows `-x ** y` and would not use this. The engine enforces it generically.
+export const noUnaryLhs = (...ops: string[]): NoUnaryLhsOps => ({ __kind: 'no-unary-lhs-ops' as const, ops });
 
 // ── Combinators ──
 
@@ -192,29 +200,33 @@ interface PrecLevelDef {
   operators: PrecOperator[];
 }
 
-function buildPrecOps(ops: (string | PrefixOps | PostfixOps)[]): PrecOperator[] {
+type OpSpec = string | PrefixOps | PostfixOps | NoUnaryLhsOps;
+
+function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
   const result: PrecOperator[] = [];
   for (const o of ops) {
     if (typeof o === 'string') {
       result.push({ value: o, position: 'infix' });
     } else if (o.__kind === 'prefix-ops') {
       for (const v of o.ops) result.push({ value: v, position: 'prefix' });
-    } else {
+    } else if (o.__kind === 'postfix-ops') {
       for (const v of o.ops) result.push({ value: v, position: 'postfix' });
+    } else {
+      for (const v of o.ops) result.push({ value: v, position: 'infix', noUnaryLhs: true });
     }
   }
   return result;
 }
 
-export function left(...ops: (string | PrefixOps | PostfixOps)[]): PrecLevelDef {
+export function left(...ops: OpSpec[]): PrecLevelDef {
   return { __kind: 'prec-level', assoc: 'left', operators: buildPrecOps(ops) };
 }
 
-export function right(...ops: (string | PrefixOps | PostfixOps)[]): PrecLevelDef {
+export function right(...ops: OpSpec[]): PrecLevelDef {
   return { __kind: 'prec-level', assoc: 'right', operators: buildPrecOps(ops) };
 }
 
-export function none(...ops: (string | PrefixOps | PostfixOps)[]): PrecLevelDef {
+export function none(...ops: OpSpec[]): PrecLevelDef {
   return { __kind: 'prec-level', assoc: 'none', operators: buildPrecOps(ops) };
 }
 

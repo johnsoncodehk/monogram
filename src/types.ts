@@ -39,6 +39,7 @@ export interface RegexContext {
 export interface PrecOperator {
   value: string;
   position: 'infix' | 'prefix' | 'postfix';
+  noUnaryLhs?: boolean;  // infix op whose left operand may not be a bare unary-prefix expression (e.g. JS `**`)
 }
 
 export interface PrecLevel {
