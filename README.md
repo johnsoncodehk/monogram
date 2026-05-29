@@ -40,9 +40,12 @@ Validated on TypeScript (grammar: [`examples/typescript.ts`](examples/typescript
 Valid-code coverage  100%    3376 / 3376 valid single-file conformance cases parse   (zero gaps)
 Bidirectional        97.8%   3585 / 3664 — also rejects what tsc rejects   (gap = over-acceptance; most is TS semantic-only rejection)
 Highlighter          99.3%   589 / 593 tokens match VS Code's official grammar
-Generated grammar    42 KB   vs the official hand-written 226 KB
+Official-grammar bugs  39    real TypeScript-TmLanguage issues replayed (288 token checks) — all pass
+Source size          628 ln  one grammar file (32 KB) replaces 3331 lines of hand-written TextMate YAML (140 KB) — 5× less, and it also yields the parser
 Engine               language-agnostic — no TypeScript-specific code
 ```
+
+Read those last two lines together — they're the whole argument. **One 628-line grammar replaces the official 3331-line hand-written TextMate YAML at a fifth the size** *and* throws in a conformance-proven parser the official grammar never had. **Less to maintain, and demonstrably more correct:** [`test/test-issues.ts`](test/test-issues.ts) replays **39 real bugs** from the [official grammar's issue tracker](https://github.com/microsoft/TypeScript-TmLanguage/issues) — the `typeof x < y` generic-vs-comparison ambiguities, regex-after-keyword cases, `as`-cast-in-`<>` confusions — and all 288 token checks pass, because those failure modes are *structurally* precluded by a real parser rather than patched one regex at a time.
 
 The parser number is the one that matters: it's the grammar's correctness proof. Most remaining failures are intentional *error* tests that the TypeScript compiler also rejects. The highlighter accuracy is what that proof buys you — and the four remaining differences are deliberate (see [Known differences](#known-differences-from-the-official-highlighter)).
 
@@ -98,6 +101,16 @@ const Regex    = token(/\/…\//, {
 ```
 
 [`test/agnostic.ts`](test/agnostic.ts) proves it: the same engine parses a toy grammar whose identifier token is named `Word`, with no templates and no regex. Supporting a new language means writing a new grammar file, not changing the engine.
+
+## Adding a language
+
+A new language is **one grammar file, proven the way TypeScript is** — by its own parser conformance, not by eyeballing colors. The contribution workflow is grammar-first and test-driven:
+
+1. **Write the grammar** with the combinator API ([`src/api.ts`](src/api.ts)) — tokens, operator precedence, rules. Everything language-specific lives here; you never touch the engine.
+2. **Prove it as a parser** against the language's *own* official test suite. Point the conformance harness at that corpus and measure **bidirectionally** — accept what the reference accepts **and** reject what it rejects (`tsc`'s `parseDiagnostics` for TypeScript; the equivalent for another language). The grammar is "ready" when valid-code coverage hits 100% and bidirectional agreement is high. That run *is* the correctness proof — the same standard TypeScript is held to here, not a lower one.
+3. **Bring the reference highlighter as the comparison baseline.** Drop in the language's existing official TextMate grammar so [`test/coverage.ts`](test/coverage.ts) can diff the *derived* highlighter against a real-world target. Coverage is then *measured against the thing you're replacing*, not asserted — and every divergence is either a win to keep or a gap to close, on the record.
+
+The highlighter, lexer, tree-sitter / Lezer / Monarch grammars, and CST types all fall out of step 1 for free; steps 2–3 are how the contribution *earns trust*. So a new-language PR is reviewed on exactly two numbers: its **parser conformance** (the proof) and its **highlighter coverage vs the official grammar** (the payoff) — the same two this README leads with for TypeScript.
 
 ## Embedded languages, without the broken seams
 
