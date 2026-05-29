@@ -343,6 +343,97 @@ function findTypeKeywordPatterns(
   });
 }
 
+// ── Contextual operator keyword detection ──
+
+/**
+ * Collect the grammar's "always-reserved" words: the union of all literals
+ * forbidden by a `not(...)` zero-width guard. These guards encode positions
+ * where a reserved word may not stand in for an identifier (binding name,
+ * shorthand property, expression NUD). A word that appears in NO such guard is
+ * never reserved by the grammar, i.e. it is a valid identifier somewhere.
+ *
+ * Language-agnostic: reads only the `not` AST nodes, never specific words.
+ */
+function collectReservedWords(grammar: CstGrammar): Set<string> {
+  const reserved = new Set<string>();
+  function collectLits(e: RuleExpr, out: Set<string>): void {
+    if (e.type === 'literal') { if (isKeywordLiteral(e.value)) out.add(e.value); return; }
+    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(i => collectLits(i, out));
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') collectLits(e.body, out);
+    else if (e.type === 'sep') collectLits(e.element, out);
+  }
+  function walk(e: RuleExpr): void {
+    if (e.type === 'not') collectLits(e.body, reserved);
+    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(walk);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+    else if (e.type === 'sep') walk(e.element);
+  }
+  for (const rule of grammar.rules) walk(rule.body);
+  return reserved;
+}
+
+/**
+ * Find "contextual operator keywords": keyword.operator.expression-class words
+ * that are NOT always-reserved (per collectReservedWords) and therefore double
+ * as ordinary identifiers (`const as = 1`, `as()`, `as.x`). These are keywords
+ * only in operator position — preceded by a value and/or followed by an operand
+ * (`x as T`, `keyof T`, `p is T`, `infer U`, `x satisfies T`). The flat global
+ * keyword match would otherwise mis-scope every identifier use as a keyword.
+ *
+ * Returns the words; the caller scopes them positionally (operand lookahead).
+ * Reserved operator words (`typeof`, `new`, `void`, `delete`, `instanceof`) are
+ * NOT returned — they can never be identifiers, so the flat match is correct.
+ */
+function findContextualOperatorKeywords(grammar: CstGrammar): Set<string> {
+  const reserved = collectReservedWords(grammar);
+  const result = new Set<string>();
+  for (const [kw, scopes] of grammar.scopeOverrides) {
+    if (!isKeywordLiteral(kw)) continue;
+    if (reserved.has(kw)) continue;
+    if (scopes.some(s => s.startsWith('keyword.operator.expression'))) result.add(kw);
+  }
+  return result;
+}
+
+/**
+ * Build an Oniguruma character class matching the first character of any TYPE
+ * or VALUE operand: identifier-start chars, string/template delimiters, the
+ * grouping/opening brackets used in types & values (`(`, `{`, `[`), a digit,
+ * and `-` (negative numeric literal types). Derived from the grammar's tokens
+ * and rule literals — no hardcoded language keywords.
+ *
+ * A contextual operator keyword (see findContextualOperatorKeywords) is a
+ * keyword exactly when followed by whitespace then one of these — distinguishing
+ * `x as T` / `keyof U` (keyword) from `const as = 1` / `as()` / `as.x` (identifier:
+ * the next char is `=` / `(` / `.`, none of which start an operand).
+ */
+function buildOperandStartClass(grammar: CstGrammar, identRegex: string): string {
+  const chars = new Set<string>();
+  // Identifier-start: $/_ plus the non-\w extras from the Ident token.
+  chars.add('_');
+  for (const ch of identExtraChars(identRegex)) chars.add(ch);
+  // String / template delimiters (first char of any string/template token).
+  for (const tok of grammar.tokens) {
+    if (tok.string || tok.template) {
+      const first = tok.pattern[0] === '\\' ? tok.pattern[1] : tok.pattern[0];
+      if (first && !/[a-zA-Z0-9]/.test(first)) chars.add(first);
+    }
+  }
+  // Grouping/opening brackets that begin a grouped type or value.
+  const allLits = new Set<string>();
+  for (const rule of grammar.rules) for (const l of collectLiterals(rule.body)) allLits.add(l);
+  for (const open of ['(', '{', '[']) if (allLits.has(open)) chars.add(open);
+  // Negative numeric literal types (`-1`, `-2n`) appear as a `-` prefix in @type rules.
+  const typeLits = new Set<string>();
+  for (const rule of grammar.rules) {
+    if (rule.flags.includes('type')) for (const l of collectLiterals(rule.body)) typeLits.add(l);
+  }
+  if (typeLits.has('-')) chars.add('-');
+  const cls = [...chars].map(escapeForCharClass).join('');
+  // `[:alpha:]` + `[:digit:]` cover the Unicode-agnostic letter/digit start.
+  return `[[:alpha:][:digit:]${cls}]`;
+}
+
 // ── Angle bracket disambiguation ──
 
 interface AngleBracketAmbiguity {
@@ -1265,6 +1356,18 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   const identToken = grammar.tokens.find(t => classifyToken(t.pattern, t.flags).scope === 'variable.other');
   const identPattern = identToken ? identToken.pattern : '[a-zA-Z_]\\w*';
 
+  // Contextual operator keywords (e.g. `as`/`keyof`/`is`/`satisfies`/`infer`):
+  // keyword.operator.expression words that double as identifiers, so they are a
+  // keyword ONLY in operator position — followed by whitespace then an operand.
+  const contextualOps = findContextualOperatorKeywords(grammar);
+  const operandStart = buildOperandStartClass(grammar, identPattern);
+  // Keyword iff followed by whitespace + an operand, OR at end of line (the
+  // operand continues on the next line — a cast/operator split across lines,
+  // e.g. `x as\n  Foo`). `const as = 1` / `as()` / `as.x` still fall through
+  // to `variable` (next char is `=` / `(` / `.`, none start an operand and
+  // none is end-of-line).
+  const ctxOpGuard = `(?=\\s+${operandStart}|\\s*$)`;
+
   // ── 1. Detect angle bracket ambiguity ──
   const angleBracket = detectAngleBracketAmbiguity(grammar);
   const angleBracketExclude = new Set(angleBracket ? ['<', '>'] : []);
@@ -2170,10 +2273,16 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const key = `${kw}-typekw`;
       const baseScope = getScope(scopeOverrides,kw) ?? 'keyword.other';
       const kwScope = `${baseScope}.${kw}`;
+      // A contextual operator keyword (e.g. `as`/`keyof`/`is`/`satisfies`) opens
+      // this type scope ONLY in operator position — followed by an operand. The
+      // guard keeps `const as = 1` / `as()` / `as.x` from being mis-scoped as a
+      // type keyword. Reserved type keywords (`extends`, `implements`) are
+      // unconditional — they are never identifiers.
+      const guard = contextualOps.has(kw) ? ctxOpGuard : '';
 
       repository[key] = {
         name: `meta.type.${kw}.${langName}`,
-        begin: `\\b(${escapeRegex(kw)})\\b`,
+        begin: `\\b(${escapeRegex(kw)})\\b${guard}`,
         beginCaptures: {
           '1': { name: `${kwScope}.${langName}` },
         },
@@ -2260,15 +2369,19 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         keywordGroups.get(scope)!.push(ident);
       }
     }
-    // A contextual keyword that the grammar ALWAYS places immediately before the string
-    // token (e.g. `'from' String_` in every import/export rule) is a keyword ONLY in that
-    // position — everywhere else it is a plain identifier (`const from = 1`, `from()`).
-    // Matching it globally mis-scopes those identifier uses, so emit it with a lookahead
-    // for a following string literal and let other uses fall through to identifier scoping.
-    // Structural + agnostic: keyed on "always-before-the-string-token", never on the word.
-    // (Only `from` qualifies. Other contextual keywords — `as`, `keyof`, `is`, … — are
-    // scoped by several mechanisms at once here, NOT just this flat group, so they can't be
-    // de-keyworded from one place; see docs/upstream-issues.md.)
+    // Two classes of contextual keyword are scoped positionally instead of by the
+    // flat global match (which would mis-scope their ordinary-identifier uses):
+    //   1. Always-before-the-string-token (e.g. `'from' String_`): keyword only
+    //      right before a string → `(?=\s*["'])` lookahead. `const from = 1`,
+    //      `from()` fall through to identifier scoping. Keyed on the adjacency.
+    //   2. Contextual OPERATOR keywords (`as`/`keyof`/`is`/`satisfies`/`infer`):
+    //      keyword.operator.expression words that aren't always-reserved, so they
+    //      double as identifiers. Keyword only in operator position (followed by
+    //      `\s+` + an operand) → `ctxOpGuard`; `const as = 1`, `as()`, `as.x` fall
+    //      through to `variable`. Reserved operator words (`typeof`, `new`, `void`,
+    //      `delete`, `instanceof`) stay in the unconditional flat match.
+    // Both are structural + agnostic: keyed on adjacency / the not()-reserved set,
+    // never on a specific word.
     const stringTokName = grammar.tokens.find(t => t.string)?.name;
     const alwaysBeforeString = (lit: string): boolean => {
       if (!stringTokName) return false;
@@ -2292,24 +2405,47 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       for (const r of grammar.rules) walk(r.body);
       return seen && ok;
     };
+    // Track scope-group keys that carry keyword.operator.expression matches, so
+    // the type-inner injection below can re-include the SAME patterns (the flat
+    // group and the per-word contextual-operator guards alike).
+    const operatorExprIncludeKeys: string[] = [];
     for (const [scope, kws] of keywordGroups) {
       const key = `scope-${scope.replace(/\./g, '-')}`;
-      const globalKws = kws.filter(k => !alwaysBeforeString(k));
-      const ctxKws = kws.filter(k => alwaysBeforeString(k));
+      const isOperatorExpr = scope.startsWith('keyword.operator.expression');
+      // Words always placed immediately before the string token (`from`) → string lookahead.
+      // Contextual operator keywords (`as`/`keyof`/…) → operand lookahead.
+      // Everything else → unconditional flat match.
+      const beforeStringKws = kws.filter(k => alwaysBeforeString(k));
+      const ctxOpKws = isOperatorExpr ? kws.filter(k => contextualOps.has(k) && !alwaysBeforeString(k)) : [];
+      const ctxOpSet = new Set(ctxOpKws);
+      const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k));
       if (globalKws.length > 0) {
         repository[key] = {
           match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${key}` });
+        if (isOperatorExpr) operatorExprIncludeKeys.push(key);
       }
-      for (const kw of ctxKws) {
+      for (const kw of beforeStringKws) {
         const ckey = `${key}-${kw.replace(/[^a-z0-9]/gi, '')}`;
         repository[ckey] = {
           match: `\\b${escapeRegex(kw)}\\b(?=\\s*["'])`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${ckey}` });
+      }
+      // One positional entry per contextual operator keyword: keyword only when
+      // followed by whitespace + an operand (a type/value start); otherwise the
+      // word falls through to identifier scoping (variable.other).
+      for (const kw of ctxOpKws) {
+        const ckey = `${key}-${kw.replace(/[^a-z0-9]/gi, '')}`;
+        repository[ckey] = {
+          match: `\\b(${escapeRegex(kw)})\\b${ctxOpGuard}`,
+          name: `${scope}.${langName}`,
+        };
+        topPatterns.push({ include: `#${ckey}` });
+        if (isOperatorExpr) operatorExprIncludeKeys.push(ckey);
       }
     }
 
@@ -2324,19 +2460,23 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // Order matters: TM matches first pattern that matches, so more specific
       // type scopes (support.type.primitive) must come before broader ones
       // (keyword.operator.expression) to give `void` the right scope in types.
-      const typeRelatedScopes = [...keywordGroups.keys()]
+      // support.type / constant.language map 1:1 to a flat scope-include; the
+      // keyword.operator.expression scope is split across operatorExprIncludeKeys
+      // (the flat reserved group + each contextual-operator guard), all injected
+      // LAST so a contextual operator keeps keyword scope in type position
+      // (`keyof T`, `p is T`, `infer U`) yet a bare type name still reaches
+      // #simple-type → entity.name.type.
+      const supportConstScopes = [...keywordGroups.keys()]
         .filter(scope => scope.startsWith('support.type.')
-          || scope.startsWith('constant.language.')
-          || scope.startsWith('keyword.operator.expression'));
-      typeRelatedScopes.sort((a, b) => {
-        const order = (s: string) =>
-          s.startsWith('support.type.') ? 0 :
-          s.startsWith('constant.language.') ? 1 :
-          2; // keyword.operator.expression last
+          || scope.startsWith('constant.language.'));
+      supportConstScopes.sort((a, b) => {
+        const order = (s: string) => s.startsWith('support.type.') ? 0 : 1;
         return order(a) - order(b);
       });
-      const typeRelatedIncludes = typeRelatedScopes
-        .map(scope => ({ include: `#scope-${scope.replace(/\./g, '-')}` }));
+      const typeRelatedIncludes = [
+        ...supportConstScopes.map(scope => ({ include: `#scope-${scope.replace(/\./g, '-')}` })),
+        ...operatorExprIncludeKeys.map(key => ({ include: `#${key}` })),
+      ];
       if (typeRelatedIncludes.length > 0) {
         // Inject type-related scopes into type-inner (non-mutating rebuild).
         // All consumers reference #type-inner via include, so they see the

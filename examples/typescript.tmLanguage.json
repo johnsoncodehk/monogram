@@ -118,6 +118,24 @@
       "include": "#scope-keyword-operator-expression"
     },
     {
+      "include": "#scope-keyword-operator-expression-is"
+    },
+    {
+      "include": "#scope-keyword-operator-expression-keyof"
+    },
+    {
+      "include": "#scope-keyword-operator-expression-asserts"
+    },
+    {
+      "include": "#scope-keyword-operator-expression-infer"
+    },
+    {
+      "include": "#scope-keyword-operator-expression-as"
+    },
+    {
+      "include": "#scope-keyword-operator-expression-satisfies"
+    },
+    {
       "include": "#scope-keyword-control-import"
     },
     {
@@ -628,6 +646,24 @@
         },
         {
           "include": "#scope-keyword-operator-expression"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-is"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-keyof"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-asserts"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-infer"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-as"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-satisfies"
         },
         {
           "include": "#simple-type"
@@ -1233,7 +1269,7 @@
     },
     "is-typekw": {
       "name": "meta.type.is.typescript",
-      "begin": "\\b(is)\\b",
+      "begin": "\\b(is)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.expression.is.typescript"
@@ -1248,7 +1284,7 @@
     },
     "keyof-typekw": {
       "name": "meta.type.keyof.typescript",
-      "begin": "\\b(keyof)\\b",
+      "begin": "\\b(keyof)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.expression.keyof.typescript"
@@ -1278,7 +1314,7 @@
     },
     "as-typekw": {
       "name": "meta.type.as.typescript",
-      "begin": "\\b(as)\\b",
+      "begin": "\\b(as)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.expression.as.typescript"
@@ -1308,7 +1344,7 @@
     },
     "satisfies-typekw": {
       "name": "meta.type.satisfies.typescript",
-      "begin": "\\b(satisfies)\\b",
+      "begin": "\\b(satisfies)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.expression.satisfies.typescript"
@@ -1358,7 +1394,31 @@
       ]
     },
     "scope-keyword-operator-expression": {
-      "match": "\\b(is|keyof|typeof|new|asserts|infer|void|as|instanceof|satisfies|delete)\\b",
+      "match": "\\b(typeof|new|void|instanceof|delete)\\b",
+      "name": "keyword.operator.expression.typescript"
+    },
+    "scope-keyword-operator-expression-is": {
+      "match": "\\b(is)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
+      "name": "keyword.operator.expression.typescript"
+    },
+    "scope-keyword-operator-expression-keyof": {
+      "match": "\\b(keyof)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
+      "name": "keyword.operator.expression.typescript"
+    },
+    "scope-keyword-operator-expression-asserts": {
+      "match": "\\b(asserts)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
+      "name": "keyword.operator.expression.typescript"
+    },
+    "scope-keyword-operator-expression-infer": {
+      "match": "\\b(infer)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
+      "name": "keyword.operator.expression.typescript"
+    },
+    "scope-keyword-operator-expression-as": {
+      "match": "\\b(as)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
+      "name": "keyword.operator.expression.typescript"
+    },
+    "scope-keyword-operator-expression-satisfies": {
+      "match": "\\b(satisfies)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
       "name": "keyword.operator.expression.typescript"
     },
     "scope-storage-modifier": {

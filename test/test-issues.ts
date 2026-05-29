@@ -678,6 +678,37 @@ const tests: TestCase[] = [
       { text: 'from', scope: 'keyword.control.import' },
     ],
   },
+  // Contextual operator keywords (`as`/`keyof`/`is`/…): keyword only in operator/type
+  // position, a plain variable as an identifier — matching the official grammar.
+  {
+    label: 'contextual `as`: identifier binding is a variable, not a keyword',
+    input: 'const as = 1;',
+    checks: [
+      { text: 'as', scope: 'variable.other' },
+    ],
+  },
+  {
+    label: 'contextual `as`: the cast operator stays a keyword',
+    input: 'const y = x as T;',
+    checks: [
+      { text: 'as', scope: 'keyword.operator.expression' },
+    ],
+  },
+  {
+    label: 'contextual `keyof`: identifier binding is a variable',
+    input: 'const keyof = 1;',
+    checks: [
+      { text: 'keyof', scope: 'variable.other' },
+    ],
+  },
+  {
+    label: 'contextual `keyof`/`is` in TYPE position stay keywords (not entity.name.type)',
+    input: 'function f(p): p is keyof T {}',
+    checks: [
+      { text: 'is', scope: 'keyword.operator.expression' },
+      { text: 'keyof', scope: 'keyword.operator.expression' },
+    ],
+  },
 ];
 
 // ══════════════════════════════════════════════════════════════════
