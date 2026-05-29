@@ -25,16 +25,26 @@ const isMulti = (t: string) => /^\s*\/\/\s*@filename:/im.test(t);
 
 let TP = 0, FN = 0, FP = 0, TN = 0;
 const fns: string[] = [], fps: string[] = [];
+// For each over-accept, remember WHY TS rejected (its first parse diagnostic) so we
+// can classify FPs by error kind, not just by directory — `diag` mode prints this.
+const fpDiag = new Map<string, { code: number; msg: string }>();
 for (const f of walk(base)) {
   const code = readFileSync(f, 'utf8');
   if (isMulti(code)) continue;
   const sf = ts.createSourceFile('t.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const tsAccept = ((sf as any).parseDiagnostics?.length ?? 0) === 0;
+  const diags = (sf as any).parseDiagnostics as ts.Diagnostic[] | undefined;
+  const tsAccept = (diags?.length ?? 0) === 0;
   let weAccept = true;
   try { parse(code); } catch { weAccept = false; }
   if (tsAccept && weAccept) TP++;
   else if (tsAccept && !weAccept) { FN++; fns.push(f.replace(base + '/', '')); }
-  else if (!tsAccept && weAccept) { FP++; fps.push(f.replace(base + '/', '')); }
+  else if (!tsAccept && weAccept) {
+    FP++;
+    const rel = f.replace(base + '/', '');
+    fps.push(rel);
+    const d = diags![0];
+    fpDiag.set(rel, { code: d.code, msg: ts.flattenDiagnosticMessageText(d.messageText, ' ') });
+  }
   else TN++;
 }
 const total = TP + FN + FP + TN;
@@ -62,3 +72,22 @@ for (const [dir, files] of groups) {
   if (showFiles) for (const f of files) console.log(`         ${f.split('/').pop()}`);
 }
 if (!showFiles) console.log(`\n  (re-run with \`fp\` to list every file: node test/conformance-matrix.ts fp)`);
+
+// Over-accepts grouped by TS's OWN reason for rejecting (parse-diagnostic code) → the
+// error *kinds* we wave through. This is the classification to triage against: a single
+// lexical rule ("digit expected", "invalid escape") often spans many directories, while
+// a directory can mix several kinds. `node test/conformance-matrix.ts diag`.
+if (process.argv.includes('diag')) {
+  const byCode = new Map<number, { msg: string; files: string[] }>();
+  for (const f of fps) {
+    const { code, msg } = fpDiag.get(f)!;
+    const e = byCode.get(code) ?? byCode.set(code, { msg, files: [] }).get(code)!;
+    e.files.push(f);
+  }
+  const diagGroups = [...byCode.entries()].sort((a, b) => b[1].files.length - a[1].files.length);
+  console.log(`\n  OVER-ACCEPTS by TS diagnostic (${FP} files, ${diagGroups.length} distinct reasons):`);
+  for (const [code, { msg, files }] of diagGroups) {
+    console.log(`\n    ${String(files.length).padStart(3)}  TS${code}: ${msg}`);
+    for (const f of files) console.log(`         ${f}`);
+  }
+}
