@@ -1,101 +1,21 @@
 import {
-  token, rule, defineGrammar,
-  left, right, none, noUnaryLhs,
+  rule, defineGrammar,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not,
 } from '../src/api.ts';
-
-// ── Tokens ──
-
-const Ident        = token(/(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/, { identifier: true });
-// Numeric tokens end with `(?![0-9A-Za-z_$\\])`: the spec rule that a numeric literal
-// may not be immediately followed by an IdentifierStart or DecimalDigit. Without it,
-// `0b2`/`0B1102110`/`0o81010` would munch a valid prefix (`0b1`, `0B110`) and leave the
-// rest as a second token, so the file parses as two statements instead of being rejected.
-// With it the bad literal matches no token and the lexer throws — the correct rejection.
-// (ASCII IdentifierStart + `\` for `\u`-escapes; the lexer compiles patterns without the
-// /u flag so \p{L} is unavailable, and every affected conformance case is ASCII.)
-const HexNumber    = token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*(?![0-9A-Za-z_$\\])/,            { scope: 'constant.numeric.hex' });
-const OctalNumber  = token(/0[oO][0-7]+(_[0-7]+)*(?![0-9A-Za-z_$\\])/,                         { scope: 'constant.numeric.octal' });
-const BinaryNumber = token(/0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\])/,                            { scope: 'constant.numeric.binary' });
-const BigInt_      = token(/[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\])/,                              { scope: 'constant.numeric.bigint' });
-const Number_      = token(/[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\])/);
-// A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must
-// match their strict forms — a `\u{cp}` with cp ≤ 0x10FFFF, a 4-hex `\uXXXX`, or a
-// 2-hex `\xXX` — while `\` + any *other* char (\n, \\, \q non-escape, line
-// continuation) stays valid via `[^ux]`. A malformed `\u`/`\x` (e.g. `\u{110000}`,
-// `\u{r}`, `\u{}`, `\u{67`) matches no escape, so the string matches no token and the
-// lexer throws — TS's exact rejection. The in-range codepoint is `0*` leading zeros
-// then 1–5 hex (0–0xFFFFF) or `10`+4 hex (0x100000–0x10FFFF).
-const codePoint = String.raw`0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})`;
-const escape    = String.raw`\\(?:u\{${codePoint}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux])`;
-const String_      = token(new RegExp(`"(?:[^"\\\\]|${escape})*"|'(?:[^'\\\\]|${escape})*'`), {
-  string: true,
-  escape: /\\(?:[nrtbfv0'"\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})/,
-});
-const Template     = token(/`(?:[^`\\$]|\\.|\$(?!\{))*`/, {
-  escape: /\\(?:[nrtbfv0'"\\`$]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})/,
-  // Same well-formed-escape rule as strings; the lexer rejects a malformed `\u`/`\x`
-  // in an *untagged* template (`\u{110000}`, `\u{r}`), but allows it when tagged.
-  escapeValid: new RegExp(escape),
-  template: { open: '`', interpOpen: '${', interpClose: '}' },
-});
-const Regex_       = token(/\/(?:[^\/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[gimsuydv]*/, {
-  regex: true,
-  regexContext: {
-    divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],
-    divisionAfterTexts: [')', ']', '++', '--', 'this', 'super', 'true', 'false', 'null', 'undefined'],
-    regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new'],
-    // `kw ( … )` heads (control-flow): the closing `)` is a statement head, not a
-    // value, so `if (a) /re/` parses `/re/` as a regex rather than division.
-    regexAfterParenKeywords: ['if', 'while', 'for', 'with'],
-    // member accessors: after one, those keywords are property NAMES, so
-    // `obj.for(x) / y` stays a method call + division.
-    memberAccessTexts: ['.', '?.'],
-  },
-});
-const Decorator    = token(/@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?/,                { scope: 'entity.name.function.decorator' });
-const PrivateField = token(/#[a-zA-Z_$][a-zA-Z0-9_$]*/,                     { scope: 'variable.other.property' });
-const Shebang      = token(/^#![^\n]*/,           { skip: true, scope: 'comment.line.shebang' });
-const JSDoc        = token(/\/\*\*(?!\/)[\s\S]*?\*\//,  { skip: true, scope: 'comment.block.documentation', embed: 'jsdoc' });
-const TripleSlash  = token(/\/\/\/\s*<[^\n]*/,    { skip: true, scope: 'comment.line.triple-slash' });
-const LineComment  = token(/\/\/[^\n]*/,           { skip: true });
-const BlockComment = token(/\/\*[\s\S]*?\*\//,     { skip: true });
-
-// ── Always-reserved words ──
-// The `Ident` token deliberately swallows keywords (they lex as identifiers), so
-// every keyword can otherwise fall back to a bare identifier. These words are
-// reserved in EVERY context (ECMAScript ReservedWord ∪ TS's always-reserved), so
-// they are valid as an identifier NOWHERE — not as an expression, a shorthand
-// property, or a binding name. `notReserved` is a zero-width guard placed before an
-// identifier position to forbid exactly these. Excluded on purpose: contextual
-// keywords (as/async/from/type/of/…) and strict-mode-only reserved words
-// (let/static/implements/yield/await/…) — those ARE valid identifiers in some
-// context a CFG can't detect (sloppy mode, non-generator/non-async), so forbidding
-// them here would reject valid code (`var let = 1`, `function f(yield) {}`).
-const notReserved = not(alt(
-  'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default',
-  'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for',
-  'function', 'if', 'import', 'in', 'instanceof', 'new', 'null', 'return', 'super',
-  'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with',
-));
-
-// A NARROWER guard for the *expression* identifier-NUD only. The full `notReserved`
-// set can NOT be used at expression position: most always-reserved words legitimately
-// begin an expression via their own dedicated forms (`new`/`new.target`, `class`/
-// `function` expressions, `import(…)`/`import<T>`, `super`, `this`, `true`/`false`/
-// `null`, …), and TS's own error-recovery tolerates several reserved words sliding into
-// the bare-identifier fallback inside otherwise-valid files (e.g. `export default …`,
-// undeclared `for (x in …)`, `class … extends (e)`, a decorator before `export`). The
-// words below have NO such role: they are the prefix operators `void`/`typeof`/`delete`
-// (which must take an operand) plus the `catch`/`throw` keywords and `enum`. Forbidding
-// the bare-identifier fallback for exactly these rejects `catch(x){}` with no `try`,
-// `void ;`/`typeof ;`/`delete ;` (operatorless prefix op), and `throw ;` — while leaving
-// every valid expression (and TS's recovery cases) untouched. Verified: widening this
-// set to other reserved words regresses valid code; these five are the FN-safe maximum.
-const notReservedExpr = not(alt(
-  'catch', 'delete', 'enum', 'throw', 'typeof', 'void',
-));
+// JavaScript is the SUBSET / base of the ECMAScript family; TypeScript is the
+// SUPERSET (JS + a type layer). The shared, type-free vocabulary — token consts,
+// the `notReserved`/`notReservedExpr` reserved-word guards, the precedence ladder
+// (`ecmaPrec`), and the JS scope map (`jsScopes`) — is OWNED by javascript.ts and
+// imported here, then extended below with the type layer. Rules are NOT shared
+// either direction (combinator rules bind their references at definition time), so
+// this file keeps its own rule consts.
+import {
+  Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
+  Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
+  Number_, String_, Template, Regex_, Decorator, PrivateField,
+  notReserved, notReservedExpr, ecmaPrec, jsScopes,
+} from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
 
@@ -532,100 +452,21 @@ const Program = rule($ => [
   many(alt(Decl, Stmt)),   // Decl first: prefer declaration over IIFE expression-statement
 ]);
 
-// ── Shared (type-free) vocabulary, reused by examples/javascript.ts ──
-// The token set, precedence ladder, and scope map below are pure ECMAScript
-// vocabulary — no rule wiring — so the JS grammar imports them verbatim rather
-// than duplicating them. (The JS grammar then drops the type-only scope keys.)
-
-export {
-  Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
-  Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
-  Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr,
-};
-
-export const ecmaTokens = {
-  // Comments must come before Regex_ to avoid /** ... */ being matched as regex
-  Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
-  Ident, HexNumber, OctalNumber, BinaryNumber, BigInt: BigInt_,
-  Number: Number_, String: String_, Template, Regex: Regex_,
-  Decorator, PrivateField,
-};
-
-export const ecmaPrec = [
-  right('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^='),
-  right('??=', '||=', '&&='),
-  left('??'),
-  left('||'),
-  left('&&'),
-  left('|'),
-  left('^'),
-  left('&'),
-  none('==', '!=', '===', '!=='),
-  none('<', '>', '<=', '>='),
-  left('<<', '>>', '>>>'),
-  left('+', '-'),
-  left('*', '/', '%'),
-  right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
-  right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
-  right(prefix('++', '--')),
-  left(postfix('++', '--')),
-];
-
-export const ecmaScopes = {
-  'keyword.control.conditional': ['if', 'else', 'switch', 'case', 'default'],
-  'keyword.control.loop': ['for', 'while', 'do', 'in', 'of'],
-  'keyword.control.flow': ['return', 'break', 'continue', 'await', 'yield'],
-  'keyword.control.trycatch': ['try', 'catch', 'finally', 'throw'],
-  'keyword.control': ['debugger', 'with'],
-  'keyword.control.import': ['import', 'export', 'from'],
-  'storage.type': ['let', 'const', 'var', 'using'],
-  'storage.type.function': ['function', 'constructor'],
-  'storage.type.class': ['class'],
-  'storage.type.interface': ['interface'],
-  'storage.type.type': ['type'],
-  'storage.type.enum': ['enum'],
-  'storage.type.namespace': ['namespace', 'module'],
-  'storage.modifier': [
-    'public', 'private', 'protected',
-    'static', 'readonly', 'abstract', 'override', 'declare', 'async', 'accessor',
-  ],
-  'storage.type.property': ['get', 'set'],
-  'keyword.other.extends': ['extends', 'implements'],
-  'keyword.operator.expression': ['typeof', 'keyof', 'instanceof', 'as', 'new', 'delete', 'void', 'is', 'satisfies', 'asserts', 'infer'],
-  'keyword.operator.assignment': ['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&='],
-  'keyword.operator.comparison': ['==', '!=', '===', '!=='],
-  'keyword.operator.logical': ['||', '&&', '??'],
-  'keyword.operator.arithmetic': ['+', '-', '*', '/', '%', '**'],
-  'keyword.operator.increment-decrement': ['++', '--'],
-  'keyword.operator.logical.prefix': ['!', '~'],
-  'keyword.operator.bitwise': ['|', '&', '^'],
-  'keyword.operator.bitwise.shift': ['<<', '>>', '>>>'],
-  'storage.type.function.arrow': ['=>'],
-  'punctuation.bracket.round': ['(', ')'],
-  'punctuation.bracket.curly': ['{', '}'],
-  'punctuation.bracket.square': ['[', ']'],
-  'punctuation.accessor': ['.'],
-  'punctuation.accessor.optional': ['?.'],
-  'punctuation.terminator.statement': [';'],
-  'punctuation.separator.comma': [','],
-  'constant.language.boolean': ['true', 'false'],
-  'constant.language.null': ['null', 'undefined'],
-  'variable.language': ['this', 'super'],
-  'support.type.primitive': ['string', 'number', 'boolean', 'object', 'symbol', 'bigint', 'any', 'unknown', 'never', 'void'],
-  'support.class': ['Promise', 'Array', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Error', 'RegExp', 'Date', 'Object', 'Function', 'Symbol'],
-  'support.variable': ['console', 'window', 'document', 'process', 'module', 'require', 'exports', 'global', 'globalThis'],
-  'support.variable.property': ['.length', '.prototype', '.constructor'],
-};
-
 // ── Grammar ──
 
 export default defineGrammar({
   name: 'typescript',
   scopeName: 'source.ts',
 
-  tokens: ecmaTokens,
+  tokens: {
+    // Comments must come before Regex_ to avoid /** ... */ being matched as regex
+    Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
+    Ident, HexNumber, OctalNumber, BinaryNumber, BigInt: BigInt_,
+    Number: Number_, String: String_, Template, Regex: Regex_,
+    Decorator, PrivateField,
+  },
 
+  // The ECMAScript operator-precedence ladder is shared, owned by javascript.ts.
   prec: ecmaPrec,
 
   rules: {
@@ -640,7 +481,62 @@ export default defineGrammar({
     Program,
   },
 
-  scopes: ecmaScopes,
+  // TypeScript EXTENDS the JS scope map (jsScopes, owned by javascript.ts) with the
+  // type layer. The shared entries are reused by reference; the TS-specific ones are
+  // inlined: four type-declaration keywords (storage.type.interface/type/enum/
+  // namespace), the type-operator keyword.operator.expression set (adds keyof/as/is/
+  // satisfies/asserts/infer over JS's), the widened storage.modifier (TS accessibility
+  // + readonly/abstract/override/declare) and keyword.other.extends (adds implements),
+  // and support.type.primitive (TS's primitive type names). The keys are written in
+  // jsScopes' original order — with the type-only keys interleaved at their TS
+  // positions — so the emitted grammar is byte-identical to the prior inline map (a
+  // bare `{ ...jsScopes, …TS-only }` spread would instead append the type-only keys at
+  // the end and flip `module`'s primary scope, changing the generated output).
+  scopes: {
+    'keyword.control.conditional': jsScopes['keyword.control.conditional'],
+    'keyword.control.loop': jsScopes['keyword.control.loop'],
+    'keyword.control.flow': jsScopes['keyword.control.flow'],
+    'keyword.control.trycatch': jsScopes['keyword.control.trycatch'],
+    'keyword.control': jsScopes['keyword.control'],
+    'keyword.control.import': jsScopes['keyword.control.import'],
+    'storage.type': jsScopes['storage.type'],
+    'storage.type.function': jsScopes['storage.type.function'],
+    'storage.type.class': jsScopes['storage.type.class'],
+    'storage.type.interface': ['interface'],
+    'storage.type.type': ['type'],
+    'storage.type.enum': ['enum'],
+    'storage.type.namespace': ['namespace', 'module'],
+    'storage.modifier': [
+      'public', 'private', 'protected',
+      'static', 'readonly', 'abstract', 'override', 'declare', 'async', 'accessor',
+    ],
+    'storage.type.property': jsScopes['storage.type.property'],
+    'keyword.other.extends': ['extends', 'implements'],
+    'keyword.operator.expression': ['typeof', 'keyof', 'instanceof', 'as', 'new', 'delete', 'void', 'is', 'satisfies', 'asserts', 'infer'],
+    'keyword.operator.assignment': jsScopes['keyword.operator.assignment'],
+    'keyword.operator.comparison': jsScopes['keyword.operator.comparison'],
+    'keyword.operator.logical': jsScopes['keyword.operator.logical'],
+    'keyword.operator.arithmetic': jsScopes['keyword.operator.arithmetic'],
+    'keyword.operator.increment-decrement': jsScopes['keyword.operator.increment-decrement'],
+    'keyword.operator.logical.prefix': jsScopes['keyword.operator.logical.prefix'],
+    'keyword.operator.bitwise': jsScopes['keyword.operator.bitwise'],
+    'keyword.operator.bitwise.shift': jsScopes['keyword.operator.bitwise.shift'],
+    'storage.type.function.arrow': jsScopes['storage.type.function.arrow'],
+    'punctuation.bracket.round': jsScopes['punctuation.bracket.round'],
+    'punctuation.bracket.curly': jsScopes['punctuation.bracket.curly'],
+    'punctuation.bracket.square': jsScopes['punctuation.bracket.square'],
+    'punctuation.accessor': jsScopes['punctuation.accessor'],
+    'punctuation.accessor.optional': jsScopes['punctuation.accessor.optional'],
+    'punctuation.terminator.statement': jsScopes['punctuation.terminator.statement'],
+    'punctuation.separator.comma': jsScopes['punctuation.separator.comma'],
+    'constant.language.boolean': jsScopes['constant.language.boolean'],
+    'constant.language.null': jsScopes['constant.language.null'],
+    'variable.language': jsScopes['variable.language'],
+    'support.type.primitive': ['string', 'number', 'boolean', 'object', 'symbol', 'bigint', 'any', 'unknown', 'never', 'void'],
+    'support.class': jsScopes['support.class'],
+    'support.variable': jsScopes['support.variable'],
+    'support.variable.property': jsScopes['support.variable.property'],
+  },
 
   entry: Program,
 });
