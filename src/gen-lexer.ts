@@ -43,6 +43,12 @@ export function createLexer(grammar: CstGrammar) {
   const tplInterpClose = templateToken?.template?.interpClose ?? '';
   const tplBraceOpen = tplInterpOpen.slice(-1);                          // brace that deepens interp nesting ('{' of '${')
   const tplOpenCode = tplOpen.length === 1 ? tplOpen.charCodeAt(0) : -1; // fast path when the open delimiter is one char
+  // A valid single escape sequence inside a template; when declared, an escape that
+  // does not match it is a scan error — but only outside tag position (a tagged
+  // template legally carries invalid escapes). Sticky `y` so it matches at `pos`.
+  const templateEscapeValidRe = templateToken?.escapeValidPattern
+    ? new RegExp(templateToken.escapeValidPattern, 'y')
+    : null;
 
   // Regex-vs-division context: declared by the grammar's `regex` token. ($templateTail
   // is the lexer's own synthetic template-end token — always a completed value, so `/`
@@ -61,10 +67,20 @@ export function createLexer(grammar: CstGrammar) {
   // Scan from inside a template span to its next boundary: an interpolation hole
   // (`interpOpen`) or the closing delimiter (`open`). Delimiters come from the
   // grammar's template token; only called when such a token is declared.
-  function scanTemplateSpan(source: string, pos: number): { endsWithInterp: boolean; end: number } {
+  function scanTemplateSpan(source: string, pos: number, validateEscapes: boolean): { endsWithInterp: boolean; end: number } {
     while (pos < source.length) {
       if (source[pos] === '\\') {
-        pos += 2;
+        // In tag position invalid escapes are legal (validateEscapes=false): just skip
+        // `\` + next char. Otherwise the escape must match the token's declared
+        // escapeValid pattern, else it's a scan error (e.g. `\u{110000}`, `\u{r}`).
+        if (validateEscapes && templateEscapeValidRe) {
+          templateEscapeValidRe.lastIndex = pos;
+          const m = templateEscapeValidRe.exec(source);
+          if (!m) throw new Error(`Invalid escape sequence in template at offset ${pos}`);
+          pos += m[0].length;
+        } else {
+          pos += 2;
+        }
       } else if (source.startsWith(tplInterpOpen, pos)) {
         return { endsWithInterp: true, end: pos + tplInterpOpen.length };
       } else if (source.startsWith(tplOpen, pos)) {
@@ -94,6 +110,15 @@ export function createLexer(grammar: CstGrammar) {
       if (pendingNl) { t.newlineBefore = true; pendingNl = false; }
       tokens.push(t);
     }
+    // Is the previous token a completed VALUE? Then `/` after it is division (not a
+    // regex) and a template after it is TAGGED (not a fresh literal). Same question,
+    // shared by the regex-vs-division check and template escape validation.
+    function prevIsValue(prev: Token | undefined): boolean {
+      if (!prev) return false;
+      const isExprKeyword = prev.type === identTokenName && expressionStartKeywords.has(prev.text);
+      const isParenHead = prev.text === ')' && lastCloseWasParenHead;
+      return !isExprKeyword && !isParenHead && (divisionPrevTypes.has(prev.type) || divisionPrevTexts.has(prev.text));
+    }
 
     while (pos < source.length) {
       // Skip whitespace
@@ -107,7 +132,10 @@ export function createLexer(grammar: CstGrammar) {
           templateStack.pop();
           const startPos = pos;
           pos += tplInterpClose.length;
-          const { endsWithInterp, end } = scanTemplateSpan(source, pos);
+          // Continuation spans (middle/tail): skip escape validation — the whole
+          // template's tagged-ness was decided at its head and isn't re-derivable from
+          // the prev token here (it's the interpolation's last token).
+          const { endsWithInterp, end } = scanTemplateSpan(source, pos, false);
           if (endsWithInterp) {
             push({ type: '$templateMiddle', text: source.slice(startPos, end), offset: startPos });
             templateStack.push(0);
@@ -129,8 +157,11 @@ export function createLexer(grammar: CstGrammar) {
       // Template literal (simple or interpolated) — only if the grammar declares a template token.
       if (templateToken && (tplOpenCode >= 0 ? source.charCodeAt(pos) === tplOpenCode : source.startsWith(tplOpen, pos))) {
         const startPos = pos;
+        // A template right after a value is TAGGED — invalid escapes are then legal
+        // (cooked = undefined), so validate escapes only for an untagged literal.
+        const tagged = prevIsValue(tokens[tokens.length - 1]);
         pos += tplOpen.length;
-        const { endsWithInterp, end } = scanTemplateSpan(source, pos);
+        const { endsWithInterp, end } = scanTemplateSpan(source, pos, !tagged);
         if (endsWithInterp) {
           push({ type: '$templateHead', text: source.slice(startPos, end), offset: startPos });
           templateStack.push(0);
@@ -148,16 +179,8 @@ export function createLexer(grammar: CstGrammar) {
       for (const tm of tokenMatchers) {
         if (tm.name === templateTokenName) continue;
         if (tm.isRegex) {
-          const prev = tokens[tokens.length - 1];
-          if (prev) {
-            // Expression-start keywords (in, throw, return, etc.) flip back to regex context
-            const isExprKeyword = prev.type === identTokenName && expressionStartKeywords.has(prev.text);
-            // A `)` that closed a control head (`if (…) /re/`) is not a value → regex.
-            const isParenHead = prev.text === ')' && lastCloseWasParenHead;
-            if (!isExprKeyword && !isParenHead && (divisionPrevTypes.has(prev.type) || divisionPrevTexts.has(prev.text))) {
-              continue;
-            }
-          }
+          // prev is a completed value → `/` is division, not a regex literal → skip.
+          if (prevIsValue(tokens[tokens.length - 1])) continue;
         }
         const m = remaining.match(tm.regex);
         if (m) {

@@ -35,6 +35,9 @@ const String_      = token(new RegExp(`"(?:[^"\\\\]|${escape})*"|'(?:[^'\\\\]|${
 });
 const Template     = token(/`(?:[^`\\$]|\\.|\$(?!\{))*`/, {
   escape: /\\(?:[nrtbfv0'"\\`$]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})/,
+  // Same well-formed-escape rule as strings; the lexer rejects a malformed `\u`/`\x`
+  // in an *untagged* template (`\u{110000}`, `\u{r}`), but allows it when tagged.
+  escapeValid: new RegExp(escape),
   template: { open: '`', interpOpen: '${', interpClose: '}' },
 });
 const Regex_       = token(/\/(?:[^\/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[gimsuydv]*/, {

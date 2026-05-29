@@ -6,6 +6,11 @@ interface TokenOptions {
   skip?: boolean;
   scope?: string;
   escape?: RegExp;
+  // A regex matching exactly one well-formed escape sequence. Engine-scanned tokens
+  // (templates) validate each `\`-escape against it and reject any that don't match —
+  // unlike `escape` (highlight-only), this drives tokenization. Skipped in tag
+  // position, where invalid escapes are legal (cooked = undefined). Optional.
+  escapeValid?: RegExp;
   regex?: boolean;
   embed?: string;
   // ── Lexer hints (keep gen-parser language-agnostic; all optional) ──
@@ -326,6 +331,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
       flags,
       scope: tok.opts.scope,
       escapePattern: tok.opts.escape?.source,
+      escapeValidPattern: tok.opts.escapeValid?.source,
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,
       template: tok.opts.template,

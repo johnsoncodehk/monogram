@@ -3,7 +3,8 @@ export interface TokenDecl {
   pattern: string;
   flags: string[];
   scope?: string;         // @scope(...) override
-  escapePattern?: string; // @escape /pattern/ — escape sequence regex
+  escapePattern?: string; // @escape /pattern/ — escape sequence regex (highlight only)
+  escapeValidPattern?: string; // one well-formed escape; engine-scanned tokens reject non-matching `\`-escapes (skipped in tag position)
   embed?: string;         // @embed(lang) — embedded language scope name
   // ── Lexer hints (keep the engine language-agnostic; all optional) ──
   identifier?: boolean;          // THE identifier token: engine uses its name for the
