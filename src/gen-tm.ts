@@ -981,8 +981,15 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
     }
   }
 
+  // Walk every expression body, checking each flattened alternative for a
+  // keyword→expr-ref adjacency. `expandAlts` resolves `alt`/`opt`/`group` so a
+  // keyword tucked inside an alternative (e.g. `alt('in','of') Expr` in a for-head)
+  // is seen adjacent to the following ref — without it, only keywords written as a
+  // bare literal directly before the ref (`'in' Expr` as an infix op) are collected,
+  // so `of` would be missed. `sep`/quantifier inner bodies stay opaque to
+  // `expandAlts`, so recurse into them to keep nested adjacencies reachable.
   function walk(expr: RuleExpr) {
-    if (expr.type === 'seq') checkSeq(expr.items);
+    for (const seq of expandAlts(expr)) checkSeq(seq);
     if (expr.type === 'alt' || expr.type === 'seq') expr.items.forEach(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
     if (expr.type === 'sep') walk(expr.element);
@@ -1776,6 +1783,28 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           patterns: [{ include: '#type-inner' }],
         };
       }
+
+      // Bare parameter name (no type annotation): the identifier at a
+      // param-start position — directly after '(' or ',', and immediately
+      // followed by a delimiter that ends a *bare* param: ',' (next param),
+      // ')' (end of list), or '=' (default value). The lookbehind keeps this
+      // from matching default-value expressions (e.g. `x = foo` → only `x`
+      // matches; `foo` is preceded by '=', not '('/','). This gives
+      // unannotated params in function/method/constructor signatures the
+      // variable.parameter scope (the type-annotation path handles annotated
+      // ones). The lookahead deliberately omits ':' and '?' so an annotated
+      // param (`x: T`, `x?: T`, `...args: T[]`) is left for
+      // #param-type-annotation — which is listed first AND, because this
+      // matcher swallows leading whitespace (TextMate prefers the leftmost
+      // match), would otherwise be pre-empted on rest params like `...args:`.
+      repository['declaration-param-name'] = {
+        match: `(?<=[,(])\\s*(\\.\\.\\.)?\\s*(${identPattern})(?=\\s*[,)=])`,
+        captures: {
+          '1': { name: `keyword.operator.spread.${langName}` },
+          '2': { name: `variable.parameter.${langName}` },
+        },
+      };
+      paramsInnerPatterns.push({ include: '#declaration-param-name' });
 
       paramsInnerPatterns.push({ include: '#nested-parens' });
       paramsInnerPatterns.push({ include: '$self' });

@@ -184,7 +184,7 @@
   "repository": {
     "regex-literal": {
       "name": "string.regexp.javascript",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%!~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\belse)|(?<=\\bdo)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcase)|(?<=\\bstatic)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=\\byield)|(?<=^))\\s*(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%!~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\baccessor)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.string.begin.regexp.javascript"
@@ -418,6 +418,17 @@
         }
       ]
     },
+    "declaration-param-name": {
+      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,)=])",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.spread.javascript"
+        },
+        "2": {
+          "name": "variable.parameter.javascript"
+        }
+      }
+    },
     "declaration-params": {
       "name": "meta.parameters.javascript",
       "begin": "\\(",
@@ -433,6 +444,9 @@
         }
       },
       "patterns": [
+        {
+          "include": "#declaration-param-name"
+        },
         {
           "include": "#nested-parens"
         },

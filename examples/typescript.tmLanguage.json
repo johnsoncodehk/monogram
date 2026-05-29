@@ -399,7 +399,7 @@
     },
     "regex-literal": {
       "name": "string.regexp.typescript",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%!~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\bsatisfies)|(?<=\\belse)|(?<=\\bdo)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcase)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=\\byield)|(?<=^))\\s*(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%!~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.string.begin.regexp.typescript"
@@ -794,6 +794,17 @@
         }
       ]
     },
+    "declaration-param-name": {
+      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,)=])",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.spread.typescript"
+        },
+        "2": {
+          "name": "variable.parameter.typescript"
+        }
+      }
+    },
     "declaration-params": {
       "name": "meta.parameters.typescript",
       "begin": "\\(",
@@ -811,6 +822,9 @@
       "patterns": [
         {
           "include": "#param-type-annotation"
+        },
+        {
+          "include": "#declaration-param-name"
         },
         {
           "include": "#nested-parens"

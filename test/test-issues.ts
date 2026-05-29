@@ -315,7 +315,7 @@ const tests: TestCase[] = [
     input: 'function f(a = 1) {}',
     checks: [
       { text: 'f', scope: 'entity.name.function' },
-      { text: 'a', scope: 'variable.other' },
+      { text: 'a', scope: 'variable.parameter' },
       { text: '=', scope: 'keyword.operator.assignment' },
       { text: '1', scope: 'constant.numeric' },
     ],
