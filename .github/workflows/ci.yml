@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 24+ runs the .ts sources directly (native type stripping) — no build, no tsx.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # Regenerate the TextMate grammar and fail if it drifts from the committed file
+      # (i.e. someone edited the grammar but forgot to regenerate).
+      - name: Generate highlighter (must be in sync)
+        run: |
+          node src/cli.ts examples/typescript.ts
+          git diff --exit-code -- examples/typescript.tmLanguage.json
+
+      # Self-contained suites (each exits non-zero on failure). The conformance /
+      # coverage / bench tools are excluded here: they need the external TypeScript
+      # conformance corpus and VS Code's grammar, which aren't available on a runner.
+      - name: Test
+        run: |
+          node test/sanity-check.ts
+          node test/agnostic.ts
+          node test/refactor-guard.ts
+          node test/test-issues.ts

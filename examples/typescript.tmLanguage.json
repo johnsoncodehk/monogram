@@ -1,0 +1,1507 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "typescript",
+  "scopeName": "source.typescript",
+  "patterns": [
+    {
+      "include": "#generic-call"
+    },
+    {
+      "include": "#generic-call-eol"
+    },
+    {
+      "include": "#generic-call-multiline"
+    },
+    {
+      "include": "#shebang"
+    },
+    {
+      "include": "#jsdoc"
+    },
+    {
+      "include": "#tripleslash"
+    },
+    {
+      "include": "#linecomment"
+    },
+    {
+      "include": "#blockcomment"
+    },
+    {
+      "include": "#regex-literal"
+    },
+    {
+      "include": "#string-double"
+    },
+    {
+      "include": "#string-single"
+    },
+    {
+      "include": "#template"
+    },
+    {
+      "include": "#decorator"
+    },
+    {
+      "include": "#type-annotation-var"
+    },
+    {
+      "include": "#type-annotation-return"
+    },
+    {
+      "include": "#object-method-key"
+    },
+    {
+      "include": "#new-expression"
+    },
+    {
+      "include": "#arrow-function-params"
+    },
+    {
+      "include": "#ternary-expression"
+    },
+    {
+      "include": "#function-declaration"
+    },
+    {
+      "include": "#class-declaration"
+    },
+    {
+      "include": "#interface-declaration"
+    },
+    {
+      "include": "#type-declaration"
+    },
+    {
+      "include": "#enum-declaration"
+    },
+    {
+      "include": "#namespace-declaration"
+    },
+    {
+      "include": "#module-declaration"
+    },
+    {
+      "include": "#is-typekw"
+    },
+    {
+      "include": "#keyof-typekw"
+    },
+    {
+      "include": "#extends-typekw"
+    },
+    {
+      "include": "#as-typekw"
+    },
+    {
+      "include": "#implements-typekw"
+    },
+    {
+      "include": "#satisfies-typekw"
+    },
+    {
+      "include": "#hexnumber"
+    },
+    {
+      "include": "#octalnumber"
+    },
+    {
+      "include": "#binarynumber"
+    },
+    {
+      "include": "#bigint"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#scope-keyword-operator-expression"
+    },
+    {
+      "include": "#scope-keyword-control-import"
+    },
+    {
+      "include": "#scope-keyword-control-loop"
+    },
+    {
+      "include": "#scope-keyword-control-flow"
+    },
+    {
+      "include": "#scope-keyword-control-conditional"
+    },
+    {
+      "include": "#scope-keyword-control-trycatch"
+    },
+    {
+      "include": "#scope-keyword-control"
+    },
+    {
+      "include": "#scope-storage-modifier"
+    },
+    {
+      "include": "#scope-keyword-other-extends"
+    },
+    {
+      "include": "#scope-keyword-other"
+    },
+    {
+      "include": "#scope-storage-type-class"
+    },
+    {
+      "include": "#scope-storage-type-function"
+    },
+    {
+      "include": "#scope-storage-type-property"
+    },
+    {
+      "include": "#scope-storage-type"
+    },
+    {
+      "include": "#scope-storage-type-interface"
+    },
+    {
+      "include": "#scope-storage-type-type"
+    },
+    {
+      "include": "#scope-storage-type-enum"
+    },
+    {
+      "include": "#scope-storage-type-namespace"
+    },
+    {
+      "include": "#scope-storage-type-function-arrow"
+    },
+    {
+      "include": "#scope-constant-language-boolean"
+    },
+    {
+      "include": "#scope-constant-language-null"
+    },
+    {
+      "include": "#scope-support-type-primitive"
+    },
+    {
+      "include": "#scope-variable-language"
+    },
+    {
+      "include": "#scope-support-variable"
+    },
+    {
+      "include": "#scope-support-class"
+    },
+    {
+      "include": "#method-call"
+    },
+    {
+      "include": "#known-property-access"
+    },
+    {
+      "include": "#property-access"
+    },
+    {
+      "include": "#operator-overrides"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#scope-punctuation-accessor"
+    },
+    {
+      "include": "#scope-punctuation-separator-comma"
+    },
+    {
+      "include": "#scope-punctuation-bracket-square"
+    },
+    {
+      "include": "#scope-punctuation-bracket-round"
+    },
+    {
+      "include": "#scope-punctuation-bracket-curly"
+    },
+    {
+      "include": "#scope-punctuation-terminator-statement"
+    },
+    {
+      "include": "#scope-punctuation-accessor-optional"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#arrow-parameter"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#ident"
+    },
+    {
+      "include": "#privatefield"
+    },
+    {
+      "include": "#comparison"
+    }
+  ],
+  "repository": {
+    "generic-call": {
+      "name": "meta.generic.typescript",
+      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*(?<T>(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*(?:\\s*<\\s*\\g<T>(?:\\s*,\\s*\\g<T>)*\\s*>)?)\\s*(?:,\\s*\\g<T>)*\\s*>\\s*[\\(`])",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.typeparameters.begin.typescript"
+        }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.typeparameters.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "generic-call-eol": {
+      "name": "meta.generic.typescript",
+      "begin": "(?<=[\\w$\\]\\)])(<)(?=\\s*(?<T>(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*(?:\\s*<\\s*\\g<T>(?:\\s*,\\s*\\g<T>)*\\s*>)?)\\s*(?:,\\s*\\g<T>)*\\s*>\\s*$)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.typeparameters.begin.typescript"
+        }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.typeparameters.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "generic-call-multiline": {
+      "name": "meta.angle-brackets.typescript",
+      "begin": "(?<=[\\w$\\]\\)])(<)(?!(?<B>[^<>]*(?:<\\g<B>>[^<>]*)*)>)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.bracket.angle.open.typescript"
+        }
+      },
+      "end": "(>)(?=\\s*[\\(`])|(>)(?=\\s*$)|(>)|(?=[=\\^+*/%!~;])",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.typeparameters.end.typescript"
+        },
+        "2": {
+          "name": "punctuation.definition.typeparameters.end.typescript"
+        },
+        "3": {
+          "name": "keyword.operator.comparison.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#generic-type"
+        },
+        {
+          "match": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*(?=\\s*[,>])",
+          "name": "entity.name.type.typescript"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.typescript"
+        },
+        {
+          "include": "#ident"
+        },
+        {
+          "include": "#angle-bracket-continuation"
+        }
+      ]
+    },
+    "angle-bracket-continuation": {
+      "begin": "(?=\\s*$)",
+      "end": "(?=>)|(?=[=\\^+*/%!~;])",
+      "patterns": [
+        {
+          "include": "#generic-type"
+        },
+        {
+          "match": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*(?=\\s*[,>]|\\s*$)",
+          "name": "entity.name.type.typescript"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.typescript"
+        },
+        {
+          "include": "#ident"
+        }
+      ]
+    },
+    "generic-type": {
+      "name": "meta.type.generic.typescript",
+      "begin": "((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(<)",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.type.typescript"
+        },
+        "2": {
+          "name": "punctuation.definition.typeparameters.begin.typescript"
+        }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.typeparameters.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "simple-type": {
+      "match": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+      "name": "entity.name.type.typescript"
+    },
+    "comparison": {
+      "match": "[<>]",
+      "name": "keyword.operator.comparison.typescript"
+    },
+    "regex-literal": {
+      "name": "string.regexp.typescript",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%!~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\bsatisfies)|(?<=\\belse)|(?<=\\bdo)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcase)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=\\byield)|(?<=^))\\s*(/)(?![*/])",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.begin.regexp.typescript"
+        }
+      },
+      "end": "(/)([gimsuydv]*)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.regexp.typescript"
+        },
+        "2": {
+          "name": "keyword.other.regexp.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "begin": "\\[",
+          "end": "\\]",
+          "name": "constant.other.character-class.regexp.typescript"
+        },
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.regexp.typescript"
+        }
+      ]
+    },
+    "shebang": {
+      "name": "comment.line.shebang.typescript",
+      "match": "^#![^\\n]*"
+    },
+    "jsdoc": {
+      "name": "comment.block.documentation.typescript",
+      "begin": "\\/\\*\\*",
+      "end": "\\*\\/",
+      "contentName": "meta.embedded.block.jsdoc"
+    },
+    "tripleslash": {
+      "name": "comment.line.triple-slash.typescript",
+      "match": "\\/\\/\\/\\s*<[^\\n]*"
+    },
+    "linecomment": {
+      "name": "comment.line.double-slash.typescript",
+      "match": "\\/\\/[^\\n]*"
+    },
+    "blockcomment": {
+      "name": "comment.block.typescript",
+      "begin": "\\/\\*",
+      "end": "\\*\\/"
+    },
+    "ident": {
+      "name": "variable.other.typescript",
+      "match": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*"
+    },
+    "hexnumber": {
+      "name": "constant.numeric.hex.typescript",
+      "match": "0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*"
+    },
+    "octalnumber": {
+      "name": "constant.numeric.octal.typescript",
+      "match": "0[oO][0-7]+(_[0-7]+)*"
+    },
+    "binarynumber": {
+      "name": "constant.numeric.binary.typescript",
+      "match": "0[bB][01]+(_[01]+)*"
+    },
+    "bigint": {
+      "name": "constant.numeric.bigint.typescript",
+      "match": "[0-9]+(_[0-9]+)*n"
+    },
+    "number": {
+      "name": "constant.numeric.float.typescript",
+      "match": "[0-9]+(_[0-9]+)*(?:\\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+)?"
+    },
+    "string-double": {
+      "name": "string.quoted.double.typescript",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.typescript"
+        }
+      },
+      "end": "\"|$",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.typescript"
+        }
+      ]
+    },
+    "string-single": {
+      "name": "string.quoted.single.typescript",
+      "begin": "'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.typescript"
+        }
+      },
+      "end": "'|$",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.typescript"
+        }
+      ]
+    },
+    "template": {
+      "name": "string.quoted.other.template.typescript",
+      "begin": "`",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.template.begin.typescript"
+        }
+      },
+      "end": "`",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.template.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[nrtbfv0'\"\\\\`$]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.typescript"
+        },
+        {
+          "begin": "\\$\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.template-expression.begin.typescript"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.template-expression.end.typescript"
+            }
+          },
+          "name": "meta.embedded.expression.typescript",
+          "patterns": [
+            {
+              "include": "$self"
+            }
+          ]
+        }
+      ]
+    },
+    "decorator": {
+      "name": "entity.name.function.decorator.typescript",
+      "match": "@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?"
+    },
+    "privatefield": {
+      "name": "variable.other.property.typescript",
+      "match": "#[a-zA-Z_$][a-zA-Z0-9_$]*"
+    },
+    "type-paren": {
+      "begin": "\\(",
+      "end": "\\)",
+      "patterns": [
+        {
+          "include": "#param-type-annotation"
+        },
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "type-object-member": {
+      "name": "meta.type.annotation.member.typescript",
+      "begin": "(#?(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\??)(\\s*:)",
+      "beginCaptures": {
+        "1": {
+          "name": "variable.object.property.typescript"
+        },
+        "2": {
+          "name": "keyword.operator.optional.typescript"
+        },
+        "3": {
+          "name": "keyword.operator.type.annotation.typescript"
+        }
+      },
+      "end": "(?=[;},])",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "type-object-type": {
+      "name": "meta.object-type.typescript",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.typescript"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#type-object-member"
+        },
+        {
+          "include": "#type-inner"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.separator.typescript"
+        }
+      ]
+    },
+    "type-inner": {
+      "patterns": [
+        {
+          "include": "#generic-type"
+        },
+        {
+          "include": "#type-object-type"
+        },
+        {
+          "include": "#type-paren"
+        },
+        {
+          "include": "#scope-support-type-primitive"
+        },
+        {
+          "include": "#scope-constant-language-boolean"
+        },
+        {
+          "include": "#scope-constant-language-null"
+        },
+        {
+          "include": "#scope-keyword-operator-expression"
+        },
+        {
+          "include": "#simple-type"
+        },
+        {
+          "match": "[\\|&]",
+          "name": "keyword.operator.type.typescript"
+        },
+        {
+          "match": "\\[\\]",
+          "name": "keyword.operator.type.array.typescript"
+        },
+        {
+          "match": "=>",
+          "name": "storage.type.function.arrow.typescript"
+        },
+        {
+          "match": ":",
+          "name": "keyword.operator.type.annotation.typescript"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.typescript"
+        }
+      ]
+    },
+    "code-block": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.typescript"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "declaration-body": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.typescript"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-body"
+        },
+        {
+          "include": "#constructor-declaration"
+        },
+        {
+          "include": "#method-signature"
+        },
+        {
+          "include": "#member-type-annotation"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "nested-parens": {
+      "begin": "\\(",
+      "end": "\\)",
+      "patterns": [
+        {
+          "include": "#nested-parens"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "param-type-annotation": {
+      "name": "meta.type.annotation.parameter.typescript",
+      "begin": "(\\.\\.\\.)?\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\??)(\\s*:)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.spread.typescript"
+        },
+        "2": {
+          "name": "variable.parameter.typescript"
+        },
+        "3": {
+          "name": "keyword.operator.optional.typescript"
+        },
+        "4": {
+          "name": "keyword.operator.type.annotation.typescript"
+        }
+      },
+      "end": "(?=[,)]|=(?!>))",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "decl-return-type": {
+      "name": "meta.type.annotation.return.typescript",
+      "begin": "(:)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.type.annotation.typescript"
+        }
+      },
+      "end": "(?=[{;]|=>)",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "declaration-params": {
+      "name": "meta.parameters.typescript",
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.begin.typescript"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#param-type-annotation"
+        },
+        {
+          "include": "#nested-parens"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "declaration-type-params": {
+      "name": "meta.type.parameters.typescript",
+      "begin": "<",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.typeparameters.begin.typescript"
+        }
+      },
+      "end": ">",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.typeparameters.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-type-params"
+        },
+        {
+          "match": "\\bextends\\b",
+          "name": "keyword.other.extends.typescript"
+        },
+        {
+          "match": "\\bconst\\b",
+          "name": "storage.type.typescript"
+        },
+        {
+          "match": "\\bin\\b",
+          "name": "keyword.control.loop.typescript"
+        },
+        {
+          "include": "#type-inner"
+        },
+        {
+          "match": "=",
+          "name": "keyword.operator.assignment.typescript"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.typescript"
+        }
+      ]
+    },
+    "function-declaration": {
+      "name": "meta.function.typescript",
+      "begin": "\\b(function)\\s*(\\*)?\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.function.typescript"
+        },
+        "2": {
+          "name": "keyword.operator.arithmetic.typescript"
+        },
+        "3": {
+          "name": "entity.name.function.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-type-params"
+        },
+        {
+          "include": "#declaration-params"
+        },
+        {
+          "include": "#decl-return-type"
+        },
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "end": "(?<=\\})"
+    },
+    "class-declaration": {
+      "name": "meta.class.typescript",
+      "begin": "\\b(class)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.class.typescript"
+        },
+        "2": {
+          "name": "entity.name.type.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-type-params"
+        },
+        {
+          "include": "#declaration-body"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "end": "(?<=\\})"
+    },
+    "interface-declaration": {
+      "name": "meta.interface.typescript",
+      "begin": "\\b(interface)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.interface.typescript"
+        },
+        "2": {
+          "name": "entity.name.type.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-type-params"
+        },
+        {
+          "include": "#declaration-body"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "end": "(?<=\\})"
+    },
+    "type-body": {
+      "name": "meta.type.body.typescript",
+      "begin": "(=)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.assignment.typescript"
+        }
+      },
+      "end": "(?=[;])",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "type-declaration": {
+      "name": "meta.type.typescript",
+      "begin": "\\b(type)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.type.typescript"
+        },
+        "2": {
+          "name": "entity.name.type.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-type-params"
+        },
+        {
+          "include": "#type-body"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "while": "^\\s*(?:[<,\\[|&(...?:{;\\-.]|(?:is|keyof|typeof|readonly|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|symbol|import)\\b|//|/\\*|(?!if|else|switch|case|default|for|while|do|in|of|return|break|continue|await|yield|try|catch|finally|throw|debugger|with|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set\\b)(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*\\b(?!\\s*[.(]))"
+    },
+    "enum-declaration": {
+      "name": "meta.enum.typescript",
+      "begin": "\\b(enum)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.enum.typescript"
+        },
+        "2": {
+          "name": "entity.name.type.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-body"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "end": "(?<=\\})"
+    },
+    "namespace-declaration": {
+      "name": "meta.namespace.typescript",
+      "begin": "\\b(namespace)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.namespace.typescript"
+        },
+        "2": {
+          "name": "entity.name.type.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-body"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "end": "(?<=\\})"
+    },
+    "module-declaration": {
+      "name": "meta.module.typescript",
+      "begin": "\\b(module)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.namespace.typescript"
+        },
+        "2": {
+          "name": "entity.name.type.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#declaration-body"
+        },
+        {
+          "include": "$self"
+        }
+      ],
+      "end": "(?<=\\})"
+    },
+    "constructor-declaration": {
+      "name": "meta.constructor.typescript",
+      "begin": "\\b(constructor)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.function.typescript"
+        }
+      },
+      "end": "(?<=\\})",
+      "patterns": [
+        {
+          "include": "#declaration-params"
+        },
+        {
+          "include": "#decl-return-type"
+        },
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "method-signature": {
+      "name": "meta.method.typescript",
+      "begin": "\\b((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)\\s*(?=[<(])",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.function.typescript"
+        }
+      },
+      "end": "(?<=\\})|(?=[;\\}])",
+      "patterns": [
+        {
+          "include": "#declaration-type-params"
+        },
+        {
+          "include": "#declaration-params"
+        },
+        {
+          "include": "#decl-return-type"
+        },
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "member-type-annotation": {
+      "name": "meta.type.annotation.member.typescript",
+      "begin": "(#?(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\??)(\\s*:)",
+      "beginCaptures": {
+        "1": {
+          "name": "variable.object.property.typescript"
+        },
+        "2": {
+          "name": "keyword.operator.optional.typescript"
+        },
+        "3": {
+          "name": "keyword.operator.type.annotation.typescript"
+        }
+      },
+      "end": "(?=[;=},)])",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "function-call": {
+      "match": "((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.typescript"
+        }
+      }
+    },
+    "object-method-key": {
+      "match": "((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*:\\s*(?:\\w+\\s+)?[\\(])",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.typescript"
+        }
+      }
+    },
+    "new-expression": {
+      "name": "meta.new-expr.typescript",
+      "begin": "\\b(new)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.typescript"
+        }
+      },
+      "end": "(?=[()}\\],=<;])",
+      "patterns": [
+        {
+          "match": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+          "name": "entity.name.function.typescript"
+        }
+      ]
+    },
+    "method-call": {
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*\\()",
+      "captures": {
+        "1": {
+          "name": "punctuation.accessor.typescript"
+        },
+        "2": {
+          "name": "entity.name.function.typescript"
+        }
+      }
+    },
+    "known-property-access": {
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*(length|prototype|constructor)\\b",
+      "captures": {
+        "1": {
+          "name": "punctuation.accessor.typescript"
+        },
+        "2": {
+          "name": "support.variable.property.typescript"
+        }
+      }
+    },
+    "property-access": {
+      "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.accessor.typescript"
+        },
+        "2": {
+          "name": "entity.other.property.typescript"
+        }
+      }
+    },
+    "arrow-parameter": {
+      "match": "\\b((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)\\s*(?==>)",
+      "captures": {
+        "1": {
+          "name": "variable.parameter.typescript"
+        }
+      }
+    },
+    "arrow-function-params": {
+      "name": "meta.parameters.arrow.typescript",
+      "begin": "(\\()(?=[^()]*\\)\\s*(?::\\s*[^=>{]*)?\\s*=>)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.parameters.begin.typescript"
+        }
+      },
+      "end": "(\\))",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.parameters.end.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#param-type-annotation"
+        },
+        {
+          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,:)?=])",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.spread.typescript"
+            },
+            "2": {
+              "name": "variable.parameter.typescript"
+            }
+          }
+        },
+        {
+          "include": "#nested-parens"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "ternary-expression": {
+      "name": "meta.ternary-expression.typescript",
+      "begin": "(\\?)(?![:.?])",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.ternary.typescript"
+        }
+      },
+      "end": "(:)",
+      "endCaptures": {
+        "1": {
+          "name": "keyword.operator.ternary.typescript"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#ternary-expression"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "is-typekw": {
+      "name": "meta.type.is.typescript",
+      "begin": "\\b(is)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.is.typescript"
+        }
+      },
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|return|break|continue|await|yield|try|catch|finally|throw|debugger|with|import|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "keyof-typekw": {
+      "name": "meta.type.keyof.typescript",
+      "begin": "\\b(keyof)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.keyof.typescript"
+        }
+      },
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|return|break|continue|await|yield|try|catch|finally|throw|debugger|with|import|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "extends-typekw": {
+      "name": "meta.type.extends.typescript",
+      "begin": "\\b(extends)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.extends.extends.typescript"
+        }
+      },
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|return|break|continue|await|yield|try|catch|finally|throw|debugger|with|import|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "as-typekw": {
+      "name": "meta.type.as.typescript",
+      "begin": "\\b(as)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.as.typescript"
+        }
+      },
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|return|break|continue|await|yield|try|catch|finally|throw|debugger|with|import|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "implements-typekw": {
+      "name": "meta.type.implements.typescript",
+      "begin": "\\b(implements)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.extends.implements.typescript"
+        }
+      },
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|return|break|continue|await|yield|try|catch|finally|throw|debugger|with|import|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "satisfies-typekw": {
+      "name": "meta.type.satisfies.typescript",
+      "begin": "\\b(satisfies)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.satisfies.typescript"
+        }
+      },
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|return|break|continue|await|yield|try|catch|finally|throw|debugger|with|import|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "type-annotation-var": {
+      "name": "meta.type.annotation.typescript",
+      "begin": "\\b(let|const|var|using)\\s+((?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\s*:)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.typescript"
+        },
+        "2": {
+          "name": "variable.other.typescript"
+        },
+        "3": {
+          "name": "keyword.operator.type.annotation.typescript"
+        }
+      },
+      "end": "(?=[=;,])|^\\s*(?=if|else|switch|case|default|for|while|do|in|of|return|break|continue|await|yield|try|catch|finally|throw|debugger|with|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "type-annotation-return": {
+      "name": "meta.type.annotation.return.typescript",
+      "begin": "(?<=\\))(:)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.type.annotation.typescript"
+        }
+      },
+      "end": "(?=[{;]|=>)",
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "scope-keyword-operator-expression": {
+      "match": "\\b(is|keyof|typeof|new|asserts|infer|void|as|instanceof|satisfies|delete)\\b",
+      "name": "keyword.operator.expression.typescript"
+    },
+    "scope-storage-modifier": {
+      "match": "\\b(readonly|abstract|async|public|private|protected|declare|static|override|accessor)\\b",
+      "name": "storage.modifier.typescript"
+    },
+    "scope-keyword-other-extends": {
+      "match": "\\b(extends|implements)\\b",
+      "name": "keyword.other.extends.typescript"
+    },
+    "scope-constant-language-boolean": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.typescript"
+    },
+    "scope-constant-language-null": {
+      "match": "\\b(null|undefined)\\b",
+      "name": "constant.language.null.typescript"
+    },
+    "scope-support-type-primitive": {
+      "match": "\\b(void|symbol|string|number|boolean|object|bigint|any|unknown|never)\\b",
+      "name": "support.type.primitive.typescript"
+    },
+    "scope-variable-language": {
+      "match": "\\b(this|super)\\b",
+      "name": "variable.language.typescript"
+    },
+    "scope-keyword-other": {
+      "match": "\\b(unique|meta|out)\\b",
+      "name": "keyword.other.typescript"
+    },
+    "scope-keyword-control-import": {
+      "match": "\\b(import|export|from)\\b",
+      "name": "keyword.control.import.typescript"
+    },
+    "scope-keyword-control-loop": {
+      "match": "\\b(in|for|while|do|of)\\b",
+      "name": "keyword.control.loop.typescript"
+    },
+    "scope-storage-type-class": {
+      "match": "\\b(class)\\b",
+      "name": "storage.type.class.typescript"
+    },
+    "scope-keyword-control-flow": {
+      "match": "\\b(yield|await|return|break|continue)\\b",
+      "name": "keyword.control.flow.typescript"
+    },
+    "scope-storage-type-function": {
+      "match": "\\b(function|constructor)\\b",
+      "name": "storage.type.function.typescript"
+    },
+    "scope-storage-type-property": {
+      "match": "\\b(get|set)\\b",
+      "name": "storage.type.property.typescript"
+    },
+    "scope-storage-type": {
+      "match": "\\b(let|const|var|using)\\b",
+      "name": "storage.type.typescript"
+    },
+    "scope-keyword-control-conditional": {
+      "match": "\\b(if|else|switch|case|default)\\b",
+      "name": "keyword.control.conditional.typescript"
+    },
+    "scope-keyword-control-trycatch": {
+      "match": "\\b(throw|try|catch|finally)\\b",
+      "name": "keyword.control.trycatch.typescript"
+    },
+    "scope-keyword-control": {
+      "match": "\\b(debugger|with)\\b",
+      "name": "keyword.control.typescript"
+    },
+    "scope-storage-type-interface": {
+      "match": "\\b(interface)\\b",
+      "name": "storage.type.interface.typescript"
+    },
+    "scope-storage-type-type": {
+      "match": "\\b(type)\\b",
+      "name": "storage.type.type.typescript"
+    },
+    "scope-storage-type-enum": {
+      "match": "\\b(enum)\\b",
+      "name": "storage.type.enum.typescript"
+    },
+    "scope-storage-type-namespace": {
+      "match": "\\b(namespace|module)\\b",
+      "name": "storage.type.namespace.typescript"
+    },
+    "scope-support-variable": {
+      "match": "\\b(module|console|window|document|process|require|exports|global|globalThis)\\b",
+      "name": "support.variable.typescript"
+    },
+    "scope-support-class": {
+      "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b",
+      "name": "support.class.typescript"
+    },
+    "scope-storage-type-function-arrow": {
+      "match": "=>",
+      "name": "storage.type.function.arrow.typescript"
+    },
+    "scope-punctuation-accessor": {
+      "match": "\\.",
+      "name": "punctuation.accessor.typescript"
+    },
+    "operator-overrides": {
+      "match": "(>>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|=)|(===|!==|==|!=)|(>>>|<<|>>)|(\\?\\?|\\|\\||&&)|(\\+\\+|--)|(\\*\\*|-|\\+|\\*|/|%)|(\\||&|\\^)|(!|~)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.assignment.typescript"
+        },
+        "2": {
+          "name": "keyword.operator.comparison.typescript"
+        },
+        "3": {
+          "name": "keyword.operator.bitwise.shift.typescript"
+        },
+        "4": {
+          "name": "keyword.operator.logical.typescript"
+        },
+        "5": {
+          "name": "keyword.operator.increment-decrement.typescript"
+        },
+        "6": {
+          "name": "keyword.operator.arithmetic.typescript"
+        },
+        "7": {
+          "name": "keyword.operator.bitwise.typescript"
+        },
+        "8": {
+          "name": "keyword.operator.logical.prefix.typescript"
+        }
+      }
+    },
+    "operators": {
+      "match": "\\.\\.\\.|<=|>=",
+      "name": "keyword.operator.typescript"
+    },
+    "scope-punctuation-separator-comma": {
+      "match": ",",
+      "name": "punctuation.separator.comma.typescript"
+    },
+    "scope-punctuation-bracket-square": {
+      "match": "\\[|\\]",
+      "name": "punctuation.bracket.square.typescript"
+    },
+    "scope-punctuation-bracket-round": {
+      "match": "\\(|\\)",
+      "name": "punctuation.bracket.round.typescript"
+    },
+    "scope-punctuation-bracket-curly": {
+      "match": "\\{|\\}",
+      "name": "punctuation.bracket.curly.typescript"
+    },
+    "scope-punctuation-terminator-statement": {
+      "match": ";",
+      "name": "punctuation.terminator.statement.typescript"
+    },
+    "scope-punctuation-accessor-optional": {
+      "match": "\\?\\.",
+      "name": "punctuation.accessor.optional.typescript"
+    },
+    "punctuation": {
+      "match": "\\?|:",
+      "name": "punctuation.typescript"
+    }
+  }
+}

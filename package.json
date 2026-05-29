@@ -1,0 +1,17 @@
+{
+  "name": "monogram",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "gen": "node src/cli.ts examples/typescript.ts",
+    "test": "node test/sanity-check.ts",
+    "conformance": "node test/run-conformance.ts",
+    "coverage": "node test/coverage.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "typescript": "^5.6.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  }
+}
