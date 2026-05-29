@@ -178,6 +178,7 @@ const Expr = rule($ => [
   // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`
   [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
   [$, '[', $, ']'],
+  [$, '!'],   // TS non-null assertion — a LHS-chain tail (access can follow: `x!.y`, `x!()`), unlike update `++`/`--`
   [$, '?', $, ':', $],
   [$, 'as', Type],
   [$, 'instanceof', $],
@@ -484,7 +485,7 @@ export default defineGrammar({
     right('**'),
     right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
     right(prefix('++', '--')),
-    left(postfix('++', '--', '!')),
+    left(postfix('++', '--')),
   ],
 
   rules: {

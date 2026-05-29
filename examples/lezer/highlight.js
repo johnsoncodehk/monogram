@@ -45,8 +45,8 @@ export const highlighting = styleTags({
   "Semi": t.punctuation,
   "Op_25/Op_2a/Op_2a2a/Op_2b/Op_2d/Op_2f": t.arithmeticOperator,
   "QuestionDot": t.derefOperator,
-  "Op_253d/Op_26263d/Op_263d/Op_2a2a3d/Op_2a3d/Op_2b3d/Op_2d3d/Op_2f3d/Op_3c3c3d/Op_3d/Op_3e3e3d/Op_3e3e3e3d/Op_3f3f3d/Op_5e3d/Op_7c3d/Op_7c7c3d": t.definitionOperator,
   "Op_21/Op_2626/Op_3f3f/Op_7c7c/Op_7e": t.logicOperator,
+  "Op_253d/Op_26263d/Op_263d/Op_2a2a3d/Op_2a3d/Op_2b3d/Op_2d3d/Op_2f3d/Op_3c3c3d/Op_3d/Op_3e3e3d/Op_3e3e3e3d/Op_3f3f3d/Op_5e3d/Op_7c3d/Op_7c7c3d": t.definitionOperator,
   "Op_213d/Op_213d3d/Op_3d3d/Op_3d3d3d": t.compareOperator,
   "Op_2b2b/Op_2d2d": t.operator,
 });

@@ -10,7 +10,7 @@ A TextMate grammar is a pile of regexes guessing at a language's structure. It's
 
 Monogram inverts the dependency:
 
-1. **Write the grammar, then prove it.** The grammar is executable. Monogram runs it as a recursive-descent + Pratt parser over the TypeScript conformance suite. Today it parses **95.4%** (3602 / 3776 files); the goal is **100% coverage of the official parser** — at which point the grammar is a *verified, complete model* of the language's syntax, not an approximation.
+1. **Write the grammar, then prove it.** The grammar is executable. Monogram runs it as a recursive-descent + Pratt parser over the TypeScript conformance suite and measures conformance *bidirectionally* — it must accept what `tsc` accepts **and** reject what `tsc` rejects. Today it parses **100% of valid single-file cases** (3376 / 3376 — zero valid-code gaps) and agrees with `tsc` **bidirectionally on 96.7%** (3544 / 3664); the remaining gap is *over-acceptance* (the grammar is still too permissive on some invalid inputs), and the goal is 100% both ways — a *verified, complete model* of the language's syntax, not an approximation.
 
 2. **Derive the highlighter from the proven grammar.** The TextMate grammar is generated from that same parser-validated grammar — never hand-written. Its correctness is underwritten by the parser conformance run, not by regex tuning.
 
@@ -37,7 +37,8 @@ And — from the same grammar — first-pass generators for the rest of the edit
 Validated on TypeScript (grammar: [`examples/typescript.ts`](examples/typescript.ts), 537 lines):
 
 ```
-Parser conformance   95.4%   3602 / 3776 files from the TypeScript conformance suite   (goal: 100%)
+Valid-code coverage  100%    3376 / 3376 valid single-file conformance cases parse   (zero gaps)
+Bidirectional        96.7%   3544 / 3664 — also rejects what tsc rejects   (goal: 100%, gap = over-acceptance)
 Highlighter          99.3%   589 / 593 tokens match VS Code's official grammar
 Generated grammar    42 KB   vs the official hand-written 226 KB
 Engine               language-agnostic — no TypeScript-specific code
@@ -184,4 +185,4 @@ Every highlighter target (TextMate, tree-sitter queries, Lezer styleTags, Monarc
 | ANTLR | yes | — | — |
 | Langium | yes | Monarch (separate) | — |
 | ungrammar | AST types | — | — |
-| **Monogram** | **CST (95.4% → 100%)** | **auto-derived (99.3%)** | **yes** |
+| **Monogram** | **CST (100% valid / 96.7% bidir)** | **auto-derived (99.3%)** | **yes** |

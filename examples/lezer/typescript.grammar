@@ -53,6 +53,7 @@ Expr {
     Expr Dot (Ident | PrivateField) |
     Expr QuestionDot (Ident | PrivateField | ParenL (Expr (Comma Expr)*)? ParenR | BracketL Expr BracketR | Template) |
     Expr BracketL Expr BracketR |
+    Expr Op_21 |
     Expr Question Expr Colon Expr |
     Expr kw_as Type |
     Expr kw_instanceof Expr |
@@ -94,7 +95,7 @@ Expr {
     Expr !l13 Op_2a2a Expr |
     !l14 (Op_21 | Op_7e | Op_2b | Op_2d | kw_typeof | kw_void | kw_delete | kw_await | kw_yield) Expr |
     !l15 (Op_2b2b | Op_2d2d) Expr |
-    Expr !l16 (Op_2b2b | Op_2d2d | Op_21)
+    Expr !l16 (Op_2b2b | Op_2d2d)
 }
 Prop {
   (Spread Expr | (kw_public | kw_private | kw_protected)? (kw_get | kw_set) MemberName ParenL ((Param (Comma Param)*)?)? ParenR (Colon Type)? Block | kw_async? Op_2a? MemberName TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block | Template (Colon Expr | ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block) | MemberName Colon Expr | BracketL Expr (Comma Expr)* BracketR Colon Expr | Ident (Op_3d Expr | Question (Colon Expr)? | ))

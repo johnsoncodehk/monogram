@@ -200,16 +200,55 @@ export function createParser(grammar: CstGrammar) {
     return !!e && e.type === 'ref' && e.name === ruleName;
   }
   type MixfixInfo = { openLit: string; sepLit: string };
+  // A continuation `<lit L1> $self <lit L2> …` whose inner `$self` operand can
+  // over-consume the `L2` the operator needs (e.g. ternary `? $ : $`, conditional
+  // type `extends $ ? $ : $`). The re-bind retries that operand capped.
+  function mixfixOf(items: RuleExpr[], ruleName: string): MixfixInfo | null {
+    if (items.length >= 4
+      && items[0]?.type === 'literal'
+      && selfRefName(items[1], ruleName)
+      && items[2]?.type === 'literal') {
+      return { openLit: items[0].value, sepLit: items[2].value };
+    }
+    return null;
+  }
   const ledMixfix = new Map<object, MixfixInfo>();
   for (const [ruleName, { leds }] of prattClassified.entries()) {
     for (const led of leds) {
+      const info = mixfixOf(led.items, ruleName);
+      if (info) ledMixfix.set(led, info);
+    }
+  }
+  // Same re-bind for left-recursive (non-Pratt) rules like `Type`, whose
+  // continuations carry the implicit leading `$`, so they are already stripped.
+  const contMixfix = new Map<object, MixfixInfo>();
+  for (const [ruleName, { continuations }] of leftRecClassified.entries()) {
+    for (const cont of continuations) {
+      const info = mixfixOf(cont, ruleName);
+      if (info) contMixfix.set(cont, info);
+    }
+  }
+
+  // ── Access-tail LEDs (closed under a postfix operator) ──
+  // A postfix operator (`a++`) turns its operand into an "update expression" that
+  // member-access tails can no longer attach to: `a++[b]`, `a++.c`, `a++()`,
+  // `a++<T>()`, `` a++`x` `` are all ill-formed (member access needs a primary, not
+  // a postfix result). So once a postfix binds, such tails must NOT continue — the
+  // bracketed term belongs to whatever follows (e.g. the next class field after an
+  // ASI). Detected structurally, language-agnostically: an access tail is a non-op
+  // LED that is "closed" (its last item is not a fresh same-rule operand, unlike a
+  // binary/ternary `… in $` / `? $ : $`) AND whose connector is a punctuator, not a
+  // word-operator — so `as`/`satisfies`/`in`/`instanceof`/`?:` still bind after `a++`.
+  const accessTailLeds = new Set<object>();
+  for (const [ruleName, { leds }] of prattClassified.entries()) {
+    for (const led of leds) {
       const it = led.items;
-      if (it.length >= 4
-        && it[0]?.type === 'literal'
-        && selfRefName(it[1], ruleName)
-        && it[2]?.type === 'literal') {
-        ledMixfix.set(led, { openLit: it[0].value, sepLit: it[2].value });
-      }
+      if (it.length === 0) continue;
+      if (it[0].type === 'op' || it[0].type === 'postfix') continue;   // operator LEDs, not tails
+      const last = it[it.length - 1];
+      const lastIsOperand = selfRefName(last, ruleName);                // open binary/ternary operand
+      const wordConnector = it[0].type === 'literal' && /^[A-Za-z]/.test(it[0].value);
+      if (!lastIsOperand && !wordConnector) accessTailLeds.add(led);
     }
   }
 
@@ -523,7 +562,16 @@ export function createParser(grammar: CstGrammar) {
         const contSaved = pos;
         for (const cont of continuations) {
           pos = contSaved;
-          const children = matchSeq(cont);
+          let children = matchSeq(cont);
+          // Mixfix operand re-bind (same fix parsePratt uses): a continuation of the
+          // shape `<lit> $self <lit> …` (e.g. the conditional type `extends $ ? $ : $`)
+          // can have its inner operand over-consume the separator the operator needs
+          // (an `infer U extends T ? …` swallowing the conditional's `?`). Retry it
+          // capped so the operand stops before that separator.
+          if (children === null) {
+            const mix = contMixfix.get(cont);
+            if (mix) { pos = contSaved; children = matchMixfixLed({ items: cont }, rule.name, mix); }
+          }
           if (children !== null) {
             node = {
               kind: 'node',
@@ -587,6 +635,10 @@ export function createParser(grammar: CstGrammar) {
 
       if (!lhs) { pos = saved; return null; }
 
+      // Once a postfix operator binds (`a++`), the operand is an update expression
+      // that access tails (`[…]`, `.x`, `(…)`, `<T>`, tagged template) can't extend.
+      let tailClosed = false;
+
       // LED loop
       while (true) {
         const tok = peek();
@@ -599,6 +651,7 @@ export function createParser(grammar: CstGrammar) {
         for (const led of leds) {
           if (led.items[0]?.type === 'op' || led.items[0]?.type === 'postfix') continue;
           if (maxBp <= minBp) continue;
+          if (tailClosed && accessTailLeds.has(led)) continue;   // no access tail after a postfix
           // Skip a LED whose connector is excluded in this context (e.g. `in` under
           // a no-`in` for-head) — it rebinds to the enclosing rule instead.
           if (suppressCur && led.items[0]?.type === 'literal' && suppressCur.has(led.items[0].value)) continue;
@@ -632,10 +685,13 @@ export function createParser(grammar: CstGrammar) {
         const info = opTable.get(tokKey);
         if (info && info.lbp > minBp) {
           if (info.position === 'postfix') {
-            pos++;
-            const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
-            lhs = { kind: 'node', rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
-            matched = true;
+            if (!tailClosed) {                                   // can't postfix an update expr (`a++ --`)
+              pos++;
+              const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
+              lhs = { kind: 'node', rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
+              tailClosed = true;
+              matched = true;
+            }
           } else {
             pos++;
             const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
