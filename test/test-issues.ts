@@ -573,6 +573,96 @@ const tests: TestCase[] = [
       { text: '`', scope: 'punctuation.definition.string.template.end' },
     ],
   },
+
+  // ── Backlog issues confirmed already-correct in the generated grammar (verified, then locked in) ──
+  {
+    label: '#1021: regex with the v (unicode-sets) flag is recognized',
+    input: 'const re = /foo/v;',
+    checks: [
+      { text: 'foo', scope: 'string.regexp' },
+      { text: 'v', scope: 'keyword.other.regexp' },
+    ],
+  },
+  {
+    label: '#788: optional chaining ?. is the optional accessor',
+    input: 'a?.b;',
+    checks: [
+      { text: '?.', scope: 'punctuation.accessor.optional' },
+      { text: 'b', scope: 'variable.other' },
+    ],
+  },
+  {
+    label: '#1025: for-of without surrounding space keeps `of` a loop keyword',
+    input: 'for(const x of[1]);',
+    checks: [
+      { text: 'of', scope: 'keyword.control.loop' },
+    ],
+  },
+  {
+    label: '#1025: for-in without surrounding space keeps `in` a loop keyword',
+    input: 'for(const k in o);',
+    checks: [
+      { text: 'in', scope: 'keyword.control.loop' },
+    ],
+  },
+  {
+    label: '#815: a class method named `new` is a method name, not the operator',
+    input: 'class C { new() {} }',
+    checks: [
+      { text: 'new', scope: 'entity.name.function' },
+    ],
+  },
+  {
+    label: '#881: `override` modifier on a method is storage.modifier',
+    input: 'class C extends B { override f() {} }',
+    checks: [
+      { text: 'override', scope: 'storage.modifier' },
+      { text: 'f', scope: 'entity.name.function' },
+    ],
+  },
+  {
+    label: '#1066: triple-slash reference directive is a comment',
+    input: `/// <reference path="x.d.ts" />`,
+    checks: [
+      { text: `/// <reference path="x.d.ts" />`, scope: 'comment.line.triple-slash' },
+    ],
+  },
+  {
+    label: '#992: casting to a type named `type` does not break highlighting',
+    input: 'const y = (x as type).z;',
+    checks: [
+      { text: 'as', scope: 'keyword.operator.expression' },
+      { text: 'type', scope: 'entity.name.type' },
+      { text: 'z', scope: 'entity.other.property' },
+    ],
+  },
+  {
+    label: '#995: paren-wrapped `as keyof typeof` assertion tokenizes',
+    input: 'const k = (obj as keyof typeof X);',
+    checks: [
+      { text: 'as', scope: 'keyword.operator.expression' },
+      { text: 'keyof', scope: 'keyword.operator.expression.keyof' },
+      { text: 'typeof', scope: 'keyword.operator.expression' },
+      { text: 'X', scope: 'variable.other' },
+    ],
+  },
+  {
+    label: '#994: default type-parameter value is colored',
+    input: 'function f<T = string>(): T {}',
+    checks: [
+      { text: 'T', scope: 'entity.name.type' },
+      { text: 'string', scope: 'support.type.primitive' },
+    ],
+  },
+  {
+    label: '#1027: nested generic `>>` closes two type-arg lists, not a shift',
+    input: 'let m: Map<string, Array<number>>;',
+    checks: [
+      { text: 'Map', scope: 'entity.name.type' },
+      { text: 'Array', scope: 'entity.name.type' },
+      { text: 'number', scope: 'support.type.primitive' },
+    ],
+  },
 ];
 
 // ══════════════════════════════════════════════════════════════════
