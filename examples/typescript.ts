@@ -532,39 +532,101 @@ const Program = rule($ => [
   many(alt(Decl, Stmt)),   // Decl first: prefer declaration over IIFE expression-statement
 ]);
 
+// ── Shared (type-free) vocabulary, reused by examples/javascript.ts ──
+// The token set, precedence ladder, and scope map below are pure ECMAScript
+// vocabulary — no rule wiring — so the JS grammar imports them verbatim rather
+// than duplicating them. (The JS grammar then drops the type-only scope keys.)
+
+export {
+  Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
+  Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
+  Number_, String_, Template, Regex_, Decorator, PrivateField,
+  notReserved, notReservedExpr,
+};
+
+export const ecmaTokens = {
+  // Comments must come before Regex_ to avoid /** ... */ being matched as regex
+  Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
+  Ident, HexNumber, OctalNumber, BinaryNumber, BigInt: BigInt_,
+  Number: Number_, String: String_, Template, Regex: Regex_,
+  Decorator, PrivateField,
+};
+
+export const ecmaPrec = [
+  right('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^='),
+  right('??=', '||=', '&&='),
+  left('??'),
+  left('||'),
+  left('&&'),
+  left('|'),
+  left('^'),
+  left('&'),
+  none('==', '!=', '===', '!=='),
+  none('<', '>', '<=', '>='),
+  left('<<', '>>', '>>>'),
+  left('+', '-'),
+  left('*', '/', '%'),
+  right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
+  right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
+  right(prefix('++', '--')),
+  left(postfix('++', '--')),
+];
+
+export const ecmaScopes = {
+  'keyword.control.conditional': ['if', 'else', 'switch', 'case', 'default'],
+  'keyword.control.loop': ['for', 'while', 'do', 'in', 'of'],
+  'keyword.control.flow': ['return', 'break', 'continue', 'await', 'yield'],
+  'keyword.control.trycatch': ['try', 'catch', 'finally', 'throw'],
+  'keyword.control': ['debugger', 'with'],
+  'keyword.control.import': ['import', 'export', 'from'],
+  'storage.type': ['let', 'const', 'var', 'using'],
+  'storage.type.function': ['function', 'constructor'],
+  'storage.type.class': ['class'],
+  'storage.type.interface': ['interface'],
+  'storage.type.type': ['type'],
+  'storage.type.enum': ['enum'],
+  'storage.type.namespace': ['namespace', 'module'],
+  'storage.modifier': [
+    'public', 'private', 'protected',
+    'static', 'readonly', 'abstract', 'override', 'declare', 'async', 'accessor',
+  ],
+  'storage.type.property': ['get', 'set'],
+  'keyword.other.extends': ['extends', 'implements'],
+  'keyword.operator.expression': ['typeof', 'keyof', 'instanceof', 'as', 'new', 'delete', 'void', 'is', 'satisfies', 'asserts', 'infer'],
+  'keyword.operator.assignment': ['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&='],
+  'keyword.operator.comparison': ['==', '!=', '===', '!=='],
+  'keyword.operator.logical': ['||', '&&', '??'],
+  'keyword.operator.arithmetic': ['+', '-', '*', '/', '%', '**'],
+  'keyword.operator.increment-decrement': ['++', '--'],
+  'keyword.operator.logical.prefix': ['!', '~'],
+  'keyword.operator.bitwise': ['|', '&', '^'],
+  'keyword.operator.bitwise.shift': ['<<', '>>', '>>>'],
+  'storage.type.function.arrow': ['=>'],
+  'punctuation.bracket.round': ['(', ')'],
+  'punctuation.bracket.curly': ['{', '}'],
+  'punctuation.bracket.square': ['[', ']'],
+  'punctuation.accessor': ['.'],
+  'punctuation.accessor.optional': ['?.'],
+  'punctuation.terminator.statement': [';'],
+  'punctuation.separator.comma': [','],
+  'constant.language.boolean': ['true', 'false'],
+  'constant.language.null': ['null', 'undefined'],
+  'variable.language': ['this', 'super'],
+  'support.type.primitive': ['string', 'number', 'boolean', 'object', 'symbol', 'bigint', 'any', 'unknown', 'never', 'void'],
+  'support.class': ['Promise', 'Array', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Error', 'RegExp', 'Date', 'Object', 'Function', 'Symbol'],
+  'support.variable': ['console', 'window', 'document', 'process', 'module', 'require', 'exports', 'global', 'globalThis'],
+  'support.variable.property': ['.length', '.prototype', '.constructor'],
+};
+
 // ── Grammar ──
 
 export default defineGrammar({
   name: 'typescript',
   scopeName: 'source.ts',
 
-  tokens: {
-    // Comments must come before Regex_ to avoid /** ... */ being matched as regex
-    Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
-    Ident, HexNumber, OctalNumber, BinaryNumber, BigInt: BigInt_,
-    Number: Number_, String: String_, Template, Regex: Regex_,
-    Decorator, PrivateField,
-  },
+  tokens: ecmaTokens,
 
-  prec: [
-    right('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^='),
-    right('??=', '||=', '&&='),
-    left('??'),
-    left('||'),
-    left('&&'),
-    left('|'),
-    left('^'),
-    left('&'),
-    none('==', '!=', '===', '!=='),
-    none('<', '>', '<=', '>='),
-    left('<<', '>>', '>>>'),
-    left('+', '-'),
-    left('*', '/', '%'),
-    right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
-    right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
-    right(prefix('++', '--')),
-    left(postfix('++', '--')),
-  ],
+  prec: ecmaPrec,
 
   rules: {
     Type, TypeMember, DecoratorExpr, TypeofRef,
@@ -578,51 +640,7 @@ export default defineGrammar({
     Program,
   },
 
-  scopes: {
-    'keyword.control.conditional': ['if', 'else', 'switch', 'case', 'default'],
-    'keyword.control.loop': ['for', 'while', 'do', 'in', 'of'],
-    'keyword.control.flow': ['return', 'break', 'continue', 'await', 'yield'],
-    'keyword.control.trycatch': ['try', 'catch', 'finally', 'throw'],
-    'keyword.control': ['debugger', 'with'],
-    'keyword.control.import': ['import', 'export', 'from'],
-    'storage.type': ['let', 'const', 'var', 'using'],
-    'storage.type.function': ['function', 'constructor'],
-    'storage.type.class': ['class'],
-    'storage.type.interface': ['interface'],
-    'storage.type.type': ['type'],
-    'storage.type.enum': ['enum'],
-    'storage.type.namespace': ['namespace', 'module'],
-    'storage.modifier': [
-      'public', 'private', 'protected',
-      'static', 'readonly', 'abstract', 'override', 'declare', 'async', 'accessor',
-    ],
-    'storage.type.property': ['get', 'set'],
-    'keyword.other.extends': ['extends', 'implements'],
-    'keyword.operator.expression': ['typeof', 'keyof', 'instanceof', 'as', 'new', 'delete', 'void', 'is', 'satisfies', 'asserts', 'infer'],
-    'keyword.operator.assignment': ['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&='],
-    'keyword.operator.comparison': ['==', '!=', '===', '!=='],
-    'keyword.operator.logical': ['||', '&&', '??'],
-    'keyword.operator.arithmetic': ['+', '-', '*', '/', '%', '**'],
-    'keyword.operator.increment-decrement': ['++', '--'],
-    'keyword.operator.logical.prefix': ['!', '~'],
-    'keyword.operator.bitwise': ['|', '&', '^'],
-    'keyword.operator.bitwise.shift': ['<<', '>>', '>>>'],
-    'storage.type.function.arrow': ['=>'],
-    'punctuation.bracket.round': ['(', ')'],
-    'punctuation.bracket.curly': ['{', '}'],
-    'punctuation.bracket.square': ['[', ']'],
-    'punctuation.accessor': ['.'],
-    'punctuation.accessor.optional': ['?.'],
-    'punctuation.terminator.statement': [';'],
-    'punctuation.separator.comma': [','],
-    'constant.language.boolean': ['true', 'false'],
-    'constant.language.null': ['null', 'undefined'],
-    'variable.language': ['this', 'super'],
-    'support.type.primitive': ['string', 'number', 'boolean', 'object', 'symbol', 'bigint', 'any', 'unknown', 'never', 'void'],
-    'support.class': ['Promise', 'Array', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Error', 'RegExp', 'Date', 'Object', 'Function', 'Symbol'],
-    'support.variable': ['console', 'window', 'document', 'process', 'module', 'require', 'exports', 'global', 'globalThis'],
-    'support.variable.property': ['.length', '.prototype', '.constructor'],
-  },
+  scopes: ecmaScopes,
 
   entry: Program,
 });
