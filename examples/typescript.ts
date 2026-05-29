@@ -20,7 +20,16 @@ const OctalNumber  = token(/0[oO][0-7]+(_[0-7]+)*(?![0-9A-Za-z_$\\])/,          
 const BinaryNumber = token(/0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\])/,                            { scope: 'constant.numeric.binary' });
 const BigInt_      = token(/[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\])/,                              { scope: 'constant.numeric.bigint' });
 const Number_      = token(/[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\])/);
-const String_      = token(/"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'/, {
+// A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must
+// match their strict forms — a `\u{cp}` with cp ≤ 0x10FFFF, a 4-hex `\uXXXX`, or a
+// 2-hex `\xXX` — while `\` + any *other* char (\n, \\, \q non-escape, line
+// continuation) stays valid via `[^ux]`. A malformed `\u`/`\x` (e.g. `\u{110000}`,
+// `\u{r}`, `\u{}`, `\u{67`) matches no escape, so the string matches no token and the
+// lexer throws — TS's exact rejection. The in-range codepoint is `0*` leading zeros
+// then 1–5 hex (0–0xFFFFF) or `10`+4 hex (0x100000–0x10FFFF).
+const codePoint = String.raw`0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})`;
+const escape    = String.raw`\\(?:u\{${codePoint}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux])`;
+const String_      = token(new RegExp(`"(?:[^"\\\\]|${escape})*"|'(?:[^'\\\\]|${escape})*'`), {
   string: true,
   escape: /\\(?:[nrtbfv0'"\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})/,
 });

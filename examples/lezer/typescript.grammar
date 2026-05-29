@@ -259,7 +259,7 @@ Program {
   // INCOMPLETE: BinaryNumber regex /0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\])/ exceeds Lezer token syntax; external tokenizer.
   // INCOMPLETE: BigInt regex /[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\])/ exceeds Lezer token syntax; external tokenizer.
   // INCOMPLETE: Number regex /[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\])/ exceeds Lezer token syntax; external tokenizer.
-  // INCOMPLETE: String regex /"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'/ exceeds Lezer token syntax; external tokenizer.
+  // INCOMPLETE: String regex /"(?:[^"\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*'/ exceeds Lezer token syntax; external tokenizer.
   // INCOMPLETE: Template is produced by the external tokenizer
   // (context-sensitive: template interpolation).
   // INCOMPLETE: Regex is produced by the external tokenizer
