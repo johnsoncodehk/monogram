@@ -411,7 +411,7 @@
     },
     "jsdoc": {
       "name": "comment.block.documentation.typescript",
-      "begin": "\\/\\*\\*",
+      "begin": "\\/\\*\\*(?!\\/)",
       "end": "\\*\\/",
       "contentName": "meta.embedded.block.jsdoc"
     },

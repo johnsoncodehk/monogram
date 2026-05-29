@@ -27,7 +27,7 @@ Type {
   (Ident (kw_is Type)? | Type AngleL (Type (Comma Type)*)? AngleR | Type BracketL BracketR | Type Op_7c Type | Type Op_26 Type | Op_7c Type | Op_26 Type | kw_keyof Type | kw_typeof TypeofRef | kw_readonly Type | ParenL Type ParenR | TypeParams? ParenL (Param (Comma Param)*)? ParenR Arrow Type | kw_abstract? kw_new TypeParams? ParenL (Param (Comma Param)*)? ParenR Arrow Type | BracketL (Spread? (Ident Question? Colon)? Spread? Type Question? Comma?)* BracketR | BraceL (TypeMember (Semi | Comma)?)* BraceR | kw_asserts Ident (kw_is Type)? | Type kw_extends Type Question Type Colon Type | kw_infer Ident (kw_extends Type (Question Type Colon Type)?)? | String | Number | HexNumber | OctalNumber | BinaryNumber | BigInt | Op_2d (Number | BigInt) | kw_true | kw_false | kw_null | kw_undefined | kw_void | kw_this | kw_unique kw_symbol | kw_import ParenL Type ParenR | Template | Type BracketL Type BracketR | Type Dot Ident)
 }
 TypeMember {
-  (kw_new? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Op_2b | Op_2d)? kw_readonly? BracketL (Ident (kw_in Type (kw_as Type)? BracketR (Op_2b | Op_2d)? Question? Colon Type | Colon Type BracketR (Colon Type)?) | Expr BracketR Question? (TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Colon Type)?)) | kw_readonly Ident Question? Colon Type | (Ident | Number | String | PrivateField) Question? (TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Colon Type)?))
+  (kw_new? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Op_2b | Op_2d)? kw_readonly? BracketL (Ident (kw_in Type (kw_as Type)? BracketR (Op_2b | Op_2d)? Question? Colon Type | Colon Type BracketR (Colon Type)?) | Expr BracketR Question? (TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Colon Type)?) | BracketR (Colon Type)?) | kw_readonly Ident Question? Colon Type | (Ident | Number | String | PrivateField) Question? (TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? | (Colon Type)?))
 }
 DecoratorExpr {
   Decorator (ParenL (Expr (Comma Expr)*)? ParenR | AngleL (Type (Comma Type)*)? AngleR ParenL (Expr (Comma Expr)*)? ParenR)?
@@ -48,7 +48,7 @@ Expr {
     kw_this |
     kw_super |
     Spread Expr |
-    Expr AngleL (Type (Comma Type)*)? AngleR (ParenL (Expr (Comma Expr)*)? ParenR | Template)? |
+    Expr AngleL (Type (Comma Type)*)? AngleR (ParenL (Expr (Comma Expr)*)? ParenR | Template | ) |
     Expr ParenL (Expr (Comma Expr)*)? ParenR |
     Expr Dot (Ident | PrivateField) |
     Expr QuestionDot (Ident | PrivateField | ParenL (Expr (Comma Expr)*)? ParenR | BracketL Expr BracketR | Template) |
@@ -145,7 +145,7 @@ TypeParams {
   AngleL (TypeParam (Comma TypeParam)*)? AngleR
 }
 TypeParam {
-  ((kw_const | kw_in | kw_out | kw_public | kw_private | kw_protected | kw_readonly)+ Ident (kw_extends Type)? (Op_3d Type)? | Ident (kw_extends Type)? (Op_3d Type)?)
+  ((kw_const | kw_in | kw_out | kw_public | kw_private | kw_protected | kw_readonly)+ Ident (kw_extends Type)? (Op_3d Type)? | (kw_const | kw_in | kw_out | kw_public | kw_private | kw_protected | kw_readonly) (Ident | kw_in | kw_out) (kw_extends Type)? (Op_3d Type)? | (Ident | kw_in | kw_out) (kw_extends Type)? (Op_3d Type)?)
 }
 Decl {
   (kw_async? kw_function Op_2a? Ident TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? (Block | Semi?) | kw_interface Ident TypeParams? (kw_extends (Type (Comma Type)*)?)? BraceL (InterfaceMember (Semi | Comma)?)* BraceR | kw_type Ident TypeParams? Op_3d Type Semi? | DecoratorExpr* kw_abstract? kw_class Ident TypeParams? (kw_extends ClassHeritage)? (kw_implements (Type (Comma Type)*)?)? BraceL ClassMember* BraceR | kw_enum Ident BraceL (EnumMember (Comma EnumMember)*)? BraceR | kw_declare kw_function Op_2a? Ident TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Semi? | kw_declare (Decl | Stmt) | kw_namespace Ident BraceL Stmt* BraceR | kw_module (String | Ident) BraceL Stmt* BraceR | kw_export (Decl | Stmt) | kw_export kw_default (kw_async? kw_function Op_2a? Ident? TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? (Block | Semi?) | kw_abstract kw_class Ident TypeParams? (kw_extends ClassHeritage)? (kw_implements (Type (Comma Type)*)?)? BraceL ClassMember* BraceR | kw_abstract kw_class TypeParams? (kw_extends ClassHeritage)? (kw_implements (Type (Comma Type)*)?)? BraceL ClassMember* BraceR | Expr Semi?) | kw_export Op_2a (kw_from String Semi? | kw_as Ident kw_from String Semi?) | kw_export BraceL (ImportSpecifier (Comma ImportSpecifier)*)? BraceR (kw_from String)? Semi? | kw_export Op_3d Expr Semi? | kw_export kw_type BraceL (ImportSpecifier (Comma ImportSpecifier)*)? BraceR (kw_from String)? Semi? | kw_const kw_enum Ident BraceL (EnumMember (Comma EnumMember)*)? BraceR | kw_import (ImportClause kw_from String Semi? | kw_type ImportClause kw_from String Semi? | Ident Op_3d Expr Semi? | String Semi?) | DecoratorExpr* kw_export (Decl | Stmt))
@@ -248,7 +248,7 @@ Program {
 
 @tokens {
   Shebang { "#!"![\n]* }
-  // INCOMPLETE: JSDoc block span "\\/\\*\\*"…"\\*\\/" → external tokenizer.
+  // INCOMPLETE: JSDoc block span "\\/\\*\\*(?!\\/)"…"\\*\\/" → external tokenizer.
   TripleSlash { "/""/""/"$[ \t\n\r]*"<"![\n]* }
   LineComment { "/""/"![\n]* }
   // INCOMPLETE: BlockComment block span "\\/\\*"…"\\*\\/" → external tokenizer.
@@ -337,5 +337,5 @@ Program {
 
 // ── INCOMPLETE / hand-tuning notes ──
 // - Rule Expr: Pratt operators (op/prefix/postfix) mapped to precedence-marked binary/unary alternatives. Lezer is GLR + @precedence, not Pratt, so deeply overloaded operators (e.g. '<' as both comparison and type-args, '+' infix vs prefix) may need hand-tuning or the external tokenizer to fully disambiguate.
-// - Block-style token JSDoc (delimiters "\\/\\*\\*"…"\\*\\/") routed to the external tokenizer; Lezer single tokens can't longest-match a multi-char close delimiter.
+// - Block-style token JSDoc (delimiters "\\/\\*\\*(?!\\/)"…"\\*\\/") routed to the external tokenizer; Lezer single tokens can't longest-match a multi-char close delimiter.
 // - Block-style token BlockComment (delimiters "\\/\\*"…"\\*\\/") routed to the external tokenizer; Lezer single tokens can't longest-match a multi-char close delimiter.

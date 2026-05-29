@@ -9,7 +9,7 @@
 //
 // This module must also supply these tokens that exceeded Lezer's @tokens syntax
 // (straightforward longest-match scanners — INCOMPLETE, regex listed for porting):
-//   JSDoc: /\/\*\*[\s\S]*?\*\//  (skip)
+//   JSDoc: /\/\*\*(?!\/)[\s\S]*?\*\//  (skip)
 //   BlockComment: /\/\*[\s\S]*?\*\//  (skip)
 //   Ident: /(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/
 //   Number: /[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+)?/

@@ -312,15 +312,17 @@ const Stmt = rule($ => [
 
 const TypeParam = rule($ => {
   // TS parses any modifier soup before a type-param name (variance `in`/`out`,
-  // `const`, even bogus `public`), then reports invalid ones post-parse. `many1`
-  // requires a name AFTER the modifiers, so a param NAMED like a modifier (`<out>`,
-  // `<in = any>`) falls through to the bare-name branch (longest-match: when a
-  // name is present the modifier branch wins because it consumes more).
+  // `const`, even bogus `public`), then reports invalid ones post-parse. A param
+  // can also be NAMED like a modifier — `<in>`, `<out = any>`, and even the
+  // variance-modified `<in in>` / `<out out>` (first `in`/`out` is the modifier,
+  // second is the name). Longest-match picks among:
   const tail = [opt('extends', Type), opt('=', Type)];
   const mod = alt('const', 'in', 'out', 'public', 'private', 'protected', 'readonly');
+  const name = alt(Ident, 'in', 'out');  // a name may itself be a contextual variance keyword
   return [
-    [many1(mod), Ident, ...tail],
-    [Ident, ...tail],
+    [many1(mod), Ident, ...tail],  // modifier soup + real-ident name: `<const in T>`, `<in T>`
+    [mod, name, ...tail],          // single modifier + in/out-named param: `<in in>`, `<out out>`
+    [name, ...tail],               // bare name, incl. `<in>`, `<out>`: `<T>`, `<in = any>`
   ];
 });
 

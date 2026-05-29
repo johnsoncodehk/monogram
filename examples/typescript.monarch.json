@@ -185,7 +185,7 @@
         "white"
       ],
       [
-        "\\/\\*\\*",
+        "\\/\\*\\*(?!\\/)",
         {
           "token": "comment",
           "next": "@comment_slashstarstar"
@@ -251,7 +251,7 @@
         "white"
       ],
       [
-        "\\/\\*\\*",
+        "\\/\\*\\*(?!\\/)",
         {
           "token": "comment",
           "next": "@comment_slashstarstar"
@@ -317,7 +317,7 @@
         "white"
       ],
       [
-        "\\/\\*\\*",
+        "\\/\\*\\*(?!\\/)",
         {
           "token": "comment",
           "next": "@comment_slashstarstar"
@@ -477,7 +477,7 @@
         "white"
       ],
       [
-        "\\/\\*\\*",
+        "\\/\\*\\*(?!\\/)",
         {
           "token": "comment",
           "next": "@comment_slashstarstar"
