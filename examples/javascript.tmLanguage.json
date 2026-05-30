@@ -1519,36 +1519,141 @@
       "name": "storage.type.function.arrow.js"
     },
     "operator-overrides": {
-      "match": "(>>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|=)|(===|!==|==|!=)|(>>>|<<|>>)|(\\?\\?|\\|\\||&&)|(\\+\\+|--)|(\\*\\*|\\*|\\+|-|/|%)|(\\||\\^|&)|(!|~)",
+      "match": "(>>>=)|(\\*\\*=)|(<<=)|(>>=)|(\\?\\?=)|(\\|\\|=)|(&&=)|(===)|(!==)|(>>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(\\?\\?)|(\\|\\|)|(&&)|(==)|(!=)|(<=)|(>=)|(<<)|(>>)|(\\*\\*)|(\\+\\+)|(--)|(\\*)|(=)|(\\|)|(\\^)|(&)|(<)|(>)|(\\+)|(-)|(/)|(%)|(!)|(~)",
       "captures": {
         "1": {
           "name": "keyword.operator.assignment.js"
         },
         "2": {
-          "name": "keyword.operator.comparison.js"
+          "name": "keyword.operator.assignment.js"
         },
         "3": {
-          "name": "keyword.operator.bitwise.shift.js"
+          "name": "keyword.operator.assignment.js"
         },
         "4": {
-          "name": "keyword.operator.logical.js"
+          "name": "keyword.operator.assignment.js"
         },
         "5": {
-          "name": "keyword.operator.increment-decrement.js"
+          "name": "keyword.operator.assignment.js"
         },
         "6": {
-          "name": "keyword.operator.arithmetic.js"
+          "name": "keyword.operator.assignment.js"
         },
         "7": {
-          "name": "keyword.operator.bitwise.js"
+          "name": "keyword.operator.assignment.js"
         },
         "8": {
+          "name": "keyword.operator.comparison.js"
+        },
+        "9": {
+          "name": "keyword.operator.comparison.js"
+        },
+        "10": {
+          "name": "keyword.operator.bitwise.shift.js"
+        },
+        "11": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "12": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "13": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "14": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "15": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "16": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "17": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "18": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "19": {
+          "name": "keyword.operator.logical.js"
+        },
+        "20": {
+          "name": "keyword.operator.logical.js"
+        },
+        "21": {
+          "name": "keyword.operator.logical.js"
+        },
+        "22": {
+          "name": "keyword.operator.comparison.js"
+        },
+        "23": {
+          "name": "keyword.operator.comparison.js"
+        },
+        "24": {
+          "name": "keyword.operator.relational.js"
+        },
+        "25": {
+          "name": "keyword.operator.relational.js"
+        },
+        "26": {
+          "name": "keyword.operator.bitwise.shift.js"
+        },
+        "27": {
+          "name": "keyword.operator.bitwise.shift.js"
+        },
+        "28": {
+          "name": "keyword.operator.arithmetic.js"
+        },
+        "29": {
+          "name": "keyword.operator.increment-decrement.js"
+        },
+        "30": {
+          "name": "keyword.operator.increment-decrement.js"
+        },
+        "31": {
+          "name": "keyword.operator.arithmetic.js"
+        },
+        "32": {
+          "name": "keyword.operator.assignment.js"
+        },
+        "33": {
+          "name": "keyword.operator.bitwise.js"
+        },
+        "34": {
+          "name": "keyword.operator.bitwise.js"
+        },
+        "35": {
+          "name": "keyword.operator.bitwise.js"
+        },
+        "36": {
+          "name": "keyword.operator.relational.js"
+        },
+        "37": {
+          "name": "keyword.operator.relational.js"
+        },
+        "38": {
+          "name": "keyword.operator.arithmetic.js"
+        },
+        "39": {
+          "name": "keyword.operator.arithmetic.js"
+        },
+        "40": {
+          "name": "keyword.operator.arithmetic.js"
+        },
+        "41": {
+          "name": "keyword.operator.arithmetic.js"
+        },
+        "42": {
+          "name": "keyword.operator.logical.prefix.js"
+        },
+        "43": {
           "name": "keyword.operator.logical.prefix.js"
         }
       }
     },
     "operators": {
-      "match": "\\.\\.\\.|<=|>=|<|>",
+      "match": "\\.\\.\\.",
       "name": "keyword.operator.js"
     },
     "scope-punctuation-bracket-round": {

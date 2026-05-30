@@ -1089,7 +1089,10 @@ function generateAngleBracketPatterns(
   const tpEnd = `punctuation.definition.typeparameters.end.${langName}`;
   const typeScope = `entity.name.type.${langName}`;
   const commaScope = `punctuation.separator.comma.${langName}`;
-  const compScope = `keyword.operator.comparison.${langName}`;
+  // A bare `<`/`>` operator (not a type-parameter bracket) is RELATIONAL, the
+  // TextMate convention the official grammar uses (`< > <= >=` = relational;
+  // `== != === !==` = comparison). Matches official so themes color them alike.
+  const relScope = `keyword.operator.relational.${langName}`;
   const angleOpen = `punctuation.bracket.angle.open.${langName}`;
 
   // All confirmed-generic scopes share type-inner (resolved at tokenize time).
@@ -1129,7 +1132,7 @@ function generateAngleBracketPatterns(
     endCaptures: {
       '1': { name: tpEnd },
       '2': { name: tpEnd },
-      '3': { name: compScope },
+      '3': { name: relScope },
     },
     patterns: [
       { include: '#generic-type' },
@@ -1171,10 +1174,11 @@ function generateAngleBracketPatterns(
     name: typeScope,
   };
 
-  // ── Layer 4: flat comparison fallback ──
+  // ── Layer 4: flat relational fallback ──
+  // A `<`/`>` that survives the generic/JSX/cast layers is a relational operator.
   result['comparison'] = {
     match: '[<>]',
-    name: compScope,
+    name: relScope,
   };
 
   return result;
@@ -3106,7 +3110,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         innerPatterns.push({ include: '#decl-return-type' });
       }
       if (decl.hasBody) {
-        innerPatterns.push({ include: decl.hasParams ? '#code-block' : '#declaration-body' });
+        // An enum body is special: its members are NAMES, not statements, and the
+        // TextMate convention scopes them `variable.other.enummember` (parallel to
+        // the `storage.type.enum` keyword → `entity.name.type.enum` name remap).
+        // Keyed on the scope subtype, not the word "enum", so any grammar that
+        // scopes its enum keyword `storage.type.enum` gets enum-member coloring for
+        // free. A member is an identifier in member position — right after the `{`
+        // or a `,` and immediately before `=` / `,` / `}` — which excludes any
+        // identifier appearing in a member's initializer value (after `=`).
+        const isEnum = /(^|\.)enum$/.test(decl.keywordScope);
+        if (isEnum) {
+          if (!repository['enum-body']) {
+            repository['enum-member'] = {
+              match: `(?<=[{,])\\s*(${identPattern})(?=\\s*[=,}])`,
+              captures: { '1': { name: `variable.other.enummember.${langName}` } },
+            };
+            repository['enum-body'] = {
+              begin: '\\{',
+              beginCaptures: { '0': { name: `punctuation.definition.block.${langName}` } },
+              end: '\\}',
+              endCaptures: { '0': { name: `punctuation.definition.block.${langName}` } },
+              patterns: [{ include: '#enum-member' }, { include: '$self' }],
+            };
+          }
+          innerPatterns.push({ include: '#enum-body' });
+        } else {
+          innerPatterns.push({ include: decl.hasParams ? '#code-block' : '#declaration-body' });
+        }
       }
 
       let end = '(?<=\\})';
@@ -4027,35 +4057,26 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     }
   }
 
-  // Overridden keyword operators: merge into ONE pattern with capture-groups per scope.
-  // This ensures longest-match-first across ALL scope groups (e.g. '===' before '=').
+  // Overridden keyword operators: ONE pattern whose alternatives are ordered
+  // GLOBALLY by length descending, with a capture per operator mapped to its
+  // scope. A regex alternation is ordered-first-match, NOT longest-match, so
+  // grouping per scope and concatenating `(group1)|(group2)` lets a short op in
+  // an earlier group shadow a longer op in a later one: e.g. `=` (assignment)
+  // would match the first char of `===` (comparison) before the comparison group
+  // is ever tried, tokenizing `===` as three `=`. Sorting EVERY operator into a
+  // single global length-descending alternation is the only ordering that keeps
+  // longer operators winning across scope boundaries (`===` before `=`, `>=`
+  // before nothing-shorter, `**=` before `**` before `*`).
   if (overriddenOps.length > 0) {
-    const opGroups = new Map<string, string[]>();
-    for (const op of overriddenOps) {
-      const scope = getScope(scopeOverrides,op)!;
-      if (!opGroups.has(scope)) opGroups.set(scope, []);
-      opGroups.get(scope)!.push(op);
-    }
-    // Sort groups by max operator length (descending) so longer operators match first;
-    // use min length as tiebreaker so groups with all-long operators come first
-    const sortedGroups = [...opGroups.entries()].sort((a, b) => {
-      const maxA = Math.max(...a[1].map(o => o.length));
-      const maxB = Math.max(...b[1].map(o => o.length));
-      if (maxB !== maxA) return maxB - maxA;
-      const minA = Math.min(...a[1].map(o => o.length));
-      const minB = Math.min(...b[1].map(o => o.length));
-      return minB - minA;
-    });
-    // Build combined regex: (group1_ops)|(group2_ops)|... with captures per group
+    const flat = overriddenOps
+      .map(op => ({ op, scope: getScope(scopeOverrides, op)! }))
+      .sort((a, b) => b.op.length - a.op.length);
     const parts: string[] = [];
     const captures: Record<string, { name: string }> = {};
-    let captureIdx = 1;
-    for (const [scope, ops] of sortedGroups) {
-      const sorted = [...ops].sort((a, b) => b.length - a.length);
-      parts.push(`(${sorted.map(escapeRegex).join('|')})`);
-      captures[String(captureIdx)] = { name: `${scope}.${langName}` };
-      captureIdx++;
-    }
+    flat.forEach((f, i) => {
+      parts.push(`(${escapeRegex(f.op)})`);
+      captures[String(i + 1)] = { name: `${f.scope}.${langName}` };
+    });
     repository['operator-overrides'] = {
       match: parts.join('|'),
       captures,

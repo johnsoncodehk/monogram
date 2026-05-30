@@ -12,12 +12,15 @@ export const tests: TestCase[] = [
 
   // ── Angle bracket: typeof < comparison ──
   {
-    label: '#1050: typeof y < string is comparison not generic',
+    label: '#1050: typeof y < string is a relational operator not generic',
     input: `x = typeof y < 'z';`,
     checks: [
       { text: 'typeof', scope: 'keyword.operator.expression' },
       { text: 'y', scope: 'variable.other' },
-      { text: '<', scope: 'keyword.operator.comparison' },
+      // `<` is a bare operator here (not a type-parameter bracket); the official
+      // grammar scopes `< > <= >=` `keyword.operator.relational` (vs `comparison`
+      // for `== != === !==`).
+      { text: '<', scope: 'keyword.operator.relational' },
     ],
   },
   {
@@ -25,7 +28,7 @@ export const tests: TestCase[] = [
     input: `typeof x < '';`,
     checks: [
       { text: 'typeof', scope: 'keyword.operator.expression' },
-      { text: '<', scope: 'keyword.operator.comparison' },
+      { text: '<', scope: 'keyword.operator.relational' },
     ],
   },
 

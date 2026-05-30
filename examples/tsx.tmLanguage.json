@@ -356,7 +356,7 @@
           "name": "punctuation.definition.typeparameters.end.tsx"
         },
         "3": {
-          "name": "keyword.operator.comparison.tsx"
+          "name": "keyword.operator.relational.tsx"
         }
       },
       "patterns": [
@@ -428,7 +428,7 @@
     },
     "comparison": {
       "match": "[<>]",
-      "name": "keyword.operator.comparison.tsx"
+      "name": "keyword.operator.relational.tsx"
     },
     "jsx-children": {
       "patterns": [
@@ -2062,6 +2062,36 @@
       ],
       "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.]|(?:is|keyof|typeof|readonly|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|symbol|import)\\b|//|/\\*|(?!if|else|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*\\b(?!\\s*[.(])))"
     },
+    "enum-member": {
+      "match": "(?<=[{,])\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[=,}])",
+      "captures": {
+        "1": {
+          "name": "variable.other.enummember.tsx"
+        }
+      }
+    },
+    "enum-body": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.tsx"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.tsx"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#enum-member"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
     "enum-declaration": {
       "name": "meta.enum.tsx",
       "begin": "\\b(enum)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
@@ -2075,7 +2105,7 @@
       },
       "patterns": [
         {
-          "include": "#declaration-body"
+          "include": "#enum-body"
         },
         {
           "include": "$self"
@@ -2636,36 +2666,135 @@
       "name": "punctuation.accessor.tsx"
     },
     "operator-overrides": {
-      "match": "(>>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|=)|(===|!==|==|!=)|(>>>|<<|>>)|(\\?\\?|\\|\\||&&)|(\\+\\+|--)|(\\*\\*|-|\\+|\\*|/|%)|(\\||&|\\^)|(!|~)",
+      "match": "(>>>=)|(\\*\\*=)|(<<=)|(>>=)|(\\?\\?=)|(\\|\\|=)|(&&=)|(===)|(!==)|(>>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(\\?\\?)|(\\|\\|)|(&&)|(==)|(!=)|(<=)|(>=)|(<<)|(>>)|(\\*\\*)|(\\+\\+)|(--)|(\\|)|(&)|(-)|(\\+)|(=)|(!)|(\\*)|(\\^)|(/)|(%)|(~)",
       "captures": {
         "1": {
           "name": "keyword.operator.assignment.tsx"
         },
         "2": {
-          "name": "keyword.operator.comparison.tsx"
+          "name": "keyword.operator.assignment.tsx"
         },
         "3": {
-          "name": "keyword.operator.bitwise.shift.tsx"
+          "name": "keyword.operator.assignment.tsx"
         },
         "4": {
-          "name": "keyword.operator.logical.tsx"
+          "name": "keyword.operator.assignment.tsx"
         },
         "5": {
-          "name": "keyword.operator.increment-decrement.tsx"
+          "name": "keyword.operator.assignment.tsx"
         },
         "6": {
-          "name": "keyword.operator.arithmetic.tsx"
+          "name": "keyword.operator.assignment.tsx"
         },
         "7": {
-          "name": "keyword.operator.bitwise.tsx"
+          "name": "keyword.operator.assignment.tsx"
         },
         "8": {
+          "name": "keyword.operator.comparison.tsx"
+        },
+        "9": {
+          "name": "keyword.operator.comparison.tsx"
+        },
+        "10": {
+          "name": "keyword.operator.bitwise.shift.tsx"
+        },
+        "11": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "12": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "13": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "14": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "15": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "16": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "17": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "18": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "19": {
+          "name": "keyword.operator.logical.tsx"
+        },
+        "20": {
+          "name": "keyword.operator.logical.tsx"
+        },
+        "21": {
+          "name": "keyword.operator.logical.tsx"
+        },
+        "22": {
+          "name": "keyword.operator.comparison.tsx"
+        },
+        "23": {
+          "name": "keyword.operator.comparison.tsx"
+        },
+        "24": {
+          "name": "keyword.operator.relational.tsx"
+        },
+        "25": {
+          "name": "keyword.operator.relational.tsx"
+        },
+        "26": {
+          "name": "keyword.operator.bitwise.shift.tsx"
+        },
+        "27": {
+          "name": "keyword.operator.bitwise.shift.tsx"
+        },
+        "28": {
+          "name": "keyword.operator.arithmetic.tsx"
+        },
+        "29": {
+          "name": "keyword.operator.increment-decrement.tsx"
+        },
+        "30": {
+          "name": "keyword.operator.increment-decrement.tsx"
+        },
+        "31": {
+          "name": "keyword.operator.bitwise.tsx"
+        },
+        "32": {
+          "name": "keyword.operator.bitwise.tsx"
+        },
+        "33": {
+          "name": "keyword.operator.arithmetic.tsx"
+        },
+        "34": {
+          "name": "keyword.operator.arithmetic.tsx"
+        },
+        "35": {
+          "name": "keyword.operator.assignment.tsx"
+        },
+        "36": {
+          "name": "keyword.operator.logical.prefix.tsx"
+        },
+        "37": {
+          "name": "keyword.operator.arithmetic.tsx"
+        },
+        "38": {
+          "name": "keyword.operator.bitwise.tsx"
+        },
+        "39": {
+          "name": "keyword.operator.arithmetic.tsx"
+        },
+        "40": {
+          "name": "keyword.operator.arithmetic.tsx"
+        },
+        "41": {
           "name": "keyword.operator.logical.prefix.tsx"
         }
       }
     },
     "operators": {
-      "match": "\\.\\.\\.|<=|>=",
+      "match": "\\.\\.\\.",
       "name": "keyword.operator.tsx"
     },
     "scope-punctuation-separator-comma": {

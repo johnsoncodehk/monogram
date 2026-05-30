@@ -518,6 +518,7 @@ export default defineGrammar({
     'keyword.operator.expression': ['typeof', 'keyof', 'instanceof', 'as', 'new', 'delete', 'void', 'is', 'satisfies', 'asserts', 'infer'],
     'keyword.operator.assignment': jsScopes['keyword.operator.assignment'],
     'keyword.operator.comparison': jsScopes['keyword.operator.comparison'],
+    'keyword.operator.relational': jsScopes['keyword.operator.relational'],
     'keyword.operator.logical': jsScopes['keyword.operator.logical'],
     'keyword.operator.arithmetic': jsScopes['keyword.operator.arithmetic'],
     'keyword.operator.increment-decrement': jsScopes['keyword.operator.increment-decrement'],

@@ -446,6 +446,7 @@ export const jsScopes = {
   'keyword.operator.expression': ['instanceof', 'new', 'delete', 'void', 'typeof'],
   'keyword.operator.assignment': ['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&='],
   'keyword.operator.comparison': ['==', '!=', '===', '!=='],
+  'keyword.operator.relational': ['<', '>', '<=', '>='],
   'keyword.operator.logical': ['||', '&&', '??'],
   'keyword.operator.arithmetic': ['+', '-', '*', '/', '%', '**'],
   'keyword.operator.increment-decrement': ['++', '--'],

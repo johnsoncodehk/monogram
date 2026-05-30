@@ -125,6 +125,9 @@ const CORPUS: string[] = [
 type Rel = 'exact' | 'family' | 'missing' | 'divergent';
 const tally: Record<Rel, number> = { exact: 0, family: 0, missing: 0, divergent: 0 };
 const missingEx = new Map<string, { n: number; ex: string }>();
+// family-only + divergent detail, keyed by the (mono→official) scope SHAPE so the
+// fix target is unambiguous: which Monogram scope to rewrite to which official path.
+const diffEx = new Map<string, { n: number; ex: string; rel: 'family' | 'divergent' }>();
 let graded = 0;
 for (const text of CORPUS) {
   const mt = tokenize(mono, text), ot = tokenize(official, text);
@@ -135,13 +138,17 @@ for (const text of CORPUS) {
     graded++;
     // normalise the language suffix (.ts / .typescript / .tsx) so we measure the
     // STRUCTURAL scope path, not the systematic source.ts-vs-source.typescript skew.
+    const rec = (rel: 'family' | 'divergent') => {
+      const k = `${normScope(mn)}  →  ${normScope(off)}`;
+      const e = diffEx.get(k) ?? { n: 0, ex: g.text, rel }; e.n++; diffEx.set(k, e);
+    };
     if (normScope(mn) === normScope(off)) tally.exact++;
     else if (!mn || mn === ROOT_MONO) {
       tally.missing++;
       const k = `${g.role} (official: ${normScope(off)})`;
       const e = missingEx.get(k) ?? { n: 0, ex: g.text }; e.n++; missingEx.set(k, e);
-    } else if (scopeFamily(mn) === scopeFamily(off)) tally.family++;
-    else tally.divergent++;
+    } else if (scopeFamily(mn) === scopeFamily(off)) { tally.family++; rec('family'); }
+    else { tally.divergent++; rec('divergent'); }
   }
 }
 const pct = (n: number) => ((n / graded) * 100).toFixed(1);
@@ -155,6 +162,17 @@ if (missingEx.size) {
   console.log(`  top "missing" (we color nothing where official does):`);
   for (const [k, v] of [...missingEx.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 6))
     console.log(`    ${String(v.n).padStart(2)}× ${k}  e.g. «${v.ex}»`);
+}
+// family-only + divergent breakdown — the exact fix targets (Monogram path → official path)
+const fam = [...diffEx.entries()].filter(([, v]) => v.rel === 'family').sort((a, b) => b[1].n - a[1].n);
+const div = [...diffEx.entries()].filter(([, v]) => v.rel === 'divergent').sort((a, b) => b[1].n - a[1].n);
+if (fam.length) {
+  console.log(`\n  family-only fix targets (Monogram → official, ${fam.length} distinct):`);
+  for (const [k, v] of fam) console.log(`    ${String(v.n).padStart(2)}×  ${k}   e.g. «${v.ex}»`);
+}
+if (div.length) {
+  console.log(`\n  divergent (different family — may be a deliberate bug-fix; ${div.length} distinct):`);
+  for (const [k, v] of div) console.log(`    ${String(v.n).padStart(2)}×  ${k}   e.g. «${v.ex}»`);
 }
 
 // ── 3. SUB-GRAMMAR DENSITY — distinct scopes INSIDE the construct, measured over the
