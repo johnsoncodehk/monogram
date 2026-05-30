@@ -23,11 +23,36 @@ module.exports = grammar({
   word: $ => $.ident,
 
   externals: $ => [
-    $.regex_literal
+    $.regex_literal,
+    $.template_chars
   ],
 
   conflicts: $ => [
     [$.expr],
+    [$.stmt],
+    [$.stmt, $.decl],
+    [$.expr, $.decl],
+    [$.program, $.stmt],
+    [$.expr, $.param],
+    [$.expr, $.new_target],
+    [$.expr, $.block],
+    [$.expr, $.member_name],
+    [$.expr, $.prop],
+    [$.member_name, $.stmt],
+    [$.decl],
+    [$.binding],
+    [$.expr, $.binding_pattern],
+    [$.expr, $.binding_element],
+    [$.prop, $.binding_property],
+    [$.member_name, $.binding_property],
+    [$.expr, $.block, $.decl],
+    [$.expr, $.prop, $.import_specifier],
+    [$.expr, $.import_specifier],
+    [$.expr, $.array_binding_element],
+    [$.expr, $.binding_property],
+    [$.prop, $.member_name],
+    [$.prop, $.member_name, $.binding_property],
+    [$.stmt, $.param],
   ],
 
   rules: {
@@ -57,7 +82,7 @@ module.exports = grammar({
       $.number,
       $.string,
       $.template,
-      $.regex,
+      $.regex_literal,
       "true",
       "false",
       "null",
@@ -131,9 +156,9 @@ module.exports = grammar({
 
     import_specifier: $ => seq($.ident, optional(seq("as", $.ident))),
 
-    shebang: $ => token(/^#![^\n]*/),
+    shebang: $ => token(/#![^\n]*/),
 
-    jsdoc: $ => token(/\/\*\*(?!\/)[\s\S]*?\*\//),
+    jsdoc: $ => token(/\/\*\*[\s\S]*?\*\//),
 
     triple_slash: $ => token(/\/\/\/\s*<[^\n]*/),
 
@@ -143,23 +168,29 @@ module.exports = grammar({
 
     ident: $ => token(/(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/),
 
-    hex_number: $ => token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*(?![0-9A-Za-z_$\\])/),
+    hex_number: $ => token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*/),
 
-    octal_number: $ => token(/0[oO][0-7]+(_[0-7]+)*(?![0-9A-Za-z_$\\])/),
+    octal_number: $ => token(/0[oO][0-7]+(_[0-7]+)*/),
 
-    binary_number: $ => token(/0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\])/),
+    binary_number: $ => token(/0[bB][01]+(_[01]+)*/),
 
-    big_int: $ => token(/[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\])/),
+    big_int: $ => token(/[0-9]+(_[0-9]+)*n/),
 
-    number: $ => token(/[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\])/),
+    number: $ => token(/[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?/),
 
     string: $ => token(/"(?:[^"\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*'/),
 
-    template: $ => token(/`(?:[^`\\$]|\\.|\$(?!\{))*`/),
-
     decorator: $ => token(/@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?/),
 
-    private_field: $ => token(/#[a-zA-Z_$][a-zA-Z0-9_$]*/)
+    private_field: $ => token(/#[a-zA-Z_$][a-zA-Z0-9_$]*/),
+
+    template: $ => seq(
+      "`",
+      repeat(choice($.template_chars, $.template_substitution)),
+      "`"
+    ),
+
+    template_substitution: $ => seq("${", $.expr, "}")
   }
 });
 

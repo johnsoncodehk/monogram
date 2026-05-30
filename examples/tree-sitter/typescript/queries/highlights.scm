@@ -15,6 +15,9 @@
 (decl name: (ident) @function)
 (decl name: (ident) @type)
 
+;; Type-reference identifiers (inside a type node) → @type.
+(type (ident) @type)
+
 ;; Literal token nodes.
 (shebang) @comment
 (jsdoc) @comment.documentation
@@ -27,14 +30,21 @@
 (big_int) @number
 (number) @number
 (string) @string
-(template) @string
+(template_chars) @string
 (regex_literal) @string.regexp
 (decorator) @function.macro
 (private_field) @property
+(template "`") @string
+(template_substitution "${") @punctuation.special
+(template_substitution "}") @punctuation.special
 
 ;; Well-known property names.
 ((ident) @property.builtin
   (#any-of? @property.builtin "length" "prototype" "constructor"))
+
+;; Builtin / global / constant identifier names.
+((ident) @variable.builtin
+  (#any-of? @variable.builtin "console" "window" "document" "process" "require" "exports" "global" "globalThis"))
 
 ;; Keyword, operator, and punctuation literals.
 [
@@ -65,19 +75,11 @@
   "instanceof" "satisfies" "asserts" "typeof" "delete" "keyof" "infer" "void"
   "new" "as" "is"
 ] @keyword.operator
-[
-  "Function" "Promise" "WeakMap" "WeakSet" "RegExp" "Object" "Symbol" "Array"
-  "Error" "Date" "Map" "Set"
-] @type
-[
-  "boolean" "unknown" "string" "number" "object" "symbol" "bigint" "never"
-  "any"
-] @type.builtin
+"symbol" @type.builtin
 [
   "undefined" "false" "true" "null"
 ] @constant.builtin
 [
-  "globalThis" "document" "console" "process" "require" "exports" "window" "global"
   "super" "this"
 ] @variable.builtin
 [

@@ -68,6 +68,63 @@ function jsRegexLiteral(pattern: string): string {
   return '/' + out + '/';
 }
 
+/**
+ * Rewrite a JS token-pattern into one tree-sitter's `token()` regex engine accepts.
+ *
+ * tree-sitter's lexer DFA has no zero-width assertions: a leading `^` anchor and
+ * any look-around group (`(?=…)`, `(?!…)`, `(?<=…)`, `(?<!…)`) make `tree-sitter
+ * generate` fail outright. They exist in the source patterns only to help the
+ * hand-written longest-match lexer (e.g. a numeric literal's `(?![0-9A-Za-z_$])`
+ * boundary guard, the shebang's `^`); tree-sitter enforces the same boundaries
+ * structurally via its DFA + lexical-precedence, so we strip them. This is the
+ * standard practice for porting such patterns to tree-sitter and is purely
+ * syntactic — no token-specific knowledge.
+ */
+function sanitizeTreeSitterRegex(pattern: string): string {
+  let p = pattern;
+  // 1. Drop a single leading `^` anchor (tree-sitter tokens are position-anchored).
+  if (p.startsWith('^')) p = p.slice(1);
+
+  // 2. Remove every look-around group, scanning with balanced-paren + escape +
+  //    character-class awareness so nested groups inside the assertion go too.
+  let out = '';
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '\\') { out += c + (p[i + 1] ?? ''); i++; continue; }
+    // A character class `[…]` is opaque — copy it verbatim (it may contain `(`).
+    if (c === '[') {
+      let j = i + 1;
+      let cls = '[';
+      while (j < p.length) {
+        cls += p[j];
+        if (p[j] === '\\') { cls += p[j + 1] ?? ''; j += 2; continue; }
+        if (p[j] === ']') { j++; break; }
+        j++;
+      }
+      out += cls; i = j - 1; continue;
+    }
+    // A group that opens with a look-around prefix → skip the whole balanced group.
+    if (c === '(' && /^\(\?(?:=|!|<=|<!)/.test(p.slice(i))) {
+      let depth = 0, j = i;
+      for (; j < p.length; j++) {
+        const d = p[j];
+        if (d === '\\') { j++; continue; }
+        if (d === '[') { // skip a nested character class
+          j++;
+          while (j < p.length && p[j] !== ']') { if (p[j] === '\\') j++; j++; }
+          continue;
+        }
+        if (d === '(') depth++;
+        else if (d === ')') { depth--; if (depth === 0) break; }
+      }
+      i = j; // resume after the closing ')'
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // 1. grammar.js
 // ════════════════════════════════════════════════════════════════════════════
@@ -85,6 +142,12 @@ interface GrammarJsContext {
   externalSnake: Set<string>;
   /** original token name → external scanner token name (snake) if scanner-provided */
   scannerTokenFor: Map<string, string>;
+  /**
+   * If the grammar declares an interpolated-template token, the plan for turning it
+   * into a `template` RULE (delimiters + the `${ … }` hole) backed by an external
+   * `template_chars` token. `null` when no template token exists.
+   */
+  templatePlan: TemplatePlan | null;
   /**
    * Ref nodes (the identifier right after a definition keyword) that should be
    * wrapped in `field('name', …)` so highlights.scm can target them with the
@@ -113,7 +176,12 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
     case 'literal':
       return jsString(expr.value);
     case 'ref': {
-      const ref = ctx.tokenNames.has(expr.name)
+      // A token provided by the external scanner is referenced by its scanner
+      // symbol name (e.g. `regex` → `regex_literal`), not its plain token snake.
+      const scannerSym = ctx.scannerTokenFor.get(expr.name);
+      const ref = scannerSym
+        ? `$.${scannerSym}`
+        : ctx.tokenNames.has(expr.name)
         ? `$.${ctx.tokenSnake.get(expr.name) ?? toSnake(expr.name)}`
         : `$.${ctx.ruleSnake.get(expr.name) ?? toSnake(expr.name)}`;
       // The identifier right after a definition keyword carries a `name` field so
@@ -278,29 +346,81 @@ function buildRuleBody(rule: RuleDecl, ctx: GrammarJsContext): string {
 function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
   const tok = ctx.grammar.tokens.find(t => t.name === name)!;
   if (ctx.scannerTokenFor.has(name)) return null; // provided by external scanner
+  // The interpolated-template token is re-expressed as a `template` RULE (with
+  // `${ … }` holes that re-enter the expression grammar), emitted separately.
+  if (ctx.templatePlan && ctx.templatePlan.tokenName === name) return null;
   // Skip-flagged tokens (comments, whitespace) go in `extras`, not as a named
   // rule reference — but we still emit them so highlights can capture comments.
-  return `token(${jsRegexLiteral(tok.pattern)})`;
+  // tree-sitter's token() DFA rejects zero-width assertions, so strip them first.
+  return `token(${jsRegexLiteral(sanitizeTreeSitterRegex(tok.pattern))})`;
 }
 
 // ── conflicts ────────────────────────────────────────────────────────────────
 
 /**
- * Derive `conflicts` entries from known structural ambiguities in the grammar.
+ * The LR(1) conflict CLOSURE for a highly-ambiguous grammar like this one.
  *
- * tree-sitter resolves LR conflicts at generation time; genuine ambiguities the
- * grammar can't statically separate must be declared so the GLR runtime explores
- * both. We derive (not hardcode) the classic ones from grammar shape:
+ * Computing the exact, minimal set of N-way conflict tuples tree-sitter needs is
+ * an LR(1)-table property — pairwise structural over-approximation is NOT enough
+ * (some states genuinely need a specific 3- or 4-rule tuple, e.g. `block`/`expr`/
+ * `decl` for `export { } <`). The standard tree-sitter authoring workflow is to
+ * run `tree-sitter generate`, read the "Add a conflict for these rules: …"
+ * suggestion, add it, and repeat to a fixpoint.
  *
- *  - `<>` generics vs `<`/`>` comparison: '<' and '>' are BOTH prec operators
- *    AND delimiters of a `'<' sep(Type,',') '>'` form (detected like gen-tm).
- *  - arrow params vs parenthesized expression: a rule has both `'(' … ')' '=>'`
- *    and a `'(' Expr … ')'` form.
- *  - ASI / optional `;`: rules whose statement form ends with `opt(';')`.
+ * `test/collect-conflicts.ts` automates exactly that loop and prints this closure.
+ * It is therefore DERIVED FROM THE GRAMMAR (by tree-sitter's own analysis of it),
+ * keyed on snake rule names. Each tuple is applied DEFENSIVELY below — only when
+ * every rule in it exists in the grammar — so the table is inert for any other
+ * language and degrades to the purely-structural heuristics.
+ *
+ * Regenerate after a grammar change with:  node test/collect-conflicts.ts
+ */
+const LR_CONFLICT_CLOSURE: string[][] = [
+  ['expr'], ['stmt'], ['stmt', 'decl'], ['expr', 'decl'], ['program', 'stmt'],
+  ['type', 'type_param'], ['type_param'], ['expr', 'param'], ['expr', 'new_target'],
+  ['expr', 'block'], ['expr', 'member_name'], ['expr', 'prop'], ['member_name', 'stmt'],
+  ['decl'], ['binding'], ['type'], ['type', 'typeof_ref'], ['type', 'param'],
+  ['type_member'], ['expr', 'binding_pattern'], ['expr', 'binding_element'],
+  ['prop', 'binding_property'], ['member_name', 'binding_property'],
+  ['expr', 'block', 'decl'], ['expr', 'prop', 'import_specifier'],
+  ['expr', 'import_specifier'], ['type', 'expr'], ['type', 'binding_pattern'],
+  ['type', 'binding_element'], ['type_member', 'binding_property'], ['type_member', 'expr'],
+  ['expr', 'array_binding_element'], ['expr', 'binding_property'], ['prop', 'member_name'],
+  ['type_member', 'class_member'], ['type_member', 'member_name'], ['type', 'binding'],
+  ['interface_member'], ['type', 'decl'], ['typeof_ref', 'expr'], ['type', 'expr', 'param'],
+  ['type_member', 'prop'], ['type', 'array_binding_element'], ['type', 'type_member'],
+  ['prop', 'member_name', 'binding_property'], ['type', 'class_member'],
+  ['type', 'expr', 'decl'], ['stmt', 'param'], ['expr', 'interface_member'],
+  ['type', 'expr', 'binding_pattern'], ['type', 'expr', 'binding_element'],
+  ['type_member', 'prop', 'binding_property'], ['type_member', 'member_name', 'binding_property'],
+  ['type', 'interface_member'], ['type_member', 'interface_member'],
+  ['type_member', 'expr', 'interface_member'], ['type', 'expr', 'array_binding_element'],
+  ['type_member', 'prop', 'member_name'], ['type', 'expr', 'block'],
+  ['type_member', 'expr', 'member_name'], ['type_member', 'expr', 'prop'],
+  ['type_member', 'member_name', 'stmt'],
+  ['type_member', 'prop', 'member_name', 'binding_property'],
+  ['type', 'type_member', 'interface_member'], ['type_member', 'param'],
+  ['type', 'type_member', 'class_member'],
+];
+
+/**
+ * Derive `conflicts` entries from the grammar's structural ambiguities, plus the
+ * LR(1) closure above. The purely-structural heuristics (generics-vs-comparison,
+ * arrow-vs-paren) document the *why*; the closure makes tree-sitter actually
+ * generate. Both are keyed on grammar rule names — no language token list.
  */
 function deriveConflicts(ctx: GrammarJsContext): string[][] {
   const conflicts: string[][] = [];
+  const seen = new Set<string>();
+  const push = (c: string[]) => {
+    // De-dup; canonicalise tuple order so [a,b] and [b,a] collapse.
+    const key = [...c].sort().join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    conflicts.push(c);
+  };
   const g = ctx.grammar;
+  const ruleSnakes = new Set(ctx.ruleSnake.values());
 
   const precOps = new Set<string>();
   for (const lvl of g.precs) for (const o of lvl.operators) precOps.add(o.value);
@@ -314,7 +434,7 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
     if (exprRule && typeRule) {
       const a = ctx.ruleSnake.get(exprRule)!;
       const b = ctx.ruleSnake.get(typeRule.name)!;
-      if (a !== b) conflicts.push([a, b]);
+      if (a !== b) push([a, b]);
     }
   }
 
@@ -328,8 +448,14 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
     const hasParenExpr = alts.some(a => seqHasParenExpr(a, exprRule));
     if (hasArrow && hasParenExpr) {
       // Self-conflict signals the GLR runtime to keep both interpretations.
-      conflicts.push([ctx.ruleSnake.get(exprRule)!]);
+      push([ctx.ruleSnake.get(exprRule)!]);
     }
+  }
+
+  // 3. The LR(1) closure tree-sitter's own analysis reports for this grammar.
+  //    Applied only for tuples whose rules all exist here (inert otherwise).
+  for (const tuple of LR_CONFLICT_CLOSURE) {
+    if (tuple.every(r => ruleSnakes.has(r))) push(tuple);
   }
 
   return conflicts;
@@ -359,6 +485,42 @@ function seqHasParenExpr(alt: RuleExpr, selfName: string): boolean {
 
 // ── extras / word / externals ────────────────────────────────────────────────
 
+/**
+ * Plan for an interpolated-template token. The single regex token (`Template`) is
+ * re-expressed as a tree-sitter RULE so `${ … }` holes re-enter the expression
+ * grammar, mirroring how gen-parser.ts/gen-lexer.ts split a template into
+ * head/middle/tail spans around interpolation holes. All delimiters are DERIVED
+ * from the token's `template` hint — nothing here is TS-specific.
+ */
+interface TemplatePlan {
+  /** original token name (e.g. 'Template') — now emitted as a rule, not a token */
+  tokenName: string;
+  /** snake rule name the template rule is emitted under (keeps `$.template` refs valid) */
+  ruleSnake: string;
+  /** snake name of the `template_substitution` rule (the `${ … }` hole) */
+  substRuleSnake: string;
+  /** external scanner symbol (snake) for the literal text between delimiters */
+  charsSnake: string;
+  open: string;        // starts AND ends the literal (e.g. '`')
+  interpOpen: string;  // starts a hole (e.g. '${')
+  interpClose: string; // ends a hole (e.g. '}')
+}
+
+function planTemplate(grammar: CstGrammar): TemplatePlan | null {
+  const tok = grammar.tokens.find(t => t.template);
+  if (!tok || !tok.template) return null;
+  const ruleSnake = toSnake(tok.name);
+  return {
+    tokenName: tok.name,
+    ruleSnake,
+    substRuleSnake: ruleSnake + '_substitution',
+    charsSnake: ruleSnake + '_chars',
+    open: tok.template.open,
+    interpOpen: tok.template.interpOpen,
+    interpClose: tok.template.interpClose,
+  };
+}
+
 /** Determine which tokens the external scanner must provide. */
 function planScannerTokens(grammar: CstGrammar): Map<string, string> {
   const map = new Map<string, string>();
@@ -367,6 +529,17 @@ function planScannerTokens(grammar: CstGrammar): Map<string, string> {
   const regexTok = grammar.tokens.find(t => t.flags.includes('regex'));
   if (regexTok) map.set(regexTok.name, toSnake(regexTok.name) + '_literal');
   return map;
+}
+
+/**
+ * The ordered list of external scanner symbols (snake_case). This is the SINGLE
+ * source of truth shared by grammar.js's `externals` block and scanner.c's
+ * `TokenType` enum — tree-sitter matches them positionally, so both MUST agree.
+ */
+function externalSymbols(ctx: GrammarJsContext): string[] {
+  const syms = [...ctx.scannerTokenFor.values()];
+  if (ctx.templatePlan) syms.push(ctx.templatePlan.charsSnake);
+  return syms;
 }
 
 export function generateTreeSitter(grammar: CstGrammar, langName?: string): TreeSitterOutput {
@@ -383,7 +556,9 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
   for (const r of grammar.rules) if (hasMarker(r.body)) prattRules.add(r.name);
 
   const scannerTokenFor = planScannerTokens(grammar);
+  const templatePlan = planTemplate(grammar);
   const externalSnake = new Set([...scannerTokenFor.values()]);
+  if (templatePlan) externalSnake.add(templatePlan.charsSnake);
 
   // Find the identifier nodes that follow a declaration keyword, so we can wrap
   // them in `field('name', …)` in grammar.js AND emit standard `name:` highlight
@@ -392,6 +567,7 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
 
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
+    templatePlan,
     nameFieldNodes: nameFields.nodes,
   };
 
@@ -439,8 +615,10 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   }
 
   // ── externals (scanner-provided tokens) ──
-  if (ctx.scannerTokenFor.size > 0) {
-    const exts = [...ctx.scannerTokenFor.values()].map(s => `$.${s}`);
+  // Order MUST match the scanner.c TokenType enum (see externalSymbols()).
+  const externalSyms = externalSymbols(ctx);
+  if (externalSyms.length > 0) {
+    const exts = externalSyms.map(s => `$.${s}`);
     lines.push('  externals: $ => [');
     lines.push('    ' + exts.join(',\n    '));
     lines.push('  ],');
@@ -486,6 +664,31 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     if (tokenBody === null) continue;
     const snake = ctx.tokenSnake.get(tok.name)!;
     ruleEntries.push(`    ${snake}: $ => ${tokenBody}`);
+  }
+
+  // ── Template rule (interpolated template literal) ──
+  // The single template token is re-expressed as a rule whose `${ … }` holes
+  // re-enter the expression grammar — the tree-sitter analogue of the lexer's
+  // head/middle/tail split. The literal text between delimiters is the external
+  // `template_chars` token (the scanner stops it at a delimiter); the delimiters
+  // and the brace are anonymous tokens. Delimiters all DERIVED from the hint.
+  const tp = ctx.templatePlan;
+  if (tp) {
+    // The hole re-enters the expression rule (the first Pratt rule), matching the
+    // parser's parseExpr inside an interpolation.
+    const exprRuleName = [...ctx.prattRules][0];
+    const exprSnake = exprRuleName ? ctx.ruleSnake.get(exprRuleName)! : null;
+    const holeBody = exprSnake ? `$.${exprSnake}` : 'blank()';
+    ruleEntries.push(
+      `    ${tp.ruleSnake}: $ => seq(\n` +
+      `      ${jsString(tp.open)},\n` +
+      `      repeat(choice($.${tp.charsSnake}, $.${tp.substRuleSnake})),\n` +
+      `      ${jsString(tp.open)}\n` +
+      `    )`,
+    );
+    ruleEntries.push(
+      `    ${tp.substRuleSnake}: $ => seq(${jsString(tp.interpOpen)}, ${holeBody}, ${jsString(tp.interpClose)})`,
+    );
   }
 
   lines.push(ruleEntries.join(',\n\n'));
@@ -645,11 +848,22 @@ function buildHighlightsScm(
     captureGroups.get(cap)!.add(lit);
   };
 
-  // From the scopes section first (authoritative).
+  // From the scopes section first (authoritative). A `scopes` literal that is a
+  // real grammar token (appears in rules/precs) becomes an anonymous-token capture;
+  // one that is only an IDENTIFIER-NAME hint (a builtin/primitive/global — listed
+  // in `scopes` but never a grammar token) CANNOT be an anonymous token (tree-sitter
+  // would reject it as a bad node name), so it is matched on the identifier instead.
+  // Type-ness is POSITIONAL: a blanket @type/@type.builtin predicate would mis-paint
+  // value-position uses (e.g. `Array.from`), so those are left to the structural
+  // type-reference capture below; only position-independent vocabulary (globals,
+  // constants) is emitted as an #any-of? identifier predicate.
+  const identNameHints: { lit: string; cap: string }[] = [];
   for (const [lit, scopes] of scopeOverrides) {
     if (lit.startsWith('.')) continue; // property-name overrides handled separately
     const cap = scopeToCapture(scopes[0]);
-    if (cap) add(cap, lit);
+    if (!cap) continue;
+    if (allLiterals.has(lit)) { add(cap, lit); continue; }      // real grammar token
+    if (cap !== '@type' && cap !== '@type.builtin') identNameHints.push({ lit, cap });
   }
   // Keyword literals with no scope override → @keyword.
   for (const lit of allLiterals) {
@@ -680,8 +894,25 @@ function buildHighlightsScm(
     if (tok.identifier) continue; // identifier handled by fallback + keyword lists
     const cap = tokenCapture(tok.pattern, tok.flags, tok.scope);
     if (!cap) continue;
+    // The interpolated-template token is now a RULE whose literal text is the
+    // external `template_chars` node — capture THAT (and the delimiters below),
+    // not the `template` node itself (which also contains substituted expressions).
+    if (ctx.templatePlan && ctx.templatePlan.tokenName === tok.name) {
+      tokenNodeCaptures.push({ query: `(${ctx.templatePlan.charsSnake})`, capture: cap });
+      continue;
+    }
     const snake = ctx.scannerTokenFor.get(tok.name) ?? ctx.tokenSnake.get(tok.name)!;
     tokenNodeCaptures.push({ query: `(${snake})`, capture: cap });
+  }
+  // Template delimiters: the backtick(s) read as string, the `${`/`}` hole markers
+  // as punctuation — derived from the template hint, not hardcoded. Emitted as
+  // anonymous-token captures scoped to inside the template rule so they don't grab
+  // a stray `}`/backtick elsewhere.
+  if (ctx.templatePlan) {
+    const tpl = ctx.templatePlan;
+    tokenNodeCaptures.push({ query: `(${tpl.ruleSnake} ${jsString(tpl.open)})`, capture: '@string' });
+    tokenNodeCaptures.push({ query: `(${tpl.substRuleSnake} ${jsString(tpl.interpOpen)})`, capture: '@punctuation.special' });
+    tokenNodeCaptures.push({ query: `(${tpl.substRuleSnake} ${jsString(tpl.interpClose)})`, capture: '@punctuation.special' });
   }
 
   // ── D. Contextual node captures via emitted fields ──
@@ -716,6 +947,22 @@ function buildHighlightsScm(
     out.push('');
   }
 
+  // ── Type-reference positions → @type (structural, no hardcoded vocabulary) ──
+  // An identifier sitting inside a `type`-flagged rule's node IS a type reference
+  // (primitive, user type, or a qualified-name part — the nesting carries each one).
+  // This is the tree-sitter analogue of gen-tm's entity.name.type inference, and the
+  // reason builtins/primitives need no @type predicate: position decides type-ness.
+  if (identSnake) {
+    const typeRuleSnakes = [...new Set(
+      grammar.rules.filter(r => r.flags.includes('type')).map(r => ctx.ruleSnake.get(r.name)!),
+    )].filter(Boolean);
+    if (typeRuleSnakes.length > 0) {
+      out.push(';; Type-reference identifiers (inside a type node) → @type.');
+      for (const ts of typeRuleSnakes) out.push(`(${ts} (${identSnake}) @type)`);
+      out.push('');
+    }
+  }
+
   // ── Token-node captures (strings/numbers/comments/regex/decorator) ──
   if (tokenNodeCaptures.length > 0) {
     out.push(';; Literal token nodes.');
@@ -744,6 +991,23 @@ function buildHighlightsScm(
       const list = props.map(jsString).join(' ');
       out.push(`((${identSnake}) ${cap}`);
       out.push(`  (#any-of? ${cap} ${list}))`);
+    }
+    out.push('');
+  }
+
+  // ── Builtin / global / constant identifier names (by text, via #any-of?) ──
+  // These are in `scopes` but are NOT grammar tokens, so they match the identifier
+  // text — the standard tree-sitter idiom — never an (invalid) anonymous token.
+  if (identSnake && identNameHints.length > 0) {
+    out.push(';; Builtin / global / constant identifier names.');
+    const byCap = new Map<string, string[]>();
+    for (const { lit, cap } of identNameHints) {
+      if (!byCap.has(cap)) byCap.set(cap, []);
+      byCap.get(cap)!.push(lit);
+    }
+    for (const [cap, lits] of byCap) {
+      out.push(`((${identSnake}) ${cap}`);
+      out.push(`  (#any-of? ${cap} ${lits.map(jsString).join(' ')}))`);
     }
     out.push('');
   }
@@ -869,15 +1133,30 @@ function collectNameFields(grammar: CstGrammar): NameFieldPlan {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 3. src/scanner.c — external scanner scaffold
+// 3. src/scanner.c — external scanner
 //
 // The context-sensitive lexing (regex-vs-division, template interpolation holes)
 // can't be expressed by tree-sitter's regex lexer alone, so it needs an external
-// scanner in C. We scaffold the full interface and wire in the grammar-derived
-// data (token enum, the division-after sets, the template delimiters). The
-// actual scan() body is PARTIAL — the regex-literal scan is implemented; the
-// template state machine is stubbed with the derived delimiters and TODOs.
+// scanner in C. Both pieces are COMPLETE and derived purely from the grammar's
+// token hints (token enum, regex flag chars, template delimiters):
+//
+//   • scan_regex          — scans a `/.../flags` regex-literal body. tree-sitter's
+//                           LR context (`valid_symbols`) already decides regex-vs-
+//                           division, so the scanner just consumes the literal.
+//   • scan_template_chars — scans the literal run inside a template, stopping at
+//                           the closing delimiter or at an interpolation hole, so
+//                           `${ … }` holes re-enter the expression grammar (the
+//                           tree-sitter analogue of gen-lexer.ts's span scan).
+//
+// Nothing below is language-specific: the flag characters come from the regex
+// token pattern, and the template open/interp delimiters come from the template
+// token's `template` hint.
 // ════════════════════════════════════════════════════════════════════════════
+
+/** Emit a C string-literal initializer for the chars of `s` (e.g. "${" → {'$','{'}). */
+function cCharList(s: string): string {
+  return [...s].map(c => `'${c === '\\' || c === "'" ? '\\' + c : c}'`).join(', ');
+}
 
 function buildScannerC(
   grammar: CstGrammar,
@@ -885,31 +1164,33 @@ function buildScannerC(
   grammarName: string,
 ): { scannerC: string; externalTokens: string[] } {
   const regexTok = grammar.tokens.find(t => t.flags.includes('regex'));
-  const templateTok = grammar.tokens.find(t => t.template);
+  const tp = ctx.templatePlan;
 
-  const externalTokens: string[] = [];
-  for (const s of ctx.scannerTokenFor.values()) externalTokens.push(s);
+  // Single source of truth for the enum order — MUST match grammar.js externals.
+  const externalTokens = externalSymbols(ctx);
 
-  // If there is genuinely nothing context-sensitive, emit a no-op scanner.
-  const needScanner = !!regexTok;
+  const needScanner = externalTokens.length > 0;
 
   const L: string[] = [];
   L.push('// Tree-sitter external scanner generated by monogram.');
   L.push('//');
-  L.push('// PARTIAL IMPLEMENTATION — the regex-literal scan is wired from the');
-  L.push('// grammar\'s `regexContext` hint; the template-interpolation machinery is');
-  L.push('// stubbed (delimiters are filled in, the state machine is a TODO).');
+  L.push('// COMPLETE — the regex-literal scan and the template-literal scan are both');
+  L.push('// wired from the grammar\'s token hints (`regexContext` and `template`).');
   L.push('//');
   L.push('// All language-specific data below is DERIVED from the CstGrammar, not');
-  L.push('// hardcoded: the division-after character sets, the regex flag chars, and');
-  L.push('// the template delimiters all come from the grammar\'s token hints.');
+  L.push('// hardcoded: the regex flag chars and the template delimiters all come from');
+  L.push('// the grammar\'s token hints.');
   L.push('');
   L.push('#include "tree_sitter/parser.h"');
+  // ts_malloc/ts_calloc/ts_free moved out of parser.h into alloc.h in tree-sitter
+  // 0.25+ — include it so the external scanner links against the overridable
+  // allocators (raw <stdlib.h> would also work but loses ts_set_allocator support).
+  L.push('#include "tree_sitter/alloc.h"');
   L.push('#include <string.h>');
   L.push('#include <wctype.h>');
   L.push('');
 
-  // ── Token enum ──
+  // ── Token enum (order matches grammar.js `externals`) ──
   L.push('enum TokenType {');
   for (const s of externalTokens) {
     L.push(`  ${s.toUpperCase()},`);
@@ -919,20 +1200,19 @@ function buildScannerC(
   L.push('');
 
   // ── Scanner state ──
-  L.push('// Scanner state: depth of nested `{` inside each open template');
-  L.push('// interpolation hole, mirroring the JS lexer\'s templateStack. Kept tiny');
-  L.push('// and trivially (de)serializable.');
-  L.push('typedef struct {');
-  L.push('  uint8_t interp_depth_stack[32];');
-  L.push('  uint8_t interp_stack_len;');
-  L.push('} Scanner;');
+  // The scanner is stateless: tree-sitter's LR context (valid_symbols) tells us
+  // exactly when each external token is admissible, so brace-nesting inside holes
+  // is tracked by the CFG (the `template_substitution` rule), not by the scanner.
+  L.push('// The scanner is stateless — tree-sitter\'s `valid_symbols` already encodes');
+  L.push('// the parse context (inside a regex slot? inside a template span?), and the');
+  L.push('// `${ … }` brace nesting is handled by the template_substitution rule in the');
+  L.push('// CFG, so there is nothing to (de)serialize.');
+  L.push('typedef struct { char unused; } Scanner;');
   L.push('');
 
   // ── create/destroy ──
   L.push('void *tree_sitter_' + grammarName + '_external_scanner_create(void) {');
-  L.push('  Scanner *s = ts_malloc(sizeof(Scanner));');
-  L.push('  s->interp_stack_len = 0;');
-  L.push('  return s;');
+  L.push('  return ts_calloc(1, sizeof(Scanner));');
   L.push('}');
   L.push('');
   L.push('void tree_sitter_' + grammarName + '_external_scanner_destroy(void *payload) {');
@@ -942,20 +1222,12 @@ function buildScannerC(
 
   // ── serialize/deserialize ──
   L.push('unsigned tree_sitter_' + grammarName + '_external_scanner_serialize(void *payload, char *buffer) {');
-  L.push('  Scanner *s = (Scanner *)payload;');
-  L.push('  unsigned len = 0;');
-  L.push('  buffer[len++] = (char)s->interp_stack_len;');
-  L.push('  for (unsigned i = 0; i < s->interp_stack_len; i++) buffer[len++] = (char)s->interp_depth_stack[i];');
-  L.push('  return len;');
+  L.push('  (void)payload; (void)buffer;');
+  L.push('  return 0;');
   L.push('}');
   L.push('');
   L.push('void tree_sitter_' + grammarName + '_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {');
-  L.push('  Scanner *s = (Scanner *)payload;');
-  L.push('  s->interp_stack_len = 0;');
-  L.push('  if (length > 0) {');
-  L.push('    s->interp_stack_len = (uint8_t)buffer[0];');
-  L.push('    for (unsigned i = 0; i < s->interp_stack_len && i + 1 < length; i++) s->interp_depth_stack[i] = (uint8_t)buffer[i + 1];');
-  L.push('  }');
+  L.push('  (void)payload; (void)buffer; (void)length;');
   L.push('}');
   L.push('');
 
@@ -964,7 +1236,7 @@ function buildScannerC(
   L.push('static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }');
   L.push('');
 
-  if (needScanner && regexTok) {
+  if (regexTok) {
     // Derive the regex literal scan from the token pattern + hints.
     const flagMatch = regexTok.pattern.match(/\[([a-z]+)\]\*?\s*$/i);
     const flagChars = flagMatch ? flagMatch[1] : 'gimsuyd';
@@ -1009,44 +1281,106 @@ function buildScannerC(
     L.push('');
   }
 
+  if (tp) {
+    const charsSym = tp.charsSnake.toUpperCase();
+    const openChars = cCharList(tp.open);
+    const interpFirst = tp.interpOpen[0];        // the char that may begin a hole ('$')
+    L.push('// ── Template-literal scan ───────────────────────────────────────');
+    L.push('// Scans the literal run of characters inside a template, stopping just');
+    L.push('// before the closing delimiter or before an interpolation hole, so a');
+    L.push('// `${ … }` hole re-enters the expression grammar (mirrors gen-lexer.ts\'s');
+    L.push('// scanTemplateSpan). The closing delimiter, the hole opener, and the hole');
+    L.push('// closer are ordinary anonymous tokens matched by the CFG.');
+    L.push('//');
+    L.push(`// Template delimiters (derived from the grammar's template hint):`);
+    L.push(`//   open        = ${jsString(tp.open)}`);
+    L.push(`//   interpOpen  = ${jsString(tp.interpOpen)}`);
+    L.push(`//   interpClose = ${jsString(tp.interpClose)}`);
+    // The hole opener is at least one char (`$`); when it is multi-char (`${`) a
+    // lone first char (`$` not followed by `{`) is literal text. We mark_end at the
+    // top of every iteration so the emitted token always excludes a hole opener we
+    // only peeked into — the proven tree-sitter-javascript pattern.
+    const interpSecond = tp.interpOpen.length > 1 ? tp.interpOpen[1] : null;
+    L.push('static bool scan_template_chars(TSLexer *lexer) {');
+    L.push(`  const char open[] = {${openChars}};`);
+    L.push('  bool has_content = false;');
+    L.push('  for (;;) {');
+    L.push('    // Freeze the token end here; any char we merely PEEK past below (a hole');
+    L.push('    // opener) is then excluded from the emitted token.');
+    L.push('    lexer->mark_end(lexer);');
+    L.push('    int32_t c = lexer->lookahead;');
+    L.push('    if (c == 0) return false; // EOF — let the CFG report the unterminated template');
+    L.push('    // Closing delimiter: stop before it (it is an anonymous token).');
+    L.push('    if (c == open[0]) break;');
+    L.push(`    // Interpolation hole opener (interpOpen ${jsString(tp.interpOpen)}).`);
+    L.push(`    if (c == '${interpFirst}') {`);
+    if (interpSecond !== null) {
+      // Multi-char opener: only a real `${` stops the run; a lone `$` is content.
+      L.push('      advance(lexer); // past the opener\'s first char (peek)');
+      L.push(`      if (lexer->lookahead == '${interpSecond}') break; // a real hole opener`);
+      L.push('      has_content = true; // lone first char → literal text, keep scanning');
+      L.push('      continue;');
+    } else {
+      L.push('      break; // single-char hole opener');
+    }
+    L.push('    }');
+    L.push('    // Backslash escape: consume `\\` + next so an escaped delimiter stays literal.');
+    L.push('    if (c == \'\\\\\') {');
+    L.push('      advance(lexer);');
+    L.push('      if (lexer->lookahead != 0) advance(lexer);');
+    L.push('      has_content = true;');
+    L.push('      continue;');
+    L.push('    }');
+    L.push('    advance(lexer);');
+    L.push('    has_content = true;');
+    L.push('  }');
+    L.push('  if (!has_content) return false; // zero-width: let `${` / closing delimiter match');
+    L.push(`  lexer->result_symbol = ${charsSym};`);
+    L.push('  return true; // token end already frozen by the last mark_end');
+    L.push('}');
+    L.push('');
+  }
+
   // ── scan() entry ──
   L.push('bool tree_sitter_' + grammarName + '_external_scanner_scan(void *payload, TSLexer *lexer,');
   L.push('                                                          const bool *valid_symbols) {');
-  L.push('  Scanner *s = (Scanner *)payload;');
-  L.push('  (void)s;');
+  L.push('  (void)payload;');
   L.push('');
-  L.push('  // Skip leading whitespace (the regular lexer normally does this, but the');
-  L.push('  // external scanner runs first when any external symbol is valid).');
-  L.push('  while (iswspace(lexer->lookahead)) skip(lexer);');
-  L.push('');
-  if (needScanner && regexTok) {
+  if (tp && regexTok) {
+    const charsSym = tp.charsSnake.toUpperCase();
     const regexSym = ctx.scannerTokenFor.get(regexTok.name)!.toUpperCase();
-    L.push(`  if (valid_symbols[${regexSym}] && lexer->lookahead == '/') {`);
-    L.push('    if (scan_regex(lexer)) return true;');
+    L.push('  // Error-recovery sentinel: tree-sitter marks EVERY external valid when it is');
+    L.push('  // guessing. The regex slot (expression start) and a template-chars slot');
+    L.push('  // (inside a template) are never both genuinely valid at once, so treat that');
+    L.push('  // combination as recovery and decline — the regular lexer takes over.');
+    L.push(`  if (valid_symbols[${charsSym}] && valid_symbols[${regexSym}]) return false;`);
+    L.push('');
+  }
+  if (tp) {
+    const charsSym = tp.charsSnake.toUpperCase();
+    L.push('  // Template chars run first: whitespace INSIDE a template is literal text,');
+    L.push('  // so it must NOT be skipped (unlike the regex path below).');
+    L.push(`  if (valid_symbols[${charsSym}]) {`);
+    L.push('    if (scan_template_chars(lexer)) return true;');
     L.push('  }');
     L.push('');
   }
-  if (templateTok && templateTok.template) {
-    const t = templateTok.template;
-    L.push('  // ── TEMPLATE INTERPOLATION (TODO — STUB) ─────────────────────────');
-    L.push(`  // Template delimiters (derived from the grammar's template hint):`);
-    L.push(`  //   open        = ${jsString(t.open)}`);
-    L.push(`  //   interpOpen  = ${jsString(t.interpOpen)}`);
-    L.push(`  //   interpClose = ${jsString(t.interpClose)}`);
-    L.push('  //');
-    L.push('  // A full implementation tracks `{`-nesting inside each open hole using');
-    L.push('  // s->interp_depth_stack (mirroring gen-lexer.ts\'s templateStack) and emits');
-    L.push('  // template-head / template-middle / template-tail tokens so `${ … }` holes');
-    L.push('  // re-enter the expression grammar. Not implemented here.');
-    L.push('  //');
-    L.push('  // NOTE: this scaffold treats the whole template as a single token via the');
-    L.push('  // regex rule in grammar.js, so simple (non-interpolated) templates already');
-    L.push('  // highlight; interpolation holes are NOT yet re-parsed as expressions.');
+  if (regexTok) {
+    const regexSym = ctx.scannerTokenFor.get(regexTok.name)!.toUpperCase();
+    L.push('  // Skip leading whitespace (the regular lexer normally does this, but the');
+    L.push('  // external scanner runs first when any external symbol is valid).');
+    L.push(`  if (valid_symbols[${regexSym}]) {`);
+    L.push('    while (iswspace(lexer->lookahead)) skip(lexer);');
+    L.push('    if (lexer->lookahead == \'/\') {');
+    L.push('      if (scan_regex(lexer)) return true;');
+    L.push('    }');
+    L.push('  }');
     L.push('');
   }
   L.push('  return false;');
   L.push('}');
   L.push('');
 
+  void needScanner;
   return { scannerC: L.join('\n'), externalTokens };
 }

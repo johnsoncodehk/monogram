@@ -27,14 +27,21 @@
 (big_int) @number
 (number) @number
 (string) @string
-(template) @string
+(template_chars) @string
 (regex_literal) @string.regexp
 (decorator) @function.macro
 (private_field) @property
+(template "`") @string
+(template_substitution "${") @punctuation.special
+(template_substitution "}") @punctuation.special
 
 ;; Well-known property names.
 ((ident) @property.builtin
   (#any-of? @property.builtin "length" "prototype" "constructor"))
+
+;; Builtin / global / constant identifier names.
+((ident) @variable.builtin
+  (#any-of? @variable.builtin "console" "window" "document" "process" "module" "require" "exports" "global" "globalThis"))
 
 ;; Keyword, operator, and punctuation literals.
 [
@@ -63,15 +70,10 @@
   "instanceof" "delete" "typeof" "void" "new"
 ] @keyword.operator
 [
-  "Function" "Promise" "WeakMap" "WeakSet" "RegExp" "Object" "Symbol" "Array"
-  "Error" "Date" "Map" "Set"
-] @type
-[
   "undefined" "false" "true" "null"
 ] @constant.builtin
 [
-  "globalThis" "document" "console" "process" "require" "exports" "window" "module"
-  "global" "super" "this"
+  "super" "this"
 ] @variable.builtin
 [
   ">>>=" "**=" "<<=" ">>=" "??=" "||=" "&&=" "==="

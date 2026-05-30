@@ -15,6 +15,7 @@
     "@lezer/javascript": "^1.5.4",
     "@types/node": "^25.9.1",
     "@vscode/tree-sitter-wasm": "^0.3.1",
+    "tree-sitter-cli": "^0.26.9",
     "typescript": "^5.6.0",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2",
