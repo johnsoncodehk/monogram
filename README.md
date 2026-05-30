@@ -187,6 +187,7 @@ node test/conformance-matrix.ts  # THE parser metric: bidirectional vs tsc — 1
 node test/highlight-bench.ts                       # absolute correctness, both grammars vs a neutral tsc oracle
 node test/highlight-bench.ts --corpus adversarial  # documented bug ledger only (no /tmp/ts-repo needed)
 node test/highlight-bench.ts --write-readme        # regenerate the head-to-head block above
+node test/scope-coverage.ts                        # drop-in COMPATIBILITY gaps vs official (scope fidelity, missing regex/JSDoc sub-grammars, TSX) — what correctness doesn't measure
 ```
 
 > `test/run-conformance.ts` reports a *raw accept-rate* (94.2% over all 3776 files, multi-file cases included) — an acceptance-only sanity check, not the bidirectional proof. `conformance-matrix.ts` is the number this README quotes.

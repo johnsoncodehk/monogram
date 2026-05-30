@@ -9,7 +9,8 @@
     "conformance:js": "node test/js-conformance.ts",
     "bench": "node test/highlight-bench.ts",
     "bench:js": "node test/js-highlight-bench.ts",
-    "bench:readme": "node test/highlight-bench.ts --corpus adversarial --write-readme"
+    "bench:readme": "node test/highlight-bench.ts --corpus adversarial --write-readme",
+    "coverage": "node test/scope-coverage.ts"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
