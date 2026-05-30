@@ -99,7 +99,7 @@ Expr {
     Expr !l16 (Op_2b2b | Op_2d2d)
 }
 Prop {
-  (Spread Expr | (kw_public | kw_private | kw_protected)? (kw_get | kw_set) MemberName ParenL ((Param (Comma Param)*)?)? ParenR (Colon Type)? Block | kw_async? Op_2a? MemberName TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block | MemberName Colon Expr | BracketL Expr (Comma Expr)* BracketR Colon Expr | Ident (Op_3d Expr | Question (Colon Expr)? | ))
+  (Spread Expr | (kw_public | kw_private | kw_protected)? (kw_get | kw_set) MemberName ParenL ((Param (Comma Param)*)?)? ParenR (Colon Type)? Block | kw_async? Op_2a? MemberName TypeParams? ParenL (Param (Comma Param)*)? ParenR (Colon Type)? Block | MemberName Colon Expr | BracketL Expr (Comma Expr)* BracketR Colon Expr | Ident (Op_3d Expr | Question (Colon Expr)? | ()))
 }
 MemberName {
   (Ident | PrivateField | String | Number | HexNumber | OctalNumber | BinaryNumber | BigInt | BracketL Expr BracketR)

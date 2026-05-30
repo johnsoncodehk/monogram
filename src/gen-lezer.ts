@@ -237,7 +237,9 @@ function exprToLezer(
         .filter(s => s.length > 0)
         .join(' ');
     case 'alt':
-      return '(' + expr.items.map(i => exprToLezer(i, ctx)).join(' | ') + ')';
+      // An alternative that reduces to empty (an epsilon / fully-optional branch)
+      // must be the explicit `()` — a bare `|` is a Lezer syntax error.
+      return '(' + expr.items.map(i => exprToLezer(i, ctx) || '()').join(' | ') + ')';
     case 'group':
       return '(' + exprToLezer(expr.body, ctx) + ')';
     case 'quantifier': {

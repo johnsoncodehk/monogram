@@ -10,6 +10,7 @@
     "bench:readme": "node test/highlight-bench.ts --corpus adversarial --write-readme"
   },
   "devDependencies": {
+    "@lezer/generator": "^1.8.0",
     "@lezer/highlight": "^1.2.3",
     "@lezer/javascript": "^1.5.4",
     "@types/node": "^25.9.1",
