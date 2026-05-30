@@ -1001,6 +1001,11 @@ function buildHighlightsScm(
     const exprRuleName = [...ctx.prattRules][0];
     const exprSnake = exprRuleName ? snake(exprRuleName) : null;
     if (exprSnake && hasPropertyAccess(grammar, identName)) struct.push(`(${exprSnake} (${exprSnake}) (${identSnake}) @property)`);
+    // destructuring rename key `{ key: binding }` — the key, anchored on the trailing element
+    for (const [n, el] of bindingKeyRules(grammar, identName)) {
+      const s = snake(n), es = snake(el);
+      if (s && es) struct.push(`(${s} (${identSnake}) @property (${es}))`);
+    }
     if (struct.length > 0) {
       out.push(';; Structural member / type-param / property-access captures.');
       out.push(...struct);
@@ -1322,6 +1327,29 @@ function hasPropertyAccess(grammar: CstGrammar, identName: string): boolean {
   };
   for (const r of grammar.rules) walk(r.body);
   return found;
+}
+
+/** Rules with a `[ identifier, ':', ruleRef ]` branch — a `key: binding` property whose
+ *  KEY is a property name. The trailing rule ref distinguishes it from a shorthand
+ *  binding (`{ a }`, where the identifier IS the binding), so the capture is anchored
+ *  on that element. Returns rule → the element-rule that must follow the key. */
+function bindingKeyRules(grammar: CstGrammar, identName: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const r of grammar.rules) {
+    for (const b of ruleBranches(r.body)) {
+      for (let i = 0; i + 2 < b.length; i++) {
+        if (b[i].type === 'ref' && (b[i] as { name: string }).name === identName
+            && b[i + 1].type === 'literal' && (b[i + 1] as { value: string }).value === ':'
+            && b[i + 2].type === 'ref') {
+          const element = (b[i + 2] as { name: string }).name;
+          // skip a self-referential value (`Stmt: Ident ':' Stmt` is a labeled statement,
+          // a jump target — not a destructuring key whose value is a sub-element rule).
+          if (element !== r.name) out.set(r.name, element);
+        }
+      }
+    }
+  }
+  return out;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

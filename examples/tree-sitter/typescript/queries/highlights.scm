@@ -33,6 +33,7 @@
 (member_name (ident) @property)
 (type_member (ident) @property)
 (expr (expr) (ident) @property)
+(binding_property (ident) @property (binding_element))
 
 ;; Enum-like value members (override member-key, which would say @property).
 (enum_member (member_name (ident) @variable))

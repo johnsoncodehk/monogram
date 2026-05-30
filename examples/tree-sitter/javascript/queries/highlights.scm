@@ -24,6 +24,7 @@
 ;; Structural member / type-param / property-access captures.
 (member_name (ident) @property)
 (expr (expr) (ident) @property)
+(binding_property (ident) @property (binding_element))
 
 ;; Literal token nodes.
 (shebang) @comment
