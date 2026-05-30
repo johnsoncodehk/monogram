@@ -87,7 +87,7 @@ if (!existsSync(MONOGRAM_PATH)) {
 }
 
 const officialGrammar = await makeRegistry('source.ts', readFileSync(OFFICIAL_PATH, 'utf-8')).loadGrammar('source.ts');
-const monogramGrammar = await makeRegistry('source.typescript', readFileSync(MONOGRAM_PATH, 'utf-8')).loadGrammar('source.typescript');
+const monogramGrammar = await makeRegistry('source.ts', readFileSync(MONOGRAM_PATH, 'utf-8')).loadGrammar('source.ts');
 if (!officialGrammar || !monogramGrammar) throw new Error('failed to load a grammar');
 
 const GRAMMARS: { key: 'official' | 'monogram'; g: vsctm.IGrammar }[] = [

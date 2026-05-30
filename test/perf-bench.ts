@@ -62,7 +62,7 @@ if (!existsSync(MONOGRAM_PATH)) {
   console.error(`Monogram grammar not found at ${MONOGRAM_PATH}. Run: node src/cli.ts examples/typescript.ts`);
   process.exit(1);
 }
-const monogramGrammar = await makeRegistry('source.typescript', readFileSync(MONOGRAM_PATH, 'utf-8')).loadGrammar('source.typescript');
+const monogramGrammar = await makeRegistry('source.ts', readFileSync(MONOGRAM_PATH, 'utf-8')).loadGrammar('source.ts');
 if (!monogramGrammar) throw new Error('failed to load Monogram grammar');
 
 let officialGrammar: vsctm.IGrammar | null = null;

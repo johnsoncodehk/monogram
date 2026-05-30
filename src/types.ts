@@ -83,4 +83,6 @@ export interface CstGrammar {
   precs: PrecLevel[];
   rules: RuleDecl[];
   scopeOverrides: Map<string, string[]>;  // literal → scope overrides from `scopes` section (multiple if keyword appears in multiple groups)
+  name?: string;
+  scopeName?: string;  // declared TextMate scope name (e.g. source.ts); its suffix drives every scope's language tag
 }

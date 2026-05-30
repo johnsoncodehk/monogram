@@ -17,7 +17,7 @@ const registry = new Registry({
     createOnigString: (s: string) => new OnigString(s),
   }),
   loadGrammar: async (scopeName: string) => {
-    if (scopeName === 'source.typescript') {
+    if (scopeName === 'source.ts') {
       const content = readFileSync('examples/typescript.tmLanguage.json', 'utf-8');
       return parseRawGrammar(content, 'typescript.tmLanguage.json');
     }
@@ -25,7 +25,7 @@ const registry = new Registry({
   },
 });
 
-const grammar = await registry.loadGrammar('source.typescript');
+const grammar = await registry.loadGrammar('source.ts');
 if (!grammar) throw new Error('Failed to load grammar');
 
 import { tests, multiLineTests } from './issue-cases.ts';

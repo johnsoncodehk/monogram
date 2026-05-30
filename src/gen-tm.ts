@@ -1581,7 +1581,7 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
       const delims = extractBlockDelimiters(tok.pattern);
       if (delims) {
         const [begin, end] = delims;
-        const sig = `${begin} ${end}`;
+        const sig = `${begin}${end}`;
         if (!seenBlock.has(sig)) { seenBlock.add(sig); blockComments.push({ begin, end }); }
       }
     }
@@ -2409,7 +2409,14 @@ function detectConstructorKeywords(
 // ── Generator ──
 
 export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGrammar {
-  const scopeName = `source.${langName}`;
+  // Honour the grammar's DECLARED scopeName (e.g. source.ts) and derive every scope's
+  // language suffix from it (ts / js / tsx) instead of the raw grammar name
+  // (typescript / …). Themes key on `keyword.control.ts`, not `…​.typescript`, so this
+  // is what makes the derived grammar a drop-in for the official one. The raw name is
+  // kept only for the display `name` field below.
+  const grammarName = langName;
+  const scopeName = grammar.scopeName ?? `source.${langName}`;
+  langName = scopeName.replace(/^source\./, '');
   const repository: Record<string, TmPattern> = {};
   const topPatterns: { include: string }[] = [];
 
@@ -4166,7 +4173,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
 
   return {
     $schema: 'https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json',
-    name: langName,
+    name: grammarName,
     scopeName,
     patterns: orderedPatterns,
     repository,

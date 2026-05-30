@@ -114,7 +114,7 @@ if (!existsSync(MONO_PATH)) {
   console.error(`Monogram JS grammar not found at ${MONO_PATH}. Run: node src/cli.ts examples/javascript.ts`);
   process.exit(1);
 }
-const mono = await loadGrammar('source.javascript', MONO_PATH);
+const mono = await loadGrammar('source.js', MONO_PATH);
 if (!mono) throw new Error('failed to load Monogram JS grammar');
 
 const results = [grade('Monogram (JS TextMate, derived)', mono)];

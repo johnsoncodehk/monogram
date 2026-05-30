@@ -50,9 +50,9 @@ function load(scopeName: string, path: string): Promise<vsctm.IGrammar | null> {
     loadGrammar: async (sn: string) => (sn === scopeName ? parseRawGrammar(content, 'g.json') : null),
   }).loadGrammar(scopeName);
 }
-const mono = (await load('source.typescript', MONO_PATH))!;
+const mono = (await load('source.ts', MONO_PATH))!;
 const official = (await load('source.ts', OFFICIAL_PATH))!;
-const ROOT_MONO = 'source.typescript', ROOT_OFF = 'source.ts';
+const ROOT_MONO = 'source.ts', ROOT_OFF = 'source.ts';
 
 interface Tok { start: number; end: number; scope: string }
 function tokenize(g: vsctm.IGrammar, text: string): Tok[] {
@@ -96,7 +96,9 @@ const byCat = new Map<string, string[]>();
 for (const s of officialOnly) { const c = category(s); (byCat.get(c) ?? byCat.set(c, []).get(c)!).push(s); }
 
 console.log('═══ DROP-IN COMPATIBILITY vs official (coverage + fidelity, NOT correctness) ═══\n');
-console.log(`scopeName        Monogram=source.typescript   official=source.ts   ${'(mismatch → not yet a drop-in)'}`);
+const monoSN = JSON.parse(readFileSync(MONO_PATH, 'utf-8')).scopeName;
+const offSN = JSON.parse(readFileSync(OFFICIAL_PATH, 'utf-8')).scopeName;
+console.log(`scopeName        Monogram=${monoSN}   official=${offSN}   ${monoSN === offSN ? '(match → drop-in scopeName ✓)' : '(mismatch → not a drop-in)'}`);
 console.log(`scope vocabulary Monogram=${monoVocab.size}   official=${offVocab.size}\n`);
 console.log(`── 1. VOCABULARY: ${officialOnly.length} official scopes Monogram never emits (pure coverage gaps) ──`);
 for (const [cat, list] of [...byCat.entries()].sort((a, b) => b[1].length - a[1].length)) {
