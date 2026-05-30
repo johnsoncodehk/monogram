@@ -902,19 +902,15 @@ export function generateLezer(grammar: LezerGrammar): LezerOutput {
 
   const ruleTexts: string[] = [];
   const entry = findEntryRule(grammar);
-  // Lezer needs a top-level `@top` rule. Reuse the grammar's entry rule.
-  ruleTexts.push(`@top Program { ${entry} }`);
-  if (entry !== 'Program') {
-    // entry rule will also be emitted below as a normal rule
-  }
-
+  // Lezer needs exactly one `@top` rule. PROMOTE the grammar's entry rule to @top
+  // (prefix its own definition) rather than emitting a separate wrapper — a wrapper
+  // named `Program` would collide with an entry rule that is itself named `Program`.
   for (const rule of grammar.rules) {
     const localCtx = { ...exprCtx, selfName: rule.name };
-    if (prattRuleNames.has(rule.name)) {
-      ruleTexts.push(emitPrattRule(rule, grammar, prec, localCtx, incomplete));
-    } else {
-      ruleTexts.push(emitPlainRule(rule, localCtx));
-    }
+    const text = prattRuleNames.has(rule.name)
+      ? emitPrattRule(rule, grammar, prec, localCtx, incomplete)
+      : emitPlainRule(rule, localCtx);
+    ruleTexts.push(rule.name === entry ? `@top ${text}` : text);
   }
 
   // ── Keyword specialization ──
@@ -928,10 +924,12 @@ export function generateLezer(grammar: LezerGrammar): LezerOutput {
 
   const specializeLines: string[] = [];
   if (identToken && keywordLits.size > 0) {
-    const mapping = [...keywordLits].sort()
-      .map(kw => `  ${lezerString(kw)} ${keywordSpecialName(kw)}`)
-      .join(',\n');
-    specializeLines.push(`@specialize<${identToken.name}, keyword> {\n${mapping}\n}`);
+    // Lezer has no `@specialize<tok, name> { … }` block form — each keyword is its own
+    // rule that specializes the identifier token (the inline `@specialize<tok, "word">`
+    // expression, as in @lezer/javascript's `kw<term>` template).
+    for (const kw of [...keywordLits].sort()) {
+      specializeLines.push(`${keywordSpecialName(kw)} { @specialize<${identToken.name}, ${lezerString(kw)}> }`);
+    }
   } else if (keywordLits.size > 0) {
     incomplete.push('Keywords present but no @identifier token to @specialize over.');
   }

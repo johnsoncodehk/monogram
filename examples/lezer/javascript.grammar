@@ -22,7 +22,6 @@
   l0 @right
 }
 
-@top Program { Program }
 DecoratorExpr {
   Decorator (ParenL (Expr (Comma Expr)*)? ParenR)?
 }
@@ -140,63 +139,61 @@ ImportClause {
 ImportSpecifier {
   Ident (kw_as Ident)?
 }
-Program {
+@top Program {
   (Decl | Stmt)*
 }
 
 // Keyword specialization over the identifier token:
-@specialize<Ident, keyword> {
-  "accessor" kw_accessor,
-  "as" kw_as,
-  "async" kw_async,
-  "await" kw_await,
-  "break" kw_break,
-  "case" kw_case,
-  "catch" kw_catch,
-  "class" kw_class,
-  "const" kw_const,
-  "constructor" kw_constructor,
-  "continue" kw_continue,
-  "debugger" kw_debugger,
-  "default" kw_default,
-  "delete" kw_delete,
-  "do" kw_do,
-  "else" kw_else,
-  "export" kw_export,
-  "extends" kw_extends,
-  "false" kw_false,
-  "finally" kw_finally,
-  "for" kw_for,
-  "from" kw_from,
-  "function" kw_function,
-  "get" kw_get,
-  "if" kw_if,
-  "import" kw_import,
-  "in" kw_in,
-  "instanceof" kw_instanceof,
-  "let" kw_let,
-  "meta" kw_meta,
-  "new" kw_new,
-  "null" kw_null,
-  "of" kw_of,
-  "return" kw_return,
-  "set" kw_set,
-  "static" kw_static,
-  "super" kw_super,
-  "switch" kw_switch,
-  "this" kw_this,
-  "throw" kw_throw,
-  "true" kw_true,
-  "try" kw_try,
-  "typeof" kw_typeof,
-  "undefined" kw_undefined,
-  "using" kw_using,
-  "var" kw_var,
-  "void" kw_void,
-  "while" kw_while,
-  "with" kw_with,
-  "yield" kw_yield
-}
+kw_accessor { @specialize<Ident, "accessor"> }
+kw_as { @specialize<Ident, "as"> }
+kw_async { @specialize<Ident, "async"> }
+kw_await { @specialize<Ident, "await"> }
+kw_break { @specialize<Ident, "break"> }
+kw_case { @specialize<Ident, "case"> }
+kw_catch { @specialize<Ident, "catch"> }
+kw_class { @specialize<Ident, "class"> }
+kw_const { @specialize<Ident, "const"> }
+kw_constructor { @specialize<Ident, "constructor"> }
+kw_continue { @specialize<Ident, "continue"> }
+kw_debugger { @specialize<Ident, "debugger"> }
+kw_default { @specialize<Ident, "default"> }
+kw_delete { @specialize<Ident, "delete"> }
+kw_do { @specialize<Ident, "do"> }
+kw_else { @specialize<Ident, "else"> }
+kw_export { @specialize<Ident, "export"> }
+kw_extends { @specialize<Ident, "extends"> }
+kw_false { @specialize<Ident, "false"> }
+kw_finally { @specialize<Ident, "finally"> }
+kw_for { @specialize<Ident, "for"> }
+kw_from { @specialize<Ident, "from"> }
+kw_function { @specialize<Ident, "function"> }
+kw_get { @specialize<Ident, "get"> }
+kw_if { @specialize<Ident, "if"> }
+kw_import { @specialize<Ident, "import"> }
+kw_in { @specialize<Ident, "in"> }
+kw_instanceof { @specialize<Ident, "instanceof"> }
+kw_let { @specialize<Ident, "let"> }
+kw_meta { @specialize<Ident, "meta"> }
+kw_new { @specialize<Ident, "new"> }
+kw_null { @specialize<Ident, "null"> }
+kw_of { @specialize<Ident, "of"> }
+kw_return { @specialize<Ident, "return"> }
+kw_set { @specialize<Ident, "set"> }
+kw_static { @specialize<Ident, "static"> }
+kw_super { @specialize<Ident, "super"> }
+kw_switch { @specialize<Ident, "switch"> }
+kw_this { @specialize<Ident, "this"> }
+kw_throw { @specialize<Ident, "throw"> }
+kw_true { @specialize<Ident, "true"> }
+kw_try { @specialize<Ident, "try"> }
+kw_typeof { @specialize<Ident, "typeof"> }
+kw_undefined { @specialize<Ident, "undefined"> }
+kw_using { @specialize<Ident, "using"> }
+kw_var { @specialize<Ident, "var"> }
+kw_void { @specialize<Ident, "void"> }
+kw_while { @specialize<Ident, "while"> }
+kw_with { @specialize<Ident, "with"> }
+kw_yield { @specialize<Ident, "yield"> }
 
 @skip { Shebang | JSDoc | TripleSlash | LineComment | BlockComment }
 

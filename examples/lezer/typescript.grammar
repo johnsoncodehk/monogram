@@ -22,7 +22,6 @@
   l0 @right
 }
 
-@top Program { Program }
 Type {
   (Ident (kw_is Type)? | Type AngleL (Type (Comma Type)*)? AngleR | Type BracketL BracketR | Type Op_7c Type | Type Op_26 Type | Op_7c Type | Op_26 Type | kw_keyof Type | kw_typeof TypeofRef | kw_readonly Type | ParenL Type ParenR | TypeParams? ParenL (Param (Comma Param)*)? ParenR Arrow Type | kw_abstract? kw_new TypeParams? ParenL (Param (Comma Param)*)? ParenR Arrow Type | BracketL (Spread? (Ident Question? Colon)? Spread? Type Question? Comma?)* BracketR | BraceL (TypeMember (Semi | Comma)?)* BraceR | kw_asserts Ident (kw_is Type)? | Type kw_extends Type Question Type Colon Type | kw_infer Ident (kw_extends Type (Question Type Colon Type)?)? | String | Number | HexNumber | OctalNumber | BinaryNumber | BigInt | Op_2d (Number | BigInt) | kw_true | kw_false | kw_null | kw_undefined | kw_void | kw_this | kw_unique kw_symbol | kw_import ParenL Type ParenR | Template | Type BracketL Type BracketR | Type Dot Ident)
 }
@@ -167,84 +166,82 @@ ImportClause {
 ImportSpecifier {
   Ident (kw_as Ident)?
 }
-Program {
+@top Program {
   (Decl | Stmt)*
 }
 
 // Keyword specialization over the identifier token:
-@specialize<Ident, keyword> {
-  "abstract" kw_abstract,
-  "accessor" kw_accessor,
-  "as" kw_as,
-  "asserts" kw_asserts,
-  "async" kw_async,
-  "await" kw_await,
-  "break" kw_break,
-  "case" kw_case,
-  "catch" kw_catch,
-  "class" kw_class,
-  "const" kw_const,
-  "constructor" kw_constructor,
-  "continue" kw_continue,
-  "debugger" kw_debugger,
-  "declare" kw_declare,
-  "default" kw_default,
-  "delete" kw_delete,
-  "do" kw_do,
-  "else" kw_else,
-  "enum" kw_enum,
-  "export" kw_export,
-  "extends" kw_extends,
-  "false" kw_false,
-  "finally" kw_finally,
-  "for" kw_for,
-  "from" kw_from,
-  "function" kw_function,
-  "get" kw_get,
-  "if" kw_if,
-  "implements" kw_implements,
-  "import" kw_import,
-  "in" kw_in,
-  "infer" kw_infer,
-  "instanceof" kw_instanceof,
-  "interface" kw_interface,
-  "is" kw_is,
-  "keyof" kw_keyof,
-  "let" kw_let,
-  "meta" kw_meta,
-  "module" kw_module,
-  "namespace" kw_namespace,
-  "new" kw_new,
-  "null" kw_null,
-  "of" kw_of,
-  "out" kw_out,
-  "override" kw_override,
-  "private" kw_private,
-  "protected" kw_protected,
-  "public" kw_public,
-  "readonly" kw_readonly,
-  "return" kw_return,
-  "satisfies" kw_satisfies,
-  "set" kw_set,
-  "static" kw_static,
-  "super" kw_super,
-  "switch" kw_switch,
-  "symbol" kw_symbol,
-  "this" kw_this,
-  "throw" kw_throw,
-  "true" kw_true,
-  "try" kw_try,
-  "type" kw_type,
-  "typeof" kw_typeof,
-  "undefined" kw_undefined,
-  "unique" kw_unique,
-  "using" kw_using,
-  "var" kw_var,
-  "void" kw_void,
-  "while" kw_while,
-  "with" kw_with,
-  "yield" kw_yield
-}
+kw_abstract { @specialize<Ident, "abstract"> }
+kw_accessor { @specialize<Ident, "accessor"> }
+kw_as { @specialize<Ident, "as"> }
+kw_asserts { @specialize<Ident, "asserts"> }
+kw_async { @specialize<Ident, "async"> }
+kw_await { @specialize<Ident, "await"> }
+kw_break { @specialize<Ident, "break"> }
+kw_case { @specialize<Ident, "case"> }
+kw_catch { @specialize<Ident, "catch"> }
+kw_class { @specialize<Ident, "class"> }
+kw_const { @specialize<Ident, "const"> }
+kw_constructor { @specialize<Ident, "constructor"> }
+kw_continue { @specialize<Ident, "continue"> }
+kw_debugger { @specialize<Ident, "debugger"> }
+kw_declare { @specialize<Ident, "declare"> }
+kw_default { @specialize<Ident, "default"> }
+kw_delete { @specialize<Ident, "delete"> }
+kw_do { @specialize<Ident, "do"> }
+kw_else { @specialize<Ident, "else"> }
+kw_enum { @specialize<Ident, "enum"> }
+kw_export { @specialize<Ident, "export"> }
+kw_extends { @specialize<Ident, "extends"> }
+kw_false { @specialize<Ident, "false"> }
+kw_finally { @specialize<Ident, "finally"> }
+kw_for { @specialize<Ident, "for"> }
+kw_from { @specialize<Ident, "from"> }
+kw_function { @specialize<Ident, "function"> }
+kw_get { @specialize<Ident, "get"> }
+kw_if { @specialize<Ident, "if"> }
+kw_implements { @specialize<Ident, "implements"> }
+kw_import { @specialize<Ident, "import"> }
+kw_in { @specialize<Ident, "in"> }
+kw_infer { @specialize<Ident, "infer"> }
+kw_instanceof { @specialize<Ident, "instanceof"> }
+kw_interface { @specialize<Ident, "interface"> }
+kw_is { @specialize<Ident, "is"> }
+kw_keyof { @specialize<Ident, "keyof"> }
+kw_let { @specialize<Ident, "let"> }
+kw_meta { @specialize<Ident, "meta"> }
+kw_module { @specialize<Ident, "module"> }
+kw_namespace { @specialize<Ident, "namespace"> }
+kw_new { @specialize<Ident, "new"> }
+kw_null { @specialize<Ident, "null"> }
+kw_of { @specialize<Ident, "of"> }
+kw_out { @specialize<Ident, "out"> }
+kw_override { @specialize<Ident, "override"> }
+kw_private { @specialize<Ident, "private"> }
+kw_protected { @specialize<Ident, "protected"> }
+kw_public { @specialize<Ident, "public"> }
+kw_readonly { @specialize<Ident, "readonly"> }
+kw_return { @specialize<Ident, "return"> }
+kw_satisfies { @specialize<Ident, "satisfies"> }
+kw_set { @specialize<Ident, "set"> }
+kw_static { @specialize<Ident, "static"> }
+kw_super { @specialize<Ident, "super"> }
+kw_switch { @specialize<Ident, "switch"> }
+kw_symbol { @specialize<Ident, "symbol"> }
+kw_this { @specialize<Ident, "this"> }
+kw_throw { @specialize<Ident, "throw"> }
+kw_true { @specialize<Ident, "true"> }
+kw_try { @specialize<Ident, "try"> }
+kw_type { @specialize<Ident, "type"> }
+kw_typeof { @specialize<Ident, "typeof"> }
+kw_undefined { @specialize<Ident, "undefined"> }
+kw_unique { @specialize<Ident, "unique"> }
+kw_using { @specialize<Ident, "using"> }
+kw_var { @specialize<Ident, "var"> }
+kw_void { @specialize<Ident, "void"> }
+kw_while { @specialize<Ident, "while"> }
+kw_with { @specialize<Ident, "with"> }
+kw_yield { @specialize<Ident, "yield"> }
 
 @skip { Shebang | JSDoc | TripleSlash | LineComment | BlockComment }
 
