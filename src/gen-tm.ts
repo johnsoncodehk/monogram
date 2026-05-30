@@ -622,6 +622,264 @@ function buildOperandStartClass(grammar: CstGrammar, identRegex: string): string
   return `[[:alpha:][:digit:]${cls}]`;
 }
 
+// ── JSX detection ──
+
+interface JsxInfo {
+  selfCloseTok: string;   // the literal text of the self-closing tag token (`/>`)
+  closeTok: string;       // the literal text of the close-tag-open token (`</`)
+}
+
+/**
+ * Detect a JSX/TSX dialect from the grammar, structurally and agnostically: a
+ * JSX grammar declares two dedicated punctuation tokens whose patterns are
+ * exactly the self-closing tag `/>` and the close-tag opener `</` (a JSX grammar
+ * needs these to lex `<Tag/>` / `</Tag>` atomically — see examples/tsx.ts), AND
+ * a rule that uses a literal `<` immediately before a rule reference (the JSX
+ * element production `'<' TagName …`). The two tokens alone are the signal; the
+ * `<`-before-ref check guards against a grammar that merely happens to declare
+ * those token texts for some non-JSX purpose. Returns the token texts (so the
+ * emitted patterns reference the grammar's own delimiters), or null.
+ *
+ * A non-JSX grammar (plain TypeScript/JavaScript) declares no such tokens, so
+ * this returns null and NO JSX patterns are emitted — the TS/JS TextMate output
+ * is therefore byte-identical to before this feature existed.
+ */
+function detectJsx(grammar: CstGrammar): JsxInfo | null {
+  const tokenText = (re: string): string | null => {
+    // Recover the literal string a simple punctuation token matches: strip
+    // regex escapes from a pattern that is only escaped literals (e.g. `\/>` →
+    // `/>`, `<\/` → `</`). Bail (null) on any metachar — a real JSX delimiter
+    // token is a fixed 2-char punctuation string.
+    let out = '';
+    for (let i = 0; i < re.length; i++) {
+      const c = re[i];
+      if (c === '\\') { const n = re[i + 1]; if (n === undefined || /[a-zA-Z0-9]/.test(n)) return null; out += n; i++; continue; }
+      if ('[](){}.*+?^$|'.includes(c)) return null;
+      out += c;
+    }
+    return out;
+  };
+  let selfCloseTok: string | null = null;
+  let closeTok: string | null = null;
+  for (const tok of grammar.tokens) {
+    if (tok.flags.includes('skip') || tok.flags.includes('regex')) continue;
+    const text = tokenText(tok.pattern);
+    if (text === '/>') selfCloseTok = text;
+    else if (text === '</') closeTok = text;
+  }
+  if (!selfCloseTok || !closeTok) return null;
+
+  // Confirm the JSX element production: a `<` literal directly before a rule ref.
+  let hasElementShape = false;
+  const walk = (e: RuleExpr): void => {
+    if (e.type === 'seq') {
+      for (let i = 0; i < e.items.length - 1; i++) {
+        if (e.items[i].type === 'literal' && (e.items[i] as { value: string }).value === '<' &&
+            e.items[i + 1].type === 'ref') hasElementShape = true;
+      }
+      e.items.forEach(walk);
+    } else if (e.type === 'alt') e.items.forEach(walk);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+    else if (e.type === 'sep') walk(e.element);
+  };
+  for (const rule of grammar.rules) walk(rule.body);
+  if (!hasElementShape) return null;
+
+  return { selfCloseTok, closeTok };
+}
+
+/**
+ * Generate the JSX TextMate repository entries (TypeScriptReact vocabulary).
+ *
+ * The hard part is the `<` disambiguation: a JSX element's `<` vs comparison
+ * `a < b` vs generic `f<T>()`. As in the official TypeScriptReact grammar, JSX
+ * is recognised only at an EXPRESSION-START position via a lookbehind: the `<`
+ * (with no preceding value operand — not after an identifier / `)` / `]` / a
+ * literal, but after `=`, `(`, `,`, `?`, `:`, `=>`, `&&`, `||`, `return`,
+ * `yield`, `default`, `(`, `[`, `{`, or line start) followed by a tag-shaped
+ * lookahead (`<` then an identifier/`>` then attribute/`>`/`/>`). A comparison's
+ * `<` always follows a value operand, so it never matches; a generic call's `<`
+ * follows an identifier, so it never matches either. (The `<T>expr` prefix cast
+ * doesn't exist in .tsx.)
+ *
+ * Tag-name scoping mirrors the official: a lowercase intrinsic tag (`div`) →
+ * entity.name.tag; an uppercase / dotted component (`Foo`, `Foo.Bar`) →
+ * support.class.component. Scopes are namespaced with `langName` like every
+ * other emitted scope.
+ */
+function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo): Record<string, TmPattern> {
+  const result: Record<string, TmPattern> = {};
+
+  // Scope names (TypeScriptReact vocabulary, namespaced by langName).
+  const tagBegin = `punctuation.definition.tag.begin.${langName}`;
+  const tagEnd = `punctuation.definition.tag.end.${langName}`;
+  const tagNs = `entity.name.tag.namespace.${langName}`;
+  const tagNsSep = `punctuation.separator.namespace.${langName}`;
+  const intrinsic = `entity.name.tag.${langName}`;
+  const component = `support.class.component.${langName}`;
+  const attrName = `entity.other.attribute-name.${langName}`;
+  const attrNsName = `entity.other.attribute-name.namespace.${langName}`;
+  const attrAssign = `keyword.operator.assignment.${langName}`;
+  const embeddedBegin = `punctuation.section.embedded.begin.${langName}`;
+  const embeddedEnd = `punctuation.section.embedded.end.${langName}`;
+  const strBegin = `punctuation.definition.string.begin.${langName}`;
+  const strEnd = `punctuation.definition.string.end.${langName}`;
+
+  // A JSX tag name: optional `ns:` prefix, then a lowercase-intrinsic OR a
+  // component (capitalised / contains `.` / `_`,`$`). Captures, in order:
+  //   1 namespace, 2 `:`, 3 intrinsic-name, 4 component-name.
+  // Component sub-alternation `([_$[:upper:]]…|[_$[:alpha:]][-_$[:alnum:].]*…)`
+  // is collapsed to: lowercase-only ⇒ intrinsic; anything else ⇒ component.
+  // The trailing `(?<!\.|-)` forbids a name ending in a joiner.
+  const nameRe =
+    `(?:(${identRegex})(:))?` +                                   // 1 ns, 2 ':'
+    `(?:([[:lower:]][-[:alnum:]]*)` +                              // 3 intrinsic (lowercase head)
+    `|([_$[:upper:]][-_$[:alnum:].]*|${identRegex}(?:[-.][_$[:alnum:]]+)+))` +  // 4 component
+    `(?<!\\.|-)`;
+  const nameCaptures = (base: number): Record<string, { name: string }> => ({
+    [String(base)]: { name: tagNs },
+    [String(base + 1)]: { name: tagNsSep },
+    [String(base + 2)]: { name: intrinsic },
+    [String(base + 3)]: { name: component },
+  });
+
+  // Expression-start lookbehind (JSX `<` is never preceded by a value operand).
+  // Variable-length lookbehind is supported by Oniguruma. After `++`/`--` is
+  // excluded (those produce a value). Mirrors the official jsx-tag-in-expression.
+  const exprStart =
+    `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)\\s*`;
+
+  // ── jsx-children: what may appear between `>` and `</` ──
+  result['jsx-children'] = {
+    patterns: [
+      { include: '#jsx-self-closing-element' },
+      { include: '#jsx-element' },
+      { include: '#jsx-fragment' },
+      { include: '#jsx-expression' },
+    ],
+  };
+
+  // ── jsx-expression: `{ … }` embedded-code container (attr value & children) ──
+  result['jsx-expression'] = {
+    name: `meta.embedded.expression.${langName}`,
+    begin: '\\{',
+    beginCaptures: { '0': { name: embeddedBegin } },
+    end: '\\}',
+    endCaptures: { '0': { name: embeddedEnd } },
+    patterns: [{ include: '$self' }],
+  };
+
+  // ── jsx-string-*: attribute string values (own scope, no escapes/interp) ──
+  for (const [q, key, scope] of [['"', 'jsx-string-double-quoted', 'string.quoted.double'], ["'", 'jsx-string-single-quoted', 'string.quoted.single']] as const) {
+    result[key] = {
+      name: `${scope}.${langName}`,
+      begin: q,
+      beginCaptures: { '0': { name: strBegin } },
+      end: q,
+      endCaptures: { '0': { name: strEnd } },
+    };
+  }
+
+  // ── jsx-attributes: name (= value)? | spread {…} ──
+  result['jsx-attributes'] = {
+    patterns: [
+      // `name` / `ns:name` (with optional namespace) immediately before ws / `=` / `/>` / `>`.
+      {
+        match: `\\s*(?:(${identRegex})(:))?([_$[:alpha:]][-_$[:alnum:].]*)(?=\\s|=|/?>|$)`,
+        captures: {
+          '1': { name: attrNsName },
+          '2': { name: tagNsSep },
+          '3': { name: attrName },
+        },
+      },
+      // `=` assignment (only when a value follows).
+      { match: `=(?=\\s*(?:'|"|\\{))`, name: attrAssign },
+      { include: '#jsx-string-double-quoted' },
+      { include: '#jsx-string-single-quoted' },
+      { include: '#jsx-expression' },
+    ],
+  };
+
+  // ── jsx-self-closing-element: `<Tag …/>` ──
+  result['jsx-self-closing-element'] = {
+    name: `meta.tag.${langName}`,
+    begin: `(<)\\s*${nameRe}`,
+    beginCaptures: { '1': { name: tagBegin }, ...nameCaptures(2) },
+    end: `(${escapeRegex(jsx.selfCloseTok)})`,
+    endCaptures: { '1': { name: tagEnd } },
+    patterns: [{ include: '#jsx-attributes' }],
+  };
+
+  // ── jsx-element: `<Tag …> children </Tag>` ──
+  // Two-phase: an inner open-tag begin/end scopes the attributes up to `>`, then
+  // a children begin/end (contentName meta.jsx.children) runs to the `</…>`.
+  result['jsx-element'] = {
+    name: `meta.tag.${langName}`,
+    begin: `(?=(<)\\s*${nameRe}(?:\\s|/?>|<))`,
+    // The closing tag's name is optional (our model doesn't enforce name-match,
+    // matching TS treating a mismatch as a semantic — not parse — error). Wrap
+    // the whole name in `(?:…)?` so the optional `?` attaches to the group, not
+    // to `nameRe`'s trailing `(?<!\.|-)` lookbehind (a quantified zero-width
+    // assertion is an invalid Oniguruma regex).
+    end: `(${escapeRegex(jsx.closeTok)})\\s*(?:${nameRe})?\\s*(>)`,
+    endCaptures: {
+      '1': { name: tagBegin },
+      ...nameCaptures(2),
+      '6': { name: tagEnd },
+    },
+    patterns: [
+      // open tag: `<Tag …>` — attributes inside, ends at `>`.
+      {
+        begin: `(<)\\s*${nameRe}`,
+        beginCaptures: { '1': { name: tagBegin }, ...nameCaptures(2) },
+        end: '(>)',
+        endCaptures: { '1': { name: tagEnd } },
+        patterns: [{ include: '#jsx-attributes' }],
+      },
+      // children region.
+      {
+        begin: '(?<=>)',
+        end: `(?=${escapeRegex(jsx.closeTok)})`,
+        contentName: `meta.jsx.children.${langName}`,
+        patterns: [{ include: '#jsx-children' }],
+      },
+    ],
+  };
+
+  // ── jsx-fragment: `<> children </>` ──
+  result['jsx-fragment'] = {
+    name: `meta.tag.${langName}`,
+    begin: '(<)\\s*(>)',
+    beginCaptures: { '1': { name: tagBegin }, '2': { name: tagEnd } },
+    end: `(${escapeRegex(jsx.closeTok)})\\s*(>)`,
+    endCaptures: { '1': { name: tagBegin }, '2': { name: tagEnd } },
+    contentName: `meta.jsx.children.${langName}`,
+    patterns: [{ include: '#jsx-children' }],
+  };
+
+  // ── Top-level expression-position entries (the disambiguated triggers) ──
+  // These wrap the elements with the expression-start lookbehind so a `<` is
+  // taken as JSX only where a value can't already be standing (mutually
+  // exclusive with comparison / generic-call, whose `<` follows an operand).
+  result['jsx-self-closing-element-in-expression'] = {
+    begin: `${exprStart}(?=(<)\\s*${nameRe}[^>]*${escapeRegex(jsx.selfCloseTok)})`,
+    end: `(?!(<)\\s*${nameRe}[^>]*${escapeRegex(jsx.selfCloseTok)})`,
+    patterns: [{ include: '#jsx-self-closing-element' }],
+  };
+  result['jsx-element-in-expression'] = {
+    begin: `${exprStart}(?=(<)\\s*${nameRe}(?:\\s|/?>|<))`,
+    end: `(?!(<)\\s*${nameRe}(?:\\s|/?>|<))`,
+    patterns: [{ include: '#jsx-element' }],
+  };
+  result['jsx-fragment-in-expression'] = {
+    begin: `${exprStart}(?=(<)\\s*(>))`,
+    end: '(?!(<)\\s*(>))',
+    patterns: [{ include: '#jsx-fragment' }],
+  };
+
+  return result;
+}
+
 // ── Angle bracket disambiguation ──
 
 interface AngleBracketAmbiguity {
@@ -2159,7 +2417,15 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   const { scopeOverrides } = grammar;
 
   // ── Shared values ──
-  const identToken = grammar.tokens.find(t => classifyToken(t.pattern, t.flags).scope === 'variable.other');
+  // THE identifier token: prefer the one the grammar explicitly flags as the
+  // identifier (`identifier: true`), the same token the parser's lexer uses for
+  // its Unicode-identifier fallback. Falling back to the first `variable.other`-
+  // classified token is unsafe when a grammar declares OTHER unrecognised
+  // punctuation tokens (e.g. JSX's `/>` / `</`, which also classify as
+  // `variable.other` and would otherwise be mistaken for the identifier pattern,
+  // corrupting every ident-derived pattern).
+  const identToken = grammar.tokens.find(t => t.identifier)
+    ?? grammar.tokens.find(t => classifyToken(t.pattern, t.flags).scope === 'variable.other');
   // Widen the identifier pattern so non-ASCII names (`Ω`, Cyrillic `А`) are scoped,
   // matching the parser lexer's Unicode fallback. This widened form is used only in
   // TextMate (Oniguruma) output, never by the lexer.
@@ -2251,6 +2517,30 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // comparison is added later in the ordering pass
   }
 
+  // ── 1a. Detect JSX/TSX dialect ──
+  // Purely additive: emitted only when the grammar declares the JSX delimiter
+  // tokens (`/>` and `</`) plus an element production. A non-JSX grammar yields
+  // null here, so no JSX patterns are emitted and its output is unchanged.
+  const jsx = detectJsx(grammar);
+  // Token names whose scoping is OWNED by the JSX patterns (the `/>` and `</`
+  // delimiters are scoped as tag punctuation inside the JSX begins/ends, so they
+  // must NOT also get a flat `variable.other` token match in Section 2).
+  const jsxOwnedTokens = new Set<string>();
+  if (jsx) {
+    const jsxPatterns = generateJsxPatterns(langName, identPattern, jsx);
+    for (const [key, pattern] of Object.entries(jsxPatterns)) repository[key] = pattern;
+    // The disambiguated, expression-position triggers go at the very top (before
+    // #generic-call / #comparison): a `<` at expression-start with a tag-shaped
+    // lookahead is JSX, never a comparison/generic (those follow a value operand).
+    topPatterns.push({ include: '#jsx-self-closing-element-in-expression' });
+    topPatterns.push({ include: '#jsx-element-in-expression' });
+    topPatterns.push({ include: '#jsx-fragment-in-expression' });
+    for (const tok of grammar.tokens) {
+      const t = tok.pattern.replace(/\\(?![a-zA-Z0-9])/g, '');
+      if (t === jsx.selfCloseTok || t === jsx.closeTok) jsxOwnedTokens.add(tok.name);
+    }
+  }
+
   // ── 1b. Detect regex literal disambiguation ──
   const regexInfo = detectRegexLiteral(grammar, tokenNames);
   if (regexInfo) {
@@ -2269,6 +2559,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   for (const tok of grammar.tokens) {
     // Skip @regex tokens — handled by regex literal disambiguation above
     if (tok.flags.includes('regex')) continue;
+    // Skip JSX delimiter tokens (`/>`, `</`) — scoped as tag punctuation inside
+    // the JSX patterns, not as a flat `variable.other` token match.
+    if (jsxOwnedTokens.has(tok.name)) continue;
 
     const classified = classifyToken(tok.pattern, tok.flags);
     const scope = tok.scope ?? classified.scope;  // @scope override wins
@@ -3818,6 +4111,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // generic-call layers, #type-cast and #comparison: its trigger is the most
     // specific (arrow position + arrow-param confirm) and it fully scopes the
     // type-parameter list (extends / defaults), which the others do not.
+    // JSX element triggers (expression-position, disambiguated) must beat the
+    // generic-call / cast / comparison angle-bracket layers AND #arrow-type-
+    // parameters: a `<` at expression-start with a tag-shaped lookahead is JSX,
+    // and the lookahead is the most specific. Self-closing before open/fragment.
+    if (key === 'jsx-self-closing-element-in-expression') return -6;
+    if (key === 'jsx-element-in-expression') return -5.5;
+    if (key === 'jsx-fragment-in-expression') return -5;
     if (key === 'arrow-type-parameters') return -4;
     if (key === 'generic-call') return -3;
     if (key === 'generic-call-eol') return -2;

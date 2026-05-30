@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "gen": "node src/cli.ts examples/typescript.ts && node src/cli.ts examples/javascript.ts",
+    "gen": "node src/cli.ts examples/typescript.ts && node src/cli.ts examples/javascript.ts && node src/cli.ts examples/tsx.ts",
     "test": "node test/sanity-check.ts",
     "conformance": "node test/run-conformance.ts",
     "conformance:js": "node test/js-conformance.ts",
+    "conformance:tsx": "node test/tsx-conformance.ts",
     "bench": "node test/highlight-bench.ts",
     "bench:js": "node test/js-highlight-bench.ts",
+    "bench:perf": "node test/perf-bench.ts",
     "bench:readme": "node test/highlight-bench.ts --corpus adversarial --write-readme",
     "coverage": "node test/scope-coverage.ts"
   },
