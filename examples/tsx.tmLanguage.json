@@ -430,6 +430,20 @@
       "match": "[<>]",
       "name": "keyword.operator.relational.tsx"
     },
+    "jsx-entity": {
+      "match": "(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.entity.tsx"
+        },
+        "2": {
+          "name": "constant.character.entity.tsx"
+        },
+        "3": {
+          "name": "punctuation.definition.entity.tsx"
+        }
+      }
+    },
     "jsx-children": {
       "patterns": [
         {
@@ -443,6 +457,9 @@
         },
         {
           "include": "#jsx-expression"
+        },
+        {
+          "include": "#jsx-entity"
         }
       ]
     },

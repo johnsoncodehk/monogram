@@ -750,12 +750,28 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo)
     `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)\\s*`;
 
   // ── jsx-children: what may appear between `>` and `</` ──
+  // Raw text needs no pattern — anything that matches none of these falls through
+  // to the enclosing region's `meta.jsx.children` contentName, so arbitrary text
+  // punctuation (`It's 100% & more!`) is already covered. The one sub-token the
+  // official grammar lifts out of that flat text is an HTML character entity
+  // (`&nbsp;`, `&amp;`, `&#123;`, `&#x1F600;`), scoped `constant.character.entity`
+  // with `&`/`;` as `punctuation.definition.entity`. A lone `&` (no `name;` tail)
+  // matches nothing here and stays plain children text — matching official.
+  result['jsx-entity'] = {
+    match: '(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)',
+    captures: {
+      '1': { name: `punctuation.definition.entity.${langName}` },
+      '2': { name: `constant.character.entity.${langName}` },
+      '3': { name: `punctuation.definition.entity.${langName}` },
+    },
+  };
   result['jsx-children'] = {
     patterns: [
       { include: '#jsx-self-closing-element' },
       { include: '#jsx-element' },
       { include: '#jsx-fragment' },
       { include: '#jsx-expression' },
+      { include: '#jsx-entity' },
     ],
   };
 

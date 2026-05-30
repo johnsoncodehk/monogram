@@ -125,8 +125,15 @@ if (ts_fail.length) {
 }
 
 console.log('\n── Corpus 3: known-unsupported valid TSX (raw-text children) ──');
-console.log('  (TS accepts these; Monogram does not — JSX text with arbitrary');
-console.log('   punctuation needs a JSX text-lexer mode this subset omits.)');
+console.log('  (TS accepts these; Monogram does not. JSX text is RAW TEXT, not a token');
+console.log('   sequence — `It\'s 100% & more!` has an unterminated string, a modulo, etc.');
+console.log('   Emitting it as one JSXText token needs a context-sensitive lexer mode, but');
+console.log('   Monogram lexes the whole source in ONE pass with NO parser feedback and a');
+console.log('   deliberately grammar-agnostic lexer (test/agnostic.ts) — it cannot know it');
+console.log('   is between `>` and `</`. The TextMate HIGHLIGHTER has no such limit (it is');
+console.log('   region-based): test/tsx-highlight.ts shows raw text + entities highlight');
+console.log('   correctly. So this is a PARSER-conformance boundary only, not a highlighter');
+console.log('   gap.)');
 for (const [name, code] of unsupported) {
   const we = weAccept(code), t = tsxAccepts(code);
   console.log(`    - ${we ? 'accept' : 'reject'}${t ? '' : ' [TS also rejects — recheck]'}: ${name}`);
