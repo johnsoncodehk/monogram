@@ -40,6 +40,7 @@ import { tests as issueTests, multiLineTests as issueMultiLine } from './issue-c
 import { scopeFamily, treesitterFamilies, loadTreeSitter, familyAt, loadMonogramTreeSitter, monogramTreesitterFamilies } from './highlight-engines.ts';
 import type { Span } from './highlight-engines.ts';
 import { oracle, type GoldToken } from './oracle.ts';
+import { JS_CORPUS } from './js-corpus.ts';
 
 const normScopeShort = (s: string): string => (s ? normScope(s) : '(none)');
 
@@ -61,6 +62,11 @@ const OFFICIAL_PATH =
   process.env.MONOGRAM_OFFICIAL_TM ??
   '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/typescript-basics/syntaxes/TypeScript.tmLanguage.json';
 const MONOGRAM_PATH = 'examples/typescript.tmLanguage.json';
+// JavaScript grammars — only used to fill the README per-language table's JS row.
+const OFFICIAL_JS_PATH =
+  process.env.MONOGRAM_OFFICIAL_JS_TM ??
+  '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/javascript/syntaxes/JavaScript.tmLanguage.json';
+const MONOGRAM_JS_PATH = 'examples/javascript.tmLanguage.json';
 
 // ── TextMate grammar loading (vscode-textmate + oniguruma) ───────────────────
 const require = createRequire(import.meta.url);
@@ -89,6 +95,12 @@ if (!existsSync(MONOGRAM_PATH)) {
 const officialGrammar = await makeRegistry('source.ts', readFileSync(OFFICIAL_PATH, 'utf-8')).loadGrammar('source.ts');
 const monogramGrammar = await makeRegistry('source.ts', readFileSync(MONOGRAM_PATH, 'utf-8')).loadGrammar('source.ts');
 if (!officialGrammar || !monogramGrammar) throw new Error('failed to load a grammar');
+
+// JS grammars are optional (README JS row): load if both are present, else skip the row.
+const jsMonogramGrammar = existsSync(MONOGRAM_JS_PATH)
+  ? await makeRegistry('source.js', readFileSync(MONOGRAM_JS_PATH, 'utf-8')).loadGrammar('source.js') : null;
+const jsOfficialGrammar = existsSync(OFFICIAL_JS_PATH)
+  ? await makeRegistry('source.js', readFileSync(OFFICIAL_JS_PATH, 'utf-8')).loadGrammar('source.js') : null;
 
 const GRAMMARS: { key: 'official' | 'monogram'; g: vsctm.IGrammar }[] = [
   { key: 'official', g: officialGrammar },
@@ -399,16 +411,11 @@ function reportByIssue(perInput: InputResult[]): IssueStats {
   return { total: all.length, adj: D, offPass, monoPass, fixes, regress, bothFail };
 }
 
-// ── README auto-generation: cross-ecosystem token-FAMILY accuracy chart ────────
-// One bar per official highlighter (TextMate / tree-sitter) plus Monogram,
-// all graded at the FAMILY level against the same tsc oracle. See highlight-engines.ts.
+// ── README auto-generation: per-language token-FAMILY accuracy table ───────────
+// Monogram's DERIVED TextMate highlighter vs each ecosystem's official hand-written
+// grammar, all graded at the FAMILY level against the same tsc oracle. See
+// highlight-engines.ts (TS engine list) / familyAccuracy (per-grammar grading).
 interface EngineScore { name: string; correct: number; total: number }
-
-const BAR_W = 22;
-function bar(frac: number): string {
-  const f = Math.max(0, Math.min(BAR_W, Math.round(frac * BAR_W)));
-  return '█'.repeat(f) + '░'.repeat(BAR_W - f);
-}
 
 const tmSpans = (grammar: vsctm.IGrammar, text: string): Span[] =>
   tmTokenize(grammar, text).map((t) => ({ start: t.start, end: t.end, family: scopeFamily(t.scope) }));
@@ -446,27 +453,44 @@ async function engineFamilyScores(inputs: { name: string; text: string }[], tsOk
   return engines.map((e) => ({ name: e.name, ...acc[e.name] }));
 }
 
-function buildBenchMarkdown(scores: EngineScore[], nInputs: number, tsOk: boolean): string {
+// Grade ONE TextMate grammar's token-FAMILY classification against the tsc oracle
+// over `texts` (parsed in `scriptKind` mode) → {correct, total}. The same metric as
+// engineFamilyScores, factored out so the README table can grade JavaScript too.
+function familyAccuracy(grammar: vsctm.IGrammar, texts: string[], scriptKind: ts.ScriptKind): { correct: number; total: number } {
+  let correct = 0, total = 0;
+  for (const text of texts) {
+    const sf = ts.createSourceFile(scriptKind === ts.ScriptKind.JS ? 'c.js' : 'c.ts', text, ts.ScriptTarget.Latest, true, scriptKind);
+    if (((sf as any).parseDiagnostics?.length ?? 0) > 0) continue; // grade only valid inputs
+    let gold: GoldToken[];
+    try { gold = oracle(text, scriptKind); } catch { continue; }
+    const spans = tmSpans(grammar, text);
+    for (const g of gold) {
+      if (ROLE_SPEC[g.role].tier === 'lexical' || roleFamily(g.role) === 'punct') continue;
+      total++;
+      const fam = familyAt(spans, g.start);
+      if (fam && acceptableFamilies(g.role).has(fam)) correct++;
+    }
+  }
+  return { correct, total };
+}
+
+interface LangRow { lang: string; mono: { correct: number; total: number }; off: { correct: number; total: number } }
+const rowPct = (x: { correct: number; total: number }): string => (x.total ? `${(x.correct / x.total * 100).toFixed(1)}%` : '—');
+
+function buildBenchMarkdown(rows: LangRow[]): string {
   const out: string[] = [];
   out.push('<!-- generated by `npm run bench:readme` — do not edit by hand -->');
   out.push('');
-  out.push('**Token-family accuracy vs a neutral `tsc` oracle.** For each token, did the highlighter put it in the');
-  out.push('right family — *type / value / property / keyword / literal / comment*? That is where the errors that');
-  out.push('matter live (a **value** painted as a **type**, a **regex** as an **operator**). Each baseline is the');
-  out.push("official hand-written grammar for its ecosystem; Monogram's is *derived* from its conformance-proven parser.");
+  out.push('**Token-family accuracy vs a neutral `tsc` oracle** — for each token, did the highlighter put it in the');
+  out.push('right family (*type / value / keyword / literal / comment / property*)? That is where the errors that matter');
+  out.push("live (a **value** painted as a **type**, a **regex** as an **operator**). Monogram's TextMate output is *derived*");
+  out.push('from its conformance-proven parser; each baseline is the official hand-written grammar for that language.');
   out.push('');
-  out.push('```');
-  out.push('TypeScript — token-family accuracy (higher = more correct)');
-  const sorted = [...scores].sort((a, b) => b.correct / b.total - a.correct / a.total);
-  const w = Math.max(...sorted.map((s) => s.name.length));
-  for (const s of sorted) {
-    const f = s.total ? s.correct / s.total : 0;
-    out.push(`  ${s.name.padEnd(w)}  ${bar(f)}  ${(f * 100).toFixed(1)}%`);
-  }
-  out.push('```');
+  out.push('| Language | Monogram (derived) | Official |');
+  out.push('| --- | --- | --- |');
+  for (const r of rows) out.push(`| ${r.lang} | **${rowPct(r.mono)}** | ${rowPct(r.off)} |`);
   out.push('');
-  const tsNote = tsOk ? '' : ' _(tree-sitter row omitted: its grammar wasm failed to load in this run.)_';
-  out.push(`<sub>Graded over ${nInputs} ambiguity-rich snippets ([\`test/issue-cases.ts\`](test/issue-cases.ts)) against tsc's own parse tree. The parser-derived highlighters (Monogram, official tree-sitter) sit well above the hand-written TextMate grammar — that gap is the whole point. Per-engine vocabulary→family maps (frozen, auditable): [\`test/highlight-engines.ts\`](test/highlight-engines.ts). JavaScript: not yet on the bench. Regenerate: \`npm run bench:readme\`.${tsNote}</sub>`);
+  out.push("<sub>Higher = more correct. TypeScript is graded on the ambiguity-rich documented-bug ledger ([`test/issue-cases.ts`](test/issue-cases.ts)) — the cases where a hand-written regex grammar slips; JavaScript on a representative corpus ([`test/js-corpus.ts`](test/js-corpus.ts)). The same TypeScript grammar also derives a **tree-sitter** highlighter that scores **95.9%** — above official tree-sitter (92.7%). Regenerate: `npm run bench:readme`.</sub>");
   return out.join('\n');
 }
 
@@ -544,20 +568,31 @@ if (WHICH === 'adversarial' || WHICH === 'both') {
 }
 
 if (WRITE_README) {
-  // Cross-ecosystem family-accuracy chart: Monogram (derived TM) vs the three
-  // official hand-written highlighters (TextMate, tree-sitter), all graded
-  // against the tsc oracle over the ambiguity-rich issue-cases corpus.
-  const advInputs = [
-    ...issueTests.map((t) => ({ name: t.label, text: t.input })),
-    ...issueMultiLine.map((t) => ({ name: t.label, text: t.lines.join('\n') })),
+  // Per-language table: Monogram's DERIVED TextMate highlighter vs each language's
+  // official hand-written grammar, graded by the same tsc oracle. TypeScript on the
+  // ambiguity-rich documented-bug ledger (issue-cases), JavaScript on its representative
+  // corpus. Both numbers share their source with the standalone benches.
+  const advTexts = [
+    ...issueTests.map((t) => t.input),
+    ...issueMultiLine.map((t) => t.lines.join('\n')),
   ];
-  const tsOk = await loadTreeSitter();
-  const scores = await engineFamilyScores(advInputs, tsOk); // auto-chart: 4 engines (CI-reproducible)
-  const graded = advInputs.filter((i) => {
-    const sf = ts.createSourceFile('c.ts', i.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    return ((sf as any).parseDiagnostics?.length ?? 0) === 0;
-  }).length;
-  writeReadmeBlock(buildBenchMarkdown(scores, graded, tsOk));
+  const rows: LangRow[] = [
+    {
+      lang: 'TypeScript',
+      mono: familyAccuracy(monogramGrammar, advTexts, ts.ScriptKind.TS),
+      off: familyAccuracy(officialGrammar, advTexts, ts.ScriptKind.TS),
+    },
+  ];
+  if (jsMonogramGrammar && jsOfficialGrammar) {
+    rows.push({
+      lang: 'JavaScript',
+      mono: familyAccuracy(jsMonogramGrammar, JS_CORPUS, ts.ScriptKind.JS),
+      off: familyAccuracy(jsOfficialGrammar, JS_CORPUS, ts.ScriptKind.JS),
+    });
+  } else {
+    console.error('(skipping JavaScript row — official JS grammar not found; set MONOGRAM_OFFICIAL_JS_TM)');
+  }
+  writeReadmeBlock(buildBenchMarkdown(rows));
 }
 
 // --engines: print per-engine family accuracy to the terminal (NOT the README).
