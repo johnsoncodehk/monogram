@@ -38,9 +38,11 @@ Take `typeof x < y`. A regex highlighter has to guess whether `<` opens a generi
 
 2. **Derive the highlighters from that proven grammar**, never hand-write them. The TextMate, tree-sitter, and Monarch outputs are all generated from the one parser-validated definition, so their correctness is underwritten by the conformance run, not by regex tuning.
 
-The payoff is concrete: a **~1,050-line grammar** (JavaScript + TypeScript) replaces the official **3331-line** hand-written TextMate; the derived **tree-sitter** scores **95.9%** token-family accuracy against a neutral `tsc` oracle versus the official tree-sitter's **92.7%** (a real GLR parser from the same grammar; CI-gated, `npm run gate:treesitter`); and [`test/test-issues.ts`](test/test-issues.ts) gates the output against **50** of the official grammar's own documented bugs (318 checks, 21 independently re-verified vs `tsc`, all still open upstream). The bug-for-bug comparison, for every language, is the [ledger below](#on-every-languages-own-bug-ledger); a few scope differences are [deliberate](#known-differences-from-the-official-highlighter).
+The payoff is concrete: a **~1,050-line grammar** (JavaScript + TypeScript) replaces the official **3331-line** hand-written TextMate; the derived **tree-sitter** scores **95.9%** token-family accuracy against a neutral `tsc` oracle versus the official tree-sitter's **92.7%** (a real GLR parser from the same grammar; CI-gated, `npm run gate:treesitter`); and [`test/test-issues.ts`](test/test-issues.ts) gates the output against **50** of the official grammar's own documented bugs (318 checks, 21 independently re-verified vs `tsc`, all still open upstream). The bug-for-bug comparison, for every language, is the [ledger below](#comparison); a few scope differences are [deliberate](#known-differences-from-the-official-highlighter).
 
-## On every language's own bug ledger
+That single source reaches across grammars, too: an embedded snippet runs *another Monogram grammar* — a `<script>` body is highlighted by Monogram's own JavaScript, so `<script>const x = 1 < 2</script>` colours `<` as a JS operator, the same ambiguity resolved *inside* the embed. Where VS Code's embeds fray — two independently-written grammars meeting with nothing checking the seam — Monogram owns both sides, so self-verifying that seam becomes possible (a design goal beyond today's standard `contentName` injection).
+
+## Comparison
 
 The same question, every language at once: take the bugs reported against each *hand-written* official grammar and ask whether the *derived* grammar solves them. Which does **only** the official solve, which does **only** Monogram solve — and which do **both** still get wrong (a shared TextMate ceiling, no regex grammar reaches it)?
 
@@ -117,7 +119,7 @@ From one grammar definition (a small TypeScript combinator API), five outputs ar
 
 And — from the same grammar — generators for the rest of the ecosystem, at varying maturity:
 
-- **tree-sitter** — `grammar.js` + a **structural** `queries/highlights.scm` + an external scanner for context-sensitive lexing. Builds end-to-end (tree-sitter's GLR absorbs the grammar; compiles to wasm) and the *derived* query scores **95.9%** through the same oracle — **above official tree-sitter** (92.7%). **CI-gated**: `npm run gate:treesitter` builds the wasm (the tree-sitter CLI bundles its own toolchain — no emscripten) and fails if Monogram drops below a floor or stops beating official.
+- **tree-sitter** — `grammar.js` + a **structural** `queries/highlights.scm` + an external scanner for context-sensitive lexing. tree-sitter's GLR absorbs the grammar and compiles to wasm; the derived query beats the official tree-sitter on the same oracle ([above](#the-idea)), CI-gated by `npm run gate:treesitter`.
 - **Monarch** — a Monaco (web) tokenizer (functional, bounded by JS-regex limits).
 
 ## The grammar is the source of truth
@@ -172,7 +174,7 @@ const Regex    = token(/\/…\//, {
 });
 ```
 
-[`test/agnostic.ts`](test/agnostic.ts) proves it: the same engine parses a toy grammar whose identifier token is named `Word`, with no templates and no regex. The strongest evidence, though, is [`html.ts`](html.ts) (~95 lines, gated against [`parse5`](https://github.com/inikulin/parse5)) — markup shares *nothing* with TypeScript's token stream, yet the same engine handles it, embeds run the right way down (a `<script>` body is highlighted by Monogram's own JavaScript grammar, so `<script>const x = 1 < 2</script>` colours `<` as a JS operator — the [`typeof x < y`](#the-idea) ambiguity resolved *inside* the embed), and Vue layers SFC blocks and `{{ }}` interpolation on top.
+[`test/agnostic.ts`](test/agnostic.ts) proves it directly — the same engine parses a toy grammar whose identifier token is `Word`, with no templates or regex. The deeper proof is [`html.ts`](html.ts): markup shares *nothing* with TypeScript's token stream, yet the same engine handles it (and Vue layers SFC blocks + `{{ }}` interpolation on top).
 
 ## Adding a language
 
@@ -184,42 +186,9 @@ A new language is **one grammar file** on the unchanged engine:
 
 The lexer, CST types, and all three highlighters fall out of step 1; a *dialect* (`.tsx`/`.jsx` via [`jsx.ts`](jsx.ts), or Vue on [`html.ts`](html.ts)) reuses a base grammar's rules by name in a few lines. The conformance/highlighter harnesses are currently TypeScript-specific (they call `tsc` and read VS Code's grammar) — point them at your own reference compiler.
 
-## Embedded languages
-
-Editors highlight embedded snippets (CSS in a template, JSDoc in a comment) by handing the region to another grammar at the boundary — flaky in VS Code, because the host and embedded grammars are written independently and nothing checks they agree on the seam. (HTML's `<script>` and Vue's blocks already exercise this by embedding Monogram's own grammars.)
-
-Monogram declares embedding points in the grammar (a token's `embed` annotation), today emitting the standard TextMate `contentName` injection. The design goal it sets up — **not yet implemented** — is to generate both sides from Monogram grammars and verify the seam in one integrated self-test, instead of hoping two strangers agree.
-
-## Tests
-
-Self-contained (no external setup):
-
-```bash
-node test/sanity-check.ts        # quick smoke test
-node test/agnostic.ts            # proves the engine is language-agnostic
-node test/test-issues.ts         # replays 50 official-grammar bugs against the generated grammar
-node test/js-conformance.ts      # JavaScript: 61/61 curated valid-JS accepted, TS-only syntax rejected
-node test/js-highlight-bench.ts  # JavaScript highlighter accuracy vs the neutral tsc-JS oracle (92.6%)
-```
-
-The conformance and highlighter benches read external grammars/corpora and are **excluded from CI** for that reason:
-
-```bash
-git clone https://github.com/microsoft/TypeScript /tmp/ts-repo   # the conformance corpus
-node test/conformance-matrix.ts  # THE parser metric: bidirectional vs tsc — 100% valid / 97.8% both ways
-
-# the highlighter bench reads VS Code's bundled TS grammar (macOS path; override with MONOGRAM_OFFICIAL_TM):
-node test/highlight-bench.ts                       # absolute correctness, both grammars vs a neutral tsc oracle
-node test/highlight-bench.ts --corpus adversarial  # documented bug ledger only (no /tmp/ts-repo needed)
-node test/issue-table.ts --write                   # regenerate the cross-language issue ledger above
-node test/scope-coverage.ts                        # drop-in COMPATIBILITY gaps vs official (scope fidelity, missing regex/JSDoc sub-grammars, TSX) — what correctness doesn't measure
-```
-
-> `test/run-conformance.ts` reports a *raw accept-rate* (94.2% over all 3776 files, multi-file cases included) — an acceptance-only sanity check, not the bidirectional proof. `conformance-matrix.ts` is the number this README quotes.
-
 ## Known differences from the official highlighter
 
-A handful of token patterns are scoped differently from VS Code's official TypeScript grammar — all intentional, and in some Monogram is arguably *more* correct (these are *deliberate divergences*, distinct from the bug-class fixes the [ledger](#on-every-languages-own-bug-ledger) measures):
+A handful of token patterns are scoped differently from VS Code's official TypeScript grammar — all intentional, and in some Monogram is arguably *more* correct (these are *deliberate divergences*, distinct from the bug-class fixes the [ledger](#comparison) measures):
 
 | Token | Monogram | Official | Why we keep ours |
 |---|---|---|---|
