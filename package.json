@@ -16,6 +16,7 @@
     "bench:tsx": "node test/tsx-highlight.ts",
     "bench:html": "node test/html-highlight.ts",
     "bench:html-official": "node test/html-bench.ts",
+    "bench:html-embed": "node test/html-embed-js.ts",
     "gate:treesitter": "(cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/treesitter-bench.ts",
     "bench:perf": "node test/perf-bench.ts",
     "bench:readme": "node test/highlight-bench.ts --corpus adversarial --write-readme",

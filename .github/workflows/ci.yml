@@ -48,6 +48,7 @@ jobs:
           node test/html-conformance.ts
           node test/html-highlight.ts
           node test/html-monarch.ts
+          node test/html-embed-js.ts
 
   # The derived tree-sitter highlighter is the strongest thesis proof (a real GLR
   # parser from the same grammar, beating the official hand-written one). Build its
