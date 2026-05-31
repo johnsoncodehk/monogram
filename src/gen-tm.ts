@@ -2670,14 +2670,15 @@ export function generateMarkupInjection(grammar: CstGrammar, grammarName: string
     // bug (vuejs/language-tools#5012). A capture's text range CAN'T be crossed, so the cast
     // stops at the quote. One pattern per quote char (a backref can't sit inside `[^…]`);
     // single-line, which is what HTML attribute values are.
-    const strSfx = inj.exprEmbed.replace(/^.*\.embedded/, '') || '.html.vue';
+    // Every scope here comes from the injection CONFIG (eqScope / exprEmbed / exprInclude) —
+    // nothing language-specific is baked into the engine. The quotes (groups 2 and 4) are
+    // left unscoped, exactly as the previous begin/end region left them; naming them would
+    // mean the engine inventing a scope string, which is the grammar's job, not the engine's.
     const valueCap = (q: string): TmPattern => ({
       match: `(=)\\s*(${q})([^${q}]*)(${q})`,
       captures: {
         '1': { name: d.eqScope },
-        '2': { name: `punctuation.definition.string.begin${strSfx}` },
         '3': { name: inj.exprEmbed, patterns: [{ include: inj.exprInclude }] },
-        '4': { name: `punctuation.definition.string.end${strSfx}` },
       },
     });
     const values: TmPattern[] = [

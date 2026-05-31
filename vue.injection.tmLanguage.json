@@ -48,9 +48,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -58,9 +55,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -70,9 +64,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -80,9 +71,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -118,9 +106,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -128,9 +113,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -140,9 +122,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -150,9 +129,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -191,9 +167,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -201,9 +174,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -213,9 +183,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -223,9 +190,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -264,9 +228,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -274,9 +235,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -286,9 +244,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -296,9 +251,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -337,9 +289,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -347,9 +296,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -359,9 +305,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -369,9 +312,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -413,9 +353,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -423,9 +360,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
@@ -435,9 +369,6 @@
                 "1": {
                   "name": "punctuation.separator.key-value.html.vue"
                 },
-                "2": {
-                  "name": "punctuation.definition.string.begin.html.vue"
-                },
                 "3": {
                   "name": "source.ts.embedded.html.vue",
                   "patterns": [
@@ -445,9 +376,6 @@
                       "include": "source.ts#expression"
                     }
                   ]
-                },
-                "4": {
-                  "name": "punctuation.definition.string.end.html.vue"
                 }
               }
             },
