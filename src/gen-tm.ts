@@ -2662,6 +2662,109 @@ export function generateMarkupInjection(grammar: CstGrammar, grammarName: string
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Rule-rooted `#expression` derivation
+//
+//  An expression-only embed (Vue `{{ }}`, directive values) must not treat a STATEMENT
+//  keyword at its TOP level as a keyword — `{{ const x }}` / `{{ for(…) }}` / `{{ return x }}`
+//  are invalid there. We derive the set of keywords that may appear in an EXPRESSION from
+//  the grammar's DECLARED expression rule (`grammar.expressionRule` — gen-tm stays agnostic,
+//  it reads a ref, it doesn't know "Expr"), then build a `#expression` repository entry =
+//  the top-level patterns with statement-starters removed and mixed keyword groups narrowed
+//  to their expression members. Nested blocks (`{ }`) re-enter `$self`, so a statement INSIDE
+//  a function/arrow body in an expression still highlights — only the top level is filtered.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const isExprKeyword = (s: string) => /^[a-zA-Z]/.test(s);
+
+/** Whether a rule expression can match the empty string — so FIRST must look past it. */
+function ruleIsNullable(e: RuleExpr, byName: Map<string, RuleExpr>, seen = new Set<string>()): boolean {
+  switch (e.type) {
+    case 'seq': return e.items.every(i => ruleIsNullable(i, byName, seen));
+    case 'alt': return e.items.some(i => ruleIsNullable(i, byName, seen));
+    case 'quantifier': return e.kind === '*' || e.kind === '?';
+    case 'group': return ruleIsNullable(e.body, byName, seen);
+    case 'not': case 'sameLine': return true;                 // zero-width assertions
+    case 'ref': { if (seen.has(e.name)) return false; seen.add(e.name); const b = byName.get(e.name); return b ? ruleIsNullable(b, byName, seen) : false; }
+    default: return false;                                     // literal / token / op / prefix / postfix / sep
+  }
+}
+
+/** FIRST set (literals only) — keywords that can BEGIN this rule. Follows refs only at
+ *  START positions, so it never descends into a statement block (which always sits after
+ *  `=>`, never at an alternative's start), and stops on cycles (left-recursion adds nothing). */
+function firstLiterals(e: RuleExpr, byName: Map<string, RuleExpr>, seen = new Set<string>()): Set<string> {
+  const out = new Set<string>();
+  switch (e.type) {
+    case 'literal': out.add(e.value); break;
+    case 'alt': for (const i of e.items) for (const x of firstLiterals(i, byName, seen)) out.add(x); break;
+    case 'seq': for (const i of e.items) { for (const x of firstLiterals(i, byName, seen)) out.add(x); if (!ruleIsNullable(i, byName)) break; } break;
+    case 'quantifier': case 'group': for (const x of firstLiterals(e.body, byName, seen)) out.add(x); break;
+    case 'sep': for (const x of firstLiterals(e.element, byName, seen)) out.add(x); break;
+    case 'ref': if (!seen.has(e.name) && byName.has(e.name)) { seen.add(e.name); for (const x of firstLiterals(byName.get(e.name)!, byName, seen)) out.add(x); } break;
+  }
+  return out;
+}
+
+/** The keywords that may appear in an EXPRESSION: the expression rule's FIRST set + its
+ *  DIRECT literals (to catch infix operators like `as`/`in`/`instanceof` that FIRST skips),
+ *  plus the keywords the grammar SCOPES as expression-level operators / constants / globals
+ *  (`typeof`/`void`/`delete` are precedence-driven, not rule literals — only their scopes show it). */
+function expressionKeywords(grammar: CstGrammar): Set<string> {
+  const byName = new Map(grammar.rules.map(r => [r.name, r.body] as const));
+  const kw = new Set<string>();
+  const body = grammar.expressionRule ? byName.get(grammar.expressionRule) : undefined;
+  if (body) {
+    for (const l of collectLiterals(body)) if (isExprKeyword(l)) kw.add(l);
+    for (const l of firstLiterals(body, byName)) if (isExprKeyword(l)) kw.add(l);
+  }
+  const exprScopePrefixes = ['keyword.operator', 'constant.language', 'variable.language', 'support.', 'storage.type.function', 'storage.type.class'];
+  for (const [lit, scopes] of grammar.scopeOverrides) {
+    if (isExprKeyword(lit) && scopes.some(s => exprScopePrefixes.some(p => s.startsWith(p)))) kw.add(lit);
+  }
+  return kw;
+}
+
+/** The leading keyword alternation a pattern is anchored on (`\b(const)…`, `\b(in|for|…)…`),
+ *  or null if it doesn't start by matching a keyword (lexical / operator / member-access). */
+function leadingKeywordAnchors(re: string | undefined): string[] | null {
+  if (!re) return null;
+  const m = re.match(/^\\b\(([A-Za-z][A-Za-z0-9_$|]*)\)/);
+  return m ? m[1].split('|') : null;
+}
+
+/** Build a `#expression` repository entry from the final top-level pattern order: drop the
+ *  includes anchored solely on statement keywords, narrow mixed keyword groups to their
+ *  expression members, keep everything lexical/operator. Mutates `repository` (adds the
+ *  `#expression` entry + any `#expr-*` narrowed-group copies). */
+function deriveExpressionEntry(grammar: CstGrammar, orderedPatterns: { include: string }[], repository: Record<string, TmPattern>): void {
+  const exprKw = expressionKeywords(grammar);
+  const exprPatterns: { include: string }[] = [];
+  for (const { include } of orderedPatterns) {
+    const key = include.slice(1);
+    const entry = repository[key];
+    const anchors = entry ? leadingKeywordAnchors(entry.begin ?? entry.match) : null;
+    if (!entry || !anchors) { exprPatterns.push({ include }); continue; }  // lexical / operator / access → expression-level
+    const kept = anchors.filter(a => exprKw.has(a));
+    if (kept.length === 0) continue;                                       // pure statement-starter → drop
+    if (kept.length === anchors.length) { exprPatterns.push({ include }); continue; }
+    // MIXED keyword group (e.g. `in|for|while|…`) → narrow to its expression members. Only
+    // safe for a plain match+name group (no begin/captures keyed to the alternation order).
+    if (entry.match && !entry.begin && !entry.captures) {
+      const narrowed = entry.match.replace(/^(\\b)\(([A-Za-z][A-Za-z0-9_$|]*)\)/, `$1(${kept.join('|')})`);
+      if (narrowed !== entry.match) { repository[`expr-${key}`] = { ...entry, match: narrowed }; exprPatterns.push({ include: `#expr-${key}` }); continue; }
+    }
+    exprPatterns.push({ include });  // couldn't narrow safely → keep (conservative)
+  }
+  // A nested `{ }` (arrow/bare block) must re-enter the FULL grammar so statements INSIDE an
+  // expression still highlight — `{{ (() => { const x = 1 })() }}`. #code-block re-includes
+  // $self; without it an arrow body inherits #expression's top-level filtering and a statement
+  // there would be dropped. (Function expressions already re-enter via #function-declaration.)
+  // Put it first so a block `{` beats the bare-curly punctuation match.
+  if (repository['code-block']) exprPatterns.unshift({ include: '#code-block' });
+  repository['expression'] = { patterns: exprPatterns };
+}
+
 export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGrammar {
   // Honour the grammar's DECLARED scopeName (e.g. source.ts) and derive every scope's
   // language suffix from it (ts / js / tsx) instead of the raw grammar name
@@ -4550,6 +4653,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   const orderedPatterns = [...new Set(topPatterns.map(p => p.include))]
     .sort((a, b) => scopeOrder(a) - scopeOrder(b))
     .map(include => ({ include }));
+
+  // Additive: a `#expression` sub-grammar for expression-only embeds (Vue `{{ }}`). The
+  // top-level `patterns` (orderedPatterns / $self) are left untouched, so standalone
+  // tokenization is unchanged — `#expression` is inert unless something includes it.
+  if (grammar.expressionRule) deriveExpressionEntry(grammar, orderedPatterns, repository);
 
   return {
     $schema: 'https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json',

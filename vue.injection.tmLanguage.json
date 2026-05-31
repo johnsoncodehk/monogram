@@ -27,7 +27,7 @@
       "contentName": "source.ts.embedded.html.vue",
       "patterns": [
         {
-          "include": "source.ts"
+          "include": "source.ts#expression"
         }
       ]
     },
@@ -53,7 +53,7 @@
               "contentName": "source.ts.embedded.html.vue",
               "patterns": [
                 {
-                  "include": "source.ts"
+                  "include": "source.ts#expression"
                 }
               ]
             }
@@ -79,7 +79,7 @@
               "contentName": "source.ts.embedded.html.vue",
               "patterns": [
                 {
-                  "include": "source.ts"
+                  "include": "source.ts#expression"
                 }
               ]
             }
@@ -108,7 +108,7 @@
               "contentName": "source.ts.embedded.html.vue",
               "patterns": [
                 {
-                  "include": "source.ts"
+                  "include": "source.ts#expression"
                 }
               ]
             }
@@ -137,7 +137,7 @@
               "contentName": "source.ts.embedded.html.vue",
               "patterns": [
                 {
-                  "include": "source.ts"
+                  "include": "source.ts#expression"
                 }
               ]
             }
@@ -166,7 +166,7 @@
               "contentName": "source.ts.embedded.html.vue",
               "patterns": [
                 {
-                  "include": "source.ts"
+                  "include": "source.ts#expression"
                 }
               ]
             }
@@ -198,7 +198,7 @@
               "contentName": "source.ts.embedded.html.vue",
               "patterns": [
                 {
-                  "include": "source.ts"
+                  "include": "source.ts#expression"
                 }
               ]
             }

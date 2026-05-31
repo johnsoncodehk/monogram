@@ -2907,6 +2907,276 @@
     "punctuation": {
       "match": "\\?|:",
       "name": "punctuation.ts"
+    },
+    "expr-scope-keyword-control-loop": {
+      "match": "\\b(in)\\b",
+      "name": "keyword.control.loop.ts"
+    },
+    "expr-scope-keyword-control-flow": {
+      "match": "\\b(yield)\\b",
+      "name": "keyword.control.flow.ts"
+    },
+    "expr-scope-storage-modifier": {
+      "match": "\\b(async)\\b",
+      "name": "storage.modifier.ts"
+    },
+    "expr-scope-keyword-other": {
+      "match": "\\b(meta)\\b",
+      "name": "keyword.other.ts"
+    },
+    "expr-scope-storage-type-namespace": {
+      "match": "\\b(module)\\b",
+      "name": "storage.type.namespace.ts"
+    },
+    "expression": {
+      "patterns": [
+        {
+          "include": "#code-block"
+        },
+        {
+          "include": "#arrow-type-parameters"
+        },
+        {
+          "include": "#generic-call"
+        },
+        {
+          "include": "#generic-call-eol"
+        },
+        {
+          "include": "#generic-call-multiline"
+        },
+        {
+          "include": "#type-cast"
+        },
+        {
+          "include": "#shebang"
+        },
+        {
+          "include": "#jsdoc"
+        },
+        {
+          "include": "#tripleslash"
+        },
+        {
+          "include": "#linecomment"
+        },
+        {
+          "include": "#blockcomment"
+        },
+        {
+          "include": "#regex-literal"
+        },
+        {
+          "include": "#string-double"
+        },
+        {
+          "include": "#string-single"
+        },
+        {
+          "include": "#template"
+        },
+        {
+          "include": "#decorator"
+        },
+        {
+          "include": "#type-annotation-return"
+        },
+        {
+          "include": "#object-method-key"
+        },
+        {
+          "include": "#new-expression"
+        },
+        {
+          "include": "#arrow-function-params"
+        },
+        {
+          "include": "#ternary-expression"
+        },
+        {
+          "include": "#function-declaration"
+        },
+        {
+          "include": "#function-anon-declaration"
+        },
+        {
+          "include": "#class-declaration"
+        },
+        {
+          "include": "#module-declaration"
+        },
+        {
+          "include": "#extends-definition"
+        },
+        {
+          "include": "#import-export-all"
+        },
+        {
+          "include": "#is-typekw"
+        },
+        {
+          "include": "#keyof-typekw"
+        },
+        {
+          "include": "#extends-typekw"
+        },
+        {
+          "include": "#as-typekw"
+        },
+        {
+          "include": "#implements-typekw"
+        },
+        {
+          "include": "#satisfies-typekw"
+        },
+        {
+          "include": "#hexnumber"
+        },
+        {
+          "include": "#octalnumber"
+        },
+        {
+          "include": "#binarynumber"
+        },
+        {
+          "include": "#bigint"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#scope-keyword-operator-expression"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-is"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-keyof"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-asserts"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-infer"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-as"
+        },
+        {
+          "include": "#scope-keyword-operator-expression-satisfies"
+        },
+        {
+          "include": "#scope-keyword-control-import"
+        },
+        {
+          "include": "#expr-scope-keyword-control-loop"
+        },
+        {
+          "include": "#expr-scope-keyword-control-flow"
+        },
+        {
+          "include": "#scope-keyword-control-from-from"
+        },
+        {
+          "include": "#expr-scope-storage-modifier"
+        },
+        {
+          "include": "#scope-keyword-other-extends"
+        },
+        {
+          "include": "#expr-scope-keyword-other"
+        },
+        {
+          "include": "#scope-storage-type-class"
+        },
+        {
+          "include": "#scope-storage-type-function"
+        },
+        {
+          "include": "#expr-scope-storage-type-namespace"
+        },
+        {
+          "include": "#scope-storage-type-function-arrow"
+        },
+        {
+          "include": "#scope-constant-language-boolean-true"
+        },
+        {
+          "include": "#scope-constant-language-boolean-false"
+        },
+        {
+          "include": "#scope-constant-language-null"
+        },
+        {
+          "include": "#scope-support-type-primitive"
+        },
+        {
+          "include": "#scope-variable-language-this"
+        },
+        {
+          "include": "#scope-variable-language-super"
+        },
+        {
+          "include": "#scope-support-variable"
+        },
+        {
+          "include": "#scope-support-class"
+        },
+        {
+          "include": "#method-call"
+        },
+        {
+          "include": "#known-property-access"
+        },
+        {
+          "include": "#property-access"
+        },
+        {
+          "include": "#operator-overrides"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#scope-punctuation-accessor"
+        },
+        {
+          "include": "#scope-punctuation-separator-comma"
+        },
+        {
+          "include": "#scope-punctuation-bracket-square"
+        },
+        {
+          "include": "#scope-punctuation-bracket-round"
+        },
+        {
+          "include": "#scope-punctuation-bracket-curly"
+        },
+        {
+          "include": "#scope-punctuation-terminator-statement"
+        },
+        {
+          "include": "#scope-punctuation-accessor-optional"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#arrow-parameter"
+        },
+        {
+          "include": "#function-call"
+        },
+        {
+          "include": "#ident"
+        },
+        {
+          "include": "#privatefield"
+        },
+        {
+          "include": "#comparison"
+        }
+      ]
     }
   }
 }

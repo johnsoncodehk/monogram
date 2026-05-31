@@ -505,4 +505,7 @@ export default defineGrammar({
   scopes: jsScopes,
 
   entry: Program,
+  // The expression rule — lets gen-tm derive a `#expression` sub-grammar (used by
+  // expression-only embeds like Vue's `{{ }}`, where statements are invalid).
+  expression: Expr,
 });

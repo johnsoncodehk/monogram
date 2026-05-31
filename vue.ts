@@ -42,7 +42,10 @@ export default defineGrammar({
     inject: {
       into: ['text.html.basic'],
       exprEmbed: 'source.ts.embedded.html.vue',
-      exprInclude: 'source.ts',
+      // `{{ }}` and directive values are EXPRESSIONS, not programs — embed the derived
+      // expression-only sub-grammar so `{{ const x }}`/`{{ for(…) }}` don't mis-highlight
+      // statement keywords (a nested block still re-enters the full grammar via $self).
+      exprInclude: 'source.ts#expression',
       interpolation: {
         open: '{{', close: '}}',
         beginScope: 'punctuation.definition.interpolation.begin.html.vue',
