@@ -60,9 +60,11 @@ Syntax grammars are critical infrastructure — every editor, every rendered cod
 | --- | --- | --- |
 | 11 documented `html.tmbundle` / vscode issues | **100.0%** | 99.4% |
 
-From a **~95-line** `html.ts`, the derived highlighter ties VS Code's mature shipped grammar across the tested cases and *fixes* two it still gets wrong ([tmbundle#118](https://github.com/textmate/html.tmbundle/issues/118), [#124](https://github.com/textmate/html.tmbundle/issues/124): a `/` in an unquoted attribute value, mis-greyed as a self-close). One grammar, three derived highlighters.
+From a **~95-line** `html.ts`, the derived highlighter ties VS Code's mature shipped grammar across the tested cases and *fixes* two it still gets wrong ([tmbundle#118](https://github.com/textmate/html.tmbundle/issues/118), [#124](https://github.com/textmate/html.tmbundle/issues/124): a `/` in an unquoted attribute value, mis-greyed as a self-close). All three engines derive from that one grammar — TextMate, Monarch, and tree-sitter (25/25 tree-equivalent to `parse5`, via a generated C external scanner for `<script>`/`<style>` raw text), each gated against `parse5`.
 
-<sub>Scope, honestly: this is token-family accuracy on tag / attribute / value / comment roles over a *sampled* bug ledger — not an exhaustive audit. The upstream tracker has ~12 open issues; several are about embedded JS/CSS (which Monogram delegates to `source.js` / `source.css`, out of a pure-HTML grammar's scope), and VS Code's shipped grammar has already fixed others. The two wins are where VS Code is still wrong at the family level.</sub>
+And `<script>` bodies are highlighted by Monogram's *own proven JavaScript grammar*, embedded: in `<script>const x = 1 < 2</script>` the `<` comes out as a JS operator, not a tag — the very `<` disambiguation from the TS/JS grammar, now working *inside* the embed. Against VS Code (both embedding Monogram's JS, so only the HTML boundary differs) the `<script>` region is **97.7%** identical, and every difference is the `</script>` delimiter — which Monogram keeps as HTML while official extends `source.js` over it. The same path carries Vue's `<script>`/`<style>`.
+
+<sub>Scope, honestly: the table is token-family accuracy on tag / attribute / value / comment roles over a *sampled* bug ledger — not an exhaustive audit. The upstream tracker has ~12 open issues; several are about *other* embedded grammars (Handlebars, JSX, JSDoc), and VS Code's shipped grammar has already fixed others. The two wins are where VS Code is still wrong at the family level.</sub>
 
 ## What you get
 
