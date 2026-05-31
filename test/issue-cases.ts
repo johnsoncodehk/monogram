@@ -177,11 +177,11 @@ export const tests: TestCase[] = [
     input: 'const { a, b } = obj;',
     checks: [
       { text: 'const', scope: 'storage.type' },
-      { text: '{', scope: 'punctuation.bracket.curly' },
-      { text: 'a', scope: 'variable.other' },
+      { text: '{', scope: 'punctuation.definition.binding-pattern.object' },
+      { text: 'a', scope: 'variable.other.constant' },
       { text: ',', scope: 'punctuation.separator.comma' },
-      { text: 'b', scope: 'variable.other' },
-      { text: '}', scope: 'punctuation.bracket.curly' },
+      { text: 'b', scope: 'variable.other.constant' },
+      { text: '}', scope: 'punctuation.definition.binding-pattern.object' },
       { text: '=', scope: 'keyword.operator.assignment' },
     ],
   },
@@ -190,8 +190,8 @@ export const tests: TestCase[] = [
     input: 'const { a: renamed } = obj;',
     checks: [
       { text: 'const', scope: 'storage.type' },
-      { text: 'a', scope: 'variable.other' },
-      { text: 'renamed', scope: 'variable.other' },
+      { text: 'a', scope: 'variable.object.property' },          // key
+      { text: 'renamed', scope: 'variable.other.constant' },     // bound name
       { text: '=', scope: 'keyword.operator.assignment' },
     ],
   },
@@ -199,7 +199,7 @@ export const tests: TestCase[] = [
     label: 'destructuring: object default value',
     input: 'const { a = 1 } = obj;',
     checks: [
-      { text: 'a', scope: 'variable.other' },
+      { text: 'a', scope: 'variable.other.constant' },
       { text: '=', scope: 'keyword.operator.assignment' },
       { text: '1', scope: 'constant.numeric' },
     ],
@@ -208,8 +208,8 @@ export const tests: TestCase[] = [
     label: 'destructuring: object rest',
     input: 'const { a, ...rest } = obj;',
     checks: [
-      { text: 'a', scope: 'variable.other' },
-      { text: 'rest', scope: 'variable.other' },
+      { text: 'a', scope: 'variable.other.constant' },
+      { text: 'rest', scope: 'variable.other.constant' },
     ],
   },
   {
@@ -217,10 +217,10 @@ export const tests: TestCase[] = [
     input: 'const [x, y] = arr;',
     checks: [
       { text: 'const', scope: 'storage.type' },
-      { text: '[', scope: 'punctuation.bracket.square' },
-      { text: 'x', scope: 'variable.other' },
-      { text: 'y', scope: 'variable.other' },
-      { text: ']', scope: 'punctuation.bracket.square' },
+      { text: '[', scope: 'punctuation.definition.binding-pattern.array' },
+      { text: 'x', scope: 'variable.other.constant' },
+      { text: 'y', scope: 'variable.other.constant' },
+      { text: ']', scope: 'punctuation.definition.binding-pattern.array' },
       { text: '=', scope: 'keyword.operator.assignment' },
     ],
   },
@@ -228,25 +228,25 @@ export const tests: TestCase[] = [
     label: 'destructuring: array rest',
     input: 'const [first, ...rest] = arr;',
     checks: [
-      { text: 'first', scope: 'variable.other' },
-      { text: 'rest', scope: 'variable.other' },
+      { text: 'first', scope: 'variable.other.constant' },
+      { text: 'rest', scope: 'variable.other.constant' },
     ],
   },
   {
     label: 'destructuring: nested array',
     input: 'const [a, [b, c]] = nested;',
     checks: [
-      { text: 'a', scope: 'variable.other' },
-      { text: 'b', scope: 'variable.other' },
-      { text: 'c', scope: 'variable.other' },
+      { text: 'a', scope: 'variable.other.constant' },
+      { text: 'b', scope: 'variable.other.constant' },
+      { text: 'c', scope: 'variable.other.constant' },
     ],
   },
   {
     label: 'destructuring: nested object',
     input: 'const { a: { b } } = obj;',
     checks: [
-      { text: 'a', scope: 'variable.other' },
-      { text: 'b', scope: 'variable.other' },
+      { text: 'a', scope: 'variable.object.property' },   // key
+      { text: 'b', scope: 'variable.other.constant' },    // nested bound name
     ],
   },
   {
@@ -319,9 +319,9 @@ export const tests: TestCase[] = [
     input: 'const { data: [first, ...rest] } = response;',
     checks: [
       { text: 'const', scope: 'storage.type' },
-      { text: 'data', scope: 'variable.other' },
-      { text: 'first', scope: 'variable.other' },
-      { text: 'rest', scope: 'variable.other' },
+      { text: 'data', scope: 'variable.object.property' },   // key (nested array binding follows)
+      { text: 'first', scope: 'variable.other.constant' },
+      { text: 'rest', scope: 'variable.other.constant' },
       { text: '=', scope: 'keyword.operator.assignment' },
     ],
   },

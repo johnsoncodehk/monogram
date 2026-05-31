@@ -61,6 +61,9 @@
       "include": "#const-binding"
     },
     {
+      "include": "#const-destructure"
+    },
+    {
       "include": "#import-export-all"
     },
     {
@@ -1278,6 +1281,136 @@
           "name": "variable.other.constant.js"
         }
       }
+    },
+    "const-bind-default": {
+      "begin": "(=)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.assignment.js"
+        }
+      },
+      "end": "(?=[,}\\])])",
+      "patterns": [
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "const-bind-prop": {
+      "patterns": [
+        {
+          "match": "(\\.\\.\\.)",
+          "name": "keyword.operator.rest.js"
+        },
+        {
+          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\s*)(:)",
+          "captures": {
+            "1": {
+              "name": "variable.object.property.js"
+            },
+            "3": {
+              "name": "punctuation.destructuring.js"
+            }
+          }
+        },
+        {
+          "include": "#const-bind-default"
+        },
+        {
+          "include": "#const-bind-object"
+        },
+        {
+          "include": "#const-bind-array"
+        },
+        {
+          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+          "name": "variable.other.constant.js"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.js"
+        }
+      ]
+    },
+    "const-bind-elem": {
+      "patterns": [
+        {
+          "match": "(\\.\\.\\.)",
+          "name": "keyword.operator.rest.js"
+        },
+        {
+          "include": "#const-bind-default"
+        },
+        {
+          "include": "#const-bind-object"
+        },
+        {
+          "include": "#const-bind-array"
+        },
+        {
+          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+          "name": "variable.other.constant.js"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.js"
+        }
+      ]
+    },
+    "const-bind-object": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.binding-pattern.object.js"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.binding-pattern.object.js"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#const-bind-prop"
+        }
+      ]
+    },
+    "const-bind-array": {
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.binding-pattern.array.js"
+        }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.binding-pattern.array.js"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#const-bind-elem"
+        }
+      ]
+    },
+    "const-destructure": {
+      "begin": "\\b(const)\\s+(?=[{\\[])",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.js"
+        }
+      },
+      "end": "(?<=[}\\]])",
+      "patterns": [
+        {
+          "include": "#const-bind-object"
+        },
+        {
+          "include": "#const-bind-array"
+        }
+      ]
     },
     "import-export-all": {
       "match": "\\b(import)\\s+(\\*)",

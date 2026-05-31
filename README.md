@@ -42,10 +42,10 @@ The payoff — Monogram's *derived* highlighter vs the official *hand-written* g
 
 | Engine | Monogram | Official |
 | --- | --- | --- |
-| TextMate | **87.6%** | 76.2% |
+| TextMate | **88.2%** | 76.2% |
 | tree-sitter | **95.9%** | 92.7% |
 
-<sub>TypeScript, on the ambiguity-rich documented-bug ledger ([`test/issue-cases.ts`](test/issue-cases.ts)) where regex grammars slip. JavaScript **92.6%** (vs 90.7%); TSX matches official **100%** family. tree-sitter is CI-gated (`npm run gate:treesitter`); regenerate: `npm run bench:readme`.</sub>
+<sub>TypeScript, on the ambiguity-rich documented-bug ledger ([`test/issue-cases.ts`](test/issue-cases.ts)) where regex grammars slip. JavaScript **93.0%** (vs 90.7%); TSX matches official **100%** family. tree-sitter is CI-gated (`npm run gate:treesitter`); regenerate: `npm run bench:readme`.</sub>
 <!-- bench:end -->
 
 You can't out-regex a parser-derived grammar — its correctness comes from a dimension hand-written grammars never touch. That's **one ~1,050-line grammar** (JS + TS) replacing the official **3331-line** hand-written TextMate, on a language-agnostic engine, and **more correct on the official grammar's own bug ledger**: [`test/test-issues.ts`](test/test-issues.ts) replays **50** documented bugs (318 checks pass, 21 independently re-verified vs `tsc`, all still open upstream). A few scope differences are [deliberate](#known-differences-from-the-official-highlighter); the [upstream issue ledger](docs/upstream-issues.md) gives an honest verdict on the ones we don't.

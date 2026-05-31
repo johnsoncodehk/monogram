@@ -3418,27 +3418,81 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // A declaration keyword scoped `*.const` (the immutable binding form) names
   // CONSTANTS — the TextMate convention, vs `let`/`var` → variable.other.readwrite.
   // Keyed on the scope subtype, not the word "const", so any grammar that scopes its
-  // immutable-declaration keyword `*.const` gets it. The binding-terminator lookahead
-  // `(?=\s*[=:;,]|$)` confines this to a SIMPLE binding name (`const x`, `const x: T`,
-  // `const x =`): it never mis-scopes `const enum E` (the token after `const` is an
-  // identifier, not a terminator) and leaves destructuring (`const {a}` / `const [a]`,
-  // which don't start with an identifier) to the normal binding handling.
+  // immutable-declaration keyword `*.const` gets it. The keyword keeps its OWN
+  // (non-marker) scope — `storage.type` — so `const` colors like `let`/`var`; only the
+  // BOUND NAME becomes a constant.
+  //
+  // Two forms, both confined so a non-destructuring grammar emits inert rules:
+  //   • simple `const x` / `const x: T` / `const x =` — a match with a binding-terminator
+  //     lookahead `(?=\s*[=:;,]|$)`, so `const enum E` is never mis-scoped (the token
+  //     after `const` is an identifier, not a terminator).
+  //   • destructuring `const {…}` / `const […]` — a region mirroring the grammar's
+  //     BindingPattern: an ident in BINDING position is a constant, an ident before `:`
+  //     is the property KEY, `...` is rest, and `= expr` is a default value (a normal
+  //     expression — its idents are NOT constants), nested patterns recurse. Matches the
+  //     official object/array-binding-pattern scopes.
   for (const [lit, scopes] of scopeOverrides) {
     if (!scopes.some(s => /(^|\.)const$/.test(s))) continue;
-    // The keyword keeps its OWN (non-marker) scope — `storage.type`, so `const` colors
-    // identically to `let`/`var`; only the BOUND NAME becomes a constant. The `*.const`
-    // entry is just the marker that flips this on.
     const kwScope = scopes.find(s => !/(^|\.)const$/.test(s)) ?? scopes[0];
+    const kw = `${kwScope}.${langName}`;
     const key = `${lit}-binding`;
     if (repository[key]) continue;
+
+    // simple: const x
     repository[key] = {
       match: `\\b(${escapeRegex(lit)})\\s+(${identPattern})(?=\\s*[=:;,]|\\s*$)`,
-      captures: {
-        '1': { name: `${kwScope}.${langName}` },
-        '2': { name: `variable.other.constant.${langName}` },
-      },
+      captures: { '1': { name: kw }, '2': { name: `variable.other.constant.${langName}` } },
     };
     topPatterns.push({ include: `#${key}` });
+
+    // destructuring: const { … } / const [ … ]
+    const C = `variable.other.constant.${langName}`;        // binding name
+    const eqScope = `${getScope(scopeOverrides, '=') ?? 'keyword.operator.assignment'}.${langName}`;
+    const commaScope = `${getScope(scopeOverrides, ',') ?? 'punctuation.separator.comma'}.${langName}`;
+    if (!repository['const-bind-default']) {
+      // A default value `= expr` — a normal expression, so its idents are NOT constants
+      // (matches official: `{ d = x }` → `x` is variable.other.readwrite). Ends at the
+      // top-level separator; nested `[]`/`{}`/`()` are consumed by $self.
+      repository['const-bind-default'] = {
+        begin: '(=)', beginCaptures: { '1': { name: eqScope } },
+        end: '(?=[,}\\])])', patterns: [{ include: '$self' }],
+      };
+      repository['const-bind-prop'] = { patterns: [
+        { match: '(\\.\\.\\.)', name: `keyword.operator.rest.${langName}` },
+        { match: `(${identPattern})(\\s*)(:)`, captures: { '1': { name: `variable.object.property.${langName}` }, '3': { name: `punctuation.destructuring.${langName}` } } },
+        { include: '#const-bind-default' },
+        { include: '#const-bind-object' },
+        { include: '#const-bind-array' },
+        { match: `(${identPattern})`, name: C },
+        { match: ',', name: commaScope },
+      ] };
+      repository['const-bind-elem'] = { patterns: [
+        { match: '(\\.\\.\\.)', name: `keyword.operator.rest.${langName}` },
+        { include: '#const-bind-default' },
+        { include: '#const-bind-object' },
+        { include: '#const-bind-array' },
+        { match: `(${identPattern})`, name: C },
+        { match: ',', name: commaScope },
+      ] };
+      repository['const-bind-object'] = {
+        begin: '\\{', beginCaptures: { '0': { name: `punctuation.definition.binding-pattern.object.${langName}` } },
+        end: '\\}', endCaptures: { '0': { name: `punctuation.definition.binding-pattern.object.${langName}` } },
+        patterns: [{ include: '#const-bind-prop' }],
+      };
+      repository['const-bind-array'] = {
+        begin: '\\[', beginCaptures: { '0': { name: `punctuation.definition.binding-pattern.array.${langName}` } },
+        end: '\\]', endCaptures: { '0': { name: `punctuation.definition.binding-pattern.array.${langName}` } },
+        patterns: [{ include: '#const-bind-elem' }],
+      };
+    }
+    const dkey = `${lit}-destructure`;
+    repository[dkey] = {
+      begin: `\\b(${escapeRegex(lit)})\\s+(?=[{\\[])`,
+      beginCaptures: { '1': { name: kw } },
+      end: '(?<=[}\\]])',
+      patterns: [{ include: '#const-bind-object' }, { include: '#const-bind-array' }],
+    };
+    topPatterns.push({ include: `#${dkey}` });
   }
 
   // ── 4a. Import/export namespace `*` → constant.language.import-export-all ──
@@ -4211,7 +4265,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (key.endsWith('-expression') && key !== 'ternary-expression' && !key.startsWith('scope-')) return 1.9;
     if (key === 'arrow-function-params') return 1.95;
     if (key === 'ternary-expression') return 1.97;
-    if (key.endsWith('-declaration') || key.endsWith('-definition') || key.endsWith('-typekw') || key.endsWith('-binding')) return 2;
+    if (key.endsWith('-declaration') || key.endsWith('-definition') || key.endsWith('-typekw') || key.endsWith('-binding') || key.endsWith('-destructure')) return 2;
     // import/export namespace `*` must beat both the import/export keyword group
     // (which would consume the keyword alone) and the arithmetic-operator match.
     if (key === 'import-export-all') return 2;
