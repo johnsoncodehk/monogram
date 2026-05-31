@@ -34,11 +34,9 @@ A TextMate grammar is a pile of regexes guessing at a language's structure. It's
 
 Take `typeof x < y`. A regex highlighter has to guess whether `<` opens a generic argument list or is a less-than comparison — and it guesses wrong somewhere, forever. A **parser** doesn't guess; the grammar already decides. Monogram inverts the dependency:
 
-1. **Write the grammar, then prove it.** The grammar is executable — Monogram runs it as a recursive-descent + [Pratt](https://en.wikipedia.org/wiki/Operator-precedence_parser) (operator-precedence) parser over the TypeScript conformance suite, measured *bidirectionally*: it must **accept** every input `tsc` accepts **and reject** every input it rejects. **100%** of valid single-file cases parse, **97.8%** bidirectional — the 2.2% gap is pure **over-acceptance** (invalid code rejected only by *context-sensitive* rules a context-free grammar can't express: reserved-word placement, `default abstract class`, `super` type-arguments), so nothing valid is ever missed.
+1. **Write the grammar, then prove it.** The grammar is executable — Monogram runs it as a recursive-descent + [Pratt](https://en.wikipedia.org/wiki/Operator-precedence_parser) (operator-precedence) parser over the TypeScript conformance suite, measured *bidirectionally*: it must **accept** every input `tsc` accepts **and reject** every input it rejects.
 
 2. **Derive the highlighters from that proven grammar**, never hand-write them. The TextMate, tree-sitter, and Monarch outputs are all generated from the one parser-validated definition, so their correctness is underwritten by the conformance run, not by regex tuning.
-
-The payoff is concrete: a **~1,050-line grammar** (JavaScript + TypeScript) replaces the official **3331-line** hand-written TextMate; the derived **tree-sitter** scores **95.9%** token-family accuracy against a neutral `tsc` oracle versus the official tree-sitter's **92.7%** (a real GLR parser from the same grammar; CI-gated, `npm run gate:treesitter`); and [`test/test-issues.ts`](test/test-issues.ts) gates the output against **50** of the official grammar's own documented bugs (318 checks, 21 independently re-verified vs `tsc`, all still open upstream). The bug-for-bug comparison, for every language, is the [ledger below](#comparison); a few scope differences are [deliberate](#known-differences-from-the-official-highlighter).
 
 That single source reaches across grammars, too: an embedded snippet runs *another Monogram grammar* — a `<script>` body is highlighted by Monogram's own JavaScript, so `<script>const x = 1 < 2</script>` colours `<` as a JS operator, the same ambiguity resolved *inside* the embed. Where VS Code's embeds fray — two independently-written grammars meeting with nothing checking the seam — Monogram owns both sides, so self-verifying that seam becomes possible (a design goal beyond today's standard `contentName` injection).
 
@@ -119,7 +117,7 @@ From one grammar definition (a small TypeScript combinator API), five outputs ar
 
 And — from the same grammar — generators for the rest of the ecosystem, at varying maturity:
 
-- **tree-sitter** — `grammar.js` + a **structural** `queries/highlights.scm` + an external scanner for context-sensitive lexing. tree-sitter's GLR absorbs the grammar and compiles to wasm; the derived query beats the official tree-sitter on the same oracle ([above](#the-idea)), CI-gated by `npm run gate:treesitter`.
+- **tree-sitter** — `grammar.js` + a **structural** `queries/highlights.scm` + an external scanner for context-sensitive lexing. tree-sitter's GLR absorbs the grammar and compiles to wasm; the derived query scores **95.9%** token-family accuracy against a neutral `tsc` oracle — above the official tree-sitter's **92.7%** — and is CI-gated by `npm run gate:treesitter`.
 - **Monarch** — a Monaco (web) tokenizer (functional, bounded by JS-regex limits).
 
 ## The grammar is the source of truth
