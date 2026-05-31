@@ -65,7 +65,6 @@ from its conformance-proven parser; each baseline is the official hand-written g
 | Language | Monogram (derived) | Official |
 | --- | --- | --- |
 | TypeScript | **87.6%** | 76.2% |
-| JavaScript | **92.6%** | 90.7% |
 
 <sub>Higher = more correct. TypeScript is graded on the ambiguity-rich documented-bug ledger ([`test/issue-cases.ts`](test/issue-cases.ts)) — the cases where a hand-written regex grammar slips; JavaScript on a representative corpus ([`test/js-corpus.ts`](test/js-corpus.ts)). The same TypeScript grammar also derives a **tree-sitter** highlighter that scores **95.9%** — above official tree-sitter (92.7%). Regenerate: `npm run bench:readme`.</sub>
 <!-- bench:end -->
