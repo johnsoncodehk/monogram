@@ -2653,10 +2653,17 @@ export function generateMarkupInjection(grammar: CstGrammar, grammarName: string
     patterns.push({ include: '#directives' });
   }
 
+  // Don't re-fire the injection INSIDE an expression it already embedded: otherwise a
+  // directive shorthand `:` matches the ternary `:` in `{{ a ? b : c }}` (its lookbehind
+  // `[\s<]` is satisfied by the space before the colon) and wrecks the rest of the file
+  // (vuejs/language-tools#5722). Exclude the embedded-expression scope — the same guard the
+  // official grammar uses (`-source.tsx -source.js.jsx`). The `{{`/value regions still START
+  // in host (text/attribute) context; only re-injection within the embed is suppressed.
+  const exclude = inj.exprEmbed ? ` -${inj.exprEmbed}` : '';
   return {
     $schema: 'https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json',
     scopeName: `${grammarName}.injection`,
-    injectionSelector: inj.into.map(s => `L:${s}`).join(', '),
+    injectionSelector: inj.into.map(s => `L:${s}${exclude}`).join(', '),
     patterns,
     repository,
   };

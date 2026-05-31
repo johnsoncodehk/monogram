@@ -93,6 +93,17 @@ const wrap = (expr: string) => `<template>\n  <p>{{ ${expr} }}</p>\n</template>`
   const k = tok(t, 'new');
   check('`{{ new Date() }}`: new IS scoped (kept)', !!k && (k.scopes.includes('keyword.operator') || k.scopes.includes('new')));
 }
+// #5722 regression guard: a ternary `:` inside {{ }} must NOT be stolen by the v-bind
+// directive shorthand (the injection must not re-fire inside the embedded expression), and
+// highlighting must recover after the interpolation. (The injectionSelector excludes the
+// embedded-expression scope — see gen-tm generateMarkupInjection.)
+{
+  const t = tokenize(wrap("ok ? 'a' : 'b'"));
+  const colon = tok(t, ':');
+  check('#5722: ternary `:` in {{ }} is NOT a v-bind directive shorthand', !!colon && !colon.scopes.includes('attribute-shorthand'));
+  const closeTags = t.filter(tk => tk.text === 'template');
+  check('#5722: highlighting recovers after the interpolation (</template> is a tag, not TS)', closeTags.length > 0 && closeTags.every(tk => !tk.scopes.includes('source.ts')));
+}
 
 // ── THE NUANCE: a statement inside a nested block re-enters $self → const valid there ──
 {
