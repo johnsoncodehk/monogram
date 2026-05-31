@@ -62,7 +62,6 @@ from its conformance-proven parser; each baseline is the official hand-written g
 | Language | Monogram (derived) | Official |
 | --- | --- | --- |
 | TypeScript | **87.6%** | 76.2% |
-| JavaScript | **92.6%** | 90.7% |
 
 
 **TSX** (the JSX dialect) has no neutral `tsc` oracle to grade against — tsc exposes no per-token JSX scope roles — so it is measured as drop-in agreement with the official **TypeScriptReact** grammar over a JSX corpus ([`test/tsx-corpus.ts`](test/tsx-corpus.ts)): Monogram matches it on **100.0%** of JSX tokens at the family level (**98.7%** exact). The non-JSX code in a `.tsx` file is the TypeScript row above.
