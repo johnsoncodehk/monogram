@@ -1,6 +1,11 @@
 node_modules
 .claude/
 
+# Third-party grammars fetched for head-to-head benches (the opponent's own files, not
+# vendored). vue-bench.ts documents the fetch + skips gracefully if absent — same as the
+# html/TS official-comparison benches, which read VS Code's installed grammars.
+test/fixtures/vue-official/
+
 # tree-sitter build outputs (from `tree-sitter generate` / `build --wasm`, not Monogram-emitted)
 tree-sitter/*/src/parser.c
 tree-sitter/*/src/grammar.json

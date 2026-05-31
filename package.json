@@ -21,6 +21,7 @@
     "bench:vue-directives": "node test/vue-directives.ts",
     "bench:vue-embed-boundary": "node test/vue-embed-boundary.ts",
     "bench:vue-interp-expr": "node test/vue-interp-expr.ts",
+    "bench:vue-official": "node test/vue-bench.ts",
     "gate:treesitter": "(cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/treesitter-bench.ts",
     "bench:perf": "node test/perf-bench.ts",
     "bench:readme": "node test/highlight-bench.ts --corpus adversarial --write-readme",
@@ -29,6 +30,8 @@
   "devDependencies": {
     "@types/node": "^25.9.1",
     "@vscode/tree-sitter-wasm": "^0.3.1",
+    "@vue/compiler-dom": "^3.5.35",
+    "@vue/compiler-sfc": "^3.5.35",
     "parse5": "^8.0.1",
     "tree-sitter-cli": "^0.26.9",
     "typescript": "^5.6.0",
