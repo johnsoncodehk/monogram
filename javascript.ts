@@ -29,7 +29,7 @@ import {
   left, right, none, noUnaryLhs,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not,
-} from '../src/api.ts';
+} from './src/api.ts';
 
 // ── Tokens ──
 

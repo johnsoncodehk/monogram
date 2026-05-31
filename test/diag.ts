@@ -1,6 +1,6 @@
 import { createParser } from '../src/gen-parser.ts';
 import { readFileSync } from 'fs';
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 const { parse } = createParser(grammar);
 for (const f of process.argv.slice(2)) {
   const code = readFileSync(f, 'utf-8');

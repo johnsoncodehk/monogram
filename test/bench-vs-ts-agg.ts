@@ -3,7 +3,7 @@ import { readdir } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import ts from 'typescript';
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 const { parse } = createParser(grammar);
 const base = '/tmp/ts-repo/tests/cases/conformance';
 async function all(d: string): Promise<string[]> { const o:string[]=[]; for(const e of await readdir(d,{withFileTypes:true})){const f=join(d,e.name); if(e.isDirectory())o.push(...await all(f)); else if(e.name.endsWith('.ts')&&!e.name.endsWith('.d.ts'))o.push(f);} return o; }

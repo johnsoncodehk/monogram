@@ -8,7 +8,7 @@ import { writeFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 const { parse } = createParser(grammar);
 
 const arg = process.argv[2];

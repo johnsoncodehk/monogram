@@ -4,7 +4,7 @@ Write a language's grammar **once**. Monogram runs that single definition as a r
 
 > *mono + grammar — one grammar definition, many derived artifacts.*
 
-**Status:** an active research project with **two languages on one shared core**. TypeScript ([`examples/typescript.ts`](examples/typescript.ts)) is mature — 100% valid-code coverage, 97.8% bidirectional, and a highlighter graded *absolutely* against a neutral oracle (more correct than the official grammar on its own bug ledger; see [Results](#results)). JavaScript ([`examples/javascript.ts`](examples/javascript.ts)) is newer: it parses real-world JS, is the standalone ECMAScript base that the TypeScript grammar extends, and its derived highlighter is graded by the *same* neutral oracle (92.6% — ahead of the official JavaScript grammar); it doesn't yet have TypeScript's full conformance-corpus depth. The engine is language-agnostic by construction and built for others to follow (see [Adding a language](#adding-a-language)).
+**Status:** an active research project with **two languages on one shared core**. TypeScript ([`typescript.ts`](typescript.ts)) is mature — 100% valid-code coverage, 97.8% bidirectional, and a highlighter graded *absolutely* against a neutral oracle (more correct than the official grammar on its own bug ledger; see [Results](#results)). JavaScript ([`javascript.ts`](javascript.ts)) is newer: it parses real-world JS, is the standalone ECMAScript base that the TypeScript grammar extends, and its derived highlighter is graded by the *same* neutral oracle (92.6% — ahead of the official JavaScript grammar); it doesn't yet have TypeScript's full conformance-corpus depth. The engine is language-agnostic by construction and built for others to follow (see [Adding a language](#adding-a-language)).
 
 ## Quick start
 
@@ -12,12 +12,12 @@ Requires Node 24+ (runs `.ts` directly — no build step, no `tsx`).
 
 ```bash
 npm install
-node src/cli.ts examples/typescript.ts        # regenerate every artifact from the grammar
+node src/cli.ts typescript.ts        # regenerate every artifact from the grammar
 ```
 
 ```ts
 import { createParser } from './src/gen-parser.ts';
-import grammar from './examples/typescript.ts';
+import grammar from './typescript.ts';
 
 const { parse } = createParser(grammar);
 const cst = parse('const x = f(a, b)');        // → a concrete syntax tree
@@ -142,9 +142,9 @@ const Regex    = token(/\/…\//, {
 
 ## Adding a language
 
-This isn't hypothetical: **JavaScript is a second language on the same engine.** Since TypeScript = JavaScript + a type layer, [`examples/javascript.ts`](examples/javascript.ts) is the standalone ECMAScript base that owns the shared vocabulary (tokens, operator precedence, base scopes, reserved-word guards), and [`examples/typescript.ts`](examples/typescript.ts) *imports* it and adds the type layer — the dependency runs subset → superset only. JavaScript parses real-world JS ([`test/js-conformance.ts`](test/js-conformance.ts): 61/61 valid snippets accepted, TS-only syntax rejected, ground truth `tsc` in JS mode) and its derived highlighter is graded by the *same* neutral oracle ([`test/js-highlight-bench.ts`](test/js-highlight-bench.ts): **92.6%** token-family accuracy, ahead of the official JavaScript TextMate grammar's 90.7%). It doesn't yet have TypeScript's full conformance-corpus depth, but it proves the claim below — a second language is *one grammar file on an unchanged engine*.
+This isn't hypothetical: **JavaScript is a second language on the same engine.** Since TypeScript = JavaScript + a type layer, [`javascript.ts`](javascript.ts) is the standalone ECMAScript base that owns the shared vocabulary (tokens, operator precedence, base scopes, reserved-word guards), and [`typescript.ts`](typescript.ts) *imports* it and adds the type layer — the dependency runs subset → superset only. JavaScript parses real-world JS ([`test/js-conformance.ts`](test/js-conformance.ts): 61/61 valid snippets accepted, TS-only syntax rejected, ground truth `tsc` in JS mode) and its derived highlighter is graded by the *same* neutral oracle ([`test/js-highlight-bench.ts`](test/js-highlight-bench.ts): **92.6%** token-family accuracy, ahead of the official JavaScript TextMate grammar's 90.7%). It doesn't yet have TypeScript's full conformance-corpus depth, but it proves the claim below — a second language is *one grammar file on an unchanged engine*.
 
-A **dialect** is cheaper still. [`examples/typescriptreact.ts`](examples/typescriptreact.ts) (`.tsx`) and [`examples/javascriptreact.ts`](examples/javascriptreact.ts) (`.jsx`) are *three lines each*: they take the proven TypeScript / JavaScript grammar and apply one shared JSX layer ([`examples/jsx.ts`](examples/jsx.ts)) — which prepends a `JSXElement` expression and drops the `<T>` cast — reusing the base's rules **verbatim, by name**, without re-declaring them. Same engine, same conformance discipline ([`test/tsx-conformance.ts`](test/tsx-conformance.ts), [`test/jsx-conformance.ts`](test/jsx-conformance.ts)), scope names matching VS Code's official `source.tsx` / `source.js.jsx`.
+A **dialect** is cheaper still. [`typescriptreact.ts`](typescriptreact.ts) (`.tsx`) and [`javascriptreact.ts`](javascriptreact.ts) (`.jsx`) are *three lines each*: they take the proven TypeScript / JavaScript grammar and apply one shared JSX layer ([`jsx.ts`](jsx.ts)) — which prepends a `JSXElement` expression and drops the `<T>` cast — reusing the base's rules **verbatim, by name**, without re-declaring them. Same engine, same conformance discipline ([`test/tsx-conformance.ts`](test/tsx-conformance.ts), [`test/jsx-conformance.ts`](test/jsx-conformance.ts)), scope names matching VS Code's official `source.tsx` / `source.js.jsx`.
 
 A new language is **one grammar file, proven the way TypeScript is** — by its own parser conformance, not by eyeballing colors:
 
@@ -206,7 +206,7 @@ Matching the official grammar *exactly* would, in cases like `transform`, make t
 ## Architecture
 
 ```
-examples/typescript.ts                one grammar (TypeScript combinator API)
+typescript.ts                one grammar (TypeScript combinator API)
         │
         ├─ src/gen-lexer.ts  ───────▶ lexer → tokens        (standalone: createLexer)
         │        ▲ composed by

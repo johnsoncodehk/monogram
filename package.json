@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "gen": "node src/cli.ts examples/typescript.ts && node src/cli.ts examples/javascript.ts && node src/cli.ts examples/typescriptreact.ts && node src/cli.ts examples/javascriptreact.ts",
+    "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts",
     "test": "node test/sanity-check.ts",
     "conformance": "node test/run-conformance.ts",
     "conformance:js": "node test/js-conformance.ts",

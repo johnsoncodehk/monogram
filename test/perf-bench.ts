@@ -12,7 +12,7 @@
 //  naming the construct so the landmine can be found before a real file hits it.
 //
 //  It is self-contained and READ-ONLY w.r.t. the grammar: it loads
-//  examples/typescript.tmLanguage.json and tokenizes, nothing else.
+//  typescript.tmLanguage.json and tokenizes, nothing else.
 //
 //  Run:
 //    node test/perf-bench.ts                         # Monogram only
@@ -40,7 +40,7 @@ const WARMUP_RUNS = 1;          // JIT warmup before the timed runs
 const TIMED_RUNS = 3;           // best-of-N (min) — least noisy estimate of true cost
 
 // ── grammar paths ──────────────────────────────────────────────────────────────
-const MONOGRAM_PATH = 'examples/typescript.tmLanguage.json';
+const MONOGRAM_PATH = 'typescript.tmLanguage.json';
 const OFFICIAL_PATH = process.env.MONOGRAM_OFFICIAL_TM; // opt-in side-by-side
 
 // ── TextMate grammar loading (oniguruma + Registry; copied from highlight-bench.ts)
@@ -59,7 +59,7 @@ function makeRegistry(scopeName: string, content: string): vsctm.Registry {
 }
 
 if (!existsSync(MONOGRAM_PATH)) {
-  console.error(`Monogram grammar not found at ${MONOGRAM_PATH}. Run: node src/cli.ts examples/typescript.ts`);
+  console.error(`Monogram grammar not found at ${MONOGRAM_PATH}. Run: node src/cli.ts typescript.ts`);
   process.exit(1);
 }
 const monogramGrammar = await makeRegistry('source.ts', readFileSync(MONOGRAM_PATH, 'utf-8')).loadGrammar('source.ts');

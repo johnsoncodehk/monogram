@@ -1,4 +1,4 @@
-// TSX conformance, mirroring test/js-conformance.ts but for examples/typescriptreact.ts.
+// TSX conformance, mirroring test/js-conformance.ts but for typescriptreact.ts.
 // Ground truth is TS's OWN parser in TSX mode
 // (`ts.createSourceFile(..., ts.ScriptKind.TSX)` → `parseDiagnostics`).
 //
@@ -22,7 +22,7 @@
 import { createParser } from '../src/gen-parser.ts';
 import ts from 'typescript';
 
-const grammar = (await import('../examples/typescriptreact.ts')).default;
+const grammar = (await import('../typescriptreact.ts')).default;
 const { parse } = createParser(grammar);
 
 const tsxAccepts = (code: string) => {

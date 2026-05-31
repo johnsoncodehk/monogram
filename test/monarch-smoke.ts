@@ -15,7 +15,7 @@ import { token, rule, defineGrammar, alt, many, left } from '../src/api.ts';
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { cond ? ok++ : (fail++, console.log('  ✗', label)); };
 
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 const mon: MonarchLanguage = generateMonarch(grammar);
 
 // ── Helpers to walk the generated tokenizer ──

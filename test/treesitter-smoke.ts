@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import vm from 'node:vm';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
 
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => {

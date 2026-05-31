@@ -5,7 +5,7 @@ import { readdir, writeFile, readFile } from 'fs/promises';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 const { parse } = createParser(grammar);
 const baseDir = '/tmp/ts-repo/tests/cases/conformance';
 const SNAP = '/tmp/pass-snapshot.json';

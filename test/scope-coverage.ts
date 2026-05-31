@@ -32,7 +32,7 @@ const require = createRequire(import.meta.url);
 const wasmBin = readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
 await onig.loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + wasmBin.byteLength));
 
-const MONO_PATH = 'examples/typescript.tmLanguage.json';
+const MONO_PATH = 'typescript.tmLanguage.json';
 const OFFICIAL_PATH = process.env.MONOGRAM_OFFICIAL_TM
   ?? '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/typescript-basics/syntaxes/TypeScript.tmLanguage.json';
 if (!existsSync(OFFICIAL_PATH)) {

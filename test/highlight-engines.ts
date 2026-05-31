@@ -116,7 +116,7 @@ export function treesitterFamilies(code: string): Span[] {
   return tsFamiliesWith(tsParser, tsQuery, code);
 }
 
-// Monogram's OWN generated tree-sitter (compiled from examples/tree-sitter, loaded
+// Monogram's OWN generated tree-sitter (compiled from tree-sitter, loaded
 // from a prebuilt wasm). Gated behind explicit paths because building that wasm needs
 // the wasi-sdk toolchain — not something CI does — so it's a local/opt-in measurement.
 let mtsParser: any = null;

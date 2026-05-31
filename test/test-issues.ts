@@ -18,7 +18,7 @@ const registry = new Registry({
   }),
   loadGrammar: async (scopeName: string) => {
     if (scopeName === 'source.ts') {
-      const content = readFileSync('examples/typescript.tmLanguage.json', 'utf-8');
+      const content = readFileSync('typescript.tmLanguage.json', 'utf-8');
       return parseRawGrammar(content, 'typescript.tmLanguage.json');
     }
     return null;

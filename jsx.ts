@@ -29,9 +29,9 @@
 // JSX rules include them only when the base has a `Type` rule (TS) and omit them
 // for the type-free JavaScript base.
 
-import { token, rule, defineGrammar, sameLine, sep, opt, many, alt } from '../src/api.ts';
+import { token, rule, defineGrammar, sameLine, sep, opt, many, alt } from './src/api.ts';
 import { Ident, Number_, String_ } from './javascript.ts';
-import type { CstGrammar, RuleDecl, TokenDecl, RuleExpr } from '../src/types.ts';
+import type { CstGrammar, RuleDecl, TokenDecl, RuleExpr } from './src/types.ts';
 
 // `/>` (self-closing) and `</` (close-tag open) are atomic JSX punctuation tokens.
 export const JSXSelfClose = token(/\/>/);

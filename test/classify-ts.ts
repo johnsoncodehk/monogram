@@ -4,7 +4,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import ts from 'typescript';
 
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 const { parse } = createParser(grammar);
 const baseDir = '/tmp/ts-repo/tests/cases/conformance';
 

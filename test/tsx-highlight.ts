@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  tsx-highlight.ts — the JSX *highlighter* gate (tsx-conformance.ts is the JSX
-//  *parser* gate). It checks the scopes Monogram's GENERATED examples/tsx.tmLanguage.json
+//  *parser* gate). It checks the scopes Monogram's GENERATED tsx.tmLanguage.json
 //  emits for the JSX-dialect constructs the TS/JS benches can't reach: element &
 //  fragment tags, attributes, expression containers, raw text children, and HTML
 //  character entities.
@@ -56,9 +56,9 @@ function tokenize(g: vsctm.IGrammar, text: string): Tok[] {
 // `.jsx` (it is structural, e.g. `meta.jsx.children`).
 const norm = (s: string) => s.replace(/\.(tsx|ts|js)$/, '');
 
-const MONO_PATH = 'examples/typescriptreact.tmLanguage.json';
+const MONO_PATH = 'typescriptreact.tmLanguage.json';
 if (!existsSync(MONO_PATH)) {
-  console.error(`Monogram TSX grammar not found at ${MONO_PATH}. Run: node src/cli.ts examples/typescriptreact.ts`);
+  console.error(`Monogram TSX grammar not found at ${MONO_PATH}. Run: node src/cli.ts typescriptreact.ts`);
   process.exit(1);
 }
 const mono = (await load('source.tsx', MONO_PATH))!;

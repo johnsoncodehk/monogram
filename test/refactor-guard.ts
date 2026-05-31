@@ -3,7 +3,7 @@
 // must still fail). Run before/after each collapse — the conformance suite
 // doesn't cover all of these edge combinations.
 import { createParser } from '../src/gen-parser.ts';
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 const { parse } = createParser(grammar);
 
 const should = {

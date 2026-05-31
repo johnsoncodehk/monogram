@@ -62,17 +62,17 @@ const PARSER_DIR = '/tmp/ts-repo/tests/cases/conformance/parser';
 const OFFICIAL_PATH =
   process.env.MONOGRAM_OFFICIAL_TM ??
   '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/typescript-basics/syntaxes/TypeScript.tmLanguage.json';
-const MONOGRAM_PATH = 'examples/typescript.tmLanguage.json';
+const MONOGRAM_PATH = 'typescript.tmLanguage.json';
 // JavaScript grammars — only used to fill the README per-language table's JS row.
 const OFFICIAL_JS_PATH =
   process.env.MONOGRAM_OFFICIAL_JS_TM ??
   '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/javascript/syntaxes/JavaScript.tmLanguage.json';
-const MONOGRAM_JS_PATH = 'examples/javascript.tmLanguage.json';
+const MONOGRAM_JS_PATH = 'javascript.tmLanguage.json';
 // TSX grammars — for the README's JSX-dialect agreement line (no neutral oracle exists).
 const OFFICIAL_TSX_PATH =
   process.env.MONOGRAM_OFFICIAL_TSX ??
   '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/typescript-basics/syntaxes/TypeScriptReact.tmLanguage.json';
-const MONOGRAM_TSX_PATH = 'examples/typescriptreact.tmLanguage.json';
+const MONOGRAM_TSX_PATH = 'typescriptreact.tmLanguage.json';
 
 // ── TextMate grammar loading (vscode-textmate + oniguruma) ───────────────────
 const require = createRequire(import.meta.url);
@@ -94,7 +94,7 @@ if (!existsSync(OFFICIAL_PATH)) {
   process.exit(1);
 }
 if (!existsSync(MONOGRAM_PATH)) {
-  console.error(`Monogram grammar not found at ${MONOGRAM_PATH}. Run: node src/cli.ts examples/typescript.ts`);
+  console.error(`Monogram grammar not found at ${MONOGRAM_PATH}. Run: node src/cli.ts typescript.ts`);
   process.exit(1);
 }
 
@@ -648,7 +648,7 @@ if (argv.includes('--engines')) {
   const tsOk = await loadTreeSitter();
   const mtsWasm = process.env.MONOGRAM_TS_WASM;
   const mtsOk = mtsWasm
-    ? await loadMonogramTreeSitter(mtsWasm, process.env.MONOGRAM_TS_QUERY ?? 'examples/tree-sitter/typescript/queries/highlights.scm')
+    ? await loadMonogramTreeSitter(mtsWasm, process.env.MONOGRAM_TS_QUERY ?? 'tree-sitter/typescript/queries/highlights.scm')
     : false;
   const scores = await engineFamilyScores(advInputs, tsOk, mtsOk);
   console.log('\n── token-family accuracy vs tsc oracle (issue-cases corpus) ──');
@@ -667,7 +667,7 @@ if (argv.includes('--miss-mts')) {
   ];
   const tsOk = await loadTreeSitter();
   const mtsWasm = process.env.MONOGRAM_TS_WASM;
-  if (!mtsWasm || !(await loadMonogramTreeSitter(mtsWasm, process.env.MONOGRAM_TS_QUERY ?? 'examples/tree-sitter/typescript/queries/highlights.scm'))) {
+  if (!mtsWasm || !(await loadMonogramTreeSitter(mtsWasm, process.env.MONOGRAM_TS_QUERY ?? 'tree-sitter/typescript/queries/highlights.scm'))) {
     console.error('set MONOGRAM_TS_WASM (and optionally MONOGRAM_TS_QUERY) to a built wasm'); process.exit(1);
   }
   const focus = process.env.MISS_ROLE; // set to a role to print each miss's snippet+context

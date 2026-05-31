@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { createParser } from '../src/gen-parser.ts';
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 process.env.PROF = '1';
 const p: any = createParser(grammar);
 const code = readFileSync('/tmp/ts-repo/tests/cases/conformance/parser/ecmascript5/RealWorld/parserharness.ts','utf-8');

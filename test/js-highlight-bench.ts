@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  js-highlight-bench.ts — JavaScript highlighter accuracy vs a NEUTRAL tsc-JS
 //  oracle. The JS counterpart of highlight-bench.ts (TypeScript): it grades
-//  Monogram's GENERATED examples/javascript.tmLanguage.json against tsc's own
+//  Monogram's GENERATED javascript.tmLanguage.json against tsc's own
 //  JS-mode parse tree (oracle.ts with ScriptKind.JS), at the token-FAMILY
 //  granularity (scope-roles.ts) — the SAME absolute, theme-independent metric the
 //  TS bench uses.
@@ -83,9 +83,9 @@ function grade(name: string, grammar: vsctm.IGrammar): { score: Score; byFamily:
   return { score: { name, correct: acc.correct, total: acc.total }, byFamily };
 }
 
-const MONO_PATH = 'examples/javascript.tmLanguage.json';
+const MONO_PATH = 'javascript.tmLanguage.json';
 if (!existsSync(MONO_PATH)) {
-  console.error(`Monogram JS grammar not found at ${MONO_PATH}. Run: node src/cli.ts examples/javascript.ts`);
+  console.error(`Monogram JS grammar not found at ${MONO_PATH}. Run: node src/cli.ts javascript.ts`);
   process.exit(1);
 }
 const mono = await loadGrammar('source.js', MONO_PATH);

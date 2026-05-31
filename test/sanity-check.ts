@@ -1,6 +1,6 @@
 import { createParser } from '../src/gen-parser.ts';
 
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 const { parse } = createParser(grammar);
 
 // Sanity checks for common syntax

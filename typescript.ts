@@ -2,7 +2,7 @@ import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not,
-} from '../src/api.ts';
+} from './src/api.ts';
 // JavaScript is the SUBSET / base of the ECMAScript family; TypeScript is the
 // SUPERSET (JS + a type layer). The shared, type-free vocabulary — token consts,
 // the `notReserved`/`notReservedExpr` reserved-word guards, the precedence ladder

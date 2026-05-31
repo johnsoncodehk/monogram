@@ -1,5 +1,5 @@
 // JavaScript bidirectional conformance, mirroring test/conformance-matrix.ts but
-// for examples/javascript.ts. Ground truth is TS's OWN parser in JS mode
+// for javascript.ts. Ground truth is TS's OWN parser in JS mode
 // (`ts.createSourceFile(..., ts.ScriptKind.JS)` → `parseDiagnostics`).
 //
 // Two corpora are measured:
@@ -20,7 +20,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import ts from 'typescript';
 
-const grammar = (await import('../examples/javascript.ts')).default;
+const grammar = (await import('../javascript.ts')).default;
 const { parse } = createParser(grammar);
 
 const jsAccepts = (code: string, file = 't.js') => {

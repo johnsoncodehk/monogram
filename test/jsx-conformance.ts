@@ -1,4 +1,4 @@
-// JSX conformance for examples/javascriptreact.ts (the `.jsx` dialect = JavaScript +
+// JSX conformance for javascriptreact.ts (the `.jsx` dialect = JavaScript +
 // JSX). Ground truth is TS's own parser in JSX mode (ts.createSourceFile(...,
 // ts.ScriptKind.JSX) → parseDiagnostics). The JS counterpart of tsx-conformance.ts:
 //   1. curated valid JSX-in-JS — the hard acceptance gate (must all parse);
@@ -8,10 +8,10 @@
 import { createParser } from '../src/gen-parser.ts';
 import ts from 'typescript';
 
-const grammar = (await import('../examples/javascriptreact.ts')).default;
+const grammar = (await import('../javascriptreact.ts')).default;
 const { parse } = createParser(grammar);
 // The JS base, to prove withJsx adds ONLY a JSX layer (identical type behavior).
-const baseParse = createParser((await import('../examples/javascript.ts')).default).parse;
+const baseParse = createParser((await import('../javascript.ts')).default).parse;
 
 const jsxAccepts = (code: string) => {
   const sf = ts.createSourceFile('t.jsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JSX);

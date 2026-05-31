@@ -19,7 +19,7 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, parse as parsePath } from 'node:path';
 
-const grammar = (await import('../examples/typescript.ts')).default;
+const grammar = (await import('../typescript.ts')).default;
 
 // Resolve the workspace `tsc` so the temp dir uses the same compiler. Walk up
 // from the cwd — under a git worktree, node_modules lives in the parent repo.
