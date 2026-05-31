@@ -62,44 +62,63 @@ _Real bugs reported against each hand-written **official** grammar — does Mono
 
 | language | vs hand-written grammar | Monogram | official | only Monogram | only official | both solve | both miss |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|
-| TypeScript | microsoft/TypeScript-TmLanguage | **64/74** | 32/74 | 32 | 0 | 32 | 10 |
+| TypeScript | microsoft/TypeScript-TmLanguage | **20/22** | 7/22 | 13 | 0 | 7 | 2 |
 | HTML | VS Code's html.tmLanguage | **8/8** | 7/8 | 1 | 0 | 7 | 0 |
 | Vue | vuejs/language-tools vue.tmLanguage.json | **11/12** | 11/12 | 0 | 0 | 11 | 1 |
 
 #### TypeScript
-**Only Monogram solves (32):** #978, #859, #1020, #855, #853, #804, #869, #770, #1021, #1025, #815, #992, #995 · +14 more
-
-**Only official solves (0):** —
-
-**Both miss (10, shared TM ceilings):** #1050, #891 · +8 more · both solve: 32
+| issue | Monogram | official |
+|---|:--:|:--:|
+| [#978](https://github.com/microsoft/TypeScript-TmLanguage/issues/978) — typeof x < string then function **(only Monogram)** | ✓ | · |
+| [#859](https://github.com/microsoft/TypeScript-TmLanguage/issues/859) — as cast inside < > comparison **(only Monogram)** | ✓ | · |
+| [#1020](https://github.com/microsoft/TypeScript-TmLanguage/issues/1020) — new Map<number, number>; (no parens) **(only Monogram)** | ✓ | · |
+| [#855](https://github.com/microsoft/TypeScript-TmLanguage/issues/855) — new Map</* comment */string, IArgs>() **(only Monogram)** | ✓ | · |
+| [#853](https://github.com/microsoft/TypeScript-TmLanguage/issues/853) — throw /foo/ is regex **(only Monogram)** | ✓ | · |
+| [#804](https://github.com/microsoft/TypeScript-TmLanguage/issues/804) — /[a\-b]/g char class recognized **(only Monogram)** | ✓ | · |
+| [#869](https://github.com/microsoft/TypeScript-TmLanguage/issues/869) — x in obj ? x : fallback ternary works **(only Monogram)** | ✓ | · |
+| [#770](https://github.com/microsoft/TypeScript-TmLanguage/issues/770) — function call parens are punctuation **(only Monogram)** | ✓ | · |
+| [#1021](https://github.com/microsoft/TypeScript-TmLanguage/issues/1021) — regex with the v (unicode-sets) flag is recognized **(only Monogram)** | ✓ | · |
+| [#1025](https://github.com/microsoft/TypeScript-TmLanguage/issues/1025) — for-of without surrounding space keeps `of` a loop keyword **(only Monogram)** | ✓ | · |
+| [#815](https://github.com/microsoft/TypeScript-TmLanguage/issues/815) — a class method named `new` is a method name, not the operator **(only Monogram)** | ✓ | · |
+| [#992](https://github.com/microsoft/TypeScript-TmLanguage/issues/992) — casting to a type named `type` does not break highlighting **(only Monogram)** | ✓ | · |
+| [#995](https://github.com/microsoft/TypeScript-TmLanguage/issues/995) — paren-wrapped `as keyof typeof` assertion tokenizes **(only Monogram)** | ✓ | · |
+| [#1050](https://github.com/microsoft/TypeScript-TmLanguage/issues/1050) — typeof y < string is a relational operator not generic _(both miss)_ | · | · |
+| [#891](https://github.com/microsoft/TypeScript-TmLanguage/issues/891) — `from` as an ordinary variable is not a keyword _(both miss)_ | · | · |
+| [#1063](https://github.com/microsoft/TypeScript-TmLanguage/issues/1063) — /\cJ/ control char escape | ✓ | ✓ |
+| [#736](https://github.com/microsoft/TypeScript-TmLanguage/issues/736) — obj.example() method gets entity.name.function | ✓ | ✓ |
+| [#788](https://github.com/microsoft/TypeScript-TmLanguage/issues/788) — optional chaining ?. is the optional accessor | ✓ | ✓ |
+| [#881](https://github.com/microsoft/TypeScript-TmLanguage/issues/881) — `override` modifier on a method is storage.modifier | ✓ | ✓ |
+| [#1066](https://github.com/microsoft/TypeScript-TmLanguage/issues/1066) — triple-slash reference directive is a comment | ✓ | ✓ |
+| [#994](https://github.com/microsoft/TypeScript-TmLanguage/issues/994) — default type-parameter value is colored | ✓ | ✓ |
+| [#1027](https://github.com/microsoft/TypeScript-TmLanguage/issues/1027) — nested generic `>>` closes two type-arg lists, not a shift | ✓ | ✓ |
 
 #### HTML
 | issue | Monogram | official |
 |---|:--:|:--:|
-| tmbundle#118 — trailing `/` in an unquoted URL value **(only Monogram)** | ✓ | · |
-| tmbundle#124 — slash in unquoted value `foo/` | ✓ | ✓ |
-| vscode#140360 — `/` inside an unquoted value (path) | ✓ | ✓ |
-| tmbundle#84 — tag name a prefix of a sibling (`<i>`/`<input>`) | ✓ | ✓ |
-| tmbundle#117 — SVG camelCase tag name | ✓ | ✓ |
-| tmbundle#122 — `<` inside a quoted attr value | ✓ | ✓ |
-| tmbundle#115 — `>` inside a quoted attr value | ✓ | ✓ |
-| tmbundle#97 — space before `>` in an end tag | ✓ | ✓ |
+| [tmbundle#118](https://github.com/textmate/html.tmbundle/issues/118) — trailing `/` in an unquoted URL value **(only Monogram)** | ✓ | · |
+| [tmbundle#124](https://github.com/textmate/html.tmbundle/issues/124) — slash in unquoted value `foo/` | ✓ | ✓ |
+| [vscode#140360](https://github.com/microsoft/vscode/issues/140360) — `/` inside an unquoted value (path) | ✓ | ✓ |
+| [tmbundle#84](https://github.com/textmate/html.tmbundle/issues/84) — tag name a prefix of a sibling (`<i>`/`<input>`) | ✓ | ✓ |
+| [tmbundle#117](https://github.com/textmate/html.tmbundle/issues/117) — SVG camelCase tag name | ✓ | ✓ |
+| [tmbundle#122](https://github.com/textmate/html.tmbundle/issues/122) — `<` inside a quoted attr value | ✓ | ✓ |
+| [tmbundle#115](https://github.com/textmate/html.tmbundle/issues/115) — `>` inside a quoted attr value | ✓ | ✓ |
+| [tmbundle#97](https://github.com/textmate/html.tmbundle/issues/97) — space before `>` in an end tag | ✓ | ✓ |
 
 #### Vue
 | issue | Monogram | official |
 |---|:--:|:--:|
-| #6007/#2096/#520 — `as` type assertion in directive value _(both miss)_ | · | · |
-| #3400 — `instanceof` in {{ }} | ✓ | ✓ |
-| #5370 — `typeof x !==` in v-if | ✓ | ✓ |
-| #5118 — `?.` / `??` in {{ }} | ✓ | ✓ |
-| #1675 — arrow `=>` in {{ }} | ✓ | ✓ |
-| #6039/#4741 — `<` operator in {{ }} (not a tag!) | ✓ | ✓ |
-| #5722 — negated ternary + quotes in {{ }} | ✓ | ✓ |
-| #5538/#2060 — trailing `export type` before </script> | ✓ | ✓ |
-| #3999 — multi-line <script> start-tag attributes | ✓ | ✓ |
-| #4769 — tag name starting with `template` | ✓ | ✓ |
-| #5701 — `{{` inside a <script> string | ✓ | ✓ |
-| #6070 — capitalized component then a <style> block | ✓ | ✓ |
+| [#6007](https://github.com/vuejs/language-tools/issues/6007)/[#2096](https://github.com/vuejs/language-tools/issues/2096)/[#520](https://github.com/vuejs/language-tools/issues/520) — `as` type assertion in directive value _(both miss)_ | · | · |
+| [#3400](https://github.com/vuejs/language-tools/issues/3400) — `instanceof` in {{ }} | ✓ | ✓ |
+| [#5370](https://github.com/vuejs/language-tools/issues/5370) — `typeof x !==` in v-if | ✓ | ✓ |
+| [#5118](https://github.com/vuejs/language-tools/issues/5118) — `?.` / `??` in {{ }} | ✓ | ✓ |
+| [#1675](https://github.com/vuejs/language-tools/issues/1675) — arrow `=>` in {{ }} | ✓ | ✓ |
+| [#6039](https://github.com/vuejs/language-tools/issues/6039)/[#4741](https://github.com/vuejs/language-tools/issues/4741) — `<` operator in {{ }} (not a tag!) | ✓ | ✓ |
+| [#5722](https://github.com/vuejs/language-tools/issues/5722) — negated ternary + quotes in {{ }} | ✓ | ✓ |
+| [#5538](https://github.com/vuejs/language-tools/issues/5538)/[#2060](https://github.com/vuejs/language-tools/issues/2060) — trailing `export type` before </script> | ✓ | ✓ |
+| [#3999](https://github.com/vuejs/language-tools/issues/3999) — multi-line <script> start-tag attributes | ✓ | ✓ |
+| [#4769](https://github.com/vuejs/language-tools/issues/4769) — tag name starting with `template` | ✓ | ✓ |
+| [#5701](https://github.com/vuejs/language-tools/issues/5701) — `{{` inside a <script> string | ✓ | ✓ |
+| [#6070](https://github.com/vuejs/language-tools/issues/6070) — capitalized component then a <style> block | ✓ | ✓ |
 <!-- issues:end -->
 
 <sub>A sampled ledger of real tracker issues, not an exhaustive audit. Run `npm run bench:issues` to regenerate (needs the official grammars: VS Code's installed TS/JS/HTML, and the Vue fixtures — see [`test/vue-bench.ts`](test/vue-bench.ts)). Sources: [`test/issue-cases.ts`](test/issue-cases.ts), [`test/html-issue-cases.ts`](test/html-issue-cases.ts), [`test/vue-issue-cases.ts`](test/vue-issue-cases.ts).</sub>
