@@ -2481,19 +2481,38 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   // style→source.css) or the token's own scope. A `{ default, lang }` embed selects by a
   // `lang="…"` start-tag attribute → one region per lang (matched first), then the default.
   const ccClose = escapeForCharClass(m.tagClose);
+  // Capture-embed: the start-tag attributes (`lang="ts"`, …) are re-tokenized by #attribute
+  // instead of being lumped; the body is re-tokenized by the embedded grammar.
+  const attrCap = { patterns: [{ include: '#attribute' }] };
   const emitRaw = (key: string, tag: string, embed: string, langVal?: string) => {
     const attrs = langVal
       ? `([^${ccClose}]*\\blang\\s*=\\s*["']${langVal}["'][^${ccClose}]*)`   // start tag carries lang="<val>"
       : `([^${ccClose}]*)`;
+    const bodyCap = { name: embed, patterns: [{ include: embed }] };          // capture re-tokenized as the embed
+    // (1) single-line `<tag …>BODY</tag>` — one regex bounds the body at `</tag>` (so even
+    //     a mid-construct embed can't escape), body + attrs re-tokenized via capture-embed.
+    repository[`${key}-inline`] = {
+      name: `meta.${tag}.${L}`,
+      match: `(${o})(${tag})\\b${attrs}(${c})(.*?)(${o}${slash})(${tag})\\s*(${c})`,
+      captures: {
+        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose },
+        '5': bodyCap,
+        '6': { name: sOpen }, '7': { name: sName }, '8': { name: sClose },
+      },
+    };
+    // (2) multi-line `begin/while` — the `while` re-checks each line and DROPS the region
+    //     (popping any open embedded region) at the `</tag>` line, so the embed can't
+    //     swallow past the close tag even mid-construct (fixes the trailing-type bug). The
+    //     `^` anchor is required; the close tag itself is then matched by the host #tag.
     repository[key] = {
       name: `meta.${tag}.${L}`,
       begin: `(${o})(${tag})\\b${attrs}(${c})`,
-      beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '4': { name: sClose } },
-      end: `(${o}${slash})(${tag})\\s*(${c})`,
-      endCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': { name: sClose } },
+      beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose } },
+      while: `^(?!\\s*${o}${slash}${tag}[\\s${ccClose}])`,
       contentName: embed,
       patterns: [{ include: embed }],
     };
+    top.push({ include: `#${key}-inline` });   // single-line first, then multi-line
     top.push({ include: `#${key}` });
   };
   for (const tag of m.rawText?.tags ?? []) {
