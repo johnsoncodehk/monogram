@@ -633,7 +633,7 @@ interface JsxInfo {
  * Detect a JSX/TSX dialect from the grammar, structurally and agnostically: a
  * JSX grammar declares two dedicated punctuation tokens whose patterns are
  * exactly the self-closing tag `/>` and the close-tag opener `</` (a JSX grammar
- * needs these to lex `<Tag/>` / `</Tag>` atomically — see jsx.ts), AND
+ * needs these to lex `<Tag/>` / `</Tag>` atomically — see javascriptreact.ts), AND
  * a rule that uses a literal `<` immediately before a rule reference (the JSX
  * element production `'<' TagName …`). The two tokens alone are the signal; the
  * `<`-before-ref check guards against a grammar that merely happens to declare
