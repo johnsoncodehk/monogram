@@ -61,6 +61,12 @@ export interface MarkupConfig {
   tagOpen: string;     // opens a tag and ends a text run (e.g. '<')
   tagClose: string;    // closes a tag → return to text/raw-text (e.g. '>')
   closeMarker?: string; // marks a close tag when it directly follows tagOpen (e.g. '/' in '</'); such a tag never opens raw text
+  // Attribute syntax (the host markup's `name="value"`): the name/value separator and the
+  // quote characters. Kept as DATA so the markup + injection emitters bake in no HTML-specific
+  // assumption (the same reason tagOpen/tagClose are data). Default to the near-universal `=`
+  // and `" '`; a grammar declares them (see html.ts) and the injection layer reads them too.
+  attributeAssign?: string;    // e.g. '='
+  attributeQuotes?: string[];  // e.g. ['"', "'"]
   // Elements whose content is raw (CDATA-like): after the start tag's `tagClose`,
   // everything up to the matching `tagOpen+closeMarker+name` is one `token`. `embed`
   // optionally maps a tag → the grammar scope to embed in its body (e.g. Vue SFC blocks:
@@ -100,6 +106,9 @@ export interface MarkupInject {
     prefix: string;        // long-form directive prefix, e.g. 'v-'
     nameScope: string;     // scope for a directive name / argument (entity.other.attribute-name.html.vue)
     eqScope: string;       // scope for the `=` before a directive value (punctuation.separator.key-value.html.vue)
+    // Optional scope for the quotes around a directive value. DATA, so the engine names them
+    // from the grammar instead of inventing a scope string; omit → quotes left unscoped.
+    valueString?: { begin: string; end: string };
   };
 }
 

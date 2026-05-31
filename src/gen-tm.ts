@@ -2469,6 +2469,11 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   const sStrPunctB = `punctuation.definition.string.begin.${L}`;
   const sStrPunctE = `punctuation.definition.string.end.${L}`;
   const o = escapeRegex(m.tagOpen), c = escapeRegex(m.tagClose), slash = escapeRegex(m.closeMarker ?? '/');
+  // Attribute syntax from config (DATA, like the tag delimiters above) — no HTML literal is
+  // baked into the emitter; defaults mirror closeMarker's `?? '/'` convention.
+  const assign = escapeRegex(m.attributeAssign ?? '='), assignCc = escapeForCharClass(m.attributeAssign ?? '=');
+  const attrQuotes = m.attributeQuotes ?? ['"', "'"], quoteCc = attrQuotes.map(escapeForCharClass).join('');
+  const ccTagOpen = escapeForCharClass(m.tagOpen);
 
   const repository: Record<string, TmPattern> = {};
   const top: { include: string }[] = [];
@@ -2594,22 +2599,20 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   // value that happens to look like a name (`href=https://…`) is NOT mis-scoped as an
   // attribute name (a real bug in flat-pattern grammars), and an unquoted value may
   // contain `/` (URLs) — the HTML spec only bars whitespace / quotes / `<>` / `=` / backtick.
-  const strDq = {
-    begin: '"', end: '"', name: `string.quoted.double.${L}`,
+  // One string pattern per declared quote char (`"`→double, `'`→single by convention).
+  const quoteKind = (q: string) => q === '"' ? 'double' : q === "'" ? 'single' : 'other';
+  const strs = attrQuotes.map(q => ({
+    begin: escapeRegex(q), end: escapeRegex(q), name: `string.quoted.${quoteKind(q)}.${L}`,
     beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
-  };
-  const strSq = {
-    begin: "'", end: "'", name: `string.quoted.single.${L}`,
-    beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
-  };
-  const unquoted = { match: `[^\\s"'${escapeForCharClass(m.tagOpen)}${escapeForCharClass(m.tagClose)}=\`]+`, name: `string.unquoted.${L}` };
+  }));
+  const unquoted = { match: `[^\\s${quoteCc}${ccTagOpen}${escapeForCharClass(m.tagClose)}${assignCc}\`]+`, name: `string.unquoted.${L}` };
   repository['attribute'] = {
     patterns: [
-      { match: `(${namePat})(?=\\s*=)`, name: sAttr },                 // attribute name (followed by `=`)
+      { match: `(${namePat})(?=\\s*${assign})`, name: sAttr },         // attribute name (followed by the assign char)
       {                                                                 // `= value`
-        begin: '(=)\\s*', beginCaptures: { '1': { name: sEq } },
+        begin: `(${assign})\\s*`, beginCaptures: { '1': { name: sEq } },
         end: `(?=[\\s${escapeForCharClass(m.tagClose)}])`,
-        patterns: [strDq, strSq, unquoted],
+        patterns: [...strs, unquoted],
       },
       { match: `(${namePat})`, name: sAttr },                          // boolean attribute (no `=`)
     ],
@@ -2642,6 +2645,14 @@ interface InjectionGrammar {
 export function generateMarkupInjection(grammar: CstGrammar, grammarName: string): InjectionGrammar | null {
   const inj = grammar.markup?.inject;
   if (!inj) return null;
+  const m = grammar.markup!;
+  // Markup delimiters from config (DATA) — the injection bakes in no HTML literal, matching
+  // generateMarkupTm and the `closeMarker ?? '/'` convention.
+  const ccOpen = escapeForCharClass(m.tagOpen), ccClose = escapeForCharClass(m.tagClose), ccSlash = escapeForCharClass(m.closeMarker ?? '/');
+  const assign = escapeRegex(m.attributeAssign ?? '='), assignCc = escapeForCharClass(m.attributeAssign ?? '=');
+  const quotes = m.attributeQuotes ?? ['"', "'"], quoteCc = quotes.map(escapeForCharClass).join('');
+  const beforeAttr = `(?<=[\\s${ccOpen}])`;          // preceded by whitespace or tag-open
+  const endAttr = `(?=[\\s${ccSlash}${ccClose}])`;   // ends at whitespace / close-marker / tag-close
   const repository: Record<string, TmPattern> = {};
   const patterns: ({ include: string })[] = [];
 
@@ -2663,51 +2674,52 @@ export function generateMarkupInjection(grammar: CstGrammar, grammarName: string
   // the expression embed applies ONLY to a directive's value, never a plain HTML attribute.
   if (inj.directives) {
     const d = inj.directives;
-    // `= "expr"` / `= 'expr'` → the value is an EXPRESSION, CAPTURE-EMBEDDED so the embedded
-    // grammar is BOUNDED to the quoted span. A begin/end region lets an inner rule cross the
-    // closing quote: `msg as string` runs its `as`-cast type context over the `"` (which looks
-    // like the start of a string-literal-type) and swallows the rest of the tag — the #5012
-    // bug (vuejs/language-tools#5012). A capture's text range CAN'T be crossed, so the cast
-    // stops at the quote. One pattern per quote char (a backref can't sit inside `[^…]`);
-    // single-line, which is what HTML attribute values are.
-    // Every scope here comes from the injection CONFIG (eqScope / exprEmbed / exprInclude) —
-    // nothing language-specific is baked into the engine. The quotes (groups 2 and 4) are
-    // left unscoped, exactly as the previous begin/end region left them; naming them would
-    // mean the engine inventing a scope string, which is the grammar's job, not the engine's.
-    const valueCap = (q: string): TmPattern => ({
-      match: `(=)\\s*(${q})([^${q}]*)(${q})`,
-      captures: {
+    // `= "expr"` → the value is an EXPRESSION, CAPTURE-EMBEDDED so the embedded grammar is
+    // BOUNDED to the quoted span. A begin/end region would let `msg as string`'s `as`-cast run
+    // its type context over the closing quote (which looks like a string-literal-type) and
+    // swallow the rest of the tag — the #5012 bug (vuejs/language-tools#5012). A capture's text
+    // range can't be crossed, so the cast stops at the quote. Everything is config DATA: the
+    // `=`/quotes from the markup config, the value scope from inject, and — so the engine never
+    // invents a scope — the quote scope from `d.valueString` (omit it → quotes left unscoped).
+    const valueCap = (q: string): TmPattern => {
+      const captures: Record<string, TmCapture> = {
         '1': { name: d.eqScope },
         '3': { name: inj.exprEmbed, patterns: [{ include: inj.exprInclude }] },
-      },
-    });
+      };
+      if (d.valueString) { captures['2'] = { name: d.valueString.begin }; captures['4'] = { name: d.valueString.end }; }
+      return { match: `(${assign})\\s*(${escapeRegex(q)})([^${escapeForCharClass(q)}]*)(${escapeRegex(q)})`, captures };
+    };
     const values: TmPattern[] = [
-      valueCap('"'), valueCap("'"),
-      // Multi-line value fallback (rare): a begin/end region still embeds across lines. The
-      // capture-embed bound is single-line (a `match` can't span lines), so a value whose
-      // closing quote is on a later line keeps the previous begin/end behaviour. Tried LAST,
-      // so a single-line value always takes the bounded capture-embed above (the #5012 fix).
-      { begin: `(=)\\s*(["'])`, beginCaptures: { '1': { name: d.eqScope } }, end: `\\2`, contentName: inj.exprEmbed, patterns: [{ include: inj.exprInclude }] },
+      ...quotes.map(valueCap),
+      // Multi-line value fallback (rare): a begin/end region embeds across lines (the capture
+      // bound is single-line). A value whose closing quote is on a later line keeps this path.
+      {
+        begin: `(${assign})\\s*([${quoteCc}])`,
+        beginCaptures: d.valueString ? { '1': { name: d.eqScope }, '2': { name: d.valueString.begin } } : { '1': { name: d.eqScope } },
+        end: `\\2`,
+        ...(d.valueString ? { endCaptures: { '0': { name: d.valueString.end } } } : {}),
+        contentName: inj.exprEmbed, patterns: [{ include: inj.exprInclude }],
+      },
     ];
     const dir: TmPattern[] = [];
     for (const c of d.control) {         // v-for / v-if … — distinct scope, value embedded
       dir.push({
-        begin: `(?<=[\\s<])(${c.match})(?=[=\\s/>]|$)`,
+        begin: `${beforeAttr}(${c.match})(?=[${assignCc}\\s${ccSlash}${ccClose}]|$)`,
         beginCaptures: { '1': { name: c.scope } },
-        end: `(?=[\\s/>])`, patterns: values,
+        end: endAttr, patterns: values,
       });
     }
     for (const s of d.shorthand) {       // `:`/`@`/`#` (+ arg), value embedded
       dir.push({
-        begin: `(?<=[\\s<])(${escapeRegex(s.char)})(\\[[^\\]]*\\]|[\\w.-]*)`,
+        begin: `${beforeAttr}(${escapeRegex(s.char)})(\\[[^\\]]*\\]|[\\w.-]*)`,
         beginCaptures: { '1': { name: s.scope }, '2': { name: d.nameScope } },
-        end: `(?=[\\s/>])`, patterns: values,
+        end: endAttr, patterns: values,
       });
     }
     dir.push({                            // long-form `v-name`(`:arg`), value embedded
-      begin: `(?<=[\\s<])(${escapeRegex(d.prefix)}[\\w-]+)(?:(:)(\\[[^\\]]*\\]|[\\w.-]*))?`,
+      begin: `${beforeAttr}(${escapeRegex(d.prefix)}[\\w-]+)(?:(:)(\\[[^\\]]*\\]|[\\w.-]*))?`,
       beginCaptures: { '1': { name: d.nameScope }, '2': { name: d.eqScope }, '3': { name: d.nameScope } },
-      end: `(?=[\\s/>])`, patterns: values,
+      end: endAttr, patterns: values,
     });
     repository['directives'] = { patterns: dir };
     patterns.push({ include: '#directives' });

@@ -85,6 +85,8 @@ export const markup: MarkupConfig = {
   tagOpen: '<',
   tagClose: '>',
   closeMarker: '/',
+  attributeAssign: '=',          // `name = value`
+  attributeQuotes: ['"', "'"],   // quoted attribute values
   rawText: { tags: ['script', 'style', 'textarea', 'title'], token: 'RawText' },
   comment: { open: '<!--', close: '-->', token: 'Comment' },
   // The HTML void elements (no children, no close tag).

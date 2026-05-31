@@ -64,6 +64,8 @@ export default defineGrammar({
         prefix: 'v-',
         nameScope: 'entity.other.attribute-name.html.vue',
         eqScope: 'punctuation.separator.key-value.html.vue',
+        // The quotes around a directive value — string punctuation, matching the official.
+        valueString: { begin: 'punctuation.definition.string.begin.html.vue', end: 'punctuation.definition.string.end.html.vue' },
       },
     },
   },
