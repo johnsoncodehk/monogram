@@ -2475,11 +2475,14 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   }
 
   // Raw-text elements (script/style/…): the body is verbatim (CDATA-like), so it is a
-  // single embedded region — `<`/`>` inside it never start a tag. script→source.js,
-  // style→source.css are embedded; any other raw-text tag falls back to its token scope.
+  // single embedded region — `<`/`>` inside it never start a tag. The embedded grammar
+  // comes from the declared `embed` map (Vue SFC blocks: template→text.html.basic,
+  // script→source.js, style→source.css); else the HTML convention (script→source.js,
+  // style→source.css) or the token's own scope.
   for (const tag of m.rawText?.tags ?? []) {
     const key = `raw-${tag}`;
-    const embed = tag === 'script' ? 'source.js' : tag === 'style' ? 'source.css' : (tokScope(m.rawText!.token) ?? `source.${L}`);
+    const embed = m.rawText!.embed?.[tag]
+      ?? (tag === 'script' ? 'source.js' : tag === 'style' ? 'source.css' : (tokScope(m.rawText!.token) ?? `source.${L}`));
     repository[key] = {
       name: `meta.${tag}.${L}`,
       begin: `(${o})(${tag})\\b([^${escapeForCharClass(m.tagClose)}]*)(${c})`,

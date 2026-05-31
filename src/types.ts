@@ -56,8 +56,11 @@ export interface MarkupConfig {
   tagClose: string;    // closes a tag → return to text/raw-text (e.g. '>')
   closeMarker?: string; // marks a close tag when it directly follows tagOpen (e.g. '/' in '</'); such a tag never opens raw text
   // Elements whose content is raw (CDATA-like): after the start tag's `tagClose`,
-  // everything up to the matching `tagOpen+closeMarker+name` is one `token`.
-  rawText?: { tags: string[]; token: string };
+  // everything up to the matching `tagOpen+closeMarker+name` is one `token`. `embed`
+  // optionally maps a tag → the grammar scope to embed in its body (e.g. Vue SFC blocks:
+  // template→text.html.basic, script→source.js, style→source.css); without it the body
+  // is scoped by `token` (HTML's script/style convention → source.js/css).
+  rawText?: { tags: string[]; token: string; embed?: Record<string, string> };
   comment?: { open: string; close: string; token: string }; // e.g. `<!--` … `-->`
   // Void elements (`<br>`, `<img>`, `<meta>`, …) — no children, no close tag. The
   // lexer RETAGS an OPEN void-tag name from the identifier token to `voidNameToken`,
