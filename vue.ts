@@ -26,6 +26,33 @@ const vue = {
         style: 'source.css',           // delegated CSS (the official grammar embeds source.css too)
       },
     },
+    // Directives + {{ }} interpolation, INJECTED onto the embedded HTML's scopes (Vue
+    // syntax can't be baked into the reused HTML grammar — it injects on top). Values and
+    // interpolation embed Monogram's OWN TS grammar (source.ts). Scopes match the official.
+    inject: {
+      into: ['text.html.basic'],
+      exprEmbed: 'source.ts.embedded.html.vue',
+      exprInclude: 'source.ts',
+      interpolation: {
+        open: '{{', close: '}}',
+        beginScope: 'punctuation.definition.interpolation.begin.html.vue',
+        endScope: 'punctuation.definition.interpolation.end.html.vue',
+      },
+      directives: {
+        control: [
+          { match: 'v-for', scope: 'keyword.control.loop.vue' },
+          { match: 'v-if|v-else-if|v-else', scope: 'keyword.control.conditional.vue' },
+        ],
+        shorthand: [
+          { char: ':', scope: 'punctuation.attribute-shorthand.bind.html.vue' },
+          { char: '@', scope: 'punctuation.attribute-shorthand.event.html.vue' },
+          { char: '#', scope: 'punctuation.attribute-shorthand.slot.html.vue' },
+        ],
+        prefix: 'v-',
+        nameScope: 'entity.other.attribute-name.html.vue',
+        eqScope: 'punctuation.separator.key-value.html.vue',
+      },
+    },
   },
 };
 

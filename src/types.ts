@@ -69,6 +69,30 @@ export interface MarkupConfig {
   // Keeps the generic parser name-blind: the void set is pure data, applied in the lexer.
   voidTags?: string[];
   voidNameToken?: string;
+  // Markup-injection layer (Vue: directives + `{{ }}` interpolation). Because the
+  // `<template>` body reuses the HTML grammar WHOLESALE (it `embed`s text.html.basic),
+  // Vue syntax can't be baked into HTML — it must be INJECTED onto HTML's scopes, the
+  // same reason the official Vue grammar uses an injection grammar. gen-tm derives a
+  // separate injection grammar (injectionSelector over `into`) from this declaration.
+  inject?: MarkupInject;
+}
+
+/** A markup-injection layer (e.g. Vue directives + interpolation) injected onto a host
+ *  grammar's scopes. All scope names + delimiters are DATA, so the emitter is generic. */
+export interface MarkupInject {
+  into: string[];        // host scopes to inject onto (e.g. ['text.html.basic']) → L:<scope>
+  exprEmbed: string;     // scope wrapping an embedded expression (e.g. source.ts.embedded.html.vue)
+  exprInclude: string;   // grammar to tokenize the expression (e.g. source.ts — Monogram's own TS)
+  // `{{ … }}` interpolation in text.
+  interpolation?: { open: string; close: string; beginScope: string; endScope: string };
+  // Directives in tag-attribute position.
+  directives?: {
+    control: { match: string; scope: string }[];  // e.g. [{match:'v-for', scope:'keyword.control.loop.vue'}, …]
+    shorthand: { char: string; scope: string }[];  // e.g. [{char:':', scope:'punctuation.attribute-shorthand.bind.html.vue'}, …]
+    prefix: string;        // long-form directive prefix, e.g. 'v-'
+    nameScope: string;     // scope for a directive name / argument (entity.other.attribute-name.html.vue)
+    eqScope: string;       // scope for the `=` before a directive value (punctuation.separator.key-value.html.vue)
+  };
 }
 
 export interface PrecOperator {

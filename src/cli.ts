@@ -1,6 +1,6 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { generateTmLanguage } from './gen-tm.ts';
+import { generateTmLanguage, generateMarkupInjection } from './gen-tm.ts';
 import { generateLanguageConfig } from './gen-vscode-config.ts';
 import { generateTreeSitter } from './gen-treesitter.ts';
 import { generateMonarch } from './gen-monarch.ts';
@@ -49,6 +49,15 @@ const tm = generateTmLanguage(grammar, langName);
 const outPath = join(dirname(file), `${langName}.tmLanguage.json`);
 writeFileSync(outPath, JSON.stringify(tm, null, 2) + '\n');
 console.log(`\n→ Generated ${outPath}`);
+
+// A markup-injection grammar (Vue directives + interpolation), when the grammar declares
+// `markup.inject` — injected onto the host (HTML) scopes, like the official Vue grammar.
+const injection = generateMarkupInjection(grammar, langName);
+if (injection) {
+  const injPath = join(dirname(file), `${langName}.injection.tmLanguage.json`);
+  writeFileSync(injPath, JSON.stringify(injection, null, 2) + '\n');
+  console.log(`→ Generated ${injPath}`);
+}
 
 // Generate VS Code language configuration (editor behaviors)
 const langConfig = generateLanguageConfig(grammar);

@@ -1,0 +1,210 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "scopeName": "vue.injection",
+  "injectionSelector": "L:text.html.basic",
+  "patterns": [
+    {
+      "include": "#interpolation"
+    },
+    {
+      "include": "#directives"
+    }
+  ],
+  "repository": {
+    "interpolation": {
+      "begin": "(\\{\\{)",
+      "end": "(\\}\\})",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.interpolation.begin.html.vue"
+        }
+      },
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.interpolation.end.html.vue"
+        }
+      },
+      "contentName": "source.ts.embedded.html.vue",
+      "patterns": [
+        {
+          "include": "source.ts"
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "begin": "(?<=[\\s<])(v-for)(?=[=\\s/>]|$)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.loop.vue"
+            }
+          },
+          "end": "(?=[\\s/>])",
+          "patterns": [
+            {
+              "begin": "(=)\\s*([\"'])",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html.vue"
+                }
+              },
+              "end": "\\2",
+              "contentName": "source.ts.embedded.html.vue",
+              "patterns": [
+                {
+                  "include": "source.ts"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "begin": "(?<=[\\s<])(v-if|v-else-if|v-else)(?=[=\\s/>]|$)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.conditional.vue"
+            }
+          },
+          "end": "(?=[\\s/>])",
+          "patterns": [
+            {
+              "begin": "(=)\\s*([\"'])",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html.vue"
+                }
+              },
+              "end": "\\2",
+              "contentName": "source.ts.embedded.html.vue",
+              "patterns": [
+                {
+                  "include": "source.ts"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "begin": "(?<=[\\s<])(:)(\\[[^\\]]*\\]|[\\w.-]*)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.attribute-shorthand.bind.html.vue"
+            },
+            "2": {
+              "name": "entity.other.attribute-name.html.vue"
+            }
+          },
+          "end": "(?=[\\s/>])",
+          "patterns": [
+            {
+              "begin": "(=)\\s*([\"'])",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html.vue"
+                }
+              },
+              "end": "\\2",
+              "contentName": "source.ts.embedded.html.vue",
+              "patterns": [
+                {
+                  "include": "source.ts"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "begin": "(?<=[\\s<])(@)(\\[[^\\]]*\\]|[\\w.-]*)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.attribute-shorthand.event.html.vue"
+            },
+            "2": {
+              "name": "entity.other.attribute-name.html.vue"
+            }
+          },
+          "end": "(?=[\\s/>])",
+          "patterns": [
+            {
+              "begin": "(=)\\s*([\"'])",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html.vue"
+                }
+              },
+              "end": "\\2",
+              "contentName": "source.ts.embedded.html.vue",
+              "patterns": [
+                {
+                  "include": "source.ts"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "begin": "(?<=[\\s<])(#)(\\[[^\\]]*\\]|[\\w.-]*)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.attribute-shorthand.slot.html.vue"
+            },
+            "2": {
+              "name": "entity.other.attribute-name.html.vue"
+            }
+          },
+          "end": "(?=[\\s/>])",
+          "patterns": [
+            {
+              "begin": "(=)\\s*([\"'])",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html.vue"
+                }
+              },
+              "end": "\\2",
+              "contentName": "source.ts.embedded.html.vue",
+              "patterns": [
+                {
+                  "include": "source.ts"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "begin": "(?<=[\\s<])(v-[\\w-]+)(?:(:)(\\[[^\\]]*\\]|[\\w.-]*))?",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.other.attribute-name.html.vue"
+            },
+            "2": {
+              "name": "punctuation.separator.key-value.html.vue"
+            },
+            "3": {
+              "name": "entity.other.attribute-name.html.vue"
+            }
+          },
+          "end": "(?=[\\s/>])",
+          "patterns": [
+            {
+              "begin": "(=)\\s*([\"'])",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html.vue"
+                }
+              },
+              "end": "\\2",
+              "contentName": "source.ts.embedded.html.vue",
+              "patterns": [
+                {
+                  "include": "source.ts"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -2541,6 +2541,85 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   };
 }
 
+interface InjectionGrammar {
+  $schema: string;
+  scopeName: string;
+  injectionSelector: string;
+  patterns: ({ include: string })[];
+  repository: Record<string, TmPattern>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Markup INJECTION grammar (Vue directives + `{{ }}` interpolation). Because a Vue
+//  `<template>` reuses the HTML grammar wholesale, Vue syntax can't be baked into HTML
+//  — it must be INJECTED onto HTML's scopes (the official Vue grammar does the same).
+//  Derived from the grammar's `markup.inject` declaration: every delimiter and scope is
+//  DATA there, so this emitter is generic. Returns null when no injection is declared.
+// ─────────────────────────────────────────────────────────────────────────────
+export function generateMarkupInjection(grammar: CstGrammar, grammarName: string): InjectionGrammar | null {
+  const inj = grammar.markup?.inject;
+  if (!inj) return null;
+  const repository: Record<string, TmPattern> = {};
+  const patterns: ({ include: string })[] = [];
+
+  // `{{ … }}` → an embedded expression (Monogram's own TS via `exprInclude`).
+  if (inj.interpolation) {
+    const ip = inj.interpolation;
+    repository['interpolation'] = {
+      begin: `(${escapeRegex(ip.open)})`,
+      end: `(${escapeRegex(ip.close)})`,
+      beginCaptures: { '1': { name: ip.beginScope } },
+      endCaptures: { '1': { name: ip.endScope } },
+      contentName: inj.exprEmbed,
+      patterns: [{ include: inj.exprInclude }],
+    };
+    patterns.push({ include: '#interpolation' });
+  }
+
+  // Directives in attribute position. Each is a begin/end region (name … then value) so
+  // the expression embed applies ONLY to a directive's value, never a plain HTML attribute.
+  if (inj.directives) {
+    const d = inj.directives;
+    const value: TmPattern = {           // `= "expr"` / `= 'expr'` → embed the expression
+      begin: `(=)\\s*(["'])`,
+      beginCaptures: { '1': { name: d.eqScope } },
+      end: `\\2`,
+      contentName: inj.exprEmbed,
+      patterns: [{ include: inj.exprInclude }],
+    };
+    const dir: TmPattern[] = [];
+    for (const c of d.control) {         // v-for / v-if … — distinct scope, value embedded
+      dir.push({
+        begin: `(?<=[\\s<])(${c.match})(?=[=\\s/>]|$)`,
+        beginCaptures: { '1': { name: c.scope } },
+        end: `(?=[\\s/>])`, patterns: [value],
+      });
+    }
+    for (const s of d.shorthand) {       // `:`/`@`/`#` (+ arg), value embedded
+      dir.push({
+        begin: `(?<=[\\s<])(${escapeRegex(s.char)})(\\[[^\\]]*\\]|[\\w.-]*)`,
+        beginCaptures: { '1': { name: s.scope }, '2': { name: d.nameScope } },
+        end: `(?=[\\s/>])`, patterns: [value],
+      });
+    }
+    dir.push({                            // long-form `v-name`(`:arg`), value embedded
+      begin: `(?<=[\\s<])(${escapeRegex(d.prefix)}[\\w-]+)(?:(:)(\\[[^\\]]*\\]|[\\w.-]*))?`,
+      beginCaptures: { '1': { name: d.nameScope }, '2': { name: d.eqScope }, '3': { name: d.nameScope } },
+      end: `(?=[\\s/>])`, patterns: [value],
+    });
+    repository['directives'] = { patterns: dir };
+    patterns.push({ include: '#directives' });
+  }
+
+  return {
+    $schema: 'https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json',
+    scopeName: `${grammarName}.injection`,
+    injectionSelector: inj.into.map(s => `L:${s}`).join(', '),
+    patterns,
+    repository,
+  };
+}
+
 export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGrammar {
   // Honour the grammar's DECLARED scopeName (e.g. source.ts) and derive every scope's
   // language suffix from it (ts / js / tsx) instead of the raw grammar name
