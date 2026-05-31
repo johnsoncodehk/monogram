@@ -64,23 +64,31 @@ const emit = (rel: string, content: string) => {
   console.log(`→ Generated ${full}`);
 };
 
-// tree-sitter: grammar.js + highlight queries + external scanner scaffold.
-// Namespaced under tree-sitter/<name>/ so multiple grammars coexist (a
-// tree-sitter package keeps grammar.js + queries/ + src/ together).
-const treeSitter = generateTreeSitter(grammar, langName);
-emit(`tree-sitter/${langName}/grammar.js`, treeSitter.grammarJs);
-emit(`tree-sitter/${langName}/queries/highlights.scm`, treeSitter.highlightsScm);
-emit(`tree-sitter/${langName}/src/scanner.c`, treeSitter.scannerC);
-// A package.json so `tree-sitter generate`/`build` can load grammar.js as CommonJS
-// (the repo root is "type":"module", which would otherwise treat .js as ESM and
-// fail on `module.exports`). Minimal — just enough to build the wasm in CI.
-emit(`tree-sitter/${langName}/package.json`,
-  JSON.stringify({ name: `tree-sitter-${langName}`, version: '0.0.0', private: true }, null, 2));
+// The tree-sitter and Monarch generators target token-stream languages; they do not
+// yet understand markup-mode grammars (HTML/Vue), so skip them there rather than emit
+// a wrong artifact. The TextMate grammar (markup-aware) + language-config + CST types
+// above/below are correct for markup. (Markup support for these two is a later block.)
+if (!grammar.markup) {
+  // tree-sitter: grammar.js + highlight queries + external scanner scaffold.
+  // Namespaced under tree-sitter/<name>/ so multiple grammars coexist (a
+  // tree-sitter package keeps grammar.js + queries/ + src/ together).
+  const treeSitter = generateTreeSitter(grammar, langName);
+  emit(`tree-sitter/${langName}/grammar.js`, treeSitter.grammarJs);
+  emit(`tree-sitter/${langName}/queries/highlights.scm`, treeSitter.highlightsScm);
+  emit(`tree-sitter/${langName}/src/scanner.c`, treeSitter.scannerC);
+  // A package.json so `tree-sitter generate`/`build` can load grammar.js as CommonJS
+  // (the repo root is "type":"module", which would otherwise treat .js as ESM and
+  // fail on `module.exports`). Minimal — just enough to build the wasm in CI.
+  emit(`tree-sitter/${langName}/package.json`,
+    JSON.stringify({ name: `tree-sitter-${langName}`, version: '0.0.0', private: true }, null, 2));
 
-// Monaco Monarch tokenizer
-emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 2));
+  // Monaco Monarch tokenizer
+  emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 2));
+} else {
+  console.log('→ Skipped tree-sitter + Monarch (markup grammar — generators are token-stream only for now)');
+}
 
-// CST node types (TypeScript)
+// CST node types (TypeScript) — generic over rules, fine for markup too.
 emit(`${langName}.cst-types.ts`, generateAstTypes(grammar));
 
 function formatExpr(expr: RuleExpr): string {

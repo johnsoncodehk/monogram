@@ -2428,6 +2428,108 @@ function detectConstructorKeywords(
 
 // ── Generator ──
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Markup TextMate grammar (HTML/Vue). When a grammar declares `markup`, its
+//  highlighter is a different shape from a token-stream language's: text between
+//  tags is the (unscoped) root, and the colourable structure is tag regions,
+//  attributes, comments, and raw-text element bodies. We derive those begin/end
+//  regions from the markup config + the grammar's token/literal scopes — the same
+//  "structural role → conventional scope" derivation the token-stream path uses,
+//  just over markup roles. Nothing here hardcodes HTML: delimiters, raw-text tag
+//  names, and comment delimiters are all grammar DATA.
+// ─────────────────────────────────────────────────────────────────────────────
+function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: string): TmGrammar {
+  const m = grammar.markup!;
+  const L = grammarName;                                   // scope suffix, e.g. 'html'
+  const { scopeOverrides } = grammar;
+  const tokScope = (name?: string) => grammar.tokens.find(t => t.name === name)?.scope;
+
+  // Tag / attribute name pattern = the grammar's identifier token (widened for Unicode).
+  const identTok = grammar.tokens.find(t => t.identifier);
+  const namePat = identTok ? unicodeWidenIdentPattern(identTok.pattern) : '[a-zA-Z][\\w:.-]*';
+
+  // Punctuation scope for the tag delimiters is declared in the grammar (`<`,`>`,`/` →
+  // punctuation.definition.tag); begin/end leaves follow the TextMate convention.
+  const tagPunct = getScope(scopeOverrides, m.tagOpen) ?? 'punctuation.definition.tag';
+  const sOpen = `${tagPunct}.begin.${L}`;
+  const sClose = `${tagPunct}.end.${L}`;
+  const sName = `entity.name.tag.${L}`;
+  const sAttr = `entity.other.attribute-name.${L}`;
+  const sEq = `punctuation.separator.key-value.${L}`;
+  const sStrPunctB = `punctuation.definition.string.begin.${L}`;
+  const sStrPunctE = `punctuation.definition.string.end.${L}`;
+  const o = escapeRegex(m.tagOpen), c = escapeRegex(m.tagClose), slash = escapeRegex(m.closeMarker ?? '/');
+
+  const repository: Record<string, TmPattern> = {};
+  const top: { include: string }[] = [];
+
+  // Comment — `<!-- … -->`.
+  if (m.comment) {
+    repository['comment'] = {
+      name: tokScope(m.comment.token) ?? `comment.block.${L}`,
+      begin: escapeRegex(m.comment.open),
+      end: escapeRegex(m.comment.close),
+      captures: { '0': { name: `punctuation.definition.comment.${L}` } },
+    };
+    top.push({ include: '#comment' });
+  }
+
+  // Raw-text elements (script/style/…): the body is verbatim (CDATA-like), so it is a
+  // single embedded region — `<`/`>` inside it never start a tag. script→source.js,
+  // style→source.css are embedded; any other raw-text tag falls back to its token scope.
+  for (const tag of m.rawText?.tags ?? []) {
+    const key = `raw-${tag}`;
+    const embed = tag === 'script' ? 'source.js' : tag === 'style' ? 'source.css' : (tokScope(m.rawText!.token) ?? `source.${L}`);
+    repository[key] = {
+      name: `meta.${tag}.${L}`,
+      begin: `(${o})(${tag})\\b([^${escapeForCharClass(m.tagClose)}]*)(${c})`,
+      beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '4': { name: sClose } },
+      end: `(${o}${slash})(${tag})\\s*(${c})`,
+      endCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': { name: sClose } },
+      contentName: embed,
+      patterns: [{ include: embed }],
+    };
+    top.push({ include: `#${key}` });
+  }
+
+  // A tag — open `<div …`, close `</div>`, self-close `<br/>`, or void `<br>`, all the
+  // same shape: `<` + optional `/` + name, attributes, then optional `/` + `>`.
+  repository['tag'] = {
+    name: `meta.tag.${L}`,
+    begin: `(${o})(${slash}?)(${namePat})`,
+    beginCaptures: { '1': { name: sOpen }, '2': { name: sOpen }, '3': { name: sName } },
+    end: `(${slash}?)(${c})`,
+    endCaptures: { '1': { name: sClose }, '2': { name: sClose } },
+    patterns: [{ include: '#attribute' }],
+  };
+  top.push({ include: '#tag' });
+
+  // Attributes inside a tag: name, `=`, and quoted / unquoted values.
+  repository['attribute'] = {
+    patterns: [
+      {
+        begin: '"', end: '"', name: `string.quoted.double.${L}`,
+        beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
+      },
+      {
+        begin: "'", end: "'", name: `string.quoted.single.${L}`,
+        beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
+      },
+      { match: '=', name: sEq },
+      { match: namePat, name: sAttr },
+      { match: `[^\\s${escapeForCharClass(m.tagClose)}${escapeForCharClass(m.closeMarker ?? '/')}'"=]+`, name: `string.unquoted.${L}` },
+    ],
+  };
+
+  return {
+    $schema: 'https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json',
+    name: grammarName,
+    scopeName,
+    patterns: top,
+    repository,
+  };
+}
+
 export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGrammar {
   // Honour the grammar's DECLARED scopeName (e.g. source.ts) and derive every scope's
   // language suffix from it (ts / js / tsx) instead of the raw grammar name
@@ -2436,6 +2538,8 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // kept only for the display `name` field below.
   const grammarName = langName;
   const scopeName = grammar.scopeName ?? `source.${langName}`;
+  // Markup languages (HTML/Vue) derive a region-based grammar, not the token-stream one.
+  if (grammar.markup) return generateMarkupTm(grammar, grammarName, scopeName);
   langName = scopeName.replace(/^source\./, '');
   const repository: Record<string, TmPattern> = {};
   const topPatterns: { include: string }[] = [];

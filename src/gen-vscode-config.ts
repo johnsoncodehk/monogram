@@ -101,10 +101,15 @@ export function generateLanguageConfig(grammar: CstGrammar): LanguageConfig {
   const lineComment = lineCands.filter(c => !c.anchored).sort((a, b) => a.marker.length - b.marker.length)[0]?.marker;
   // Canonical block comment: the shortest opener (/* over the /** doc variant).
   const blockComment = blockCands.slice().sort((a, b) => a[0].length - b[0].length)[0];
-  if (lineComment || blockComment) {
+  // A markup grammar's comment is declared in its markup config (e.g. `<!--`…`-->`),
+  // not as a skip token, so take it from there when present.
+  const markupBlock: [string, string] | undefined = grammar.markup?.comment
+    ? [grammar.markup.comment.open, grammar.markup.comment.close]
+    : undefined;
+  if (lineComment || blockComment || markupBlock) {
     config.comments = {};
     if (lineComment) config.comments.lineComment = lineComment;
-    if (blockComment) config.comments.blockComment = blockComment;
+    if (blockComment ?? markupBlock) config.comments.blockComment = blockComment ?? markupBlock;
   }
 
   // ── Brackets — from `punctuation.bracket.*` scopes + template interpolation ──
