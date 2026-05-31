@@ -8,9 +8,19 @@ interface TmPattern {
   begin?: string;
   end?: string;
   while?: string;
-  captures?: Record<string, { name: string }>;
-  beginCaptures?: Record<string, { name: string }>;
-  endCaptures?: Record<string, { name: string }>;
+  captures?: Record<string, TmCapture>;
+  beginCaptures?: Record<string, TmCapture>;
+  endCaptures?: Record<string, TmCapture>;
+  patterns?: (TmPattern | { include: string })[];
+  include?: string;
+}
+
+// A capture is itself a rule (vscode-textmate maps IRawCaptures → IRawRule): besides
+// carrying a scope `name`, it may RE-TOKENIZE its span via `patterns`/`include`
+// (capture-embed). Used to scope `<script>`'s start-tag attributes (#attribute) and to
+// embed a single-line raw-text body (e.g. `<script>const x</script>` → source.js).
+interface TmCapture {
+  name?: string;
   patterns?: (TmPattern | { include: string })[];
   include?: string;
 }
