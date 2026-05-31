@@ -23,6 +23,7 @@ import onig from 'vscode-oniguruma';
 import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { scopeFamily } from './highlight-engines.ts';
+import { JSX_CORPUS } from './tsx-corpus.ts';
 
 const { INITIAL, Registry, parseRawGrammar } = vsctm;
 const require = createRequire(import.meta.url);
@@ -157,14 +158,7 @@ if (fails.length) { console.log('  FAILURES:'); for (const f of fails) console.l
 // ── 2. Drop-in agreement vs the official TypeScriptReact grammar (opt-in) ──
 const OFF = process.env.MONOGRAM_OFFICIAL_TSX
   ?? '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/typescript-basics/syntaxes/TypeScriptReact.tmLanguage.json';
-const CORPUS = [
-  `const a = <div className="x" data-id={5}>It's 100% & more!</div>;`,
-  `const b = <ul>{items.map(x => <li key={x.id}>{x.name}</li>)}</ul>;`,
-  `const c = <span>&nbsp;&amp; entities &#123;</span>;`,
-  `const d = <Foo.Bar baz={1}><Child /></Foo.Bar>;`,
-  `const e = <><Header title="Hi" />{children}<Footer /></>;`,
-  `const f = <input type="text" value={v} disabled {...rest} />;`,
-];
+const CORPUS = JSX_CORPUS;
 if (existsSync(OFF)) {
   const off = (await load('source.tsx', OFF))!;
   let exact = 0, fam = 0, graded = 0;
