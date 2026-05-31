@@ -64,24 +64,19 @@ const emit = (rel: string, content: string) => {
   console.log(`→ Generated ${full}`);
 };
 
-// The tree-sitter generator is still token-stream only; for a markup grammar it would
-// emit a wrong artifact, so skip it there (markup tree-sitter support is a later block).
-if (!grammar.markup) {
-  // tree-sitter: grammar.js + highlight queries + external scanner scaffold.
-  // Namespaced under tree-sitter/<name>/ so multiple grammars coexist (a
-  // tree-sitter package keeps grammar.js + queries/ + src/ together).
-  const treeSitter = generateTreeSitter(grammar, langName);
-  emit(`tree-sitter/${langName}/grammar.js`, treeSitter.grammarJs);
-  emit(`tree-sitter/${langName}/queries/highlights.scm`, treeSitter.highlightsScm);
-  emit(`tree-sitter/${langName}/src/scanner.c`, treeSitter.scannerC);
-  // A package.json so `tree-sitter generate`/`build` can load grammar.js as CommonJS
-  // (the repo root is "type":"module", which would otherwise treat .js as ESM and
-  // fail on `module.exports`). Minimal — just enough to build the wasm in CI.
-  emit(`tree-sitter/${langName}/package.json`,
-    JSON.stringify({ name: `tree-sitter-${langName}`, version: '0.0.0', private: true }, null, 2));
-} else {
-  console.log('→ Skipped tree-sitter (markup grammar — generator is token-stream only for now)');
-}
+// tree-sitter: grammar.js + highlight queries + (optionally) an external scanner.
+// Namespaced under tree-sitter/<name>/ so multiple grammars coexist (a tree-sitter
+// package keeps grammar.js + queries/ + src/ together). Markup grammars get a
+// purpose-built grammar with NO external tokens (v1), so no scanner.c is emitted.
+const treeSitter = generateTreeSitter(grammar, langName);
+emit(`tree-sitter/${langName}/grammar.js`, treeSitter.grammarJs);
+emit(`tree-sitter/${langName}/queries/highlights.scm`, treeSitter.highlightsScm);
+if (treeSitter.scannerC.trim()) emit(`tree-sitter/${langName}/src/scanner.c`, treeSitter.scannerC);
+// A package.json so `tree-sitter generate`/`build` can load grammar.js as CommonJS
+// (the repo root is "type":"module", which would otherwise treat .js as ESM and
+// fail on `module.exports`). Minimal — just enough to build the wasm in CI.
+emit(`tree-sitter/${langName}/package.json`,
+  JSON.stringify({ name: `tree-sitter-${langName}`, version: '0.0.0', private: true }, null, 2));
 
 // Monaco Monarch tokenizer (markup-aware: emits a tag/text/raw-text state machine).
 emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 2));

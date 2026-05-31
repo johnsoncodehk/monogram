@@ -68,3 +68,10 @@ jobs:
           npx tree-sitter build --wasm .
       - name: Tree-sitter accuracy gate (≥ floor, must beat official)
         run: node test/treesitter-bench.ts
+      - name: Build + gate the derived HTML tree-sitter grammar (v1, vs parse5)
+        run: |
+          cd tree-sitter/html
+          npx tree-sitter generate
+          npx tree-sitter build --wasm .
+          cd ../..
+          node test/html-treesitter.ts
