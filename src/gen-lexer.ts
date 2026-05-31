@@ -70,11 +70,13 @@ export function createLexer(grammar: CstGrammar) {
   // tokens the lexer itself emits, so it needs no parser feedback.
   const markup = grammar.markup;
   const rawTextTagSet = new Set((markup?.rawText?.tags ?? []).map(t => t.toLowerCase()));
+  const voidTagSet = new Set((markup?.voidTags ?? []).map(t => t.toLowerCase()));
   // Markup content tokens are emitted by the state machine, not matched by a regex in
   // the normal loop (like the template token) — else a greedy text pattern would hijack
-  // tag-mode tokenizing. Skipped in the matcher loop below.
+  // tag-mode tokenizing. The void-name token is a RETAG target (never matched fresh),
+  // skipped here too so its placeholder pattern can't shadow the identifier token.
   const markupTokenNames = new Set<string>(
-    [markup?.textToken, markup?.rawText?.token, markup?.comment?.token].filter(Boolean) as string[],
+    [markup?.textToken, markup?.rawText?.token, markup?.comment?.token, markup?.voidNameToken].filter(Boolean) as string[],
   );
 
   // Scan from inside a template span to its next boundary: an interpolation hole
@@ -305,7 +307,13 @@ export function createLexer(grammar: CstGrammar) {
             inTagName = false; sawCloseMarker = false;
           } else if (inTagName) {
             if (markup.closeMarker && last.text === markup.closeMarker) sawCloseMarker = true;
-            else { curTag = last.text; inTagName = false; }
+            else {
+              curTag = last.text; inTagName = false;
+              // An OPEN void-element name → retag so the parser's void branch matches it.
+              if (markup.voidNameToken && !sawCloseMarker && voidTagSet.has(curTag.toLowerCase())) {
+                last.type = markup.voidNameToken;
+              }
+            }
           }
         }
       }

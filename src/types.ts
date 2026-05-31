@@ -59,6 +59,13 @@ export interface MarkupConfig {
   // everything up to the matching `tagOpen+closeMarker+name` is one `token`.
   rawText?: { tags: string[]; token: string };
   comment?: { open: string; close: string; token: string }; // e.g. `<!--` … `-->`
+  // Void elements (`<br>`, `<img>`, `<meta>`, …) — no children, no close tag. The
+  // lexer RETAGS an OPEN void-tag name from the identifier token to `voidNameToken`,
+  // so the parser's void-element branch matches it by token type and never tries to
+  // parse children / a close tag (which would otherwise swallow following siblings).
+  // Keeps the generic parser name-blind: the void set is pure data, applied in the lexer.
+  voidTags?: string[];
+  voidNameToken?: string;
 }
 
 export interface PrecOperator {

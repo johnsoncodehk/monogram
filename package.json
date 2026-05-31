@@ -9,6 +9,8 @@
     "conformance:js": "node test/js-conformance.ts",
     "conformance:tsx": "node test/tsx-conformance.ts",
     "conformance:jsx": "node test/jsx-conformance.ts",
+    "conformance:html": "node test/html-conformance.ts",
+    "spike:html-lexer": "node test/html-lexer-spike.ts",
     "bench": "node test/highlight-bench.ts",
     "bench:js": "node test/js-highlight-bench.ts",
     "bench:tsx": "node test/tsx-highlight.ts",
@@ -20,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^25.9.1",
     "@vscode/tree-sitter-wasm": "^0.3.1",
+    "parse5": "^8.0.1",
     "tree-sitter-cli": "^0.26.9",
     "typescript": "^5.6.0",
     "vscode-oniguruma": "^2.0.1",
