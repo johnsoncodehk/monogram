@@ -176,19 +176,13 @@ const Regex    = token(/\/…\//, {
 
 ## Adding a language
 
-This isn't hypothetical: **JavaScript is a second language on the same engine.** Since TypeScript = JavaScript + a type layer, [`javascript.ts`](javascript.ts) is the standalone ECMAScript base that owns the shared vocabulary (tokens, operator precedence, base scopes, reserved-word guards), and [`typescript.ts`](typescript.ts) *imports* it and adds the type layer — the dependency runs subset → superset only. JavaScript parses real-world JS ([`test/js-conformance.ts`](test/js-conformance.ts): 61/61 valid snippets accepted, TS-only syntax rejected, ground truth `tsc` in JS mode) and its derived highlighter is graded by the *same* neutral oracle ([`test/js-highlight-bench.ts`](test/js-highlight-bench.ts): **92.6%** token-family accuracy, ahead of the official JavaScript TextMate grammar's 90.7%). It doesn't yet have TypeScript's full conformance-corpus depth, but it proves the claim — a second language is *one grammar file on an unchanged engine*.
+A new language is **one grammar file** on the unchanged engine:
 
-A **dialect** is cheaper still. [`typescriptreact.ts`](typescriptreact.ts) (`.tsx`) and [`javascriptreact.ts`](javascriptreact.ts) (`.jsx`) are *three lines each*: they take the proven TypeScript / JavaScript grammar and apply one shared JSX layer ([`jsx.ts`](jsx.ts)) — which prepends a `JSXElement` expression and drops the `<T>` cast — reusing the base's rules **verbatim, by name**, without re-declaring them. Same engine, same conformance discipline ([`test/tsx-conformance.ts`](test/tsx-conformance.ts), [`test/jsx-conformance.ts`](test/jsx-conformance.ts)), scope names matching VS Code's official `source.tsx` / `source.js.jsx`. (Vue is the same move for a markup base — a dialect of [`html.ts`](html.ts).)
+1. **Write the grammar** with the combinator API ([`src/api.ts`](src/api.ts)) — tokens, operator precedence, rules. Everything language-specific lives here.
+2. **Prove it as a parser** against the language's own official test suite, measured **bidirectionally** (accept what the reference accepts, reject what it rejects).
+3. **Drop in the official TextMate grammar** as the baseline, so highlighter coverage is measured against what you're replacing, not asserted.
 
-A new language is **one grammar file, proven the way TypeScript is** — by its own parser conformance, not by eyeballing colors:
-
-1. **Write the grammar** with the combinator API ([`src/api.ts`](src/api.ts)). All language-specifics live here; the engine stays untouched.
-2. **Prove it as a parser** against the language's *own* official test suite, measured **bidirectionally** (accept what the reference accepts, reject what it rejects). A grammar is "ready" when valid-code coverage is 100% and bidirectional agreement is high — that run is the correctness proof.
-3. **Bring the reference highlighter as the baseline.** Drop in the language's existing official TextMate grammar so coverage is *measured against the thing you're replacing*, not asserted.
-
-The highlighter, lexer, and CST types fall out of step 1 automatically (the tree-sitter / Monarch generators give you a scaffold to finish); steps 2–3 are how the result earns trust. A new-language PR is reviewed on exactly two numbers: **parser conformance** and **highlighter coverage vs the official grammar**.
-
-> The conformance and highlighter *harnesses* are currently TypeScript-specific — they call `tsc`'s `parseDiagnostics` and read VS Code's bundled TS grammar. A contributor adapts those harness scripts to their reference compiler's diagnostic API; the engine and generators themselves are reused unchanged.
+The lexer, CST types, and all three highlighters fall out of step 1; a *dialect* (`.tsx`/`.jsx` via [`jsx.ts`](jsx.ts), or Vue on [`html.ts`](html.ts)) reuses a base grammar's rules by name in a few lines. The conformance/highlighter harnesses are currently TypeScript-specific (they call `tsc` and read VS Code's grammar) — point them at your own reference compiler.
 
 ## Embedded languages
 
