@@ -1,13 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  html-treesitter.ts — gates the DERIVED tree-sitter HTML grammar (v1). Loads the
-//  wasm built from tree-sitter/html/grammar.js, parses well-formed HTML, and checks
-//    1. NO ERROR nodes (the GLR parser accepts it), and
+//  html-treesitter.ts — gates the DERIVED tree-sitter HTML grammar. Loads the wasm built
+//  from tree-sitter/html/grammar.js (+ src/scanner.c), parses well-formed HTML, and checks
+//    1. NO ERROR nodes (the GLR parser accepts it),
 //    2. TREE-EQUIVALENCE — the element tree (tag names + nesting) matches parse5,
-//  the same oracle html-conformance.ts uses for the recursive-descent parser.
-//
-//  v1 scope: raw-text element bodies (<script>/<style>) are ordinary text, so a literal
-//  `<` inside them isn't supported yet (an external scanner is the next increment) —
-//  see `unsupported`. Build the wasm first:
+//       the same oracle html-conformance.ts uses for the recursive-descent parser, and
+//    3. the external scanner engages — raw-text bodies (<script>/<style>) with an inner
+//       `<`/`>` become a `raw_text` node, not markup.
+//  Build the wasm first:
 //    cd tree-sitter/html && npx tree-sitter generate && npx tree-sitter build --wasm .
 //
 //  Run: node test/html-treesitter.ts
@@ -85,11 +84,21 @@ const corpus: string[] = [
   '<style>.a { color: red; }</style>',                // raw text w/o inner `<`
   '<div><!-- a comment --><p>x</p></div>',
   '<custom-element data-x="1"><slot-content>hi</slot-content></custom-element>',
+  // raw-text bodies with a literal `<` / `>` — handled by the external scanner
+  '<script>var a = 1 < 2 && b > 3;</script>',
+  '<style>a > b { color: red }</style>',
+  '<div><script>if (a < b) { x() }</script><p>after</p></div>',
+  '<script></script>',                                // empty raw-text body
 ];
 
-// Deferred to the external-scanner increment (documented, not gated).
+// Now handled by the external scanner — was the v1 gap.
+const rawTextCases = [
+  '<script>1 < 2</script>',
+  '<style>a>b{}</style>',
+];
+
+// Documented B-lite gaps still out of scope (not the external scanner).
 const unsupported: [string, string][] = [
-  ['raw-text body with a literal `<`', '<script>if (a < b) {}</script>'],
   ['optional close tags / DOCTYPE / implicit tbody', '<ul><li>a<li>b</ul>'],
 ];
 
@@ -105,15 +114,28 @@ for (const html of corpus) {
   else treeFails.push(`${html}\n      tree-sitter: ${a}\n      parse5:      ${b}`);
 }
 
-console.log(`── HTML tree-sitter (v1) vs parse5 (${corpus.length} well-formed fragments) ──`);
+console.log(`── HTML tree-sitter vs parse5 (${corpus.length} well-formed fragments) ──`);
 console.log(`  parsed (no ERROR) : ${parsed}/${corpus.length}`);
 console.log(`  tree-match        : ${treeMatch}/${corpus.length}  (element names + nesting === parse5)`);
 if (errFails.length) { console.log('\n  PARSE ERRORS:'); for (const f of errFails) console.log('    - ' + f); }
 if (treeFails.length) { console.log('\n  TREE MISMATCHES:'); for (const f of treeFails) console.log('    - ' + f); }
-console.log(`\n  v1 deferred (external scanner — documented, not gated): ${unsupported.map(u => u[0]).join(', ')}`);
+console.log(`  out of scope (not the scanner): ${unsupported.map(u => u[0]).join(', ')}`);
 
-if (parsed < corpus.length || treeMatch < corpus.length) {
+// The external scanner must actually engage: a raw-text body with an inner `<`/`>` is a
+// `raw_text` node (not an ERROR, not a parsed-out tag).
+let rawOk = 0;
+const rawFails: string[] = [];
+const hasRawText = (n: any): boolean => n.type === 'raw_text' || n.namedChildren.some(hasRawText);
+for (const html of rawTextCases) {
+  const tree = parser.parse(html);
+  if (!hasError(tree.rootNode) && hasRawText(tree.rootNode)) rawOk++;
+  else rawFails.push(`${html} → ${tree.rootNode.toString()}`);
+}
+console.log(`  raw-text scanner  : ${rawOk}/${rawTextCases.length}  (inner < / > captured as raw_text, not markup)`);
+if (rawFails.length) { console.log('\n  RAW-TEXT FAILURES:'); for (const f of rawFails) console.log('    - ' + f); }
+
+if (parsed < corpus.length || treeMatch < corpus.length || rawOk < rawTextCases.length) {
   console.log('\n✗ HTML tree-sitter FAILED');
   process.exit(1);
 }
-console.log('\n✓ HTML tree-sitter: parses every well-formed fragment with the same element tree as parse5');
+console.log('\n✓ HTML tree-sitter: parses every well-formed fragment with the same element tree as parse5 (raw-text via external scanner)');
