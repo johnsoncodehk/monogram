@@ -64,10 +64,8 @@ const emit = (rel: string, content: string) => {
   console.log(`→ Generated ${full}`);
 };
 
-// The tree-sitter and Monarch generators target token-stream languages; they do not
-// yet understand markup-mode grammars (HTML/Vue), so skip them there rather than emit
-// a wrong artifact. The TextMate grammar (markup-aware) + language-config + CST types
-// above/below are correct for markup. (Markup support for these two is a later block.)
+// The tree-sitter generator is still token-stream only; for a markup grammar it would
+// emit a wrong artifact, so skip it there (markup tree-sitter support is a later block).
 if (!grammar.markup) {
   // tree-sitter: grammar.js + highlight queries + external scanner scaffold.
   // Namespaced under tree-sitter/<name>/ so multiple grammars coexist (a
@@ -81,12 +79,12 @@ if (!grammar.markup) {
   // fail on `module.exports`). Minimal — just enough to build the wasm in CI.
   emit(`tree-sitter/${langName}/package.json`,
     JSON.stringify({ name: `tree-sitter-${langName}`, version: '0.0.0', private: true }, null, 2));
-
-  // Monaco Monarch tokenizer
-  emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 2));
 } else {
-  console.log('→ Skipped tree-sitter + Monarch (markup grammar — generators are token-stream only for now)');
+  console.log('→ Skipped tree-sitter (markup grammar — generator is token-stream only for now)');
 }
+
+// Monaco Monarch tokenizer (markup-aware: emits a tag/text/raw-text state machine).
+emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 2));
 
 // CST node types (TypeScript) — generic over rules, fine for markup too.
 emit(`${langName}.cst-types.ts`, generateAstTypes(grammar));

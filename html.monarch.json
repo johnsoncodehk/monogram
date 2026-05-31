@@ -1,0 +1,380 @@
+{
+  "defaultToken": "",
+  "tokenPostfix": ".html",
+  "ignoreCase": true,
+  "brackets": [],
+  "tokenizer": {
+    "root": [
+      [
+        "<!--",
+        {
+          "token": "comment",
+          "next": "@comment"
+        }
+      ],
+      [
+        "</",
+        {
+          "token": "delimiter",
+          "next": "@closetag"
+        }
+      ],
+      [
+        "<",
+        {
+          "token": "delimiter",
+          "next": "@opentag"
+        }
+      ],
+      [
+        "[^<]+",
+        ""
+      ]
+    ],
+    "opentag": [
+      [
+        "script\\b",
+        {
+          "token": "tag",
+          "switchTo": "@rawtag_script"
+        }
+      ],
+      [
+        "style\\b",
+        {
+          "token": "tag",
+          "switchTo": "@rawtag_style"
+        }
+      ],
+      [
+        "textarea\\b",
+        {
+          "token": "tag",
+          "switchTo": "@rawtag_textarea"
+        }
+      ],
+      [
+        "title\\b",
+        {
+          "token": "tag",
+          "switchTo": "@rawtag_title"
+        }
+      ],
+      [
+        "[a-zA-Z][\\w:.-]*",
+        {
+          "token": "tag",
+          "switchTo": "@tag"
+        }
+      ],
+      [
+        "",
+        "",
+        "@pop"
+      ]
+    ],
+    "closetag": [
+      [
+        "[a-zA-Z][\\w:.-]*",
+        "tag"
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter",
+          "next": "@pop"
+        }
+      ],
+      [
+        "\\s+",
+        ""
+      ]
+    ],
+    "tag": [
+      [
+        "[a-zA-Z][\\w:.-]*",
+        "attribute.name"
+      ],
+      [
+        "=",
+        "delimiter"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@dq"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@sq"
+        }
+      ],
+      [
+        "\\s+",
+        ""
+      ],
+      [
+        "/?>",
+        {
+          "token": "delimiter",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "dq": [
+      [
+        "[^\"]+",
+        "string"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "sq": [
+      [
+        "[^']+",
+        "string"
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "comment": [
+      [
+        "-->",
+        {
+          "token": "comment",
+          "next": "@pop"
+        }
+      ],
+      [
+        "[^-]+",
+        "comment"
+      ],
+      [
+        "[\\s\\S]",
+        "comment"
+      ]
+    ],
+    "rawtag_script": [
+      [
+        "[a-zA-Z][\\w:.-]*",
+        "attribute.name"
+      ],
+      [
+        "=",
+        "delimiter"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@dq"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@sq"
+        }
+      ],
+      [
+        "\\s+",
+        ""
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter",
+          "switchTo": "@rawbody_script"
+        }
+      ]
+    ],
+    "rawbody_script": [
+      [
+        "</script\\s*>",
+        {
+          "token": "tag",
+          "next": "@popall"
+        }
+      ],
+      [
+        "[^<]+",
+        "source.js"
+      ],
+      [
+        "<",
+        "source.js"
+      ]
+    ],
+    "rawtag_style": [
+      [
+        "[a-zA-Z][\\w:.-]*",
+        "attribute.name"
+      ],
+      [
+        "=",
+        "delimiter"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@dq"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@sq"
+        }
+      ],
+      [
+        "\\s+",
+        ""
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter",
+          "switchTo": "@rawbody_style"
+        }
+      ]
+    ],
+    "rawbody_style": [
+      [
+        "</style\\s*>",
+        {
+          "token": "tag",
+          "next": "@popall"
+        }
+      ],
+      [
+        "[^<]+",
+        "source.css"
+      ],
+      [
+        "<",
+        "source.css"
+      ]
+    ],
+    "rawtag_textarea": [
+      [
+        "[a-zA-Z][\\w:.-]*",
+        "attribute.name"
+      ],
+      [
+        "=",
+        "delimiter"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@dq"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@sq"
+        }
+      ],
+      [
+        "\\s+",
+        ""
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter",
+          "switchTo": "@rawbody_textarea"
+        }
+      ]
+    ],
+    "rawbody_textarea": [
+      [
+        "</textarea\\s*>",
+        {
+          "token": "tag",
+          "next": "@popall"
+        }
+      ],
+      [
+        "[^<]+",
+        "source"
+      ],
+      [
+        "<",
+        "source"
+      ]
+    ],
+    "rawtag_title": [
+      [
+        "[a-zA-Z][\\w:.-]*",
+        "attribute.name"
+      ],
+      [
+        "=",
+        "delimiter"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@dq"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@sq"
+        }
+      ],
+      [
+        "\\s+",
+        ""
+      ],
+      [
+        ">",
+        {
+          "token": "delimiter",
+          "switchTo": "@rawbody_title"
+        }
+      ]
+    ],
+    "rawbody_title": [
+      [
+        "</title\\s*>",
+        {
+          "token": "tag",
+          "next": "@popall"
+        }
+      ],
+      [
+        "[^<]+",
+        "source"
+      ],
+      [
+        "<",
+        "source"
+      ]
+    ]
+  }
+}

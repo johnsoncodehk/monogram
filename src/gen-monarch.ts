@@ -308,9 +308,86 @@ function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
   return found ? { confirmChars: [...confirm] } : null;
 }
 
+// ── Markup tokenizer (HTML/Vue) ──
+// A markup grammar's Monarch tokenizer is a state machine over tags/text/raw-text,
+// derived from the markup config — NOT the token-stream construction below. Each rule
+// emits a single token (the type models no multi-capture action), so open/close tags
+// are split into states to keep the `<`/`>` delimiter distinct from the tag name.
+function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
+  const m = grammar.markup!;
+  const idTok = grammar.tokens.find(t => t.identifier);
+  const name = idTok?.pattern ?? '[a-zA-Z][\\w:.-]*';
+  const o = escapeRegex(m.tagOpen), c = escapeRegex(m.tagClose), sl = escapeRegex(m.closeMarker ?? '/');
+  const oc = m.tagOpen;                                   // raw open char for char classes (`<` is class-safe)
+  // Attribute rules shared by the normal tag state and each raw-text start tag.
+  const attrRules: MonarchRule[] = [
+    [name, 'attribute.name'],
+    ['=', 'delimiter'],
+    ['"', { token: 'string', next: '@dq' }],
+    ["'", { token: 'string', next: '@sq' }],
+    ['\\s+', ''],
+  ];
+
+  const tokenizer: Record<string, MonarchRule[]> = {
+    root: [
+      ...(m.comment ? [[escapeRegex(m.comment.open), { token: 'comment', next: '@comment' }] as MonarchRule] : []),
+      [`${o}${sl}`, { token: 'delimiter', next: '@closetag' }],
+      [`${o}`, { token: 'delimiter', next: '@opentag' }],
+      [`[^${oc}]+`, ''],                                   // text content (the uncoloured root)
+    ],
+    // Just consumed `<` — the tag name decides the next state. Raw-text elements switch
+    // to a body state where `<`/`>` are content, not markup.
+    opentag: [
+      ...(m.rawText?.tags ?? []).map(tag => [`${tag}\\b`, { token: 'tag', switchTo: `@rawtag_${tag}` }] as MonarchRule),
+      [name, { token: 'tag', switchTo: '@tag' }],
+      ['', '', '@pop'],
+    ],
+    closetag: [
+      [name, 'tag'],
+      [`${c}`, { token: 'delimiter', next: '@pop' }],
+      ['\\s+', ''],
+    ],
+    tag: [
+      ...attrRules,
+      [`${sl}?${c}`, { token: 'delimiter', next: '@pop' }],
+    ],
+    dq: [['[^"]+', 'string'], ['"', { token: 'string', next: '@pop' }]],
+    sq: [["[^']+", 'string'], ["'", { token: 'string', next: '@pop' }]],
+  };
+  if (m.comment) {
+    const close = escapeRegex(m.comment.close);
+    tokenizer.comment = [
+      [close, { token: 'comment', next: '@pop' }],
+      [`[^${escapeRegex(m.comment.close[0])}]+`, 'comment'],
+      ['[\\s\\S]', 'comment'],
+    ];
+  }
+  for (const tag of m.rawText?.tags ?? []) {
+    const embed = tag === 'script' ? 'source.js' : tag === 'style' ? 'source.css' : 'source';
+    tokenizer[`rawtag_${tag}`] = [
+      ...attrRules,
+      [`${c}`, { token: 'delimiter', switchTo: `@rawbody_${tag}` }],
+    ];
+    tokenizer[`rawbody_${tag}`] = [
+      [`${o}${sl}${tag}\\s*${c}`, { token: 'tag', next: '@popall' }],   // close tag → back to root
+      [`[^${oc}]+`, embed],
+      [`${o}`, embed],                                                   // a stray `<` in the body is content
+    ];
+  }
+
+  return {
+    defaultToken: '',
+    tokenPostfix: `.${(grammar as { name?: string }).name ?? 'markup'}`,
+    ignoreCase: true,            // HTML tag/attribute names are case-insensitive
+    brackets: [],
+    tokenizer,
+  };
+}
+
 // ── Main generator ──
 
 export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
+  if (grammar.markup) return generateMarkupMonarch(grammar);
   const { scopeOverrides } = grammar;
 
   // ── Identifier token: prefer the declared `identifier` hint (the lexer's own
