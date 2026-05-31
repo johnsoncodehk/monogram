@@ -3414,6 +3414,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     topPatterns.push({ include: `#${key}` });
   }
 
+  // ── 4b. const-binding names → variable.other.constant ──
+  // A declaration keyword scoped `*.const` (the immutable binding form) names
+  // CONSTANTS — the TextMate convention, vs `let`/`var` → variable.other.readwrite.
+  // Keyed on the scope subtype, not the word "const", so any grammar that scopes its
+  // immutable-declaration keyword `*.const` gets it. The binding-terminator lookahead
+  // `(?=\s*[=:;,]|$)` confines this to a SIMPLE binding name (`const x`, `const x: T`,
+  // `const x =`): it never mis-scopes `const enum E` (the token after `const` is an
+  // identifier, not a terminator) and leaves destructuring (`const {a}` / `const [a]`,
+  // which don't start with an identifier) to the normal binding handling.
+  for (const [lit, scopes] of scopeOverrides) {
+    if (!scopes.some(s => /(^|\.)const$/.test(s))) continue;
+    // The keyword keeps its OWN (non-marker) scope — `storage.type`, so `const` colors
+    // identically to `let`/`var`; only the BOUND NAME becomes a constant. The `*.const`
+    // entry is just the marker that flips this on.
+    const kwScope = scopes.find(s => !/(^|\.)const$/.test(s)) ?? scopes[0];
+    const key = `${lit}-binding`;
+    if (repository[key]) continue;
+    repository[key] = {
+      match: `\\b(${escapeRegex(lit)})\\s+(${identPattern})(?=\\s*[=:;,]|\\s*$)`,
+      captures: {
+        '1': { name: `${kwScope}.${langName}` },
+        '2': { name: `variable.other.constant.${langName}` },
+      },
+    };
+    topPatterns.push({ include: `#${key}` });
+  }
+
   // ── 4a. Import/export namespace `*` → constant.language.import-export-all ──
   // A `*` directly after an import/export keyword (`import * as ns`, `export *`,
   // `export * as ns`) names the whole module, not multiplication. Both the trigger
@@ -3867,6 +3894,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // group and the per-word contextual-operator guards alike).
     const operatorExprIncludeKeys: string[] = [];
     for (const [scope, kws] of keywordGroups) {
+      // `*.const` is a binding MARKER subtype (drives the const-binding rule), not a
+      // keyword color — the keyword is already emitted by its primary scope group, so
+      // skip a dead duplicate pattern here.
+      if (/(^|\.)const$/.test(scope)) continue;
       const key = `scope-${scope.replace(/\./g, '-')}`;
       const isOperatorExpr = scope.startsWith('keyword.operator.expression');
       // A loop-connector keyword that the grammar proves is also a valid identifier
@@ -4180,7 +4211,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (key.endsWith('-expression') && key !== 'ternary-expression' && !key.startsWith('scope-')) return 1.9;
     if (key === 'arrow-function-params') return 1.95;
     if (key === 'ternary-expression') return 1.97;
-    if (key.endsWith('-declaration') || key.endsWith('-definition') || key.endsWith('-typekw')) return 2;
+    if (key.endsWith('-declaration') || key.endsWith('-definition') || key.endsWith('-typekw') || key.endsWith('-binding')) return 2;
     // import/export namespace `*` must beat both the import/export keyword group
     // (which would consume the keyword alone) and the arithmetic-operator match.
     if (key === 'import-export-all') return 2;

@@ -503,6 +503,7 @@ export default defineGrammar({
     'keyword.control.export': jsScopes['keyword.control.export'],
     'keyword.control.from': jsScopes['keyword.control.from'],
     'storage.type': jsScopes['storage.type'],
+    'storage.type.const': jsScopes['storage.type.const'],
     'storage.type.function': jsScopes['storage.type.function'],
     'storage.type.class': jsScopes['storage.type.class'],
     'storage.type.interface': ['interface'],

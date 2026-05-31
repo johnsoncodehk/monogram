@@ -438,6 +438,10 @@ export const jsScopes = {
   'keyword.control.export': ['export'],
   'keyword.control.from': ['from'],
   'storage.type': ['let', 'const', 'var', 'using'],
+  // `const` also carries this marker subtype — a no-op for the keyword's own color
+  // (`storage.type` wins, being declared first), but it tells the highlighter generator
+  // that a `const` binding names a CONSTANT. See gen-tm's const-binding rule.
+  'storage.type.const': ['const'],
   'storage.type.function': ['function', 'constructor'],
   'storage.type.class': ['class'],
   'storage.modifier': ['static', 'async', 'accessor'],

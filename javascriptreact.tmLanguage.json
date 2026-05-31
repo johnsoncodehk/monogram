@@ -67,6 +67,9 @@
       "include": "#extends-definition"
     },
     {
+      "include": "#const-binding"
+    },
+    {
       "include": "#import-export-all"
     },
     {
@@ -1539,6 +1542,17 @@
         },
         "2": {
           "name": "entity.other.inherited-class.js.jsx"
+        }
+      }
+    },
+    "const-binding": {
+      "match": "\\b(const)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[=:;,]|\\s*$)",
+      "captures": {
+        "1": {
+          "name": "storage.type.js.jsx"
+        },
+        "2": {
+          "name": "variable.other.constant.js.jsx"
         }
       }
     },
