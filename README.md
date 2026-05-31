@@ -35,7 +35,7 @@ Take `typeof x < y`. A regex highlighter has to guess whether `<` opens a generi
 
 The payoff, against a neutral `tsc` oracle: the *derived* highlighter is **more correct than the official hand-written grammar** — bug-for-bug, across every language (the ledger is [below](#on-every-languages-own-bug-ledger)), and on the second derived engine too: derived **tree-sitter scores 95.9%** token-family accuracy vs the official tree-sitter's 92.7% (a real GLR parser from the same grammar; CI-gated, `npm run gate:treesitter`).
 
-You can't out-regex a parser-derived grammar — its correctness comes from a dimension hand-written grammars never touch. That's **one ~1,050-line grammar** (JS + TS) replacing the official **3331-line** hand-written TextMate, on a language-agnostic engine, and **more correct on the official grammar's own bug ledger**: [`test/test-issues.ts`](test/test-issues.ts) replays **50** documented bugs (318 checks pass, 21 independently re-verified vs `tsc`, all still open upstream). A few scope differences are [deliberate](#known-differences-from-the-official-highlighter); the [upstream issue ledger](docs/upstream-issues.md) gives an honest verdict on the ones we don't.
+You can't out-regex a parser-derived grammar — its correctness comes from a dimension hand-written grammars never touch. Concretely, **one ~1,050-line grammar** (JS + TS) replaces the official **3331-line** hand-written TextMate, and [`test/test-issues.ts`](test/test-issues.ts) gates the derived output against **50** of its documented bugs (318 checks, 21 independently re-verified vs `tsc`, all still open upstream). A few scope differences are [deliberate](#known-differences-from-the-official-highlighter); the [upstream issue ledger](docs/upstream-issues.md) judges the rest.
 
 ### It makes a neglected layer worth touching again
 
@@ -267,4 +267,4 @@ Every highlighter target is produced by the *same* structural scope-inference, r
 | ungrammar | AST types | — | — |
 | **Monogram** | **CST, conformance-proven** | **derived from the parser grammar** | **yes** |
 
-These tools all have real parsers; what none of them do is *derive the highlighter from the parser's own grammar as a single source* — which is the one thing Monogram is for. There are now **two languages on that single engine** — JavaScript and TypeScript, sharing one ECMAScript core (subset → superset) rather than two hand-maintained grammars. (Conformance and coverage numbers in [The idea](#the-idea).)
+Every tool here has a real parser; none *derives the highlighter from the parser's own grammar as a single source* — the one thing Monogram is for.
