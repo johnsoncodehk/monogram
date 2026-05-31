@@ -94,10 +94,19 @@
       "include": "#extends-definition"
     },
     {
+      "include": "#let-destructure"
+    },
+    {
       "include": "#const-binding"
     },
     {
       "include": "#const-destructure"
+    },
+    {
+      "include": "#var-destructure"
+    },
+    {
+      "include": "#using-destructure"
     },
     {
       "include": "#import-export-all"
@@ -2022,18 +2031,7 @@
         }
       }
     },
-    "const-binding": {
-      "match": "\\b(const)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[=:;,]|\\s*$)",
-      "captures": {
-        "1": {
-          "name": "storage.type.ts"
-        },
-        "2": {
-          "name": "variable.other.constant.ts"
-        }
-      }
-    },
-    "const-bind-default": {
+    "bind-default": {
       "begin": "(=)",
       "beginCaptures": {
         "1": {
@@ -2065,7 +2063,7 @@
           }
         },
         {
-          "include": "#const-bind-default"
+          "include": "#bind-default"
         },
         {
           "include": "#const-bind-object"
@@ -2090,7 +2088,7 @@
           "name": "keyword.operator.rest.ts"
         },
         {
-          "include": "#const-bind-default"
+          "include": "#bind-default"
         },
         {
           "include": "#const-bind-object"
@@ -2146,6 +2144,133 @@
         }
       ]
     },
+    "mut-bind-prop": {
+      "patterns": [
+        {
+          "match": "(\\.\\.\\.)",
+          "name": "keyword.operator.rest.ts"
+        },
+        {
+          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\s*)(:)",
+          "captures": {
+            "1": {
+              "name": "variable.object.property.ts"
+            },
+            "3": {
+              "name": "punctuation.destructuring.ts"
+            }
+          }
+        },
+        {
+          "include": "#bind-default"
+        },
+        {
+          "include": "#mut-bind-object"
+        },
+        {
+          "include": "#mut-bind-array"
+        },
+        {
+          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.ts"
+        }
+      ]
+    },
+    "mut-bind-elem": {
+      "patterns": [
+        {
+          "match": "(\\.\\.\\.)",
+          "name": "keyword.operator.rest.ts"
+        },
+        {
+          "include": "#bind-default"
+        },
+        {
+          "include": "#mut-bind-object"
+        },
+        {
+          "include": "#mut-bind-array"
+        },
+        {
+          "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.ts"
+        }
+      ]
+    },
+    "mut-bind-object": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.binding-pattern.object.ts"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.binding-pattern.object.ts"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#mut-bind-prop"
+        }
+      ]
+    },
+    "mut-bind-array": {
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.binding-pattern.array.ts"
+        }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.binding-pattern.array.ts"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#mut-bind-elem"
+        }
+      ]
+    },
+    "let-destructure": {
+      "begin": "\\b(let)\\s+(?=[{\\[])",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.ts"
+        }
+      },
+      "end": "(?<=[}\\]])",
+      "patterns": [
+        {
+          "include": "#mut-bind-object"
+        },
+        {
+          "include": "#mut-bind-array"
+        }
+      ]
+    },
+    "const-binding": {
+      "match": "\\b(const)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[=:;,]|\\s*$)",
+      "captures": {
+        "1": {
+          "name": "storage.type.ts"
+        },
+        "2": {
+          "name": "variable.other.constant.ts"
+        }
+      }
+    },
     "const-destructure": {
       "begin": "\\b(const)\\s+(?=[{\\[])",
       "beginCaptures": {
@@ -2160,6 +2285,40 @@
         },
         {
           "include": "#const-bind-array"
+        }
+      ]
+    },
+    "var-destructure": {
+      "begin": "\\b(var)\\s+(?=[{\\[])",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.ts"
+        }
+      },
+      "end": "(?<=[}\\]])",
+      "patterns": [
+        {
+          "include": "#mut-bind-object"
+        },
+        {
+          "include": "#mut-bind-array"
+        }
+      ]
+    },
+    "using-destructure": {
+      "begin": "\\b(using)\\s+(?=[{\\[])",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.ts"
+        }
+      },
+      "end": "(?<=[}\\]])",
+      "patterns": [
+        {
+          "include": "#mut-bind-object"
+        },
+        {
+          "include": "#mut-bind-array"
         }
       ]
     },

@@ -309,9 +309,28 @@ export const tests: TestCase[] = [
     input: 'let { x, y }: Point = getPoint();',
     checks: [
       { text: 'let', scope: 'storage.type' },
-      { text: 'x', scope: 'variable.other' },
-      { text: 'y', scope: 'variable.other' },
+      { text: '{', scope: 'punctuation.definition.binding-pattern.object' },  // not a plain bracket
+      { text: 'x', scope: 'variable.other.readwrite' },                       // mutable binding (NOT constant)
+      { text: 'y', scope: 'variable.other.readwrite' },
       { text: 'getPoint', scope: 'entity.name.function' },
+    ],
+  },
+  {
+    label: 'destructuring: let/var rename + array rest (readwrite flavor)',
+    input: 'let { p, q: qq } = o; var [h, ...t] = a;',
+    checks: [
+      { text: 'let', scope: 'storage.type' },
+      { text: '{', scope: 'punctuation.definition.binding-pattern.object' },
+      { text: 'p', scope: 'variable.other.readwrite' },
+      { text: 'q', scope: 'variable.object.property' },        // renamed key, not a binding name
+      { text: 'qq', scope: 'variable.other.readwrite' },       // the bound (mutable) name
+      { text: '}', scope: 'punctuation.definition.binding-pattern.object' },
+      { text: 'var', scope: 'storage.type' },
+      { text: '[', scope: 'punctuation.definition.binding-pattern.array' },
+      { text: 'h', scope: 'variable.other.readwrite' },
+      { text: '...', scope: 'keyword.operator.rest' },
+      { text: 't', scope: 'variable.other.readwrite' },
+      { text: ']', scope: 'punctuation.definition.binding-pattern.array' },
     ],
   },
   {

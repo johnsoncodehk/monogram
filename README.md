@@ -42,7 +42,7 @@ The payoff — Monogram's *derived* highlighter vs the official *hand-written* g
 
 | Engine | Monogram | Official |
 | --- | --- | --- |
-| TextMate | **88.2%** | 76.2% |
+| TextMate | **88.4%** | 76.6% |
 | tree-sitter | **95.9%** | 92.7% |
 
 <sub>TypeScript, on the ambiguity-rich documented-bug ledger ([`test/issue-cases.ts`](test/issue-cases.ts)) where regex grammars slip. JavaScript **93.0%** (vs 90.7%); TSX matches official **100%** family. tree-sitter is CI-gated (`npm run gate:treesitter`); regenerate: `npm run bench:readme`.</sub>

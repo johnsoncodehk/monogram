@@ -3414,85 +3414,107 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     topPatterns.push({ include: `#${key}` });
   }
 
-  // ── 4b. const-binding names → variable.other.constant ──
-  // A declaration keyword scoped `*.const` (the immutable binding form) names
-  // CONSTANTS — the TextMate convention, vs `let`/`var` → variable.other.readwrite.
-  // Keyed on the scope subtype, not the word "const", so any grammar that scopes its
-  // immutable-declaration keyword `*.const` gets it. The keyword keeps its OWN
-  // (non-marker) scope — `storage.type` — so `const` colors like `let`/`var`; only the
-  // BOUND NAME becomes a constant.
+  // ── 4b. declaration-binding names (`const x`, `let {…}`, `var […]`) ──
+  // The binding-introducer keywords are those scoped with the BARE `storage.type` — the
+  // variable-declaration scope. `function`/`class`/`enum`/`namespace`/… all carry a more
+  // specific `storage.type.*` subtype, so this excludes them; what's left is exactly the
+  // `let`/`const`/`var`/`using` family. Keyed on the scope, not the words, so any grammar
+  // that scopes its declaration keywords `storage.type` gets binding highlighting.
+  //
+  // A bound name takes the TextMate convention for its mutability: the `*.const`-marked
+  // keyword (the immutable form) names CONSTANTS (`variable.other.constant`); the rest
+  // name `variable.other.readwrite` (the same leaf the identifier catch-all emits). Two
+  // region flavors are generated from one emitter, differing only in that name scope.
   //
   // Two forms, both confined so a non-destructuring grammar emits inert rules:
-  //   • simple `const x` / `const x: T` / `const x =` — a match with a binding-terminator
-  //     lookahead `(?=\s*[=:;,]|$)`, so `const enum E` is never mis-scoped (the token
-  //     after `const` is an identifier, not a terminator).
-  //   • destructuring `const {…}` / `const […]` — a region mirroring the grammar's
-  //     BindingPattern: an ident in BINDING position is a constant, an ident before `:`
-  //     is the property KEY, `...` is rest, and `= expr` is a default value (a normal
-  //     expression — its idents are NOT constants), nested patterns recurse. Matches the
-  //     official object/array-binding-pattern scopes.
-  for (const [lit, scopes] of scopeOverrides) {
-    if (!scopes.some(s => /(^|\.)const$/.test(s))) continue;
-    const kwScope = scopes.find(s => !/(^|\.)const$/.test(s)) ?? scopes[0];
-    const kw = `${kwScope}.${langName}`;
-    const key = `${lit}-binding`;
-    if (repository[key]) continue;
-
-    // simple: const x
-    repository[key] = {
-      match: `\\b(${escapeRegex(lit)})\\s+(${identPattern})(?=\\s*[=:;,]|\\s*$)`,
-      captures: { '1': { name: kw }, '2': { name: `variable.other.constant.${langName}` } },
-    };
-    topPatterns.push({ include: `#${key}` });
-
-    // destructuring: const { … } / const [ … ]
-    const C = `variable.other.constant.${langName}`;        // binding name
+  //   • simple `const x` / `const x: T` / `const x =` — a binding-terminator lookahead
+  //     `(?=\s*[=:;,]|$)` keeps `const enum E` from matching. Only the immutable form
+  //     needs this; a plain `let x` already gets readwrite from the identifier catch-all.
+  //   • destructuring `KEYWORD {…}` / `KEYWORD […]` — a region mirroring the grammar's
+  //     BindingPattern: an ident in BINDING position takes the flavor's name scope, an
+  //     ident before `:` is the property KEY, `...` is rest, and `= expr` is a default
+  //     value (a normal expression — its idents are NOT bindings), nested patterns
+  //     recurse. Matches the official object/array-binding-pattern scopes.
+  const bindIntroducers = [...scopeOverrides].filter(([, scopes]) => scopes.includes('storage.type'));
+  if (bindIntroducers.length) {
+    // `variable.other.constant` / `variable.other.readwrite` are TextMate conventions, not
+    // language words; the readwrite leaf mirrors the identifier catch-all (see above).
+    const constantScope = `variable.other.constant.${langName}`;
+    const readwriteScope = `variable.other.readwrite.${langName}`;
     const eqScope = `${getScope(scopeOverrides, '=') ?? 'keyword.operator.assignment'}.${langName}`;
     const commaScope = `${getScope(scopeOverrides, ',') ?? 'punctuation.separator.comma'}.${langName}`;
-    if (!repository['const-bind-default']) {
-      // A default value `= expr` — a normal expression, so its idents are NOT constants
-      // (matches official: `{ d = x }` → `x` is variable.other.readwrite). Ends at the
-      // top-level separator; nested `[]`/`{}`/`()` are consumed by $self.
-      repository['const-bind-default'] = {
-        begin: '(=)', beginCaptures: { '1': { name: eqScope } },
-        end: '(?=[,}\\])])', patterns: [{ include: '$self' }],
-      };
-      repository['const-bind-prop'] = { patterns: [
+
+    // Shared default-value region: `= expr` is a normal expression, so its idents are NOT
+    // bindings (matches official: `{ d = x }` → `x` is readwrite). Ends at the top-level
+    // separator; nested `[]`/`{}`/`()` are consumed by $self.
+    repository['bind-default'] = {
+      begin: '(=)', beginCaptures: { '1': { name: eqScope } },
+      end: '(?=[,}\\])])', patterns: [{ include: '$self' }],
+    };
+    // One binding-pattern region set per flavor, differing only in the binding-name scope.
+    const emitBindRegions = (flavor: string, nameScope: string) => {
+      repository[`${flavor}-bind-prop`] = { patterns: [
         { match: '(\\.\\.\\.)', name: `keyword.operator.rest.${langName}` },
         { match: `(${identPattern})(\\s*)(:)`, captures: { '1': { name: `variable.object.property.${langName}` }, '3': { name: `punctuation.destructuring.${langName}` } } },
-        { include: '#const-bind-default' },
-        { include: '#const-bind-object' },
-        { include: '#const-bind-array' },
-        { match: `(${identPattern})`, name: C },
+        { include: '#bind-default' },
+        { include: `#${flavor}-bind-object` },
+        { include: `#${flavor}-bind-array` },
+        { match: `(${identPattern})`, name: nameScope },
         { match: ',', name: commaScope },
       ] };
-      repository['const-bind-elem'] = { patterns: [
+      repository[`${flavor}-bind-elem`] = { patterns: [
         { match: '(\\.\\.\\.)', name: `keyword.operator.rest.${langName}` },
-        { include: '#const-bind-default' },
-        { include: '#const-bind-object' },
-        { include: '#const-bind-array' },
-        { match: `(${identPattern})`, name: C },
+        { include: '#bind-default' },
+        { include: `#${flavor}-bind-object` },
+        { include: `#${flavor}-bind-array` },
+        { match: `(${identPattern})`, name: nameScope },
         { match: ',', name: commaScope },
       ] };
-      repository['const-bind-object'] = {
+      repository[`${flavor}-bind-object`] = {
         begin: '\\{', beginCaptures: { '0': { name: `punctuation.definition.binding-pattern.object.${langName}` } },
         end: '\\}', endCaptures: { '0': { name: `punctuation.definition.binding-pattern.object.${langName}` } },
-        patterns: [{ include: '#const-bind-prop' }],
+        patterns: [{ include: `#${flavor}-bind-prop` }],
       };
-      repository['const-bind-array'] = {
+      repository[`${flavor}-bind-array`] = {
         begin: '\\[', beginCaptures: { '0': { name: `punctuation.definition.binding-pattern.array.${langName}` } },
         end: '\\]', endCaptures: { '0': { name: `punctuation.definition.binding-pattern.array.${langName}` } },
-        patterns: [{ include: '#const-bind-elem' }],
+        patterns: [{ include: `#${flavor}-bind-elem` }],
       };
-    }
-    const dkey = `${lit}-destructure`;
-    repository[dkey] = {
-      begin: `\\b(${escapeRegex(lit)})\\s+(?=[{\\[])`,
-      beginCaptures: { '1': { name: kw } },
-      end: '(?<=[}\\]])',
-      patterns: [{ include: '#const-bind-object' }, { include: '#const-bind-array' }],
     };
-    topPatterns.push({ include: `#${dkey}` });
+    emitBindRegions('const', constantScope);
+    emitBindRegions('mut', readwriteScope);
+
+    for (const [lit, scopes] of bindIntroducers) {
+      const isConst = scopes.some(s => /(^|\.)const$/.test(s));
+      const flavor = isConst ? 'const' : 'mut';
+      const kwScope = scopes.find(s => !/(^|\.)const$/.test(s)) ?? scopes[0];
+      const kw = `${kwScope}.${langName}`;
+
+      // simple `const x` — only the immutable form needs a rule (a plain `let x` already
+      // gets readwrite from the identifier catch-all). Terminator lookahead avoids `const enum E`.
+      if (isConst) {
+        const key = `${lit}-binding`;
+        if (!repository[key]) {
+          repository[key] = {
+            match: `\\b(${escapeRegex(lit)})\\s+(${identPattern})(?=\\s*[=:;,]|\\s*$)`,
+            captures: { '1': { name: kw }, '2': { name: constantScope } },
+          };
+          topPatterns.push({ include: `#${key}` });
+        }
+      }
+
+      // destructuring `KEYWORD {…}` / `KEYWORD […]`
+      const dkey = `${lit}-destructure`;
+      if (!repository[dkey]) {
+        repository[dkey] = {
+          begin: `\\b(${escapeRegex(lit)})\\s+(?=[{\\[])`,
+          beginCaptures: { '1': { name: kw } },
+          end: '(?<=[}\\]])',
+          patterns: [{ include: `#${flavor}-bind-object` }, { include: `#${flavor}-bind-array` }],
+        };
+        topPatterns.push({ include: `#${dkey}` });
+      }
+    }
   }
 
   // ── 4a. Import/export namespace `*` → constant.language.import-export-all ──

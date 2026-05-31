@@ -114,6 +114,7 @@ const CORPUS: string[] = [
   `type Result<T> = { ok: true; value: T } | { ok: false; error: Error };`,
   `const arr = [1, 2, 3].map((n) => n * 2).filter((n) => n > 2);`,
   `const { a, b: renamed, ...rest } = config; const [first, ...more] = list;`,
+  `let { p, q: aliased } = opts; var [head, ...tail] = items;`,
   `const re = /^\\d{3}-(\\w+)$/gi; const ok = re.test(input);`,
   `const t = \`Hello \${user.name}, you have \${count} messages\`;`,
   `enum Color { Red, Green = 2, Blue } namespace NS { export const v = 1; }`,
