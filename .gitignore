@@ -1,2 +1,9 @@
 node_modules
 .claude/
+
+# tree-sitter build outputs (from `tree-sitter generate` / `build --wasm`, not Monogram-emitted)
+tree-sitter/*/src/parser.c
+tree-sitter/*/src/grammar.json
+tree-sitter/*/src/node-types.json
+tree-sitter/*/src/tree_sitter/
+tree-sitter/*/*.wasm

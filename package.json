@@ -12,6 +12,7 @@
     "bench": "node test/highlight-bench.ts",
     "bench:js": "node test/js-highlight-bench.ts",
     "bench:tsx": "node test/tsx-highlight.ts",
+    "gate:treesitter": "(cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/treesitter-bench.ts",
     "bench:perf": "node test/perf-bench.ts",
     "bench:readme": "node test/highlight-bench.ts --corpus adversarial --write-readme",
     "coverage": "node test/scope-coverage.ts"

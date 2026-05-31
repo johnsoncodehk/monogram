@@ -69,7 +69,7 @@ from its conformance-proven parser; each baseline is the official hand-written g
 <sub>Higher = more correct. TypeScript is graded on the ambiguity-rich documented-bug ledger ([`test/issue-cases.ts`](test/issue-cases.ts)) — the cases where a hand-written regex grammar slips; JavaScript on a representative corpus ([`test/js-corpus.ts`](test/js-corpus.ts)). The same TypeScript grammar also derives a **tree-sitter** highlighter that scores **95.9%** — above official tree-sitter (92.7%). Regenerate: `npm run bench:readme`.</sub>
 <!-- bench:end -->
 
-Monogram is more correct than the official hand-written grammar in TypeScript and JavaScript, and matches it in TSX — all from one shared, conformance-proven core. (On *unambiguous* code the TextMate grammars are neck-and-neck at ~99%; the ledger above is the ambiguity-rich code where a parser-derived highlighter pulls clear. The tree-sitter output, derived from the *same* grammar, leads outright at 95.9% — opt-in via `MONOGRAM_TS_WASM=… node test/highlight-bench.ts --engines`.)
+Monogram is more correct than the official hand-written grammar in TypeScript and JavaScript, and matches it in TSX — all from one shared, conformance-proven core. (On *unambiguous* code the TextMate grammars are neck-and-neck at ~99%; the ledger above is the ambiguity-rich code where a parser-derived highlighter pulls clear. The tree-sitter output, derived from the *same* grammar, leads outright at 95.9% — CI-gated by `npm run gate:treesitter`, which builds the wasm and asserts it beats official.)
 
 ## What you get
 
@@ -83,7 +83,7 @@ From one grammar definition (a small TypeScript combinator API), three outputs a
 
 And — from the same grammar — generators for the rest of the ecosystem, at varying maturity:
 
-- **tree-sitter** — `grammar.js` + a **structural** `queries/highlights.scm` + an external scanner for context-sensitive lexing. Builds end-to-end (tree-sitter's GLR absorbs the grammar; compiles to wasm) and the *derived* query scores **95.9%** through the same oracle as the table above — **above official tree-sitter** (92.7%). Opt-in (needs a local wasm build), so it stays out of the CI table.
+- **tree-sitter** — `grammar.js` + a **structural** `queries/highlights.scm` + an external scanner for context-sensitive lexing. Builds end-to-end (tree-sitter's GLR absorbs the grammar; compiles to wasm) and the *derived* query scores **95.9%** through the same oracle — **above official tree-sitter** (92.7%). **CI-gated**: `npm run gate:treesitter` builds the wasm (the tree-sitter CLI bundles its own toolchain — no emscripten) and fails if Monogram drops below a floor or stops beating official.
 - **Monarch** — a Monaco (web) tokenizer (functional, bounded by JS-regex limits).
 
 ## The grammar is the source of truth

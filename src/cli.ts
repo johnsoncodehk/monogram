@@ -71,6 +71,11 @@ const treeSitter = generateTreeSitter(grammar, langName);
 emit(`tree-sitter/${langName}/grammar.js`, treeSitter.grammarJs);
 emit(`tree-sitter/${langName}/queries/highlights.scm`, treeSitter.highlightsScm);
 emit(`tree-sitter/${langName}/src/scanner.c`, treeSitter.scannerC);
+// A package.json so `tree-sitter generate`/`build` can load grammar.js as CommonJS
+// (the repo root is "type":"module", which would otherwise treat .js as ESM and
+// fail on `module.exports`). Minimal — just enough to build the wasm in CI.
+emit(`tree-sitter/${langName}/package.json`,
+  JSON.stringify({ name: `tree-sitter-${langName}`, version: '0.0.0', private: true }, null, 2));
 
 // Monaco Monarch tokenizer
 emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 2));

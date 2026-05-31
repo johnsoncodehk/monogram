@@ -44,3 +44,23 @@ jobs:
           node test/js-conformance.ts
           node test/tsx-conformance.ts
           node test/jsx-conformance.ts
+
+  # The derived tree-sitter highlighter is the strongest thesis proof (a real GLR
+  # parser from the same grammar, beating the official hand-written one). Build its
+  # wasm and gate the accuracy so the 95.9% is verified, not just claimed. The
+  # tree-sitter CLI bundles its own wasm toolchain — no emscripten/docker needed.
+  treesitter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Build the derived tree-sitter grammar to wasm
+        run: |
+          cd tree-sitter/typescript
+          npx tree-sitter generate
+          npx tree-sitter build --wasm .
+      - name: Tree-sitter accuracy gate (≥ floor, must beat official)
+        run: node test/treesitter-bench.ts
