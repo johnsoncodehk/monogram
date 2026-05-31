@@ -2504,20 +2504,28 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   };
   top.push({ include: '#tag' });
 
-  // Attributes inside a tag: name, `=`, and quoted / unquoted values.
+  // Attributes inside a tag. The VALUE is scoped only inside a `= …` region, so a
+  // value that happens to look like a name (`href=https://…`) is NOT mis-scoped as an
+  // attribute name (a real bug in flat-pattern grammars), and an unquoted value may
+  // contain `/` (URLs) — the HTML spec only bars whitespace / quotes / `<>` / `=` / backtick.
+  const strDq = {
+    begin: '"', end: '"', name: `string.quoted.double.${L}`,
+    beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
+  };
+  const strSq = {
+    begin: "'", end: "'", name: `string.quoted.single.${L}`,
+    beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
+  };
+  const unquoted = { match: `[^\\s"'${escapeForCharClass(m.tagOpen)}${escapeForCharClass(m.tagClose)}=\`]+`, name: `string.unquoted.${L}` };
   repository['attribute'] = {
     patterns: [
-      {
-        begin: '"', end: '"', name: `string.quoted.double.${L}`,
-        beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
+      { match: `(${namePat})(?=\\s*=)`, name: sAttr },                 // attribute name (followed by `=`)
+      {                                                                 // `= value`
+        begin: '(=)\\s*', beginCaptures: { '1': { name: sEq } },
+        end: `(?=[\\s${escapeForCharClass(m.tagClose)}])`,
+        patterns: [strDq, strSq, unquoted],
       },
-      {
-        begin: "'", end: "'", name: `string.quoted.single.${L}`,
-        beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
-      },
-      { match: '=', name: sEq },
-      { match: namePat, name: sAttr },
-      { match: `[^\\s${escapeForCharClass(m.tagClose)}${escapeForCharClass(m.closeMarker ?? '/')}'"=]+`, name: `string.unquoted.${L}` },
+      { match: `(${namePat})`, name: sAttr },                          // boolean attribute (no `=`)
     ],
   };
 

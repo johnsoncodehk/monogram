@@ -128,17 +128,34 @@ const corpus: string[] = [
   '<td colspan=2 rowspan=3>cell</td>',               // multiple unquoted numeric values
 ];
 
+// DOCUMENTED bugs reported against the official html.tmbundle / VS Code HTML grammar —
+// the HTML analog of test/issues.ts. Each is valid HTML (parse5 parses it); the question
+// is whether the highlighter scopes it correctly.
+const reportedBugs: { issue: string; html: string }[] = [
+  { issue: 'tmbundle#84  tag name a prefix of the next', html: '<div><i><input></i></div>' },
+  { issue: 'tmbundle#97  space before > in end tag', html: '<div>x</div >' },
+  { issue: 'tmbundle#45  double dash inside a comment', html: '<!-- a -- b -->' },
+  { issue: 'vscode       unquoted attr value ending in /', html: '<a href=https://example.org/>x</a>' },
+  { issue: 'tmbundle#84b deeper same-prefix nesting', html: '<form><for>x</for></form>' },
+];
+for (const b of reportedBugs) corpus.push(b.html);
+
 interface Tally { ok: number; total: number }
 const tally = (): Record<Role, Tally> => ({ tag: { ok: 0, total: 0 }, attribute: { ok: 0, total: 0 }, string: { ok: 0, total: 0 }, comment: { ok: 0, total: 0 } });
 const monoT = tally(), offT = tally();
 let monoOk = 0, offOk = 0, total = 0;
+interface Disagreement { line: string; ch: string; role: Role; winner: string; mono: string; off: string }
+const disagreements: Disagreement[] = [];
 
 for (const line of corpus) {
   for (const { offset, role } of rolesOf(line)) {
     total++;
     monoT[role].total++; offT[role].total++;
-    if (familyOf(scopeAt(mono, line, offset)) === role) { monoOk++; monoT[role].ok++; }
-    if (familyOf(scopeAt(official, line, offset)) === role) { offOk++; offT[role].ok++; }
+    const mScope = scopeAt(mono, line, offset), oScope = scopeAt(official, line, offset);
+    const mOk = familyOf(mScope) === role, oOk = familyOf(oScope) === role;
+    if (mOk) { monoOk++; monoT[role].ok++; }
+    if (oOk) { offOk++; offT[role].ok++; }
+    if (mOk !== oOk) disagreements.push({ line, ch: line[offset], role, winner: mOk ? 'Monogram' : 'official', mono: familyOf(mScope), off: familyOf(oScope) });
   }
 }
 
@@ -149,6 +166,20 @@ for (const role of ['tag', 'attribute', 'string', 'comment'] as Role[]) {
   console.log(`  ${role.padEnd(11)}  ${pct(monoT[role].ok, monoT[role].total).padStart(6)}     ${pct(offT[role].ok, offT[role].total).padStart(6)}   (${monoT[role].total} spans)`);
 }
 console.log(`  ${'OVERALL'.padEnd(11)}  ${pct(monoOk, total).padStart(6)}     ${pct(offOk, total).padStart(6)}`);
+
+// Where the two engines disagree (one right, one wrong per parse5) — the real signal.
+if (disagreements.length) {
+  console.log(`\n  ── disagreements (${disagreements.length}): where one engine is right and the other wrong ──`);
+  const seen = new Set<string>();
+  for (const d of disagreements) {
+    const key = `${d.line}|${d.role}|${d.winner}`;
+    if (seen.has(key)) continue; seen.add(key);
+    console.log(`  ${d.winner === 'Monogram' ? '✓Mono' : '✓Off '} ${JSON.stringify(d.line)}`);
+    console.log(`        ${d.role} char ${JSON.stringify(d.ch)}: Monogram→${d.mono}, official→${d.off}`);
+  }
+} else {
+  console.log(`\n  (no disagreements — both engines agree with parse5 on every graded span)`);
+}
 
 // Qualitative differentiator: equal correctness, but Monogram's is DERIVED + smaller +
 // uniform (no baked-in tag-name list to maintain), vs the official hand-written grammar.

@@ -197,46 +197,57 @@
     "attribute": {
       "patterns": [
         {
-          "begin": "\"",
-          "end": "\"",
-          "name": "string.quoted.double.html",
-          "beginCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.begin.html"
-            }
-          },
-          "endCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.end.html"
-            }
-          }
-        },
-        {
-          "begin": "'",
-          "end": "'",
-          "name": "string.quoted.single.html",
-          "beginCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.begin.html"
-            }
-          },
-          "endCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.end.html"
-            }
-          }
-        },
-        {
-          "match": "=",
-          "name": "punctuation.separator.key-value.html"
-        },
-        {
-          "match": "[a-zA-Z][\\w:.-]*",
+          "match": "([a-zA-Z][\\w:.-]*)(?=\\s*=)",
           "name": "entity.other.attribute-name.html"
         },
         {
-          "match": "[^\\s>/'\"=]+",
-          "name": "string.unquoted.html"
+          "begin": "(=)\\s*",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.separator.key-value.html"
+            }
+          },
+          "end": "(?=[\\s>])",
+          "patterns": [
+            {
+              "begin": "\"",
+              "end": "\"",
+              "name": "string.quoted.double.html",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.string.begin.html"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.string.end.html"
+                }
+              }
+            },
+            {
+              "begin": "'",
+              "end": "'",
+              "name": "string.quoted.single.html",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.string.begin.html"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.string.end.html"
+                }
+              }
+            },
+            {
+              "match": "[^\\s\"'<>=`]+",
+              "name": "string.unquoted.html"
+            }
+          ]
+        },
+        {
+          "match": "([a-zA-Z][\\w:.-]*)",
+          "name": "entity.other.attribute-name.html"
         }
       ]
     }

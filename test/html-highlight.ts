@@ -75,6 +75,11 @@ expect('<div class="x">hi</div>', '"', 'punctuation.definition.string'); // valu
 expect("<a href='/y'>", '/y', 'string.quoted.single');
 expect('<input type="text" disabled>', 'disabled', 'entity.other.attribute-name');
 expect('<td colspan=2>', '2', 'string.unquoted');
+// Regression for the documented official bug (vscode#140360): the WHOLE unquoted value,
+// including a trailing `/`, is the value — not a self-close delimiter. A value that looks
+// like a name (`https:`) must NOT be scoped as an attribute name.
+expect('<a href=https://example.org/>x</a>', 'href', 'entity.other.attribute-name');
+expect('<a href=https://example.org/>x</a>', 'https://example.org/', 'string.unquoted');
 
 // ── text content is the (unscoped) root, not a tag ──
 expectNot('<p>hello</p>', 'hello', 'entity.name.tag');
