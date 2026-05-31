@@ -64,6 +64,19 @@ export function createLexer(grammar: CstGrammar) {
   // the control-head rule above does not apply (`obj.for(x) / y` is a call/division).
   const memberAccessTexts = new Set(regexCtx?.memberAccessTexts ?? []);
 
+  // ── Markup mode (opt-in; entirely dormant unless the grammar declares `markup`) ──
+  // Drives a text/tag/raw-text state machine in tokenize(); all delimiters are grammar
+  // DATA (nothing here hardcodes `<`/`>`/HTML), and transitions are keyed only on the
+  // tokens the lexer itself emits, so it needs no parser feedback.
+  const markup = grammar.markup;
+  const rawTextTagSet = new Set((markup?.rawText?.tags ?? []).map(t => t.toLowerCase()));
+  // Markup content tokens are emitted by the state machine, not matched by a regex in
+  // the normal loop (like the template token) — else a greedy text pattern would hijack
+  // tag-mode tokenizing. Skipped in the matcher loop below.
+  const markupTokenNames = new Set<string>(
+    [markup?.textToken, markup?.rawText?.token, markup?.comment?.token].filter(Boolean) as string[],
+  );
+
   // Scan from inside a template span to its next boundary: an interpolation hole
   // (`interpOpen`) or the closing delimiter (`open`). Delimiters come from the
   // grammar's template token; only called when such a token is declared.
@@ -106,6 +119,14 @@ export function createLexer(grammar: CstGrammar) {
     // cleared — so the parser can honor "no LineTerminator here" restrictions
     // (e.g. an array/indexed-access type's `[` must be on the same line).
     let pendingNl = false;
+    // Markup state machine — active only when `markup` is declared. 'tag' is also the
+    // resting mode for token-stream grammars, where the text/raw-text branches below
+    // never fire (markup is undefined) → tokenization is byte-identical to before.
+    type MarkupMode = 'text' | 'tag' | 'rawtext';
+    let mode: MarkupMode = markup ? 'text' : 'tag';
+    let curTag = '';            // tag name being read in tag mode (decides raw-text entry)
+    let inTagName = false;      // the next tag-mode token is (part of) the tag name
+    let sawCloseMarker = false; // this tag began `</…` → a close tag, never a raw-text opener
     function push(t: Token): void {
       if (pendingNl) { t.newlineBefore = true; pendingNl = false; }
       tokens.push(t);
@@ -121,6 +142,42 @@ export function createLexer(grammar: CstGrammar) {
     }
 
     while (pos < source.length) {
+      // ── Markup TEXT mode: a run of text up to the next tag — whitespace and arbitrary
+      // punctuation INCLUDED (not skipped, not rejected). Comments and a tag-open are
+      // dispatched here; everything else up to the next tagOpen is one text token. ──
+      if (markup && mode === 'text') {
+        if (markup.comment && source.startsWith(markup.comment.open, pos)) {
+          const idx = source.indexOf(markup.comment.close, pos + markup.comment.open.length);
+          const end = idx < 0 ? source.length : idx + markup.comment.close.length;
+          push({ type: markup.comment.token, text: source.slice(pos, end), offset: pos });
+          pos = end;
+          continue;
+        }
+        if (source.startsWith(markup.tagOpen, pos)) {
+          push({ type: '', text: markup.tagOpen, offset: pos });
+          pos += markup.tagOpen.length;
+          mode = 'tag'; inTagName = true; sawCloseMarker = false; curTag = '';
+          continue;
+        }
+        let p = pos;
+        while (p < source.length && !source.startsWith(markup.tagOpen, p)) p++;
+        push({ type: markup.textToken, text: source.slice(pos, p), offset: pos });
+        pos = p;
+        continue;
+      }
+
+      // ── Markup RAW-TEXT mode: verbatim element content (script/style/…), scanned to
+      // the matching close tag, so `<`/`>` inside it (e.g. `a < b`, `1<2`) stay text. ──
+      if (markup && mode === 'rawtext') {
+        const needle = (markup.tagOpen + (markup.closeMarker ?? '') + curTag).toLowerCase();
+        const idx = source.toLowerCase().indexOf(needle, pos);
+        const end = idx < 0 ? source.length : idx;
+        if (end > pos) push({ type: markup.rawText!.token, text: source.slice(pos, end), offset: pos });
+        pos = end;
+        mode = 'text'; curTag = '';   // the close tag re-tokenizes via text → tag
+        continue;
+      }
+
       // Skip whitespace
       const wsMatch = source.slice(pos).match(/^\s+/);
       if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
@@ -178,6 +235,7 @@ export function createLexer(grammar: CstGrammar) {
       // Try token patterns in declaration order (the template token is handled above)
       for (const tm of tokenMatchers) {
         if (tm.name === templateTokenName) continue;
+        if (markupTokenNames.has(tm.name)) continue;   // scanned by the markup state machine
         if (tm.isRegex) {
           // prev is a completed value → `/` is division, not a regex literal → skip.
           if (prevIsValue(tokens[tokens.length - 1])) continue;
@@ -234,6 +292,22 @@ export function createLexer(grammar: CstGrammar) {
 
       if (!matched) {
         throw new Error(`Unexpected character at offset ${pos}: '${source[pos]}'`);
+      }
+
+      // ── Markup TAG mode: track the tag being read so the closing `tagClose` knows
+      // whether to enter raw-text mode. Runs only for tokens emitted in tag mode (the
+      // text/raw-text branches `continue` above, never reaching here). ──
+      if (markup && mode === 'tag') {
+        const last = tokens[tokens.length - 1];
+        if (last) {
+          if (last.text === markup.tagClose) {
+            mode = (!sawCloseMarker && rawTextTagSet.has(curTag.toLowerCase())) ? 'rawtext' : 'text';
+            inTagName = false; sawCloseMarker = false;
+          } else if (inTagName) {
+            if (markup.closeMarker && last.text === markup.closeMarker) sawCloseMarker = true;
+            else { curTag = last.text; inTagName = false; }
+          }
+        }
       }
     }
 

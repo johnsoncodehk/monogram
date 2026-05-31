@@ -36,6 +36,31 @@ export interface RegexContext {
   memberAccessTexts?: string[];
 }
 
+/**
+ * Declarative markup-mode tokenization (opt-in, e.g. HTML/Vue). When a grammar
+ * declares `markup`, the lexer runs a text / tag / raw-text STATE MACHINE instead
+ * of the pure token stream: text between tags is one TEXT token (whitespace and
+ * arbitrary punctuation included, not skipped), `<…>` is tokenized as a tag, and
+ * raw-text elements (`<script>`/`<style>`/…) scan verbatim to their close tag.
+ *
+ * Every delimiter is grammar DATA — nothing in the lexer hardcodes `<`/`>`/HTML —
+ * so the engine stays language-agnostic. Mode transitions are LEXER-LOCAL (keyed
+ * on the tokens the lexer itself emits: tagOpen/tagClose and the tag name), so the
+ * lexer never needs parser feedback and the "lexer depends only on tokens, not
+ * rules" architecture is preserved. ABSENT for token-stream languages (JS/TS),
+ * where the machine is dormant and tokenization is byte-identical to before.
+ */
+export interface MarkupConfig {
+  textToken: string;   // token TYPE emitted for a run of text between tags
+  tagOpen: string;     // opens a tag and ends a text run (e.g. '<')
+  tagClose: string;    // closes a tag → return to text/raw-text (e.g. '>')
+  closeMarker?: string; // marks a close tag when it directly follows tagOpen (e.g. '/' in '</'); such a tag never opens raw text
+  // Elements whose content is raw (CDATA-like): after the start tag's `tagClose`,
+  // everything up to the matching `tagOpen+closeMarker+name` is one `token`.
+  rawText?: { tags: string[]; token: string };
+  comment?: { open: string; close: string; token: string }; // e.g. `<!--` … `-->`
+}
+
 export interface PrecOperator {
   value: string;
   position: 'infix' | 'prefix' | 'postfix';
@@ -85,4 +110,5 @@ export interface CstGrammar {
   scopeOverrides: Map<string, string[]>;  // literal → scope overrides from `scopes` section (multiple if keyword appears in multiple groups)
   name?: string;
   scopeName?: string;  // declared TextMate scope name (e.g. source.ts); its suffix drives every scope's language tag
+  markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue); absent for token-stream languages
 }

@@ -1,4 +1,4 @@
-import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr } from './types.ts';
+import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig } from './types.ts';
 
 // ── Token ──
 
@@ -322,6 +322,7 @@ interface GrammarConfig {
   rules: Record<string, RuleRef>;
   scopes?: Record<string, string[]>;
   entry: RuleRef;
+  markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
 }
 
 export function defineGrammar(config: GrammarConfig): CstGrammar & { name: string; scopeName?: string } {
@@ -386,5 +387,5 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     }
   }
 
-  return { name: config.name, scopeName: config.scopeName, tokens, precs, rules, scopeOverrides };
+  return { name: config.name, scopeName: config.scopeName, tokens, precs, rules, scopeOverrides, markup: config.markup };
 }
