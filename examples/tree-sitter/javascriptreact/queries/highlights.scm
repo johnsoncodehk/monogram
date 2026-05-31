@@ -19,25 +19,13 @@
 (expr "class" (ident) @type)
 (expr "function" (ident) @function)
 (decl "function" (ident) @function)
-(decl "interface" (ident) @type)
-(decl "type" (ident) @type)
 (decl "class" (ident) @type)
-(decl "enum" (ident) @type)
-(decl "namespace" (ident) @type)
-
-;; Type-reference identifiers (inside a type node) -> @type.
-(type (ident) @type)
 
 ;; Structural member / type-param / property-access captures.
 (jsxtag_name (ident) @type)
-(type_param (ident) @type)
 (member_name (ident) @property)
-(type_member (ident) @property)
 (expr (expr) (ident) @property)
 (binding_property (ident) @property (binding_element))
-
-;; Enum-like value members (override member-key, which would say @property).
-(enum_member (member_name (ident) @variable))
 
 ;; Literal token nodes.
 (shebang) @comment
@@ -65,15 +53,13 @@
 
 ;; Builtin / global / constant identifier names.
 ((ident) @variable.builtin
-  (#any-of? @variable.builtin "console" "window" "document" "process" "require" "exports" "global" "globalThis"))
+  (#any-of? @variable.builtin "console" "window" "document" "process" "module" "require" "exports" "global" "globalThis"))
 
 ;; Keyword, operator, and punctuation literals.
 [
-  "implements" "interface" "namespace" "protected" "debugger" "readonly" "abstract" "override"
-  "accessor" "private" "declare" "extends" "default" "module" "public" "static"
-  "unique" "switch" "export" "const" "using" "class" "async" "with"
-  "type" "enum" "meta" "case" "from" "let" "var" "get"
-  "set" "out"
+  "debugger" "accessor" "default" "extends" "switch" "export" "static" "const"
+  "using" "class" "async" "case" "with" "from" "meta" "let"
+  "var" "get" "set" "as"
 ] @keyword
 [
   "constructor" "function" "=>"
@@ -92,10 +78,8 @@
   "finally" "catch" "throw" "try"
 ] @keyword.exception
 [
-  "instanceof" "satisfies" "asserts" "typeof" "delete" "keyof" "infer" "void"
-  "new" "as" "is"
+  "instanceof" "delete" "typeof" "void" "new"
 ] @keyword.operator
-"symbol" @type.builtin
 [
   "undefined" "false" "true" "null"
 ] @constant.builtin

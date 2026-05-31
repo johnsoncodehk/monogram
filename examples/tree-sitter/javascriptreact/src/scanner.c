@@ -23,20 +23,20 @@ enum TokenType {
 // CFG, so there is nothing to (de)serialize.
 typedef struct { char unused; } Scanner;
 
-void *tree_sitter_tsx_external_scanner_create(void) {
+void *tree_sitter_javascriptreact_external_scanner_create(void) {
   return ts_calloc(1, sizeof(Scanner));
 }
 
-void tree_sitter_tsx_external_scanner_destroy(void *payload) {
+void tree_sitter_javascriptreact_external_scanner_destroy(void *payload) {
   ts_free(payload);
 }
 
-unsigned tree_sitter_tsx_external_scanner_serialize(void *payload, char *buffer) {
+unsigned tree_sitter_javascriptreact_external_scanner_serialize(void *payload, char *buffer) {
   (void)payload; (void)buffer;
   return 0;
 }
 
-void tree_sitter_tsx_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
+void tree_sitter_javascriptreact_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
   (void)payload; (void)buffer; (void)length;
 }
 
@@ -120,7 +120,7 @@ static bool scan_template_chars(TSLexer *lexer) {
   return true; // token end already frozen by the last mark_end
 }
 
-bool tree_sitter_tsx_external_scanner_scan(void *payload, TSLexer *lexer,
+bool tree_sitter_javascriptreact_external_scanner_scan(void *payload, TSLexer *lexer,
                                                           const bool *valid_symbols) {
   (void)payload;
 

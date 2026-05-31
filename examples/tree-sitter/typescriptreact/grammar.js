@@ -9,7 +9,7 @@
 // @ts-check
 
 module.exports = grammar({
-  name: "tsx",
+  name: "typescriptreact",
 
   extras: $ => [
     /\s/,
@@ -106,18 +106,6 @@ module.exports = grammar({
     decorator_expr: $ => seq($.decorator, optional(choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
 
     typeof_ref: $ => choice($.ident, seq($.typeof_ref, ".", $.ident)),
-
-    jsxelement: $ => choice(seq("<", $.jsxtag_name, optional(seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">")), repeat($.jsxattr), $.jsxself_close), seq("<", $.jsxtag_name, optional(seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">")), repeat($.jsxattr), ">", repeat($.jsxchild), $.jsxclose, optional($.jsxtag_name), ">"), seq("<", ">", repeat($.jsxchild), $.jsxclose, ">")),
-
-    jsxtag_name: $ => seq($.ident, repeat(choice(seq(".", $.ident), seq(":", $.ident), seq("-", $.ident)))),
-
-    jsxattr: $ => choice(seq("{", "...", $.expr, "}"), seq($.ident, repeat(choice(seq(".", $.ident), seq(":", $.ident), seq("-", $.ident))), optional(seq("=", $.jsxattr_value)))),
-
-    jsxattr_value: $ => choice($.string, seq("{", $.expr, "}")),
-
-    jsxcontainer: $ => seq("{", optional("..."), optional($.expr), "}"),
-
-    jsxchild: $ => choice($.jsxelement, $.jsxcontainer, $.ident, $.number, $.string, choice(",", ".", ":", ";", "!", "?")),
 
     expr: $ => choice(
       prec.right(1, seq($.expr, field('operator', choice("=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=")), $.expr)),
@@ -229,6 +217,18 @@ module.exports = grammar({
 
     import_specifier: $ => seq($.ident, optional(seq("as", $.ident))),
 
+    jsxtag_name: $ => seq($.ident, repeat(choice(seq(".", $.ident), seq(":", $.ident), seq("-", $.ident)))),
+
+    jsxattr_value: $ => choice($.string, seq("{", $.expr, "}")),
+
+    jsxattr: $ => choice(seq("{", "...", $.expr, "}"), seq($.ident, repeat(choice(seq(".", $.ident), seq(":", $.ident), seq("-", $.ident))), optional(seq("=", $.jsxattr_value)))),
+
+    jsxcontainer: $ => seq("{", optional("..."), optional($.expr), "}"),
+
+    jsxchild: $ => choice($.jsxelement, $.jsxcontainer, $.ident, $.number, $.string, choice(",", ".", ":", ";", "!", "?")),
+
+    jsxelement: $ => choice(seq("<", $.jsxtag_name, optional(seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">")), repeat($.jsxattr), $.jsxself_close), seq("<", $.jsxtag_name, optional(seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">")), repeat($.jsxattr), ">", repeat($.jsxchild), $.jsxclose, optional($.jsxtag_name), ">"), seq("<", ">", repeat($.jsxchild), $.jsxclose, ">")),
+
     shebang: $ => token(/#![^\n]*/),
 
     jsdoc: $ => token(/\/\*\*[\s\S]*?\*\//),
@@ -238,10 +238,6 @@ module.exports = grammar({
     line_comment: $ => token(/\/\/[^\n]*/),
 
     block_comment: $ => token(/\/\*[\s\S]*?\*\//),
-
-    jsxself_close: $ => token(/\/>/),
-
-    jsxclose: $ => token(/<\//),
 
     ident: $ => token(/(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/),
 
@@ -256,6 +252,10 @@ module.exports = grammar({
     number: $ => token(/[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?/),
 
     string: $ => token(/"(?:[^"\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*'/),
+
+    jsxself_close: $ => token(/\/>/),
+
+    jsxclose: $ => token(/<\//),
 
     decorator: $ => token(/@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?/),
 

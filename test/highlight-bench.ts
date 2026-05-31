@@ -72,7 +72,7 @@ const MONOGRAM_JS_PATH = 'examples/javascript.tmLanguage.json';
 const OFFICIAL_TSX_PATH =
   process.env.MONOGRAM_OFFICIAL_TSX ??
   '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/typescript-basics/syntaxes/TypeScriptReact.tmLanguage.json';
-const MONOGRAM_TSX_PATH = 'examples/tsx.tmLanguage.json';
+const MONOGRAM_TSX_PATH = 'examples/typescriptreact.tmLanguage.json';
 
 // ── TextMate grammar loading (vscode-textmate + oniguruma) ───────────────────
 const require = createRequire(import.meta.url);

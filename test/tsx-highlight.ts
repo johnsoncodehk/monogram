@@ -56,9 +56,9 @@ function tokenize(g: vsctm.IGrammar, text: string): Tok[] {
 // `.jsx` (it is structural, e.g. `meta.jsx.children`).
 const norm = (s: string) => s.replace(/\.(tsx|ts|js)$/, '');
 
-const MONO_PATH = 'examples/tsx.tmLanguage.json';
+const MONO_PATH = 'examples/typescriptreact.tmLanguage.json';
 if (!existsSync(MONO_PATH)) {
-  console.error(`Monogram TSX grammar not found at ${MONO_PATH}. Run: node src/cli.ts examples/tsx.ts`);
+  console.error(`Monogram TSX grammar not found at ${MONO_PATH}. Run: node src/cli.ts examples/typescriptreact.ts`);
   process.exit(1);
 }
 const mono = (await load('source.tsx', MONO_PATH))!;

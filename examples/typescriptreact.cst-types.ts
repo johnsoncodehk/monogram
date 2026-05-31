@@ -119,78 +119,6 @@ export interface TypeofRefNode extends CstPos {
   >;
 }
 
-/** `JSXElement` node. Children (flattened, in source order) are drawn from: */
-export interface JSXElementNode extends CstPos {
-  kind: 'node';
-  rule: 'JSXElement';
-  children: Array<
-    | (CstLeaf & { tokenType: '$punct' })
-    | (CstLeaf & { tokenType: 'JSXClose' })
-    | (CstLeaf & { tokenType: 'JSXSelfClose' })
-    | JSXAttrNode
-    | JSXChildNode
-    | JSXTagNameNode
-    | TypeNode
-  >;
-}
-
-/** `JSXTagName` node. Children (flattened, in source order) are drawn from: */
-export interface JSXTagNameNode extends CstPos {
-  kind: 'node';
-  rule: 'JSXTagName';
-  children: Array<
-    | (CstLeaf & { tokenType: '$punct' })
-    | (CstLeaf & { tokenType: 'Ident' })
-  >;
-}
-
-/** `JSXAttr` node. Children (flattened, in source order) are drawn from: */
-export interface JSXAttrNode extends CstPos {
-  kind: 'node';
-  rule: 'JSXAttr';
-  children: Array<
-    | (CstLeaf & { tokenType: '$punct' })
-    | (CstLeaf & { tokenType: 'Ident' })
-    | ExprNode
-    | JSXAttrValueNode
-  >;
-}
-
-/** `JSXAttrValue` node. Children (flattened, in source order) are drawn from: */
-export interface JSXAttrValueNode extends CstPos {
-  kind: 'node';
-  rule: 'JSXAttrValue';
-  children: Array<
-    | (CstLeaf & { tokenType: '$punct' })
-    | (CstLeaf & { tokenType: 'String' })
-    | ExprNode
-  >;
-}
-
-/** `JSXContainer` node. Children (flattened, in source order) are drawn from: */
-export interface JSXContainerNode extends CstPos {
-  kind: 'node';
-  rule: 'JSXContainer';
-  children: Array<
-    | (CstLeaf & { tokenType: '$punct' })
-    | ExprNode
-  >;
-}
-
-/** `JSXChild` node. Children (flattened, in source order) are drawn from: */
-export interface JSXChildNode extends CstPos {
-  kind: 'node';
-  rule: 'JSXChild';
-  children: Array<
-    | (CstLeaf & { tokenType: '$punct' })
-    | (CstLeaf & { tokenType: 'Ident' })
-    | (CstLeaf & { tokenType: 'Number' })
-    | (CstLeaf & { tokenType: 'String' })
-    | JSXContainerNode
-    | JSXElementNode
-  >;
-}
-
 /** `Expr` node. Children (flattened, in source order) are drawn from: */
 export interface ExprNode extends CstPos {
   kind: 'node';
@@ -544,6 +472,78 @@ export interface ImportSpecifierNode extends CstPos {
   >;
 }
 
+/** `JSXTagName` node. Children (flattened, in source order) are drawn from: */
+export interface JSXTagNameNode extends CstPos {
+  kind: 'node';
+  rule: 'JSXTagName';
+  children: Array<
+    | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: 'Ident' })
+  >;
+}
+
+/** `JSXAttrValue` node. Children (flattened, in source order) are drawn from: */
+export interface JSXAttrValueNode extends CstPos {
+  kind: 'node';
+  rule: 'JSXAttrValue';
+  children: Array<
+    | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: 'String' })
+    | ExprNode
+  >;
+}
+
+/** `JSXAttr` node. Children (flattened, in source order) are drawn from: */
+export interface JSXAttrNode extends CstPos {
+  kind: 'node';
+  rule: 'JSXAttr';
+  children: Array<
+    | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: 'Ident' })
+    | ExprNode
+    | JSXAttrValueNode
+  >;
+}
+
+/** `JSXContainer` node. Children (flattened, in source order) are drawn from: */
+export interface JSXContainerNode extends CstPos {
+  kind: 'node';
+  rule: 'JSXContainer';
+  children: Array<
+    | (CstLeaf & { tokenType: '$punct' })
+    | ExprNode
+  >;
+}
+
+/** `JSXChild` node. Children (flattened, in source order) are drawn from: */
+export interface JSXChildNode extends CstPos {
+  kind: 'node';
+  rule: 'JSXChild';
+  children: Array<
+    | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'Number' })
+    | (CstLeaf & { tokenType: 'String' })
+    | JSXContainerNode
+    | JSXElementNode
+  >;
+}
+
+/** `JSXElement` node. Children (flattened, in source order) are drawn from: */
+export interface JSXElementNode extends CstPos {
+  kind: 'node';
+  rule: 'JSXElement';
+  children: Array<
+    | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: 'JSXClose' })
+    | (CstLeaf & { tokenType: 'JSXSelfClose' })
+    | JSXAttrNode
+    | JSXChildNode
+    | JSXTagNameNode
+    | TypeNode
+  >;
+}
+
 /** `Program` node. Children (flattened, in source order) are drawn from: */
 export interface ProgramNode extends CstPos {
   kind: 'node';
@@ -561,12 +561,6 @@ export type CstNode =
   | TypeMemberNode
   | DecoratorExprNode
   | TypeofRefNode
-  | JSXElementNode
-  | JSXTagNameNode
-  | JSXAttrNode
-  | JSXAttrValueNode
-  | JSXContainerNode
-  | JSXChildNode
   | ExprNode
   | PropNode
   | MemberNameNode
@@ -591,6 +585,12 @@ export type CstNode =
   | EnumMemberNode
   | ImportClauseNode
   | ImportSpecifierNode
+  | JSXTagNameNode
+  | JSXAttrValueNode
+  | JSXAttrNode
+  | JSXContainerNode
+  | JSXChildNode
+  | JSXElementNode
   | ProgramNode;
 
 /** Every `rule` discriminant value (the keys of the CstNode union). */
@@ -600,12 +600,6 @@ export type RuleName =
   | 'TypeMember'
   | 'DecoratorExpr'
   | 'TypeofRef'
-  | 'JSXElement'
-  | 'JSXTagName'
-  | 'JSXAttr'
-  | 'JSXAttrValue'
-  | 'JSXContainer'
-  | 'JSXChild'
   | 'Expr'
   | 'Prop'
   | 'MemberName'
@@ -630,6 +624,12 @@ export type RuleName =
   | 'EnumMember'
   | 'ImportClause'
   | 'ImportSpecifier'
+  | 'JSXTagName'
+  | 'JSXAttrValue'
+  | 'JSXAttr'
+  | 'JSXContainer'
+  | 'JSXChild'
+  | 'JSXElement'
   | 'Program';
 
 /** Any CST element: a node or a leaf. */

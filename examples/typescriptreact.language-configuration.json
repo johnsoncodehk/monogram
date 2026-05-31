@@ -1,0 +1,179 @@
+{
+  "comments": {
+    "lineComment": "//",
+    "blockComment": [
+      "/*",
+      "*/"
+    ]
+  },
+  "brackets": [
+    [
+      "${",
+      "}"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ]
+  ],
+  "colorizedBracketPairs": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "<",
+      ">"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "${",
+      "close": "}"
+    },
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "'",
+      "close": "'",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "`",
+      "close": "`",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "/**",
+      "close": " */",
+      "notIn": [
+        "string"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "${",
+      "}"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "\"",
+      "\""
+    ],
+    [
+      "'",
+      "'"
+    ],
+    [
+      "`",
+      "`"
+    ],
+    [
+      "<",
+      ">"
+    ]
+  ],
+  "autoCloseBefore": "})]>=.;,:` \n\t",
+  "folding": {
+    "markers": {
+      "start": "^\\s*//\\s*#?region\\b",
+      "end": "^\\s*//\\s*#?endregion\\b"
+    }
+  },
+  "wordPattern": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+  "indentationRules": {
+    "decreaseIndentPattern": "^\\s*[)}\\]].*$",
+    "increaseIndentPattern": "^.*(\\([^)]*|\\{[^}]*|\\[[^\\]]*)$"
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*/\\*\\*(?!/)([^*]|\\*(?!/))*$",
+      "afterText": "^\\s*\\*/$",
+      "action": {
+        "indent": "indentOutdent",
+        "appendText": " * "
+      }
+    },
+    {
+      "beforeText": "^\\s*/\\*\\*(?!/)([^*]|\\*(?!/))*$",
+      "action": {
+        "indent": "none",
+        "appendText": " * "
+      }
+    },
+    {
+      "beforeText": "^(\\t|[ ])*\\*([ ]([^*]|\\*(?!/))*)?$",
+      "action": {
+        "indent": "none",
+        "appendText": "* "
+      }
+    },
+    {
+      "beforeText": "^(\\t|[ ])*[ ]\\*/\\s*$",
+      "action": {
+        "indent": "none",
+        "removeText": 1
+      }
+    },
+    {
+      "beforeText": "(?<!\\\\|\\w:)//\\s*\\S",
+      "afterText": "^(?!\\s*$).+",
+      "action": {
+        "indent": "none",
+        "appendText": "// "
+      }
+    }
+  ]
+}
