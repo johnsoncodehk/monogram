@@ -83,12 +83,34 @@ export interface MarkupConfig {
   // Keeps the generic parser name-blind: the void set is pure data, applied in the lexer.
   voidTags?: string[];
   voidNameToken?: string;
+  // Character entities in text (HTML: `&amp;`, `&#169;`, `&#xAB;`). When declared, a run
+  // of text is no longer one opaque blob in the highlighter: an entity is lifted out and
+  // scoped on its own (the official HTML grammar does the same — see textmate/html.tmbundle#81).
+  // Pure DATA (the prefix char, the `;` terminator, and the scope names), so the emitter bakes
+  // in no HTML-specific assumption — a different markup language declares its own. ABSENT →
+  // text stays one blob (current behaviour). Highlight-only: the parser still emits one text
+  // token (an entity is ordinary text to the grammar), so conformance is unchanged.
+  entity?: MarkupEntity;
   // Markup-injection layer (Vue: directives + `{{ }}` interpolation). Because the
   // `<template>` body reuses the HTML grammar WHOLESALE (it `embed`s text.html.basic),
   // Vue syntax can't be baked into HTML — it must be INJECTED onto HTML's scopes, the
   // same reason the official Vue grammar uses an injection grammar. gen-tm derives a
   // separate injection grammar (injectionSelector over `into`) from this declaration.
   inject?: MarkupInject;
+}
+
+/** Character entities in markup text (HTML `&amp;` / `&#169;` / `&#xAB;`). All DATA, so the
+ *  emitter hardcodes nothing HTML-specific. `prefix`+`terminator` delimit an entity; `numericMarker`
+ *  introduces a numeric reference, `hexMarker` (after it) a hex one. The scope names follow the
+ *  official HTML grammar's: named/numeric entity bodies and the prefix/terminator punctuation. */
+export interface MarkupEntity {
+  prefix: string;            // starts an entity reference (e.g. '&')
+  terminator: string;        // ends it (e.g. ';')
+  numericMarker: string;     // marks a numeric reference after the prefix (e.g. '#' → `&#169;`)
+  hexMarker: string;         // marks a hex numeric reference after numericMarker (e.g. 'x' → `&#xAB;`); case-insensitive
+  namedScope: string;        // scope for a named entity body, e.g. constant.character.entity.named.html
+  numericScope: string;      // scope for a numeric entity body, e.g. constant.character.entity.html
+  punctuationScope: string;  // scope for the prefix/terminator punctuation, e.g. punctuation.definition.entity.html
 }
 
 /** A markup-injection layer (e.g. Vue directives + interpolation) injected onto a host

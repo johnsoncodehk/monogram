@@ -81,7 +81,7 @@ async function gradeHtml(): Promise<Row[] | null> {
     sn === 'text.html.basic' ? parseRawGrammar(read(htmlPath), 'html.json') :
     (embeds[sn] && existsSync(embeds[sn])) ? parseRawGrammar(read(embeds[sn]), `${sn}.json`) :
     (sn.startsWith('source.') || sn.startsWith('text.')) ? stub(sn) : null });
-  const mono = (await mkReg('html.tmLanguage.json', { 'source.js': 'javascript.tmLanguage.json' }).loadGrammar('text.html.basic'))!;
+  const mono = (await mkReg('html.tmLanguage.json', { 'source.js': 'javascript.tmLanguage.json', 'source.css': official.css }).loadGrammar('text.html.basic'))!;
   const off = (await mkReg(official.html, { 'source.js': official.js, 'source.css': official.css }).loadGrammar('text.html.basic'))!;
   return htmlCases.map(c => ({ id: c.id, title: c.title, mono: c.want(scopeAtFns(mono, c.src)(c.at, c.nth)), off: c.want(scopeAtFns(off, c.src)(c.at, c.nth)) }));
 }

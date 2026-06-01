@@ -32,17 +32,16 @@ export const cases: HtmlCase[] = [
   { id: 'tmbundle#108', title: 'nested `<svg>` is a valid tag, not flagged invalid', src: '<svg><svg></svg></svg>',
     at: 'svg', nth: 1, want: s => isTag(s) && !s.includes('invalid') },       // official's SVG-child whitelist marks a nested <svg> invalid.illegal; Monogram's generic nesting accepts it
 
-  // ── Scope GAPS Monogram does not cover (honest non-wins), graded against the REAL embedded
-  //    JS/CSS so a ✓ means the span is *correctly highlighted*, not merely delegated. #81:
-  //    Monogram's Text token is one `[^<]+` blob, so it can't scope a character entity → only
-  //    official. #102: Monogram names a `<style>` body `source.css` but leaves it one
-  //    untokenized blob; the official embeds real CSS (property names) → only official. #113:
-  //    the official embeds JS but mis-reads `//` in the string (the bug), and Monogram doesn't
-  //    embed attribute JS at all, so the `//` is correct JS in NEITHER → both miss.
+  // ── #81 (entities) and #102 (`<style>`/`<script>` embedding) WERE Monogram-only gaps, now
+  //    CLOSED: html.ts gained `markup.entity` and a `rawText.embed` map (delegating CSS — and
+  //    Monogram's OWN JS — to the platform grammars), so both now grade ✓✓. #113 is the one
+  //    remaining HTML both-miss: the official embeds JS in `on*` but mis-reads `//` in the
+  //    string (the bug), and Monogram doesn't embed attribute JS at all. All graded against the
+  //    REAL embedded JS/CSS so a ✓ means *correctly highlighted*, not merely delegated.
   { id: 'tmbundle#113', title: '`//` in an `onclick=` JS string read as a comment', src: `<input onclick="location.href='https://x.org/'">`,
     at: '//', want: s => s.includes('source.js') && !s.includes('comment') }, // official: real JS embed reads // as a comment (bug); Monogram: value is one HTML string, no source.js
   { id: 'tmbundle#81', title: 'character entity `&amp;` in text', src: '<p>x &amp; z</p>',
-    at: '&amp;', want: s => s.includes('constant.character.entity') },        // official scopes the entity; Monogram's Text blob cannot
+    at: '&amp;', want: s => s.includes('constant.character.entity') },        // both scope it now — Monogram via markup.entity (was a Text blob), official natively
   { id: 'tmbundle#102', title: '`<style>` element CSS is tokenized, not a flat blob', src: '<style>.a{color:red}</style>',
-    at: 'color', want: s => s.includes('support.type.property-name.css') },   // official embeds real CSS (color = property-name); Monogram names the region source.css but leaves it one untokenized blob
+    at: 'color', want: s => s.includes('support.type.property-name.css') },   // both embed real CSS (color = property-name) — Monogram now delegates source.css like the official (was an untokenized blob)
 ];

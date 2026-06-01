@@ -87,8 +87,23 @@ export const markup: MarkupConfig = {
   closeMarker: '/',
   attributeAssign: '=',          // `name = value`
   attributeQuotes: ['"', "'"],   // quoted attribute values
-  rawText: { tags: ['script', 'style', 'textarea', 'title'], token: 'RawText' },
+  // Raw-text element bodies are scanned verbatim by the parser, but the HIGHLIGHTER
+  // delegates `<script>`/`<style>` to the platform's real JS/CSS grammars (exactly as
+  // the official HTML grammar embeds source.js / source.css — Monogram has no own CSS
+  // grammar). `embed` is highlight-only data; the parser still raw-texts every body, so
+  // conformance is unchanged. `textarea`/`title` have no embed → their body stays scoped
+  // by `token` (source.embedded), matching the official's plain raw-text content.
+  rawText: { tags: ['script', 'style', 'textarea', 'title'], token: 'RawText',
+             embed: { script: 'source.js', style: 'source.css' } },
   comment: { open: '<!--', close: '-->', token: 'Comment' },
+  // Character entities (`&amp;`, `&#169;`, `&#xAB;`) in text — lifted out of the text blob and
+  // scoped individually, like the official grammar (textmate/html.tmbundle#81). Highlight-only.
+  entity: {
+    prefix: '&', terminator: ';', numericMarker: '#', hexMarker: 'x',
+    namedScope: 'constant.character.entity.named.html',
+    numericScope: 'constant.character.entity.html',
+    punctuationScope: 'punctuation.definition.entity.html',
+  },
   // The HTML void elements (no children, no close tag).
   voidTags: ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
              'link', 'meta', 'param', 'source', 'track', 'wbr'],

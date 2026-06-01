@@ -2489,6 +2489,29 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     top.push({ include: '#comment' });
   }
 
+  // Character entities (`&amp;` / `&#169;` / `&#xAB;`) in text. Driven by `markup.entity`
+  // DATA (prefix / terminator / numeric+hex markers / scopes) — nothing HTML-specific is
+  // baked in. Two captured forms: NAMED (a letter then name chars) → namedScope, or NUMERIC
+  // (`#` then digits, or `#x` then hex) → numericScope; the prefix and terminator are the
+  // entity punctuation. A lone prefix (no `name;` tail) matches nothing → stays plain text,
+  // matching the official. Highlight-only: the lexer/parser still see one text token.
+  if (m.entity) {
+    const e = m.entity;
+    const pfx = escapeRegex(e.prefix), term = escapeRegex(e.terminator);
+    const numM = escapeRegex(e.numericMarker), hexM = escapeForCharClass(e.hexMarker);
+    repository['entities'] = {
+      patterns: [
+        // Numeric / hex reference: `#` digits, or `#` `x`/`X` hex digits.
+        { match: `(${pfx})(${numM}(?:[${hexM}${hexM.toUpperCase()}][0-9a-fA-F]+|[0-9]+))(${term})`,
+          captures: { '1': { name: e.punctuationScope }, '2': { name: e.numericScope }, '3': { name: e.punctuationScope } } },
+        // Named reference: a letter, then name chars (letters/digits).
+        { match: `(${pfx})([a-zA-Z][a-zA-Z0-9]*)(${term})`,
+          captures: { '1': { name: e.punctuationScope }, '2': { name: e.namedScope }, '3': { name: e.punctuationScope } } },
+      ],
+    };
+    top.push({ include: '#entities' });
+  }
+
   // Raw-text elements (script/style/…): the body is verbatim (CDATA-like), so it is a
   // single embedded region — `<`/`>` inside it never start a tag. The embedded grammar
   // comes from the declared `embed` map (Vue SFC blocks: template→text.html.basic,

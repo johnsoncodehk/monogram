@@ -7,6 +7,9 @@
       "include": "#comment"
     },
     {
+      "include": "#entities"
+    },
+    {
       "include": "#raw-script-inline"
     },
     {
@@ -56,6 +59,38 @@
           "name": "punctuation.definition.comment.html"
         }
       }
+    },
+    "entities": {
+      "patterns": [
+        {
+          "match": "(&)(#(?:[xX][0-9a-fA-F]+|[0-9]+))(;)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.entity.html"
+            },
+            "2": {
+              "name": "constant.character.entity.html"
+            },
+            "3": {
+              "name": "punctuation.definition.entity.html"
+            }
+          }
+        },
+        {
+          "match": "(&)([a-zA-Z][a-zA-Z0-9]*)(;)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.entity.html"
+            },
+            "2": {
+              "name": "constant.character.entity.named.html"
+            },
+            "3": {
+              "name": "punctuation.definition.entity.html"
+            }
+          }
+        }
+      ]
     },
     "raw-script-inline": {
       "name": "meta.script.html",
