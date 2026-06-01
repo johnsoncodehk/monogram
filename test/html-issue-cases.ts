@@ -30,12 +30,14 @@ export const cases: HtmlCase[] = [
   { id: 'tmbundle#97', title: 'space before `>` in an end tag', src: '<section>x</section >',
     at: 'section', nth: 1, want: isTag },                                     // the close tag name is still a tag
 
-  // ── Scope GAPS Monogram does not cover (honest losses, kept so the HTML column isn't
+  // ── Scope GAPS Monogram does not cover (honest non-wins, kept so the HTML column isn't
   //    all-wins). Monogram embeds only in raw-text elements (<script>/<style>), never in
   //    attribute values, and its Text token is a single `[^<]+` blob, so it cannot tokenize
-  //    character entities. The official does both → these grade as `(only official)`.
-  { id: 'tmbundle#113', title: 'embedded JS in an `onclick=` attribute value', src: `<input onclick="location.href='https://x.org/'">`,
-    at: 'location', want: s => s.includes('source.js') },                     // official embeds source.js in on* (and #113 shows that embedded JS is itself buggy); Monogram leaves the value a string
+  //    character entities. #81/#88 → `(only official)`. #113 → `(both miss)`: the official
+  //    embeds JS but mis-reads `//` in the string (the reported bug), and Monogram doesn't
+  //    embed attribute JS at all — so the `//` is correctly inside a JS string in NEITHER.
+  { id: 'tmbundle#113', title: '`//` in an `onclick=` JS string read as a comment', src: `<input onclick="location.href='https://x.org/'">`,
+    at: '//', want: s => s.includes('source.js') && !s.includes('comment') }, // official: real JS embed reads // as a comment (bug); Monogram: value is one HTML string, no source.js
   { id: 'tmbundle#81', title: 'character entity `&amp;` in text', src: '<p>x &amp; z</p>',
     at: '&amp;', want: s => s.includes('constant.character.entity') },        // official scopes the entity; Monogram's Text blob cannot
   { id: 'tmbundle#88', title: 'CSS inside a `style` attribute value', src: '<div style="color:red">x</div>',
