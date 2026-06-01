@@ -29,18 +29,20 @@ export const cases: HtmlCase[] = [
     at: 'go', want: isText },                                                 // the `>` didn't close the tag early
   { id: 'tmbundle#97', title: 'space before `>` in an end tag', src: '<section>x</section >',
     at: 'section', nth: 1, want: isTag },                                     // the close tag name is still a tag
+  { id: 'tmbundle#108', title: 'nested `<svg>` is a valid tag, not flagged invalid', src: '<svg><svg></svg></svg>',
+    at: 'svg', nth: 1, want: s => isTag(s) && !s.includes('invalid') },       // official's SVG-child whitelist marks a nested <svg> invalid.illegal; Monogram's generic nesting accepts it
 
-  // ── Scope GAPS Monogram does not cover (honest non-wins, kept so the HTML column isn't
-  //    all-wins). Graded against the REAL embedded JS/CSS (not a stub), so a ✓ means the span
-  //    is *correctly* highlighted, not merely delegated. #81: Monogram's Text token is one
-  //    `[^<]+` blob, so it can't scope a character entity → only official. #88: Monogram never
-  //    embeds CSS in attribute values; the official does → only official. #113: the official
-  //    embeds JS but mis-reads `//` in the string (the bug), and Monogram doesn't embed
-  //    attribute JS at all, so the `//` is correct JS in NEITHER → both miss.
+  // ── Scope GAPS Monogram does not cover (honest non-wins), graded against the REAL embedded
+  //    JS/CSS so a ✓ means the span is *correctly highlighted*, not merely delegated. #81:
+  //    Monogram's Text token is one `[^<]+` blob, so it can't scope a character entity → only
+  //    official. #102: Monogram names a `<style>` body `source.css` but leaves it one
+  //    untokenized blob; the official embeds real CSS (property names) → only official. #113:
+  //    the official embeds JS but mis-reads `//` in the string (the bug), and Monogram doesn't
+  //    embed attribute JS at all, so the `//` is correct JS in NEITHER → both miss.
   { id: 'tmbundle#113', title: '`//` in an `onclick=` JS string read as a comment', src: `<input onclick="location.href='https://x.org/'">`,
     at: '//', want: s => s.includes('source.js') && !s.includes('comment') }, // official: real JS embed reads // as a comment (bug); Monogram: value is one HTML string, no source.js
   { id: 'tmbundle#81', title: 'character entity `&amp;` in text', src: '<p>x &amp; z</p>',
     at: '&amp;', want: s => s.includes('constant.character.entity') },        // official scopes the entity; Monogram's Text blob cannot
-  { id: 'tmbundle#88', title: 'CSS inside a `style` attribute value', src: '<div style="color:red">x</div>',
-    at: 'color', want: s => s.includes('source.css') },                       // official embeds REAL css in style=; Monogram keeps the value a plain HTML string
+  { id: 'tmbundle#102', title: '`<style>` element CSS is tokenized, not a flat blob', src: '<style>.a{color:red}</style>',
+    at: 'color', want: s => s.includes('support.type.property-name.css') },   // official embeds real CSS (color = property-name); Monogram names the region source.css but leaves it one untokenized blob
 ];
