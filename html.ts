@@ -87,10 +87,13 @@ export const markup: MarkupConfig = {
   closeMarker: '/',
   attributeAssign: '=',          // `name = value`
   attributeQuotes: ['"', "'"],   // quoted attribute values
-  // `on*` event-handler attributes carry JS. Embedding Monogram's OWN source.js (capture-bounded
-  // to the value) highlights it correctly — and beats the official, whose inline-JS value rule
-  // hand-rolls a `//` splitter that mis-reads `//` inside a string as a comment (html.tmbundle#113).
-  attributeEmbed: [{ namePattern: 'on\\w+', embed: 'source.js' }],
+  // `on*` event-handler attributes carry JS, and `style` carries CSS — embed the platform's
+  // source.js / source.css, capture-bounded to the quoted value. The JS embed also beats the
+  // official, whose inline-JS value rule hand-rolls a `//` splitter that mis-reads `//` inside a
+  // string as a comment (html.tmbundle#113); the `style`→source.css embed matches the official's
+  // inline-CSS delegation (html.tmbundle#88). `data-on…` / `style-…` aren't grabbed — the `(?![\w:.-])`
+  // name boundary + leftmost-match keep the generic attribute-name rule winning at the true start.
+  attributeEmbed: [{ namePattern: 'on\\w+', embed: 'source.js' }, { namePattern: 'style', embed: 'source.css' }],
   // Raw-text element bodies are scanned verbatim by the parser, but the HIGHLIGHTER
   // delegates `<script>`/`<style>` to the platform's real JS/CSS grammars (exactly as
   // the official HTML grammar embeds source.js / source.css — Monogram has no own CSS

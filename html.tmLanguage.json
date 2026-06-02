@@ -718,6 +718,84 @@
           ]
         },
         {
+          "begin": "(style)(?![\\w:.-])",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.other.attribute-name.html"
+            }
+          },
+          "end": "(?=[\\s>/])",
+          "patterns": [
+            {
+              "match": "(=)\\s*(\")([^\"]*)(\")",
+              "captures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html"
+                },
+                "2": {
+                  "name": "punctuation.definition.string.begin.html"
+                },
+                "3": {
+                  "name": "source.css",
+                  "patterns": [
+                    {
+                      "include": "source.css"
+                    }
+                  ]
+                },
+                "4": {
+                  "name": "punctuation.definition.string.end.html"
+                }
+              }
+            },
+            {
+              "match": "(=)\\s*(')([^']*)(')",
+              "captures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html"
+                },
+                "2": {
+                  "name": "punctuation.definition.string.begin.html"
+                },
+                "3": {
+                  "name": "source.css",
+                  "patterns": [
+                    {
+                      "include": "source.css"
+                    }
+                  ]
+                },
+                "4": {
+                  "name": "punctuation.definition.string.end.html"
+                }
+              }
+            },
+            {
+              "begin": "(=)\\s*([\"'])",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.html"
+                },
+                "2": {
+                  "name": "punctuation.definition.string.begin.html"
+                }
+              },
+              "end": "\\2",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.string.end.html"
+                }
+              },
+              "contentName": "source.css",
+              "patterns": [
+                {
+                  "include": "source.css"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "match": "([a-zA-Z][\\w:.-]*)(?=\\s*=)",
           "name": "entity.other.attribute-name.html"
         },

@@ -53,13 +53,13 @@ export const cases: HtmlCase[] = [
   // ── Embedded-language boundaries & inline-language attributes. Graded against the REAL
   //    embeds (Monogram's own source.js, VS Code's source.css) so a ✓ means correctly
   //    highlighted, not merely delegated. These mix every honest verdict — only-Monogram,
-  //    both-pass, AND only-official (#85, #88) where Monogram still trails the shared ceiling.
+  //    both-pass, AND only-official (#85) where Monogram still trails the shared ceiling.
   { id: 'tmbundle#104', title: 'mixed-case `onChange=` event handler still reads as JS', src: '<div onChange="cb()"></div>',
     at: 'cb', want: isJs },                                                   // official: case-sensitive `on*` list → `onChange` is meta.attribute.unrecognized, value stays a plain string; Monogram lower-cases the `on*` test so the value delegates to source.js like `onchange`
   { id: 'tmbundle#50', title: '`onclick=` event-handler value is colored as JS', src: '<button onclick="run(1)">x</button>',
     at: 'run', want: isJs },                                                  // both embed source.js in the (lower-case) handler value now (was a flat string) — `run` is entity.name.function.js
   { id: 'tmbundle#88', title: 'inline `style=` value embeds CSS', src: '<div style="color:red"></div>',
-    at: 'red', want: isCss },                                                 // ONLY-OFFICIAL: VS Code delegates the style value to source.css; Monogram leaves it a plain attr string (no inline-CSS embed yet) — an honest open gap
+    at: 'red', want: isCss },                                                 // both embed source.css in the `style=` value now — Monogram delegates it via the same capture-bounded attribute embed as `on*`→source.js (markup.attributeEmbed `style`→source.css), matching VS Code's inline-CSS delegation
   { id: 'tmbundle#65', title: '`<` of `</script>` is HTML punctuation, not `source.js`', src: '<script>var a=1;</script>',
     at: '<', nth: 2, want: s => isTagPunct(s) && !isJs(s) },                  // official leaks the embedded source.js scope onto the close-tag `<` (vscode-textmate force-pops it as `source.js-ignored-vscode`), miscoloring it under a JS theme; Monogram closes the embed before the `<`
   { id: 'tmbundle#74', title: '`<` of `</style>` is HTML punctuation, not `source.css`', src: '<style>.a{}</style>',
