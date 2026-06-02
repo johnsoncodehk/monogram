@@ -63,6 +63,10 @@ export function createLexer(grammar: CstGrammar) {
   // Member-access texts (`.`/`?.`): a keyword right after one is a property name, so
   // the control-head rule above does not apply (`obj.for(x) / y` is a call/division).
   const memberAccessTexts = new Set(regexCtx?.memberAccessTexts ?? []);
+  // Postfix ops ambiguous with a prefix op of the same spelling (TS `!`): value-producing
+  // only in postfix position (after a value), so a following `/` is division then but a
+  // regex when it's the prefix form (`!/re/`). Resolved per-occurrence (see lastBangWasPostfix).
+  const postfixAfterValueTexts = new Set(regexCtx?.postfixAfterValueTexts ?? []);
 
   // ── Markup mode (opt-in; entirely dormant unless the grammar declares `markup`) ──
   // Drives a text/tag/raw-text state machine in tokenize(); all delimiters are grammar
@@ -116,6 +120,11 @@ export function createLexer(grammar: CstGrammar) {
     // that to the regex-vs-division check (consulted only when prev is `)`).
     const parenHeadStack: boolean[] = [];
     let lastCloseWasParenHead = false;
+    // Whether the most-recently-emitted ambiguous postfix/prefix op (e.g. `!`) was in
+    // POSTFIX position — i.e. followed a value, so it is itself value-producing (non-null
+    // `x!`) and a following `/` is division. False ⇒ it was the prefix form (`!x`, `!/re/`),
+    // so a `/` right after it is a regex. Read by prevIsValue when prev is such a token.
+    let lastBangWasPostfix = false;
     // A line terminator was seen since the last emitted token (skipped whitespace
     // or comments). Stamped onto the next real token as `newlineBefore`, then
     // cleared — so the parser can honor "no LineTerminator here" restrictions
@@ -138,6 +147,9 @@ export function createLexer(grammar: CstGrammar) {
     // shared by the regex-vs-division check and template escape validation.
     function prevIsValue(prev: Token | undefined): boolean {
       if (!prev) return false;
+      // An ambiguous postfix/prefix op (e.g. `!`) is a value only in postfix position
+      // (it followed a value) — recorded when it was emitted (lastBangWasPostfix).
+      if (postfixAfterValueTexts.has(prev.text)) return lastBangWasPostfix;
       const isExprKeyword = prev.type === identTokenName && expressionStartKeywords.has(prev.text);
       const isParenHead = prev.text === ')' && lastCloseWasParenHead;
       return !isExprKeyword && !isParenHead && (divisionPrevTypes.has(prev.type) || divisionPrevTexts.has(prev.text));
@@ -273,6 +285,10 @@ export function createLexer(grammar: CstGrammar) {
             } else if (lit === ')') {
               lastCloseWasParenHead = parenHeadStack.pop() ?? false;
             }
+            // An ambiguous postfix/prefix op (`!`): it is the value-producing postfix form
+            // iff it follows a value (computed BEFORE pushing it, so prev is the token
+            // before it). Chains correctly (`a!!`): each `!` reads the prior one's flag.
+            if (postfixAfterValueTexts.has(lit)) lastBangWasPostfix = prevIsValue(tokens[tokens.length - 1]);
             push({ type: '', text: lit, offset: pos });
             pos += lit.length;
             matched = true;

@@ -22,6 +22,7 @@ interface TokenOptions {
     regexAfterTexts?: string[];
     regexAfterParenKeywords?: string[];
     memberAccessTexts?: string[];
+    postfixAfterValueTexts?: string[];
   };
   string?: boolean;
 }
@@ -357,6 +358,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
         regexAfterTexts: tok.opts.regexContext.regexAfterTexts ?? [],
         regexAfterParenKeywords: tok.opts.regexContext.regexAfterParenKeywords ?? [],
         memberAccessTexts: tok.opts.regexContext.memberAccessTexts ?? [],
+        postfixAfterValueTexts: tok.opts.regexContext.postfixAfterValueTexts ?? [],
       },
       string: tok.opts.string,
     };

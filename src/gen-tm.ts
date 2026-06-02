@@ -1834,6 +1834,12 @@ interface RegexLiteralInfo {
   flagsPattern: string;   // e.g., '[gimsuy]*'
   preceedingKeywords: string[];  // keywords that can precede a regex literal
   precedingChars: string[];  // single-char operators/punctuation that can precede regex
+  // Chars (e.g. `!`) that are AMBIGUOUS postfix/prefix ops: a regex may follow one ONLY in
+  // its prefix form (`!/re/`), i.e. when the op-run is ITSELF in a regex-start position; in
+  // postfix form (`x! / y` — non-null) a following `/` is division. Kept OUT of precedingChars
+  // (which would make every `/` after one a regex) and handled by a recursive lookbehind that
+  // checks the context BEFORE the op-run. From the grammar's regexContext.postfixAfterValueTexts.
+  postfixAmbiguousChars: string[];
   commentSecondChars: string[];  // chars after '/' that start comments (e.g., ['/', '*'])
   // Regex-escaped block-comment delimiter pairs that share the regex's `/` prefix
   // (e.g. `['\\/\\*', '\\*\\/']` for `/* … */`). A comment is transparent to the
@@ -1943,11 +1949,17 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
   const seenChars = new Set<string>();
   // Close brackets precede division, not regex
   const closeBrackets = new Set([')', ']', '}']);
+  // Ambiguous postfix/prefix op chars (TS `!`): handled by a dedicated recursive lookbehind,
+  // so keep them OUT of the flat preceding-char class (else `x! / y` would lex as a regex).
+  const regexCtx = grammar.tokens.find(t => t.regexContext)?.regexContext;
+  const postfixAmbiguousChars = (regexCtx?.postfixAfterValueTexts ?? []).filter(c => c.length === 1);
+  const postfixAmbiguousSet = new Set(postfixAmbiguousChars);
   // Infix/prefix operators from prec table
   for (const level of grammar.precs) {
     for (const op of level.operators) {
       if (op.value.length === 1 && !/[a-zA-Z]/.test(op.value) &&
-          op.position !== 'postfix' && op.value !== '/' && !seenChars.has(op.value)) {
+          op.position !== 'postfix' && op.value !== '/' &&
+          !postfixAmbiguousSet.has(op.value) && !seenChars.has(op.value)) {
         precedingChars.push(op.value);
         seenChars.add(op.value);
       }
@@ -1957,7 +1969,7 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
   for (const rule of grammar.rules) {
     for (const lit of collectLiterals(rule.body)) {
       if (lit.length === 1 && !/[a-zA-Z]/.test(lit) &&
-          !closeBrackets.has(lit) && !seenChars.has(lit)) {
+          !closeBrackets.has(lit) && !postfixAmbiguousSet.has(lit) && !seenChars.has(lit)) {
         precedingChars.push(lit);
         seenChars.add(lit);
       }
@@ -1989,7 +2001,7 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
     }
   }
 
-  return { flagsPattern, preceedingKeywords, precedingChars, commentSecondChars, blockComments };
+  return { flagsPattern, preceedingKeywords, precedingChars, postfixAmbiguousChars, commentSecondChars, blockComments };
 }
 
 /**
@@ -2026,9 +2038,28 @@ function generateRegexLiteralPatterns(
   // Also match at start of line
   const startOfLine = '(?<=^)';
 
-  const fullLookbehind = keywordLookbehinds
-    ? `(?:${charLookbehind}|${keywordLookbehinds}|${startOfLine})`
-    : `(?:${charLookbehind}|${startOfLine})`;
+  // Ambiguous postfix/prefix op chars (TS `!`): a `/` may follow one ONLY when the op-run is
+  // the PREFIX form — i.e. the run is itself in a regex-start position (`= !/re/`, `!!/re/`,
+  // `return !/x/`), NOT the postfix non-null form (`x! / y` → division). We can't decide that
+  // from the single char before `/` (it's the op either way), so look back PAST the op-run and
+  // re-apply the same regex-start test there. The inner context is the SAME char-class +
+  // keywords + line-start used above, but un-wrapped (it sits inside this lookbehind), and the
+  // op-run is `[ops](?:\s*[ops])*` (chained `!!` allowed). Because these chars were excluded
+  // from `charLookbehind`, a postfix op (preceded by a value) matches NONE of the alternatives
+  // → the `/` falls through to the division operator.
+  const innerCtx = [
+    charEsc ? `[${charEsc}]` : null,
+    ...info.preceedingKeywords.map(kw => `\\b${escapeRegex(kw)}`),
+    '^',
+  ].filter(Boolean).join('|');
+  const opRun = info.postfixAmbiguousChars.map(escapeRegex).join('');
+  const postfixBangLookbehind = opRun
+    ? `(?<=(?:${innerCtx})\\s*[${opRun}](?:\\s*[${opRun}])*)`
+    : '';
+
+  const lbAlts = [charLookbehind, keywordLookbehinds, postfixBangLookbehind, startOfLine]
+    .filter(Boolean).join('|');
+  const fullLookbehind = `(?:${lbAlts})`;
 
   // Build comment exclusion: after '/' these chars would start a comment
   const commentExclude = info.commentSecondChars.length > 0

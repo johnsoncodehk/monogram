@@ -34,6 +34,15 @@ export interface RegexContext {
   // property NAME, not a keyword, so `obj.for(x) / y` is a call + division (the
   // `regexAfterParenKeywords` control-head rule does not apply).
   memberAccessTexts?: string[];
+  // postfix-unary operator TEXTs that are AMBIGUOUS with a prefix operator of the
+  // same spelling (TS non-null `!`, also logical-not `!`). Such a token is
+  // value-producing — so a following `/` is DIVISION and a following template is
+  // TAGGED — ONLY when it follows a value (postfix `x!`); when it follows a
+  // non-value/expression-start it is the prefix operator (`!x`, `!/re/`), so a `/`
+  // right after it is a REGEX. (Unconditional postfix ops like `++`/`--` go in
+  // `divisionAfterTexts` instead — a `/` can never directly follow their prefix
+  // form, so they need no value-context check.)
+  postfixAfterValueTexts?: string[];
 }
 
 /** A raw-text element's embed, selected by a `lang="…"` attribute on the start tag. */

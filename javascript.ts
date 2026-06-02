@@ -78,6 +78,13 @@ const Regex_       = token(/\/(?:[^\/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[gims
     // member accessors: after one, those keywords are property NAMES, so
     // `obj.for(x) / y` stays a method call + division.
     memberAccessTexts: ['.', '?.'],
+    // `!` is BOTH prefix logical-not and (in TS) postfix non-null. It is value-producing —
+    // so a following `/` is division (`x! / y`) and a following template is tagged — only in
+    // its postfix form (after a value); as prefix-not a following `/` is a regex (`!/re/`).
+    // Resolved per-occurrence from the preceding context (the lexer/highlighter check whether
+    // the `!` itself follows a value). In valid JS `!` is only ever prefix, so this is inert
+    // for JS (a `!` never follows a value) — it earns its keep in the shared TS layer.
+    postfixAfterValueTexts: ['!'],
   },
 });
 const Decorator    = token(/@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?/,                { scope: 'entity.name.function.decorator' });
