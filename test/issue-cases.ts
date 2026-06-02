@@ -4,9 +4,15 @@
 // Each case label carries its tracker #issue number (microsoft/TypeScript-TmLanguage).
 
 export interface Check { text: string; scope: string; }
-export interface TestCase { label: string; input: string; checks: Check[]; }
+// `monoGap`: an honest reported bug the DERIVED grammar does NOT solve yet (only-official, or
+// both-miss). It still appears in the README cross-language comparison table (graded honestly by
+// test/issue-table.ts), but the Monogram-measurement consumers SKIP it — the self-test
+// (test/test-issues.ts) and the accuracy benches (test/highlight-bench.ts, test/treesitter-bench.ts)
+// gate Monogram's KNOWN-GOOD corpus, not the full honest comparison universe, so a case Monogram
+// gets wrong must not fail them. Same convention as test/vue-issue-cases.ts.
+export interface TestCase { label: string; input: string; checks: Check[]; monoGap?: boolean; }
 export interface MultiLineCheck { line: number; text: string; scope: string; }
-export interface MultiLineTest { label: string; lines: string[]; checks: MultiLineCheck[]; }
+export interface MultiLineTest { label: string; lines: string[]; checks: MultiLineCheck[]; monoGap?: boolean; }
 
 export const tests: TestCase[] = [
 
@@ -691,6 +697,63 @@ export const tests: TestCase[] = [
       { text: 'keyof', scope: 'keyword.operator.expression' },
     ],
   },
+
+  // ── More documented official-grammar bugs (graded honestly: wins, ties, and gaps) ──
+
+  // `instanceof` followed by a bitwise/arithmetic/equality operator: the official grammar
+  // mis-reads the right-hand operand as a TYPE name (entity.name.type) and the highlighting
+  // derails — Monogram keeps it a value expression.
+  {
+    label: '#814: `a instanceof B & c` keeps the operand a value, not a type',
+    input: 'if (a instanceof B & c) {}',
+    checks: [
+      { text: 'instanceof', scope: 'keyword.operator.expression' },
+      { text: 'B', scope: 'variable.other' },   // official paints this entity.name.type
+      { text: 'c', scope: 'variable.other' },
+    ],
+  },
+  // `as const satisfies Foo`: the reported bug (the `satisfies` keyword not being colored) is
+  // fixed in BOTH grammars now — a both-pass kept to document the resolved issue honestly.
+  {
+    label: '#956: `as const satisfies Foo` colors the satisfies keyword and the type',
+    input: 'const x = { a: 1 } as const satisfies Foo;',
+    checks: [
+      { text: 'satisfies', scope: 'keyword' },
+      { text: 'Foo', scope: 'entity.name.type' },
+    ],
+  },
+  // `import type from "./type"` is a DEFAULT import whose binding is named `type` (not a
+  // type-only import) — so `type` should be a variable. Both grammars mis-read it as the
+  // `import type` modifier keyword: an honest both-miss the derived grammar does not solve.
+  {
+    label: '#950: default import named `type` — the binding is a variable, not the `type` keyword',
+    monoGap: true,
+    input: `import type from "./type";`,
+    checks: [
+      { text: 'type', scope: 'variable.other' },
+    ],
+  },
+  // TS 5.9 `import defer * as ns`: the `defer` modifier should be a keyword, but both grammars
+  // scope it as an alias variable (variable.other.readwrite[.alias]) — neither knows the syntax.
+  {
+    label: '#1058: `import defer` should scope `defer` as a keyword',
+    monoGap: true,
+    input: `import defer * as ns from "x";`,
+    checks: [
+      { text: 'defer', scope: 'keyword' },
+    ],
+  },
+  // Conditional type with an un-parenthesized `typeof` operand: the official grammar tokenizes
+  // the `? :` as a ternary, the derived grammar does not yet split the conditional-type operator
+  // (an only-official gap).
+  {
+    label: '#907: `typeof x extends string ? 1 : 2` conditional-type ternary',
+    monoGap: true,
+    input: 'type T = typeof x extends string ? 1 : 2;',
+    checks: [
+      { text: '?', scope: 'keyword.operator.ternary' },
+    ],
+  },
 ];
 
 // ══════════════════════════════════════════════════════════════════
@@ -1256,6 +1319,105 @@ export const multiLineTests: MultiLineTest[] = [
       { line: 0, text: '`', scope: 'punctuation.definition.string.template.begin' },
       { line: 0, text: '${', scope: 'punctuation.definition.template-expression.begin' },
       { line: 0, text: '}', scope: 'punctuation.definition.template-expression.end' },
+    ],
+  },
+
+  // ── More documented official-grammar bugs (multi-line; graded honestly) ──
+
+  // A generic arrow whose `(` parameter list is broken before the close `)`: the official
+  // grammar swallows the rest of the FILE into a `cast.expr` type context (the `return` becomes
+  // entity.name.type), exactly the reported "breaks highlighting for the rest of the file".
+  {
+    label: '#1048: `<T extends number>(a\\n) =>` does not derail the body',
+    lines: [
+      'const echo = <T extends number>(a',
+      ') => {',
+      '  return a;',
+      '};',
+    ],
+    checks: [
+      { line: 1, text: '=>', scope: 'storage.type.function.arrow' },
+      { line: 2, text: 'return', scope: 'keyword.control.flow' },  // official: entity.name.type
+    ],
+  },
+
+  // A lambda block inside an object literal inside parentheses in a `return`: the official
+  // grammar mis-reads `({…})` as an object-binding-pattern parameter and every following
+  // function (here `function two`) is swallowed as an object-literal key for the rest of the file.
+  {
+    label: '#988: nested lambda-in-object-in-parens does not break later functions',
+    lines: [
+      'function one() {',
+      '  return (',
+      '    {',
+      '      toString: () => {',
+      '        return "x";',
+      '      }',
+      '    }',
+      '  );',
+      '}',
+      'function two() {',
+      '  return "??";',
+      '}',
+    ],
+    checks: [
+      { line: 9, text: 'function', scope: 'storage.type.function' },
+      { line: 9, text: 'two', scope: 'entity.name.function' },     // official: meta.object-literal.key
+      { line: 10, text: 'return', scope: 'keyword.control.flow' },
+    ],
+  },
+
+  // A `//` line comment terminating a union-type member: on the NEXT line the official grammar
+  // drops the type-annotation context — the line-2 `|` becomes a bitwise operator — while the
+  // derived grammar keeps the union pipe a type operator. (The README table's line-agnostic
+  // substring matcher can't tell the two `|`s apart so it scores this a tie; the line-aware
+  // self-test below locks the real win on the line-2 pipe.)
+  {
+    label: '#989: trailing `//` inside a multiline union keeps the next `|` a type operator',
+    lines: [
+      'let test:',
+      '  | null //',
+      '  | undefined;',
+    ],
+    checks: [
+      { line: 0, text: 'let', scope: 'storage.type' },
+      { line: 2, text: '|', scope: 'keyword.operator.type' },        // official: keyword.operator.bitwise
+      { line: 2, text: 'undefined', scope: 'constant' },
+    ],
+  },
+
+  // A multi-line `new Map<…>` type-argument list containing an indexed-access type: the official
+  // grammar loses the type context across the line breaks — `number`/`Array` become plain
+  // variables and the `["events"]` is read as an array LITERAL. The derived grammar keeps it a type.
+  {
+    label: '#1064: multiline `new Map<…Array<DB.X["events"]>…>` stays a type',
+    lines: [
+      'const eventMap = new Map<',
+      '  number,',
+      '  Array<DB.Infertable["events"]>',
+      '>();',
+    ],
+    checks: [
+      { line: 1, text: 'number', scope: 'entity.name.type' },       // official: variable.other.readwrite
+      { line: 2, text: 'Array', scope: 'entity.name.type' },
+      { line: 3, text: '>', scope: 'punctuation.definition.typeparameters.end' },
+    ],
+  },
+
+  // A `declare function` returning a multi-line union of object types: BOTH grammars mis-handle
+  // the SECOND union member's properties (the reported inconsistency between the first `data`,
+  // correctly a property, and the second `data`). An honest both-miss the derived grammar shares.
+  {
+    label: '#997: union of object types — both members’ props should be properties',
+    monoGap: true,
+    lines: [
+      'declare function getCb():',
+      '  | { data: string; cb: (arg: string) => void }',
+      '  | { data: number; cb: (arg: number) => void }',
+    ],
+    checks: [
+      { line: 1, text: 'data', scope: 'variable.object.property' },  // member 1: official ✓, mono ✗
+      { line: 2, text: 'data', scope: 'variable.object.property' },  // member 2: both ✗
     ],
   },
 ];

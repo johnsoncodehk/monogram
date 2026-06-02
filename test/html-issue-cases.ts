@@ -11,6 +11,9 @@ const isTag = (s: string) => s.includes('entity.name.tag');
 const isString = (s: string) => s.includes('string');                 // a quoted/unquoted attr VALUE
 const notAttrName = (s: string) => !s.includes('entity.other.attribute-name');
 const isText = (s: string) => s.includes('text') && !s.includes('entity') && !s.includes('string');
+const isJs = (s: string) => s.includes('source.js');                  // delegated to the JS grammar
+const isCss = (s: string) => s.includes('source.css');                // delegated to the CSS grammar
+const isTagPunct = (s: string) => s.includes('punctuation.definition.tag'); // a `<` `>` `/` delimiter
 
 export const cases: HtmlCase[] = [
   { id: 'tmbundle#118', title: 'trailing `/` in an unquoted URL value', src: '<a href=https://example.org/>foo</a>',
@@ -46,4 +49,25 @@ export const cases: HtmlCase[] = [
     at: '&amp;', want: s => s.includes('constant.character.entity') },        // both scope it now — Monogram via markup.entity (was a Text blob), official natively
   { id: 'tmbundle#102', title: '`<style>` element CSS is tokenized, not a flat blob', src: '<style>.a{color:red}</style>',
     at: 'color', want: s => s.includes('support.type.property-name.css') },   // both embed real CSS (color = property-name) — Monogram now delegates source.css like the official (was an untokenized blob)
+
+  // ── Embedded-language boundaries & inline-language attributes. Graded against the REAL
+  //    embeds (Monogram's own source.js, VS Code's source.css) so a ✓ means correctly
+  //    highlighted, not merely delegated. These mix every honest verdict — only-Monogram,
+  //    both-pass, AND only-official (#85, #88) where Monogram still trails the shared ceiling.
+  { id: 'tmbundle#104', title: 'mixed-case `onChange=` event handler still reads as JS', src: '<div onChange="cb()"></div>',
+    at: 'cb', want: isJs },                                                   // official: case-sensitive `on*` list → `onChange` is meta.attribute.unrecognized, value stays a plain string; Monogram lower-cases the `on*` test so the value delegates to source.js like `onchange`
+  { id: 'tmbundle#50', title: '`onclick=` event-handler value is colored as JS', src: '<button onclick="run(1)">x</button>',
+    at: 'run', want: isJs },                                                  // both embed source.js in the (lower-case) handler value now (was a flat string) — `run` is entity.name.function.js
+  { id: 'tmbundle#88', title: 'inline `style=` value embeds CSS', src: '<div style="color:red"></div>',
+    at: 'red', want: isCss },                                                 // ONLY-OFFICIAL: VS Code delegates the style value to source.css; Monogram leaves it a plain attr string (no inline-CSS embed yet) — an honest open gap
+  { id: 'tmbundle#65', title: '`<` of `</script>` is HTML punctuation, not `source.js`', src: '<script>var a=1;</script>',
+    at: '<', nth: 2, want: s => isTagPunct(s) && !isJs(s) },                  // official leaks the embedded source.js scope onto the close-tag `<` (vscode-textmate force-pops it as `source.js-ignored-vscode`), miscoloring it under a JS theme; Monogram closes the embed before the `<`
+  { id: 'tmbundle#74', title: '`<` of `</style>` is HTML punctuation, not `source.css`', src: '<style>.a{}</style>',
+    at: '<', nth: 2, want: s => isTagPunct(s) && !isCss(s) },                 // same leak for CSS: official tags the `</style>` `<` with source.css; Monogram does not
+  { id: 'tmbundle#85', title: '`//</script>` on its own line still closes the script', src: '<script>\n//</script>\n<p>z</p>',
+    at: 'z', want: s => !isJs(s) },                                          // ONLY-OFFICIAL: when `</script>` follows a `//` comment on a line that begins inside the embed, Monogram's JS line-comment swallows the close tag and stays stuck in source.js (the `<p>` after never recovers); VS Code's embed has a higher-priority `(?=</script)` end-guard. Honest Monogram gap (the single-line `<script>//</script>` form, #72, both close fine)
+  { id: 'tmbundle#51', title: 'self-closing `/` is tag punctuation', src: '<img src="a.png" />',
+    at: '/', want: isTagPunct },                                             // both scope the `/` of `/>` as punctuation.definition.tag (was plain text in old TextMate)
+  { id: 'tmbundle#82', title: '`<script type="application/json">` body is not parsed as HTML', src: '<script type="application/json">{"k":1}</script>',
+    at: 'k', want: s => !isTag(s) && !s.includes('invalid') && !s.includes('.error') }, // the JSON body broke HTML highlighting historically; now neither treats its `{...}` as markup — official drops it into source.unknown, Monogram tokenizes it via source.js (JSON ⊂ JS), and `</script>` still closes
 ];

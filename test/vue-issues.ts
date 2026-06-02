@@ -43,6 +43,10 @@ const expect: Record<string, { mono: boolean; off: boolean }> = {
   '#6007/#2096/#520': { mono: true, off: false }, '#5538/#2060': { mono: true, off: true },
   '#3999': { mono: true, off: true }, '#4769': { mono: true, off: true }, '#5701': { mono: true, off: true },
   '#6070': { mono: true, off: true },
+  // ── 2026-06 expansion: more reported bugs, honest mix (incl. only-official Monogram gaps) ──
+  '#5660': { mono: true, off: false }, '#4716/#5571': { mono: true, off: false }, '#4291': { mono: true, off: false },
+  '#4410': { mono: false, off: true }, '#3727': { mono: false, off: true }, '#2666': { mono: false, off: true },
+  '#2560/#1290': { mono: true, off: true },
 };
 
 let mPass = 0, oPass = 0; const rows: string[] = []; const deviations: string[] = [];

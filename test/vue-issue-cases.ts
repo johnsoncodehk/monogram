@@ -12,7 +12,11 @@ export const htmlText = (s: string) => familyOf(s) === 'html';   // recovered to
 export const DONE = '\n  <b>DONE</b>\n</template>';              // downstream marker — must recover to HTML
 
 export interface Check { at: string; nth?: number; want: (s: string) => boolean; desc: string }
-export interface Case { id: string; title: string; src: string; checks: Check[] }
+// `monoGap`: an honest REPORTED bug the DERIVED grammar does NOT solve yet (only-official, or
+// both-miss). It still appears in the cross-language README table (graded honestly by
+// issue-table.ts), but the Monogram-self-test gates (vue-issues.ts / vue-dropin.ts) skip it —
+// they assert Monogram's known-good behaviour, not the full honest comparison corpus.
+export interface Case { id: string; title: string; src: string; checks: Check[]; monoGap?: boolean }
 
 export const cases: Case[] = [
   // ── TS operators inside template expressions — Monogram embeds proven TS, gets these free ──
@@ -43,4 +47,34 @@ export const cases: Case[] = [
     checks: [{ at: 'real', want: embedded, desc: 'the real interpolation still embeds as TS' }, { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
   { id: '#6070', title: 'capitalized component then a `<style>` block', src: `<template>\n  <MyComp @click="f">x</MyComp>\n</template>\n<style>\n.a { color: red }\n</style>`,
     checks: [{ at: 'color', want: s => familyOf(s) === 'css', desc: '<style> after a capitalized tag still embeds as CSS' }] },
+
+  // ── more of the `as`-cast leak family (the #5012 intra-line ceiling) — Monogram wins ──
+  { id: '#5660', title: '`as const` cast in a v-for value', src: `<template>\n  <div v-for="i in [0,1,2] as const">{{ i }}</div>${DONE}`,
+    checks: [{ at: 'as', want: embedded, desc: '`as const` embeds as TS' },
+      { at: '{{', want: htmlText, desc: 'the interpolation opener is HTML — the cast did NOT leak past the closing quote' },
+      { at: 'DONE', want: htmlText, desc: 'downstream recovers to HTML (the official\'s cast context leaks all the way to EOF)' }] },
+  { id: '#4716/#5571', title: '`as` cast followed by another attribute', src: `<template>\n  <some-comp :value="foo as boolean" :other="bar" />${DONE}`,
+    checks: [{ at: 'as', want: embedded, desc: '`as` embeds as TS' },
+      { at: 'bar', want: embedded, desc: 'the NEXT directive value still embeds as TS — the cast can\'t eat the closing quote (the official mis-scopes `bar` as a plain attribute name)' },
+      { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
+  // ── block-language attribute — Monogram embeds tsx as code, the official drops the embed ──
+  { id: '#4291', title: '`<script lang="tsx">` body is embedded code', src: `<script setup lang="tsx">\nconst n = 1\n</script>\n<template>\n  <p>x</p>${DONE}`,
+    checks: [{ at: 'n = 1', want: embedded, desc: 'the tsx script body embeds as code (the official leaves the whole body as plain HTML text)' },
+      { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
+
+  // ── directive forms Monogram doesn't model yet (the value is plain HTML, not embedded) — official wins ──
+  { id: '#4410', monoGap: true, title: 'dynamic directive argument `:[attr]`', src: `<template>\n  <a :[attr]="url">x</a>${DONE}`,
+    checks: [{ at: 'attr', want: embedded, desc: 'the `[attr]` dynamic argument is itself a JS expression — should embed as TS (Monogram treats it as a plain attribute name)' },
+      { at: 'url', want: embedded, desc: 'the value embeds as TS' }, { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
+  { id: '#3727', monoGap: true, title: '`.prop` modifier shorthand', src: `<template>\n  <my-comp .prop="value" />${DONE}`,
+    checks: [{ at: 'value', want: embedded, desc: '`.prop` is `v-bind:prop.prop` shorthand — its value should embed as TS (Monogram reads `.prop` as a plain attr, so the value is a plain string)' },
+      { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
+  { id: '#2666', monoGap: true, title: 'dynamic slot name from a template literal', src: '<template>\n  <Comp v-slot:[`item-${idx}`]="props">{{ props }}</Comp>' + DONE,
+    checks: [{ at: 'idx', want: embedded, desc: 'the `${idx}` inside the template-literal slot name should embed as TS (Monogram treats the whole `v-slot:[…]` arg as a plain attribute name)' },
+      { at: 'props }}', want: embedded, desc: 'the slot-props value embeds as TS' }, { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
+
+  // ── v-for loop var named after a TS keyword — the old `type`-in-v-for trap; both handle it now ──
+  { id: '#2560/#1290', title: '`type` as a v-for loop variable', src: `<template>\n  <div v-for="type in items">{{ type }}</div>${DONE}`,
+    checks: [{ at: 'type }}', want: embedded, desc: 'the loop variable named `type` embeds as TS — no keyword-trap break' },
+      { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
 ];

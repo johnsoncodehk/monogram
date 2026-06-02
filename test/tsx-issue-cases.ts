@@ -3,11 +3,19 @@
 // side effects on import). Shared by test/issue-table.ts (the README cross-language table).
 //
 // Monogram's .tsx is the JSX dialect DERIVED from the conformance-proven TS base (withJsx) —
-// not a separate hand-written grammar. These are cases the hand-written official grammar gets
-// wrong: it breaks a generic-arrow type-param list with a default/const modifier to
+// not a separate hand-written grammar. The first cases are ones the hand-written official grammar
+// gets wrong: it breaks a generic-arrow type-param list with a default/const modifier to
 // `invalid.illegal` (the `<` is taken as a JSX tag), and lumps a member-expression tag name
 // into one component token. The derived grammar disambiguates both. (#1033 — a JSX component
 // with a generic type argument — the official already handles; Monogram now matches it.)
+//
+// The ledger is HONEST, not cherry-picked: it also keeps cases the derived grammar loses or ties —
+// #794 / #585 / #754 are only the official solves (a `!`+`/` division mis-read as a regex so the
+// `/>` no longer closes the tag; a `//` comment inside an open tag; a JSX element after a `/**/`
+// block comment), #825 is a both-fail (a `<` and the tag name split across lines defeats both
+// line-oriented grammars), and #667 / #624 are both-pass (real reported cascades both now handle).
+// Every `src` was ground-truthed as valid JSX with tsc (ScriptKind.TSX, 0 parse diagnostics; the
+// node kind confirms a real JsxElement, not a generic arrow), so a failing check is a true miss.
 
 export interface Check { at: string; nth?: number; want: (s: string) => boolean; desc: string }
 export interface Case { id: string; title: string; src: string; checks: Check[] }
@@ -18,6 +26,13 @@ export interface Case { id: string; title: string; src: string; checks: Check[] 
 const arrow = (s: string) => s.includes('storage.type.function.arrow');
 const isType = (s: string) => s.includes('support.type') || s.includes('entity.name.type');
 const isVar = (s: string) => s.includes('variable.other');
+// A JSX tag name (intrinsic `entity.name.tag` or a `support.class.component`) — used to tell
+// "the `<…>` was recognized as a JSX tag" from "it was read as a `<` comparison / type-args".
+const isTag = (s: string) => s.includes('entity.name.tag') || s.includes('support.class.component');
+// The self-closing `/>` (or a `>`) really closing a tag, vs. cascading into expression operators.
+const isTagEnd = (s: string) => s.includes('punctuation.definition.tag.end');
+const isComment = (s: string) => s.includes('comment.');
+const isChildren = (s: string) => s.includes('meta.jsx.children');
 
 export const cases: Case[] = [
   // ── generic-arrow type-params with a default / `const` modifier (the official breaks these) ──
@@ -33,4 +48,55 @@ export const cases: Case[] = [
   // ── JSX component with a generic type argument (both get this right) ──
   { id: '#1033', title: 'JSX component with a generic type argument', src: `const e = <Box<number> prop={1} />;`,
     checks: [{ at: 'number', want: isType, desc: 'the `<number>` type argument is a type, not a broken attribute' }] },
+
+  // ── beyond the generic-arrow / member-tag wins above: honest cases the DERIVED grammar does
+  //    NOT win. Each is a real reported bug, ground-truthed as valid JSX with tsc (ScriptKind.TSX,
+  //    parseDiagnostics.length===0); the node kind (JsxSelfClosingElement / JsxElement) confirms
+  //    the `<…>` is genuinely a JSX tag, not a generic arrow. We keep every honest verdict. ──
+
+  // #794 (only the official solves this). Inside a JSX-attribute object, a non-null `!` followed by
+  // ` / ` is a real division — `image.width! / image.height!`. Monogram reads the `!`+`/` as the
+  // start of a regex/relational run, so the self-closing `/>` is mis-scoped as a relational operator
+  // (`keyword.operator.relational`) instead of closing the tag; the official keeps `/>` as the tag
+  // end. tsc: JsxSelfClosingElement, 0 diagnostics — the `/>` really does close the element.
+  { id: '#794', title: 'non-null `!` then `/` (division) in a JSX-attribute object', src: `const x = <Image style={{ r: image.width! / image.height! }} />;`,
+    checks: [{ at: '/>', want: isTagEnd, desc: 'the `/>` closes the tag — not a relational/regex operator from the `!` `/` run' }] },
+
+  // #585 (only the official solves this). A `//` line comment is legal inside the open tag, between
+  // attributes. Monogram does not treat the `// …` line as a comment (it falls through to the tag
+  // body, scope `meta.tag.tsx`); the official scopes it `comment.line.double-slash`. tsc: the element
+  // is a valid JsxSelfClosingElement with the comment skipped.
+  { id: '#585', title: '`//` line comment inside a JSX open tag', src: `const a = <button\n  // hi\n/>;`,
+    checks: [{ at: '// hi', want: isComment, desc: 'the `//` line inside the tag is a comment, not tag/attribute text' }] },
+
+  // #754 (only the official solves this). A JSX element preceded by a `/**/` block comment on the
+  // same line. Monogram fails to switch into JSX after the comment — `<Element />` is read as a `<`
+  // comparison and `Element` becomes `variable.other.readwrite`; the official recognizes the tag
+  // (`entity.name.tag` / `support.class.component`). tsc: JsxSelfClosingElement, 0 diagnostics.
+  { id: '#754', title: 'JSX element right after a `/**/` block comment', src: `const a = /**/ <Element />;`,
+    checks: [{ at: 'Element', want: isTag, desc: 'the post-comment `<Element />` is a JSX tag, not a `<` comparison' }] },
+
+  // #825 (BOTH miss this). `<` and the tag name split across lines — a chevron alone on one line,
+  // the name on the next. This is valid JSX (tsc: nested JsxElements, 0 diagnostics) but defeats
+  // both line-oriented TM grammars: each scopes the `span` name as `meta.jsx.children` (plain text)
+  // rather than an `entity.name.tag`. Kept as an honest both-fail (a structural TM limitation).
+  { id: '#825', title: '`<` and tag name on separate lines', src: `const demo =\n  <div>\n    <\n      span className="foo">\n    </span>\n  </div>;`,
+    checks: [{ at: 'span', want: isTag, desc: 'the `span` after a lone `<` is a tag name, not JSX text (both grammars miss this)' }] },
+
+  // #667 (BOTH solve this now). An arrow function plus a ternary inside a JSX attribute used to
+  // cascade — the ternary LHS was mis-scoped `meta.parameters` and broke the rest. Both grammars now
+  // keep the attribute arrow as a function arrow and the element's `text` as JSX children.
+  // tsc: JsxElement + ArrowFunction, 0 diagnostics.
+  { id: '#667', title: 'arrow function + ternary inside a JSX attribute', src: `const f = <Foo a={d.X ? (d.Y || null) : 'Add'} onR={(p) => { }}>text</Foo>;`,
+    checks: [
+      { at: '=>', want: arrow, desc: 'the attribute callback `=>` is a function arrow' },
+      { at: 'text', want: isChildren, desc: 'the element body `text` is JSX children (no cascade past the arrow)' },
+    ] },
+
+  // #624 (BOTH solve this now). A JSX element inside an array literal whose attribute is a template
+  // literal — `<Baz key={`k-${bar.id}`} />, <Qux />`. The reported bug was the array's *second*
+  // element losing its tag scope; both grammars now recognize `<Qux />` as a component tag.
+  // tsc: ArrowFunction + two JsxSelfClosingElements, 0 diagnostics.
+  { id: '#624', title: 'JSX element in an array after a template-literal attribute', src: `const g = bar => ([\n  <Baz key={\`k-\${bar.id}\`} />,\n  <Qux />\n]);`,
+    checks: [{ at: '<Qux', want: isTag, desc: 'the second array element `<Qux />` is still a JSX tag (no cascade from the template attribute)' }] },
 ];
