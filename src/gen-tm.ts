@@ -637,6 +637,10 @@ function buildOperandStartClass(grammar: CstGrammar, identRegex: string): string
 interface JsxInfo {
   selfCloseTok: string;   // the literal text of the self-closing tag token (`/>`)
   closeTok: string;       // the literal text of the close-tag-open token (`</`)
+  // The inner @type rule name a generic type-argument list on a tag carries, from
+  // the element production `'<' TagName <opt '<' sep(Type, ',') '>'> …` (TS-family
+  // JSX only; null for a type-free `.jsx` grammar, where a tag has no type args).
+  typeArgRule: string | null;
 }
 
 /**
@@ -695,7 +699,28 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
   for (const rule of grammar.rules) walk(rule.body);
   if (!hasElementShape) return null;
 
-  return { selfCloseTok, closeTok };
+  // Detect generic type-arguments on a tag: in an element alternative the tag
+  // name ref is followed by an optional `'<' sep(Type, ',') '>'` group. Expanding
+  // opt()/alt() surfaces the present branch as `… '<' ref(TagName) '<' sep '>' …`,
+  // so scan each flattened sequence for the `'<' ref '<' sep '>'` shape and read
+  // the sep element's ref — the @type rule scoped inside the type-arg list. Only
+  // a TS-family JSX grammar declares this (the `.jsx` base omits `typeArgs`), so a
+  // plain JS JSX grammar yields null here and emits no tag type-args patterns.
+  let typeArgRule: string | null = null;
+  const findTypeArgs = (items: RuleExpr[]): void => {
+    for (let i = 0; i + 3 < items.length; i++) {
+      if (items[i].type === 'literal' && (items[i] as { value: string }).value === '<' &&
+          items[i + 1].type === 'ref' &&
+          items[i + 2].type === 'literal' && (items[i + 2] as { value: string }).value === '<' &&
+          items[i + 3].type === 'sep') {
+        const sep = items[i + 3] as { type: 'sep'; element: RuleExpr };
+        if (sep.element.type === 'ref') typeArgRule = sep.element.name;
+      }
+    }
+  };
+  for (const rule of grammar.rules) for (const seq of expandAlts(rule.body)) findTypeArgs(seq);
+
+  return { selfCloseTok, closeTok, typeArgRule };
 }
 
 /**
@@ -781,6 +806,15 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   const tagNsSep = `punctuation.separator.namespace.${langName}`;
   const intrinsic = `entity.name.tag.${langName}`;
   const component = `support.class.component.${langName}`;
+  // A dotted member-expression tag name (`comps.MyComp`, `a.b.C`): the leading
+  // qualifier segment(s) are an object/namespace reference, the `.` a member
+  // accessor, and the final segment the referenced component. Mirrors how the
+  // grammar scopes a value member access `a.b` elsewhere (object identifier +
+  // `punctuation.accessor` + member), and resolves #627 — where the official
+  // grammar lumps the whole dotted name into one `support.class.component` token,
+  // losing that `comps` is a reference and `.` an accessor.
+  const tagObject = `variable.other.object.${langName}`;
+  const tagAccessor = `punctuation.accessor.${langName}`;
   const attrName = `entity.other.attribute-name.${langName}`;
   const attrNsName = `entity.other.attribute-name.namespace.${langName}`;
   const attrAssign = `keyword.operator.assignment.${langName}`;
@@ -788,23 +822,54 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   const embeddedEnd = `punctuation.section.embedded.end.${langName}`;
   const strBegin = `punctuation.definition.string.begin.${langName}`;
   const strEnd = `punctuation.definition.string.end.${langName}`;
+  // Generic type-arguments on a component tag (`<Box<number> …>`): `meta.type.parameters`
+  // wrapper with `punctuation.definition.typeparameters.begin/end` delimiters, the
+  // same scopes a generic call / declaration type-param list uses elsewhere (#1033).
+  const typeParamsMeta = `meta.type.parameters.${langName}`;
+  const tpBegin = `punctuation.definition.typeparameters.begin.${langName}`;
+  const tpEnd = `punctuation.definition.typeparameters.end.${langName}`;
+  // An OPTIONAL balanced `<…>` type-argument group following the tag name, for the
+  // expression-position triggers' lookaheads (so `<Box<number> … />` / `<Box<A,B>>…`
+  // is recognised as a tag — the type-arg `>` must not be mistaken for the tag's own
+  // `>`). Oniguruma balanced-group recursion; the `?` makes it absent for a plain
+  // `<div …>`. Emitted only for a TS-family JSX grammar (jsx.typeArgRule set).
+  const optTagTypeArgs = jsx.typeArgRule
+    ? '(?:\\s*<(?<TA>[^<>]*(?:<\\g<TA>>[^<>]*)*)>)?'
+    : '';
 
-  // A JSX tag name: optional `ns:` prefix, then a lowercase-intrinsic OR a
-  // component (capitalised / contains `.` / `_`,`$`). Captures, in order:
-  //   1 namespace, 2 `:`, 3 intrinsic-name, 4 component-name.
-  // Component sub-alternation `([_$[:upper:]]…|[_$[:alpha:]][-_$[:alnum:].]*…)`
-  // is collapsed to: lowercase-only ⇒ intrinsic; anything else ⇒ component.
-  // The trailing `(?<!\.|-)` forbids a name ending in a joiner.
+  // A JSX tag name: optional `ns:` prefix, then a dotted member-expression OR a
+  // lowercase-intrinsic OR a (non-dotted) component. Captures, in order:
+  //   1 namespace, 2 `:`, 3 dotted-member, 4 intrinsic-name, 5 component-name.
+  // The dotted-member alternative `Ident(?:\.Ident)+` is tried FIRST so any name
+  // containing a `.` (`comps.MyComp`, `a.b.C`, `Foo.Bar`) is taken as a member
+  // expression and re-tokenized (see `nameCaptures`) into object/accessor/
+  // component — rather than the lowercase head leaking the rest into attributes
+  // (the #627 bug) or the whole dotted name collapsing into one component token.
+  // The remaining alternatives keep the original collapse: lowercase-only ⇒
+  // intrinsic; anything else ⇒ component. The trailing `(?<!\.|-)` forbids a name
+  // ending in a joiner. `[-:]` joiners stay inside intrinsic/component (only `.`
+  // forms a member expression).
+  const memberNameRe = `${identRegex}(?:\\.${identRegex})+`;     // dotted member
   const nameRe =
     `(?:(${identRegex})(:))?` +                                   // 1 ns, 2 ':'
-    `(?:([[:lower:]][-[:alnum:]]*)` +                              // 3 intrinsic (lowercase head)
-    `|([_$[:upper:]][-_$[:alnum:].]*|${identRegex}(?:[-.][_$[:alnum:]]+)+))` +  // 4 component
+    `(?:(${memberNameRe})` +                                      // 3 dotted member-expression
+    `|([[:lower:]][-[:alnum:]]*)` +                               // 4 intrinsic (lowercase head)
+    `|([_$[:upper:]][-_$[:alnum:].]*|${identRegex}(?:[-.][_$[:alnum:]]+)+))` +  // 5 component
     `(?<!\\.|-)`;
-  const nameCaptures = (base: number): Record<string, { name: string }> => ({
+  // Re-tokenize the dotted-member capture (#627): each qualifier segment before a
+  // `.` is an object reference, each `.` an accessor, the trailing segment the
+  // referenced component. (A capture is itself a rule, so it may carry `patterns`.)
+  const memberPatterns: TmPattern[] = [
+    { match: `${identRegex}(?=\\s*\\.)`, name: tagObject },   // qualifier segment (before a `.`)
+    { match: '\\.', name: tagAccessor },                      // member accessor
+    { match: identRegex, name: component },                   // referenced component (final segment)
+  ];
+  const nameCaptures = (base: number): Record<string, TmCapture> => ({
     [String(base)]: { name: tagNs },
     [String(base + 1)]: { name: tagNsSep },
-    [String(base + 2)]: { name: intrinsic },
-    [String(base + 3)]: { name: component },
+    [String(base + 2)]: { patterns: memberPatterns },   // dotted member: re-tokenized, no wrapper scope
+    [String(base + 3)]: { name: intrinsic },
+    [String(base + 4)]: { name: component },
   });
 
   // Generic-arrow carve-out (the inverse of #arrow-type-parameters' begin guard).
@@ -908,6 +973,27 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
     ],
   };
 
+  // ── jsx-tag-type-arguments: `<…>` generic type args on a component tag (#1033) ──
+  // A TS-family JSX tag may carry `<List<string>>` between the tag name and its
+  // attributes. Inside an open tag a bare `<` can only open this list (attributes
+  // never start with `<`), so a `<`/`>` begin/end region is unambiguous here. The
+  // inner types reach `#type-inner` (primitives, nested generics, unions, …), so
+  // `<number>` → support.type.primitive and `<Map<K,V>>` nests correctly — the
+  // same vocabulary the non-JSX generic-call patterns use. Emitted only when the
+  // grammar declares tag type-args (jsx.typeArgRule); the `.jsx` base omits them.
+  const tagTypeArgsInclude: { include: string }[] = [];
+  if (jsx.typeArgRule) {
+    result['jsx-tag-type-arguments'] = {
+      name: typeParamsMeta,
+      begin: '(<)',
+      beginCaptures: { '1': { name: tpBegin } },
+      end: '(>)',
+      endCaptures: { '1': { name: tpEnd } },
+      patterns: [{ include: '#type-inner' }],
+    };
+    tagTypeArgsInclude.push({ include: '#jsx-tag-type-arguments' });
+  }
+
   // ── jsx-self-closing-element: `<Tag …/>` ──
   result['jsx-self-closing-element'] = {
     name: `meta.tag.${langName}`,
@@ -915,7 +1001,8 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
     beginCaptures: { '1': { name: tagBegin }, ...nameCaptures(2) },
     end: `(${escapeRegex(jsx.selfCloseTok)})`,
     endCaptures: { '1': { name: tagEnd } },
-    patterns: [{ include: '#jsx-attributes' }],
+    // type-args (if any) come right after the name, before attributes.
+    patterns: [...tagTypeArgsInclude, { include: '#jsx-attributes' }],
   };
 
   // ── jsx-element: `<Tag …> children </Tag>` ──
@@ -932,17 +1019,17 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
     end: `(${escapeRegex(jsx.closeTok)})\\s*(?:${nameRe})?\\s*(>)`,
     endCaptures: {
       '1': { name: tagBegin },
-      ...nameCaptures(2),
-      '6': { name: tagEnd },
+      ...nameCaptures(2),   // name sub-captures 2..6 (ns, sep, member, intrinsic, component)
+      '7': { name: tagEnd },
     },
     patterns: [
-      // open tag: `<Tag …>` — attributes inside, ends at `>`.
+      // open tag: `<Tag …>` — type-args (if any) then attributes, ends at `>`.
       {
         begin: `(<)\\s*${nameRe}`,
         beginCaptures: { '1': { name: tagBegin }, ...nameCaptures(2) },
         end: '(>)',
         endCaptures: { '1': { name: tagEnd } },
-        patterns: [{ include: '#jsx-attributes' }],
+        patterns: [...tagTypeArgsInclude, { include: '#jsx-attributes' }],
       },
       // children region.
       {
@@ -969,9 +1056,13 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   // These wrap the elements with the expression-start lookbehind so a `<` is
   // taken as JSX only where a value can't already be standing (mutually
   // exclusive with comparison / generic-call, whose `<` follows an operand).
+  // The lookahead consumes an optional balanced `<…>` type-arg group after the
+  // name (`<Box<number> … />`) so its inner `>` isn't mistaken for the tag's `>`,
+  // letting the self-closing trigger win over the open-element one (included
+  // first) for a self-closing tag that carries type args.
   result['jsx-self-closing-element-in-expression'] = {
-    begin: `${exprStart}(?=(<)\\s*${nameRe}[^>]*${escapeRegex(jsx.selfCloseTok)})`,
-    end: `(?!(<)\\s*${nameRe}[^>]*${escapeRegex(jsx.selfCloseTok)})`,
+    begin: `${exprStart}(?=(<)\\s*${nameRe}${optTagTypeArgs}[^>]*${escapeRegex(jsx.selfCloseTok)})`,
+    end: `(?!(<)\\s*${nameRe}${optTagTypeArgs}[^>]*${escapeRegex(jsx.selfCloseTok)})`,
     patterns: [{ include: '#jsx-self-closing-element' }],
   };
   result['jsx-element-in-expression'] = {

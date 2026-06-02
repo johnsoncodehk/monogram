@@ -172,6 +172,53 @@ const checks: { label: string; code: string; want: { text: string; scope: string
       { text: '=>', scope: 'storage.type.function.arrow' },
     ],
   },
+  // ── #1033: a JSX component tag carrying a generic type argument ──
+  // `<Box<number> prop={1} />` — the `<number>` must be a TYPE-ARGUMENT list
+  // (`meta.type.parameters` + typeparameters punctuation, `number` a primitive
+  // type), NOT collapse into the tag and dump `prop`/`/>` into children. The
+  // official .tsx grammar scopes it this way; Monogram derives it from the
+  // element production's `opt('<', sep(Type), '>')` type-args (TS-family only).
+  {
+    label: '#1033: <Box<number> …/> — generic type argument on a component tag',
+    code: `const e = <Box<number> prop={1} />;`,
+    // The bare `<` is ambiguous by text (the tag-open `<` matches first), so the
+    // type-arg list is pinned by its UNAMBIGUOUS tokens instead: `number` as a
+    // primitive type (only reachable inside the type-arg region) and the lone `>`
+    // as the typeparameters close (the self-close `/>` is a separate token).
+    want: [
+      { text: 'Box', scope: 'support.class.component' },
+      { text: 'number', scope: 'support.type.primitive' },
+      { text: '>', scope: 'punctuation.definition.typeparameters.end' },
+      { text: 'prop', scope: 'entity.other.attribute-name' },
+      { text: '/>', scope: 'punctuation.definition.tag.end' },
+    ],
+  },
+  {
+    label: '#1033: <Box<Map<K,V>> …/> — nested generic type arguments on a tag',
+    code: `const e = <Box<Map<K,V>> a={1} />;`,
+    want: [
+      { text: 'Map', scope: 'entity.name.type' },
+      { text: 'K', scope: 'entity.name.type' },
+      { text: 'a', scope: 'entity.other.attribute-name' },
+      { text: '/>', scope: 'punctuation.definition.tag.end' },
+    ],
+  },
+  // ── #627: a member-expression (dotted) JSX tag name ──
+  // `<comps.MyComp />` — `comps` is an object/namespace REFERENCE, `.` a member
+  // accessor, `MyComp` the referenced component. The official grammar lumps the
+  // whole dotted name into one `support.class.component` token (the reported gap);
+  // Monogram splits it, mirroring how it scopes a value member access `a.b`.
+  // Crucially `MyComp` must NOT be `entity.other.attribute-name` (the old bug).
+  {
+    label: '#627: <comps.MyComp /> — dotted member tag name is a member expression',
+    code: `const e = <comps.MyComp />;`,
+    want: [
+      { text: 'comps', scope: 'variable.other.object' },
+      { text: '.', scope: 'punctuation.accessor' },
+      { text: 'MyComp', scope: 'support.class.component' },
+      { text: '/>', scope: 'punctuation.definition.tag.end' },
+    ],
+  },
 ];
 
 const scopeAt = (toks: Tok[], text: string): string | null => {
