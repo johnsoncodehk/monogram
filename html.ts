@@ -93,7 +93,15 @@ export const markup: MarkupConfig = {
   // string as a comment (html.tmbundle#113); the `style`→source.css embed matches the official's
   // inline-CSS delegation (html.tmbundle#88). `data-on…` / `style-…` aren't grabbed — the `(?![\w:.-])`
   // name boundary + leftmost-match keep the generic attribute-name rule winning at the true start.
-  attributeEmbed: [{ namePattern: 'on\\w+', embed: 'source.js' }, { namePattern: 'style', embed: 'source.css' }],
+  // `style="…"` carries a CSS DECLARATION LIST (no selector/braces), so it embeds scope source.css
+  // but is tokenized by source.css#rule-list-innards — `color`→property-name, `red`→value — instead
+  // of the stylesheet root (which mis-reads `color:red` as a selector). This is GRANULAR, beating
+  // VS Code's own HTML grammar (a flat source.css blob there) and matching the hand-written Vue
+  // grammar's `#vue-directives-style-attr` (its "Copy from source.css#rule-list-innards").
+  attributeEmbed: [
+    { namePattern: 'on\\w+', embed: 'source.js' },
+    { namePattern: 'style', embed: 'source.css', include: 'source.css#rule-list-innards' },
+  ],
   // Raw-text element bodies are scanned verbatim by the parser, but the HIGHLIGHTER
   // delegates `<script>`/`<style>` to the platform's real JS/CSS grammars (exactly as
   // the official HTML grammar embeds source.js / source.css — Monogram has no own CSS

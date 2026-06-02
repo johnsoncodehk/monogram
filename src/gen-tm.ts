@@ -3212,7 +3212,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     begin: `(${spec.namePattern})(?![\\w:.-])`,
     beginCaptures: { '1': { name: sAttr } },
     end: `(?=[\\s${escapeForCharClass(m.tagClose)}${escapeForCharClass(m.closeMarker ?? '/')}])`,
-    patterns: embedValuePatterns(spec.embed, spec.embed, sEq, assign, attrQuotes, quoteCc, { begin: sStrPunctB, end: sStrPunctE }),
+    patterns: embedValuePatterns(spec.embed, spec.include ?? spec.embed, sEq, assign, attrQuotes, quoteCc, { begin: sStrPunctB, end: sStrPunctE }),
   }));
   repository['attribute'] = {
     patterns: [

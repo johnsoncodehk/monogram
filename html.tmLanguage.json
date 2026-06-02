@@ -739,7 +739,7 @@
                   "name": "source.css",
                   "patterns": [
                     {
-                      "include": "source.css"
+                      "include": "source.css#rule-list-innards"
                     }
                   ]
                 },
@@ -761,7 +761,7 @@
                   "name": "source.css",
                   "patterns": [
                     {
-                      "include": "source.css"
+                      "include": "source.css#rule-list-innards"
                     }
                   ]
                 },
@@ -789,7 +789,7 @@
               "contentName": "source.css",
               "patterns": [
                 {
-                  "include": "source.css"
+                  "include": "source.css#rule-list-innards"
                 }
               ]
             }

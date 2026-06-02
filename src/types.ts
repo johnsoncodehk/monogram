@@ -82,7 +82,11 @@ export interface MarkupConfig {
   // the closing quote (the #5012 fix), and a derived JS grammar reads `//` inside a string as
   // string content, not a comment (the official hand-rolls a `//` splitter here and mis-fires:
   // textmate/html.tmbundle#113). Highlight-only; the parser never sees attribute values as code.
-  attributeEmbed?: { namePattern: string; embed: string }[];
+  // `include` (optional) overrides what the value is tokenized BY when it differs from the embed
+  // SCOPE — e.g. an inline `style="…"` carries a CSS *declaration list* (no selector/braces), so it
+  // embeds scope `source.css` but is tokenized by `source.css#rule-list-innards` (property:value),
+  // not the stylesheet root (which would mis-read `color:red` as a selector). Defaults to `embed`.
+  attributeEmbed?: { namePattern: string; embed: string; include?: string }[];
   // Elements whose content is raw (CDATA-like): after the start tag's `tagClose`,
   // everything up to the matching `tagOpen+closeMarker+name` is one `token`. `embed`
   // optionally maps a tag → the grammar scope to embed in its body (e.g. Vue SFC blocks:
