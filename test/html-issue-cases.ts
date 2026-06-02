@@ -53,7 +53,10 @@ export const cases: HtmlCase[] = [
   // ── Embedded-language boundaries & inline-language attributes. Graded against the REAL
   //    embeds (Monogram's own source.js, VS Code's source.css) so a ✓ means correctly
   //    highlighted, not merely delegated. These mix every honest verdict — only-Monogram,
-  //    both-pass, AND only-official (#85) where Monogram still trails the shared ceiling.
+  //    both-pass, AND only-official (#85), which is NOT a shared ceiling but a documented,
+  //    PROVEN tradeoff: fixing it agnostically would regress #5538 and/or leak source.js onto
+  //    the close `<` (#65/#74); the official only "wins" by hand-patching JS's comment grammar
+  //    (non-agnostic). The full mechanism + the measured begin/end experiment are at #85 below.
   { id: 'tmbundle#104', title: 'mixed-case `onChange=` event handler still reads as JS', src: '<div onChange="cb()"></div>',
     at: 'cb', want: isJs },                                                   // official: case-sensitive `on*` list → `onChange` is meta.attribute.unrecognized, value stays a plain string; Monogram lower-cases the `on*` test so the value delegates to source.js like `onchange`
   { id: 'tmbundle#50', title: '`onclick=` event-handler value is colored as JS', src: '<button onclick="run(1)">x</button>',
@@ -65,7 +68,36 @@ export const cases: HtmlCase[] = [
   { id: 'tmbundle#74', title: '`<` of `</style>` is HTML punctuation, not `source.css`', src: '<style>.a{}</style>',
     at: '<', nth: 2, want: s => isTagPunct(s) && !isCss(s) },                 // same leak for CSS: official tags the `</style>` `<` with source.css; Monogram does not
   { id: 'tmbundle#85', title: '`//</script>` on its own line still closes the script', src: '<script>\n//</script>\n<p>z</p>',
-    at: 'z', want: s => !isJs(s) },                                          // ONLY-OFFICIAL: when `</script>` follows a `//` comment on a line that begins inside the embed, Monogram's JS line-comment swallows the close tag and stays stuck in source.js (the `<p>` after never recovers); VS Code's embed has a higher-priority `(?=</script)` end-guard. Honest Monogram gap (the single-line `<script>//</script>` form, #72, both close fine)
+    at: 'z', want: s => !isJs(s) },                                          // ONLY-OFFICIAL, and a DEFENSIBLE tradeoff (proven, not a silent miss):
+    //   The fix and the win are MUTUALLY EXCLUSIVE under the agnostic constraint, because of how
+    //   vscode-textmate arbitrates a host region's close against a SEPARATE embedded grammar:
+    //     • Monogram's multi-line raw-text region is `begin/while` (`while: ^(?!\s*</script…)`).
+    //       `while`'s line-start re-check is the ONLY TextMate mechanism that force-UNWINDS a
+    //       still-open embedded *multi-line* construct (a TS `meta.type.body`, a JS template/regex)
+    //       at the close-tag line — which is exactly what wins #5538/#2060 (`export type T` with no
+    //       `;` before `</script>`) and keeps the close `<` CLEAN tag punctuation (the #65/#74 win).
+    //       But `while` is `^`-anchored, so it can only drop the region when a line *starts* with
+    //       `</script>`; it structurally cannot catch the MID-LINE close in `//</script>` → #85 stuck.
+    //     • Switching to `begin/end` (end = `(?=^\s*</tag)|(<)(?=/tag)`, both the line-start and the
+    //       per-position alt, i.e. the official's own shape) was BUILT + MEASURED here: it still
+    //       FAILS #85 *and* REGRESSES #5538 to 18/19. It fails #85 because Monogram embeds the REAL
+    //       `source.js`, whose line comment is `match: //[^\n]*` — a leftmost-match that claims the
+    //       whole `//</script>` line at col 0 before the host `end` (at col 2) is ever tried; an
+    //       `end`/sibling rule cannot preempt an embedded rule that matches at an earlier column.
+    //       It regresses #5538 because `begin/end` does NOT unwind the open embedded TS type-body at
+    //       the close line (only `while` does) → that body swallows `</script>` and the template
+    //       never recovers. (Confirmed: vue-issues 18/19, vue-dropin 18/19 under that form.)
+    //   VS Code "wins" both ONLY by NOT using the real embed: it re-declares JS's own comment / block
+    //   / string rules with a baked-in `end:(?=</script)|\n` guard before `include source.js`, so the
+    //   comment voluntarily yields before the close tag. That is a JS-syntax-specific patch — to copy
+    //   it, gen-tm.ts would have to KNOW the embedded language has `//`,`/*…*/`, backticks, regex (and
+    //   rewrite each with a `</script>` guard), violating the agnostic constraint (delimiters/tag are
+    //   config DATA; the embedded language's comment grammar is not). And the official PAYS for #85
+    //   with the very leak Monogram beats it on: its `(<)(?=/script)` end marks EVERY close-tag `<`
+    //   `source.js-ignored-vscode` (contains `source.js`) — see #65/#74, which Monogram keeps clean.
+    //   So: Monogram trades the rare `//</script>` mid-comment close (multi-line `<script>` only; the
+    //   single-line `<script>//…</script>` #72 closes fine on the inline path) to keep the common
+    //   clean close (#65/#74) and the trailing-type unwind (#5538) — and stays language-agnostic.
   { id: 'tmbundle#51', title: 'self-closing `/` is tag punctuation', src: '<img src="a.png" />',
     at: '/', want: isTagPunct },                                             // both scope the `/` of `/>` as punctuation.definition.tag (was plain text in old TextMate)
   { id: 'tmbundle#82', title: '`<script type="application/json">` body is not parsed as HTML', src: '<script type="application/json">{"k":1}</script>',
