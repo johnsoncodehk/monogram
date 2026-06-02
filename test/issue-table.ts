@@ -45,7 +45,8 @@ function scopeAtFns(grammar: any, src: string) {
   const toks: any[][] = []; let st: any = INITIAL;
   for (const l of lines) { const r = grammar.tokenizeLine(l, st); toks.push(r.tokens); st = r.ruleStack; }
   const at = (offset: number) => { let li = 0; while (li + 1 < start.length && start[li + 1] <= offset) li++; const c = offset - start[li]; for (const t of toks[li] ?? []) if (c >= t.startIndex && c < t.endIndex) return t.scopes.join(' '); return ''; };
-  return (text: string, nth = 0) => { let i = -1; for (let k = 0; k <= nth; k++) i = src.indexOf(text, i + 1); return i < 0 ? '' : at(i + Math.floor(text.length / 2)); };
+  const find = (text: string, nth = 0) => { let i = -1; for (let k = 0; k <= nth; k++) i = src.indexOf(text, i + 1); return i < 0 ? '' : at(i + Math.floor(text.length / 2)); };
+  return Object.assign(find, { at }); // .at(offset) lets gradeTs walk checks from a running position
 }
 
 interface Row { id: string; title: string; mono: boolean; off: boolean }
@@ -57,7 +58,23 @@ async function gradeTs(): Promise<Row[] | null> {
   const mk = (path: string) => new Registry({ onigLib, loadGrammar: async (sn) => sn === 'source.ts' ? parseRawGrammar(read(path), 'ts.json') : (sn.startsWith('source.') ? stub(sn) : null) });
   const mono = (await mk('typescript.tmLanguage.json').loadGrammar('source.ts'))!;
   const off = (await mk(official.ts).loadGrammar('source.ts'))!;
-  const pass = (g: any, t: typeof tsTests[number]) => { const at = scopeAtFns(g, t.input); return t.checks.every(c => at(c.text).includes(c.scope)); };
+  // Grade checks SEQUENTIALLY: find each check's text from the end of the previous match, then read
+  // the scope at the span midpoint. The running start position is what makes repeated tokens and
+  // sub-token substrings resolve to the intended span — the two `from`s of `import from from "m"`
+  // (#891) and the `y` that also hides inside `typeof` (#1050). A plain indexOf-from-0 collapsed
+  // both checks onto the first occurrence and mis-graded these as unsolved even though the grammar
+  // tokenizes them correctly (test/test-issues.ts confirms). Midpoint (rather than whole-token)
+  // keeps whole-line span checks like #1066's `/// <reference … />` passing for the official
+  // grammar, which splits that directive into sub-tokens.
+  const pass = (g: any, t: typeof tsTests[number]) => {
+    const f = scopeAtFns(g, t.input); let pos = 0;
+    for (const c of t.checks) {
+      const idx = t.input.indexOf(c.text, pos);
+      if (idx < 0 || !f.at(idx + Math.floor(c.text.length / 2)).includes(c.scope)) return false;
+      pos = idx + c.text.length;
+    }
+    return true;
+  };
   // Ledger = real REPORTED tracker issues (a `#` in the label); the unnumbered cases are
   // Monogram's own coverage cases, not bugs filed against the official — they live in the
   // self-test (test-issues.ts), not here. Dedupe sub-cases by issue: an issue counts as
