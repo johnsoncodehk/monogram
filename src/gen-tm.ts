@@ -2825,9 +2825,9 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   // Raw-text elements (script/style/…): the body is verbatim (CDATA-like), so it is a
   // single embedded region — `<`/`>` inside it never start a tag. The embedded grammar
   // comes from the declared `embed` map (Vue SFC blocks: template→text.html.basic,
-  // script→source.js, style→source.css); else the HTML convention (script→source.js,
-  // style→source.css) or the token's own scope. A `{ default, lang }` embed selects by a
-  // `lang="…"` start-tag attribute → one region per lang (matched first), then the default.
+  // script→source.js, style→source.css); else the token's own scope. Nothing HTML-specific
+  // is baked in — a grammar that wants script→JS declares it (html.ts does). A `{ default, lang }`
+  // embed selects by a `lang="…"` start-tag attribute → one region per lang (first), then default.
   const ccClose = escapeForCharClass(m.tagClose);
   // Capture-embed: the start-tag attributes (`lang="ts"`, …) are re-tokenized by #attribute
   // instead of being lumped; the body is re-tokenized by the embedded grammar.
@@ -2904,8 +2904,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     top.push({ include: `#raw-${tag}-ml` });
   };
   for (const tag of m.rawText?.tags ?? []) {
-    const spec = m.rawText!.embed?.[tag]
-      ?? (tag === 'script' ? 'source.js' : tag === 'style' ? 'source.css' : (tokScope(m.rawText!.token) ?? `source.${L}`));
+    const spec = m.rawText!.embed?.[tag] ?? (tokScope(m.rawText!.token) ?? `source.${L}`);
     if (typeof spec === 'string') {
       emitRaw(`raw-${tag}`, tag, spec);
     } else {
