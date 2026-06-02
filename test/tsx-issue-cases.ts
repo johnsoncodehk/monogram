@@ -87,10 +87,15 @@ export const cases: Case[] = [
   { id: '#754', title: 'JSX element right after a `/**/` block comment', src: `const a = /**/ <Element />;`,
     checks: [{ at: 'Element', want: isTag, desc: 'the post-comment `<Element />` is a JSX tag, not a `<` comparison' }] },
 
-  // #825 (BOTH miss this). `<` and the tag name split across lines — a chevron alone on one line,
-  // the name on the next. This is valid JSX (tsc: nested JsxElements, 0 diagnostics) but defeats
-  // both line-oriented TM grammars: each scopes the `span` name as `meta.jsx.children` (plain text)
-  // rather than an `entity.name.tag`. Kept as an honest both-fail (a structural TM limitation).
+  // #825 (BOTH miss this — a PROVEN structural TM limit). `<` and the tag name split across lines —
+  // a chevron alone on one line, the name on the next. Valid JSX (tsc: nested JsxElements, 0 diags)
+  // and Monogram's PARSER accepts it; the gap is purely the highlighter. A TextMate `begin` regex is
+  // single-line, so the tag-open `(<)\s*name` cannot span the `<`/name line break — `\s*` never
+  // crosses the newline within one `tokenizeLine`. A multi-line construct can't recover it cleanly
+  // either: a lone `<` is only unambiguously a tag inside children (a bare `<` elsewhere is a split
+  // comparison `a <\n b` or generic `f<\n T>`), and even in children it would need a bespoke
+  // multi-line tag-open neither line-oriented grammar implements. Both scope `span` as
+  // `meta.jsx.children` (plain text). The frontier neither reaches today.
   { id: '#825', title: '`<` and tag name on separate lines', src: `const demo =\n  <div>\n    <\n      span className="foo">\n    </span>\n  </div>;`,
     checks: [{ at: 'span', want: isTag, desc: 'the `span` after a lone `<` is a tag name, not JSX text (both grammars miss this)' }] },
 

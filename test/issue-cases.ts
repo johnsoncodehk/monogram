@@ -722,9 +722,16 @@ export const tests: TestCase[] = [
       { text: 'Foo', scope: 'entity.name.type' },
     ],
   },
-  // `import type from "./type"` is a DEFAULT import whose binding is named `type` (not a
-  // type-only import) — so `type` should be a variable. Both grammars mis-read it as the
-  // `import type` modifier keyword: an honest both-miss the derived grammar does not solve.
+  // `import type from "./type"` is a DEFAULT import whose binding is named `type` (tsc:
+  // isTypeOnly=false, importClause.name=`type`) — so `type` should be a variable. A PROVEN both-miss
+  // at the agnostic ceiling: Monogram's PARSER accepts it (the CFG distinguishes the binding), but
+  // the pattern-highlighter's type-alias DECLARATION region fires on the `type <name>` shape — here
+  // `type from`, with `from` a perfectly valid contextual alias name (`type from = X` is a real type
+  // alias). The only TM disambiguator is the preceding `import`, i.e. a negative lookbehind hardcoding
+  // that one keyword — which the agnostic generator can't emit (it has no parse-context notion of
+  // "statement position", and `import` is just data). The official hardcodes `import type` and STILL
+  // misses this (scopes `type`→keyword.control.type); Monogram mis-fires its type-alias region
+  // (`type`→storage.type.type). Different wrong answers, same miss.
   {
     label: '#950: default import named `type` — the binding is a variable, not the `type` keyword',
     monoGap: true,
@@ -733,8 +740,14 @@ export const tests: TestCase[] = [
       { text: 'type', scope: 'variable.other' },
     ],
   },
-  // TS 5.9 `import defer * as ns`: the `defer` modifier should be a keyword, but both grammars
-  // scope it as an alias variable (variable.other.readwrite[.alias]) — neither knows the syntax.
+  // TS 5.9 `import defer * as ns` (deferred-import, valid in tsc 5.9.3): the `defer` modifier should
+  // be a keyword. A PROVEN both-miss: `defer` is a CONTEXTUAL keyword the grammar's vocabulary does
+  // not include — the CFG (like the official, and like TS before 5.9) parses it as an ordinary
+  // binding identifier, so both grammars scope it variable.other.readwrite[.alias]. The agnostic
+  // generator scopes a word as a keyword only when the grammar SAYS it is one; making `defer` a
+  // keyword ONLY in `import defer *` (it stays a valid identifier in `const defer`, `import defer
+  // from`) means modeling brand-new deferred-import syntax with a position-only keyword — neither
+  // grammar does. Both miss new syntax.
   {
     label: '#1058: `import defer` should scope `defer` as a keyword',
     monoGap: true,
