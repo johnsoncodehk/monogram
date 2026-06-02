@@ -743,12 +743,12 @@ export const tests: TestCase[] = [
       { text: 'defer', scope: 'keyword' },
     ],
   },
-  // Conditional type with an un-parenthesized `typeof` operand: the official grammar tokenizes
-  // the `? :` as a ternary, the derived grammar does not yet split the conditional-type operator
-  // (an only-official gap).
+  // Conditional type with an un-parenthesized `typeof` operand: the `? :` is a type ternary.
+  // The derived grammar emits a `type-conditional` region (anchored on the `extends` connector,
+  // mirroring the official's `#type-conditional`) so the `?`/`:` are scoped keyword.operator.ternary
+  // like the expression ternary — the connector anchor keeps an OPTIONAL `?` (`{ a?: T }`) distinct.
   {
     label: '#907: `typeof x extends string ? 1 : 2` conditional-type ternary',
-    monoGap: true,
     input: 'type T = typeof x extends string ? 1 : 2;',
     checks: [
       { text: '?', scope: 'keyword.operator.ternary' },

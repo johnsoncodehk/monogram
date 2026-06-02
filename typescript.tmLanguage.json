@@ -1350,6 +1350,39 @@
         }
       ]
     },
+    "type-conditional": {
+      "begin": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(extends)\\s+",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.extends.ts"
+        }
+      },
+      "end": "(?<=:)|(?=[;>])",
+      "patterns": [
+        {
+          "begin": "\\?",
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.operator.ternary.ts"
+            }
+          },
+          "end": ":",
+          "endCaptures": {
+            "0": {
+              "name": "keyword.operator.ternary.ts"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#type-inner"
+            }
+          ]
+        },
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
     "type-inner": {
       "patterns": [
         {
@@ -1360,6 +1393,9 @@
         },
         {
           "include": "#type-paren"
+        },
+        {
+          "include": "#type-conditional"
         },
         {
           "include": "#shebang"

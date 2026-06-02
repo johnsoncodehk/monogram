@@ -1872,6 +1872,60 @@ function detectTernary(grammar: CstGrammar): boolean {
   return grammar.rules.some(r => walk(r.body));
 }
 
+// ── Conditional-type detection ──
+
+/**
+ * Detect a conditional-type production: a `{ type: true }` rule whose body
+ * contains the literal sequence `<ref> KW <ref> '?' <ref> ':' <ref>` — i.e.
+ * `Type extends Type ? Type : Type`, the ternary form of the type ternary.
+ * Returns the connector keyword literal (`extends`) so the caller can look up
+ * its scope from the derived scope map (NOT hardcoded). `null` if no rule has
+ * the shape, in which case no `type-conditional` region is emitted.
+ *
+ * Mirrors detectTernary's walk, but is gated on a type-flagged rule and a
+ * keyword connector between the head/check types — that connector is what
+ * distinguishes a conditional `?`/`:` (a ternary) from an OPTIONAL `?`
+ * (`{ a?: T }`). The emitted region anchors on the connector so the inner
+ * ternary scope only exists inside a conditional.
+ */
+function detectConditionalType(grammar: CstGrammar): string | null {
+  let connector: string | null = null;
+
+  function checkSeq(items: RuleExpr[]): void {
+    // window: ref KW ref '?' ref ':' ref  (7 items)
+    for (let i = 0; i + 6 < items.length; i++) {
+      const kw = items[i + 1];
+      const q = items[i + 3];
+      const colon = items[i + 5];
+      if (items[i].type === 'ref' &&
+          kw.type === 'literal' && isKeywordLiteral((kw as { value: string }).value) &&
+          items[i + 2].type === 'ref' &&
+          q.type === 'literal' && (q as { value: string }).value === '?' &&
+          items[i + 4].type === 'ref' &&
+          colon.type === 'literal' && (colon as { value: string }).value === ':' &&
+          items[i + 6].type === 'ref') {
+        connector = (kw as { value: string }).value;
+        return;
+      }
+    }
+  }
+
+  function walk(expr: RuleExpr): void {
+    if (connector) return;
+    if (expr.type === 'seq') { checkSeq(expr.items); expr.items.forEach(walk); }
+    else if (expr.type === 'alt') expr.items.forEach(walk);
+    else if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
+    else if (expr.type === 'sep') walk(expr.element);
+  }
+
+  for (const rule of grammar.rules) {
+    if (!rule.flags.includes('type')) continue;
+    walk(rule.body);
+    if (connector) break;
+  }
+  return connector;
+}
+
 // ── Direct-param keyword detection ──
 
 /**
@@ -3878,6 +3932,59 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   if (typeLiterals.has(',')) {
     typeInnerPats.push({ match: ',', name: `punctuation.separator.comma.${langName}` });
   }
+  // Conditional type `T extends U ? X : Y` — scope the connector (`extends`) and
+  // the ternary `?`/`:` like the official `#type-conditional`. The region is
+  // anchored on the connector keyword: that anchor is what disambiguates the
+  // conditional ternary from an OPTIONAL `?` (`{ a?: T }`) or a tuple `[T?]` —
+  // the ternary sub-region only exists once we're past an `extends`. Both the
+  // connector and the type-inner key are DERIVED (the connector literal comes
+  // from detectConditionalType walking the type rule's `<ref> kw <ref> ? <ref>
+  // : <ref>` shape; its scope from the scope map; the recursive `#type` slots
+  // reuse #type-inner). The inner `#type-inner` greedily consumes nested types
+  // INCLUDING their own colons (object types `{ k: V }`, nested conditionals),
+  // so the primary end `(?<=:)` matches only the conditional's own colon, and
+  // nested conditionals recurse back through #type-inner → #type-conditional.
+  //
+  // The extra `(?=[;>])` end bounds a connector that is NOT actually a conditional
+  // — chiefly a type-PARAMETER constraint that reached here unshadowed: a prefix
+  // cast `<T extends number>(…` is type-shaped but has no `?`, so without a bound
+  // the `(?<=:)` end would never match and the region would swallow the rest of
+  // the file (the official's #type-conditional has this exact runaway). `;` and
+  // `>` can never appear at the conditional's OWN nesting level inside a *valid*
+  // check-type — object/paren/generic types (`{…}`, `(…)`, `<…>`) are child
+  // regions that consume their own `;`/`>`, so a real `T extends U ? …` always
+  // reaches `?` (then `:`) before either — so this bound never truncates a valid
+  // conditional, it only lets the cast/constraint `>` (or a malformed `;`) close.
+  const condConnector = detectConditionalType(grammar);
+  if (condConnector) {
+    const connScope = getScope(scopeOverrides, condConnector) ?? 'keyword.other';
+    const ternaryScope = `keyword.operator.ternary.${langName}`;
+    repository['type-conditional'] = {
+      // Anchor on the connector, but NOT a member-access `.extends` (a property
+      // named `extends`) — mirrors the official's `(?<!\.)` guard. Allowed after
+      // `...` (a rest/spread before the head type). `\b` keeps it off `extendsX`.
+      begin: `(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(${escapeRegex(condConnector)})\\s+`,
+      beginCaptures: {
+        '1': { name: `${connScope}.${langName}` },
+      },
+      end: '(?<=:)|(?=[;>])',
+      patterns: [
+        {
+          begin: '\\?',
+          beginCaptures: { '0': { name: ternaryScope } },
+          end: ':',
+          endCaptures: { '0': { name: ternaryScope } },
+          patterns: [{ include: '#type-inner' }],
+        },
+        { include: '#type-inner' },
+      ],
+    };
+    // Reachable from the type body: insert before #simple-type so the connector
+    // opens the conditional region rather than being painted entity.name.type.
+    const idx = typeInnerPats.findIndex(p => 'include' in p && p.include === '#simple-type');
+    typeInnerPats.splice(idx === -1 ? typeInnerPats.length : idx, 0, { include: '#type-conditional' });
+  }
+
   repository['type-inner'] = { patterns: typeInnerPats };
 
   // Wire up deferred type-paren pattern (basic wiring; patched after type injections)
