@@ -132,6 +132,46 @@ const checks: { label: string; code: string; want: { text: string; scope: string
       { text: 'span', scope: 'entity.name.tag' },
     ],
   },
+  // ── Generic-arrow type params after `=` (NOT JSX) ──
+  // Reported microsoft/TypeScript-TmLanguage bugs the official .tsx grammar
+  // breaks (it emits `meta.tag` / `invalid.illegal.attribute`). A type-param
+  // list with a `=` default or `const` modifier carries a trailing comma
+  // (`<T = X,>`, `<const T,>`) so it parses as an arrow, not a tag. The `<`/`>`
+  // must be type-parameter punctuation and `=>` the arrow operator — even after
+  // `=`, which is where the disambiguation is hardest (the JSX expression-start
+  // trigger also fires there). See gen-tm's #arrow-type-parameters carve-out.
+  {
+    label: '#967: <T = void,> generic arrow after `=` (default) is type-params not JSX',
+    code: `const f = <T = void,>(): G<T> => true;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
+  {
+    label: '#979: <const T,> generic arrow after `=` (const modifier) is type-params not JSX',
+    code: `export const always = <const T,>(v: T) => v;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
+  {
+    label: '#1042/#990: <T = string,> generic arrow after `=` (default) is type-params not JSX',
+    code: `const f = <T = string,>(x: T) => x;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
+  {
+    label: '<T = unknown,> generic arrow after `=` (default) is type-params not JSX',
+    code: `const x = <T = unknown,>(p: T) => p;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
 ];
 
 const scopeAt = (toks: Tok[], text: string): string | null => {

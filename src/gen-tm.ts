@@ -717,7 +717,7 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  * support.class.component. Scopes are namespaced with `langName` like every
  * other emitted scope.
  */
-function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo): Record<string, TmPattern> {
+function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo, hasArrowTypeParams: boolean): Record<string, TmPattern> {
   const result: Record<string, TmPattern> = {};
 
   // Scope names (TypeScriptReact vocabulary, namespaced by langName).
@@ -753,11 +753,43 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo)
     [String(base + 3)]: { name: component },
   });
 
+  // Generic-arrow carve-out (the inverse of #arrow-type-parameters' begin guard).
+  // A `.tsx` generic-arrow type-param list (`<T = X,>(…) =>`, `<const T,>(…) =>`)
+  // sits in expression position too, so its leading `<` also satisfies the
+  // expression-start lookbehind below. Unlike a JSX tag-open, it always carries a
+  // TOP-LEVEL comma inside `<…>` (treating `{…}` opaquely) AND its `>` is followed
+  // by an arrow-shaped `(`. We must NOT take such a `<` as JSX. The disambiguation
+  // can't be left to pattern order: the expression-start prefix consumes leading
+  // whitespace, so after `= <…` the JSX begin's match starts at that space — one
+  // offset LEFT of #arrow-type-parameters' `<` — and vscode-textmate always keeps
+  // the leftmost match regardless of order. So the carve-out is encoded locally as
+  // a negative lookahead (checked at the `<`, after the ws is consumed) that mirrors
+  // #arrow-type-parameters' positive guard exactly: same top-level-comma test, same
+  // balanced-angle + arrow-param-shape confirm. JSX-only by construction (this
+  // helper is reached only for a JSX/TSX grammar). Result: after `=`, `const`-value,
+  // `return`, etc., the type-param list wins; every genuine JSX tag (no top-level
+  // comma, or no trailing arrow-paren) is untouched.
+  // Only a TS-family JSX grammar (one whose `<…>` is also a generic delimiter, so
+  // #arrow-type-parameters exists) needs the carve-out. A plain JS `.jsx` grammar
+  // has no generics, so the guard stays empty there and its output is unchanged.
+  const jsxBalancedAngles = '(?<B>[^<>]*(?:<\\g<B>>[^<>]*)*)';
+  const jsxArrowParamShape =
+    `\\(\\s*(?:\\)|\\.\\.\\.|${identRegex}\\s*[:,?)]|[{\\[]|$)`;
+  // Top-level comma scan: `{…}` attr-value containers AND `"…"`/`'…'` attr-value
+  // strings are opaque, so a comma inside `a={[1,2]}` or `a="x,y"` is NOT a
+  // top-level separator (a JSX tag-open never has a *top-level* comma).
+  const jsxTopComma = `(?:[^<>{}"']|\\{[^{}]*\\}|"[^"]*"|'[^']*')*,`;
+  const notArrowTypeParams = hasArrowTypeParams
+    ? `(?!<(?=${jsxTopComma})(?=${jsxBalancedAngles}>\\s*${jsxArrowParamShape}))`
+    : '';
+
   // Expression-start lookbehind (JSX `<` is never preceded by a value operand).
   // Variable-length lookbehind is supported by Oniguruma. After `++`/`--` is
   // excluded (those produce a value). Mirrors the official jsx-tag-in-expression.
+  // The carve-out above is appended so a generic-arrow type-param list (which also
+  // begins with `<` in expression position) is left to #arrow-type-parameters.
   const exprStart =
-    `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)\\s*`;
+    `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)\\s*${notArrowTypeParams}`;
 
   // ── jsx-children: what may appear between `>` and `</` ──
   // Raw text needs no pattern — anything that matches none of these falls through
@@ -3058,7 +3090,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // must NOT also get a flat `variable.other` token match in Section 2).
   const jsxOwnedTokens = new Set<string>();
   if (jsx) {
-    const jsxPatterns = generateJsxPatterns(langName, identPattern, jsx);
+    const jsxPatterns = generateJsxPatterns(langName, identPattern, jsx, !!angleBracket);
     for (const [key, pattern] of Object.entries(jsxPatterns)) repository[key] = pattern;
     // The disambiguated, expression-position triggers go at the very top (before
     // #generic-call / #comparison): a `<` at expression-start with a tag-shaped
@@ -3599,9 +3631,21 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         const arrowParamShape =
           `\\(\\s*(?:\\)|\\.\\.\\.|${identPattern}\\s*[:,?)]|[{\\[]|$)`;
         const arrowPos = `(?:(?<=\\basync\\s)|(?<![\\w$)\\]}]\\s*))`;
+        // JSX-dialect disambiguator: in a `.tsx`/`.jsx` grammar a bare `<Foo>(…`
+        // is a JSX element, so a generic-arrow type-param list is only recognised
+        // when it carries a TOP-LEVEL comma inside the `<…>` (`<T,>`, `<T = X,>`,
+        // `<const T,>`, `<T, U>`) — a tag-open never has one. `{…}` attr-value
+        // containers and `"…"`/`'…'` attr strings are opaque, so a comma inside
+        // `a={[1,2]}` or `a="x,y"` doesn't count. In a plain (non-JSX) TS grammar
+        // this would wrongly reject no-comma generics like `<T>()`/`<T extends X>()`,
+        // so the guard is gated on `jsx` and empty otherwise — keeping the TS output
+        // byte-identical. The inverse of this guard is the carve-out appended to the
+        // JSX expression-start triggers (see generateJsxPatterns), so the two stay
+        // mutually exclusive; both must share this same opaque-skip set.
+        const topComma = jsx ? `(?=(?:[^<>{}"']|\\{[^{}]*\\}|"[^"]*"|'[^']*')*,)` : '';
         repository['arrow-type-parameters'] = {
           name: `meta.type.parameters.${langName}`,
-          begin: `${arrowPos}(<)(?=${balancedAngles}>\\s*${arrowParamShape})`,
+          begin: `${arrowPos}(<)${topComma}(?=${balancedAngles}>\\s*${arrowParamShape})`,
           beginCaptures: {
             '1': { name: `punctuation.definition.typeparameters.begin.${langName}` },
           },
@@ -4770,10 +4814,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // generic-call / cast / comparison angle-bracket layers AND #arrow-type-
     // parameters: a `<` at expression-start with a tag-shaped lookahead is JSX,
     // and the lookahead is the most specific. Self-closing before open/fragment.
+    if (key === 'arrow-type-parameters') return -7;
     if (key === 'jsx-self-closing-element-in-expression') return -6;
     if (key === 'jsx-element-in-expression') return -5.5;
     if (key === 'jsx-fragment-in-expression') return -5;
-    if (key === 'arrow-type-parameters') return -4;
     if (key === 'generic-call') return -3;
     if (key === 'generic-call-eol') return -2;
     if (key === 'generic-call-multiline') return -1;
