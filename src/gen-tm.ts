@@ -743,19 +743,47 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  *     A grammar whose arrow params use a different bracket yields THAT bracket
  *     (test/agnostic.ts proves this with a `⟨…⟩`-param grammar).
  *
- * NOT derived (left as structural literals, by design):
+ * NOT derived (left as a structural literal — and PROVEN irreducible, see below):
  *   • `{` `}` — the comma-nesting brace skipped inside the `<…>` scan so a comma
- *     inside a `{…}` is not a top-level separator. This skip is SHARED by both
- *     sides, and what it must skip is NOT a single named production: in the
- *     #arrow-type-parameters positive guard it is an object-type / object-literal
- *     DEFAULT (`<T = {a:1},>` — a `Type`/`Expr` brace), and in the JSX carve-out it
- *     is an attribute-value CONTAINER (`a={[1,2]}` — a JSX brace). TypeScript writes
- *     object types, object literals, blocks AND JSX containers all with the same `{`
- *     glyph from distinct rules, so "the comma-nesting brace" is the UNION of all of
- *     them — i.e. "any `{…}`", with no one rule to read it off. (A grammar that gave
- *     JSX containers a different glyph than object types would still have to skip the
- *     object-default brace here, so reading the brace off the JSX container rule
- *     would source the WRONG glyph.) Kept literal as "any brace".
+ *     inside a `{…}` is not a top-level separator. This is the LAST hardcoded
+ *     delimiter, and it was investigated hard (can it be derived from the grammar's
+ *     bracket declarations like the parens/quotes are?). The answer is NO, for a
+ *     reason deeper than output-byte-identity:
+ *
+ *     The obvious derivation — "skip the UNION of every declared balanced bracket
+ *     pair (`{}`, `[]`, `()`), read off the `punctuation.bracket.*` scopes" — DERIVES
+ *     the `{` but is WRONG. Measured against tsc as ground truth (ScriptKind.TSX),
+ *     the union makes the highlighter LESS correct, not more: it fixes ZERO cases and
+ *     REGRESSES one — `<T = [a, b]>(x: T) => x` (single type-param, tuple default, no
+ *     trailing comma), which tsc parses as a generic arrow. The cases one might hope
+ *     the union fixes (`<T = [a, b],>`, `<T = (a, b),>` — bracket defaults WITH a
+ *     trailing comma) already work WITHOUT it, and the fn-type default
+ *     `<T = (a: number) => b,>` is missed by a DIFFERENT mechanism (the `>` inside
+ *     `=>` ends `balancedAngles` early), which this skip does not touch.
+ *
+ *     Why the union regresses: the disambiguation's "top-level comma ⇒ arrow"
+ *     heuristic is itself an approximation of tsc's rule (tsc disambiguates a
+ *     single-param `<T = X>(…)=>` by the trailing `(…)=>` shape, with no comma
+ *     needed). With `[]`/`()` left TRANSPARENT (not in the skip), the scan walks INTO
+ *     a bracket default and finds its inner comma, so the heuristic fires
+ *     correctly-by-accident for `<T = [a, b]>`. Making `[]`/`()` opaque (the union)
+ *     suppresses that inner comma — faithful to the heuristic, but now a valid
+ *     generic-arrow is mis-highlighted as JSX. "Balanced bracket" and "bracket that
+ *     must be OPAQUE here" are DIFFERENT sets: only `{` belongs to the latter.
+ *
+ *     And `{` is genuinely the only one that MUST be opaque: the scan terminates on
+ *     `<`/`>`, and among the brackets only the JSX expression CONTAINER `{…}` can
+ *     appear bare in a tag-open / attribute position AND contain `<`/`>` (e.g.
+ *     `a={x > 1 ? y : z}`) — so a container's inner `>` would end the scan early
+ *     unless `{…}` is skipped. `(…)`/`[…]` never appear bare there (nested in JSX
+ *     they are already inside a `{…}` container), so they must stay transparent.
+ *     This positional uniqueness is a fact about the JSX ELEMENT production's shape,
+ *     not a property of the bracket pair, so it can't be read off `bracketPairs` —
+ *     and identifying "the container rule" structurally needs either a hardcoded
+ *     base-rule stoplist (a WORSE hardcode) or a token-keyed reachability that
+ *     over-collects in TSX (the tag's `opt('<', sep(Type), '>')` type-args drag in
+ *     `Type`'s `()`/`[]`). So the `{` stays a literal — the one irreducible glyph,
+ *     skipped as "any single-level `{…}`".
  *   • the arrow-param-shape TAIL `\s*(?: … | \.\.\. | IDENT\s*[:,?] | [{\[] | $)` —
  *     the curated first-token shapes of an arrow parameter list. The parens `(`/`)`
  *     ARE derived (from the arrow rule, see below), but this tail is a deliberately

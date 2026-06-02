@@ -172,6 +172,37 @@ const checks: { label: string; code: string; want: { text: string; scope: string
       { text: '=>', scope: 'storage.type.function.arrow' },
     ],
   },
+  // ── Bracket-DEFAULT generic arrows (tuple `[…]` / paren `(…)` default + trailing
+  // comma) — the comma-skip must keep `[]`/`()` TRANSPARENT, not opaque. tsc parses
+  // all of these as generic arrows; Monogram agrees (the official .tsx grammar gets
+  // them wrong, as #967/#979). These pin the skip's bracket behavior: a derivation
+  // that made `[]`/`()` opaque (the rejected "union of all bracket pairs") would
+  // hide the inner comma of a single-param bracket default and mis-call it JSX —
+  // see jsxDisambigDelims' doc for the full proof that only `{` must be opaque.
+  {
+    label: 'tuple-default <T = [a, b],> generic arrow is type-params not JSX',
+    code: `const g = <T = [a, b],>(x: T) => x;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
+  {
+    label: 'paren-default <T = (a),> generic arrow is type-params not JSX',
+    code: `const p = <T = (a),>(x: T) => x;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
+  {
+    label: 'object-default <T = {a:1},> generic arrow is type-params not JSX (the `{` skip)',
+    code: `const o = <T = {a:1},>(x: T) => x;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
   // ── #1033: a JSX component tag carrying a generic type argument ──
   // `<Box<number> prop={1} />` — the `<number>` must be a TYPE-ARGUMENT list
   // (`meta.type.parameters` + typeparameters punctuation, `number` a primitive
