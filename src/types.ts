@@ -67,6 +67,13 @@ export interface MarkupConfig {
   // and `" '`; a grammar declares them (see html.ts) and the injection layer reads them too.
   attributeAssign?: string;    // e.g. '='
   attributeQuotes?: string[];  // e.g. ['"', "'"]
+  // Attributes whose VALUE is embedded source, selected by a name pattern (HTML event handlers:
+  // `on*`→source.js, like the official). The value is CAPTURE-embedded (bounded to the quoted
+  // span) via the SAME helper Vue directive values use — so the embedded grammar can't run past
+  // the closing quote (the #5012 fix), and a derived JS grammar reads `//` inside a string as
+  // string content, not a comment (the official hand-rolls a `//` splitter here and mis-fires:
+  // textmate/html.tmbundle#113). Highlight-only; the parser never sees attribute values as code.
+  attributeEmbed?: { namePattern: string; embed: string }[];
   // Elements whose content is raw (CDATA-like): after the start tag's `tagClose`,
   // everything up to the matching `tagOpen+closeMarker+name` is one `token`. `embed`
   // optionally maps a tag → the grammar scope to embed in its body (e.g. Vue SFC blocks:

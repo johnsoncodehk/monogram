@@ -2713,6 +2713,41 @@ function detectConstructorKeywords(
 
 // ── Generator ──
 
+// Patterns that embed a quoted attribute VALUE as an expression/source grammar, BOUNDED to the
+// quoted span. SHARED by Vue directive values (`:x="e as T"`, `@click="…"`) and plain-HTML embed
+// attributes (`on*="…"`→source.js). The per-quote form is a CAPTURE-embed (group 3 = the value),
+// whose text range the embedded grammar physically cannot cross — so an `as`-cast type context
+// can't run past the closing quote and swallow the rest of the tag (vuejs/language-tools#5012),
+// and a derived JS grammar keeps a `//` inside a string a string, not a comment (html.tmbundle#113).
+// The trailing begin/end is a multi-line fallback (the capture bound is single-line) for a value
+// whose closing quote sits on a later line. `str` (the quote-punctuation scopes) is optional: omit
+// it → quotes left unscoped (Vue passes it from `d.valueString`; HTML from the string-punct scopes).
+// `assign` arrives pre-escaped; `quotes` raw; `quoteCc` is the char-class-escaped quote set.
+function embedValuePatterns(
+  embed: string, include: string, eqScope: string,
+  assign: string, quotes: string[], quoteCc: string,
+  str?: { begin: string; end: string },
+): TmPattern[] {
+  const valueCap = (q: string): TmPattern => {
+    const captures: Record<string, TmCapture> = {
+      '1': { name: eqScope },
+      '3': { name: embed, patterns: [{ include }] },
+    };
+    if (str) { captures['2'] = { name: str.begin }; captures['4'] = { name: str.end }; }
+    return { match: `(${assign})\\s*(${escapeRegex(q)})([^${escapeForCharClass(q)}]*)(${escapeRegex(q)})`, captures };
+  };
+  return [
+    ...quotes.map(valueCap),
+    {
+      begin: `(${assign})\\s*([${quoteCc}])`,
+      beginCaptures: str ? { '1': { name: eqScope }, '2': { name: str.begin } } : { '1': { name: eqScope } },
+      end: `\\2`,
+      ...(str ? { endCaptures: { '0': { name: str.end } } } : {}),
+      contentName: embed, patterns: [{ include }],
+    },
+  ];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Markup TextMate grammar (HTML/Vue). When a grammar declares `markup`, its
 //  highlighter is a different shape from a token-stream language's: text between
@@ -2904,8 +2939,20 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     beginCaptures: { '0': { name: sStrPunctB } }, endCaptures: { '0': { name: sStrPunctE } },
   }));
   const unquoted = { match: `[^\\s${quoteCc}${ccTagOpen}${escapeForCharClass(m.tagClose)}${assignCc}\`]+`, name: `string.unquoted.${L}` };
+  // Embedded-value attributes (HTML event handlers: `on*`=…→source.js). Mirrors a Vue directive's
+  // shape — an outer region keyed on the attribute NAME, then the SHARED capture-embed value
+  // (embedValuePatterns) bounds the embed to the quoted span. Placed FIRST so it wins the
+  // name/value tie on a real `on*`; leftmost-match still prefers the generic name rule for
+  // `data-on…` (it matches at the earlier, true attribute start). `(?![\w:.-])` completes the name.
+  const attrEmbed: TmPattern[] = (m.attributeEmbed ?? []).map(spec => ({
+    begin: `(${spec.namePattern})(?![\\w:.-])`,
+    beginCaptures: { '1': { name: sAttr } },
+    end: `(?=[\\s${escapeForCharClass(m.tagClose)}${escapeForCharClass(m.closeMarker ?? '/')}])`,
+    patterns: embedValuePatterns(spec.embed, spec.embed, sEq, assign, attrQuotes, quoteCc, { begin: sStrPunctB, end: sStrPunctE }),
+  }));
   repository['attribute'] = {
     patterns: [
+      ...attrEmbed,                                                     // `on*`=…→embedded source (before the generic name)
       { match: `(${namePat})(?=\\s*${assign})`, name: sAttr },         // attribute name (followed by the assign char)
       {                                                                 // `= value`
         begin: `(${assign})\\s*`, beginCaptures: { '1': { name: sEq } },
@@ -2993,33 +3040,11 @@ function buildMarkupInjectParts(grammar: CstGrammar, mainScopeName: string): { r
   // expression embed applies ONLY to a directive's value, never a plain HTML attribute.
   if (inj.directives) {
     const d = inj.directives;
-    // `= "expr"` → the value is an EXPRESSION, CAPTURE-EMBEDDED so the embedded grammar is
-    // BOUNDED to the quoted span. A begin/end region would let `msg as string`'s `as`-cast run
-    // its type context over the closing quote (which looks like a string-literal-type) and
-    // swallow the rest of the tag — the #5012 bug (vuejs/language-tools#5012). A capture's text
-    // range can't be crossed, so the cast stops at the quote. Everything is config DATA: the
-    // `=`/quotes from the markup config, the value scope from inject, and — so the engine never
-    // invents a scope — the quote scope from `d.valueString` (omit it → quotes left unscoped).
-    const valueCap = (q: string): TmPattern => {
-      const captures: Record<string, TmCapture> = {
-        '1': { name: d.eqScope },
-        '3': { name: inj.exprEmbed, patterns: [{ include: inj.exprInclude }] },
-      };
-      if (d.valueString) { captures['2'] = { name: d.valueString.begin }; captures['4'] = { name: d.valueString.end }; }
-      return { match: `(${assign})\\s*(${escapeRegex(q)})([^${escapeForCharClass(q)}]*)(${escapeRegex(q)})`, captures };
-    };
-    const values: TmPattern[] = [
-      ...quotes.map(valueCap),
-      // Multi-line value fallback (rare): a begin/end region embeds across lines (the capture
-      // bound is single-line). A value whose closing quote is on a later line keeps this path.
-      {
-        begin: `(${assign})\\s*([${quoteCc}])`,
-        beginCaptures: d.valueString ? { '1': { name: d.eqScope }, '2': { name: d.valueString.begin } } : { '1': { name: d.eqScope } },
-        end: `\\2`,
-        ...(d.valueString ? { endCaptures: { '0': { name: d.valueString.end } } } : {}),
-        contentName: inj.exprEmbed, patterns: [{ include: inj.exprInclude }],
-      },
-    ];
+    // `= "expr"` → the value is an EXPRESSION. Capture-embedded (bounded to the quoted span) so an
+    // `as`-cast can't run its type context past the closing quote and swallow the tag (#5012). The
+    // SAME embed-value helper plain-HTML `on*` attributes use — `d.valueString` (optional) scopes
+    // the quotes; the value scope + include come from `inject`. See embedValuePatterns.
+    const values = embedValuePatterns(inj.exprEmbed, inj.exprInclude, d.eqScope, assign, quotes, quoteCc, d.valueString);
     const dir: TmPattern[] = [];
     for (const c of d.control) {         // v-for / v-if … — distinct scope, value embedded
       dir.push({

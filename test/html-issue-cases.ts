@@ -32,14 +32,16 @@ export const cases: HtmlCase[] = [
   { id: 'tmbundle#108', title: 'nested `<svg>` is a valid tag, not flagged invalid', src: '<svg><svg></svg></svg>',
     at: 'svg', nth: 1, want: s => isTag(s) && !s.includes('invalid') },       // official's SVG-child whitelist marks a nested <svg> invalid.illegal; Monogram's generic nesting accepts it
 
-  // ── #81 (entities) and #102 (`<style>`/`<script>` embedding) WERE Monogram-only gaps, now
-  //    CLOSED: html.ts gained `markup.entity` and a `rawText.embed` map (delegating CSS — and
-  //    Monogram's OWN JS — to the platform grammars), so both now grade ✓✓. #113 is the one
-  //    remaining HTML both-miss: the official embeds JS in `on*` but mis-reads `//` in the
-  //    string (the bug), and Monogram doesn't embed attribute JS at all. All graded against the
-  //    REAL embedded JS/CSS so a ✓ means *correctly highlighted*, not merely delegated.
+  // ── #81 (entities), #102 (`<style>`/`<script>` embedding) and #113 (`on*` JS) WERE Monogram-only
+  //    gaps, now CLOSED: html.ts gained `markup.entity`, a `rawText.embed` map (delegating CSS — and
+  //    Monogram's OWN JS — to the platform grammars), and `markup.attributeEmbed` (`on*`→source.js).
+  //    All graded against the REAL embedded JS/CSS so a ✓ means *correctly highlighted*, not merely
+  //    delegated — for #113 that's the whole point: the official DOES embed JS in `on*` yet still
+  //    mis-reads `//` in the string as a comment (its inline-JS value rule hand-rolls a `//`
+  //    splitter), so it can't win even with the embed; Monogram delegates the whole value to its
+  //    own source.js (capture-bounded, the same helper Vue directive values use) and reads it right.
   { id: 'tmbundle#113', title: '`//` in an `onclick=` JS string read as a comment', src: `<input onclick="location.href='https://x.org/'">`,
-    at: '//', want: s => s.includes('source.js') && !s.includes('comment') }, // official: real JS embed reads // as a comment (bug); Monogram: value is one HTML string, no source.js
+    at: '//', want: s => s.includes('source.js') && !s.includes('comment') }, // official: hand-rolled // splitter reads it as a comment (bug); Monogram: capture-embedded source.js keeps it a string
   { id: 'tmbundle#81', title: 'character entity `&amp;` in text', src: '<p>x &amp; z</p>',
     at: '&amp;', want: s => s.includes('constant.character.entity') },        // both scope it now — Monogram via markup.entity (was a Text blob), official natively
   { id: 'tmbundle#102', title: '`<style>` element CSS is tokenized, not a flat blob', src: '<style>.a{color:red}</style>',

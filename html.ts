@@ -87,6 +87,10 @@ export const markup: MarkupConfig = {
   closeMarker: '/',
   attributeAssign: '=',          // `name = value`
   attributeQuotes: ['"', "'"],   // quoted attribute values
+  // `on*` event-handler attributes carry JS. Embedding Monogram's OWN source.js (capture-bounded
+  // to the value) highlights it correctly — and beats the official, whose inline-JS value rule
+  // hand-rolls a `//` splitter that mis-reads `//` inside a string as a comment (html.tmbundle#113).
+  attributeEmbed: [{ namePattern: 'on\\w+', embed: 'source.js' }],
   // Raw-text element bodies are scanned verbatim by the parser, but the HIGHLIGHTER
   // delegates `<script>`/`<style>` to the platform's real JS/CSS grammars (exactly as
   // the official HTML grammar embeds source.js / source.css — Monogram has no own CSS
