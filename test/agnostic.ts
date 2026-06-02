@@ -67,5 +67,36 @@ const jbegin = generateTmLanguage(gj, 'minijsx').repository['jsx-self-closing-el
 check('gen-tm JSX disambiguation skip-set quotes derived from grammar (~, not hardcoded \")',
   jbegin.includes('~[^~]*~') && !jbegin.includes('"[^"]*"') && !jbegin.includes("'[^']*'"));
 
+// 7. gen-tm's `.tsx` generic-arrow confirm (#arrow-type-parameters' arrowParamShape)
+//    reads the arrow PARAM-LIST delimiters from the arrow rule's own
+//    `'(' sep(Param,',') ')' … '=>'` (detectArrowParamDelims) — NOT a hardcoded `(`.
+//    A TS-family-JSX grammar whose arrow params are delimited by `⟨…⟩` (with a
+//    type-param-bearing declaration so #arrow-type-parameters is emitted at all)
+//    must produce a confirm that uses `⟨`/`⟩` and never a literal `\(`. Proves the
+//    param-paren derivation is data-driven; the curated param-shape TAIL
+//    (`\.\.\.`, `[:,?]`, `[{\[]`, `$`) stays literal on purpose (it is a deliberately
+//    NARROWED subset of FIRST(Param), which the shared CFG rule cannot express).
+const AType  = rule(() => [[Word]]);
+const ATP    = rule(($: any) => [['<', sep(AType, ','), '>']]);                         // <T,> generic delimiters
+const AParam = rule(($: any) => [[Word, opt(':', AType)]]);
+const ADecl  = rule(($: any) => [['fn', Word, opt(ATP), '⟨', sep(AParam, ','), '⟩', '{', '}']]); // decl w/ type-params
+const AArrow = rule(($: any) => [[opt(ATP), '⟨', sep(AParam, ','), '⟩', '=>', Word]]);  // arrow, params in ⟨…⟩
+const ACall  = rule(($: any) => [[Word, '<', sep(AType, ','), '>', '⟨', sep(Word, ','), '⟩']]); // generic-call confirm
+const AAttr  = rule(($: any) => [[Word, opt('=', Word)]]);
+const AElem  = rule(($: any) => [['<', Word, many(AAttr), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]); // JSX tag
+const AExpr  = rule(() => [Word, ACall, AArrow, AElem]);
+const AStmt  = rule(() => [ADecl, AExpr]);
+const AProg  = rule(() => [[many(AStmt)]]);
+const ga = defineGrammar({
+  name: 'angjsx', scopeName: 'source.angjsx',
+  tokens: { JSelfEnd, JCloseTg, Word },
+  prec: [none('<', '>')],
+  scopes: { 'storage.type.function': ['fn'] },  // so `fn` is a detected declaration keyword
+  rules: { AType, ATP, AParam, ADecl, AArrow, ACall, AAttr, AElem, AExpr, AStmt, AProg }, entry: AProg,
+});
+const abegin = generateTmLanguage(ga, 'angjsx').repository['arrow-type-parameters']?.begin ?? '';
+check('gen-tm arrow-param confirm parens derived from arrow rule (⟨⟩, not hardcoded `(`)',
+  abegin.includes('⟨') && abegin.includes('⟩') && !abegin.includes('\\('));
+
 console.log(fail === 0 ? `\n${ok}/${ok} agnosticism checks pass — engine has no TS-specific token assumptions` : `\n${fail} FAILED`);
 process.exit(fail === 0 ? 0 : 1);

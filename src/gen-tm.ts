@@ -738,21 +738,40 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  *   • quote chars (`"` / `'`) — the attr-value string delimiters, from the
  *     `string`-flagged token's pattern (same primitive gen-vscode-config uses, so a
  *     `~…~`-string grammar would yield `~`, never a hardcoded `"`).
+ *   • `(` `)` — the arrow PARAM-LIST delimiters in the `arrowParamShape` confirm,
+ *     from the arrow rule's own `'(' sep(Param,',') ')' … '=>'` (detectArrowParamDelims).
+ *     A grammar whose arrow params use a different bracket yields THAT bracket
+ *     (test/agnostic.ts proves this with a `⟨…⟩`-param grammar).
  *
  * NOT derived (left as structural literals, by design):
- *   • `(` `)` — the arrow parameter parens. There is no grammar declaration that
- *     marks "the call/group open" agnostically; deriving it would need a new hint
- *     the grammar doesn't carry. Same stance the surrounding pre-existing code takes.
- *   • `{` `}` — the JSX expression-container braces, treated opaque so a comma inside
- *     `a={[1,2]}` isn't a top-level separator. Structural to JSX (no separate
- *     declaration to read), so kept literal alongside `(`/`)`.
+ *   • `{` `}` — the comma-nesting brace skipped inside the `<…>` scan so a comma
+ *     inside a `{…}` is not a top-level separator. This skip is SHARED by both
+ *     sides, and what it must skip is NOT a single named production: in the
+ *     #arrow-type-parameters positive guard it is an object-type / object-literal
+ *     DEFAULT (`<T = {a:1},>` — a `Type`/`Expr` brace), and in the JSX carve-out it
+ *     is an attribute-value CONTAINER (`a={[1,2]}` — a JSX brace). TypeScript writes
+ *     object types, object literals, blocks AND JSX containers all with the same `{`
+ *     glyph from distinct rules, so "the comma-nesting brace" is the UNION of all of
+ *     them — i.e. "any `{…}`", with no one rule to read it off. (A grammar that gave
+ *     JSX containers a different glyph than object types would still have to skip the
+ *     object-default brace here, so reading the brace off the JSX container rule
+ *     would source the WRONG glyph.) Kept literal as "any brace".
+ *   • the arrow-param-shape TAIL `\s*(?: … | \.\.\. | IDENT\s*[:,?] | [{\[] | $)` —
+ *     the curated first-token shapes of an arrow parameter list. The parens `(`/`)`
+ *     ARE derived (from the arrow rule, see below), but this tail is a deliberately
+ *     NARROWED subset of FIRST(Param): the grammar's `Param` rule is shared with
+ *     constructors/methods, so its real FIRST set also contains `@`-decorators and
+ *     `public`/`private`/`readonly` parameter-property modifiers — forms that are
+ *     valid in a constructor but NOT in an arrow. That arrow-only narrowing is a
+ *     semantic fact the CFG does not carry, so a faithful FIRST(Param) derivation
+ *     would BROADEN this regex; the curated tail stays literal on purpose.
  */
 interface JsxDisambigDelims {
   topComma: string;        // top-level-comma scan body: `(?:…opaque…)*,`
   balancedAngles: string;  // recursive balanced `<…>` named group `(?<B>…)`
   arrowParamShape: string; // the arrow-shaped `(` confirm after `>`
 }
-function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string): JsxDisambigDelims {
+function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null): JsxDisambigDelims {
   // `<` / `>` from the prec table — the generic delimiters. detectAngleBracketAmbiguity
   // (the only caller's gate) already proved this grammar declares BOTH as prec
   // operators, so reading them back here sources the chars from the grammar's own
@@ -772,8 +791,13 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   const topComma = `(?:${negClass}|\\{[^{}]*\\}${opaqueStr ? '|' + opaqueStr : ''})*${escapeRegex(separator)}`;
   // Recursive balanced `<…>` (Oniguruma named-group recursion).
   const balancedAngles = `(?<B>[^${oc}]*(?:${escapeRegex(open)}\\g<B>${escapeRegex(close)}[^${oc}]*)*)`;
-  // Arrow-shaped `(` after `>` — `(` `)` left structural (see doc comment above).
-  const arrowParamShape = `\\(\\s*(?:\\)|\\.\\.\\.|${identRegex}\\s*[:,?)]|[{\\[]|$)`;
+  // Arrow-shaped param list after `>`: the `(`/`)` are the arrow rule's own param
+  // delimiters (detectArrowParamDelims); the tail is the curated first-token shapes
+  // (see doc comment for why the parens derive but the tail stays literal). The
+  // `close` glyph appears twice — the empty list `( )` and the single-param `(x)`
+  // confirm — so both read from the same derived delimiter.
+  const [pOpen, pClose] = paramParens ? [paramParens.open, paramParens.close] : ['(', ')'];
+  const arrowParamShape = `${escapeRegex(pOpen)}\\s*(?:${escapeRegex(pClose)}|\\.\\.\\.|${identRegex}\\s*[:,?${escapeForCharClass(pClose)}]|[{\\[]|$)`;
   return { topComma, balancedAngles, arrowParamShape };
 }
 
@@ -1561,6 +1585,53 @@ function detectParenArrowParams(grammar: CstGrammar): boolean {
   }
 
   return grammar.rules.some(r => walk(r.body));
+}
+
+/**
+ * Recover the OPEN/CLOSE delimiter glyphs of the arrow parameter list from the
+ * same `'(' sep(Param, ',') ')' … '=>'` shape detectParenArrowParams matches —
+ * but returning the two literal glyphs instead of a boolean. The arrow rule
+ * (`[opt(async), opt(TypeParams), '(', sep(Param, ','), ')', opt(':',Type), '=>', …]`)
+ * is the one grammar declaration that names the arrow param-list delimiters, so
+ * the `.tsx` generic-arrow confirm (jsxDisambigDelims' arrowParamShape) reads its
+ * `(`/`)` from HERE rather than baking the glyphs in. A grammar whose arrow params
+ * use a different bracket therefore yields THAT bracket (test/agnostic.ts proves
+ * this with a `⟨…⟩`-param grammar). Returns null only if no arrow rule is found
+ * (then the caller keeps the regex well-formed with the literal pair).
+ *
+ * Shape-identical to detectParenArrowParams on purpose (raw-AST walk, the same
+ * `i / i+2 / i+3…'=>'` scan): the two read the same production, so they can never
+ * disagree about what the arrow param parens are.
+ */
+function detectArrowParamDelims(grammar: CstGrammar): { open: string; close: string } | null {
+  let found: { open: string; close: string } | null = null;
+  function checkSeq(items: RuleExpr[]): boolean {
+    for (let i = 0; i < items.length - 3; i++) {
+      const open = items[i], close = items[i + 2];
+      if (open.type === 'literal' && close.type === 'literal' && items[i + 1].type === 'sep') {
+        for (let j = i + 3; j < items.length; j++) {
+          const item = items[j];
+          if (item.type === 'literal' && (item as { value: string }).value === '=>') {
+            found = { open: (open as { value: string }).value, close: (close as { value: string }).value };
+            return true;
+          }
+          if (item.type === 'literal' && ![':', '?'].includes((item as { value: string }).value)) break;
+          if (item.type === 'quantifier' || item.type === 'group') continue;
+          if (item.type === 'ref') continue;
+        }
+      }
+    }
+    return false;
+  }
+  function walk(expr: RuleExpr): boolean {
+    if (expr.type === 'seq') return checkSeq(expr.items) || expr.items.some(walk);
+    if (expr.type === 'alt') return expr.items.some(walk);
+    if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
+    if (expr.type === 'sep') return walk(expr.element);
+    return false;
+  }
+  grammar.rules.some(r => walk(r.body));
+  return found;
 }
 
 // ── Ternary expression detection ──
@@ -3208,7 +3279,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // expression-start trigger in generateJsxPatterns. Built only when `<…>` is a
   // generic delimiter; null for a plain JS `.jsx` grammar (no generics).
   const angleDisambig = angleBracket
-    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator)
+    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar))
     : null;
 
   if (angleBracket) {
