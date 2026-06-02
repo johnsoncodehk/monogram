@@ -735,6 +735,12 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  *     `grammar.precs` so the chars come from the grammar, not a literal here.
  *   • `sep` (`,`) — the type-param separator, from `sep(Type, ',')` (carried on the
  *     AngleBracketAmbiguity that this is only built alongside).
+ *   • the constraint keyword(s) (`extends`) — the NO-COMMA disambiguating signal, read
+ *     off the type-param rule's `opt('extends', Type)` constraint (detectTypeParamConstraintKeywords).
+ *     `<T extends X>(…) =>` is a generic arrow with no trailing comma; the keyword is
+ *     matched at top level and NOT immediately followed by `=` (to exclude a JSX attr
+ *     named `extends`). A grammar whose constraint word differs yields THAT word; one
+ *     with no such constraint falls back to the comma-only form (test/agnostic.ts proves it).
  *   • quote chars (`"` / `'`) — the attr-value string delimiters, from the
  *     `string`-flagged token's pattern (same primitive gen-vscode-config uses, so a
  *     `~…~`-string grammar would yield `~`, never a hardcoded `"`).
@@ -796,10 +802,84 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  */
 interface JsxDisambigDelims {
   topComma: string;        // top-level-comma scan body: `(?:…opaque…)*,`
+  topTypeParam: string;    // "is a type-param list" body: top-level comma OR constraint keyword
   balancedAngles: string;  // recursive balanced `<…>` named group `(?<B>…)`
   arrowParamShape: string; // the arrow-shaped `(` confirm after `>`
 }
-function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null): JsxDisambigDelims {
+
+/**
+ * Read the NO-COMMA disambiguating constraint keyword(s) off the type-parameter
+ * rule — the `.tsx` analogue of how the comma separator is read off `sep(…, ',')`.
+ *
+ * A `.tsx` `<…>` with a single type-param and NO trailing comma is ambiguous with a
+ * JSX tag, EXCEPT when the param carries a CONSTRAINT keyword: `<T extends X>() =>`
+ * is an unambiguous generic arrow (verified against tsc/ScriptKind.TSX — 0 parse
+ * errors, an ArrowFunction), whereas a bare `<T>` / a modifier-only `<const T>` /
+ * `<in T>` is parsed as JSX. So the constraint keyword (and ONLY it) is the second
+ * no-comma signal a generic-arrow guard may rely on.
+ *
+ * The keyword is declared, not hardcoded: the type-param rule (the `sep` element of
+ * the `'<' sep(TypeParam, ',') '>'` form) contains an OPTIONAL `[<word-literal>, Type]`
+ * pair — the constraint (`opt('extends', Type)`). We surface every such WORD literal
+ * (alphabetic, so it can be `\b`-bounded and JSX-attr-ambiguous — unlike the `=`
+ * default, whose `[ '=' , Type]` pair is punctuation and is NOT a usable no-comma
+ * signal: a top-level `=` also appears in JSX attributes, e.g. `<Foo a={x}>(c)</Foo>`,
+ * and would mis-flip them). A grammar whose constraint keyword is something other than
+ * `extends` yields THAT word; a type-param rule with no such constraint (e.g. the
+ * agnostic test's bare `<T,>` generics) yields none, and the guard falls back to the
+ * comma-only form — output unchanged. test/agnostic.ts proves the derivation.
+ *
+ * `typeArgRule` is the rule used inside a generic type-ARGUMENT list (`Foo<Type>`,
+ * detectAngleBracketAmbiguity's innerRuleName, e.g. `Type`). Type-argument lists share
+ * the same `'<' sep(…, ',') '>'` shape but their element is a TYPE, not a param
+ * DECLARATION — and a type rule's own `opt('is', Type)` type-predicate would otherwise
+ * be misread as a "constraint". So that rule is excluded from the param-rule scan.
+ */
+function detectTypeParamConstraintKeywords(grammar: CstGrammar, typeArgRule: string | null): string[] {
+  // The type-param rule is the `sep` element of a `'<' sep(X, ',') '>'` body, EXCEPT
+  // the type-argument inner rule (which has the same shape but is a type, not a param
+  // declaration). In practice the remaining element is just `TypeParam`.
+  const sepElementRules = new Set<string>();
+  const scanForTypeParamSep = (items: RuleExpr[]): void => {
+    for (let i = 0; i + 2 < items.length; i++) {
+      if (items[i].type === 'literal' && (items[i] as { value: string }).value === '<' &&
+          items[i + 1].type === 'sep' &&
+          items[i + 2].type === 'literal' && (items[i + 2] as { value: string }).value === '>') {
+        const sep = items[i + 1] as { type: 'sep'; element: RuleExpr };
+        if (sep.element.type === 'ref' && sep.element.name !== typeArgRule) sepElementRules.add(sep.element.name);
+      }
+    }
+  };
+  for (const rule of grammar.rules) for (const seq of expandAlts(rule.body)) scanForTypeParamSep(seq);
+
+  // In each such rule, find OPTIONAL `[<word-literal>, <ref>]` pairs — the constraint.
+  // The literal must be a WORD (starts with a letter/`_`) so it is `\b`-bounded; a
+  // punctuation lead like `=` (the default) is excluded on purpose (see doc above).
+  const keywords = new Set<string>();
+  const isWord = (s: string) => /^[A-Za-z_]/.test(s);
+  const scanConstraint = (expr: RuleExpr): void => {
+    if (expr.type === 'quantifier') {
+      if (expr.kind === '?' && expr.body.type === 'seq') {
+        const its = expr.body.items;
+        if (its.length >= 2 && its[0].type === 'literal' && its[1].type === 'ref') {
+          const lit = (its[0] as { value: string }).value;
+          if (isWord(lit)) keywords.add(lit);
+        }
+      }
+      scanConstraint(expr.body);
+    } else if (expr.type === 'seq' || expr.type === 'alt') {
+      for (const it of (expr as { items: RuleExpr[] }).items) scanConstraint(it);
+    } else if (expr.type === 'group') {
+      scanConstraint((expr as { body: RuleExpr }).body);
+    }
+  };
+  for (const rule of grammar.rules) {
+    if (sepElementRules.has(rule.name)) scanConstraint(rule.body);
+  }
+  return [...keywords];
+}
+
+function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null, typeArgRule: string | null): JsxDisambigDelims {
   // `<` / `>` from the prec table — the generic delimiters. detectAngleBracketAmbiguity
   // (the only caller's gate) already proved this grammar declares BOTH as prec
   // operators, so reading them back here sources the chars from the grammar's own
@@ -816,7 +896,22 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   // attr string are skipped so a comma inside them is not a top-level separator.
   const opaqueStr = [...quotes].map(q => { const e = escapeRegex(q); return `${e}[^${escapeForCharClass(q)}]*${e}`; }).join('|');
   const negClass = `[^${oc}{}${[...quotes].map(escapeForCharClass).join('')}]`;  // none of < > { } " '
-  const topComma = `(?:${negClass}|\\{[^{}]*\\}${opaqueStr ? '|' + opaqueStr : ''})*${escapeRegex(separator)}`;
+  // Shared top-level scan prefix: a run of (plain chars | opaque `{…}` | opaque
+  // strings), so a comma / keyword inside a `{…}` container or a `"…"` attr string is
+  // not seen as top-level.
+  const skip = `(?:${negClass}|\\{[^{}]*\\}${opaqueStr ? '|' + opaqueStr : ''})*`;
+  const topComma = `${skip}${escapeRegex(separator)}`;
+  // The two NO-COMMA disambiguating signals are the constraint keyword(s) read off
+  // the type-param rule (`extends`), matched at top level and — crucially — NOT
+  // immediately followed by `=`. `<T extends X>` is a type-param (extends + a type);
+  // `<Foo extends={x}>` is a JSX attr named `extends` (extends + `=`). The `(?!=)`
+  // after optional whitespace is what tells them apart (verified vs tsc). Each keyword
+  // is `\b`-bounded so it doesn't match inside a longer identifier. A grammar with no
+  // such constraint keyword yields `topTypeParam === topComma` (comma-only) — output
+  // unchanged for those (e.g. the agnostic test's bare `<T,>` generics).
+  const constraintKeywords = detectTypeParamConstraintKeywords(grammar, typeArgRule);
+  const constraintAlts = constraintKeywords.map(kw => `${skip}\\b${escapeRegex(kw)}\\b\\s*(?!=)`);
+  const topTypeParam = constraintAlts.length ? `(?:${topComma}|${constraintAlts.join('|')})` : topComma;
   // Recursive balanced `<…>` (Oniguruma named-group recursion).
   const balancedAngles = `(?<B>[^${oc}]*(?:${escapeRegex(open)}\\g<B>${escapeRegex(close)}[^${oc}]*)*)`;
   // Arrow-shaped param list after `>`: the `(`/`)` are the arrow rule's own param
@@ -826,7 +921,7 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   // confirm — so both read from the same derived delimiter.
   const [pOpen, pClose] = paramParens ? [paramParens.open, paramParens.close] : ['(', ')'];
   const arrowParamShape = `${escapeRegex(pOpen)}\\s*(?:${escapeRegex(pClose)}|\\.\\.\\.|${identRegex}\\s*[:,?${escapeForCharClass(pClose)}]|[{\\[]|$)`;
-  return { topComma, balancedAngles, arrowParamShape };
+  return { topComma, topTypeParam, balancedAngles, arrowParamShape };
 }
 
 /**
@@ -925,29 +1020,31 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   });
 
   // Generic-arrow carve-out (the inverse of #arrow-type-parameters' begin guard).
-  // A `.tsx` generic-arrow type-param list (`<T = X,>(…) =>`, `<const T,>(…) =>`)
-  // sits in expression position too, so its leading `<` also satisfies the
-  // expression-start lookbehind below. Unlike a JSX tag-open, it always carries a
-  // TOP-LEVEL comma inside `<…>` (treating `{…}` opaquely) AND its `>` is followed
+  // A `.tsx` generic-arrow type-param list (`<T = X,>(…) =>`, `<const T,>(…) =>`,
+  // `<T extends X>(…) =>`) sits in expression position too, so its leading `<` also
+  // satisfies the expression-start lookbehind below. Unlike a JSX tag-open, it
+  // carries a TOP-LEVEL comma inside `<…>` (treating `{…}` opaquely) OR a top-level
+  // constraint keyword (`extends`, the no-comma signal) AND its `>` is followed
   // by an arrow-shaped `(`. We must NOT take such a `<` as JSX. The disambiguation
   // can't be left to pattern order: the expression-start prefix consumes leading
   // whitespace, so after `= <…` the JSX begin's match starts at that space — one
   // offset LEFT of #arrow-type-parameters' `<` — and vscode-textmate always keeps
   // the leftmost match regardless of order. So the carve-out is encoded locally as
   // a negative lookahead (checked at the `<`, after the ws is consumed) that mirrors
-  // #arrow-type-parameters' positive guard exactly: same top-level-comma test, same
-  // balanced-angle + arrow-param-shape confirm. JSX-only by construction (this
-  // helper is reached only for a JSX/TSX grammar). Result: after `=`, `const`-value,
-  // `return`, etc., the type-param list wins; every genuine JSX tag (no top-level
-  // comma, or no trailing arrow-paren) is untouched.
+  // #arrow-type-parameters' positive guard exactly: same top-level type-param test
+  // (comma OR constraint keyword), same balanced-angle + arrow-param-shape confirm.
+  // JSX-only by construction (this helper is reached only for a JSX/TSX grammar).
+  // Result: after `=`, `const`-value, `return`, etc., the type-param list wins; every
+  // genuine JSX tag (no top-level comma / constraint keyword, or no trailing
+  // arrow-paren) is untouched.
   // Only a TS-family JSX grammar (one whose `<…>` is also a generic delimiter, so
   // #arrow-type-parameters exists) needs the carve-out. A plain JS `.jsx` grammar
   // has no generics, so `disambig` is null there and the guard stays empty — its
-  // output is unchanged. The building-blocks (top-level-comma scan, balanced-angle,
+  // output is unchanged. The building-blocks (top-level type-param scan, balanced-angle,
   // arrow-param-shape) are derived from the grammar by jsxDisambigDelims and SHARED
   // with #arrow-type-parameters' positive guard so the two can never drift.
   const notArrowTypeParams = disambig
-    ? `(?!<(?=${disambig.topComma})(?=${disambig.balancedAngles}>\\s*${disambig.arrowParamShape}))`
+    ? `(?!<(?=${disambig.topTypeParam})(?=${disambig.balancedAngles}>\\s*${disambig.arrowParamShape}))`
     : '';
 
   // Expression-start lookbehind (JSX `<` is never preceded by a value operand).
@@ -3331,7 +3428,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // expression-start trigger in generateJsxPatterns. Built only when `<…>` is a
   // generic delimiter; null for a plain JS `.jsx` grammar (no generics).
   const angleDisambig = angleBracket
-    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar))
+    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar), angleBracket.innerRuleName)
     : null;
 
   if (angleBracket) {
@@ -3909,16 +4006,19 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // JSX-dialect disambiguator: in a `.tsx`/`.jsx` grammar a bare `<Foo>(…`
         // is a JSX element, so a generic-arrow type-param list is only recognised
         // when it carries a TOP-LEVEL comma inside the `<…>` (`<T,>`, `<T = X,>`,
-        // `<const T,>`, `<T, U>`) — a tag-open never has one. `{…}` attr-value
-        // containers and `"…"`/`'…'` attr strings are opaque, so a comma inside
-        // `a={[1,2]}` or `a="x,y"` doesn't count. In a plain (non-JSX) TS grammar
-        // this would wrongly reject no-comma generics like `<T>()`/`<T extends X>()`,
-        // so the guard is gated on `jsx` and empty otherwise — keeping the TS output
-        // byte-identical. The skip-set body (`angleDisambig.topComma`) is derived
-        // from the grammar and SHARED with the carve-out appended to the JSX
-        // expression-start triggers (see generateJsxPatterns), so the positive guard
-        // here and its inverse there stay mutually exclusive by construction.
-        const topComma = jsx ? `(?=${angleDisambig.topComma})` : '';
+        // `<const T,>`, `<T, U>`) OR a top-level CONSTRAINT keyword (`<T extends X>`,
+        // the no-comma signal — `extends` is read off the type-param rule, and must
+        // not be a JSX attr named `extends`, hence `\bextends\b\s*(?!=)`) — a tag-open
+        // never has either. `{…}` attr-value containers and `"…"`/`'…'` attr strings
+        // are opaque, so a comma inside `a={[1,2]}` / a keyword inside `a="extends x"`
+        // doesn't count. In a plain (non-JSX) TS grammar this would wrongly reject
+        // no-comma generics like `<T>()`, so the guard is gated on `jsx` and empty
+        // otherwise — keeping the TS output byte-identical. The skip-set body
+        // (`angleDisambig.topTypeParam`) is derived from the grammar and SHARED with
+        // the carve-out appended to the JSX expression-start triggers (see
+        // generateJsxPatterns), so the positive guard here and its inverse there stay
+        // mutually exclusive by construction.
+        const topComma = jsx ? `(?=${angleDisambig.topTypeParam})` : '';
         repository['arrow-type-parameters'] = {
           name: `meta.type.parameters.${langName}`,
           begin: `${arrowPos}(<)${topComma}(?=${balancedAngles}>\\s*${arrowParamShape})`,

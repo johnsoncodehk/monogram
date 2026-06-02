@@ -135,6 +135,33 @@ const checks: { label: string; code: string; want: { text: string; scope: string
       { text: 'span', scope: 'entity.name.tag' },
     ],
   },
+  // ── REGRESSION GUARD: `extends`/`const` as a JSX ATTRIBUTE NAME stays JSX ──
+  // `extends`/`const` are valid JSX attribute names (`<Foo extends={x} />`). The
+  // no-comma generic-arrow guard fires on a top-level constraint keyword, but ONLY
+  // when it is NOT immediately followed by `=` (a type-param `<T extends X>` has a
+  // type after `extends`; a JSX attr has `extends=`). These pin that distinction so a
+  // future over-broad guard that flipped a JSX attr named `extends`/`const` to
+  // type-params is caught: the `<` must stay a TAG begin and `extends`/`const` an
+  // attribute name (NOT typeparameters punctuation / a keyword).
+  {
+    label: '<Foo extends={x} /> — `extends` is a JSX attribute name, stays a tag',
+    code: `const j = <Foo extends={x} />;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.tag.begin' },
+      { text: 'extends', scope: 'entity.other.attribute-name' },
+    ],
+  },
+  {
+    // No leading `const`/`let` declaration here: an assignment expression `k = …`
+    // still puts the JSX in expression position, but keeps the SOLE `const` token the
+    // attribute one (so scopeAt finds the attr, not an outer declaration keyword).
+    label: '<Foo const={y} /> — `const` is a JSX attribute name, stays a tag',
+    code: `k = <Foo const={y} />;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.tag.begin' },
+      { text: 'const', scope: 'entity.other.attribute-name' },
+    ],
+  },
   // ── Generic-arrow type params after `=` (NOT JSX) ──
   // Reported microsoft/TypeScript-TmLanguage bugs the official .tsx grammar
   // breaks (it emits `meta.tag` / `invalid.illegal.attribute`). A type-param
@@ -175,15 +202,43 @@ const checks: { label: string; code: string; want: { text: string; scope: string
       { text: '=>', scope: 'storage.type.function.arrow' },
     ],
   },
+  // ── No-comma generic arrows disambiguated by the `extends` CONSTRAINT (not a
+  // trailing comma) ── tsc (ScriptKind.TSX) parses each of these as a generic
+  // ArrowFunction (0 parse errors); the official .tsx grammar gets them right too.
+  // Monogram's type-param guard now also fires on a TOP-LEVEL constraint keyword
+  // (`extends` not immediately followed by `=` — which would be a JSX attr named
+  // `extends`), derived from the type-param rule's `opt('extends', Type)`. The
+  // canonical `<T extends X>` was a documented gap (the old guard required a comma);
+  // it's now a normal check. NOTE the `=` default WITHOUT a trailing comma (`<T = X>`)
+  // is deliberately NOT covered: a top-level `=` also appears in JSX attributes
+  // (`<Foo a={x}>(c)</Foo>`), so it can't be a no-comma signal without regressing JSX.
   {
-    // FALSIFYING TEST for a known gap (no-comma generic arrow disambiguated by `extends`,
-    // not a trailing comma). tsc (ScriptKind.TSX) parses `<T extends X>() => 1` as a generic
-    // ArrowFunction (0 parse errors); the official .tsx grammar gets it right too. Monogram's
-    // type-param guard requires a TOP-LEVEL COMMA, which this has none of, so it currently
-    // mis-scopes the `<…>` as a JSX tag. This check pins the desired behaviour.
     label: '<T extends X>() generic arrow (no comma, extends-disambiguated) is type-params not JSX',
     code: `const f = <T extends X>() => 1;`,
-    knownGap: true,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
+  {
+    label: '<T extends X>(p: T) => p generic arrow (no comma, extends + real params)',
+    code: `const f = <T extends X>(p: T) => p;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
+  {
+    label: '<T extends keyof X>() no-comma generic arrow (keyof constraint)',
+    code: `const f = <T extends keyof X>() => 1;`,
+    want: [
+      { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+      { text: '=>', scope: 'storage.type.function.arrow' },
+    ],
+  },
+  {
+    label: '<const T extends X>() no-comma generic arrow (const modifier + extends)',
+    code: `const f = <const T extends X>() => 1;`,
     want: [
       { text: '<', scope: 'punctuation.definition.typeparameters.begin' },
       { text: '=>', scope: 'storage.type.function.arrow' },

@@ -98,5 +98,42 @@ const abegin = generateTmLanguage(ga, 'angjsx').repository['arrow-type-parameter
 check('gen-tm arrow-param confirm parens derived from arrow rule (⟨⟩, not hardcoded `(`)',
   abegin.includes('⟨') && abegin.includes('⟩') && !abegin.includes('\\('));
 
+// 8. gen-tm's `.tsx` NO-COMMA generic-arrow disambiguator reads the CONSTRAINT
+//    keyword off the type-PARAM rule (`opt('extends', Type)` in TS), NOT a hardcoded
+//    `extends`. A single no-comma type-param `<T extends X>(…)=>` is a generic arrow
+//    (vs JSX) precisely because of that keyword. A TS-family-JSX grammar whose
+//    type-param rule's constraint keyword is `subtypeof` (and whose type-ARGUMENT
+//    rule has its OWN `opt('is', …)` predicate, which must NOT be mistaken for a
+//    constraint) must produce a guard mentioning `\bsubtypeof\b` and NEVER `\bextends\b`
+//    nor `\bis\b`. Proves the keyword derivation is data-driven and scoped to the
+//    param rule, not the type-arg rule.
+const CType   = rule(($: any) => [[Word, opt('is', Word)]]);                            // type, with an `is` predicate
+const CTParam = rule(($: any) => [[Word, opt('subtypeof', CType)]]);                    // type-PARAM: name + constraint
+const CTP     = rule(($: any) => [['<', sep(CTParam, ','), '>']]);                      // <T subtypeof X,> type-param list
+const CParam  = rule(($: any) => [[Word, opt(':', CType)]]);
+const CDecl   = rule(($: any) => [['fn', Word, opt(CTP), '(', sep(CParam, ','), ')', '{', '}']]); // decl w/ type-params (emits arrow-type-parameters)
+const CArrow  = rule(($: any) => [[opt(CTP), '(', sep(CParam, ','), ')', '=>', Word]]); // arrow w/ type-params
+const CCall   = rule(($: any) => [[Word, '<', sep(CType, ','), '>', '(', sep(Word, ','), ')']]); // generic-call (type-ARGS use CType)
+const CAttr   = rule(($: any) => [[Word, opt('=', Word)]]);
+const CElem   = rule(($: any) => [['<', Word, many(CAttr), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]);
+const CExpr   = rule(() => [Word, CCall, CArrow, CElem]);
+const CStmt   = rule(() => [CDecl, CExpr]);
+const CProg   = rule(() => [[many(CStmt)]]);
+const gc2 = defineGrammar({
+  name: 'conjsx', scopeName: 'source.conjsx',
+  tokens: { JSelfEnd, JCloseTg, Word },
+  prec: [none('<', '>')],
+  scopes: { 'storage.type.function': ['fn'] },  // so `fn` is a detected declaration keyword
+  rules: { CType, CTParam, CTP, CParam, CDecl, CArrow, CCall, CAttr, CElem, CExpr, CStmt, CProg }, entry: CProg,
+});
+// BOTH sides of the disambiguation must carry the DERIVED keyword: the positive
+// #arrow-type-parameters begin guard AND the inverse JSX-trigger carve-out.
+const ctm = generateTmLanguage(gc2, 'conjsx');
+const cbegin = ctm.repository['arrow-type-parameters']?.begin ?? '';
+const ccarve = ctm.repository['jsx-self-closing-element-in-expression']?.begin ?? '';
+const kwOk = (s: string) => s.includes('\\bsubtypeof\\b') && !s.includes('\\bextends\\b') && !s.includes('\\bis\\b');
+check('gen-tm no-comma constraint keyword derived from type-param rule (subtypeof, not hardcoded `extends`/`is`)',
+  kwOk(cbegin) && kwOk(ccarve));
+
 console.log(fail === 0 ? `\n${ok}/${ok} agnosticism checks pass — engine has no TS-specific token assumptions` : `\n${fail} FAILED`);
 process.exit(fail === 0 ? 0 : 1);
