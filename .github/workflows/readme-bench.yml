@@ -1,27 +1,45 @@
-name: README bench
+name: README ledger
 
-# Auto-refreshes the highlighter head-to-head block in README.md (between the
-# <!-- bench:start --> / <!-- bench:end --> markers) and commits it back to master.
+# Auto-refreshes the cross-language bug ledger in README.md (between the
+# <!-- issues:start --> / <!-- issues:end --> markers) and commits it back to master.
 #
-# Determinism: the block is the ADVERSARIAL corpus only (the documented-bug ledger
-# in test/issue-cases.ts, all in-repo) graded against a PINNED official grammar
-# fetched below — so the same inputs always yield the same block. The
-# parser-conformance corpus (a heavy, version-sensitive TypeScript clone) is left
-# out on purpose; that axis lives in a hand-written note next to the block.
+# The ledger grades Monogram's DERIVED grammars against each hand-written OFFICIAL one on
+# real reported bugs (test/issue-table.ts → `npm run bench:issues`). It covers FOUR languages,
+# so every official grammar must be present or the run refuses to write (issue-table.ts aborts
+# on a partial table rather than clobbering committed sections):
+#   - TS / TSX / HTML / CSS / JS — VS Code's bundled grammars, FETCHED at a pinned tag below.
+#   - Vue — vuejs/language-tools' three grammars, VENDORED at test/fixtures/vue-official/
+#     (the shipped Vue grammar has no clean raw-fetch URL; the harness embeds Monogram's own
+#     HTML/TS so no VS Code install is needed for the Vue head-to-head).
 #
-# No infinite loop: the bot commit touches only README.md, which is NOT in the
-# paths filter below, so it cannot re-trigger this workflow ([skip ci] is a backstop).
+# Determinism: same inputs (pinned official grammars + in-repo derived grammars + in-repo
+# issue-case data) → same block. The parser-conformance corpus (heavy, version-sensitive) is
+# deliberately out; that axis lives in a hand-written note next to the block.
+#
+# No infinite loop: the bot commit touches only README.md, which is NOT in the paths filter
+# below, so it can't re-trigger this workflow ([skip ci] is a backstop).
 
 on:
   push:
     branches: [master]
     paths:
+      # Derived grammars graded by the ledger.
       - 'typescript.tmLanguage.json'
-      - 'test/highlight-bench.ts'
-      - 'test/highlight-engines.ts'
-      - 'test/scope-roles.ts'
+      - 'typescriptreact.tmLanguage.json'
+      - 'html.tmLanguage.json'
+      - 'html-derivative.tmLanguage.json'
+      - 'javascript.tmLanguage.json'
+      - 'vue.tmLanguage.json'
+      - 'vue.directives.tmLanguage.json'
+      - 'vue.interpolations.tmLanguage.json'
+      # The grader + per-language issue-case data + the Vue harness.
+      - 'test/issue-table.ts'
       - 'test/issue-cases.ts'
-      - 'test/vendor/treesitter-typescript-highlights.scm'
+      - 'test/tsx-issue-cases.ts'
+      - 'test/html-issue-cases.ts'
+      - 'test/vue-issue-cases.ts'
+      - 'test/vue-grammar-harness.ts'
+      - 'test/fixtures/vue-official/**'
       - '.github/workflows/readme-bench.yml'
   workflow_dispatch:
 
@@ -29,12 +47,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: readme-bench-${{ github.ref }}
+  group: readme-ledger-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  # Pinned VS Code tag whose bundled TypeScript grammar is the "official" baseline.
-  # Bump this deliberately to re-baseline against a newer official grammar.
+  # Pinned VS Code tag whose bundled grammars are the "official" baseline for TS/TSX/HTML/CSS/JS.
+  # Bump deliberately to re-baseline against newer official grammars.
   OFFICIAL_TM_TAG: '1.96.0'
 
 jobs:
@@ -50,25 +68,32 @@ jobs:
 
       - run: npm ci
 
-      - name: Fetch pinned official TypeScript grammar
+      - name: Fetch pinned official VS Code grammars (TS / TSX / HTML / CSS / JS)
         run: |
-          curl -fsSL \
-            "https://raw.githubusercontent.com/microsoft/vscode/${OFFICIAL_TM_TAG}/extensions/typescript-basics/syntaxes/TypeScript.tmLanguage.json" \
-            -o "${RUNNER_TEMP}/official-ts.tmLanguage.json"
+          base="https://raw.githubusercontent.com/microsoft/vscode/${OFFICIAL_TM_TAG}/extensions"
+          curl -fsSL "$base/typescript-basics/syntaxes/TypeScript.tmLanguage.json"      -o "${RUNNER_TEMP}/official-ts.json"
+          curl -fsSL "$base/typescript-basics/syntaxes/TypeScriptReact.tmLanguage.json" -o "${RUNNER_TEMP}/official-tsx.json"
+          curl -fsSL "$base/html/syntaxes/html.tmLanguage.json"                         -o "${RUNNER_TEMP}/official-html.json"
+          curl -fsSL "$base/css/syntaxes/css.tmLanguage.json"                           -o "${RUNNER_TEMP}/official-css.json"
+          curl -fsSL "$base/javascript/syntaxes/JavaScript.tmLanguage.json"             -o "${RUNNER_TEMP}/official-js.json"
 
-      - name: Regenerate the README bench block
+      - name: Regenerate the README ledger (all four languages)
         env:
-          MONOGRAM_OFFICIAL_TM: ${{ runner.temp }}/official-ts.tmLanguage.json
-        run: npm run bench:readme
+          MONOGRAM_OFFICIAL_TM:   ${{ runner.temp }}/official-ts.json
+          MONOGRAM_OFFICIAL_TSX:  ${{ runner.temp }}/official-tsx.json
+          MONOGRAM_OFFICIAL_HTML: ${{ runner.temp }}/official-html.json
+          MONOGRAM_OFFICIAL_CSS:  ${{ runner.temp }}/official-css.json
+          MONOGRAM_OFFICIAL_JS:   ${{ runner.temp }}/official-js.json
+        run: npm run bench:issues
 
-      - name: Commit the refreshed block (if it changed)
+      - name: Commit the refreshed ledger (if it changed)
         run: |
           if git diff --quiet -- README.md; then
-            echo "README bench block already current — nothing to commit."
+            echo "README ledger already current — nothing to commit."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md
-          git commit -m "chore: refresh README highlighter bench results [skip ci]"
+          git commit -m "chore: refresh README cross-language bug ledger [skip ci]"
           git push

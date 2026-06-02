@@ -1,10 +1,15 @@
 node_modules
 .claude/
 
-# Third-party grammars fetched for head-to-head benches (the opponent's own files, not
-# vendored). vue-bench.ts documents the fetch + skips gracefully if absent — same as the
-# html/TS official-comparison benches, which read VS Code's installed grammars.
-test/fixtures/vue-official/
+# The official Vue grammars are VENDORED as a PINNED baseline (3 small MIT files from
+# vuejs/language-tools) so the 4-language README ledger can regenerate in CI, which has no
+# Volar install. (VS Code's TS/TSX/HTML/CSS/JS grammars are still FETCHED at a pinned tag by
+# the readme-bench workflow; only Vue — whose shipped grammar has no clean raw-fetch URL — is
+# vendored.) Any OTHER file dropped in this dir (a larger/newer fetch) stays ignored.
+test/fixtures/vue-official/*
+!test/fixtures/vue-official/vue.tmLanguage.json
+!test/fixtures/vue-official/vue-directives.json
+!test/fixtures/vue-official/vue-interpolations.json
 
 # tree-sitter build outputs (from `tree-sitter generate` / `build --wasm`, not Monogram-emitted)
 tree-sitter/*/src/parser.c
