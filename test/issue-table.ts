@@ -18,6 +18,7 @@ import onig from 'vscode-oniguruma';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tests as tsTests } from './issue-cases.ts';
+import { cases as tsxCases } from './tsx-issue-cases.ts';
 import { cases as htmlCases } from './html-issue-cases.ts';
 import { cases as vueCases } from './vue-issue-cases.ts';
 import { scopeLookup as vueScopeLookup, officialAvailable as vueOfficialAvailable } from './vue-grammar-harness.ts';
@@ -32,6 +33,7 @@ const stub = (sn: string) => parseRawGrammar(JSON.stringify({ scopeName: sn, pat
 const VSCODE = '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions';
 const official = {
   ts: process.env.MONOGRAM_OFFICIAL_TM ?? `${VSCODE}/typescript-basics/syntaxes/TypeScript.tmLanguage.json`,
+  tsx: process.env.MONOGRAM_OFFICIAL_TSX ?? `${VSCODE}/typescript-basics/syntaxes/TypeScriptReact.tmLanguage.json`,
   html: process.env.MONOGRAM_OFFICIAL_HTML ?? `${VSCODE}/html/syntaxes/html.tmLanguage.json`,
   js: process.env.MONOGRAM_OFFICIAL_JS ?? `${VSCODE}/javascript/syntaxes/JavaScript.tmLanguage.json`,
   css: process.env.MONOGRAM_OFFICIAL_CSS ?? `${VSCODE}/css/syntaxes/css.tmLanguage.json`,
@@ -70,6 +72,17 @@ async function gradeTs(): Promise<Row[] | null> {
   return [...byId.values()];
 }
 
+// ── TSX: cases are {id, title, src, checks:[{at, want}]} (predicate-based, like Vue). Monogram's
+// typescriptreact (source.tsx) vs the official TypeScriptReact, both self-contained .tsx grammars.
+async function gradeTsx(): Promise<Row[] | null> {
+  if (!existsSync(official.tsx)) return null;
+  const mk = (path: string) => new Registry({ onigLib, loadGrammar: async (sn) => sn === 'source.tsx' ? parseRawGrammar(read(path), 'tsx.json') : (sn.startsWith('source.') ? stub(sn) : null) });
+  const mono = (await mk('typescriptreact.tmLanguage.json').loadGrammar('source.tsx'))!;
+  const off = (await mk(official.tsx).loadGrammar('source.tsx'))!;
+  const pass = (g: any, c: typeof tsxCases[number]) => { const at = scopeAtFns(g, c.src); return c.checks.every(ch => ch.want(at(ch.at, ch.nth))); };
+  return tsxCases.map(c => ({ id: c.id, title: c.title, mono: pass(mono, c), off: pass(off, c) }));
+}
+
 // ── HTML: cases are {id, title, src, at, want}; pass = want(scope at the marked span).
 async function gradeHtml(): Promise<Row[] | null> {
   if (!existsSync(official.html)) return null;
@@ -105,6 +118,7 @@ async function gradeVue(): Promise<Row[] | null> {
 
 const langs: { name: string; key: string; opponent: string; rows: Row[] | null }[] = [
   { name: 'TypeScript', key: 'ts', opponent: 'microsoft/TypeScript-TmLanguage', rows: await gradeTs() },
+  { name: 'TSX', key: 'tsx', opponent: 'microsoft/TypeScript-TmLanguage (TypeScriptReact)', rows: await gradeTsx() },
   { name: 'HTML', key: 'html', opponent: "VS Code's html.tmLanguage", rows: await gradeHtml() },
   { name: 'Vue', key: 'vue', opponent: 'vuejs/language-tools vue.tmLanguage.json', rows: await gradeVue() },
 ];
@@ -113,7 +127,7 @@ const langs: { name: string; key: string; opponent: string; rows: Row[] | null }
 const mark = (b: boolean) => b ? '✓' : '·';
 // Link each tracker id to its issue. ids look like `#1050`, `tmbundle#118`, `vscode#140360`,
 // or `#6007/#2096/#520`; the prefix (or the language) selects the repo.
-const REPO: Record<string, string> = { ts: 'microsoft/TypeScript-TmLanguage', html: 'textmate/html.tmbundle', vue: 'vuejs/language-tools' };
+const REPO: Record<string, string> = { ts: 'microsoft/TypeScript-TmLanguage', tsx: 'microsoft/TypeScript-TmLanguage', html: 'textmate/html.tmbundle', vue: 'vuejs/language-tools' };
 const PREFIX: Record<string, string> = { tmbundle: 'textmate/html.tmbundle', vscode: 'microsoft/vscode' };
 const linkify = (id: string, key: string) => id.replace(/([a-z]+)?#(\d+)/g, (_m, pfx, num) => `[${pfx ?? ''}#${num}](https://github.com/${(pfx && PREFIX[pfx]) || REPO[key]}/issues/${num})`);
 const graded = langs.filter(l => l.rows) as { name: string; key: string; opponent: string; rows: Row[] }[];
