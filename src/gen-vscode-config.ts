@@ -1,5 +1,5 @@
 import type { CstGrammar } from './types.ts';
-import { collectLiterals } from './grammar-utils.ts';
+import { collectLiterals, literalRuns, stringDelimiters } from './grammar-utils.ts';
 
 // Generate a VS Code `language-configuration.json` from the grammar. This is the
 // editor-behavior artifact (comments, bracket pairs, auto-close/surround, folding,
@@ -18,58 +18,6 @@ export interface LanguageConfig {
   wordPattern?: string;
   indentationRules?: { increaseIndentPattern: string; decreaseIndentPattern: string };
   onEnterRules?: { beforeText: string; afterText?: string; action: { indent: string; appendText?: string; removeText?: number } }[];
-}
-
-// ── regex-source helpers: pull literal delimiters out of a token's pattern ──
-
-// The literal "runs" in a regex source, skipping char classes and metachars and
-// unescaping `\/`,`\*`,… (but treating `\s`,`\d`,`\b`,… as run boundaries).
-// e.g. `\/\*[\s\S]*?\*\/` → ['/*', '*/'];  `\/\/[^\n]*` → ['//'].
-function literalRuns(src: string): string[] {
-  const runs: string[] = [];
-  let cur = '', inClass = false, i = 0;
-  if (src[i] === '^') i++;
-  for (; i < src.length; i++) {
-    const c = src[i];
-    if (c === '\\') {
-      const n = src[i + 1] ?? ''; i++;
-      if (/[a-zA-Z]/.test(n)) { if (cur) { runs.push(cur); cur = ''; } continue; } // \s \d \b … → boundary
-      if (!inClass) cur += n;                                                       // \/ \* \. … → literal char
-      continue;
-    }
-    if (c === '[') { if (cur) { runs.push(cur); cur = ''; } inClass = true; continue; }
-    if (c === ']') { inClass = false; continue; }
-    if (inClass) continue;
-    if ('(){}.*+?|$'.includes(c)) { if (cur) { runs.push(cur); cur = ''; } continue; }
-    cur += c;
-  }
-  if (cur) runs.push(cur);
-  return runs;
-}
-
-// Split a regex source into its TOP-LEVEL `|` alternatives (depth 0, outside
-// char classes). e.g. a string token `"(?:…)*"|'(?:…)*'` → ['"(?:…)*"', "'(?:…)*'"].
-function topLevelAlternatives(src: string): string[] {
-  const out: string[] = [];
-  let cur = '', depth = 0, inClass = false;
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i];
-    if (c === '\\') { cur += c + (src[i + 1] ?? ''); i++; continue; }
-    if (inClass) { cur += c; if (c === ']') inClass = false; continue; }
-    if (c === '[') { inClass = true; cur += c; continue; }
-    if (c === '(') { depth++; cur += c; continue; }
-    if (c === ')') { depth--; cur += c; continue; }
-    if (c === '|' && depth === 0) { out.push(cur); cur = ''; continue; }
-    cur += c;
-  }
-  out.push(cur);
-  return out;
-}
-
-// Delimiter(s) of a string token: the leading literal of each top-level
-// alternative (any char — `"`, `'`, `«`, `"""`, …; NOT hardcoded to JS quotes).
-function stringDelimiters(src: string): string[] {
-  return topLevelAlternatives(src).map(b => literalRuns(b)[0]).filter(Boolean);
 }
 
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
