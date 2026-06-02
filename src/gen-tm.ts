@@ -412,6 +412,27 @@ function commentRepoKeys(grammar: CstGrammar): string[] {
   return keys;
 }
 
+/**
+ * The full-match regexes of the grammar's BLOCK-comment tokens (a `comment.block…`
+ * token whose pattern has a delimited body — `/* … *​/`, `(* … *)`, whatever the
+ * grammar declared). Derived, never hardcoded: a token is a block comment iff its
+ * classified scope is `comment.block…` AND `extractBlockDelimiters` finds a
+ * begin/body/end shape — the same `isBlock` test `classifyToken` uses. The
+ * token's own `pattern` IS its full match, so it can be embedded directly into a
+ * lookahead to "see through" a block comment (a LINE comment can't precede
+ * same-line code — it eats to EOL — so only block comments are collected here).
+ */
+function blockCommentMatchers(grammar: CstGrammar): string[] {
+  const pats: string[] = [];
+  for (const tok of grammar.tokens) {
+    if (tok.flags.includes('regex')) continue;
+    const c = classifyToken(tok.pattern, tok.flags);
+    const scope = tok.scope ?? c.scope;
+    if (scope.startsWith('comment.') && c.isBlock) pats.push(tok.pattern);
+  }
+  return pats;
+}
+
 // ── Type-keyword detection ──
 
 /**
@@ -963,7 +984,7 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
  * support.class.component. Scopes are namespaced with `langName` like every
  * other emitted scope.
  */
-function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo, disambig: JsxDisambigDelims | null, commentKeys: string[] = []): Record<string, TmPattern> {
+function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = []): Record<string, TmPattern> {
   const result: Record<string, TmPattern> = {};
   // Comment includes (`#linecomment`, `#blockcomment`, … — whatever the grammar
   // named its comment tokens; the keys are DERIVED via commentRepoKeys, never
@@ -1078,10 +1099,31 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   // Expression-start lookbehind (JSX `<` is never preceded by a value operand).
   // Variable-length lookbehind is supported by Oniguruma. After `++`/`--` is
   // excluded (those produce a value). Mirrors the official jsx-tag-in-expression.
-  // The carve-out above is appended so a generic-arrow type-param list (which also
-  // begins with `<` in expression position) is left to #arrow-type-parameters.
-  const exprStart =
-    `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)\\s*${notArrowTypeParams}`;
+  // The lookbehind is ZERO-WIDTH and anchored on the operator/opener BEFORE any
+  // leading comment, so the operand-vs-operator test is made at the real operator
+  // — `a /**/ <b>` (an operand `a` precedes the comment) is NOT JSX, while
+  // `= /**/ <b/>` (an operator precedes) is. (The official anchors on the block-
+  // comment CLOSE `*​/` instead, which can't see past the comment to the operator,
+  // so it wrongly flips `f /**/ <T>(x)` — a generic call — to a JSX tag.)
+  const exprBehind =
+    `(?<!\\+\\+|--)(?<=[({\\[,?=:>&|]|&&|\\|\\||=>|\\breturn|\\byield|\\bdefault|\\bcase|^)`;
+  // The leading run skipped (inside a lookahead, so zero-width) between the
+  // anchoring operator and the tag's `<`: whitespace plus any number of BLOCK
+  // comments — a JSX element may legally follow a `/* … */` on the same line
+  // (#754; tsc/ScriptKind.TSX parses `= /**/ <X/>` as a JsxSelfClosingElement).
+  // The block-comment regexes are DERIVED from the grammar (blockCommentMatchers),
+  // never hardcoded; a LINE comment can't precede same-line JSX (it eats to EOL).
+  // The comment itself stays for the region's comment includes to scope.
+  const leadComments = blockCommentPats.length
+    ? `(?:(?:${blockCommentPats.join('|')})\\s*)*`
+    : '';
+  const leadSkip = `\\s*${leadComments}`;
+  // Combined expression-start prefix: anchor on the operator, then (in a zero-width
+  // lookahead) skip leading whitespace/comments and apply the generic-arrow
+  // carve-out at the `<`. Each region appends its own tag-shaped lookahead body.
+  const exprStartLA = (tagBody: string) => `${exprBehind}(?=${leadSkip}${notArrowTypeParams}${tagBody})`;
+  // The matching region `end`: closes once the skip-run no longer reaches a tag.
+  const exprEndLA = (tagBody: string) => `(?!${leadSkip}${tagBody})`;
 
   // ── jsx-children: what may appear between `>` and `</` ──
   // Raw text needs no pattern — anything that matches none of these falls through
@@ -1242,20 +1284,28 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   // name (`<Box<number> … />`) so its inner `>` isn't mistaken for the tag's `>`,
   // letting the self-closing trigger win over the open-element one (included
   // first) for a self-closing tag that carries type args.
+  // Each region's tag-shaped lookahead body (the part after the skip-run, starting
+  // at the tag's `<`). Shared by the begin (zero-width, after the operator anchor +
+  // ws/comment skip) and the end (closes when the skip-run no longer reaches a tag).
+  // `commentIncludes` is prepended to `patterns` so a leading block comment skipped
+  // by the lookahead is still scoped (`comment.block`) before #jsx-* takes the tag.
+  const selfCloseBody = `(<)\\s*${nameRe}${optTagTypeArgs}[^>]*${escapeRegex(jsx.selfCloseTok)}`;
   result['jsx-self-closing-element-in-expression'] = {
-    begin: `${exprStart}(?=(<)\\s*${nameRe}${optTagTypeArgs}[^>]*${escapeRegex(jsx.selfCloseTok)})`,
-    end: `(?!(<)\\s*${nameRe}${optTagTypeArgs}[^>]*${escapeRegex(jsx.selfCloseTok)})`,
-    patterns: [{ include: '#jsx-self-closing-element' }],
+    begin: exprStartLA(selfCloseBody),
+    end: exprEndLA(selfCloseBody),
+    patterns: [...commentIncludes, { include: '#jsx-self-closing-element' }],
   };
+  const elementBody = `(<)\\s*${nameRe}(?:\\s|/?>|<)`;
   result['jsx-element-in-expression'] = {
-    begin: `${exprStart}(?=(<)\\s*${nameRe}(?:\\s|/?>|<))`,
-    end: `(?!(<)\\s*${nameRe}(?:\\s|/?>|<))`,
-    patterns: [{ include: '#jsx-element' }],
+    begin: exprStartLA(elementBody),
+    end: exprEndLA(elementBody),
+    patterns: [...commentIncludes, { include: '#jsx-element' }],
   };
+  const fragmentBody = `(<)\\s*(>)`;
   result['jsx-fragment-in-expression'] = {
-    begin: `${exprStart}(?=(<)\\s*(>))`,
-    end: '(?!(<)\\s*(>))',
-    patterns: [{ include: '#jsx-fragment' }],
+    begin: exprStartLA(fragmentBody),
+    end: exprEndLA(fragmentBody),
+    patterns: [...commentIncludes, { include: '#jsx-fragment' }],
   };
 
   return result;
@@ -3529,7 +3579,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   if (jsx) {
     // The grammar's comment repo keys (derived, not hardcoded) so a `//` / `/* */`
     // comment is recognised inside a JSX open tag — legal between attributes (#585).
-    const jsxPatterns = generateJsxPatterns(langName, identPattern, jsx, angleDisambig, commentRepoKeys(grammar));
+    const jsxPatterns = generateJsxPatterns(langName, identPattern, jsx, angleDisambig, commentRepoKeys(grammar), blockCommentMatchers(grammar));
     for (const [key, pattern] of Object.entries(jsxPatterns)) repository[key] = pattern;
     // The disambiguated, expression-position triggers go at the very top (before
     // #generic-call / #comparison): a `<` at expression-start with a tag-shaped

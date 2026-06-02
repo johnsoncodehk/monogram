@@ -9,12 +9,16 @@
 // into one component token. The derived grammar disambiguates both. (#1033 — a JSX component
 // with a generic type argument — the official already handles; Monogram now matches it.)
 //
-// The ledger is HONEST, not cherry-picked: it also keeps cases the derived grammar loses or ties —
-// #794 / #754 are only the official solves (a `!`+`/` division mis-read as a regex so the
-// `/>` no longer closes the tag; a JSX element after a `/**/` block comment), #825 is a both-fail
-// (a `<` and the tag name split across lines defeats both line-oriented grammars), and
-// #585 / #667 / #624 are both-pass (a `//` comment inside an open tag is now scoped as a comment;
-// real reported cascades both now handle).
+// The ledger is HONEST, not cherry-picked: it also keeps cases the derived grammar ties or loses —
+// #825 is a both-fail (a `<` and the tag name split across lines defeats both line-oriented
+// grammars, the one remaining only/no-one-solves case). The rest the derived grammar now wins or
+// ties: #794 / #754 / #585 / #667 / #624 / #1033 are both-pass — a non-null `!` then `/` division
+// keeps the `/>` closing the tag; a JSX element after a `/**/` block comment switches into JSX; a
+// `//` comment inside an open tag is scoped as a comment; real reported cascades both now handle.
+// Each of #794 / #754 / #585 was an only-official miss until the derived grammar caught up. #754 in
+// particular: the expression-start trigger learned to see past a leading block comment to the tag —
+// anchored on the operator BEFORE the comment, so `a /**/ <b>` stays a comparison — see gen-tm's
+// `leadComments` / `blockCommentMatchers` (the block-comment regex is DERIVED, never hardcoded).
 // Every `src` was ground-truthed as valid JSX with tsc (ScriptKind.TSX, 0 parse diagnostics; the
 // node kind confirms a real JsxElement, not a generic arrow), so a failing check is a true miss.
 
@@ -50,16 +54,17 @@ export const cases: Case[] = [
   { id: '#1033', title: 'JSX component with a generic type argument', src: `const e = <Box<number> prop={1} />;`,
     checks: [{ at: 'number', want: isType, desc: 'the `<number>` type argument is a type, not a broken attribute' }] },
 
-  // ── beyond the generic-arrow / member-tag wins above: honest cases the DERIVED grammar does
-  //    NOT win. Each is a real reported bug, ground-truthed as valid JSX with tsc (ScriptKind.TSX,
-  //    parseDiagnostics.length===0); the node kind (JsxSelfClosingElement / JsxElement) confirms
-  //    the `<…>` is genuinely a JSX tag, not a generic arrow. We keep every honest verdict. ──
+  // ── beyond the generic-arrow / member-tag wins above: cases that were once only-official misses
+  //    (#794 / #585 / #754) and are now both-pass, plus the lone both-fail (#825). Each is a real
+  //    reported bug, ground-truthed as valid JSX with tsc (ScriptKind.TSX, parseDiagnostics.length
+  //    ===0); the node kind (JsxSelfClosingElement / JsxElement) confirms the `<…>` is genuinely a
+  //    JSX tag, not a generic arrow. We keep every honest verdict. ──
 
-  // #794 (only the official solves this). Inside a JSX-attribute object, a non-null `!` followed by
-  // ` / ` is a real division — `image.width! / image.height!`. Monogram reads the `!`+`/` as the
-  // start of a regex/relational run, so the self-closing `/>` is mis-scoped as a relational operator
-  // (`keyword.operator.relational`) instead of closing the tag; the official keeps `/>` as the tag
-  // end. tsc: JsxSelfClosingElement, 0 diagnostics — the `/>` really does close the element.
+  // #794 (both solve this now). Inside a JSX-attribute object, a non-null `!` followed by ` / ` is a
+  // real division — `image.width! / image.height!`. Monogram used to read the `!`+`/` as the start
+  // of a regex/relational run, mis-scoping the self-closing `/>` as a relational operator instead of
+  // closing the tag; it now lexes `/` after a non-null `!` as division, so `/>` closes the tag — the
+  // official keeps `/>` as the tag end too. tsc: JsxSelfClosingElement, 0 diagnostics.
   { id: '#794', title: 'non-null `!` then `/` (division) in a JSX-attribute object', src: `const x = <Image style={{ r: image.width! / image.height! }} />;`,
     checks: [{ at: '/>', want: isTagEnd, desc: 'the `/>` closes the tag — not a relational/regex operator from the `!` `/` run' }] },
 
@@ -71,10 +76,14 @@ export const cases: Case[] = [
   { id: '#585', title: '`//` line comment inside a JSX open tag', src: `const a = <button\n  // hi\n/>;`,
     checks: [{ at: '// hi', want: isComment, desc: 'the `//` line inside the tag is a comment, not tag/attribute text' }] },
 
-  // #754 (only the official solves this). A JSX element preceded by a `/**/` block comment on the
-  // same line. Monogram fails to switch into JSX after the comment — `<Element />` is read as a `<`
-  // comparison and `Element` becomes `variable.other.readwrite`; the official recognizes the tag
-  // (`entity.name.tag` / `support.class.component`). tsc: JsxSelfClosingElement, 0 diagnostics.
+  // #754 (both solve this now). A JSX element preceded by a `/**/` block comment on the same line.
+  // The expression-start JSX trigger now sees past a leading block comment to the tag — its
+  // lookbehind anchors on the operator BEFORE the comment (the `=` here) and a zero-width lookahead
+  // skips the ws/comment run (the block-comment regex is DERIVED from the grammar, never hardcoded;
+  // see gen-tm's `leadComments`). So `<Element />` switches into JSX and `Element` is a tag, while
+  // `a /**/ <b>` (an operand precedes the comment) stays a comparison. tsc: JsxSelfClosingElement,
+  // 0 diagnostics. (The official anchors on the comment-close `*​/` instead, so it also flips
+  // `f /**/ <T>(x)` — a generic call — to a tag; Monogram keeps that a comparison.)
   { id: '#754', title: 'JSX element right after a `/**/` block comment', src: `const a = /**/ <Element />;`,
     checks: [{ at: 'Element', want: isTag, desc: 'the post-comment `<Element />` is a JSX tag, not a `<` comparison' }] },
 
