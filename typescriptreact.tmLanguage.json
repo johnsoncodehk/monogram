@@ -537,6 +537,21 @@
     "jsx-attributes": {
       "patterns": [
         {
+          "include": "#shebang"
+        },
+        {
+          "include": "#jsdoc"
+        },
+        {
+          "include": "#tripleslash"
+        },
+        {
+          "include": "#linecomment"
+        },
+        {
+          "include": "#blockcomment"
+        },
+        {
           "match": "\\s*(?:((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(:))?([_$[:alpha:]][-_$[:alnum:].]*)(?=\\s|=|/?>|$)",
           "captures": {
             "1": {

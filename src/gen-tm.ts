@@ -392,6 +392,26 @@ function classifyToken(pattern: string, flags: string[]): { scope: string; isBlo
   return { scope: 'variable.other' };
 }
 
+/**
+ * The repository keys of the grammar's COMMENT token entries, in declaration
+ * order. A token is a comment iff its emitted scope (the `@scope` override, else
+ * the classified scope) starts with `comment.` — the same classification the
+ * token-emission pass uses — and its repo key is `tok.name.toLowerCase()`, the
+ * same key that pass registers the entry under. Deriving the keys this way (not
+ * by hardcoding e.g. `"linecomment"`) lets any region that may legally contain a
+ * comment — a multiline type-arg list, a JSX open tag — `#include` the real
+ * comment entries the grammar declared, whatever they are named.
+ */
+function commentRepoKeys(grammar: CstGrammar): string[] {
+  const keys: string[] = [];
+  for (const tok of grammar.tokens) {
+    if (tok.flags.includes('regex')) continue;   // @regex tokens aren't comments
+    const scope = tok.scope ?? classifyToken(tok.pattern, tok.flags).scope;
+    if (scope.startsWith('comment.')) keys.push(tok.name.toLowerCase());
+  }
+  return keys;
+}
+
 // ── Type-keyword detection ──
 
 /**
@@ -943,8 +963,16 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
  * support.class.component. Scopes are namespaced with `langName` like every
  * other emitted scope.
  */
-function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo, disambig: JsxDisambigDelims | null): Record<string, TmPattern> {
+function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo, disambig: JsxDisambigDelims | null, commentKeys: string[] = []): Record<string, TmPattern> {
   const result: Record<string, TmPattern> = {};
+  // Comment includes (`#linecomment`, `#blockcomment`, … — whatever the grammar
+  // named its comment tokens; the keys are DERIVED via commentRepoKeys, never
+  // hardcoded). A `//` line or `/* */` block comment is legal inside a JSX open
+  // tag between attributes (tsc/ScriptKind.TSX parses `<button\n // hi\n/>` as a
+  // JsxSelfClosingElement with the comment skipped — #585). Listed FIRST in the
+  // open-tag attribute patterns so a leading `//` is taken as a comment rather
+  // than falling through to the tag body as plain `meta.tag` text.
+  const commentIncludes: { include: string }[] = commentKeys.map(k => ({ include: `#${k}` }));
 
   // Scope names (TypeScriptReact vocabulary, namespaced by langName).
   const tagBegin = `punctuation.definition.tag.begin.${langName}`;
@@ -1103,8 +1131,13 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   }
 
   // ── jsx-attributes: name (= value)? | spread {…} ──
+  // A comment (`//` line / `/* */` block) is legal between attributes inside the
+  // open tag, so the grammar's comment entries are included FIRST (#585) — before
+  // the attribute-name match, which would otherwise swallow a `//`-led line as
+  // tag text.
   result['jsx-attributes'] = {
     patterns: [
+      ...commentIncludes,
       // `name` / `ns:name` (with optional namespace) immediately before ws / `=` / `/>` / `>`.
       {
         match: `\\s*(?:(${identRegex})(:))?([_$[:alpha:]][-_$[:alnum:].]*)(?=\\s|=|/?>|$)`,
@@ -3494,7 +3527,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // must NOT also get a flat `variable.other` token match in Section 2).
   const jsxOwnedTokens = new Set<string>();
   if (jsx) {
-    const jsxPatterns = generateJsxPatterns(langName, identPattern, jsx, angleDisambig);
+    // The grammar's comment repo keys (derived, not hardcoded) so a `//` / `/* */`
+    // comment is recognised inside a JSX open tag — legal between attributes (#585).
+    const jsxPatterns = generateJsxPatterns(langName, identPattern, jsx, angleDisambig, commentRepoKeys(grammar));
     for (const [key, pattern] of Object.entries(jsxPatterns)) repository[key] = pattern;
     // The disambiguated, expression-position triggers go at the very top (before
     // #generic-call / #comparison): a `<` at expression-start with a tag-shaped
@@ -3522,7 +3557,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // Comment repository keys, collected in declaration order, so type contexts
   // (a multiline generic arg list spans several lines) can re-include them —
   // the official grammar allows a comment anywhere a type may appear.
-  const commentIncludeKeys: string[] = [];
+  const commentIncludeKeys = commentRepoKeys(grammar);
   for (const tok of grammar.tokens) {
     // Skip @regex tokens — handled by regex literal disambiguation above
     if (tok.flags.includes('regex')) continue;
@@ -3534,7 +3569,6 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     const scope = tok.scope ?? classified.scope;  // @scope override wins
     const isBlock = classified.isBlock;
     const key = tok.name.toLowerCase();
-    if (scope.startsWith('comment.')) commentIncludeKeys.push(key);
 
     if (scope === 'string.quoted.other.template') {
       const tmplEscape = tok.escapePattern ?? '\\\\.';

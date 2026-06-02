@@ -10,10 +10,11 @@
 // with a generic type argument — the official already handles; Monogram now matches it.)
 //
 // The ledger is HONEST, not cherry-picked: it also keeps cases the derived grammar loses or ties —
-// #794 / #585 / #754 are only the official solves (a `!`+`/` division mis-read as a regex so the
-// `/>` no longer closes the tag; a `//` comment inside an open tag; a JSX element after a `/**/`
-// block comment), #825 is a both-fail (a `<` and the tag name split across lines defeats both
-// line-oriented grammars), and #667 / #624 are both-pass (real reported cascades both now handle).
+// #794 / #754 are only the official solves (a `!`+`/` division mis-read as a regex so the
+// `/>` no longer closes the tag; a JSX element after a `/**/` block comment), #825 is a both-fail
+// (a `<` and the tag name split across lines defeats both line-oriented grammars), and
+// #585 / #667 / #624 are both-pass (a `//` comment inside an open tag is now scoped as a comment;
+// real reported cascades both now handle).
 // Every `src` was ground-truthed as valid JSX with tsc (ScriptKind.TSX, 0 parse diagnostics; the
 // node kind confirms a real JsxElement, not a generic arrow), so a failing check is a true miss.
 
@@ -62,10 +63,11 @@ export const cases: Case[] = [
   { id: '#794', title: 'non-null `!` then `/` (division) in a JSX-attribute object', src: `const x = <Image style={{ r: image.width! / image.height! }} />;`,
     checks: [{ at: '/>', want: isTagEnd, desc: 'the `/>` closes the tag — not a relational/regex operator from the `!` `/` run' }] },
 
-  // #585 (only the official solves this). A `//` line comment is legal inside the open tag, between
-  // attributes. Monogram does not treat the `// …` line as a comment (it falls through to the tag
-  // body, scope `meta.tag.tsx`); the official scopes it `comment.line.double-slash`. tsc: the element
-  // is a valid JsxSelfClosingElement with the comment skipped.
+  // #585 (both solve this now). A `//` line comment is legal inside the open tag, between
+  // attributes. Monogram's open-tag attribute patterns now include the grammar's comment entries
+  // (derived, not hardcoded — see gen-tm's commentRepoKeys), so the `// …` line is scoped
+  // `comment.line.double-slash` like the official; a `/* */` block comment in the same position
+  // works too. tsc: the element is a valid JsxSelfClosingElement with the comment skipped.
   { id: '#585', title: '`//` line comment inside a JSX open tag', src: `const a = <button\n  // hi\n/>;`,
     checks: [{ at: '// hi', want: isComment, desc: 'the `//` line inside the tag is a comment, not tag/attribute text' }] },
 
