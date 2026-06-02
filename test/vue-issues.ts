@@ -45,7 +45,7 @@ const expect: Record<string, { mono: boolean; off: boolean }> = {
   '#6070': { mono: true, off: true },
   // ── 2026-06 expansion: more reported bugs, honest mix (incl. only-official Monogram gaps) ──
   '#5660': { mono: true, off: false }, '#4716/#5571': { mono: true, off: false }, '#4291': { mono: true, off: false },
-  '#4410': { mono: false, off: true }, '#3727': { mono: false, off: true }, '#2666': { mono: false, off: true },
+  '#4410': { mono: true, off: true }, '#3727': { mono: true, off: true }, '#2666': { mono: true, off: true },
   '#2560/#1290': { mono: true, off: true },
 };
 

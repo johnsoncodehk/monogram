@@ -100,6 +100,10 @@ export default defineGrammar({
         ],
         shorthand: [
           { char: ':', scope: 'punctuation.attribute-shorthand.bind.html.vue' },
+          // `.prop` is Vue's shorthand for `v-bind:prop.prop` — a bind shorthand, same scope as
+          // `:` (vuejs/language-tools#3727). The directive arg (`prop`) is then parsed by the
+          // shared arg-capture, so its value embeds like any other bind directive.
+          { char: '.', scope: 'punctuation.attribute-shorthand.bind.html.vue' },
           { char: '@', scope: 'punctuation.attribute-shorthand.event.html.vue' },
           { char: '#', scope: 'punctuation.attribute-shorthand.slot.html.vue' },
         ],

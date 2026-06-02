@@ -62,15 +62,16 @@ export const cases: Case[] = [
     checks: [{ at: 'n = 1', want: embedded, desc: 'the tsx script body embeds as code (the official leaves the whole body as plain HTML text)' },
       { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
 
-  // ── directive forms Monogram doesn't model yet (the value is plain HTML, not embedded) — official wins ──
-  { id: '#4410', monoGap: true, title: 'dynamic directive argument `:[attr]`', src: `<template>\n  <a :[attr]="url">x</a>${DONE}`,
-    checks: [{ at: 'attr', want: embedded, desc: 'the `[attr]` dynamic argument is itself a JS expression — should embed as TS (Monogram treats it as a plain attribute name)' },
+  // ── dynamic directive args + `.prop` shorthand — Monogram now splits the bracketed arg and
+  //    embeds its expression (the official's arg shape, config-driven); both pass ──
+  { id: '#4410', title: 'dynamic directive argument `:[attr]`', src: `<template>\n  <a :[attr]="url">x</a>${DONE}`,
+    checks: [{ at: 'attr', want: embedded, desc: 'the `[attr]` dynamic argument is itself a JS expression — embeds as TS (the `[`/`]` are punctuation, the inner re-tokenizes as source.ts)' },
       { at: 'url', want: embedded, desc: 'the value embeds as TS' }, { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
-  { id: '#3727', monoGap: true, title: '`.prop` modifier shorthand', src: `<template>\n  <my-comp .prop="value" />${DONE}`,
-    checks: [{ at: 'value', want: embedded, desc: '`.prop` is `v-bind:prop.prop` shorthand — its value should embed as TS (Monogram reads `.prop` as a plain attr, so the value is a plain string)' },
+  { id: '#3727', title: '`.prop` modifier shorthand', src: `<template>\n  <my-comp .prop="value" />${DONE}`,
+    checks: [{ at: 'value', want: embedded, desc: '`.prop` is `v-bind:prop.prop` shorthand — `.` is a bind shorthand, so its value embeds as TS' },
       { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
-  { id: '#2666', monoGap: true, title: 'dynamic slot name from a template literal', src: '<template>\n  <Comp v-slot:[`item-${idx}`]="props">{{ props }}</Comp>' + DONE,
-    checks: [{ at: 'idx', want: embedded, desc: 'the `${idx}` inside the template-literal slot name should embed as TS (Monogram treats the whole `v-slot:[…]` arg as a plain attribute name)' },
+  { id: '#2666', title: 'dynamic slot name from a template literal', src: '<template>\n  <Comp v-slot:[`item-${idx}`]="props">{{ props }}</Comp>' + DONE,
+    checks: [{ at: 'idx', want: embedded, desc: 'the `${idx}` inside the template-literal slot name embeds as TS — the dynamic `[…]` arg is re-tokenized as an expression' },
       { at: 'props }}', want: embedded, desc: 'the slot-props value embeds as TS' }, { at: 'DONE', want: htmlText, desc: 'downstream recovers' }] },
 
   // ── v-for loop var named after a TS keyword — the old `type`-in-v-for trap; both handle it now ──

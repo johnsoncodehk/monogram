@@ -3309,6 +3309,22 @@ function buildMarkupInjectParts(grammar: CstGrammar, mainScopeName: string): { r
     // SAME embed-value helper plain-HTML `on*` attributes use — `d.valueString` (optional) scopes
     // the quotes; the value scope + include come from `inject`. See embedValuePatterns.
     const values = embedValuePatterns(inj.exprEmbed, inj.exprInclude, d.eqScope, assign, quotes, quoteCc, d.valueString);
+    // The optional directive ARGUMENT, shared by the shorthand (`:arg`) and long-form (`v-bind:arg`)
+    // begins. A DYNAMIC arg `[expr]` is itself an expression (`:[attr]`, `v-slot:[`k-${i}`]` —
+    // vuejs/language-tools#4410/#2666): split into `[` + inner-embedded + `]`, the inner re-tokenized
+    // by `exprInclude` (so `${idx}` lights as code). A STATIC arg is a plain name. This is the
+    // official's arg shape `(?:(?:(\[)([^\]]*)(\]))|([\w-]+))?`. The embed scope/include come from
+    // the `inject` config (NOT hardcoded — gen-tm stays agnostic); the only Vue-specific knowledge
+    // is "a bracketed directive arg is an expression", which is the generic markup-injection rule.
+    // Returns the regex fragment + the four capture entries indexed from `base` (so a head's own
+    // groups precede the arg's). `[` / `]` reuse `eqScope` (punctuation), matching the official.
+    const argFragment = `(?:(?:(\\[)([^\\]]*)(\\]))|([\\w-]+))?`;
+    const argCaptures = (base: number): Record<string, TmCapture> => ({
+      [base]: { name: d.eqScope },                                            // `[`
+      [base + 1]: { name: inj.exprEmbed, patterns: [{ include: inj.exprInclude }] },  // dynamic arg → embedded
+      [base + 2]: { name: d.eqScope },                                        // `]`
+      [base + 3]: { name: d.nameScope },                                      // static arg name
+    });
     const dir: TmPattern[] = [];
     for (const c of d.control) {         // v-for / v-if … — distinct scope, value embedded
       dir.push({
@@ -3317,16 +3333,16 @@ function buildMarkupInjectParts(grammar: CstGrammar, mainScopeName: string): { r
         end: endAttr, patterns: values,
       });
     }
-    for (const s of d.shorthand) {       // `:`/`@`/`#` (+ arg), value embedded
+    for (const s of d.shorthand) {       // `:`/`.`/`@`/`#` (+ arg), value embedded
       dir.push({
-        begin: `${beforeAttr}(${escapeRegex(s.char)})(\\[[^\\]]*\\]|[\\w.-]*)`,
-        beginCaptures: { '1': { name: s.scope }, '2': { name: d.nameScope } },
+        begin: `${beforeAttr}(${escapeRegex(s.char)})${argFragment}`,
+        beginCaptures: { '1': { name: s.scope }, ...argCaptures(2) },
         end: endAttr, patterns: values,
       });
     }
     dir.push({                            // long-form `v-name`(`:arg`), value embedded
-      begin: `${beforeAttr}(${escapeRegex(d.prefix)}[\\w-]+)(?:(:)(\\[[^\\]]*\\]|[\\w.-]*))?`,
-      beginCaptures: { '1': { name: d.nameScope }, '2': { name: d.eqScope }, '3': { name: d.nameScope } },
+      begin: `${beforeAttr}(${escapeRegex(d.prefix)}[\\w-]+)(?:(:)${argFragment})?`,
+      beginCaptures: { '1': { name: d.nameScope }, '2': { name: d.eqScope }, ...argCaptures(3) },
       end: endAttr, patterns: values,
     });
     repo[d.repoKey] = { patterns: dir };
