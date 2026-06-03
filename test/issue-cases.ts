@@ -644,21 +644,23 @@ export const tests: TestCase[] = [
   //
   // #994 is about a JSDoc `@template` DEFAULT — `@template [Output=Value]` inside a `/** */`
   // comment — whose param name is "not colored". It is NOT about a generic-parameter default
-  // (`function f<T = string>`, which both grammars already color); the old case here tested that
-  // wrong construct, so its ✓ was honest about the wrong thing. The real repro is a genuine
-  // BOTH-MISS: Monogram leaves the whole `[Output=Value]` as one bare `meta.embedded.block.jsdoc`
-  // blob (the `Output` name unscoped) and the official does the same (`comment.block.documentation`),
-  // so neither colors `Output`. The check below asks for the DESIRED `Output → entity.name.type`
-  // (the template-param name) which BOTH miss — graded a both-miss in the README ledger — and
-  // `monoGap: true` keeps it out of the Monogram self-test (which gates only the known-good corpus).
+  // (`function f<T = string>`, which both grammars already color). The TS-flavored bracket form
+  // `[Name=Default]` starts with `[`, so the official's two `@template` patterns (an
+  // identifier-list and a `{Constraint}` brace form — both of which Monogram mirrors exactly)
+  // never match it; the official leaves the whole `[Output=Value]` as one bare
+  // `comment.block.documentation` blob, `Output` unscoped. Monogram's DERIVED, extensible JSDoc
+  // sub-grammar adds a dedicated bracket-default pattern (gen-tm `generateJsdocPatterns`): the
+  // `[`/`]` get the `@param [opt=default]` square-bracket scopes, `=` is the assignment operator,
+  // and the declared param NAME (and its default) become `entity.name.type.jsdoc`. So Monogram
+  // colors `Output` as a type name while the official still misses it → an only-Monogram win
+  // (the plain `@template T` / `T, U` / `{C} T` forms stay byte-identical to the official).
   {
-    label: '#994: JSDoc `@template [Output=Value]` default — the param name is uncolored (both miss)',
+    label: '#994: JSDoc `@template [Output=Value]` default — Monogram colors the param name, official misses it',
     input: '/** @template [Output=Value] */',
-    monoGap: true,
     checks: [
-      // Desired-but-unmet: the template param `Output` should be a type name. Monogram and the
-      // official both leave it inside the bare JSDoc blob, so this fails for both (a both-miss).
-      { text: 'Output', scope: 'entity.name.type' },
+      // Monogram scopes the declared template-param name as a type name (the official leaves it
+      // as bare comment text). This is the only-Monogram win.
+      { text: 'Output', scope: 'entity.name.type.jsdoc' },
     ],
   },
   {

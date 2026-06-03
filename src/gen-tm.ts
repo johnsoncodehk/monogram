@@ -2577,6 +2577,26 @@ function generateJsdocPatterns(langName: string): Record<string, TmPattern> {
             '4': { name: 'entity.name.type.instance.jsdoc' },
           },
         },
+        // @template [Name=Default]  →  TS-flavored default type-parameter
+        // (microsoft/TypeScript-TmLanguage#994). The square-bracket form starts
+        // with `[`, so the identifier-list / brace patterns below never match it;
+        // the official VS Code TS grammar lacks this case entirely and leaves the
+        // whole `[Name=Default]` as bare comment text. Mirror the `@param
+        // [opt=default]` bracket scopes; color the declared param NAME (and its
+        // default) as a type name — beating the official, which colors neither.
+        {
+          match:
+            '(?x)\n((@)template)\n\\s+\n(\\[)\\s*\n(                                  # 4: the declared type-parameter name\n  [A-Za-z_$][\\w$]*\n)\n(?:\n  \\s* (=) \\s*                      # 5: the `=` of the default\n  (                                # 6: the default type expression\n    (?>\n      "(?:\\*(?!/)|\\\\(?!")|[^*\\\\])*?" |\n      \'(?:\\*(?!/)|\\\\(?!\')|[^*\\\\])*?\' |\n      \\[ (?:\\*(?!/)|[^*])*? \\] |\n      (?:\\*(?!/)|\\s(?!\\s*\\])|[^*\\s\\[\\]])\n    )*\n  )\n)?\n\\s* (\\])',
+          captures: {
+            '1': { name: 'storage.type.class.jsdoc' },
+            '2': { name: 'punctuation.definition.block.tag.jsdoc' },
+            '3': { name: 'punctuation.definition.optional-value.begin.bracket.square.jsdoc' },
+            '4': { name: 'entity.name.type.jsdoc' },
+            '5': { name: 'keyword.operator.assignment.jsdoc' },
+            '6': { name: 'entity.name.type.jsdoc' },
+            '7': { name: 'punctuation.definition.optional-value.end.bracket.square.jsdoc' },
+          },
+        },
         // @template  →  identifier list (no brace)
         {
           match:
