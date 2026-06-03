@@ -1,17 +1,21 @@
-// scope-gap-yaml.ts — YAML adapter for the unified scope-gap harness. vscode#203212 language #1:
-// VS Code's YAML grammar is the unmaintained textmate/yaml.tmbundle; the oracle is the `yaml`
-// package (maintained). Run (bare node): node test/scope-gap-yaml.ts
-//   Override the official grammar: MONOGRAM_OFFICIAL_YAML=/path/to/yaml.tmLanguage.json
+// scope-gap-yaml.ts — YAML adapter for the unified scope-gap harness. NOTE: unlike most of the
+// vscode#203212 list, VS Code already switched YAML OFF the dead textmate/yaml.tmbundle TO the
+// maintained RedCMD/YAML-Syntax-Highlighter (microsoft/vscode#232244). So YAML's "official"
+// baseline here is that MAINTAINED grammar — this gap is Monogram vs a maintained competitor, not
+// a dead bundle. Default = RedCMD UPSTREAM; clone it first:
+//   git clone --depth 1 https://github.com/RedCMD/YAML-Syntax-Highlighter /tmp/redcmd-yaml
+// (VS Code's bundled YAML is the same grammar — identical result; set MONOGRAM_OFFICIAL_YAML to
+//  .../extensions/yaml/syntaxes/yaml.tmLanguage.json for that.) Oracle = the `yaml` package.
+// Run (bare node): node test/scope-gap-yaml.ts
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parse as yamlParse, parseAllDocuments } from 'yaml';
 import { run } from './scope-gap.ts';
 import { yamlOracle } from './yaml-oracle.ts';
 
-const OFFICIAL = process.env.MONOGRAM_OFFICIAL_YAML
-  ?? '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/yaml/syntaxes/yaml.tmLanguage.json';
-// VS Code's YAML grammar is a dispatcher stub that include()s version-specific sub-grammars in
-// the same syntaxes/ dir — load them all, or the official scopes nothing (everything → root).
+const OFFICIAL = process.env.MONOGRAM_OFFICIAL_YAML ?? '/tmp/redcmd-yaml/syntaxes/yaml.tmLanguage.json';
+// The RedCMD/VS Code YAML grammar is a dispatcher stub that include()s version-specific
+// sub-grammars in the same syntaxes/ dir — load them all, or the official scopes nothing.
 const SYN = dirname(OFFICIAL);
 const officialExtra: Record<string, string> = {
   'source.yaml.1.2': join(SYN, 'yaml-1.2.tmLanguage.json'),
