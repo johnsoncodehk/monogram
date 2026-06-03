@@ -213,7 +213,7 @@ module.exports = grammar({
 
     enum_member: $ => seq($.member_name, optional(seq("=", $.expr))),
 
-    import_clause: $ => choice(seq($.ident, optional(seq(",", choice(seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", $.ident))))), seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", $.ident)),
+    import_clause: $ => choice(seq("defer", "*", "as", $.ident), seq($.ident, optional(seq(",", choice(seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", $.ident))))), seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", $.ident)),
 
     import_specifier: $ => seq($.ident, optional(seq("as", $.ident))),
 

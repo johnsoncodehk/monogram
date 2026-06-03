@@ -426,6 +426,7 @@
             "constructor": "keyword",
             "override": "keyword",
             "accessor": "keyword",
+            "defer": "keyword",
             "delete": "operator",
             "string": "keyword",
             "number": "keyword",
@@ -866,6 +867,10 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "defer": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "delete": {
               "token": "operator",
               "switchTo": "@root"
@@ -1202,6 +1207,7 @@
             "constructor": "keyword",
             "override": "keyword",
             "accessor": "keyword",
+            "defer": "keyword",
             "delete": "operator",
             "string": "keyword",
             "number": "keyword",

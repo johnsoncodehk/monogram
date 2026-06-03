@@ -4765,9 +4765,41 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // grammar/scope map; the rule fires only on the keyword→`*` adjacency that
   // actually occurs in a rule, so an arithmetic `*` is never mis-scoped (import/
   // export keywords are reserved and can never be a multiplication operand).
+  // A phase modifier is a keyword literal whose EVERY keyword occurrence in the
+  // grammar sits immediately before the namespace `*` (e.g. `defer`, only ever in
+  // `import defer * as ns`). Such a word is NOT reserved — it stays a valid binding
+  // identifier elsewhere (`const defer = 1`, `defer()`, `import defer from "m"`) — so
+  // it must be scoped POSITIONALLY (right before `*`, via #import-export-all below),
+  // never in the flat keyword match. Words used as keywords in OTHER positions too
+  // (`import`; `export`, before `*` AND in `export default …`) are NOT phase
+  // modifiers — they keep their normal flat scoping and may introduce the `*`.
+  const usedAsKeywordOnlyBeforeStar = (lit: string): boolean => {
+    let beforeStar = false, elsewhere = false;
+    const walk = (e: RuleExpr | undefined): void => {
+      if (!e) return;
+      if (e.type === 'seq') {
+        for (let i = 0; i < e.items.length; i++) {
+          const it = e.items[i];
+          if (it.type === 'literal' && it.value === lit) {
+            const nx = e.items[i + 1];
+            if (nx && nx.type === 'literal' && nx.value === '*') beforeStar = true; else elsewhere = true;
+          }
+          walk(it);
+        }
+      } else if (e.type === 'alt') e.items.forEach(walk);
+      else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+      else if (e.type === 'sep') walk(e.element);
+    };
+    for (const r of grammar.rules) walk(r.body);
+    return beforeStar && !elsewhere;
+  };
+  // Star-introducing keywords (`import`/`export`): carry a keyword.control.import
+  // subtype scope AND introduce a namespace `*`. Phase modifiers (which also carry
+  // such a subtype, since `defer` is a deferred-IMPORT marker) are excluded — they
+  // are not star-introducers, they sit BETWEEN the keyword and the `*`.
   const importExportKws = new Set<string>();
   for (const [lit, scopes] of scopeOverrides) {
-    if (scopes.some(s => s.startsWith('keyword.control.import'))) importExportKws.add(lit);
+    if (scopes.some(s => s.startsWith('keyword.control.import')) && !usedAsKeywordOnlyBeforeStar(lit)) importExportKws.add(lit);
   }
   // Does a rule have an alternative whose first item is the `*` literal? (e.g.
   // `import` → ImportClause, whose namespace branch begins `'*' 'as' Ident`.)
@@ -4785,6 +4817,27 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     return false;
   };
   const starAllKws = new Set<string>();   // import/export keywords that introduce a namespace `*`
+  // Does an alternative begin `[K, '*', …]` where K is a keyword literal? (the
+  // import phase-modifier shape — `defer * as ns`). Returns each such K reached
+  // directly or through a rule-ref (e.g. `import ImportClause`, an ImportClause alt
+  // being `['defer','*','as',Ident]`).
+  const phaseStarKws = (refName: string, seen: Set<string> = new Set()): string[] => {
+    if (seen.has(refName)) return [];
+    seen.add(refName);
+    const rule = grammar.rules.find(r => r.name === refName);
+    if (!rule) return [];
+    const out: string[] = [];
+    for (const alt of expandAlts(rule.body)) {
+      const head = alt[0], next = alt[1];
+      if (head?.type === 'literal' && isKeywordLiteral(head.value) && next?.type === 'literal' && next.value === '*') out.push(head.value);
+      else if (head?.type === 'ref') out.push(...phaseStarKws(head.name, seen));
+    }
+    return out;
+  };
+  // Map each star-introducing import keyword to the phase modifiers that may sit
+  // between it and the `*` (e.g. `import` → [`defer`]). `export`'s `*` takes no
+  // modifier, so its entry stays empty.
+  const phaseModsByKw = new Map<string, string[]>();
   {
     const walk = (e: RuleExpr | undefined): void => {
       if (!e) return;
@@ -4797,6 +4850,18 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           if ((b.type === 'literal' && b.value === '*') || (b.type === 'ref' && ruleStartsWithStar(b.name))) {
             starAllKws.add(a.value);
           }
+          // Phase modifier between the keyword and `*` (`import defer * as ns`):
+          // a `[K,'*']`-headed alt reached through the next rule-ref, K used as a
+          // keyword ONLY before `*`.
+          if (b.type === 'ref') {
+            const mods = phaseStarKws(b.name).filter(usedAsKeywordOnlyBeforeStar);
+            if (mods.length) {
+              starAllKws.add(a.value);
+              const cur = phaseModsByKw.get(a.value) ?? [];
+              for (const m of mods) if (!cur.includes(m)) cur.push(m);
+              phaseModsByKw.set(a.value, cur);
+            }
+          }
         }
         for (const item of alt) {
           if (item.type === 'quantifier' || item.type === 'group') walk(item.body);
@@ -4806,17 +4871,51 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     };
     for (const rule of grammar.rules) walk(rule.body);
   }
+  // Collect the phase modifiers so the flat keyword match (section 5) can exclude
+  // them — they are scoped here, positionally, instead.
+  const phaseModifierKws = new Set<string>([...phaseModsByKw.values()].flat());
   if (starAllKws.size > 0) {
     // Keyword keeps the scope it carries elsewhere (read from the scope map), so
-    // capture 1 is not hardcoded to a specific scope string.
+    // the keyword capture is not hardcoded to a specific scope string.
     const kwScope = getScope(scopeOverrides, [...starAllKws][0]) ?? 'keyword.control.import';
-    repository['import-export-all'] = {
-      match: `\\b(${[...starAllKws].map(escapeRegex).join('|')})\\s+(\\*)`,
-      captures: {
-        '1': { name: `${kwScope}.${langName}` },
-        '2': { name: `constant.language.import-export-all.${langName}` },
-      },
-    };
+    if (phaseModifierKws.size === 0) {
+      // No phase modifier in this language (e.g. JS, or TS without `import defer`):
+      // emit the original flat keyword→`*` match verbatim — byte-identical output.
+      repository['import-export-all'] = {
+        match: `\\b(${[...starAllKws].map(escapeRegex).join('|')})\\s+(\\*)`,
+        captures: {
+          '1': { name: `${kwScope}.${langName}` },
+          '2': { name: `constant.language.import-export-all.${langName}` },
+        },
+      };
+    } else {
+      // A phase modifier exists (`import defer * as ns`). One branch per
+      // star-introducing keyword: a keyword that admits a modifier emits
+      // `(import)\s+(?:(defer)\s+)?(\*)`; a bare one stays `(export)\s+(\*)`.
+      // Capture groups number across branches in open-paren order, assigned as the
+      // branches are built. The phase modifier is scoped from the map (a
+      // keyword.control.import subtype), never a hardcoded word.
+      const phaseScope = getScope(scopeOverrides, [...phaseModifierKws][0]) ?? kwScope;
+      const captures: Record<string, { name: string }> = {};
+      const branches: string[] = [];
+      let g = 0;
+      for (const kw of starAllKws) {
+        const mods = phaseModsByKw.get(kw) ?? [];
+        const kwG = ++g; captures[String(kwG)] = { name: `${kwScope}.${langName}` };
+        let branch = `(${escapeRegex(kw)})\\s+`;
+        if (mods.length) {
+          const modG = ++g; captures[String(modG)] = { name: `${phaseScope}.${langName}` };
+          branch += `(?:(${mods.map(escapeRegex).join('|')})\\s+)?`;
+        }
+        const starG = ++g; captures[String(starG)] = { name: `constant.language.import-export-all.${langName}` };
+        branch += `(\\*)`;
+        branches.push(branch);
+      }
+      repository['import-export-all'] = {
+        match: `\\b(?:${branches.join('|')})`,
+        captures,
+      };
+    }
     topPatterns.push({ include: '#import-export-all' });
   }
 
@@ -5322,7 +5421,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // Drop keywords whose keyword role is owned by a dedicated declaration context
       // (e.g. `constructor` → #constructor-declaration in class bodies). They double
       // as identifiers everywhere else, so the flat match must not paint them.
-      const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k) && !ctxModSet.has(k) && !contextDeclaredKws.has(k));
+      // Phase modifiers (`defer`, only ever before the namespace `*`) are likewise
+      // scoped positionally by #import-export-all — never in the flat match, which
+      // would mis-paint their ordinary-identifier uses (`const defer`, `defer()`,
+      // `import defer from "m"`).
+      const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k) && !ctxModSet.has(k) && !contextDeclaredKws.has(k) && !phaseModifierKws.has(k));
       if (globalKws.length > 0) {
         repository[key] = {
           match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b`,

@@ -78,7 +78,9 @@
 [
   "constructor" "function" "=>"
 ] @keyword.function
-"import" @keyword.import
+[
+  "import" "defer"
+] @keyword.import
 [
   "else" "if"
 ] @keyword.conditional

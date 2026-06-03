@@ -403,6 +403,11 @@ const ImportSpecifier = rule($ => [
 ]);
 
 const ImportClause = rule($ => [
+  // deferred import (TS 5.9): `import defer * as ns from "m"`. `defer` is a phase
+  // modifier here, ONLY valid immediately before the namespace `* as`. As a keyword
+  // literal it still lexes as an Ident, so `defer` stays an ordinary binding name in
+  // every other position (`const defer = 1`, `import defer from "m"`, `defer()`).
+  ['defer', '*', 'as', Ident],
   // default import, optionally followed by named `{…}` or namespace `* as x`
   [Ident, opt(',', alt(['{', sep(ImportSpecifier, ','), '}'], ['*', 'as', Ident]))],
   ['{', sep(ImportSpecifier, ','), '}'],
@@ -500,6 +505,13 @@ export default defineGrammar({
     'keyword.control.trycatch': jsScopes['keyword.control.trycatch'],
     'keyword.control': jsScopes['keyword.control'],
     'keyword.control.import': jsScopes['keyword.control.import'],
+    // `defer` is the TS 5.9 deferred-import phase modifier (`import defer * as ns`).
+    // It carries a keyword.control.import subtype, but — unlike `import` itself — it
+    // is NOT reserved (a valid identifier name everywhere else). gen-tm therefore
+    // scopes it POSITIONALLY (only right before the namespace `*`, via the
+    // import-export-all pattern), never in the flat keyword match. See gen-tm's
+    // phase-modifier handling.
+    'keyword.control.import.phase': ['defer'],
     'keyword.control.export': jsScopes['keyword.control.export'],
     'keyword.control.from': jsScopes['keyword.control.from'],
     'storage.type': jsScopes['storage.type'],

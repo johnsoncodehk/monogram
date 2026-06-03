@@ -745,16 +745,14 @@ export const tests: TestCase[] = [
     ],
   },
   // TS 5.9 `import defer * as ns` (deferred-import, valid in tsc 5.9.3): the `defer` modifier should
-  // be a keyword. A PROVEN both-miss: `defer` is a CONTEXTUAL keyword the grammar's vocabulary does
-  // not include — the CFG (like the official, and like TS before 5.9) parses it as an ordinary
-  // binding identifier, so both grammars scope it variable.other.readwrite[.alias]. The agnostic
-  // generator scopes a word as a keyword only when the grammar SAYS it is one; making `defer` a
-  // keyword ONLY in `import defer *` (it stays a valid identifier in `const defer`, `import defer
-  // from`) means modeling brand-new deferred-import syntax with a position-only keyword — neither
-  // grammar does. Both miss new syntax.
+  // be a keyword. The official grammar still misses it (its vocabulary has no `defer`, so it scopes
+  // it variable.other.readwrite[.alias]). Monogram MODELS the deferred-import production in the CFG
+  // (`['defer','*','as',Ident]` in ImportClause) and marks `defer` a keyword.control.import.phase —
+  // and the agnostic generator scopes it as a keyword ONLY in phase-modifier position (immediately
+  // before the namespace `*`, via the import-export-all pattern), so `defer` stays an ordinary
+  // identifier everywhere else (`const defer = 1`, `defer()`, `import defer from "m"`). A Monogram win.
   {
     label: '#1058: `import defer` should scope `defer` as a keyword',
-    monoGap: true,
     input: `import defer * as ns from "x";`,
     checks: [
       { text: 'defer', scope: 'keyword' },
