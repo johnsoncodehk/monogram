@@ -7,6 +7,9 @@
       "include": "#comment"
     },
     {
+      "include": "#explicit-key"
+    },
+    {
       "include": "#dquotekey"
     },
     {
@@ -75,7 +78,7 @@
     },
     "directive": {
       "name": "keyword.other.directive.yaml",
-      "match": "%[^\\n]*"
+      "match": "%(?:[^\\n#]|#(?<=\\S#))*"
     },
     "comment": {
       "name": "comment.line.number-sign.yaml",
@@ -91,11 +94,46 @@
     },
     "dquote": {
       "name": "string.quoted.double.yaml",
-      "match": "\"(?:\\\\.|[^\"\\\\])*\""
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.yaml"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.yaml"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.yaml"
+        }
+      ]
     },
     "squote": {
       "name": "string.quoted.single.yaml",
-      "match": "'(?:''|[^'])*'"
+      "begin": "'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.yaml"
+        }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.yaml"
+        }
+      },
+      "patterns": [
+        {
+          "match": "''",
+          "name": "constant.character.escape.yaml"
+        }
+      ],
+      "applyEndPatternLast": true
     },
     "anchor": {
       "name": "entity.name.type.anchor.yaml",
@@ -115,7 +153,7 @@
     },
     "key": {
       "name": "entity.name.tag.yaml",
-      "match": "(?:[^\\s\\-?:,\\[\\]{}#&*!|>'\"%@\\`]|[-?:](?=[^\\s,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\s,\\]}]))*(?=[\\t ]*:(?:[\\s,\\[\\]{}]|$))"
+      "match": "(?:[^\\s\\-?:,\\[\\]{}#&*!|>'\"%@\\`]|[-?:](?=[^\\s,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\s,\\]}])|#(?<=\\S#))*(?=[\\t ]*:(?:[\\s,\\[\\]{}]|$))"
     },
     "num": {
       "name": "constant.numeric.yaml",
@@ -127,7 +165,7 @@
     },
     "plain": {
       "name": "string.unquoted.yaml",
-      "match": "(?:[^\\s\\-?:,\\[\\]{}#&*!|>'\"%@`]|[-?:](?=[^\\s,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\s,\\]}]))*"
+      "match": "(?:[^\\s\\-?:,\\[\\]{}#&*!|>'\"%@\\`]|[-?:](?=[^\\s,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\s,\\]}])|#(?<=\\S#))*"
     },
     "indent": {
       "name": "variable.other.yaml",
@@ -140,6 +178,17 @@
     "newline": {
       "name": "variable.other.yaml",
       "match": "(?!)"
+    },
+    "explicit-key": {
+      "match": "(\\?)([\\t ]+)((?:[^\\s\\-?:,\\[\\]{}#&*!|>'\"%@\\`]|[-?:](?=[^\\s,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\s,\\]}])|#(?<=\\S#))*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.map.key.yaml"
+        },
+        "3": {
+          "name": "entity.name.tag.yaml"
+        }
+      }
     },
     "type-inner": {
       "patterns": [

@@ -27,7 +27,10 @@ const SQuote = token(/'(?:''|[^'])*'/, { string: true, scope: 'string.quoted.sin
 const Anchor = token(/&[^\s\[\]{},]+/, { scope: 'entity.name.type.anchor' });
 const Alias = token(/\*[^\s\[\]{},]+/, { scope: 'variable.other.alias' });
 const Tag = token(/!(?:<[^>]*>|[^\s\[\]{},]*)/, { scope: 'storage.type.tag' });
-const Directive = token(/%[^\n]*/, { scope: 'keyword.other.directive' });
+// Directive (`%YAML 1.2`, `%TAG …`): runs to EOL but stops before a ` #` trailing comment — a
+// `#` is a comment indicator only after whitespace, so a glued `#` (`%YAML 1.1#x`) stays part of
+// the directive while a spaced ` # comment` falls to the Comment token (same rule as plain scalars).
+const Directive = token(/%(?:[^\n#]|#(?<=\S#))*/, { scope: 'keyword.other.directive' });
 // Block scalar (| / >): EMITTED by the lexer's block-scalar mode (placeholder pattern, skipped
 // in the regex loop) so the more-indented content lines arrive as a single token.
 const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block' });
@@ -37,7 +40,12 @@ const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block' });
 // string-valued plain scalar — a finer SCOPE for the highlighter, while the parser still treats
 // every one as a Scalar (they are all added to the `Scalar` rule, so the parse tree is unchanged).
 const PLAIN_HEAD = String.raw`(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:](?=[^\s,\[\]{}]))`;
-const PLAIN_BODY = String.raw`(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}]))*`;
+// A `#` is a COMMENT indicator only at line start or after whitespace; inside a plain scalar a
+// `#` glued to a non-space char is ordinary content (`this is#not` is ONE key, `http://a#b` is a
+// URL). So the body keeps a `#` whose preceding char is non-space — `#(?<=\S#)` matches the `#`
+// then asserts the two chars ending here are «non-space»«#» — while ` #…` (space-prefixed) still
+// ends the scalar and falls to the Comment token.
+const PLAIN_BODY = String.raw`(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}])|#(?<=\S#))*`;
 // A plain scalar is a mapping KEY when a `:` key-separator (colon + whitespace / EOL, or—inside a
 // flow collection—colon + `,`/`]`/`}`) follows it. Matched BEFORE the value/number tokens so a
 // numeric-looking key (`123:`) is still a key (entity.name.tag), as the `yaml` oracle resolves it.
@@ -82,11 +90,11 @@ const BoolNull = token(
 );
 
 // Plain scalar. Leading char: a non-indicator, OR one of `- ? :` when followed by a non-space
-// (so `-1`, `?x`, `::v` are plain, but `- `, `? `, `: ` stay indicators). Body: any non
-// `:`/`#`/`,`/flow char, plus `:` when NOT followed by space/`,`/`]`/`}` — YAML treats only `: `
-// as a key separator, so `http://x` and `key:val` are single plain scalars.
+// (so `-1`, `?x`, `::v` are plain, but `- `, `? `, `: ` stay indicators). Body: the shared
+// PLAIN_BODY (any non `:`/`,`/flow char, plus `:` not before space/`,`/`]`/`}`, plus a `#` glued
+// to a non-space) — so `http://x`, `key:val` and `this is#not` are single plain scalars.
 const Plain = token(
-  /(?:[^\s\-?:,\[\]{}#&*!|>'"%@`]|[-?:](?=[^\s,\[\]{}]))(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}]))*/,
+  new RegExp(`${PLAIN_HEAD}${PLAIN_BODY}`),
   { scope: 'string.unquoted' },
 );
 

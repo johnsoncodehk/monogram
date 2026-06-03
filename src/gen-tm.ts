@@ -7,6 +7,7 @@ interface TmPattern {
   match?: string;
   begin?: string;
   end?: string;
+  applyEndPatternLast?: boolean;
   while?: string;
   captures?: Record<string, TmCapture>;
   beginCaptures?: Record<string, TmCapture>;
@@ -184,6 +185,31 @@ function extractInterpPrefix(pattern: string): string | null {
       }
     }
   }
+  return null;
+}
+
+/**
+ * Recognise a simple quote-delimited string token regex and return its single delimiter char
+ * plus the in-string ESCAPE sub-pattern (so an escaped delimiter doesn't close the region).
+ * Two delimiter-escape shapes are understood, matching how a quoted scalar is written:
+ *   • backslash escape:  `"(?:\\.|[^"\\])*"`   → delim `"`, escape `\\.`
+ *   • doubled delimiter: `'(?:''|[^'])*'`      → delim `'`, escape `''`
+ * Returns null for anything else (multi-char delimiters, lookahead-bearing key tokens, …) so
+ * the caller keeps emitting a flat `match`. The shape is read from the regex itself — no
+ * hardcoded quote char — so it is language-agnostic.
+ */
+function quoteDelimAndEscape(pattern: string): { delim: string; escape: string } | null {
+  // Opening delimiter: a single non-alphanumeric char (optionally backslash-escaped in the regex).
+  const m = /^(\\?)([^\s\w])\(\?:/.exec(pattern);
+  if (!m) return null;
+  const delim = m[2];
+  const d = delim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // delimiter, regex-escaped
+  // The regex must CLOSE on the same bare delimiter, and its body must be the alternation of an
+  // escape with "any char but the delimiter (and backslash)". Match the two canonical shapes.
+  const backslash = new RegExp(`^${m[1]}${d}\\(\\?:\\\\\\\\\\.\\|\\[\\^${d}\\\\\\\\\\]\\)\\*${m[1]}${d}$`);
+  const doubled   = new RegExp(`^${m[1]}${d}\\(\\?:${d}${d}\\|\\[\\^${d}\\]\\)\\*${m[1]}${d}$`);
+  if (backslash.test(pattern)) return { delim, escape: '\\\\.' };
+  if (doubled.test(pattern)) return { delim, escape: d + d };
   return null;
 }
 
@@ -994,6 +1020,14 @@ interface JsxDisambigDelims {
   topTypeParam: string;    // "is a type-param list" body: top-level comma OR constraint keyword
   balancedAngles: string;  // recursive balanced `<…>` named group `(?<B>…)`
   arrowParamShape: string; // the arrow-shaped `(` confirm after `>`
+  // Lookbehind body asserting the `>` just left closes a type-param LIST that carried a
+  // top-level comma or constraint keyword (`<T,>`, `<T extends X>`) — i.e. the SAME
+  // generic-arrow disambiguation signal as `topTypeParam`, but for matching a `(` that
+  // sits immediately after the `>`. Used to confirm a deferred (next-line) arrow param
+  // list while excluding a generic CALL `foo<Bar>(` / comparison `a > (` (neither has
+  // the comma/constraint). Depth-0 (`skip` never crosses a nested `<…>`), so a nested-
+  // generic constraint inside the param-list's own `<…>` is conservatively not matched.
+  typeParamCloseBehind: string;
 }
 
 /**
@@ -1110,7 +1144,17 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   // confirm — so both read from the same derived delimiter.
   const [pOpen, pClose] = paramParens ? [paramParens.open, paramParens.close] : ['(', ')'];
   const arrowParamShape = `${escapeRegex(pOpen)}\\s*(?:${escapeRegex(pClose)}|\\.\\.\\.|${identRegex}\\s*[:,?${escapeForCharClass(pClose)}]|[{\\[]|$)`;
-  return { topComma, topTypeParam, balancedAngles, arrowParamShape };
+  // `<` … (top-level comma OR constraint keyword) … `>` as a LOOKBEHIND body. Oniguruma
+  // allows variable-length lookbehind (the `skip` `*` runs) but NOT a nested lookahead,
+  // so the `\s*(?!=)` JSX-attr guard `topTypeParam` carries is dropped here — it isn't
+  // needed once we are already standing just past the closing `>` (the `<…>` is a proven
+  // type-param list). `skip` stays depth-0, so this conservatively confirms a top-level
+  // comma/constraint without crossing a nested `<…>`.
+  const behindKw = constraintAlts.length
+    ? `|${skip}\\b(?:${constraintKeywords.map(escapeRegex).join('|')})\\b`
+    : '';
+  const typeParamCloseBehind = `${escapeRegex(open)}(?:${topComma}${behindKw})${skip}${escapeRegex(close)}`;
+  return { topComma, topTypeParam, balancedAngles, arrowParamShape, typeParamCloseBehind };
 }
 
 /**
@@ -3214,6 +3258,77 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
   return results;
 }
 
+/**
+ * Explicit mapping-key detection (e.g. YAML `? key` / `: value`).
+ *
+ * An indentation grammar may mark a mapping key NOT by a trailing key-separator on the key
+ * itself but by a PRECEDING indicator (YAML's `?`): `? somekey` on one line, `: value` on
+ * the next. The key scalar then carries no `:` and a flat per-token rule scopes it as an
+ * ordinary string. The official grammar paints it as a key (entity.name.tag), so this derives
+ * the shape and lets gen-tm emit a contextual rule scoping the scalar right after the
+ * indicator as a key.
+ *
+ * Signal (all from the grammar, nothing hardcoded):
+ *   • the grammar is INDENTATION-mode (`grammar.indent`) — the family this construct lives in;
+ *   • some rule has an alternative `seq` whose HEAD is a single-char punctuation literal `I`
+ *     and which contains, as a sibling, a `seq` headed by another single-char literal `S`
+ *     (the value-separator) — i.e. the `I … S …` explicit-entry shape;
+ *   • the grammar has a KEY token: a scalar token whose pattern ends in a lookahead that
+ *     mentions `S` (`(?=…S…)`) — its scope is THE key scope, and the matching scalar WITHOUT
+ *     the lookahead (same head, broadest scope) supplies the key BODY pattern.
+ * Returns null when the shape is absent (so non-YAML grammars are unaffected).
+ */
+function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: string; keyBody: string } | null {
+  if (!grammar.indent) return null;
+
+  // Find a separator literal S that heads a nested seq sibling of a head-indicator literal I.
+  const headSinglePunct = (e: RuleExpr): string | null =>
+    e.type === 'literal' && e.value.length === 1 && !/[\w\s]/.test(e.value) ? e.value : null;
+  let indicator: string | null = null;
+  let separator: string | null = null;
+  const visit = (e: RuleExpr): void => {
+    if (e.type === 'seq') {
+      const head = headSinglePunct(e.items[0]);
+      if (head) {
+        for (let i = 1; i < e.items.length; i++) {
+          let inner = e.items[i];
+          if (inner.type === 'quantifier') inner = inner.body;
+          if (inner.type === 'seq') {
+            const sep = headSinglePunct(inner.items[0]);
+            if (sep && sep !== head) { indicator = head; separator = sep; }
+          }
+        }
+      }
+      e.items.forEach(visit);
+    } else if (e.type === 'alt') e.items.forEach(visit);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') visit(e.body);
+    else if (e.type === 'sep') visit(e.element);
+  };
+  for (const r of grammar.rules) visit(r.body);
+  if (!indicator || !separator) return null;
+  const sep: string = separator;
+
+  // KEY token = a plain-scalar token PLUS a trailing key-separator lookahead — i.e. its pattern
+  // is `<P.pattern>(?=…sep…)` for some OTHER (broader, no-lookahead) scalar token P. P supplies
+  // the key BODY, the key token supplies the key SCOPE. This pairing pins exactly the "plain key"
+  // token (not a typed value like a number, whose body differs), with no hardcoded scope. The
+  // remainder after P's pattern must be a single trailing lookahead group mentioning the separator
+  // (so an internal `(?=…)` inside P's own body is never mistaken for the key separator).
+  let keyScope: string | null = null;
+  let keyBody: string | null = null;
+  for (const k of grammar.tokens) {
+    if (!k.scope || k.string) continue;
+    for (const p of grammar.tokens) {
+      if (p === k || !p.pattern || !k.pattern.startsWith(p.pattern)) continue;
+      const tail = k.pattern.slice(p.pattern.length);
+      if (/^\(\?=.*\)$/.test(tail) && tail.includes(sep)) { keyScope = k.scope; keyBody = p.pattern; break; }
+    }
+    if (keyScope) break;
+  }
+  if (!keyScope || !keyBody) return null;
+  return { indicator, keyScope, keyBody };
+}
+
 // ── Constructor-call keyword detection ──
 
 function detectConstructorKeywords(
@@ -4228,6 +4343,30 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         }
       }
 
+    } else if (tok.string && scope.startsWith('string.') && quoteDelimAndEscape(tok.pattern)) {
+      // A quote-delimited string token that carries NO @escape declaration (e.g. YAML's
+      // double/single-quoted scalars). A flat `match` is line-bounded, but such a string can
+      // legally span newlines (a YAML flow scalar folds across lines). Emit a begin/end REGION
+      // — which naturally spans lines — deriving the delimiter and the in-string escape SHAPE
+      // (`\.` backslash-escape vs a doubled delimiter like `''`) straight from the token regex.
+      // JS/TS strings declare an @escape and take the escapePattern branch above, so they are
+      // untouched; this fires only for the otherwise-flat quoted-string token.
+      const { delim, escape } = quoteDelimAndEscape(tok.pattern)!;
+      const region: TmPattern = {
+        name: `${scope}.${langName}`,
+        begin: escapeRegex(delim),
+        beginCaptures: { '0': { name: `punctuation.definition.string.begin.${langName}` } },
+        end: escapeRegex(delim),
+        endCaptures: { '0': { name: `punctuation.definition.string.end.${langName}` } },
+        patterns: [{ match: escape, name: `constant.character.escape.${langName}` }],
+      };
+      // A doubled-delimiter escape (`''`) shares its first char with the region's `end`, so the
+      // escape pattern must be tried BEFORE the end (else `'a''b'` closes at the inner pair).
+      if (escape === escapeRegex(delim) + escapeRegex(delim)) region.applyEndPatternLast = true;
+      repository[key] = region;
+      topPatterns.push({ include: `#${key}` });
+      rememberLiteralKey(scope, key, tok.name);
+
     } else if (isBlock) {
       // Block comments: extract begin/end delimiters from the pattern.
       // E.g., \/\*[\s\S]*?\*\/  → begin: \/\*   end: \*\/
@@ -4285,6 +4424,26 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // them so a literal type (`type X = 1 | 2`) keeps its `constant.numeric` scope.
       if (tok !== identToken) rememberLiteralKey(emittedScope, key, tok.name);
     }
+  }
+
+  // ── 2b. Explicit mapping key (`? key`) ──
+  // An indentation grammar may flag a mapping key by a PRECEDING indicator instead of a
+  // trailing separator (YAML `? key`). The key scalar then has no `:` and the flat token loop
+  // above scopes it as an ordinary string; re-scope the scalar that immediately follows the
+  // indicator as a key. A flat per-token rule can't see the preceding indicator, but a
+  // contextual MATCH can — the indicator is captured in the same rule. Derived from the grammar
+  // (the indicator literal, the key scope, the key body); null for non-indentation grammars.
+  const explicitKey = detectExplicitKey(grammar);
+  if (explicitKey) {
+    repository['explicit-key'] = {
+      // `(indicator)( whitespace )(key-scalar)` on one line — the dominant explicit-key shape.
+      match: `(${escapeRegex(explicitKey.indicator)})([\\t ]+)(${explicitKey.keyBody})`,
+      captures: {
+        '1': { name: `punctuation.definition.map.key.${langName}` },
+        '3': { name: `${explicitKey.keyScope}.${langName}` },
+      },
+    };
+    topPatterns.push({ include: '#explicit-key' });
   }
 
   // ── 3. Collect all literals from rules ──
@@ -4597,9 +4756,15 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // Identifiers: must not be statement keywords, and must not be followed
     // by ( or . (which indicate expression statements like foo() or foo.bar).
     // Use \b after the identifier to prevent backtracking to a partial match.
+    // The keyword alternation MUST be grouped — `(?:kw1|kw2)\b`, not `kw1|kw2\b` —
+    // or the trailing `\b` binds to the LAST alternative only and the others match
+    // a mere PREFIX: a continuation line opening with an identifier that starts with
+    // a keyword (`getTranslationEntry`, `interfaceName`, `newThing`, `inferred`) would
+    // fail the negative lookahead and tear the whole multi-line type region down,
+    // dropping the tail to value mode (the type.ref miss this region exists to close).
     if (stmtStartKeywords.size > 0) {
       const stmtAlt = [...stmtStartKeywords].map(escapeRegex).join('|');
-      whileParts.push(`(?!${stmtAlt}\\b)${identPattern}\\b(?!\\s*[.(])`);
+      whileParts.push(`(?!(?:${stmtAlt})\\b)${identPattern}\\b(?!\\s*[.(])`);
     } else {
       whileParts.push(`${identPattern}\\b(?!\\s*[.(])`);
     }
@@ -5713,6 +5878,42 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       patterns: arrowInner,
     };
     topPatterns.push({ include: '#arrow-function-params' });
+
+    // Generic-arrow param list whose `(` is deferred to a LATER line:
+    //   const f = <T extends X>(
+    //     a: T,
+    //   ) => …
+    // #arrow-function-params' same-line lookahead (`(?=[^()]*\)…=>)`) can't confirm
+    // the closing `)`/`=>` when the param list spans lines, so the params would fall
+    // to value mode (their annotations lose type scope). But here #arrow-type-parameters
+    // has ALREADY disambiguated the arrow (its begin verified the `<…>` + arrow-shaped
+    // `(`, allowing the `(`-at-end-of-line form) and ended at the type-param `>`; the
+    // very next `(` therefore opens the arrow's param list. We re-open the SAME typed
+    // param region keyed on that `>` close. Two guards keep it surgical:
+    //   • the `(` must be at END OF LINE (`\s*$`) — the single-line generic arrow
+    //     `<T,>(x:T)=>x` is already handled by #arrow-function-params, and a one-line
+    //     parenthesised expression after a comparison/call `>` (`a > (b)`) is left alone;
+    //   • the preceding `>` must close a type-param list carrying a top-level comma or
+    //     constraint keyword (`typeParamCloseBehind`, the SAME signal #arrow-type-
+    //     parameters disambiguates on) — so a multi-line generic CALL `foo<Bar>(` or
+    //     comparison `a > (` (neither has the comma/constraint) does NOT open params.
+    // Emitted only when generic-arrow type params exist (angleDisambig), so non-generic
+    // grammars are unaffected.
+    if (angleBracket && angleDisambig) {
+      repository['arrow-function-params-generic'] = {
+        name: `meta.parameters.arrow.${langName}`,
+        begin: `(?<=${angleDisambig.typeParamCloseBehind})\\s*(\\()\\s*$`,
+        beginCaptures: {
+          '1': { name: `punctuation.definition.parameters.begin.${langName}` },
+        },
+        end: '(\\))',
+        endCaptures: {
+          '1': { name: `punctuation.definition.parameters.end.${langName}` },
+        },
+        patterns: arrowInner,
+      };
+      topPatterns.push({ include: '#arrow-function-params-generic' });
+    }
   }
 
   // ── 4b4. Ternary expression (? ... :) ──
@@ -5822,7 +6023,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const varAnnotEndParts = ['(?=[;,]|=(?!>))'];
       if (stmtStartKeywords.size > 0) {
         const stmtAlt = [...stmtStartKeywords].map(escapeRegex).join('|');
-        varAnnotEndParts.push(`^\\s*(?=${stmtAlt})\\b`);
+        // Group the alternation so `\b` requires a WHOLE keyword: `^\s*(?=(?:kw)\b)`.
+        // Ungrouped (`(?=kw1|kw2)\b`) the `\b` binds to the last alternative only and
+        // the rest match a prefix, so a continuation line like `interfaceName: T` would
+        // falsely look like a statement keyword and terminate the annotation early.
+        varAnnotEndParts.push(`^\\s*(?=(?:${stmtAlt})\\b)`);
       }
       repository['type-annotation-var'] = {
         name: `meta.type.annotation.${langName}`,
@@ -6250,6 +6455,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     const entry = repository[key];
     const scope = entry?.name ?? '';
     if (scope.startsWith('comment.')) return 0;
+    // An explicit mapping-key rule (`? key`) is the most specific scalar context — its indicator
+    // pins the following scalar as a key — so it must be tried before the bare key/plain scalars.
+    if (key === 'explicit-key') return 0.8;
     // A top-level token-match scoped `entity.name.tag` (e.g. an indentation grammar's mapping
     // KEY — a scalar that is the LHS of `:`) is a NAME, more specific than any string/typed-value
     // scalar it overlaps, so it must be tried first. (Markup tag names live inside begin/end
@@ -6268,6 +6476,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (key === 'object-method-key') return 1.85;
     if (key.endsWith('-expression') && key !== 'ternary-expression' && !key.startsWith('scope-')) return 1.9;
     if (key === 'arrow-function-params') return 1.95;
+    // The deferred-`(` generic-arrow param list ranks with #arrow-function-params so it
+    // beats the bare bracket/punctuation rules that would otherwise claim the `(`.
+    if (key === 'arrow-function-params-generic') return 1.95;
     if (key === 'ternary-expression') return 1.97;
     if (key.endsWith('-declaration') || key.endsWith('-definition') || key.endsWith('-typekw') || key.endsWith('-binding') || key.endsWith('-destructure')) return 2;
     // import/export namespace `*` must beat both the import/export keyword group

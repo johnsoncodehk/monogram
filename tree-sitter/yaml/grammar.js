@@ -53,7 +53,7 @@ module.exports = grammar({
 
     doc_end: $ => token(/\.\.\./),
 
-    directive: $ => token(/%[^\n]*/),
+    directive: $ => token(/%(?:[^\n#]|#)*/),
 
     comment: $ => token(/#[^\n]*/),
 
@@ -73,13 +73,13 @@ module.exports = grammar({
 
     block_scalar: $ => token(//),
 
-    key: $ => token(/(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:])(?:[^:#\n,\[\]{}]|:)*/),
+    key: $ => token(/(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:])(?:[^:#\n,\[\]{}]|:|#)*/),
 
     num: $ => token(/(?:[+-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)/),
 
     bool_null: $ => token(/(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)/),
 
-    plain: $ => token(/(?:[^\s\-?:,\[\]{}#&*!|>'"%@`]|[-?:])(?:[^:#\n,\[\]{}]|:)*/),
+    plain: $ => token(/(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:])(?:[^:#\n,\[\]{}]|:|#)*/),
 
     indent: $ => token(//),
 
