@@ -482,6 +482,52 @@ export const jsScopes = {
   'support.variable.property': ['.length', '.prototype', '.constructor'],
 };
 
+// Repository-key NAMING CONSTRAINT (官方命名「限制器」) — the SHARED ECMAScript half. For Monogram's
+// source.js to be a repository-level DROP-IN for VS Code's official JavaScript grammar (and for the
+// shared half of source.ts), the official repository KEY NAMES that external grammars `#include`
+// (`source.js#qstring-double`, `#comment`, `#punctuation-comma`, …) must be the names Monogram
+// NATIVELY emits. Monogram derives those keys under its OWN structural names (`#string-double`,
+// `#linecomment`/`#blockcomment`, `#scope-punctuation-separator-comma`, …), so this maps each
+// OFFICIAL name → the structural key(s) gen-tm derived for the SAME construct; gen-tm projects the
+// repository through it at generation time, emitting the canonical name NATIVELY (a STRING value
+// RENAMES the structural key — its old name ceases to exist — and rewrites every `#…` reference; an
+// ARRAY value SYNTHESISES the `{patterns:[…]}` union the official grammar itself writes, resolving
+// each member through the 1:1 renames first and dropping members absent from this grammar). It is
+// PURELY a naming projection — no `match`/`begin`/`name` changes — so emitted tokenization is
+// byte-for-byte unchanged (verified: test/repo-compat.ts + the byte-identical scope-array diff). The
+// NAMES are ECMAScript DATA and belong here (the grammar definition may know JS — it already carries
+// `jsScopes`); gen-tm only looks them up + substitutes, so the engine stays language-agnostic.
+//
+// This file OWNS the shared ECMAScript vocabulary, so it owns these shared canonical names too;
+// typescript.ts imports + spreads this map and adds its TS-only entries (type-parameters, casts,
+// type-object, return-type, …). Every entry here was verified 1:1 against the official JavaScript
+// grammar (same construct + same emitted scope) — see the per-construct audit. Official names that
+// ALREADY name a real Monogram key (`expression`, `template`) are omitted (gen-tm never clobbers an
+// existing key). Deliberately NOT mapped: `null-literal`/`undefined-literal` (Monogram folds
+// `null`+`undefined` into ONE `constant.language.null` key — official splits them, so neither is a
+// clean 1:1) and `numericConstant-literal` (NaN/Infinity — Monogram has no such key).
+export const jsBaseCanonical: Record<string, string | string[]> = {
+  // 1:1 — RENAME the structural key (and every reference) to the official name.
+  type: 'type-inner',
+  'qstring-double': 'string-double',
+  'qstring-single': 'string-single',
+  'punctuation-comma': 'scope-punctuation-separator-comma',
+  'punctuation-semicolon': 'scope-punctuation-terminator-statement',
+  'punctuation-accessor': 'scope-punctuation-accessor',
+  regex: 'regex-literal',
+  'new-expr': 'new-expression',
+  'parameter-name': 'declaration-param-name',
+  directives: 'tripleslash',
+  'this-literal': 'scope-variable-language-this',
+  'super-literal': 'scope-variable-language-super',
+  // Unions (official wrapper keys): members keep their structural names but are resolved through the
+  // 1:1 renames above first — e.g. `tripleslash` → `directives`, `string-double` → `qstring-double`.
+  comment: ['jsdoc', 'tripleslash', 'linecomment', 'blockcomment'],
+  string: ['string-single', 'string-double', 'template'],
+  'boolean-literal': ['scope-constant-language-boolean-true', 'scope-constant-language-boolean-false'],
+  'numeric-literal': ['hexnumber', 'binarynumber', 'octalnumber', 'number', 'bigint'],
+};
+
 // ── Grammar ──
 
 export default defineGrammar({
@@ -510,6 +556,7 @@ export default defineGrammar({
   },
 
   scopes: jsScopes,
+  canonicalRepoNames: jsBaseCanonical,
 
   entry: Program,
   // The expression rule — lets gen-tm derive a `#expression` sub-grammar (used by

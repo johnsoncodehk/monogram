@@ -14,7 +14,7 @@ import {
   Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr, ecmaPrec, jsScopes,
+  notReserved, notReservedExpr, ecmaPrec, jsScopes, jsBaseCanonical,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -562,46 +562,37 @@ export default defineGrammar({
   // Markdown, MDX, …) `#include` the official repository keys BY NAME (`source.ts#type`,
   // `source.ts#qstring-double`, `source.ts#comment`, …). Monogram derives those keys under its OWN
   // structural names (`#type-inner`, `#string-double`, `#linecomment`/`#blockcomment`, …), so the
-  // official names wouldn't resolve and an `#include` would silently no-op. Rather than ADD an alias
-  // entry next to each structural key (a redundant 2nd layer), this CONSTRAINS gen-tm's key emission:
-  // it maps each OFFICIAL name → the structural key(s) gen-tm derived for the SAME construct, and
-  // gen-tm projects the repository through it at generation time, emitting the canonical name NATIVELY
-  // (the structural key is RENAMED — its old name ceases to exist — and every `#…` reference is
-  // rewritten with it, so the repository holds ONE key, natively named). It is purely a naming
-  // projection — no `match`/`begin`/`name` changes — so the emitted tokenization is byte-for-byte
-  // unchanged (verified: test/repo-compat.ts + the vue dual-host proof). The NAMES are
-  // TypeScript-specific DATA and belong HERE (the grammar definition may know TS — it already carries
-  // the `scopes` map); gen-tm only looks up + substitutes, staying language-agnostic.
+  // official names wouldn't resolve and an `#include` would silently no-op. This CONSTRAINS gen-tm's
+  // key emission: it maps each OFFICIAL name → the structural key(s) gen-tm derived for the SAME
+  // construct, and gen-tm projects the repository through it at generation time, emitting the
+  // canonical name NATIVELY (a STRING value RENAMES the structural key — its old name ceases to exist
+  // — and rewrites every `#…` reference; an ARRAY value SYNTHESISES the `{patterns:[…]}` UNION the
+  // official grammar itself writes, e.g. `#comment`/`#return-type`, resolving each member through the
+  // 1:1 renames first). It is purely a naming projection — no `match`/`begin`/`name` changes — so the
+  // emitted tokenization is byte-for-byte unchanged (verified: test/repo-compat.ts + the vue dual-host
+  // proof). gen-tm only looks up + substitutes, staying language-agnostic.
   //
-  // Two value forms encode the two construct↔key relationships gen-tm derives:
-  //   • STRING → the official construct maps 1:1 to ONE structural key; RENAME it (and all refs).
-  //   • ARRAY  → the official key is a UNION the official grammar itself writes as a `{patterns:[…]}`
-  //     wrapper (`#comment`, `#return-type`); Monogram derives the members as separate keys, so no
-  //     single rename carries the name — gen-tm SYNTHESISES the wrapper, resolving each member through
-  //     the 1:1 renames first (so `tripleslash`, renamed to `directives`, is included by that name).
-  // Official names that ALREADY name a real Monogram key are simply omitted here: `expression` and
-  // `namespace-declaration` (Monogram's `namespace`-keyword key) already match by name. (Monogram's
-  // `module-declaration` — the legacy `module X {}` form the official folds into `namespace-declaration`
-  // — stays Monogram-internal; it's a structural split, not a naming gap, so renaming it onto the
-  // already-taken `namespace-declaration` is neither needed nor safe.)
+  // The SHARED ECMAScript half (`type`, `qstring-*`, `punctuation-comma`/`-semicolon`/`-accessor`,
+  // `new-expr`, `regex`, `directives`, `parameter-name`, `comment`/`string`/`boolean-literal`/
+  // `numeric-literal` unions, `this-literal`/`super-literal`) is OWNED by javascript.ts (which owns the
+  // shared vocabulary) as `jsBaseCanonical`, imported and spread here; this file adds ONLY the TS-only
+  // entries (the type layer: type-parameters, casts, type-object, param/return type annotations,
+  // type-predicate). The structural source of an entry that doesn't exist in source.ts (none here —
+  // all verified present) would simply be SKIPPED by gen-tm. Official names that ALREADY name a real
+  // Monogram key are omitted: `expression`, `template`, and `namespace-declaration` (Monogram's
+  // `namespace`-keyword key) already match by name. (Monogram's `module-declaration` — the legacy
+  // `module X {}` form the official folds into `namespace-declaration` — stays Monogram-internal; a
+  // structural split, not a naming gap.)
   canonicalRepoNames: {
-    type: 'type-inner',
-    'punctuation-comma': 'scope-punctuation-separator-comma',
-    'qstring-double': 'string-double',
-    'qstring-single': 'string-single',
+    ...jsBaseCanonical,
+    // TS-only — the type layer (no JS counterpart).
     'type-parameters': 'declaration-type-params',
     'type-alias-declaration': 'type-declaration',
     'type-object': 'type-object-type',
-    'new-expr': 'new-expression',
     cast: 'type-cast',
-    regex: 'regex-literal',
-    directives: 'tripleslash',
     'parameter-type-annotation': 'param-type-annotation',
-    'parameter-name': 'declaration-param-name',
     'type-predicate-operator': 'is-typekw',
-    // Unions (official wrapper keys): members keep their structural names but are resolved through the
-    // renames above — e.g. `tripleslash` → `directives` in `comment`.
-    comment: ['jsdoc', 'tripleslash', 'linecomment', 'blockcomment'],
+    // Union (official wrapper key): members resolved through the renames above.
     'return-type': ['type-annotation-return', 'decl-return-type'],
   },
 

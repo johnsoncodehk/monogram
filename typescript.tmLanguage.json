@@ -250,10 +250,10 @@
       "include": "#scope-support-type-primitive"
     },
     {
-      "include": "#scope-variable-language-this"
+      "include": "#this-literal"
     },
     {
-      "include": "#scope-variable-language-super"
+      "include": "#super-literal"
     },
     {
       "include": "#scope-support-variable"
@@ -277,7 +277,7 @@
       "include": "#operators"
     },
     {
-      "include": "#scope-punctuation-accessor"
+      "include": "#punctuation-accessor"
     },
     {
       "include": "#punctuation-comma"
@@ -292,7 +292,7 @@
       "include": "#scope-punctuation-bracket-curly"
     },
     {
-      "include": "#scope-punctuation-terminator-statement"
+      "include": "#punctuation-semicolon"
     },
     {
       "include": "#scope-punctuation-accessor-optional"
@@ -2343,10 +2343,6 @@
       "match": "\\b(void|symbol|string|number|boolean|object|bigint|any|unknown|never)\\b",
       "name": "support.type.primitive.ts"
     },
-    "scope-variable-language-this": {
-      "match": "\\b(this)\\b",
-      "name": "variable.language.this.ts"
-    },
     "scope-keyword-other": {
       "match": "\\b(unique|meta|out)\\b",
       "name": "keyword.other.ts"
@@ -2362,10 +2358,6 @@
     "scope-keyword-control-loop-of": {
       "match": "\\b(of)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$|\\s*[({\\[\"`/\\-])",
       "name": "keyword.control.loop.ts"
-    },
-    "scope-variable-language-super": {
-      "match": "\\b(super)\\b",
-      "name": "variable.language.super.ts"
     },
     "scope-storage-type-class": {
       "match": "\\b(class)\\b",
@@ -2438,10 +2430,6 @@
     "scope-storage-type-function-arrow": {
       "match": "=>",
       "name": "storage.type.function.arrow.ts"
-    },
-    "scope-punctuation-accessor": {
-      "match": "\\.",
-      "name": "punctuation.accessor.ts"
     },
     "operator-overrides": {
       "match": "(>>>=)|(\\*\\*=)|(<<=)|(>>=)|(\\?\\?=)|(\\|\\|=)|(&&=)|(===)|(!==)|(>>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(\\?\\?)|(\\|\\|)|(&&)|(==)|(!=)|(<=)|(>=)|(<<)|(>>)|(\\*\\*)|(\\+\\+)|(--)|(\\|)|(&)|(-)|(\\+)|(!)|(\\*)|(=)|(\\^)|(/)|(%)|(~)",
@@ -2586,10 +2574,6 @@
     "scope-punctuation-bracket-curly": {
       "match": "\\{|\\}",
       "name": "punctuation.bracket.curly.ts"
-    },
-    "scope-punctuation-terminator-statement": {
-      "match": ";",
-      "name": "punctuation.terminator.statement.ts"
     },
     "scope-punctuation-accessor-optional": {
       "match": "\\?\\.",
@@ -2805,10 +2789,10 @@
           "include": "#scope-support-type-primitive"
         },
         {
-          "include": "#scope-variable-language-this"
+          "include": "#this-literal"
         },
         {
-          "include": "#scope-variable-language-super"
+          "include": "#super-literal"
         },
         {
           "include": "#scope-support-variable"
@@ -2832,7 +2816,7 @@
           "include": "#operators"
         },
         {
-          "include": "#scope-punctuation-accessor"
+          "include": "#punctuation-accessor"
         },
         {
           "include": "#punctuation-comma"
@@ -2847,7 +2831,7 @@
           "include": "#scope-punctuation-bracket-curly"
         },
         {
-          "include": "#scope-punctuation-terminator-statement"
+          "include": "#punctuation-semicolon"
         },
         {
           "include": "#scope-punctuation-accessor-optional"
@@ -2959,10 +2943,6 @@
         }
       ]
     },
-    "punctuation-comma": {
-      "match": ",",
-      "name": "punctuation.separator.comma.ts"
-    },
     "qstring-double": {
       "name": "string.quoted.double.ts",
       "begin": "\"",
@@ -3004,6 +2984,83 @@
           "name": "constant.character.escape.ts"
         }
       ]
+    },
+    "punctuation-comma": {
+      "match": ",",
+      "name": "punctuation.separator.comma.ts"
+    },
+    "punctuation-semicolon": {
+      "match": ";",
+      "name": "punctuation.terminator.statement.ts"
+    },
+    "punctuation-accessor": {
+      "match": "\\.",
+      "name": "punctuation.accessor.ts"
+    },
+    "regex": {
+      "name": "string.regexp.ts",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=(?:[=|\\^&<>+\\-*%~,\\[(?:{;.]|\\bis|\\bkeyof|\\btypeof|\\breadonly|\\bnew|\\bextends|\\bin|\\bas|\\binstanceof|\\bclass|\\basync|\\byield|\\bsatisfies|\\bfunction|\\bget|\\bset|\\belse|\\bdo|\\breturn|\\bthrow|\\btry|\\bfinally|\\bcatch|\\bpublic|\\bprivate|\\bprotected|\\bof|\\bcase|\\bdeclare|\\bexport|\\bdefault|\\bimport|\\btype|\\bstatic|\\babstract|\\boverride|\\baccessor|\\bvoid|\\bdelete|\\bawait|^)\\s*[!](?:\\s*[!])*)|(?<=^))\\s*(?:((?:\\/\\*\\*(?!\\/)[\\s\\S]*?\\*\\/|\\/\\*[\\s\\S]*?\\*\\/)\\s*))?(/)(?![*/])",
+      "beginCaptures": {
+        "1": {
+          "name": "comment.block.ts"
+        },
+        "2": {
+          "name": "punctuation.definition.string.begin.regexp.ts"
+        }
+      },
+      "end": "(/)([gimsuydv]*)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.regexp.ts"
+        },
+        "2": {
+          "name": "keyword.other.regexp.ts"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#regexp"
+        }
+      ]
+    },
+    "new-expr": {
+      "name": "meta.new-expr.ts",
+      "begin": "\\b(new)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.ts"
+        }
+      },
+      "end": "(?=[()}\\],=<;])",
+      "patterns": [
+        {
+          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+          "name": "entity.name.function.ts"
+        }
+      ]
+    },
+    "parameter-name": {
+      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,)=])",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.spread.ts"
+        },
+        "2": {
+          "name": "variable.parameter.ts"
+        }
+      }
+    },
+    "directives": {
+      "name": "comment.line.triple-slash.ts",
+      "match": "\\/\\/\\/\\s*<[^\\n]*"
+    },
+    "this-literal": {
+      "match": "\\b(this)\\b",
+      "name": "variable.language.this.ts"
+    },
+    "super-literal": {
+      "match": "\\b(super)\\b",
+      "name": "variable.language.super.ts"
     },
     "type-parameters": {
       "name": "meta.type.parameters.ts",
@@ -3118,22 +3175,6 @@
         }
       ]
     },
-    "new-expr": {
-      "name": "meta.new-expr.ts",
-      "begin": "\\b(new)\\b",
-      "beginCaptures": {
-        "1": {
-          "name": "keyword.operator.expression.ts"
-        }
-      },
-      "end": "(?=[()}\\],=<;])",
-      "patterns": [
-        {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
-          "name": "entity.name.function.ts"
-        }
-      ]
-    },
     "cast": {
       "name": "meta.cast.expr.ts",
       "begin": "(?<![\\w$)\\]]\\s*)(<)(?=\\s*[[:alpha:]_$({\\[](?<TC>[\\w$.,\\[\\]\\s|&]*(?:<\\g<TC>>[\\w$.,\\[\\]\\s|&]*)*)>\\s*[[:alpha:][:digit:]_$\"`({\\[\\-])",
@@ -3153,36 +3194,6 @@
           "include": "#type"
         }
       ]
-    },
-    "regex": {
-      "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=(?:[=|\\^&<>+\\-*%~,\\[(?:{;.]|\\bis|\\bkeyof|\\btypeof|\\breadonly|\\bnew|\\bextends|\\bin|\\bas|\\binstanceof|\\bclass|\\basync|\\byield|\\bsatisfies|\\bfunction|\\bget|\\bset|\\belse|\\bdo|\\breturn|\\bthrow|\\btry|\\bfinally|\\bcatch|\\bpublic|\\bprivate|\\bprotected|\\bof|\\bcase|\\bdeclare|\\bexport|\\bdefault|\\bimport|\\btype|\\bstatic|\\babstract|\\boverride|\\baccessor|\\bvoid|\\bdelete|\\bawait|^)\\s*[!](?:\\s*[!])*)|(?<=^))\\s*(?:((?:\\/\\*\\*(?!\\/)[\\s\\S]*?\\*\\/|\\/\\*[\\s\\S]*?\\*\\/)\\s*))?(/)(?![*/])",
-      "beginCaptures": {
-        "1": {
-          "name": "comment.block.ts"
-        },
-        "2": {
-          "name": "punctuation.definition.string.begin.regexp.ts"
-        }
-      },
-      "end": "(/)([gimsuydv]*)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.string.end.regexp.ts"
-        },
-        "2": {
-          "name": "keyword.other.regexp.ts"
-        }
-      },
-      "patterns": [
-        {
-          "include": "#regexp"
-        }
-      ]
-    },
-    "directives": {
-      "name": "comment.line.triple-slash.ts",
-      "match": "\\/\\/\\/\\s*<[^\\n]*"
     },
     "parameter-type-annotation": {
       "name": "meta.type.annotation.parameter.ts",
@@ -3207,17 +3218,6 @@
           "include": "#type"
         }
       ]
-    },
-    "parameter-name": {
-      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,)=])",
-      "captures": {
-        "1": {
-          "name": "keyword.operator.spread.ts"
-        },
-        "2": {
-          "name": "variable.parameter.ts"
-        }
-      }
     },
     "type-predicate-operator": {
       "name": "meta.type.is.ts",
@@ -3247,6 +3247,48 @@
         },
         {
           "include": "#blockcomment"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "include": "#qstring-single"
+        },
+        {
+          "include": "#qstring-double"
+        },
+        {
+          "include": "#template"
+        }
+      ]
+    },
+    "boolean-literal": {
+      "patterns": [
+        {
+          "include": "#scope-constant-language-boolean-true"
+        },
+        {
+          "include": "#scope-constant-language-boolean-false"
+        }
+      ]
+    },
+    "numeric-literal": {
+      "patterns": [
+        {
+          "include": "#hexnumber"
+        },
+        {
+          "include": "#binarynumber"
+        },
+        {
+          "include": "#octalnumber"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#bigint"
         }
       ]
     },

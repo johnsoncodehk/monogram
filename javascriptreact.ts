@@ -86,6 +86,27 @@ function buildJsxDecls(hasTypes: boolean): { rules: RuleDecl[]; tokens: TokenDec
   };
 }
 
+// Repository-key NAMING CONSTRAINT — the JSX delta. The base's `canonicalRepoNames`
+// (`jsBaseCanonical`, owned by javascript.ts) is inherited through the `{ ...base }` spread
+// below; this adds ONLY the JSX-key correspondences, so BOTH the `.jsx` and `.tsx` dialects
+// (each built via `withJsx`) emit the official names natively. Monogram's JSX decomposition
+// differs from the official's (it splits element/fragment/self-closing where the official splits
+// tag-with/without-attributes), so MOST JSX keys are deliberately NOT mapped — only a genuine 1:1
+// is aligned. `jsx-children`, `jsx-string-double-quoted`, `jsx-string-single-quoted` ALREADY match
+// by name (gen-tm never clobbers an existing key, so listing them is unnecessary). Verified 1:1:
+//   • `jsx-entities` ← `jsx-entity` — the JSX character-entity construct (`&amp;`/`&#65;`/`&#x41;`),
+//     same emitted scopes (`constant.character.entity` + `punctuation.definition.entity`); the
+//     official name is the plural wrapper, Monogram's is the single match rule. A pure rename.
+// Deliberately NOT mapped (decompose/scope differently — a rename would NOT be a faithful
+// projection, so it would mis-serve an `#include`): `jsx-evaluated-code` (Monogram's `jsx-expression`
+// scopes the braces with `name`, the official scopes only the content with `contentName`, and embeds
+// `$self` vs `#expression`), `jsx-tag-attributes` (Monogram's `jsx-attributes` is a bare wrapper; the
+// official is a `meta.tag.attributes`-scoped begin/end region), and the whole `jsx-tag*` element
+// family (a different structural split).
+const JSX_CANONICAL: Record<string, string | string[]> = {
+  'jsx-entities': 'jsx-entity',
+};
+
 const isLiteral = (e: RuleExpr, v: string): boolean => e.type === 'literal' && e.value === v;
 
 /** Turn an ECMAScript-family base grammar into its React/JSX dialect. Imported by
@@ -124,7 +145,13 @@ export function withJsx(base: CstGrammar, opts: { name: string; scopeName: strin
   }
   if (!placed) tokens.push(...jsx.tokens); // base has no regex token — just append
 
-  return { ...base, name: opts.name, scopeName: opts.scopeName, rules, tokens };
+  // Inherit the base's canonical repo-key names (jsBaseCanonical for the JS base, the full TS map
+  // for the TS base) and add the JSX delta, so both the `.jsx` and `.tsx` dialects emit the official
+  // names natively. Pure DATA merge — gen-tm only looks them up, so the engine stays agnostic.
+  return {
+    ...base, name: opts.name, scopeName: opts.scopeName, rules, tokens,
+    canonicalRepoNames: { ...base.canonicalRepoNames, ...JSX_CANONICAL },
+  };
 }
 
 // The `.jsx` grammar: the JavaScript base + the JSX layer above.

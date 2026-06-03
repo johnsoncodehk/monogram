@@ -256,10 +256,10 @@
       "include": "#scope-support-type-primitive"
     },
     {
-      "include": "#scope-variable-language-this"
+      "include": "#this-literal"
     },
     {
-      "include": "#scope-variable-language-super"
+      "include": "#super-literal"
     },
     {
       "include": "#scope-support-variable"
@@ -283,7 +283,7 @@
       "include": "#operators"
     },
     {
-      "include": "#scope-punctuation-accessor"
+      "include": "#punctuation-accessor"
     },
     {
       "include": "#punctuation-comma"
@@ -298,7 +298,7 @@
       "include": "#scope-punctuation-bracket-curly"
     },
     {
-      "include": "#scope-punctuation-terminator-statement"
+      "include": "#punctuation-semicolon"
     },
     {
       "include": "#scope-punctuation-accessor-optional"
@@ -454,20 +454,6 @@
       "match": "[<>]",
       "name": "keyword.operator.relational.tsx"
     },
-    "jsx-entity": {
-      "match": "(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)",
-      "captures": {
-        "1": {
-          "name": "punctuation.definition.entity.tsx"
-        },
-        "2": {
-          "name": "constant.character.entity.tsx"
-        },
-        "3": {
-          "name": "punctuation.definition.entity.tsx"
-        }
-      }
-    },
     "jsx-children": {
       "patterns": [
         {
@@ -486,7 +472,7 @@
           "include": "#jsx-expression"
         },
         {
-          "include": "#jsx-entity"
+          "include": "#jsx-entities"
         }
       ]
     },
@@ -2862,10 +2848,6 @@
       "match": "\\b(void|symbol|string|number|boolean|object|bigint|any|unknown|never)\\b",
       "name": "support.type.primitive.tsx"
     },
-    "scope-variable-language-this": {
-      "match": "\\b(this)\\b",
-      "name": "variable.language.this.tsx"
-    },
     "scope-keyword-other": {
       "match": "\\b(unique|meta|out)\\b",
       "name": "keyword.other.tsx"
@@ -2881,10 +2863,6 @@
     "scope-keyword-control-loop-of": {
       "match": "\\b(of)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$|\\s*[({\\[\"`/\\-])",
       "name": "keyword.control.loop.tsx"
-    },
-    "scope-variable-language-super": {
-      "match": "\\b(super)\\b",
-      "name": "variable.language.super.tsx"
     },
     "scope-storage-type-class": {
       "match": "\\b(class)\\b",
@@ -2957,10 +2935,6 @@
     "scope-storage-type-function-arrow": {
       "match": "=>",
       "name": "storage.type.function.arrow.tsx"
-    },
-    "scope-punctuation-accessor": {
-      "match": "\\.",
-      "name": "punctuation.accessor.tsx"
     },
     "operator-overrides": {
       "match": "(>>>=)|(\\*\\*=)|(<<=)|(>>=)|(\\?\\?=)|(\\|\\|=)|(&&=)|(===)|(!==)|(>>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(\\?\\?)|(\\|\\|)|(&&)|(==)|(!=)|(<=)|(>=)|(<<)|(>>)|(\\*\\*)|(\\+\\+)|(--)|(\\|)|(&)|(-)|(\\+)|(!)|(\\*)|(=)|(\\^)|(/)|(%)|(~)",
@@ -3105,10 +3079,6 @@
     "scope-punctuation-bracket-curly": {
       "match": "\\{|\\}",
       "name": "punctuation.bracket.curly.tsx"
-    },
-    "scope-punctuation-terminator-statement": {
-      "match": ";",
-      "name": "punctuation.terminator.statement.tsx"
     },
     "scope-punctuation-accessor-optional": {
       "match": "\\?\\.",
@@ -3330,10 +3300,10 @@
           "include": "#scope-support-type-primitive"
         },
         {
-          "include": "#scope-variable-language-this"
+          "include": "#this-literal"
         },
         {
-          "include": "#scope-variable-language-super"
+          "include": "#super-literal"
         },
         {
           "include": "#scope-support-variable"
@@ -3357,7 +3327,7 @@
           "include": "#operators"
         },
         {
-          "include": "#scope-punctuation-accessor"
+          "include": "#punctuation-accessor"
         },
         {
           "include": "#punctuation-comma"
@@ -3372,7 +3342,7 @@
           "include": "#scope-punctuation-bracket-curly"
         },
         {
-          "include": "#scope-punctuation-terminator-statement"
+          "include": "#punctuation-semicolon"
         },
         {
           "include": "#scope-punctuation-accessor-optional"
@@ -3484,10 +3454,6 @@
         }
       ]
     },
-    "punctuation-comma": {
-      "match": ",",
-      "name": "punctuation.separator.comma.tsx"
-    },
     "qstring-double": {
       "name": "string.quoted.double.tsx",
       "begin": "\"",
@@ -3529,6 +3495,83 @@
           "name": "constant.character.escape.tsx"
         }
       ]
+    },
+    "punctuation-comma": {
+      "match": ",",
+      "name": "punctuation.separator.comma.tsx"
+    },
+    "punctuation-semicolon": {
+      "match": ";",
+      "name": "punctuation.terminator.statement.tsx"
+    },
+    "punctuation-accessor": {
+      "match": "\\.",
+      "name": "punctuation.accessor.tsx"
+    },
+    "regex": {
+      "name": "string.regexp.tsx",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=(?:[=|\\^&<>+\\-*%~,\\[(?:{;.]|\\bis|\\bkeyof|\\btypeof|\\breadonly|\\bnew|\\bextends|\\bin|\\bas|\\binstanceof|\\bclass|\\basync|\\byield|\\bsatisfies|\\bfunction|\\bget|\\bset|\\belse|\\bdo|\\breturn|\\bthrow|\\btry|\\bfinally|\\bcatch|\\bpublic|\\bprivate|\\bprotected|\\bof|\\bcase|\\bdeclare|\\bexport|\\bdefault|\\bimport|\\btype|\\bstatic|\\babstract|\\boverride|\\baccessor|\\bvoid|\\bdelete|\\bawait|^)\\s*[!](?:\\s*[!])*)|(?<=^))\\s*(?:((?:\\/\\*\\*(?!\\/)[\\s\\S]*?\\*\\/|\\/\\*[\\s\\S]*?\\*\\/)\\s*))?(/)(?![*/])",
+      "beginCaptures": {
+        "1": {
+          "name": "comment.block.tsx"
+        },
+        "2": {
+          "name": "punctuation.definition.string.begin.regexp.tsx"
+        }
+      },
+      "end": "(/)([gimsuydv]*)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.regexp.tsx"
+        },
+        "2": {
+          "name": "keyword.other.regexp.tsx"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#regexp"
+        }
+      ]
+    },
+    "new-expr": {
+      "name": "meta.new-expr.tsx",
+      "begin": "\\b(new)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.tsx"
+        }
+      },
+      "end": "(?=[()}\\],=<;])",
+      "patterns": [
+        {
+          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+          "name": "entity.name.function.tsx"
+        }
+      ]
+    },
+    "parameter-name": {
+      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,)=])",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.spread.tsx"
+        },
+        "2": {
+          "name": "variable.parameter.tsx"
+        }
+      }
+    },
+    "directives": {
+      "name": "comment.line.triple-slash.tsx",
+      "match": "\\/\\/\\/\\s*<[^\\n]*"
+    },
+    "this-literal": {
+      "match": "\\b(this)\\b",
+      "name": "variable.language.this.tsx"
+    },
+    "super-literal": {
+      "match": "\\b(super)\\b",
+      "name": "variable.language.super.tsx"
     },
     "type-parameters": {
       "name": "meta.type.parameters.tsx",
@@ -3643,52 +3686,6 @@
         }
       ]
     },
-    "new-expr": {
-      "name": "meta.new-expr.tsx",
-      "begin": "\\b(new)\\b",
-      "beginCaptures": {
-        "1": {
-          "name": "keyword.operator.expression.tsx"
-        }
-      },
-      "end": "(?=[()}\\],=<;])",
-      "patterns": [
-        {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
-          "name": "entity.name.function.tsx"
-        }
-      ]
-    },
-    "regex": {
-      "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=(?:[=|\\^&<>+\\-*%~,\\[(?:{;.]|\\bis|\\bkeyof|\\btypeof|\\breadonly|\\bnew|\\bextends|\\bin|\\bas|\\binstanceof|\\bclass|\\basync|\\byield|\\bsatisfies|\\bfunction|\\bget|\\bset|\\belse|\\bdo|\\breturn|\\bthrow|\\btry|\\bfinally|\\bcatch|\\bpublic|\\bprivate|\\bprotected|\\bof|\\bcase|\\bdeclare|\\bexport|\\bdefault|\\bimport|\\btype|\\bstatic|\\babstract|\\boverride|\\baccessor|\\bvoid|\\bdelete|\\bawait|^)\\s*[!](?:\\s*[!])*)|(?<=^))\\s*(?:((?:\\/\\*\\*(?!\\/)[\\s\\S]*?\\*\\/|\\/\\*[\\s\\S]*?\\*\\/)\\s*))?(/)(?![*/])",
-      "beginCaptures": {
-        "1": {
-          "name": "comment.block.tsx"
-        },
-        "2": {
-          "name": "punctuation.definition.string.begin.regexp.tsx"
-        }
-      },
-      "end": "(/)([gimsuydv]*)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.string.end.regexp.tsx"
-        },
-        "2": {
-          "name": "keyword.other.regexp.tsx"
-        }
-      },
-      "patterns": [
-        {
-          "include": "#regexp"
-        }
-      ]
-    },
-    "directives": {
-      "name": "comment.line.triple-slash.tsx",
-      "match": "\\/\\/\\/\\s*<[^\\n]*"
-    },
     "parameter-type-annotation": {
       "name": "meta.type.annotation.parameter.tsx",
       "begin": "(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\??)(\\s*:)",
@@ -3713,17 +3710,6 @@
         }
       ]
     },
-    "parameter-name": {
-      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,)=])",
-      "captures": {
-        "1": {
-          "name": "keyword.operator.spread.tsx"
-        },
-        "2": {
-          "name": "variable.parameter.tsx"
-        }
-      }
-    },
     "type-predicate-operator": {
       "name": "meta.type.is.tsx",
       "begin": "\\b(is)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
@@ -3739,6 +3725,20 @@
         }
       ]
     },
+    "jsx-entities": {
+      "match": "(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.entity.tsx"
+        },
+        "2": {
+          "name": "constant.character.entity.tsx"
+        },
+        "3": {
+          "name": "punctuation.definition.entity.tsx"
+        }
+      }
+    },
     "comment": {
       "patterns": [
         {
@@ -3752,6 +3752,48 @@
         },
         {
           "include": "#blockcomment"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "include": "#qstring-single"
+        },
+        {
+          "include": "#qstring-double"
+        },
+        {
+          "include": "#template"
+        }
+      ]
+    },
+    "boolean-literal": {
+      "patterns": [
+        {
+          "include": "#scope-constant-language-boolean-true"
+        },
+        {
+          "include": "#scope-constant-language-boolean-false"
+        }
+      ]
+    },
+    "numeric-literal": {
+      "patterns": [
+        {
+          "include": "#hexnumber"
+        },
+        {
+          "include": "#binarynumber"
+        },
+        {
+          "include": "#octalnumber"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#bigint"
         }
       ]
     },

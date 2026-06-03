@@ -19,7 +19,7 @@
       "include": "#jsdoc"
     },
     {
-      "include": "#tripleslash"
+      "include": "#directives"
     },
     {
       "include": "#linecomment"
@@ -28,13 +28,13 @@
       "include": "#blockcomment"
     },
     {
-      "include": "#regex-literal"
+      "include": "#regex"
     },
     {
-      "include": "#string-double"
+      "include": "#qstring-double"
     },
     {
-      "include": "#string-single"
+      "include": "#qstring-single"
     },
     {
       "include": "#template"
@@ -46,7 +46,7 @@
       "include": "#object-method-key"
     },
     {
-      "include": "#new-expression"
+      "include": "#new-expr"
     },
     {
       "include": "#arrow-function-params"
@@ -169,10 +169,10 @@
       "include": "#scope-constant-language-null"
     },
     {
-      "include": "#scope-variable-language-this"
+      "include": "#this-literal"
     },
     {
-      "include": "#scope-variable-language-super"
+      "include": "#super-literal"
     },
     {
       "include": "#scope-support-class"
@@ -196,13 +196,13 @@
       "include": "#operators"
     },
     {
-      "include": "#scope-punctuation-accessor"
+      "include": "#punctuation-accessor"
     },
     {
       "include": "#scope-punctuation-bracket-round"
     },
     {
-      "include": "#scope-punctuation-separator-comma"
+      "include": "#punctuation-comma"
     },
     {
       "include": "#scope-punctuation-accessor-optional"
@@ -214,7 +214,7 @@
       "include": "#scope-punctuation-bracket-curly"
     },
     {
-      "include": "#scope-punctuation-terminator-statement"
+      "include": "#punctuation-semicolon"
     },
     {
       "include": "#punctuation"
@@ -233,20 +233,6 @@
     }
   ],
   "repository": {
-    "jsx-entity": {
-      "match": "(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)",
-      "captures": {
-        "1": {
-          "name": "punctuation.definition.entity.js.jsx"
-        },
-        "2": {
-          "name": "constant.character.entity.js.jsx"
-        },
-        "3": {
-          "name": "punctuation.definition.entity.js.jsx"
-        }
-      }
-    },
     "jsx-children": {
       "patterns": [
         {
@@ -265,7 +251,7 @@
           "include": "#jsx-expression"
         },
         {
-          "include": "#jsx-entity"
+          "include": "#jsx-entities"
         }
       ]
     },
@@ -328,7 +314,7 @@
           "include": "#jsdoc"
         },
         {
-          "include": "#tripleslash"
+          "include": "#directives"
         },
         {
           "include": "#linecomment"
@@ -656,7 +642,7 @@
           "include": "#jsdoc"
         },
         {
-          "include": "#tripleslash"
+          "include": "#directives"
         },
         {
           "include": "#linecomment"
@@ -680,7 +666,7 @@
           "include": "#jsdoc"
         },
         {
-          "include": "#tripleslash"
+          "include": "#directives"
         },
         {
           "include": "#linecomment"
@@ -704,7 +690,7 @@
           "include": "#jsdoc"
         },
         {
-          "include": "#tripleslash"
+          "include": "#directives"
         },
         {
           "include": "#linecomment"
@@ -714,32 +700,6 @@
         },
         {
           "include": "#jsx-fragment"
-        }
-      ]
-    },
-    "regex-literal": {
-      "name": "string.regexp.js.jsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\baccessor)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=(?:[=|\\^&<>+\\-*%~(,.\\[?:{;]|\\binstanceof|\\bin|\\bnew|\\bextends|\\byield|\\bget|\\bset|\\basync|\\belse|\\bdo|\\breturn|\\bthrow|\\btry|\\bfinally|\\bcatch|\\bof|\\bcase|\\bexport|\\bdefault|\\bimport|\\bstatic|\\baccessor|\\btypeof|\\bvoid|\\bdelete|\\bawait|^)\\s*[!](?:\\s*[!])*)|(?<=^))\\s*(?:((?:\\/\\*\\*(?!\\/)[\\s\\S]*?\\*\\/|\\/\\*[\\s\\S]*?\\*\\/)\\s*))?(/)(?![*/])",
-      "beginCaptures": {
-        "1": {
-          "name": "comment.block.js.jsx"
-        },
-        "2": {
-          "name": "punctuation.definition.string.begin.regexp.js.jsx"
-        }
-      },
-      "end": "(/)([gimsuydv]*)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.string.end.regexp.js.jsx"
-        },
-        "2": {
-          "name": "keyword.other.regexp.js.jsx"
-        }
-      },
-      "patterns": [
-        {
-          "include": "#regexp"
         }
       ]
     },
@@ -1411,10 +1371,6 @@
         }
       ]
     },
-    "tripleslash": {
-      "name": "comment.line.triple-slash.js.jsx",
-      "match": "\\/\\/\\/\\s*<[^\\n]*"
-    },
     "linecomment": {
       "name": "comment.line.double-slash.js.jsx",
       "match": "\\/\\/[^\\n]*"
@@ -1447,48 +1403,6 @@
     "number": {
       "name": "constant.numeric.decimal.js.jsx",
       "match": "[0-9]+(_[0-9]+)*(?:\\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
-    },
-    "string-double": {
-      "name": "string.quoted.double.js.jsx",
-      "begin": "\"",
-      "beginCaptures": {
-        "0": {
-          "name": "punctuation.definition.string.begin.js.jsx"
-        }
-      },
-      "end": "\"|$",
-      "endCaptures": {
-        "0": {
-          "name": "punctuation.definition.string.end.js.jsx"
-        }
-      },
-      "patterns": [
-        {
-          "match": "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
-          "name": "constant.character.escape.js.jsx"
-        }
-      ]
-    },
-    "string-single": {
-      "name": "string.quoted.single.js.jsx",
-      "begin": "'",
-      "beginCaptures": {
-        "0": {
-          "name": "punctuation.definition.string.begin.js.jsx"
-        }
-      },
-      "end": "'|$",
-      "endCaptures": {
-        "0": {
-          "name": "punctuation.definition.string.end.js.jsx"
-        }
-      },
-      "patterns": [
-        {
-          "match": "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
-          "name": "constant.character.escape.js.jsx"
-        }
-      ]
     },
     "template": {
       "name": "string.quoted.other.template.js.jsx",
@@ -1538,13 +1452,6 @@
     "privatefield": {
       "name": "variable.other.property.js.jsx",
       "match": "#[a-zA-Z_$][a-zA-Z0-9_$]*"
-    },
-    "type-inner": {
-      "patterns": [
-        {
-          "include": "#simple-type"
-        }
-      ]
     },
     "code-block": {
       "begin": "\\{",
@@ -1608,17 +1515,6 @@
         }
       ]
     },
-    "declaration-param-name": {
-      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,)=])",
-      "captures": {
-        "1": {
-          "name": "keyword.operator.spread.js.jsx"
-        },
-        "2": {
-          "name": "variable.parameter.js.jsx"
-        }
-      }
-    },
     "declaration-params": {
       "name": "meta.parameters.js.jsx",
       "begin": "\\(",
@@ -1635,7 +1531,7 @@
       },
       "patterns": [
         {
-          "include": "#declaration-param-name"
+          "include": "#parameter-name"
         },
         {
           "include": "#nested-parens"
@@ -2091,22 +1987,6 @@
         }
       }
     },
-    "new-expression": {
-      "name": "meta.new-expr.js.jsx",
-      "begin": "\\b(new)\\b",
-      "beginCaptures": {
-        "1": {
-          "name": "keyword.operator.expression.js.jsx"
-        }
-      },
-      "end": "(?=[()}\\],=;])",
-      "patterns": [
-        {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
-          "name": "entity.name.function.js.jsx"
-        }
-      ]
-    },
     "method-call": {
       "match": "(?<=[\\w$\\]\\)])(\\.)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*\\()",
       "captures": {
@@ -2217,14 +2097,6 @@
       "match": "\\b(null|undefined)\\b",
       "name": "constant.language.null.js.jsx"
     },
-    "scope-variable-language-this": {
-      "match": "\\b(this)\\b",
-      "name": "variable.language.this.js.jsx"
-    },
-    "scope-variable-language-super": {
-      "match": "\\b(super)\\b",
-      "name": "variable.language.super.js.jsx"
-    },
     "scope-keyword-operator-expression": {
       "match": "\\b(instanceof|new|typeof|void|delete)\\b",
       "name": "keyword.operator.expression.js.jsx"
@@ -2308,10 +2180,6 @@
     "scope-support-variable": {
       "match": "\\b(console|window|document|process|module|require|exports|global|globalThis)\\b",
       "name": "support.variable.js.jsx"
-    },
-    "scope-punctuation-accessor": {
-      "match": "\\.",
-      "name": "punctuation.accessor.js.jsx"
     },
     "scope-storage-type-function-arrow": {
       "match": "=>",
@@ -2459,10 +2327,6 @@
       "match": "\\(|\\)",
       "name": "punctuation.bracket.round.js.jsx"
     },
-    "scope-punctuation-separator-comma": {
-      "match": ",",
-      "name": "punctuation.separator.comma.js.jsx"
-    },
     "scope-punctuation-accessor-optional": {
       "match": "\\?\\.",
       "name": "punctuation.accessor.optional.js.jsx"
@@ -2474,10 +2338,6 @@
     "scope-punctuation-bracket-curly": {
       "match": "\\{|\\}",
       "name": "punctuation.bracket.curly.js.jsx"
-    },
-    "scope-punctuation-terminator-statement": {
-      "match": ";",
-      "name": "punctuation.terminator.statement.js.jsx"
     },
     "punctuation": {
       "match": "\\?|:",
@@ -2516,7 +2376,7 @@
           "include": "#jsdoc"
         },
         {
-          "include": "#tripleslash"
+          "include": "#directives"
         },
         {
           "include": "#linecomment"
@@ -2525,13 +2385,13 @@
           "include": "#blockcomment"
         },
         {
-          "include": "#regex-literal"
+          "include": "#regex"
         },
         {
-          "include": "#string-double"
+          "include": "#qstring-double"
         },
         {
-          "include": "#string-single"
+          "include": "#qstring-single"
         },
         {
           "include": "#template"
@@ -2543,7 +2403,7 @@
           "include": "#object-method-key"
         },
         {
-          "include": "#new-expression"
+          "include": "#new-expr"
         },
         {
           "include": "#arrow-function-params"
@@ -2624,10 +2484,10 @@
           "include": "#scope-constant-language-null"
         },
         {
-          "include": "#scope-variable-language-this"
+          "include": "#this-literal"
         },
         {
-          "include": "#scope-variable-language-super"
+          "include": "#super-literal"
         },
         {
           "include": "#scope-support-class"
@@ -2651,13 +2511,13 @@
           "include": "#operators"
         },
         {
-          "include": "#scope-punctuation-accessor"
+          "include": "#punctuation-accessor"
         },
         {
           "include": "#scope-punctuation-bracket-round"
         },
         {
-          "include": "#scope-punctuation-separator-comma"
+          "include": "#punctuation-comma"
         },
         {
           "include": "#scope-punctuation-accessor-optional"
@@ -2669,7 +2529,7 @@
           "include": "#scope-punctuation-bracket-curly"
         },
         {
-          "include": "#scope-punctuation-terminator-statement"
+          "include": "#punctuation-semicolon"
         },
         {
           "include": "#punctuation"
@@ -2685,6 +2545,204 @@
         },
         {
           "include": "#privatefield"
+        }
+      ]
+    },
+    "type": {
+      "patterns": [
+        {
+          "include": "#simple-type"
+        }
+      ]
+    },
+    "qstring-double": {
+      "name": "string.quoted.double.js.jsx",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.js.jsx"
+        }
+      },
+      "end": "\"|$",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.js.jsx"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.js.jsx"
+        }
+      ]
+    },
+    "qstring-single": {
+      "name": "string.quoted.single.js.jsx",
+      "begin": "'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.js.jsx"
+        }
+      },
+      "end": "'|$",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.js.jsx"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[nrtbfv0'\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\})",
+          "name": "constant.character.escape.js.jsx"
+        }
+      ]
+    },
+    "punctuation-comma": {
+      "match": ",",
+      "name": "punctuation.separator.comma.js.jsx"
+    },
+    "punctuation-semicolon": {
+      "match": ";",
+      "name": "punctuation.terminator.statement.js.jsx"
+    },
+    "punctuation-accessor": {
+      "match": "\\.",
+      "name": "punctuation.accessor.js.jsx"
+    },
+    "regex": {
+      "name": "string.regexp.js.jsx",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\baccessor)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=(?:[=|\\^&<>+\\-*%~(,.\\[?:{;]|\\binstanceof|\\bin|\\bnew|\\bextends|\\byield|\\bget|\\bset|\\basync|\\belse|\\bdo|\\breturn|\\bthrow|\\btry|\\bfinally|\\bcatch|\\bof|\\bcase|\\bexport|\\bdefault|\\bimport|\\bstatic|\\baccessor|\\btypeof|\\bvoid|\\bdelete|\\bawait|^)\\s*[!](?:\\s*[!])*)|(?<=^))\\s*(?:((?:\\/\\*\\*(?!\\/)[\\s\\S]*?\\*\\/|\\/\\*[\\s\\S]*?\\*\\/)\\s*))?(/)(?![*/])",
+      "beginCaptures": {
+        "1": {
+          "name": "comment.block.js.jsx"
+        },
+        "2": {
+          "name": "punctuation.definition.string.begin.regexp.js.jsx"
+        }
+      },
+      "end": "(/)([gimsuydv]*)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.regexp.js.jsx"
+        },
+        "2": {
+          "name": "keyword.other.regexp.js.jsx"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#regexp"
+        }
+      ]
+    },
+    "new-expr": {
+      "name": "meta.new-expr.js.jsx",
+      "begin": "\\b(new)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.expression.js.jsx"
+        }
+      },
+      "end": "(?=[()}\\],=;])",
+      "patterns": [
+        {
+          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+          "name": "entity.name.function.js.jsx"
+        }
+      ]
+    },
+    "parameter-name": {
+      "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,)=])",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.spread.js.jsx"
+        },
+        "2": {
+          "name": "variable.parameter.js.jsx"
+        }
+      }
+    },
+    "directives": {
+      "name": "comment.line.triple-slash.js.jsx",
+      "match": "\\/\\/\\/\\s*<[^\\n]*"
+    },
+    "this-literal": {
+      "match": "\\b(this)\\b",
+      "name": "variable.language.this.js.jsx"
+    },
+    "super-literal": {
+      "match": "\\b(super)\\b",
+      "name": "variable.language.super.js.jsx"
+    },
+    "jsx-entities": {
+      "match": "(&)(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)(;)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.entity.js.jsx"
+        },
+        "2": {
+          "name": "constant.character.entity.js.jsx"
+        },
+        "3": {
+          "name": "punctuation.definition.entity.js.jsx"
+        }
+      }
+    },
+    "comment": {
+      "patterns": [
+        {
+          "include": "#jsdoc"
+        },
+        {
+          "include": "#directives"
+        },
+        {
+          "include": "#linecomment"
+        },
+        {
+          "include": "#blockcomment"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "include": "#qstring-single"
+        },
+        {
+          "include": "#qstring-double"
+        },
+        {
+          "include": "#template"
+        }
+      ]
+    },
+    "boolean-literal": {
+      "patterns": [
+        {
+          "include": "#scope-constant-language-boolean-true"
+        },
+        {
+          "include": "#scope-constant-language-boolean-false"
+        }
+      ]
+    },
+    "numeric-literal": {
+      "patterns": [
+        {
+          "include": "#hexnumber"
+        },
+        {
+          "include": "#binarynumber"
+        },
+        {
+          "include": "#octalnumber"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#bigint"
         }
       ]
     }
