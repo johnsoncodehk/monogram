@@ -47,7 +47,7 @@ module.exports = grammar({
 
     flow_sequence: $ => seq("[", optional(seq($.flow_value, repeat(seq(",", $.flow_value)))), optional(","), "]"),
 
-    scalar: $ => choice($.dquote, $.squote, $.block_scalar, $.plain),
+    scalar: $ => choice($.dquote_key, $.squote_key, $.dquote, $.squote, $.block_scalar, $.key, $.num, $.bool_null, $.plain),
 
     doc_start: $ => token(/---/),
 
@@ -56,6 +56,10 @@ module.exports = grammar({
     directive: $ => token(/%[^\n]*/),
 
     comment: $ => token(/#[^\n]*/),
+
+    dquote_key: $ => token(/"(?:\\.|[^"\\])*"/),
+
+    squote_key: $ => token(/'(?:''|[^'])*'/),
 
     dquote: $ => token(/"(?:\\.|[^"\\])*"/),
 
@@ -68,6 +72,12 @@ module.exports = grammar({
     tag: $ => token(/!(?:<[^>]*>|[^\s\[\]{},]*)/),
 
     block_scalar: $ => token(//),
+
+    key: $ => token(/(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:])(?:[^:#\n,\[\]{}]|:)*/),
+
+    num: $ => token(/(?:[+-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)/),
+
+    bool_null: $ => token(/(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)/),
 
     plain: $ => token(/(?:[^\s\-?:,\[\]{}#&*!|>'"%@`]|[-?:])(?:[^:#\n,\[\]{}]|:)*/),
 

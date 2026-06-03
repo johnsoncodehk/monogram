@@ -11,12 +11,17 @@
 (doc_end) @punctuation.delimiter
 (directive) @keyword
 (comment) @comment
+(dquote_key) @constructor
+(squote_key) @constructor
 (dquote) @string
 (squote) @string
 (anchor) @type
 (alias) @variable
 (tag) @keyword
 (block_scalar) @string
+(key) @constructor
+(num) @number
+(bool_null) @constant.builtin
 (plain) @string
 
 ;; Keyword, operator, and punctuation literals.

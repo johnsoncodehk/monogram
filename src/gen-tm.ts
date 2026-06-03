@@ -379,6 +379,91 @@ function deriveBindingCloseBrackets(grammar: CstGrammar, identName: string | und
   return [...closes];
 }
 
+/**
+ * Derive the CLOSE bracket(s) of a COMPUTED MEMBER KEY (`[ expr ] : T`), data-driven
+ * from the grammar. A member's `: Type` annotation only opens a type region when the
+ * key is a plain identifier (`#member-type-annotation`'s ident-anchored begin); a
+ * computed key ends in a non-identifier bracket (`['x']: T`, `[Symbol.iterator]: T`),
+ * so its `:` would otherwise fall through to bare punctuation and the type name be
+ * scoped as a value — the same gap `#param-bind-type-annotation` closes for binding
+ * patterns. This finds the bracket that wraps a computed key: a member-NAME rule
+ * (one whose `ref` stands immediately before a member `(':' Type)` annotation) that
+ * has a `[ OPEN … CLOSE ]` alternative; the CLOSE is read off the rule, not hardcoded.
+ */
+function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: Set<string>): string[] {
+  const PAIR: Record<string, string> = { '{': '}', '[': ']', '(': ')' };
+  // Member-NAME rules: a `ref` that, within some sequence, is followed (allowing an
+  // intervening optional `?`/group) by a literal `:` then a type-rule ref — the
+  // `key (?) : Type` member shape. Those refs name the rules that occupy a key slot.
+  const memberNameRules = new Set<string>();
+  const scanSeq = (items: RuleExpr[]): void => {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      // A member KEY is never a type-rule ref itself (excludes a TYPE `ref` that
+      // happens to sit before a `:` in a type-internal construct — a conditional
+      // type `T extends U ? X : Y`, a mapped-type `[K in T]: U`, etc.).
+      if (it.type !== 'ref' || typeRuleNames.has(it.name)) continue;
+      // look ahead for `… : <typeRef>` after this ref (skip an optional `?`/group)
+      for (let j = i + 1; j < items.length; j++) {
+        const nx = items[j];
+        if (nx.type === 'literal' && (nx as { value: string }).value === ':') {
+          const after = items[j + 1];
+          if (after && after.type === 'ref' && typeRuleNames.has((after as { name: string }).name)) {
+            memberNameRules.add((it as { name: string }).name);
+          }
+          break;
+        }
+        // allow an optional `?` or a small group/quantifier to sit between key and `:`
+        if (nx.type === 'literal' && (nx as { value: string }).value === '?') continue;
+        if (nx.type === 'quantifier' || nx.type === 'group') continue;
+        break;
+      }
+    }
+  };
+  const walk = (expr: RuleExpr | undefined): void => {
+    if (!expr) return;
+    if (expr.type === 'seq') scanSeq(expr.items);
+    if (expr.type === 'seq' || expr.type === 'alt') for (const i of expr.items) walk(i);
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+      walk((expr as { body?: RuleExpr }).body);
+    }
+    if (expr.type === 'sep') walk((expr as { element: RuleExpr }).element);
+  };
+  for (const r of grammar.rules) walk(r.body);
+
+  // Does a rule-expr (transitively, within this alternative) reference a non-type
+  // rule — i.e. wrap an EXPRESSION? A computed property KEY brackets an expression
+  // (`[ Expr ]`); a TUPLE type brackets types (`[ Type, … ]`). Requiring an
+  // expression ref inside the bracket pair keeps this to genuine computed keys.
+  const wrapsExpr = (expr: RuleExpr | undefined): boolean => {
+    if (!expr) return false;
+    if (expr.type === 'ref') return !typeRuleNames.has(expr.name);
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(wrapsExpr);
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+      return wrapsExpr((expr as { body?: RuleExpr }).body);
+    }
+    if (expr.type === 'sep') return wrapsExpr((expr as { element: RuleExpr }).element);
+    return false;
+  };
+
+  const closes = new Set<string>();
+  for (const r of grammar.rules) {
+    if (!memberNameRules.has(r.name)) continue;
+    const alts = r.body.type === 'alt' ? r.body.items : [r.body];
+    for (const a of alts) {
+      if (a.type !== 'seq' || a.items.length < 2) continue;
+      const f = a.items[0], l = a.items[a.items.length - 1];
+      if (f.type === 'literal' && l.type === 'literal' &&
+          PAIR[(f as { value: string }).value] === (l as { value: string }).value &&
+          // the bracket must wrap an expression (computed key), not types (a tuple)
+          a.items.slice(1, -1).some(wrapsExpr)) {
+        closes.add((l as { value: string }).value);
+      }
+    }
+  }
+  return [...closes];
+}
+
 // ── Token classification ──
 
 /**
@@ -5038,6 +5123,35 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     };
     const bodyPatterns = repository['declaration-body'].patterns!;
     bodyPatterns.splice(bodyPatterns.length - 1, 0, { include: '#member-type-annotation' });
+
+    // Computed-member-key type annotation: `[ 'k' ] : T`, `[Symbol.iterator]: T`.
+    // #member-type-annotation above only opens on a SIMPLE-identifier key before `:`;
+    // when the key is a computed `[ expr ]` the trailing `:` would otherwise fall
+    // through to bare punctuation and the type name be scoped as a VALUE (the type.ref
+    // miss this closes — e.g. `['x']: React.DOMAttributes<unknown>`). The key's
+    // `[ expr ]` — its brackets and inner expression — is consumed by the body's
+    // expression patterns (`$self`) exactly as before, so those scopes are unchanged;
+    // this rule only opens the type region at the trailing `:`, anchored by a
+    // lookbehind on the computed-key CLOSE bracket (derived from the grammar's member
+    // rules, see deriveComputedMemberCloseBrackets), mirroring #param-bind-type-annotation.
+    // An index signature `[k: T]: U` is unaffected: its inner `k:` opens
+    // #member-type-annotation first (a leftmost match), whose region already spans the
+    // trailing `]: U`, so this pattern never fires there.
+    const memberKeyCloses = deriveComputedMemberCloseBrackets(grammar, typeRuleNames);
+    if (memberKeyCloses.length) {
+      const closeClass = memberKeyCloses.map(escapeForCharClass).join('');
+      repository['member-bind-type-annotation'] = {
+        name: `meta.type.annotation.member.${langName}`,
+        begin: `(?<=[${closeClass}])\\s*(\\??)\\s*(:)`,
+        beginCaptures: {
+          '1': { name: `keyword.operator.optional.${langName}` },
+          '2': { name: `keyword.operator.type.annotation.${langName}` },
+        },
+        end: '(?=[;},)]|=(?!>))',
+        patterns: [{ include: '#type-inner' }],
+      };
+      bodyPatterns.splice(bodyPatterns.length - 1, 0, { include: '#member-bind-type-annotation' });
+    }
   }
 
   // ── 4. Contextual patterns (keyword + Ident → entity.name.*) ──
@@ -6136,6 +6250,18 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     const entry = repository[key];
     const scope = entry?.name ?? '';
     if (scope.startsWith('comment.')) return 0;
+    // A top-level token-match scoped `entity.name.tag` (e.g. an indentation grammar's mapping
+    // KEY — a scalar that is the LHS of `:`) is a NAME, more specific than any string/typed-value
+    // scalar it overlaps, so it must be tried first. (Markup tag names live inside begin/end
+    // regions, never as a top-level include, so this only ranks the YAML-style key scalar.)
+    if (entry?.match && scope.startsWith('entity.name.tag')) return 0.9;
+    // An UNQUOTED plain-scalar catch-all (`string.unquoted`) is the least-specific scalar shape
+    // (it has no opening delimiter and matches almost any bare run), so — unlike a quoted/regex
+    // string — it must rank AFTER the typed-literal scalars (constant.numeric / constant.language)
+    // that overlap it, while still beating structural punctuation (so `-1` reads as the scalar,
+    // not a `-` operator). Only an indentation/plain-scalar grammar (YAML) has such a top-level
+    // token; quoted strings keep rank 1, so the TS/JS/markup families are unaffected.
+    if (scope.startsWith('string.unquoted')) return 8.8;
     if (scope.startsWith('string.')) return 1;
     if (scope.includes('entity.name.function.decorator')) return 1.5;
     if (key === 'type-annotation-var' || key === 'type-annotation-return') return 1.8;

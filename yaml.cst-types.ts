@@ -17,16 +17,21 @@ export type TokenType =
   | 'Alias'
   | 'Anchor'
   | 'BlockScalar'
+  | 'BoolNull'
   | 'Comment'
   | 'DQuote'
+  | 'DQuoteKey'
   | 'Dedent'
   | 'Directive'
   | 'DocEnd'
   | 'DocStart'
   | 'Indent'
+  | 'Key'
   | 'Newline'
+  | 'Num'
   | 'Plain'
   | 'SQuote'
+  | 'SQuoteKey'
   | 'Tag'
   | '$keyword'
   | '$punct'
@@ -213,9 +218,14 @@ export interface ScalarNode extends CstPos {
   rule: 'Scalar';
   children: Array<
     | (CstLeaf & { tokenType: 'BlockScalar' })
+    | (CstLeaf & { tokenType: 'BoolNull' })
     | (CstLeaf & { tokenType: 'DQuote' })
+    | (CstLeaf & { tokenType: 'DQuoteKey' })
+    | (CstLeaf & { tokenType: 'Key' })
+    | (CstLeaf & { tokenType: 'Num' })
     | (CstLeaf & { tokenType: 'Plain' })
     | (CstLeaf & { tokenType: 'SQuote' })
+    | (CstLeaf & { tokenType: 'SQuoteKey' })
   >;
 }
 

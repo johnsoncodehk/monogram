@@ -7,7 +7,7 @@
     "string_dquote_body": [
       [
         "[^\"\\\\]+",
-        "string"
+        "identifier"
       ],
       [
         "\\\\.",
@@ -21,7 +21,7 @@
       [
         "\"",
         {
-          "token": "string",
+          "token": "identifier",
           "switchTo": "@value"
         }
       ]
@@ -33,7 +33,7 @@
       [
         "\"",
         {
-          "token": "string",
+          "token": "identifier",
           "next": "@pop"
         }
       ]
@@ -41,7 +41,7 @@
     "string_squote_body": [
       [
         "[^'\\\\]+",
-        "string"
+        "identifier"
       ],
       [
         "\\\\.",
@@ -55,7 +55,7 @@
       [
         "'",
         {
-          "token": "string",
+          "token": "identifier",
           "switchTo": "@value"
         }
       ]
@@ -67,7 +67,7 @@
       [
         "'",
         {
-          "token": "string",
+          "token": "identifier",
           "next": "@pop"
         }
       ]
@@ -84,15 +84,22 @@
       [
         "\"",
         {
-          "token": "string",
+          "token": "identifier",
           "switchTo": "@string_dquote"
         }
       ],
       [
         "'",
         {
-          "token": "string",
+          "token": "identifier",
           "switchTo": "@string_squote"
+        }
+      ],
+      [
+        "(?:[+-]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN)|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(?:\\.[0-9]+|[0-9]+(?:\\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)(?=[\\t ]+#|[\\t ]*(?:[\\r\\n,\\[\\]{}]|:(?:[\\s,\\[\\]{}]|$))|$)",
+        {
+          "token": "number",
+          "switchTo": "@value"
         }
       ],
       [
@@ -132,6 +139,20 @@
       ],
       [
         "!(?:<[^>]*>|[^\\s\\[\\]{},]*)",
+        {
+          "token": "keyword",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:[^\\s\\-?:,\\[\\]{}#&*!|>'\"%@\\`]|[-?:](?=[^\\s,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\s,\\]}]))*(?=[\\t ]*:(?:[\\s,\\[\\]{}]|$))",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)(?=[\\t ]+#|[\\t ]*(?:[\\r\\n,\\[\\]{}]|:(?:[\\s,\\[\\]{}]|$))|$)",
         {
           "token": "keyword",
           "switchTo": "@value"

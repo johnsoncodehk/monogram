@@ -1847,6 +1847,9 @@
           "include": "#member-type-annotation"
         },
         {
+          "include": "#member-bind-type-annotation"
+        },
+        {
           "include": "$self"
         }
       ]
@@ -2277,6 +2280,24 @@
           "name": "keyword.operator.optional.tsx"
         },
         "3": {
+          "name": "keyword.operator.type.annotation.tsx"
+        }
+      },
+      "end": "(?=[;},)]|=(?!>))",
+      "patterns": [
+        {
+          "include": "#type"
+        }
+      ]
+    },
+    "member-bind-type-annotation": {
+      "name": "meta.type.annotation.member.tsx",
+      "begin": "(?<=[\\]])\\s*(\\??)\\s*(:)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.optional.tsx"
+        },
+        "2": {
           "name": "keyword.operator.type.annotation.tsx"
         }
       },

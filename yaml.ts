@@ -31,6 +31,56 @@ const Directive = token(/%[^\n]*/, { scope: 'keyword.other.directive' });
 // Block scalar (| / >): EMITTED by the lexer's block-scalar mode (placeholder pattern, skipped
 // in the regex loop) so the more-indented content lines arrive as a single token.
 const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block' });
+// Plain-scalar shapes shared by the key / number / boolean tokens below. The BODY is the same
+// run of characters the general Plain scalar matches; the leading-char and the trailing context
+// are what split a key (LHS of `: `) and a typed value (number / boolean / null) off the generic
+// string-valued plain scalar — a finer SCOPE for the highlighter, while the parser still treats
+// every one as a Scalar (they are all added to the `Scalar` rule, so the parse tree is unchanged).
+const PLAIN_HEAD = String.raw`(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:](?=[^\s,\[\]{}]))`;
+const PLAIN_BODY = String.raw`(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}]))*`;
+// A plain scalar is a mapping KEY when a `:` key-separator (colon + whitespace / EOL, or—inside a
+// flow collection—colon + `,`/`]`/`}`) follows it. Matched BEFORE the value/number tokens so a
+// numeric-looking key (`123:`) is still a key (entity.name.tag), as the `yaml` oracle resolves it.
+const KEY_SEP = String.raw`(?=[\t ]*:(?:[\s,\[\]{}]|$))`;
+
+// Plain scalar that is a mapping key → entity.name.tag (the YAML convention for a key name).
+const Key = token(
+  new RegExp(`${PLAIN_HEAD}${PLAIN_BODY}${KEY_SEP}`),
+  { scope: 'entity.name.tag' },
+);
+// Double-quoted scalar in KEY position (a `"…"` immediately followed by a key-separator `:`).
+const DQuoteKey = token(
+  new RegExp(`"(?:\\\\.|[^"\\\\])*"${KEY_SEP}`),
+  { string: true, scope: 'entity.name.tag' },
+);
+// Single-quoted scalar in KEY position.
+const SQuoteKey = token(
+  new RegExp(`'(?:''|[^'])*'${KEY_SEP}`),
+  { string: true, scope: 'entity.name.tag' },
+);
+
+// Value end-boundary for typed plain scalars (number / boolean / null): the scalar must be the
+// WHOLE node, so it is followed by whitespace+comment, an end-of-value char (EOL / `,` / `]` /
+// `}`), or a key-separator `:`. Mirrors the maintained RedCMD grammar's core-schema lookaheads.
+const VALUE_END = String.raw`(?=[\t ]+#|[\t ]*(?:[\r\n,\[\]{}]|:(?:[\s,\[\]{}]|$))|$)`;
+// Numeric plain scalars (YAML 1.2 core schema): decimal / octal / hex integers, floats, ±.inf,
+// .nan. Anything outside the core schema (binary `0b…`, dates, `12:34:56`) stays a plain string,
+// matching what the `yaml` oracle resolves to a number.
+const Num = token(
+  new RegExp(
+    String.raw`(?:[+-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)` +
+    String.raw`|0x[0-9a-fA-F]+|0o[0-7]+` +
+    String.raw`|[+-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)` +
+    VALUE_END,
+  ),
+  { scope: 'constant.numeric' },
+);
+// Boolean / null plain scalars (core schema) → constant.language.
+const BoolNull = token(
+  new RegExp(String.raw`(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)${VALUE_END}`),
+  { scope: 'constant.language' },
+);
+
 // Plain scalar. Leading char: a non-indicator, OR one of `- ? :` when followed by a non-space
 // (so `-1`, `?x`, `::v` are plain, but `- `, `? `, `: ` stay indicators). Body: any non
 // `:`/`#`/`,`/flow char, plus `:` when NOT followed by space/`,`/`]`/`}` — YAML treats only `: `
@@ -40,7 +90,10 @@ const Plain = token(
   { scope: 'string.unquoted' },
 );
 
-const Scalar = rule(() => [DQuote, SQuote, BlockScalar, Plain]);
+// A Scalar is any of the above scalar SHAPES. The key / number / boolean tokens are finer
+// HIGHLIGHTING splits of the generic quoted/plain scalars; the parser accepts them all wherever
+// a scalar is legal, so the parse tree (and the src-coverage metric) is unchanged.
+const Scalar = rule(() => [DQuoteKey, SQuoteKey, DQuote, SQuote, BlockScalar, Key, Num, BoolNull, Plain]);
 
 // A node (a value in any context): optional anchor/tag prefix, then a collection, alias, or a
 // scalar-led form. The scalar-led branch is LEFT-FACTORED: parse one scalar, then a trailing
@@ -108,7 +161,10 @@ const indent: IndentConfig = {
 export default defineGrammar({
   name: 'yaml',
   scopeName: 'source.yaml',
-  tokens: { DocStart, DocEnd, Directive, Comment, DQuote, SQuote, Anchor, Alias, Tag, BlockScalar, Plain, Indent, Dedent, Newline },
+  // Declaration order = lexer precedence (earlier wins). The KEY tokens precede the quoted /
+  // value tokens (a numeric- or quoted-looking key is still a key); the typed value tokens
+  // (Num, BoolNull) precede the generic Plain so a number / boolean resolves to its own scope.
+  tokens: { DocStart, DocEnd, Directive, Comment, DQuoteKey, SQuoteKey, DQuote, SQuote, Anchor, Alias, Tag, BlockScalar, Key, Num, BoolNull, Plain, Indent, Dedent, Newline },
   // NOTE: the parser's entry rule is the LAST rule declared here (findEntryRule = rules[last]),
   // so `Stream` must come last.
   rules: {
