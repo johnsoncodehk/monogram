@@ -43,6 +43,7 @@
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2",
     "vscode-tmlanguage-snapshot": "^1.0.1",
-    "web-tree-sitter": "^0.26.9"
+    "web-tree-sitter": "^0.26.9",
+    "yaml": "^2.9.0"
   }
 }
