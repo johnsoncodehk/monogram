@@ -1737,6 +1737,9 @@
           "include": "#parameter-type-annotation"
         },
         {
+          "include": "#param-bind-type-annotation"
+        },
+        {
           "include": "#type"
         }
       ]
@@ -1860,6 +1863,24 @@
         }
       ]
     },
+    "param-bind-type-annotation": {
+      "name": "meta.type.annotation.parameter.tsx",
+      "begin": "(?<=[}\\]])\\s*(\\??)\\s*(:)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.optional.tsx"
+        },
+        "2": {
+          "name": "keyword.operator.type.annotation.tsx"
+        }
+      },
+      "end": "(?=[,)]|=(?!>))",
+      "patterns": [
+        {
+          "include": "#type"
+        }
+      ]
+    },
     "decl-return-type": {
       "name": "meta.type.annotation.return.tsx",
       "begin": "(:)",
@@ -1892,6 +1913,9 @@
       "patterns": [
         {
           "include": "#parameter-type-annotation"
+        },
+        {
+          "include": "#param-bind-type-annotation"
         },
         {
           "include": "#parameter-name"
@@ -2664,6 +2688,9 @@
       "patterns": [
         {
           "include": "#parameter-type-annotation"
+        },
+        {
+          "include": "#param-bind-type-annotation"
         },
         {
           "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,:)?=])",
@@ -3704,7 +3731,7 @@
           "include": "$self"
         }
       ],
-      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.]|(?:is|keyof|typeof|readonly|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|symbol|import)\\b|//|/\\*|(?!if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*\\b(?!\\s*[.(])))"
+      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.]|(?:is|keyof|typeof|readonly|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|symbol|import)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{;\\-.=])|(?!if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*\\b(?!\\s*[.(])))"
     },
     "type-object": {
       "name": "meta.object-type.tsx",

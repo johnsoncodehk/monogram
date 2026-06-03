@@ -316,6 +316,69 @@ function hasColonTypeAnnotation(grammar: CstGrammar, typeRuleNames: Set<string>)
   return grammar.rules.some(r => walk(r.body));
 }
 
+/**
+ * Derive the CLOSE brackets that terminate a destructuring BINDING PATTERN
+ * (`{ a } : T`, `[ a ] : T`), data-driven from the grammar.
+ *
+ * A binding-pattern rule is one whose every alternative is a bracket-delimited
+ * sequence (`OPEN … CLOSE`) AND which is referenced as a direct alternative
+ * standing in for the identifier — i.e. it appears in an `alt(…)` whose items also
+ * reach the grammar's identifier token (the `alt([Ident,…], BindingPattern)` shape
+ * every binding/param uses). That co-reference is what distinguishes a binding
+ * pattern from a same-bracketed block / object-type body, which never substitutes
+ * for a name. The brackets themselves are read off the rule, not hardcoded: a
+ * grammar whose patterns are delimited by other paired brackets yields those, and a
+ * grammar with no destructuring binding yields the empty set (so the dependent rule
+ * is omitted entirely). `:`/`?` stay literal here, matching the rest of this
+ * generator's type-annotation derivations (`#param-type-annotation`, etc.).
+ */
+function deriveBindingCloseBrackets(grammar: CstGrammar, identName: string | undefined): string[] {
+  const PAIR: Record<string, string> = { '{': '}', '[': ']', '(': ')' };
+  const directRef = (expr: RuleExpr | undefined, name: string): boolean => {
+    if (!expr) return false;
+    if (expr.type === 'ref') return expr.name === name;
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(i => directRef(i, name));
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+      return directRef((expr as { body?: RuleExpr }).body, name);
+    }
+    if (expr.type === 'sep') return directRef((expr as { element: RuleExpr }).element, name);
+    return false;
+  };
+  // Rule names that appear in an `alt` whose siblings reach the identifier token —
+  // candidates for "stands in for a binding name".
+  const nameSubstitutes = new Set<string>();
+  const scan = (expr: RuleExpr | undefined): void => {
+    if (!expr) return;
+    if (expr.type === 'alt' && identName && expr.items.some(i => directRef(i, identName))) {
+      for (const it of expr.items) if (it.type === 'ref') nameSubstitutes.add(it.name);
+    }
+    if (expr.type === 'seq' || expr.type === 'alt') for (const i of expr.items) scan(i);
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+      scan((expr as { body?: RuleExpr }).body);
+    }
+    if (expr.type === 'sep') scan((expr as { element: RuleExpr }).element);
+  };
+  for (const r of grammar.rules) scan(r.body);
+
+  const closes = new Set<string>();
+  for (const r of grammar.rules) {
+    if (!nameSubstitutes.has(r.name)) continue;
+    const alts = r.body.type === 'alt' ? r.body.items : [r.body];
+    const allBracketed = alts.length > 0 && alts.every(a => {
+      if (a.type !== 'seq' || a.items.length < 2) return false;
+      const f = a.items[0], l = a.items[a.items.length - 1];
+      return f.type === 'literal' && l.type === 'literal' &&
+        PAIR[(f as { value: string }).value] === (l as { value: string }).value;
+    });
+    if (!allBracketed) continue;
+    for (const a of alts as { items: RuleExpr[] }[]) {
+      const l = a.items[a.items.length - 1];
+      if (l.type === 'literal') closes.add((l as { value: string }).value);
+    }
+  }
+  return [...closes];
+}
+
 // ── Token classification ──
 
 /**
@@ -4403,8 +4466,17 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // Build while pattern for type alias continuation.
   // A line continues the type alias if it starts with type-continuation content:
   // type operators, type keywords, comments, or identifiers that aren't statement keywords.
+  // The alias body separator (the literal that introduces `= Body`) — the same
+  // literal the type-alias detector keys on below (`decl.endHint === '='`), kept
+  // in one place so the `while` and the detector agree on what a type alias is.
+  const typeAliasSeparator = '=';
   let typeAliasWhile: string | undefined;
   if (typeLiterals.size > 0) {
+    // Operators that may LEAD a continuation line (`| A`, `& B`, …). Closing
+    // brackets (`]`/`)`/`}`/`>`) and `=>` are excluded — a line that opens with a
+    // bare closer normally ENDS the type (it closes an enclosing block), so it
+    // must NOT keep the region alive on its own (see the closer-run handling
+    // below, which only continues when a closer is FOLLOWED by a type operator).
     const typeContinueOps = [...typeLiterals]
       .filter(l => !isKeywordLiteral(l) && l !== '=>' && l !== ']' && l !== ')' && l !== '}' && l !== '>')
       .map(escapeForCharClass).join('');
@@ -4414,6 +4486,29 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (typeKwAlt) whileParts.push(`(?:${typeKwAlt})\\b`);
     whileParts.push('//');
     whileParts.push('/\\*');
+    // Multi-line type tail: a continuation line that OPENS with one or more
+    // closing brackets that finish a multi-line sub-type (a `}` object body, a
+    // `>` type-arg or type-PARAM list, a `)`/`]` paren/tuple) and is then
+    // immediately followed by a token that keeps the type going:
+    //   • a type-continuation operator `& Other` / `| Extra` (the union/
+    //     intersection TAIL after a multi-line body — `} & Other`, `> & Extra`)
+    //   • the body-introducing `=` (a multi-line type-PARAMETER list laid out
+    //     before the `=`: `type T<\n  P extends X\n> = Body` — line 3 opens with
+    //     the `>` that closes the params, then `= Body`)
+    // Without this, such a line opened with `}`/`>`/`)`, failed the `while`, and
+    // tore the region down — dropping the tail / body to expression mode (the
+    // tail's `type.ref` and the body's types lost their scope). The trailing
+    // operator/`=` is REQUIRED so a bare enclosing-block closer (`type T = X`
+    // then a lone `}` ending a namespace/function body) still terminates the
+    // alias. The closing brackets, the operators and the `=` body-introducer are
+    // all the grammar's own type/assignment literals — agnostic.
+    const typeCloserChars = [...typeLiterals]
+      .filter(l => l === ']' || l === ')' || l === '}' || l === '>')
+      .map(escapeForCharClass).join('');
+    const aliasSep = escapeForCharClass(typeAliasSeparator);
+    if (typeCloserChars && typeContinueOps) {
+      whileParts.push(`[${typeCloserChars}](?:\\s*[${typeCloserChars}])*\\s*(?=[${typeContinueOps}${aliasSep}])`);
+    }
     // Identifiers: must not be statement keywords, and must not be followed
     // by ( or . (which indicate expression statements like foo() or foo.bar).
     // Use \b after the identifier to prevent backtracking to a partial match.
@@ -4492,6 +4587,34 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           patterns: [{ include: '#type-inner' }],
         };
         paramsInnerPatterns.push({ include: '#param-type-annotation' });
+
+        // Destructuring-binding parameter type annotation: `{ a } : T`, `[ a ] : T`
+        // (and with defaults `{ a = 0 } : T`). #param-type-annotation above only
+        // opens on a SIMPLE-identifier param before `:`; when the param is a binding
+        // pattern its `:` annotation would otherwise fall through to bare punctuation
+        // and the type name be scoped as a value. The binding pattern's `{…}`/`[…]`
+        // body — its bound names, nested patterns and `= default` expressions — is
+        // consumed by `$self` exactly as before (so those scopes are unchanged); this
+        // rule only opens the type region at the trailing `:`. The begin is anchored
+        // by a lookbehind on the binding-pattern CLOSE bracket (derived from the
+        // grammar, see deriveBindingCloseBrackets), which at param-list level can only
+        // be a destructuring close — a default-value object/array literal is nested
+        // inside `$self` and never surfaces here, so it cannot trigger this region.
+        const bindCloses = deriveBindingCloseBrackets(grammar, identToken?.name);
+        if (bindCloses.length) {
+          const closeClass = bindCloses.map(escapeForCharClass).join('');
+          repository['param-bind-type-annotation'] = {
+            name: `meta.type.annotation.parameter.${langName}`,
+            begin: `(?<=[${closeClass}])\\s*(\\??)\\s*(:)`,
+            beginCaptures: {
+              '1': { name: `keyword.operator.optional.${langName}` },
+              '2': { name: `keyword.operator.type.annotation.${langName}` },
+            },
+            end: '(?=[,)]|=(?!>))',
+            patterns: [{ include: '#type-inner' }],
+          };
+          paramsInnerPatterns.push({ include: '#param-bind-type-annotation' });
+        }
 
         // Bare ':' return-type pattern (for use inside declaration scopes,
         // after declaration-params consumes the ')')
@@ -4683,7 +4806,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // Type alias: `type Foo = Type;` — scope covers the type body.
         // Use begin/while so the scope auto-closes when the next line
         // can't be part of a type expression (e.g., starts with a statement keyword
-        // or an expression like `foo()`).
+        // or an expression like `foo()`). `while` tears the WHOLE region (and any
+        // open inner object-type/type-arg frames) down when it fails, so an inner
+        // sub-type that doesn't close cleanly can never run away into later code —
+        // the per-line re-test re-establishes the boundary every line.
         end = '(?=;)|;';
         if (!repository['type-body']) {
           const eqScope = getScope(scopeOverrides, '=') ?? 'keyword.operator.assignment';
@@ -5439,6 +5565,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (hasTypeAnnotations && repository['param-type-annotation']) {
       arrowInner.push({ include: '#param-type-annotation' });
     }
+    // Destructuring-binding param annotation (`({ a = 0 }: T) => …`), same rule as
+    // the declaration-param list — emitted only when the grammar has binding patterns.
+    if (repository['param-bind-type-annotation']) {
+      arrowInner.push({ include: '#param-bind-type-annotation' });
+    }
     // Bare parameter ident at param-start positions only (after '(' or ',').
     // Followed by ',', ')', '=' (default), ':' (type annotation), or '?' (optional).
     // Use lookbehind to avoid matching default value expressions like `= level`.
@@ -5829,10 +5960,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   }
 
   // Patch type-paren with param-type-annotation so function-type params
-  // like `(raw: unknown) => T` get variable.parameter scoping.
+  // like `(raw: unknown) => T` get variable.parameter scoping. A destructuring-binding
+  // function-type param (`({ a }: P) => void`) routes its `: P` through the same
+  // binding rule (when the grammar emitted it).
   if (repository['type-paren'] && repository['param-type-annotation']) {
     repository['type-paren'].patterns = [
       { include: '#param-type-annotation' },
+      ...(repository['param-bind-type-annotation'] ? [{ include: '#param-bind-type-annotation' }] : []),
       { include: '#type-inner' },
     ];
   }
