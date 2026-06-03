@@ -4904,7 +4904,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         '2': { name: `keyword.operator.optional.${langName}` },
         '3': { name: `keyword.operator.type.annotation.${langName}` },
       },
-      end: '(?=[;=},)])',
+      // The `=` boundary (member initializer `x: T = …`) is matched as `=(?!>)`
+      // so the `=` of a function-type return arrow (`x: () => T`) does not close
+      // the annotation early and strip the return type of its type scope.
+      end: '(?=[;},)]|=(?!>))',
       patterns: [{ include: '#type-inner' }],
     };
     const bodyPatterns = repository['declaration-body'].patterns!;
@@ -5565,7 +5568,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const kwAlt = usedVarDecls.map(escapeRegex).join('|');
 
       // Variable declaration: (let|const|var) ident :
-      const varAnnotEndParts = ['(?=[=;,])'];
+      // The annotation ends at the initializer `=`, the statement `;`, or the
+      // next declarator `,`. The `=` is matched as `=(?!>)` so the `=` of a
+      // function-type return arrow (`const f: () => T = …`) does NOT prematurely
+      // close the type region — keeping the post-arrow return type in type mode
+      // (same arrow-vs-assignment guard #param-type-annotation already uses). The
+      // `=>` arrow is the grammar's own type literal, so this stays agnostic.
+      const varAnnotEndParts = ['(?=[;,]|=(?!>))'];
       if (stmtStartKeywords.size > 0) {
         const stmtAlt = [...stmtStartKeywords].map(escapeRegex).join('|');
         varAnnotEndParts.push(`^\\s*(?=${stmtAlt})\\b`);

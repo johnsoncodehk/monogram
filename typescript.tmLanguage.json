@@ -1751,7 +1751,7 @@
           "name": "keyword.operator.type.annotation.ts"
         }
       },
-      "end": "(?=[;=},)])",
+      "end": "(?=[;},)]|=(?!>))",
       "patterns": [
         {
           "include": "#type"
@@ -2291,7 +2291,7 @@
           "name": "keyword.operator.type.annotation.ts"
         }
       },
-      "end": "(?=[=;,])|^\\s*(?=if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b",
+      "end": "(?=[;,]|=(?!>))|^\\s*(?=if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b",
       "patterns": [
         {
           "include": "#type"
