@@ -1,0 +1,121 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "yaml",
+  "scopeName": "source.yaml",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#dquote"
+    },
+    {
+      "include": "#squote"
+    },
+    {
+      "include": "#blockscalar"
+    },
+    {
+      "include": "#plain"
+    },
+    {
+      "include": "#directive"
+    },
+    {
+      "include": "#tag"
+    },
+    {
+      "include": "#docstart"
+    },
+    {
+      "include": "#docend"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#alias"
+    },
+    {
+      "include": "#indent"
+    },
+    {
+      "include": "#dedent"
+    },
+    {
+      "include": "#newline"
+    },
+    {
+      "include": "#anchor"
+    }
+  ],
+  "repository": {
+    "docstart": {
+      "name": "punctuation.definition.directives-end.readwrite.yaml",
+      "match": "---"
+    },
+    "docend": {
+      "name": "punctuation.definition.document-end.yaml",
+      "match": "\\.\\.\\."
+    },
+    "directive": {
+      "name": "keyword.other.directive.yaml",
+      "match": "%[^\\n]*"
+    },
+    "comment": {
+      "name": "comment.line.number-sign.yaml",
+      "match": "#[^\\n]*"
+    },
+    "dquote": {
+      "name": "string.quoted.double.yaml",
+      "match": "\"(?:\\\\.|[^\"\\\\])*\""
+    },
+    "squote": {
+      "name": "string.quoted.single.yaml",
+      "match": "'(?:''|[^'])*'"
+    },
+    "anchor": {
+      "name": "entity.name.type.anchor.yaml",
+      "match": "&[^\\s\\[\\]{},]+"
+    },
+    "alias": {
+      "name": "variable.other.alias.yaml",
+      "match": "\\*[^\\s\\[\\]{},]+"
+    },
+    "tag": {
+      "name": "storage.type.tag.yaml",
+      "match": "!(?:<[^>]*>|[^\\s\\[\\]{},]*)"
+    },
+    "blockscalar": {
+      "name": "string.unquoted.block.yaml",
+      "match": "(?!)"
+    },
+    "plain": {
+      "name": "string.unquoted.yaml",
+      "match": "(?:[^\\s\\-?:,\\[\\]{}#&*!|>'\"%@`]|[-?:](?=[^\\s,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\s,\\]}]))*"
+    },
+    "indent": {
+      "name": "variable.other.yaml",
+      "match": "(?!)"
+    },
+    "dedent": {
+      "name": "variable.other.yaml",
+      "match": "(?!)"
+    },
+    "newline": {
+      "name": "variable.other.yaml",
+      "match": "(?!)"
+    },
+    "type-inner": {
+      "patterns": [
+        {
+          "include": "#simple-type"
+        }
+      ]
+    },
+    "punctuation": {
+      "match": ":|\\?|-|\\{|,|\\}|\\[|\\]",
+      "name": "punctuation.yaml"
+    }
+  }
+}

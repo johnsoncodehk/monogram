@@ -19,25 +19,25 @@ const Dedent = token(/(?!)/, {});
 const Newline = token(/(?!)/, {});
 
 // ── Scalars & lexical tokens (declaration order matters: earlier wins) ──
-const DocStart = token(/---/, { scope: 'punctuation.definition.directives-end.yaml' });
-const DocEnd = token(/\.\.\./, { scope: 'punctuation.definition.document-end.yaml' });
-const Comment = token(/#[^\n]*/, { skip: true, scope: 'comment.line.number-sign.yaml' });
-const DQuote = token(/"(?:\\.|[^"\\])*"/, { string: true, scope: 'string.quoted.double.yaml' });
-const SQuote = token(/'(?:''|[^'])*'/, { string: true, scope: 'string.quoted.single.yaml' });
-const Anchor = token(/&[^\s\[\]{},]+/, { scope: 'entity.name.type.anchor.yaml' });
-const Alias = token(/\*[^\s\[\]{},]+/, { scope: 'variable.other.alias.yaml' });
-const Tag = token(/!(?:<[^>]*>|[^\s\[\]{},]*)/, { scope: 'storage.type.tag.yaml' });
-const Directive = token(/%[^\n]*/, { scope: 'keyword.other.directive.yaml' });
+const DocStart = token(/---/, { scope: 'punctuation.definition.directives-end' });
+const DocEnd = token(/\.\.\./, { scope: 'punctuation.definition.document-end' });
+const Comment = token(/#[^\n]*/, { skip: true, scope: 'comment.line.number-sign' });
+const DQuote = token(/"(?:\\.|[^"\\])*"/, { string: true, scope: 'string.quoted.double' });
+const SQuote = token(/'(?:''|[^'])*'/, { string: true, scope: 'string.quoted.single' });
+const Anchor = token(/&[^\s\[\]{},]+/, { scope: 'entity.name.type.anchor' });
+const Alias = token(/\*[^\s\[\]{},]+/, { scope: 'variable.other.alias' });
+const Tag = token(/!(?:<[^>]*>|[^\s\[\]{},]*)/, { scope: 'storage.type.tag' });
+const Directive = token(/%[^\n]*/, { scope: 'keyword.other.directive' });
 // Block scalar (| / >): EMITTED by the lexer's block-scalar mode (placeholder pattern, skipped
 // in the regex loop) so the more-indented content lines arrive as a single token.
-const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block.yaml' });
+const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block' });
 // Plain scalar. Leading char: a non-indicator, OR one of `- ? :` when followed by a non-space
 // (so `-1`, `?x`, `::v` are plain, but `- `, `? `, `: ` stay indicators). Body: any non
 // `:`/`#`/`,`/flow char, plus `:` when NOT followed by space/`,`/`]`/`}` — YAML treats only `: `
 // as a key separator, so `http://x` and `key:val` are single plain scalars.
 const Plain = token(
   /(?:[^\s\-?:,\[\]{}#&*!|>'"%@`]|[-?:](?=[^\s,\[\]{}]))(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}]))*/,
-  { scope: 'string.unquoted.yaml' },
+  { scope: 'string.unquoted' },
 );
 
 const Scalar = rule(() => [DQuote, SQuote, BlockScalar, Plain]);

@@ -28,6 +28,10 @@ export interface ScopeGapAdapter {
   scopeName: string;              // grammar scope, e.g. 'source.ts'
   officialPath: string;          // the official .tmLanguage.json (the #203212 bundle)
   monogramPath: string;          // Monogram's derived .tmLanguage.json
+  // Extra sub-grammar files (scopeName → path) the official/Monogram grammar `include`s — for
+  // MULTI-FILE grammars (e.g. VS Code's YAML is a dispatcher that includes source.yaml.1.2 etc.).
+  officialExtra?: Record<string, string>;
+  monogramExtra?: Record<string, string>;
   loadCorpus: () => { name: string; text: string }[];
   roleOracle: (text: string) => GoldToken[];   // parser → per-token role (the neutral oracle)
   isGradable?: (text: string) => boolean;       // skip inputs the oracle can't judge (default: all)
@@ -45,16 +49,23 @@ function ensureWasm(): Promise<unknown> {
   }
   return wasmReady;
 }
-function loadGrammar(scopeName: string, path: string) {
-  const content = readFileSync(path, 'utf-8');
+// Load a (possibly MULTI-FILE) grammar: `files` maps every scopeName the grammar references
+// (its own + any sub-grammars it `include`s, e.g. YAML's source.yaml.1.2) to a file path.
+function loadGrammarSet(mainScope: string, files: Record<string, string>) {
+  const cache: Record<string, string> = {};
   const reg = new Registry({
     onigLib: Promise.resolve({
       createOnigScanner: (p: string[]) => new OnigScanner(p),
       createOnigString: (s: string) => new OnigString(s),
     }),
-    loadGrammar: async (sn: string) => (sn === scopeName ? parseRawGrammar(content, 'g.json') : null),
+    loadGrammar: async (sn: string) => {
+      const p = files[sn];
+      if (!p) return null;
+      const content = cache[sn] ?? (cache[sn] = readFileSync(p, 'utf-8'));
+      return parseRawGrammar(content, sn + '.json');
+    },
   });
-  return reg.loadGrammar(scopeName);
+  return reg.loadGrammar(mainScope);
 }
 
 interface TmToken { start: number; end: number; scope: string }
@@ -80,8 +91,8 @@ export async function run(adapter: ScopeGapAdapter): Promise<void> {
   if (!existsSync(adapter.officialPath)) { console.error(`Official grammar not found:\n  ${adapter.officialPath}`); process.exit(1); }
   if (!existsSync(adapter.monogramPath)) { console.error(`Monogram grammar not found: ${adapter.monogramPath} (run: node src/cli.ts ${adapter.name}.ts)`); process.exit(1); }
   await ensureWasm();
-  const official = await loadGrammar(adapter.scopeName, adapter.officialPath);
-  const monogram = await loadGrammar(adapter.scopeName, adapter.monogramPath);
+  const official = await loadGrammarSet(adapter.scopeName, { [adapter.scopeName]: adapter.officialPath, ...(adapter.officialExtra ?? {}) });
+  const monogram = await loadGrammarSet(adapter.scopeName, { [adapter.scopeName]: adapter.monogramPath, ...(adapter.monogramExtra ?? {}) });
   if (!official || !monogram) throw new Error('failed to load a grammar');
 
   const corpus = adapter.loadCorpus();

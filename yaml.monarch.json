@@ -1,0 +1,184 @@
+{
+  "defaultToken": "invalid",
+  "tokenPostfix": ".yaml",
+  "ignoreCase": false,
+  "brackets": [],
+  "tokenizer": {
+    "string_dquote_body": [
+      [
+        "[^\"\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_dquote": [
+      {
+        "include": "@string_dquote_body"
+      },
+      [
+        "\"",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_dquoteN": [
+      {
+        "include": "@string_dquote_body"
+      },
+      [
+        "\"",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_squote_body": [
+      [
+        "[^'\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_squote": [
+      {
+        "include": "@string_squote_body"
+      },
+      [
+        "'",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_squoteN": [
+      {
+        "include": "@string_squote_body"
+      },
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "exprBody": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "#.*$",
+        "comment"
+      ],
+      [
+        "\"",
+        {
+          "token": "string",
+          "switchTo": "@string_dquote"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "switchTo": "@string_squote"
+        }
+      ],
+      [
+        "---",
+        {
+          "token": "delimiter",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "\\.\\.\\.",
+        {
+          "token": "delimiter",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "%[^\\n]*",
+        {
+          "token": "keyword",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "&[^\\s\\[\\]{},]+",
+        {
+          "token": "type.identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "\\*[^\\s\\[\\]{},]+",
+        {
+          "token": "variable",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "!(?:<[^>]*>|[^\\s\\[\\]{},]*)",
+        {
+          "token": "keyword",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?!)",
+        {
+          "token": "variable",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?!)",
+        {
+          "token": "variable",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?!)",
+        {
+          "cases": {
+            "@default": {
+              "token": "identifier",
+              "switchTo": "@value"
+            }
+          }
+        }
+      ],
+      [
+        ":|\\?|-|\\{|,|\\}|\\[|\\]",
+        {
+          "token": "delimiter",
+          "switchTo": "@root"
+        }
+      ]
+    ],
+    "root": [
+      {
+        "include": "@exprBody"
+      }
+    ],
+    "value": [
+      {
+        "include": "@exprBody"
+      }
+    ]
+  }
+}
