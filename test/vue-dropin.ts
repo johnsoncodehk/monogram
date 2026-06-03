@@ -70,10 +70,17 @@ function lookup(src: string): (offset: number) => string {
 }
 const makeAt = (src: string) => { const lk = lookup(src); return (text: string, nth = 0) => { let i = -1; for (let k = 0; k <= nth; k++) i = src.indexOf(text, i + 1); return i < 0 ? '__NF__' : lk(i + Math.floor(text.length / 2)); }; };
 
-// Gate Monogram's known-good behaviour: skip the honest `monoGap` cases (reported bugs the
-// derived grammar doesn't model yet — they live in the README table, graded by issue-table.ts,
-// but aren't part of the "clean drop-in" claim).
-const dropinCases = cases.filter((c) => !c.monoGap);
+// EVERY reported case is a drop-in regression gate — run them ALL on the OFFICIAL host grammars,
+// so each is validated on BOTH host axes: vue-issues.ts runs the same cases on MONOGRAM's embedded
+// source.ts/html, this runs them on VS Code's REAL HTML + official source.ts (the published
+// environment). A case that passes on Monogram's host but fails here is a DROP-IN bug — e.g.
+// `generic="…"`, whose type-param value must tokenize under the OFFICIAL TS grammar's repo keys
+// (`#type`/`#comment`), not just Monogram's (`#type-inner`/`#blockcomment`). There are no `monoGap`
+// Vue cases (all reported bugs are solved); a future unsolvable one can't be a clean drop-in, so it
+// would (correctly) fail here and must be handled consciously rather than silently skipped.
+const skippedMonoGap = cases.filter((c) => c.monoGap);
+if (skippedMonoGap.length) console.log(`  ⚠ ${skippedMonoGap.length} monoGap case(s) present — they are STILL run below (every case is a drop-in gate): ${skippedMonoGap.map(c => c.id).join(', ')}`);
+const dropinCases = cases;
 let pass = 0, fail = 0; const failures: string[] = [];
 for (const c of dropinCases) {
   const at = makeAt(c.src);
@@ -85,7 +92,7 @@ console.log('\n═════════════════════�
 console.log('  Monogram Vue as a DROP-IN on VS Code\'s REAL HTML grammars (text.html.derivative');
 console.log('  + text.html.basic) + real source.ts — the published-extension environment.');
 console.log('══════════════════════════════════════════════════════════════════════');
-console.log(`  reported regression cases: ${pass}/${dropinCases.length} pass (${cases.length - dropinCases.length} monoGap cases skipped — see issue-table.ts)`);
+console.log(`  reported regression cases: ${pass}/${dropinCases.length} pass on the OFFICIAL host (same cases vue-issues.ts runs on Monogram's host — every case validated on BOTH axes)`);
 for (const f of failures) console.log(f);
 if (fail > 0) { console.log('\n✗ Monogram Vue is NOT a clean drop-in on the official HTML (a case regressed)'); process.exit(1); }
 console.log('  ✓ directives fire on the official meta.tag, interpolation in text.html.derivative,');
