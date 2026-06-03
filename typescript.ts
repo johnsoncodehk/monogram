@@ -574,6 +574,7 @@ export default defineGrammar({
   // (JSDoc + `///` BEFORE the plain `//`/`/*` forms, matching the official precedence);
   // `punctuation-comma` = the comma separator (same scope, `punctuation.separator.comma.ts`).
   repoAliases: {
+    // Publicly-embedded keys (external grammars `#include` these) — the drop-in API surface.
     type: [{ include: '#type-inner' }],
     comment: [
       { include: '#jsdoc' },
@@ -582,6 +583,30 @@ export default defineGrammar({
       { include: '#blockcomment' },
     ],
     'punctuation-comma': [{ include: '#scope-punctuation-separator-comma' }],
+    // Name alignment: where Monogram already models the SAME construct as the official grammar but
+    // under its own key name, expose the OFFICIAL name too (verified same construct, not "硬追"
+    // internal keys Monogram doesn't have) — so a maintainer reviewing Monogram as a source.ts
+    // replacement sees the repository structure line up. Each is an additive alias to Monogram's
+    // existing region (never overrides). Byte-identical regions: qstring-* / type-parameters.
+    'qstring-double': [{ include: '#string-double' }],
+    'qstring-single': [{ include: '#string-single' }],
+    'type-parameters': [{ include: '#declaration-type-params' }],
+    'type-alias-declaration': [{ include: '#type-declaration' }],
+    'namespace-declaration': [{ include: '#module-declaration' }],
+    'directives': [{ include: '#tripleslash' }],
+    'type-object': [{ include: '#type-object-type' }],
+    'new-expr': [{ include: '#new-expression' }],
+    'cast': [{ include: '#type-cast' }],
+    'regex': [{ include: '#regex-literal' }],
+    'parameter-type-annotation': [{ include: '#param-type-annotation' }],
+    'parameter-name': [{ include: '#declaration-param-name' }],
+    'return-type': [{ include: '#type-annotation-return' }, { include: '#decl-return-type' }],
+    'type-predicate-operator': [{ include: '#is-typekw' }],
+    // NOT aliased: official `enum-declaration`/`interface-declaration` cover the WHOLE declaration
+    // (begin on the keyword), whereas Monogram's `enum-body`/`declaration-body` are only the `{…}`
+    // body — a partial match, so forcing the name would mislead. The rest of the official's ~120
+    // unmatched keys are its internal decomposition (one construct split across many keys) that
+    // Monogram models more coarsely — no corresponding entry to rename.
   },
 
   entry: Program,

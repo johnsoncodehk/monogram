@@ -3263,6 +3263,100 @@
           "include": "#scope-punctuation-separator-comma"
         }
       ]
+    },
+    "qstring-double": {
+      "patterns": [
+        {
+          "include": "#string-double"
+        }
+      ]
+    },
+    "qstring-single": {
+      "patterns": [
+        {
+          "include": "#string-single"
+        }
+      ]
+    },
+    "type-parameters": {
+      "patterns": [
+        {
+          "include": "#declaration-type-params"
+        }
+      ]
+    },
+    "type-alias-declaration": {
+      "patterns": [
+        {
+          "include": "#type-declaration"
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "include": "#tripleslash"
+        }
+      ]
+    },
+    "type-object": {
+      "patterns": [
+        {
+          "include": "#type-object-type"
+        }
+      ]
+    },
+    "new-expr": {
+      "patterns": [
+        {
+          "include": "#new-expression"
+        }
+      ]
+    },
+    "cast": {
+      "patterns": [
+        {
+          "include": "#type-cast"
+        }
+      ]
+    },
+    "regex": {
+      "patterns": [
+        {
+          "include": "#regex-literal"
+        }
+      ]
+    },
+    "parameter-type-annotation": {
+      "patterns": [
+        {
+          "include": "#param-type-annotation"
+        }
+      ]
+    },
+    "parameter-name": {
+      "patterns": [
+        {
+          "include": "#declaration-param-name"
+        }
+      ]
+    },
+    "return-type": {
+      "patterns": [
+        {
+          "include": "#type-annotation-return"
+        },
+        {
+          "include": "#decl-return-type"
+        }
+      ]
+    },
+    "type-predicate-operator": {
+      "patterns": [
+        {
+          "include": "#is-typekw"
+        }
+      ]
     }
   }
 }
