@@ -42,22 +42,21 @@ export default defineGrammar({
   },
   markup: {
     ...htmlMarkup,
-    // Vue `<script setup generic="T extends U, in V = D">`: the value is a TS TYPE-PARAMETER list, not
-    // a string. There is no single repo key for "a bracket-less type-param list" — and even "a type"
-    // is named differently across hosts (Monogram's source.ts has `#type-inner`, VS Code's OFFICIAL
-    // source.ts has `#type`). Since the published Vue grammar embeds whichever source.ts the editor
-    // ships, we hand-roll the list exactly like Volar's own grammar does — literal matches for the
-    // variance modifiers / default `=` / comma (host-independent) plus type & comment includes that
-    // list BOTH host keys (an unresolved `#include` silently no-ops, so it tokenizes as TS under
-    // EITHER source.ts). Vue-only (extends html.ts's on*/style embeds; doesn't touch the HTML grammar).
+    // Vue `<script setup generic="T, U extends V">`: the value is a TS TYPE-PARAMETER list, not a
+    // string. We tokenize it EXACTLY as Volar's hand-written `vue-directives-generic-attr` rule does
+    // — through source.ts's PUBLIC repository keys (`#comment`, `#type`, `#punctuation-comma`) plus
+    // the two literal matches it inlines (the variance keyword `extends|in|out`, and a default-`=`
+    // that isn't `=>`). This is a true drop-in: those official key names now resolve in Monogram's
+    // own source.ts (via typescript.ts's `repoAliases`) AND in VS Code's official source.ts, so the
+    // SAME vue grammar runs on either host (proven by test/vue-dropin.ts). Vue-only, so it extends
+    // html.ts's `on*`/`style` embeds rather than polluting the HTML grammar.
     attributeEmbed: [...(htmlMarkup.attributeEmbed ?? []), {
-      namePattern: 'generic', embed: 'source.ts', valuePatterns: [
-        { include: 'source.ts#comment' },                                       // official TS
-        { include: 'source.ts#blockcomment' }, { include: 'source.ts#linecomment' }, // Monogram TS
+      namePattern: 'generic', embed: 'source.ts',
+      valuePatterns: [
+        { include: 'source.ts#comment' },
         { name: 'storage.modifier.ts', match: '(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(extends|in|out)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))' },
-        { include: 'source.ts#type' },                                          // official TS
-        { include: 'source.ts#type-inner' },                                    // Monogram TS
-        { name: 'punctuation.separator.comma.ts', match: ',' },
+        { include: 'source.ts#type' },
+        { include: 'source.ts#punctuation-comma' },
         { name: 'keyword.operator.assignment.ts', match: '(=)(?!>)' },
       ],
     }],

@@ -52,21 +52,6 @@ export interface RawEmbed {
 }
 
 /**
- * A raw TextMate pattern, passed through verbatim into the generated grammar. Used where a markup
- * grammar legitimately knows the SHAPE of an embedded sub-language fragment and must hand-roll the
- * pattern list (as Volar's hand-written Vue grammar does for `generic=`): the GENERATOR stays
- * agnostic and just emits the DATA. A pattern is either an `include` (which silently no-ops if the
- * referenced key is absent — so listing both a Monogram key and the official-TS key resolves to
- * whichever host grammar is loaded) or a literal `match`/`name` (host-independent).
- */
-export interface RawTmPattern {
-  include?: string;
-  match?: string;
-  name?: string;
-  captures?: Record<string, { name?: string }>;
-}
-
-/**
  * Declarative markup-mode tokenization (opt-in, e.g. HTML/Vue). When a grammar
  * declares `markup`, the lexer runs a text / tag / raw-text STATE MACHINE instead
  * of the pure token stream: text between tags is one TEXT token (whitespace and
@@ -101,15 +86,14 @@ export interface MarkupConfig {
   // SCOPE — e.g. an inline `style="…"` carries a CSS *declaration list* (no selector/braces), so it
   // embeds scope `source.css` but is tokenized by `source.css#rule-list-innards` (property:value),
   // not the stylesheet root (which would mis-read `color:red` as a selector). Defaults to `embed`.
-  // `valuePatterns` (optional) replaces the single `include` with a HAND-ROLLED pattern list for the
-  // embedded value — for when no single include can tokenize it across host grammars. Vue `<script
-  // setup generic="T extends U, in V = D">` carries a TS type-PARAMETER list, and the repo key for
-  // "a type" differs between Monogram's source.ts (`#type-inner`) and VS Code's OFFICIAL source.ts
-  // (`#type`); one include satisfies only one host. So vue.ts supplies the official grammar's exact
-  // list — literal `match`es for `extends`/`in`/`out`/`=`/`,` (host-agnostic) plus type/comment
-  // includes that list BOTH host keys (an unresolved `#include` silently no-ops in vscode-textmate,
-  // so the value tokenizes as TS under EITHER source.ts). When set, `include` is ignored for the attr.
-  attributeEmbed?: { namePattern: string; embed: string; include?: string; valuePatterns?: RawTmPattern[] }[];
+  // `valuePatterns` (optional) overrides the single `include` with an EXPLICIT list of TextMate
+  // patterns to tokenize the value by — for a value that is not one homogeneous embed but a small
+  // grammar of its own (Vue `generic="…"` is a TS type-PARAMETER list: comments + a variance
+  // keyword + types + commas + `=` defaults). Each entry is a plain fragment ({include} or
+  // {name,match}); when present it REPLACES `include` inside the value span (the quote bounding is
+  // unchanged). Lets an embed mirror a hand-written grammar's value rule verbatim (e.g. Volar's
+  // `vue-directives-generic-attr`) using the host's PUBLIC repository keys.
+  attributeEmbed?: { namePattern: string; embed: string; include?: string; valuePatterns?: RepoAlias[] }[];
   // Elements whose content is raw (CDATA-like): after the start tag's `tagClose`,
   // everything up to the matching `tagOpen+closeMarker+name` is one `token`. `embed`
   // optionally maps a tag → the grammar scope to embed in its body (e.g. Vue SFC blocks:
@@ -202,6 +186,17 @@ export interface MarkupInject {
   };
 }
 
+/** One pattern fragment in a `repoAliases` entry (see CstGrammar.repoAliases). Either a reuse
+ *  `include` of an existing internal repository key (the preferred, additive form) or an inline
+ *  `match` with a scope `name` (for the literal sub-patterns a hand-written grammar inlines —
+ *  e.g. a variance keyword or `=` operator). A plain TextMate-rule subset; gen-tm passes it through
+ *  verbatim, so it stays language-agnostic (the engine never inspects the strings). */
+export interface RepoAlias {
+  include?: string;   // e.g. '#type-inner'  (reuse an existing internal key)
+  name?: string;      // scope for an inline match
+  match?: string;     // inline pattern
+}
+
 export interface PrecOperator {
   value: string;
   position: 'infix' | 'prefix' | 'postfix';
@@ -258,6 +253,20 @@ export interface CstGrammar {
   // text.html.derivative this way — the embedded-fragment scope Vue/markdown/pug inject onto;
   // VS Code ships it as a separate grammar for the same reason. gen-tm emits one file each.
   aliasScopes?: { scope: string; file: string }[];
+  // Repository-API ALIASES: official-grammar repository KEY NAMES → a pattern list that reuses
+  // THIS grammar's own internal structural key(s). For Monogram's source.ts to be a true
+  // repository-level DROP-IN for VS Code's official TS grammar, the official key NAMES that
+  // external grammars `#include` (`source.ts#type`, `source.ts#comment`, `source.ts#punctuation-comma`,
+  // …) must also RESOLVE in Monogram's grammar — an unresolved `#include` silently no-ops. gen-tm
+  // emits each entry as an ADDITIVE `repository[officialKey] = { patterns: <these> }`, REUSING
+  // Monogram's existing rules (e.g. `type` → `[{include:'#type-inner'}]`) rather than renaming
+  // internal keys — so Monogram's own references / tokenization are undisturbed; the official key
+  // is just a second NAME for the same patterns. An entry whose key already exists is skipped (a
+  // real key like `expression` already matches by name and is never clobbered). The KEY NAMES are
+  // language-specific DATA and live in the grammar definition (typescript.ts), NEVER in gen-tm —
+  // which keeps the engine language-agnostic. Each pattern is a plain TextMate fragment: an
+  // `{ include: '#internal-key' }` (the preferred reuse form) or an inline `{ name, match }`.
+  repoAliases?: Record<string, RepoAlias[]>;
   // VS Code extension `contributes` data — packaging info a consumer needs to wire the
   // generated grammars into an editor (and to make Monogram's Vue a true drop-in for
   // vuejs/language-tools' files). All DATA the grammar declares; gen emits a pasteable

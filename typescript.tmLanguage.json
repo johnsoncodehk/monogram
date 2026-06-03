@@ -3233,6 +3233,36 @@
           "include": "#comparison"
         }
       ]
+    },
+    "type": {
+      "patterns": [
+        {
+          "include": "#type-inner"
+        }
+      ]
+    },
+    "comment": {
+      "patterns": [
+        {
+          "include": "#jsdoc"
+        },
+        {
+          "include": "#tripleslash"
+        },
+        {
+          "include": "#linecomment"
+        },
+        {
+          "include": "#blockcomment"
+        }
+      ]
+    },
+    "punctuation-comma": {
+      "patterns": [
+        {
+          "include": "#scope-punctuation-separator-comma"
+        }
+      ]
     }
   }
 }

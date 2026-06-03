@@ -557,6 +557,33 @@ export default defineGrammar({
     'support.variable.property': jsScopes['support.variable.property'],
   },
 
+  // Repository-API ALIASES — the part that makes Monogram's source.ts a REPOSITORY-LEVEL drop-in
+  // for VS Code's official TypeScript grammar. External grammars (Vue, Markdown, MDX, …) `#include`
+  // the official's repository keys BY NAME (`source.ts#type`, `source.ts#comment`,
+  // `source.ts#punctuation-comma`, …). Monogram structures its repository under its OWN internal
+  // names (`#type-inner`, `#linecomment`/`#blockcomment`, `#scope-punctuation-separator-comma`), so
+  // those official names wouldn't resolve and an `#include` would silently no-op. These aliases add
+  // the official NAME as a thin re-export of Monogram's equivalent internal key(s) — additive, so
+  // Monogram's own references and emitted tokenization are completely unchanged (verified: the alias
+  // tokenizes identically to the official key — see test/ts-repo-compat.ts and the vue dual-host
+  // proof). The key NAMES are TypeScript-specific DATA and belong HERE (the grammar definition may
+  // know TS — it already carries the `scopes` map); gen-tm only copies the patterns through, so the
+  // engine stays language-agnostic. `expression` already matches the official by name, so it needs
+  // no alias (and an existing key is never overridden). Each entry mirrors what the official key
+  // produces: `type` = the full inner-type pattern list; `comment` = JSDoc/triple-slash/line/block
+  // (JSDoc + `///` BEFORE the plain `//`/`/*` forms, matching the official precedence);
+  // `punctuation-comma` = the comma separator (same scope, `punctuation.separator.comma.ts`).
+  repoAliases: {
+    type: [{ include: '#type-inner' }],
+    comment: [
+      { include: '#jsdoc' },
+      { include: '#tripleslash' },
+      { include: '#linecomment' },
+      { include: '#blockcomment' },
+    ],
+    'punctuation-comma': [{ include: '#scope-punctuation-separator-comma' }],
+  },
+
   entry: Program,
   // The expression rule — lets gen-tm derive a `#expression` sub-grammar (used by
   // expression-only embeds like Vue's `{{ }}`, where statements are invalid).

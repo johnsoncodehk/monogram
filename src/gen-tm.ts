@@ -3062,18 +3062,21 @@ function detectConstructorKeywords(
 // whose closing quote sits on a later line. `str` (the quote-punctuation scopes) is optional: omit
 // it → quotes left unscoped (Vue passes it from `d.valueString`; HTML from the string-punct scopes).
 // `assign` arrives pre-escaped; `quotes` raw; `quoteCc` is the char-class-escaped quote set.
+// `valuePatterns` (optional) overrides the single `include` with an explicit pattern list (Vue
+// `generic="…"` — a TS type-PARAMETER list: comments + variance keyword + types + commas + `=`,
+// mirroring Volar's hand-written rule via the host's PUBLIC repository keys). When given it REPLACES
+// `[{ include }]` everywhere the value is tokenized; the quote bounding is unchanged.
 function embedValuePatterns(
-  embed: string, include: string | TmPattern[], eqScope: string,
+  embed: string, include: string, eqScope: string,
   assign: string, quotes: string[], quoteCc: string,
   str?: { begin: string; end: string },
+  valuePatterns?: (TmPattern | { include: string })[],
 ): TmPattern[] {
-  // The value tokenizers: a single `#include` (the common case) OR a hand-rolled pattern LIST (when
-  // one include can't tokenize the value across host grammars — see Vue `generic=`, MarkupConfig).
-  const valPats: TmPattern[] = Array.isArray(include) ? include : [{ include }];
+  const valuePats: (TmPattern | { include: string })[] = valuePatterns ?? [{ include }];
   const valueCap = (q: string): TmPattern => {
     const captures: Record<string, TmCapture> = {
       '1': { name: eqScope },
-      '3': { name: embed, patterns: valPats },
+      '3': { name: embed, patterns: valuePats },
     };
     if (str) { captures['2'] = { name: str.begin }; captures['4'] = { name: str.end }; }
     return { match: `(${assign})\\s*(${escapeRegex(q)})([^${escapeForCharClass(q)}]*)(${escapeRegex(q)})`, captures };
@@ -3085,7 +3088,7 @@ function embedValuePatterns(
       beginCaptures: str ? { '1': { name: eqScope }, '2': { name: str.begin } } : { '1': { name: eqScope } },
       end: `\\2`,
       ...(str ? { endCaptures: { '0': { name: str.end } } } : {}),
-      contentName: embed, patterns: valPats,
+      contentName: embed, patterns: valuePats,
     },
   ];
 }
@@ -3313,7 +3316,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     begin: `(${spec.namePattern})(?![\\w:.-])`,
     beginCaptures: { '1': { name: sAttr } },
     end: `(?=[\\s${escapeForCharClass(m.tagClose)}${escapeForCharClass(m.closeMarker ?? '/')}])`,
-    patterns: embedValuePatterns(spec.embed, spec.valuePatterns ?? spec.include ?? spec.embed, sEq, assign, attrQuotes, quoteCc, { begin: sStrPunctB, end: sStrPunctE }),
+    patterns: embedValuePatterns(spec.embed, spec.include ?? spec.embed, sEq, assign, attrQuotes, quoteCc, { begin: sStrPunctB, end: sStrPunctE }, spec.valuePatterns),
   }));
   repository['attribute'] = {
     patterns: [
@@ -3333,6 +3336,10 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   // Repo-only — NOT pushed to `top`, so they fire via injection, not the main SFC parse.
   const injectParts = buildMarkupInjectParts(grammar, scopeName);
   if (injectParts) Object.assign(repository, injectParts.repo);
+
+  // Drop-in repository aliases (official key names → reuse internal keys). Additive; markup
+  // grammars may also expose them (none today), so the path is symmetric with the token-stream one.
+  applyRepoAliases(grammar, repository);
 
   return {
     $schema: 'https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json',
@@ -3609,6 +3616,22 @@ function deriveExpressionEntry(grammar: CstGrammar, orderedPatterns: { include: 
   // Put it first so a block `{` beats the bare-curly punctuation match.
   if (repository['code-block']) exprPatterns.unshift({ include: '#code-block' });
   repository['expression'] = { patterns: exprPatterns };
+}
+
+// Repository-API ALIASES (drop-in): the grammar may declare `repoAliases` mapping an OFFICIAL
+// grammar's repository KEY NAME → a pattern list that reuses THIS grammar's own internal keys, so
+// the official name (`source.ts#type`, `#comment`, `#punctuation-comma`, …) resolves in Monogram
+// too and external `#include`s don't no-op. Additive: an entry whose key already exists is SKIPPED
+// (a real matching key like `expression` is never clobbered), and existing entries / tokenization
+// are untouched. The key NAMES are language DATA in the grammar definition — gen-tm only copies the
+// patterns through, so the engine stays language-agnostic (a grammar without `repoAliases` is
+// unaffected; the agnostic-test grammars declare none, so no TS names leak into the engine).
+function applyRepoAliases(grammar: CstGrammar, repository: Record<string, TmPattern>): void {
+  if (!grammar.repoAliases) return;
+  for (const [key, patterns] of Object.entries(grammar.repoAliases)) {
+    if (key in repository) continue;   // never override an existing (already-matching) key
+    repository[key] = { patterns: patterns.map(p => ({ ...p })) };
+  }
 }
 
 export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGrammar {
@@ -5768,6 +5791,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // top-level `patterns` (orderedPatterns / $self) are left untouched, so standalone
   // tokenization is unchanged — `#expression` is inert unless something includes it.
   if (grammar.expressionRule) deriveExpressionEntry(grammar, orderedPatterns, repository);
+
+  // Drop-in repository aliases (official key names → reuse internal keys). Additive; runs last
+  // so `#expression` (a real key) is in place before an alias might reference it.
+  applyRepoAliases(grammar, repository);
 
   return {
     $schema: 'https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json',

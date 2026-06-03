@@ -326,6 +326,7 @@ interface GrammarConfig {
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
   expression?: RuleRef;   // the rule that produces an EXPRESSION; enables a derived `#expression` sub-grammar (expression-only embeds)
   aliasScopes?: { scope: string; file: string }[];  // extra grammars re-exposing this one under another scopeName (e.g. text.html.derivative)
+  repoAliases?: Record<string, import('./types.ts').RepoAlias[]>;  // official repo KEY NAME → patterns reusing this grammar's internal keys (drop-in API; see CstGrammar.repoAliases)
   manifest?: import('./types.ts').ContributesManifest;  // VS Code `contributes` packaging (emits a pasteable snippet)
 }
 
@@ -392,5 +393,5 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     }
   }
 
-  return { name: config.name, scopeName: config.scopeName, tokens, precs, rules, scopeOverrides, markup: config.markup, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, manifest: config.manifest };
+  return { name: config.name, scopeName: config.scopeName, tokens, precs, rules, scopeOverrides, markup: config.markup, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, repoAliases: config.repoAliases, manifest: config.manifest };
 }
