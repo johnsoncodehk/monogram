@@ -6243,8 +6243,45 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // `import defer from "m"`).
       const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k) && !ctxModSet.has(k) && !contextDeclaredKws.has(k) && !phaseModifierKws.has(k));
       if (globalKws.length > 0) {
+        // A `support.class` group names BUILTIN CLASS/TYPE identifiers (Object, Array,
+        // Promise, …) — but, unlike a true keyword, those words also appear as runtime
+        // VALUES: `Object.keys(x)` (member-access LHS), `Object(x)` (call). tsc/official
+        // scope a builtin in value position as a value, NOT a class, so the unconditional
+        // flat match over-paints it. Guard the flat match with a NEGATIVE lookahead that
+        // makes it ABSTAIN when the builtin is immediately followed by a member accessor
+        // (`.`/`?.`) or a call `(`; the word then falls through to the already-derived
+        // value rules (#method-call/#property-access for the `.member`, #function-call for
+        // a direct call, #ident for the bare LHS) — exactly as a non-builtin capitalised
+        // name does. TYPE positions (annotation/heritage/type-args) reach the builtin
+        // through `<`/whitespace, never `.`/`(`, so they still hit the flat match and keep
+        // `support.class`; member-LHS/call positions are never type positions, so this is
+        // type-position-safe by construction. Convention-driven (keys on the `support.class`
+        // scope name like the storage.type.*/`*.extends` handling above), not on any word.
+        // Value-position openers are the member accessors (`.`/`?.`) and the call `(`.
+        // Detect each from the grammar's own punctuation data (its scope map / accessor
+        // detection) rather than assuming the JS spellings: `.` via accessor detection
+        // OR a `punctuation.accessor` scope entry, `?.` via its `punctuation.accessor`
+        // (optional) scope entry, `(` via its `punctuation.bracket`/round scope entry.
+        const accessorChar = (lit: string): string | undefined => {
+          const sc = getScope(scopeOverrides, lit);
+          return sc && /(^|\.)accessor(\.|$)/.test(sc) ? escapeRegex(lit) : undefined;
+        };
+        const callOpener = (): string | undefined => {
+          for (const [lit, scopes] of scopeOverrides)
+            if (/(^|\.)bracket\.round(\.|$)/.test(scopes[0] ?? '') && /[([{]/.test(lit)) return escapeRegex(lit);
+          return undefined;
+        };
+        const valuePosOpeners = [
+          propAccess.hasDot ? '\\.' : accessorChar('.'),
+          accessorChar('?.'),
+          callOpener(),
+        ].filter((x): x is string => !!x);
+        const isBuiltinClass = scope === 'support.class' || scope.startsWith('support.class.');
+        const valueAbstain = isBuiltinClass && valuePosOpeners.length > 0
+          ? `(?!\\s*(?:${valuePosOpeners.join('|')}))`
+          : '';
         repository[key] = {
-          match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b`,
+          match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b${valueAbstain}`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${key}` });

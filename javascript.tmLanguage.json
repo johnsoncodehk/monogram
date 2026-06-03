@@ -1721,7 +1721,7 @@
       "name": "keyword.control.from.js"
     },
     "scope-support-class": {
-      "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b",
+      "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b(?!\\s*(?:\\.|\\?\\.|\\())",
       "name": "support.class.js"
     },
     "scope-support-variable": {

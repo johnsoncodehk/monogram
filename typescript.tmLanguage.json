@@ -2588,7 +2588,7 @@
       "name": "keyword.control.from.ts"
     },
     "scope-support-class": {
-      "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b",
+      "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b(?!\\s*(?:\\.|\\?\\.|\\())",
       "name": "support.class.ts"
     },
     "scope-storage-type-function-arrow": {
