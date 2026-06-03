@@ -118,6 +118,9 @@
       "include": "#import-export-all"
     },
     {
+      "include": "#import-default-binding"
+    },
+    {
       "include": "#is-typekw"
     },
     {
@@ -2757,6 +2760,17 @@
         }
       }
     },
+    "import-default-binding": {
+      "match": "\\b(import)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*(?:(?:from)\\b|,))",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.tsx"
+        },
+        "2": {
+          "name": "variable.other.readwrite.tsx"
+        }
+      }
+    },
     "function-call": {
       "match": "((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*\\()",
       "captures": {
@@ -3440,6 +3454,9 @@
         },
         {
           "include": "#import-export-all"
+        },
+        {
+          "include": "#import-default-binding"
         },
         {
           "include": "#is-typekw"

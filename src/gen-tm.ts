@@ -4741,6 +4741,84 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     topPatterns.push({ include: '#import-export-all' });
   }
 
+  // ── 4a-bis. Default-import binding name → variable.other.readwrite ──
+  // The identifier directly after an import keyword that is immediately followed
+  // by the module-source connector (`import X from "m"`) — or a `,` that begins a
+  // mixed clause (`import X, { a } from "m"`) — is a BOUND NAME (the default
+  // import), exactly like a `const` binding, NOT a type/keyword. The catch-all
+  // already scopes a plain identifier `variable.other.readwrite`, but a *contextual
+  // keyword* sitting in that slot (e.g. `import type from "m"`, where `type` is the
+  // default binding literally named `type`, tsc isTypeOnly=false) is otherwise
+  // claimed by its own keyword/declaration rule — the type-alias `type <name>`
+  // region fires on `type from`. This rule restores the binding role.
+  //
+  // Fully derived, no hardcoded words:
+  //   • trigger keywords = the import keywords (scope keyword.control.import*) whose
+  //     rule places a bare identifier directly after them — directly, or through a
+  //     ref whose first alternative starts with the identifier token (the default
+  //     branch of an import-clause rule). Keywords that only ever take `{…}`/`*`
+  //     (no default form) are excluded.
+  //   • module-source connector = the keyword(s) scoped keyword.control.from.
+  // The connector lookahead is the disambiguator the grammar itself uses: a default
+  // binding is followed by the source connector or a `,`; a *modifier* keyword
+  // (`import type X from`) is followed by the clause identifier instead, so the
+  // modifier is left untouched (its own keyword/declaration rule still paints it).
+  // Leftmost-match makes this win over the later `type <name>` region (which begins
+  // one token further right), and the order rank (below) wins the position-0 tie
+  // over the flat import-keyword / storage-keyword matches.
+  //
+  // GATED on the collision actually being possible: the only reason this is needed
+  // is that a DECLARATION keyword (one with its own `keyword <name>` region) is also
+  // a NON-reserved word, so it can legally stand as the bound default-import name and
+  // its region would otherwise fire inside the import (TS `type`/`interface`/…). A
+  // language whose declaration keywords are all reserved (plain JS: `function`/`class`)
+  // has no such word in the binding slot — a plain identifier already gets readwrite
+  // from the catch-all — so the rule is not emitted and the output stays byte-identical.
+  const declReservedWords = collectReservedWords(grammar);
+  const hasContextualDeclKeyword = declarations.some(d => !declReservedWords.has(d.keyword));
+  const defaultBindImportKws = new Set<string>();
+  {
+    // True when the rule-ref `b` is the identifier token itself, or a rule whose
+    // first alternative starts with it (`ruleStartsWithIdent` returns true for the
+    // token name directly, so this covers both `import Ident` and `import ImportClause`).
+    const startsWithIdentClause = (refName: string): boolean =>
+      identToken ? ruleStartsWithIdent(refName, identToken.name, grammar.rules) : false;
+    const walk = (e: RuleExpr | undefined): void => {
+      if (!e) return;
+      for (const alt of expandAlts(e)) {
+        for (let i = 0; i < alt.length - 1; i++) {
+          const a = alt[i], b = alt[i + 1];
+          if (a.type !== 'literal' || !importExportKws.has(a.value)) continue;
+          // A bare identifier directly after the keyword, or reached through the
+          // next rule-ref whose first alternative is the identifier token.
+          if (b.type === 'ref' && startsWithIdentClause(b.name)) {
+            defaultBindImportKws.add(a.value);
+          }
+        }
+        for (const item of alt) {
+          if (item.type === 'quantifier' || item.type === 'group') walk(item.body);
+          else if (item.type === 'sep') walk(item.element);
+        }
+      }
+    };
+    for (const rule of grammar.rules) walk(rule.body);
+  }
+  const moduleSourceKws = [...scopeOverrides]
+    .filter(([, scopes]) => scopes.some(s => /(^|\.)keyword\.control\.from\b/.test(s)))
+    .map(([lit]) => lit);
+  if (hasContextualDeclKeyword && defaultBindImportKws.size > 0 && moduleSourceKws.length > 0 && identToken) {
+    const kwScope = getScope(scopeOverrides, [...defaultBindImportKws][0]) ?? 'keyword.control.import';
+    const fromAlt = moduleSourceKws.map(escapeRegex).join('|');
+    repository['import-default-binding'] = {
+      match: `\\b(${[...defaultBindImportKws].map(escapeRegex).join('|')})\\s+(${identPattern})(?=\\s*(?:(?:${fromAlt})\\b|,))`,
+      captures: {
+        '1': { name: `${kwScope}.${langName}` },
+        '2': { name: `variable.other.readwrite.${langName}` },
+      },
+    };
+    topPatterns.push({ include: '#import-default-binding' });
+  }
+
   // ── 4b. Function call detection ──
   const hasCallExpr = detectCallExpression(grammar);
   if (hasCallExpr) {
@@ -5453,6 +5531,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // import/export namespace `*` must beat both the import/export keyword group
     // (which would consume the keyword alone) and the arithmetic-operator match.
     if (key === 'import-export-all') return 2;
+    // A default-import binding name (`import X from`, `import type from`) must beat
+    // the flat import keyword group AND the `type <name>` declaration/storage match
+    // for the contextual-keyword-as-binding case; leftmost-match handles the region
+    // one token to the right, this rank wins the position-0 tie.
+    if (key === 'import-default-binding') return 2;
     if (scope.includes('constant.numeric')) return 3; // stable sort preserves DSL token order
     if (scope.includes('keyword.operator') && key.startsWith('scope-')) return 4;
     if (scope.includes('keyword.control')) return 5;

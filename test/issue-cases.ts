@@ -723,18 +723,22 @@ export const tests: TestCase[] = [
     ],
   },
   // `import type from "./type"` is a DEFAULT import whose binding is named `type` (tsc:
-  // isTypeOnly=false, importClause.name=`type`) — so `type` should be a variable. A PROVEN both-miss
-  // at the agnostic ceiling: Monogram's PARSER accepts it (the CFG distinguishes the binding), but
-  // the pattern-highlighter's type-alias DECLARATION region fires on the `type <name>` shape — here
-  // `type from`, with `from` a perfectly valid contextual alias name (`type from = X` is a real type
-  // alias). The only TM disambiguator is the preceding `import`, i.e. a negative lookbehind hardcoding
-  // that one keyword — which the agnostic generator can't emit (it has no parse-context notion of
-  // "statement position", and `import` is just data). The official hardcodes `import type` and STILL
-  // misses this (scopes `type`→keyword.control.type); Monogram mis-fires its type-alias region
-  // (`type`→storage.type.type). Different wrong answers, same miss.
+  // isTypeOnly=false, importClause.name=`type`) — so `type` should be a variable. Monogram's
+  // PARSER already distinguishes it (the CFG admits `type` as the default binding), and the
+  // DERIVED highlighter now scopes it variable.other too: gen-tm emits an `import-default-binding`
+  // rule — the identifier directly after an import keyword that is immediately followed by the
+  // module-source connector (or a `,`) is a bound name, exactly like a `const` binding. All three
+  // ingredients are read from the grammar, not hardcoded: the import keyword(s) (scope
+  // keyword.control.import*, placing a bare identifier after them), the `from` connector (scope
+  // keyword.control.from), and the disambiguator (a default binding is FOLLOWED by the connector,
+  // whereas the `type` MODIFIER in `import type X from` is followed by the clause identifier — so
+  // `import type { A }` / `import type X` / `import type * as ns` keep `type` as the modifier).
+  // The rule is gated on the language having a contextual (non-reserved) declaration keyword that
+  // can stand in the binding slot — plain JS has none, so its grammar stays byte-identical. The
+  // official hardcodes `import type` and STILL misses this (scopes `type`→keyword.control.type);
+  // Monogram now gets it right (`type`→variable.other.readwrite).
   {
     label: '#950: default import named `type` — the binding is a variable, not the `type` keyword',
-    monoGap: true,
     input: `import type from "./type";`,
     checks: [
       { text: 'type', scope: 'variable.other' },
