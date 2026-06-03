@@ -196,6 +196,27 @@ export interface RepoAlias {
   match?: string;     // inline pattern
 }
 
+/**
+ * Opt-in indentation-sensitive tokenization (YAML / Python-like). When a grammar declares
+ * `indent`, the lexer tracks an indentation STACK and, at each block-context line start,
+ * emits INDENT / DEDENT / NEWLINE tokens by comparing the line's leading-space column to the
+ * stack top (deeper → INDENT + push; shallower → DEDENT per popped level; equal → NEWLINE
+ * sibling-separator). Indentation is SUSPENDED inside flow delimiters (`[ ] { }`) — newlines
+ * there are insignificant — via a flow-depth counter. Blank lines and comment-only lines do
+ * not affect indentation. The three tokens are emitted by the engine (not matched by a
+ * regex), exactly like markup's text token, so the grammar declares them with placeholder
+ * patterns and names them here. ABSENT for token-stream languages → tokenization is
+ * byte-identical (the whole mechanism is dormant, like `markup`).
+ */
+export interface IndentConfig {
+  indentToken: string;    // token TYPE emitted when a line's column exceeds the stack top
+  dedentToken: string;    // token TYPE emitted (once per popped level) when it drops below
+  newlineToken: string;   // token TYPE emitted at a same-column line boundary (sibling separator)
+  flowOpen?: string[];    // punctuation that suspends indentation while open (e.g. ['[', '{'])
+  flowClose?: string[];   // matching closers (e.g. [']', '}'])
+  comment?: string;       // line-comment introducer ignored for indentation (e.g. '#')
+}
+
 export interface PrecOperator {
   value: string;
   position: 'infix' | 'prefix' | 'postfix';
@@ -246,6 +267,7 @@ export interface CstGrammar {
   name?: string;
   scopeName?: string;  // declared TextMate scope name (e.g. source.ts); its suffix drives every scope's language tag
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue); absent for token-stream languages
+  indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML); absent → byte-identical token stream
   expressionRule?: string;  // name of the rule that produces an EXPRESSION; lets gen-tm derive a `#expression` sub-grammar (for expression-only embeds, e.g. Vue `{{ }}`)
   // Extra TextMate grammars that just RE-EXPOSE this one under another scopeName (thin
   // `{scopeName, patterns:[{include: <this.scopeName>}]}` wrappers). HTML declares
