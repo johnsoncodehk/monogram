@@ -42,6 +42,11 @@ export default defineGrammar({
   },
   markup: {
     ...htmlMarkup,
+    // Vue `<script setup generic="T, U extends V">`: the value is a TS TYPE-PARAMETER list, not a
+    // string. Embed it as source.ts#type-inner (T/U → entity.name.type, `extends`/`in`/`out` → the
+    // variance keyword, `,` → separator) — Vue-only, so it extends html.ts's `on*`/`style` embeds
+    // rather than polluting the HTML grammar. The bracket-less list is exactly #type-inner's shape.
+    attributeEmbed: [...(htmlMarkup.attributeEmbed ?? []), { namePattern: 'generic', embed: 'source.ts', include: 'source.ts#type-inner' }],
     rawText: {
       tags: ['template', 'script', 'style'],
       token: 'RawText',

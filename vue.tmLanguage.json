@@ -1570,6 +1570,84 @@
           ]
         },
         {
+          "begin": "(generic)(?![\\w:.-])",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.other.attribute-name.vue"
+            }
+          },
+          "end": "(?=[\\s>/])",
+          "patterns": [
+            {
+              "match": "(=)\\s*(\")([^\"]*)(\")",
+              "captures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.vue"
+                },
+                "2": {
+                  "name": "punctuation.definition.string.begin.vue"
+                },
+                "3": {
+                  "name": "source.ts",
+                  "patterns": [
+                    {
+                      "include": "source.ts#type-inner"
+                    }
+                  ]
+                },
+                "4": {
+                  "name": "punctuation.definition.string.end.vue"
+                }
+              }
+            },
+            {
+              "match": "(=)\\s*(')([^']*)(')",
+              "captures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.vue"
+                },
+                "2": {
+                  "name": "punctuation.definition.string.begin.vue"
+                },
+                "3": {
+                  "name": "source.ts",
+                  "patterns": [
+                    {
+                      "include": "source.ts#type-inner"
+                    }
+                  ]
+                },
+                "4": {
+                  "name": "punctuation.definition.string.end.vue"
+                }
+              }
+            },
+            {
+              "begin": "(=)\\s*([\"'])",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.vue"
+                },
+                "2": {
+                  "name": "punctuation.definition.string.begin.vue"
+                }
+              },
+              "end": "\\2",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.string.end.vue"
+                }
+              },
+              "contentName": "source.ts",
+              "patterns": [
+                {
+                  "include": "source.ts#type-inner"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "match": "([a-zA-Z][\\w:.-]*)(?=\\s*=)",
           "name": "entity.other.attribute-name.vue"
         },
