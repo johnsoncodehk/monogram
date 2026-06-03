@@ -19,7 +19,7 @@ Per-grammar alignment vs the **official parser** as the neutral oracle (`node te
 | TypeScript | 97.7% · 97.1% | 99.4% vs 99.0% |
 | JavaScript | 97.3% · 92.2% | 87.9% vs 83.6% |
 | JSX | 100.0% · 97.1% | 94.6% vs 92.9% |
-| TSX | 99.4% · 96.7% | 95.0% vs 95.1% |
+| TSX | 99.4% · 96.7% | 95.3% vs 95.1% |
 | HTML | 84.3% · 77.9% | 100.0% vs 97.6% |
 | YAML | 83.0% · 63.1% | 91.8% vs 89.7% |
 | Vue | — | 98.8% vs 98.0% |

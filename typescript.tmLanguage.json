@@ -1242,6 +1242,36 @@
         }
       ]
     },
+    "type-bracket": {
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.ts"
+        }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.ts"
+        }
+      },
+      "patterns": [
+        {
+          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\s*:)",
+          "captures": {
+            "1": {
+              "name": "variable.parameter.ts"
+            },
+            "2": {
+              "name": "keyword.operator.type.annotation.ts"
+            }
+          }
+        },
+        {
+          "include": "#type"
+        }
+      ]
+    },
     "type-object-member": {
       "name": "meta.type.annotation.member.ts",
       "begin": "(#?(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\??)(\\s*:)",
@@ -1332,6 +1362,9 @@
         }
       },
       "patterns": [
+        {
+          "include": "#member-initializer-object"
+        },
         {
           "include": "#declaration-body"
         },
@@ -1803,6 +1836,20 @@
       "patterns": [
         {
           "include": "#type"
+        }
+      ]
+    },
+    "member-initializer-object": {
+      "begin": "(?<![=!<>+\\-*/%&|^~])(=)(?![=>])(?=\\s*\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.assignment.ts"
+        }
+      },
+      "end": "(?<=\\})",
+      "patterns": [
+        {
+          "include": "#code-block"
         }
       ]
     },
@@ -3072,6 +3119,9 @@
         {
           "match": "\\[\\]",
           "name": "keyword.operator.type.array.ts"
+        },
+        {
+          "include": "#type-bracket"
         },
         {
           "match": "=>",

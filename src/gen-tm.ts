@@ -4484,6 +4484,29 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     };
   }
 
+  // Type-bracket: `[ … ]` inside type contexts — a TUPLE type (`[A, B]`) or an
+  // indexed-access type's index (`T[K]`). Without this region a tuple's inner `,`
+  // (or an object-type member's `: [A, B]` value) prematurely satisfies the
+  // enclosing type region's `end` (`#type-object-member` ends on `,`), so every
+  // element after the first falls back to value mode. Modelled exactly like
+  // #type-paren (recurse via #type-inner), keyed on the SAME signal — the grammar's
+  // @type rules containing `[` and `]` (typeLiterals) — so it is agnostic and emitted
+  // only when the language actually has bracket types. It is included in #type-inner
+  // AFTER the `\[\]` empty-array-suffix match, so `T[]` still reads as an array
+  // operator and only a `[` carrying content opens the tuple region.
+  const hasBracketType = grammar.rules.some(r =>
+    r.flags.includes('type') && collectLiterals(r.body).includes('[') && collectLiterals(r.body).includes(']')
+  );
+  if (hasBracketType && hasTypeAnnotations) {
+    repository['type-bracket'] = {
+      begin: '\\[',
+      beginCaptures: { '0': { name: `punctuation.definition.block.${langName}` } },
+      end: '\\]',
+      endCaptures: { '0': { name: `punctuation.definition.block.${langName}` } },
+      // patterns filled after type-inner is built
+    };
+  }
+
   // Type-object-type: { key: Type; ... } inside type contexts
   // Detect if any @type rule has '{' ... '}' alternatives
   const hasObjectType = grammar.rules.some(r =>
@@ -4602,6 +4625,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // Array bracket type — only if @type rules contain both [ and ]
   if (typeLiterals.has('[') && typeLiterals.has(']')) {
     typeInnerPats.push({ match: '\\[\\]', name: `keyword.operator.type.array.${langName}` });
+    // A `[` carrying content opens the recursive tuple / indexed-access region
+    // (#type-bracket), listed AFTER the empty-array match so `T[]` stays an array op.
+    if (repository['type-bracket']) typeInnerPats.push({ include: '#type-bracket' });
   }
   // Arrow function type — only if => appears in @type rules
   if (typeLiterals.has('=>')) {
@@ -4673,6 +4699,28 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // Wire up deferred type-paren pattern (basic wiring; patched after type injections)
   if (repository['type-paren']) {
     repository['type-paren'].patterns = [{ include: '#type-inner' }];
+  }
+  // Wire up deferred type-bracket (tuple / indexed-access). A bare ident `[`-adjacent
+  // and followed by `:` is an INDEX-SIGNATURE param (`[key: string]`) or a LABELLED
+  // tuple element (`[first: A, …]`) — that leading identifier is a binding/parameter
+  // name, NOT a type, so a narrow head match scopes it `variable.parameter` (and its
+  // `:` as the annotation) BEFORE #type-inner would paint it entity.name.type. The
+  // match is anchored to the `[` (lookbehind) and the `:`, so a plain tuple element
+  // (`[A, B]`) / indexed-access index (`T[K]`) — ident NOT followed by `:` — falls
+  // through to #type-inner and recurses as a type, as intended. (Anchoring on the `[`
+  // rather than including the whole #type-object-member region avoids the member
+  // rule's `,`/`}` end leaking across tuple elements.)
+  if (repository['type-bracket']) {
+    repository['type-bracket'].patterns = [
+      {
+        match: `(?<=\\[)\\s*(${identPattern})(\\s*:)`,
+        captures: {
+          '1': { name: `variable.parameter.${langName}` },
+          '2': { name: `keyword.operator.type.annotation.${langName}` },
+        },
+      },
+      { include: '#type-inner' },
+    ];
   }
   // Wire up deferred type-object patterns now that type-inner exists
   if (repository['type-object-member']) {
@@ -5316,6 +5364,34 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         patterns: [{ include: '#type-inner' }],
       };
       bodyPatterns.splice(bodyPatterns.length - 1, 0, { include: '#member-bind-type-annotation' });
+    }
+
+    // Class-field INITIALIZER object literal (`foo = { … }`). Inside a declaration
+    // body the `{ … }` after a field's `=` would otherwise be consumed by the
+    // self-recursive #declaration-body block — which carries #member-type-annotation —
+    // so an object-literal key (`{ a: PropTypes.number }`) is mis-read as a member
+    // type annotation (key → variable.object.property, value → entity.name.type). A
+    // field initializer is an EXPRESSION, not a class body: this region opens on the
+    // member `=` (a lone assignment — the compound-operator lookbehind/ahead keep it
+    // off `==`/`=>`/`>=`/`+=`) when an object `{` follows, and routes the `{ … }`
+    // through #code-block (the self-recursive block that includes `$self` but NOT the
+    // class-member patterns), so the object literal's keys/values read as plain
+    // expression tokens exactly as a top-level `const x = { … }` does. Emitted only
+    // when both the member-annotation regime (the source of the leak) and #code-block
+    // exist, and keyed on the grammar's `{`/`=` — agnostic, no TS-specific names.
+    if (repository['member-type-annotation'] && repository['code-block']) {
+      const asgnScope = getScope(scopeOverrides, '=') ?? 'keyword.operator.assignment';
+      repository['member-initializer-object'] = {
+        begin: `(?<![=!<>+\\-*/%&|^~])(=)(?![=>])(?=\\s*\\{)`,
+        beginCaptures: { '1': { name: `${asgnScope}.${langName}` } },
+        end: '(?<=\\})',
+        patterns: [{ include: '#code-block' }],
+      };
+      // Front of the body patterns: its `=`-anchored begin sits one position LEFT of
+      // the bare `\{` self-recursion and of `$self`'s `=` operator match, so leftmost-
+      // match makes it claim `= {` first; a non-object initializer (`= bar`) lacks the
+      // `{` lookahead and is untouched.
+      repository['declaration-body'].patterns!.unshift({ include: '#member-initializer-object' });
     }
   }
 
