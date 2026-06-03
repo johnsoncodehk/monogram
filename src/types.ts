@@ -215,6 +215,10 @@ export interface IndentConfig {
   flowOpen?: string[];    // punctuation that suspends indentation while open (e.g. ['[', '{'])
   flowClose?: string[];   // matching closers (e.g. [']', '}'])
   comment?: string;       // line-comment introducer ignored for indentation (e.g. '#')
+  // Block scalars (YAML `|` / `>`): when the rest of a line is an introducer + indicators, the
+  // following more-indented lines are verbatim content emitted as ONE token (like raw-text, but
+  // bounded by indentation rather than a close tag). `introducers` are the leading chars (['|','>']).
+  blockScalar?: { introducers: string[]; token: string };
 }
 
 export interface PrecOperator {

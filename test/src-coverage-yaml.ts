@@ -21,12 +21,15 @@ const { parse } = createParser(grammar);
 // Corpus: each yaml-test-suite src/*.yaml is itself a YAML sequence of test maps; the input
 // document lives in each map's `yaml:` block scalar. Extract them all.
 const SUITE = '/tmp/yaml-test-suite/src';
+// The suite's src format encodes whitespace visibly (per its ReadMe): ␣ = space, —…» = hard
+// tab, ↵/∎ = trailing-newline markers. Decode to real bytes so each input is genuine YAML.
+const decode = (s: string) => s.replace(/␣/g, ' ').replace(/—+»/g, '\t').replace(/[↵∎]/g, '');
 const corpus: { code: string; origin: string }[] = [];
 for (const f of readdirSync(SUITE).filter((n) => n.endsWith('.yaml'))) {
   try {
     const meta = yamlParse(readFileSync(`${SUITE}/${f}`, 'utf8'));
     for (const t of (Array.isArray(meta) ? meta : [meta])) {
-      if (t && typeof t.yaml === 'string') corpus.push({ code: t.yaml, origin: f });
+      if (t && typeof t.yaml === 'string') corpus.push({ code: decode(t.yaml), origin: f });
     }
   } catch { /* skip meta-files that don't themselves round-trip through yaml.parse */ }
 }

@@ -93,6 +93,12 @@ export function createLexer(grammar: CstGrammar) {
   );
   const flowOpenSet = new Set(indent?.flowOpen ?? []);
   const flowCloseSet = new Set(indent?.flowClose ?? []);
+  // Block scalars (YAML | / >): an introducer char + indent/chomp indicators + optional trailing
+  // comment to end-of-line is the SIGNATURE (so `a > b` isn't mistaken for one); the following
+  // more-indented lines are verbatim content, emitted as one token (skipped in the regex loop).
+  const blockScalarIntro = new Set(indent?.blockScalar?.introducers ?? []);
+  const blockScalarSig = /^[|>](?:[1-9][+-]?|[+-][1-9]?|[+-]|)[ \t]*(?:#[^\n]*)?(?:\r?\n|$)/;
+  if (indent?.blockScalar) indentTokenNames.add(indent.blockScalar.token);
 
   // Scan from inside a template span to its next boundary: an interpolation hole
   // (`interpOpen`) or the closing delimiter (`open`). Delimiters come from the
@@ -153,6 +159,7 @@ export function createLexer(grammar: CstGrammar) {
     let flowDepth = 0;               // >0 while inside flow delimiters ([ ] { }) → indentation suspended
     let lineStart = !!indent;        // at a block-context line boundary (file start counts as one)
     let emittedContent = false;      // any real (non-structural) token emitted yet — suppress a leading NEWLINE/DEDENT
+    let currentLineCol = 0;          // leading-space column of the current logical line (bounds block scalars)
     const indentStack: number[] = [0];
     function push(t: Token): void {
       if (pendingNl) { t.newlineBefore = true; pendingNl = false; }
@@ -232,6 +239,7 @@ export function createLexer(grammar: CstGrammar) {
           pos = e; continue;                                                // next iteration consumes the newline
         }
         pos = p;                                                            // consume the leading indentation
+        currentLineCol = col;                                               // bounds a block scalar started on this line
         const top = indentStack[indentStack.length - 1];
         if (col > top) {
           indentStack.push(col);
@@ -263,6 +271,29 @@ export function createLexer(grammar: CstGrammar) {
       } else {
         const wsMatch = source.slice(pos).match(/^\s+/);
         if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
+      }
+
+      // ── Block scalar (YAML | / >): from the introducer line, take all following lines more
+      // indented than the current line's column as ONE verbatim token (blank lines included). ──
+      if (indent?.blockScalar && flowDepth === 0 && blockScalarIntro.has(source[pos]) && blockScalarSig.test(source.slice(pos))) {
+        const startPos = pos;
+        let p = pos; while (p < source.length && source[p] !== '\n') p++; if (p < source.length) p++;  // skip the header line
+        const parent = currentLineCol;
+        while (p < source.length) {
+          let q = p, c = 0;
+          while (q < source.length && source[q] === ' ') { q++; c++; }
+          if (q >= source.length) { p = q; break; }
+          if (source[q] === '\n' || source[q] === '\r') {                 // blank line — part of the scalar
+            p = q + 1; if (source[q] === '\r' && source[p] === '\n') p++;
+            continue;
+          }
+          if (c > parent) { let e = q; while (e < source.length && source[e] !== '\n') e++; p = e < source.length ? e + 1 : e; }
+          else break;                                                     // dedent → the block scalar ends
+        }
+        push({ type: indent.blockScalar!.token, text: source.slice(startPos, p), offset: startPos });
+        pos = p;
+        lineStart = true;
+        continue;
       }
 
       // Close an interpolation hole (interpClose at baseline depth) → resume the template span.

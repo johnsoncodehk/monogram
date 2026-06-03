@@ -27,28 +27,49 @@ const SQuote = token(/'(?:''|[^'])*'/, { string: true, scope: 'string.quoted.sin
 const Anchor = token(/&[^\s\[\]{},]+/, { scope: 'entity.name.type.anchor.yaml' });
 const Alias = token(/\*[^\s\[\]{},]+/, { scope: 'variable.other.alias.yaml' });
 const Tag = token(/!(?:<[^>]*>|[^\s\[\]{},]*)/, { scope: 'storage.type.tag.yaml' });
-// Plain scalar: a run that does not START with a YAML indicator and contains no ':' / '#' /
-// newline / flow punctuation (first cut — real YAML permits ':' mid-scalar and trailing ' #').
-const Plain = token(/[^\s\-?:,\[\]{}#&*!|>'"%@`][^:#\n,\[\]{}]*/, { scope: 'string.unquoted.yaml' });
+const Directive = token(/%[^\n]*/, { scope: 'keyword.other.directive.yaml' });
+// Block scalar (| / >): EMITTED by the lexer's block-scalar mode (placeholder pattern, skipped
+// in the regex loop) so the more-indented content lines arrive as a single token.
+const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block.yaml' });
+// Plain scalar. Leading char: a non-indicator, OR one of `- ? :` when followed by a non-space
+// (so `-1`, `?x`, `::v` are plain, but `- `, `? `, `: ` stay indicators). Body: any non
+// `:`/`#`/`,`/flow char, plus `:` when NOT followed by space/`,`/`]`/`}` — YAML treats only `: `
+// as a key separator, so `http://x` and `key:val` are single plain scalars.
+const Plain = token(
+  /(?:[^\s\-?:,\[\]{}#&*!|>'"%@`]|[-?:](?=[^\s,\[\]{}]))(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}]))*/,
+  { scope: 'string.unquoted.yaml' },
+);
 
-const Scalar = rule(() => [DQuote, SQuote, Plain]);
+const Scalar = rule(() => [DQuote, SQuote, BlockScalar, Plain]);
 
 // A node (a value in any context): optional anchor/tag prefix, then a collection, alias, or a
 // scalar-led form. The scalar-led branch is LEFT-FACTORED: parse one scalar, then a trailing
 // ':' decides whether it is a block mapping (this scalar is the first key) or a bare scalar —
 // so BlockMapping and Scalar no longer share a FIRST token (which made the parser pick wrong).
 const Node = rule(() => [
-  [opt(Anchor), opt(Tag), alt(BlockSequence, FlowMapping, FlowSequence, Alias, MappingOrScalar)],
+  [opt(Anchor), opt(Tag), alt(BlockSequence, ExplicitMapping, FlowMapping, FlowSequence, Alias, MappingOrScalar)],
 ]);
 
 // Scalar, optionally continued as a block mapping when a ':' follows.
 const MappingOrScalar = rule(() => [
-  [Scalar, opt(':', opt(Value), many(Newline, MapEntry))],
+  [Scalar, opt(':', opt(MapValue), many(Newline, MapEntry))],
 ]);
-// Subsequent mapping entries (the first key+':' is consumed by MappingOrScalar above).
-const MapEntry = rule(() => [[Scalar, ':', opt(Value)]]);
-// A value after `:` (or `-`) is either an indented block (INDENT … DEDENT) or an inline node.
+// Subsequent mapping entries: implicit (`key: value`) or explicit (`? key` / `: value`).
+const MapEntry = rule(() => [
+  [Scalar, ':', opt(MapValue)],
+  ['?', opt(MapValue), opt(Newline), opt(':', opt(MapValue))],
+]);
+// A mapping that STARTS with an explicit `? key` entry (FIRST = `?`, disjoint from scalar-led).
+const ExplicitMapping = rule(() => [
+  ['?', opt(MapValue), opt(Newline), opt(':', opt(MapValue)), many(Newline, MapEntry)],
+]);
+// A SEQUENCE-item value (after `-`): an indented block, or any inline node — including a
+// compact inline block sequence (`- - a` is valid YAML).
 const Value = rule(() => [[Indent, Node, Dedent], Node]);
+// A MAPPING value (after `:`): an indented block, or an inline node that is NOT a block
+// sequence — YAML forbids `key: - a` on one line (a block seq must begin on the next line).
+const MapValue = rule(() => [[Indent, Node, Dedent], InlineNode]);
+const InlineNode = rule(() => [[opt(Anchor), opt(Tag), alt(FlowMapping, FlowSequence, Alias, MappingOrScalar)]]);
 
 // Block sequence: `- item` entries separated by a same-column NEWLINE.
 const BlockSequence = rule(() => [[SeqItem, many(Newline, SeqItem)]]);
@@ -63,7 +84,16 @@ const FlowScalarOrNode = rule(() => [alt(FlowMapping, FlowSequence, Alias, Scala
 const FlowSequence = rule(() => [['[', opt(FlowValue, many(',', FlowValue)), opt(','), ']']]);
 
 // A YAML stream: one or more documents (optionally fenced by --- / ...).
-const Stream = rule(() => [many(alt(DocStart, DocEnd, Node))]);
+// A YAML stream: leading directives, an implicit first document, then explicit `---` documents.
+// NEWLINE is tolerated only ADJACENT to a marker (`---`/`...`/directive) via opt(Newline), and a
+// bare second document requires a `---` — so `node\nbare` (two implicit docs) is rejected (the
+// `many` body needs a DocStart) while `node\n---\nnode` and `---\nnode` parse.
+const Stream = rule(() => [[
+  many(Directive, opt(Newline)),
+  opt(Indent), opt(Node), opt(Dedent),
+  many(opt(Newline), opt(DocEnd), opt(Newline), DocStart, opt(Newline), many(Directive, opt(Newline)), opt(Indent), opt(Node), opt(Dedent)),
+  opt(Newline), opt(DocEnd), opt(Newline),
+]]);
 
 const indent: IndentConfig = {
   indentToken: 'Indent',
@@ -72,16 +102,17 @@ const indent: IndentConfig = {
   flowOpen: ['[', '{'],
   flowClose: [']', '}'],
   comment: '#',
+  blockScalar: { introducers: ['|', '>'], token: 'BlockScalar' },
 };
 
 export default defineGrammar({
   name: 'yaml',
   scopeName: 'source.yaml',
-  tokens: { DocStart, DocEnd, Comment, DQuote, SQuote, Anchor, Alias, Tag, Plain, Indent, Dedent, Newline },
+  tokens: { DocStart, DocEnd, Directive, Comment, DQuote, SQuote, Anchor, Alias, Tag, BlockScalar, Plain, Indent, Dedent, Newline },
   // NOTE: the parser's entry rule is the LAST rule declared here (findEntryRule = rules[last]),
   // so `Stream` must come last.
   rules: {
-    Node, MappingOrScalar, MapEntry, Value, BlockSequence, SeqItem,
+    Node, MappingOrScalar, MapEntry, ExplicitMapping, Value, MapValue, InlineNode, BlockSequence, SeqItem,
     FlowMapping, FlowEntry, FlowValue, FlowScalarOrNode, FlowSequence, Scalar, Stream,
   },
   entry: Stream,
