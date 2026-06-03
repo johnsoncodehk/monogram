@@ -1157,7 +1157,15 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   };
   result['jsx-children'] = {
     patterns: [
-      { include: '#jsx-self-closing-element' },
+      // A child element — `#jsx-element` covers BOTH the self-closing `<br/>` and the
+      // open `<span>…</span>` shape (its `end` matches `/>` OR `</name>`), so the
+      // separate `#jsx-self-closing-element` is NOT listed here: that rule's begin
+      // (`<name`, CONSUMING — unlike `#jsx-element`'s zero-width lookahead begin)
+      // would greedily claim a NON-self-closing child `<span>` and, never finding a
+      // `/>`, run its region to EOF — mis-scoping the child's `>`, body and the rest
+      // of the children as tag text (the top-level `-in-expression` triggers avoid
+      // this with a `/>`-anchored lookahead, which can't be reproduced here because a
+      // child's `/>` may sit past an embedded `{…}` the lookahead can't scan).
       { include: '#jsx-element' },
       { include: '#jsx-fragment' },
       // A tag whose `<` is alone at end-of-line, its NAME on a following line
@@ -3977,6 +3985,23 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // (a multiline generic arg list spans several lines) can re-include them —
   // the official grammar allows a comment anywhere a type may appear.
   const commentIncludeKeys = commentRepoKeys(grammar);
+  // Repository keys of the grammar's STRING- and NUMBER-family literal tokens,
+  // collected in declaration order as their repo entries are built below. These
+  // are the leaf literals that can appear inside a TYPE expression (a literal
+  // type — `type X = "foo" | 1`, a generic arg `Foo<"a">`, a literal param-type
+  // annotation), so the type-context regions (#type-inner et al.) re-include them
+  // to KEEP the string/number scope instead of letting the literal fall through
+  // to the region's own `meta.type.*` name. The classification is the same
+  // scope-family test the token loop already uses, so the set is fully derived
+  // from the grammar's own token scopes — no hardcoded `"`/digit literals.
+  const literalLiteralKeys: string[] = [];
+  const literalTokenNames = new Set<string>();
+  const rememberLiteralKey = (scope: string, repoKey: string, tokName?: string) => {
+    if (scope.startsWith('string.') || scope.startsWith('constant.numeric')) {
+      literalLiteralKeys.push(repoKey);
+      if (tokName) literalTokenNames.add(tokName);
+    }
+  };
   for (const tok of grammar.tokens) {
     // Skip @regex tokens — handled by regex literal disambiguation above
     if (tok.flags.includes('regex')) continue;
@@ -4037,6 +4062,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           patterns: [escapePat],
         };
         topPatterns.push({ include: `#${key}` });
+        rememberLiteralKey(delimScope, key, tok.name);
       } else {
         // Multiple delimiters: generate separate entries
         for (const [delim, delimScope] of delimiters) {
@@ -4050,6 +4076,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
             patterns: [escapePat],
           };
           topPatterns.push({ include: `#${subKey}` });
+          rememberLiteralKey(delimScope, subKey, tok.name);
         }
       }
 
@@ -4106,6 +4133,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         match: tok === identToken ? identPattern : tok.pattern,
       };
       topPatterns.push({ include: `#${key}` });
+      // Numeric-literal tokens (decimal/hex/octal/binary/bigint) land here — record
+      // them so a literal type (`type X = 1 | 2`) keeps its `constant.numeric` scope.
+      if (tok !== identToken) rememberLiteralKey(emittedScope, key, tok.name);
     }
   }
 
@@ -4212,6 +4242,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     }
   }
 
+  // Literal types — a STRING/NUMBER literal can stand as a type (`type X =
+  // "foo" | 1`, a generic arg `Foo<"a">`, a literal param-type `(p: "on") =>`).
+  // If any @type rule references one of the grammar's string/number literal
+  // tokens, re-include those leaf token repo entries inside the type context so
+  // the literal keeps its `string`/`constant.numeric` scope rather than falling
+  // through to the enclosing region's `meta.type.*` name. Both the trigger
+  // (a literal-token ref reachable from a @type rule) and the included keys are
+  // derived from the grammar's own tokens/rules — no hardcoded `"`/digit shapes.
+  const typeRefsLiteralToken = literalTokenNames.size > 0 && grammar.rules.some(r => {
+    if (!r.flags.includes('type')) return false;
+    let found = false;
+    const walk = (e: RuleExpr): void => {
+      if (found || !e) return;
+      switch (e.type) {
+        case 'ref': if (literalTokenNames.has(e.name)) found = true; return;
+        case 'seq': case 'alt': e.items.forEach(walk); return;
+        case 'quantifier': case 'group': case 'not': walk(e.body); return;
+        case 'sep': walk(e.element); return;
+      }
+    };
+    walk(r.body);
+    return found;
+  });
+  const literalTypeIncludes: { include: string }[] = typeRefsLiteralToken
+    ? literalLiteralKeys.map(k => ({ include: `#${k}` }))
+    : [];
+
   // Shared type inner patterns — exposed as a repository entry so all consumers
   // reference it via `{ include: '#type-inner' }`.  No shared mutable array;
   // later injections rebuild the patterns array non-destructively.
@@ -4221,6 +4278,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     ...(repository['type-object-type'] ? [{ include: '#type-object-type' }] : []),
     ...(repository['type-paren'] ? [{ include: '#type-paren' }] : []),
     ...(repository['type-predicate'] ? [{ include: '#type-predicate' }] : []),
+    // Literal types (string/number literal standing as a type) — before
+    // #simple-type so a `"foo"`/`1` keeps its literal scope instead of being
+    // swallowed by the surrounding type region's name.
+    ...literalTypeIncludes,
     { include: '#simple-type' },
   ];
   // Union/intersection operators — only if present in @type rules
@@ -5720,6 +5781,16 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // `/` would fall through unmatched and the comment body would be
         // mis-scoped as a type name.
         ...commentIncludeKeys.map(key => ({ include: `#${key}` })),
+        // A LEADING `<…>` type-parameter list of a generic function-type
+        // (`<T, U>(x: T) => U`, e.g. `declare const f: <T>(…) => …`). In type
+        // position — the only place `#type-inner` is reached — a bare `<` (one not
+        // preceded by a type name, which `#generic-type`'s `name<` already claims)
+        // can only open such a list, so re-using the declaration type-param list
+        // (`extends`/defaults/nested generics scoped identically) is unambiguous.
+        // Without it the `<` falls through, the params get expression scopes and the
+        // closing `>` is mis-read as a relational operator. Gated on the entry
+        // existing (a grammar with no generic declarations emits none).
+        ...(repository['declaration-type-params'] ? [{ include: '#declaration-type-params' }] : []),
         ...supportConstScopes.map(scope => ({ include: `#scope-${scope.replace(/\./g, '-')}` })),
         ...operatorExprIncludeKeys.map(key => ({ include: `#${key}` })),
       ];

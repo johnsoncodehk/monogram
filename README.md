@@ -16,13 +16,13 @@ Per-grammar alignment vs the **official parser** as the neutral oracle (`node te
 
 | Grammar | Parser (branch · agree) | Highlighter — Monogram vs official |
 |---|---|---|
-| TypeScript | 97.7% · 97.1% | 99.3% vs 99.0% |
+| TypeScript | 97.7% · 97.1% | 99.4% vs 99.0% |
 | JavaScript | 97.3% · 92.2% | 87.9% vs 83.6% |
-| JSX | 100.0% · 97.1% | 85.7% vs 81.1% |
-| TSX | 99.4% · 96.7% | 87.0% vs 90.4% |
+| JSX | 100.0% · 97.1% | 82.9% vs 81.1% |
+| TSX | 99.4% · 96.7% | 89.6% vs 90.4% |
 | HTML | 84.3% · 77.9% | 100.0% vs 97.6% |
 | YAML | 83.0% · 63.1% | 46.5% vs 89.7% |
-| Vue | — | 97.5% vs 95.9% |
+| Vue | — | 98.8% vs 98.0% |
 <!-- coverage:end -->
 
 <sub>**Which “official” grammar each row compares against:** HTML’s is the unmaintained [`textmate/html.tmbundle`](https://github.com/textmate/html.tmbundle) — the #203212 case Monogram targets. YAML’s is the maintained [RedCMD/YAML-Syntax-Highlighter](https://github.com/RedCMD/YAML-Syntax-Highlighter) that VS Code switched to ([microsoft/vscode#232244](https://github.com/microsoft/vscode/pull/232244)) — so YAML’s gap is Monogram vs a *maintained* grammar, not a dead bundle. JS/TS use Microsoft’s maintained [TypeScript-TmLanguage](https://github.com/microsoft/TypeScript-TmLanguage).</sub>

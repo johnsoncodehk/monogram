@@ -2894,6 +2894,27 @@
           "include": "#type-paren"
         },
         {
+          "include": "#hexnumber"
+        },
+        {
+          "include": "#octalnumber"
+        },
+        {
+          "include": "#binarynumber"
+        },
+        {
+          "include": "#bigint"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#qstring-double"
+        },
+        {
+          "include": "#qstring-single"
+        },
+        {
           "include": "#type-conditional"
         },
         {
@@ -2910,6 +2931,9 @@
         },
         {
           "include": "#blockcomment"
+        },
+        {
+          "include": "#type-parameters"
         },
         {
           "include": "#scope-support-type-primitive"

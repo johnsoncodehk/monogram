@@ -236,9 +236,6 @@
     "jsx-children": {
       "patterns": [
         {
-          "include": "#jsx-self-closing-element"
-        },
-        {
           "include": "#jsx-element"
         },
         {
