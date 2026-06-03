@@ -3193,6 +3193,26 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
         '6': { name: sOpen }, '7': { name: sName }, '8': { name: sClose },
       },
     };
+    // (1b) single-line OPEN+BODY then `</tag` whose `>` is DEFERRED to a later line — the whole
+    //     `<tag …>BODY</tag` sits on ONE line but the close `>` (HTML allows whitespace, incl. line
+    //     feeds, between the tag name and `>` of an END tag) lands on a subsequent line. The `(1)`
+    //     `-inline` match needs `>` on the line, and the `begin/while` `(2)` below only re-checks at
+    //     the NEXT line's start — so neither closes here and the trailing `</tag` would leak into the
+    //     embed (textmate/html.tmbundle#97). This bounded `begin/end` claims the open tag + body +
+    //     `</tag` (capture-embedding BODY so the close stays clean), then `end`s at the deferred `>`.
+    //     The close must be on the SAME line as the open (so it doesn't collide with the `begin/while`,
+    //     which owns the open-then-later-lines case); `(?=\s*$)` requires only whitespace after `</tag`
+    //     to end-of-line, i.e. the `>` really is deferred. Agnostic: keys on the tag + `<`/`/`/`>`
+    //     delimiters only, like every other raw-text rule.
+    repository[`${key}-inline-ml`] = {
+      name: `meta.${tag}.${L}`,
+      begin: `(${o})(${tag})\\b${attrs}(${c})(.*?)(${o}${slash})(${tag})(?=\\s*$)`,
+      beginCaptures: {
+        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose },
+        '5': bodyCap, '6': { name: sOpen }, '7': { name: sName },
+      },
+      end: `(${c})`, endCaptures: { '1': { name: sClose } },
+    };
     // (2) multi-line `begin/while` — the `while` re-checks each line and DROPS the region
     //     (popping any open embedded region) at the first line CONTAINING `</tag>` (the `.*`
     //     reaches it anywhere on the line, not just `^\s*` at the start). So the close wins even
@@ -3201,7 +3221,10 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     //     `</script>` regardless of embedded-language context. The embed stays ONE continuous
     //     region across lines (the `while` only TESTS, never re-anchors), so a multi-line template
     //     literal / block comment in the body is unbroken; only a line that actually contains the
-    //     close tag drops. CRUCIALLY the line-start drop FORCE-UNWINDS a still-open embedded region
+    //     close tag drops. The close-tag test is `</tag` then ws / `>` / END-OF-LINE (`$`): the EOL
+    //     alternative drops a line whose `</tag` has its `>` DEFERRED to a later line (tmbundle#97),
+    //     so that line leaves the embed and the sibling `#<key>-close-ml` re-embeds its pre-close
+    //     content. CRUCIALLY the line-start drop FORCE-UNWINDS a still-open embedded region
     //     (e.g. a trailing unterminated `type T =` whose body would otherwise read `</script>` as
     //     `< script >` type-args) — an `end:(?=</tag)` lookahead can NOT do this (the innermost open
     //     embed region's patterns are evaluated before any outer `end`), so the `while` is load-
@@ -3211,7 +3234,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
       name: `meta.${tag}.${L}`,
       begin: `(${o})(${tag})\\b${attrs}(${c})`,
       beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose } },
-      while: `^(?!.*${o}${slash}${tag}[\\s${ccClose}])`,
+      while: `^(?!.*${o}${slash}${tag}(?:[\\s${ccClose}]|$))`,
       contentName: embed,
       patterns: [{ include: embed }],
     };
@@ -3234,9 +3257,24 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
       match: `^(\\s*)((?:(?!${o}${tag}\\b).)+?)(${o}${slash})(${tag})\\s*(${c})`,
       captures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName }, '5': { name: sClose } },
     };
-    top.push({ include: `#${key}-inline` });   // single-line first, then multi-line
+    // (3b) ORPHAN CLOSE LINE whose `>` is DEFERRED — `BODY</tag` ending the line, the `>` on a later
+    //     one (the case-(3) sibling but with the close `>` split off, the tmbundle#97 deferred-`>`
+    //     shape after the body sits on its own line). The widened `begin/while` (2) drops this line
+    //     (its `</tag` is at end-of-line), so it lands here: a bounded `begin/end` that capture-embeds
+    //     BODY (so the embed can't reach the close), opens at `</tag` with only whitespace after it
+    //     (`(?=\s*$)` → the `>` is deferred), and `end`s at the deferred `>`. Same tempered-greedy
+    //     BODY run as (3) so it can't swallow a following block's `<tag` OPEN; agnostic to the embed.
+    repository[`${key}-close-ml`] = {
+      name: `meta.${tag}.${L}`,
+      begin: `^(\\s*)((?:(?!${o}${tag}\\b).)+?)(${o}${slash})(${tag})(?=\\s*$)`,
+      beginCaptures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName } },
+      end: `(${c})`, endCaptures: { '1': { name: sClose } },
+    };
+    top.push({ include: `#${key}-inline` });      // single-line first, then multi-line
+    top.push({ include: `#${key}-inline-ml` });   // single-line open+body+</tag with a DEFERRED `>` (#97)
     top.push({ include: `#${key}` });
-    top.push({ include: `#${key}-close` });    // orphan close line (BODY</tag>) — after the open-tag rules
+    top.push({ include: `#${key}-close` });        // orphan close line (BODY</tag>) — after the open-tag rules
+    top.push({ include: `#${key}-close-ml` });     // orphan close line with a DEFERRED `>` (#97)
   };
   // Multi-line START TAG variant — `<script\n  lang="ts"\n>` (force-expand-multiline
   // formatting; vuejs/language-tools#3999). A TextMate `begin` is single-line, so the entries
@@ -3249,7 +3287,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   const emitRawMultiline = (tag: string, spec: string | { default: string; lang?: Record<string, string> }) => {
     const defaultEmbed = typeof spec === 'string' ? spec : spec.default;
     const langs = typeof spec === 'string' ? [] : Object.entries(spec.lang ?? {});
-    const closeAhead = `${o}${slash}${tag}[\\s${ccClose}]`;            // `</tag` then ws / `>`
+    const closeAhead = `${o}${slash}${tag}(?:[\\s${ccClose}]|$)`;      // `</tag` then ws / `>` / EOL (a DEFERRED `>` on a later line, tmbundle#97)
     const content = (embed: string): TmPattern[] => [                 // body after `>`, bounded at `</tag>`
       { begin: `(?<=${c})(?=[^\\n]*${closeAhead})`, end: `(?=${closeAhead})`, contentName: embed, patterns: [{ include: embed }] },
       { begin: `(?<=${c})`, while: `^(?!.*${closeAhead})`, contentName: embed, patterns: [{ include: embed }] },
