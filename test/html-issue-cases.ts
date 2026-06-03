@@ -87,6 +87,17 @@ export const cases: HtmlCase[] = [
     //       It regresses #5538 because `begin/end` does NOT unwind the open embedded TS type-body at
     //       the close line (only `while` does) → that body swallows `</script>` and the template
     //       never recovers. (Confirmed: vue-issues 18/19, vue-dropin 18/19 under that form.)
+    //     • The #113 CAPTURE-EMBED (the body is a regex CAPTURE group; TextMate re-anchors the embed to
+    //       that FIXED span, so a `//` physically can't escape it) is exactly what closes the SINGLE-LINE
+    //       form — the inline `match` path, why #72 `<script>//…</script>` works. Extending it to the
+    //       multi-line body (a PER-LINE bounded capture) was BUILT + MEASURED: it DOES fix #85 (and
+    //       #65/#74), but re-anchors source.js EACH LINE, so any cross-line JS construct splits — a
+    //       template literal `` `a⏎b` `` becomes two embeds (`a` an unterminated string, `b` re-parsed
+    //       as code) instead of one string carried across the break, which the `begin/while` region
+    //       embed gets RIGHT (verified: `a`,`b` both `string.template` continuous). The bound that makes
+    //       a capture-embed safe is inherently single-line — a `match` can't span lines — so multi-line
+    //       either re-anchors (breaking the FAR commoner cross-line template / block-comment / regex) or
+    //       needs the official's hand-patch below. Trading those for the rare #85 is a net loss.
     //   VS Code "wins" both ONLY by NOT using the real embed: it re-declares JS's own comment / block
     //   / string rules with a baked-in `end:(?=</script)|\n` guard before `include source.js`, so the
     //   comment voluntarily yields before the close tag. That is a JS-syntax-specific patch — to copy
