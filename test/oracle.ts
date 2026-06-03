@@ -47,12 +47,38 @@ function kwRole(text: string, node: ts.Node): RoleName {
   return R.kwOther;
 }
 
+// A JSX intrinsic (host) element name uses the React/TS convention: a simple tag
+// whose first character is a lowercase ASCII letter (`div`, `span`, `my-widget`) is a
+// host element scoped `entity.name.tag` by both grammars; an uppercase-initial tag
+// (`Foo`) is a COMPONENT = a genuine value reference and must NOT be reclassified.
+const isIntrinsicTagName = (text: string): boolean => /^[a-z]/.test(text);
+
 // Classify an identifier by its structural position in the parse tree.
 function identRole(node: ts.Node): RoleName {
   const p = node.parent;
   if (!p) return R.valueRef;
   const is = (fn: (n: ts.Node) => boolean) => fn(p);
   const named = (n: any) => n.name === node;
+
+  // ── JSX markup roles ──────────────────────────────────────────────────────────
+  // The simple-Identifier tagName of an opening/closing/self-closing element. A
+  // lowercase-initial name is an INTRINSIC/host element → entity.name.tag (R.tagName);
+  // an uppercase-initial name is a COMPONENT = a value reference → falls through to
+  // R.valueRef below (do NOT touch — Monogram's value scope legitimately beats
+  // official's support.class.component there). Dotted (`<Foo.Bar>`, a
+  // PropertyAccessExpression) and namespaced (`<svg:rect>`, a JsxNamespacedName) tag
+  // names are compound nodes, not the element's direct Identifier tagName, so they
+  // are unaffected — handled as their own node kinds, like member access.
+  if ((is(ts.isJsxOpeningElement) || is(ts.isJsxClosingElement) || is(ts.isJsxSelfClosingElement)) &&
+      (p as ts.JsxOpeningLikeElement | ts.JsxClosingElement).tagName === node &&
+      isIntrinsicTagName((node as ts.Identifier).text)) {
+    return R.tagName;
+  }
+  // A JSX attribute NAME (`className=`, `data-x=`) — both grammars scope it
+  // entity.other.attribute-name (R.attrName). The `name === node` guard excludes the
+  // attribute's VALUE; namespaced attr names (`xml:lang`) are a JsxNamespacedName, not
+  // an Identifier child of JsxAttribute, so they are unaffected.
+  if (is(ts.isJsxAttribute) && named(p)) return R.attrName;
 
   if (is(ts.isFunctionDeclaration) && named(p)) return R.funcDecl;
   if (is(ts.isFunctionExpression) && named(p)) return R.funcDecl;
