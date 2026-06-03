@@ -3247,6 +3247,25 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     };
     top.push({ include: `#raw-${tag}-ml` });
   };
+  // Custom-block embeds: ANY block tag carrying `lang="<lang>"` embeds the mapped scope in its body
+  // (the SFC custom-block convention — `<i18n lang="yaml">`, `<docs lang="md">`, `<gql lang="gql">`).
+  // One begin/end per lang: the tag NAME is captured (group 2) and the close is its BACKREFERENCE
+  // (`</\2>`), so the region is tag-agnostic. Emitted BEFORE the named rawText blocks so a data lang
+  // on a named tag still resolves here when that tag's lang map doesn't list it. The lookahead asserts
+  // `lang=<lang>` in the start tag; the start-tag attrs re-tokenize via #attribute; body → the grammar.
+  for (const [lang, scope] of Object.entries(m.customBlockEmbed ?? {})) {
+    const key = `block-${lang}`;
+    repository[key] = {
+      name: `meta.embedded.block.${L}`,
+      begin: `(${o})(${namePat})\\b(?=[^${ccClose}]*\\blang\\s*=\\s*["']?${escapeRegex(lang)}\\b)([^${ccClose}]*)(${c})`,
+      beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': { patterns: [{ include: '#attribute' }] }, '4': { name: sClose } },
+      end: `(${o}${slash})(\\2)\\s*(${c})`,
+      endCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': { name: sClose } },
+      contentName: scope,
+      patterns: [{ include: scope }],
+    };
+    top.push({ include: `#${key}` });
+  }
   for (const tag of m.rawText?.tags ?? []) {
     const spec = m.rawText!.embed?.[tag] ?? (tokScope(m.rawText!.token) ?? `source.${L}`);
     if (typeof spec === 'string') {

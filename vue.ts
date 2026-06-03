@@ -62,9 +62,19 @@ export default defineGrammar({
         // <template> keeps the embedded-HTML-fragment scope text.html.derivative.
         template: { default: 'text.html.derivative', lang: { pug: 'text.pug' } },
         // <script lang="ts"> embeds Monogram's OWN proven TS grammar (more correct than VS Code's).
-        script: { default: 'source.js', lang: { ts: 'source.ts', tsx: 'source.tsx', jsx: 'source.js.jsx' } },
-        style: { default: 'source.css', lang: { scss: 'source.css.scss', less: 'source.css.less', stylus: 'source.stylus', postcss: 'source.postcss' } },
+        script: { default: 'source.js', lang: { ts: 'source.ts', tsx: 'source.tsx', jsx: 'source.js.jsx', coffee: 'source.coffee' } },
+        style: { default: 'source.css', lang: { scss: 'source.css.scss', less: 'source.css.less', stylus: 'source.stylus', postcss: 'source.postcss', sass: 'source.sass' } },
       },
+    },
+    // Custom-block embeds: ANY top-level block tag with `lang="<x>"` embeds the mapped scope — the
+    // Vue SFC custom-block convention (`<i18n lang="yaml">`, `<docs lang="md">`, `<gql lang="graphql">`).
+    // Matches the hand-written grammar's generic `<anytag lang=…>` catch-all. The common script/style/
+    // template langs stay on the named rawText blocks above; these data langs (which have no named
+    // block) are caught here on whatever tag carries them.
+    customBlockEmbed: {
+      md: 'text.html.markdown',
+      json: 'source.json', jsonc: 'source.json.comments', json5: 'source.json5',
+      yaml: 'source.yaml', toml: 'source.toml', gql: 'source.graphql', graphql: 'source.graphql',
     },
     // Directives + {{ }} interpolation, INJECTED onto the embedded HTML's scopes (Vue syntax
     // can't be baked into the reused HTML grammar — it injects on top). Emitted as TWO thin-stub

@@ -95,6 +95,14 @@ export interface MarkupConfig {
   // instead map to `{ default, lang }` to pick the embed by a `lang="…"` attribute on the
   // start tag (Vue: `<script lang="ts">`→source.ts, `<style lang="scss">`→source.css.scss).
   rawText?: { tags: string[]; token: string; embed?: Record<string, string | RawEmbed> };
+  // Custom-block embeds: ANY top-level block tag (not just the named rawText ones) whose start
+  // tag carries `lang="<lang>"` embeds the mapped scope in its body — the Vue SFC custom-block
+  // convention (`<i18n lang="yaml">`→source.yaml, `<docs lang="md">`→text.html.markdown, also
+  // `<script lang="coffee">`, `<style lang="sass">`). Keyed by lang → embed scope; matches a
+  // generic tag name and closes on its backreferenced `</tag>`. Tried BEFORE the named rawText
+  // blocks, so an exotic lang wins over a named block's default (a `<script lang="coffee">`
+  // embeds source.coffee, not the script default). The common langs stay on the named blocks.
+  customBlockEmbed?: Record<string, string>;
   comment?: { open: string; close: string; token: string }; // e.g. `<!--` … `-->`
   // Void elements (`<br>`, `<img>`, `<meta>`, …) — no children, no close tag. The
   // lexer RETAGS an OPEN void-tag name from the identifier token to `voidNameToken`,
