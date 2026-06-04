@@ -72,6 +72,13 @@ export interface MarkupConfig {
   tagOpen: string;     // opens a tag and ends a text run (e.g. '<')
   tagClose: string;    // closes a tag → return to text/raw-text (e.g. '>')
   closeMarker?: string; // marks a close tag when it directly follows tagOpen (e.g. '/' in '</'); such a tag never opens raw text
+  // What CHAR (right after `tagOpen`) actually opens a tag — a regex char-class BODY (the part
+  // inside `[…]`), e.g. HTML's WHATWG tag-open state `'a-zA-Z/!?'`. A `tagOpen` NOT followed by
+  // such a char is a literal text character, not a tag start: `<p>a < b</p>` → the `<` is text
+  // (parse5 agrees), so the text run keeps going instead of ending and throwing on a non-tag `<`.
+  // Pure DATA (every markup language declares its own opener set). ABSENT → legacy behaviour:
+  // every `tagOpen` ends the text run and opens a tag (a bare `<` then errors downstream).
+  tagOpenAfter?: string;
   // Attribute syntax (the host markup's `name="value"`): the name/value separator and the
   // quote characters. Kept as DATA so the markup + injection emitters bake in no HTML-specific
   // assumption (the same reason tagOpen/tagClose are data). Default to the near-universal `=`

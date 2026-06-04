@@ -138,6 +138,11 @@ export function createLexer(grammar: CstGrammar) {
     '^[^\\s' + ccEscape(attrQuoteChars.join('') + markup.tagOpen + markup.tagClose +
       (markup.attributeAssign ?? '=') + '`') + ']+',
   ) : null;
+  // What char (right after `tagOpen`) actually opens a tag (markup.tagOpenAfter is a char-class
+  // BODY, so it's used verbatim, not re-escaped). When declared, a `tagOpen` followed by anything
+  // else is a literal text char (WHATWG tag-open state: `<p>a < b</p>` keeps `<` as text). ABSENT
+  // → null, and a `tagOpen` always opens a tag (legacy behaviour, unchanged for other grammars).
+  const tagOpenAfterRe = markup?.tagOpenAfter ? new RegExp('[' + markup.tagOpenAfter + ']') : null;
 
   // ── Indentation mode (opt-in; dormant unless the grammar declares `indent`) ──
   // Like markup, the INDENT/DEDENT/NEWLINE tokens are EMITTED by a state machine (not matched
@@ -211,6 +216,12 @@ export function createLexer(grammar: CstGrammar) {
     let curTag = '';            // tag name being read in tag mode (decides raw-text entry)
     let inTagName = false;      // the next tag-mode token is (part of) the tag name
     let sawCloseMarker = false; // this tag began `</…` → a close tag, never a raw-text opener
+    // True iff a `tagOpen` at `i` actually OPENS a tag: with no `tagOpenAfter` declared, always
+    // (legacy — every `tagOpen` opens a tag); otherwise only when the char right after it matches
+    // the opener set (WHATWG tag-open state). A `tagOpen` at EOF (`<` last) opens nothing → text.
+    const opensTag = (i: number): boolean =>
+      !tagOpenAfterRe || (i + markup!.tagOpen.length < source.length
+        && tagOpenAfterRe.test(source[i + markup!.tagOpen.length]));
     // Indentation state — active only when `indent` is declared (dormant otherwise).
     let flowDepth = 0;               // >0 while inside flow delimiters ([ ] { }) → indentation suspended
     let lineStart = !!indent;        // at a block-context line boundary (file start counts as one)
@@ -253,14 +264,19 @@ export function createLexer(grammar: CstGrammar) {
           pos = end;
           continue;
         }
-        if (source.startsWith(markup.tagOpen, pos)) {
+        if (source.startsWith(markup.tagOpen, pos) && opensTag(pos)) {
           push({ type: '', text: markup.tagOpen, offset: pos });
           pos += markup.tagOpen.length;
           mode = 'tag'; inTagName = true; sawCloseMarker = false; curTag = '';
           continue;
         }
+        // End the text run at the next REAL tag-open. A `tagOpen` not followed by an opener
+        // char (`<` before a space/digit/`=`, or at EOF) is a literal text char, so it does NOT
+        // end the run — the loop steps past it (WHATWG tag-open state; matches parse5 on
+        // `<p>a < b</p>`). `pos` here is already a non-opening char (the dispatch above handled
+        // a real tag/comment), so the run is always ≥ 1 char and progress is guaranteed.
         let p = pos;
-        while (p < source.length && !source.startsWith(markup.tagOpen, p)) p++;
+        while (p < source.length && !(source.startsWith(markup.tagOpen, p) && opensTag(p))) p++;
         push({ type: markup.textToken, text: source.slice(pos, p), offset: pos });
         pos = p;
         continue;
@@ -533,7 +549,20 @@ export function createLexer(grammar: CstGrammar) {
         const last = tokens[tokens.length - 1];
         if (last) {
           if (last.text === markup.tagClose) {
-            mode = (!sawCloseMarker && rawTextTagSet.has(curTag.toLowerCase())) ? 'rawtext' : 'text';
+            const isRaw = !sawCloseMarker && rawTextTagSet.has(curTag.toLowerCase());
+            mode = isRaw ? 'rawtext' : 'text';
+            // A raw-text element is NEVER self-closing (WHATWG): a `/` right before the
+            // `>` of `<script …/>` is IGNORED, not a self-close marker — the body runs as
+            // raw-text to the matching close tag (or EOF). Drop that `/` token so the parser
+            // sees a plain raw-text START tag (`<script …>`), not the self-close arm. (Void /
+            // non-raw self-close like `<br/>`, `<div/>` are untouched — they don't enter
+            // raw-text, so this never fires for them.) Matches parse5.
+            if (isRaw && markup.closeMarker) {
+              const slash = tokens[tokens.length - 2];
+              if (slash && slash.type === '' && slash.text === markup.closeMarker) {
+                tokens.splice(tokens.length - 2, 1);
+              }
+            }
             inTagName = false; sawCloseMarker = false;
           } else if (inTagName) {
             if (markup.closeMarker && last.text === markup.closeMarker) sawCloseMarker = true;

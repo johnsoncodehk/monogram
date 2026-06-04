@@ -93,13 +93,20 @@ const corpus: string[] = [
   '<dl><dt>a<dd>b<dt>c<dd>d</dl>',
   '<select><option>a<option>b</select>',
   '<p>x<div>y</div>',
+  // Bare `<` that does not open a tag is TEXT (WHATWG tag-open state: `<` only opens a tag
+  // before `[a-zA-Z/!?]`). parse5 keeps these as text; Monogram now matches (was a throw).
+  '<p>a < b</p>',
+  '<p>5 < 3</p>',
+  // A raw-text element (script/style/textarea/title) is NEVER self-closing: a trailing `/>` is
+  // IGNORED and the body runs as raw-text to the close tag. parse5 makes a <script> with body
+  // "body"; Monogram now matches (the lexer drops the `/`, the parser raw-texts the body).
+  '<script src="x"/>body</script>',
 ];
 
 // Known B-lite gaps (documented, not gated): things parse5 handles via error-recovery
 // or full-document construction that a well-formed CFG doesn't.
 const unsupported: [string, string][] = [
   ['DOCTYPE', '<!DOCTYPE html><html><body>x</body></html>'],
-  ['unescaped < in text (needs &lt;)', '<p>a < b</p>'],
 ];
 
 let accepted = 0, treeMatch = 0;

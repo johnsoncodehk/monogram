@@ -53,16 +53,24 @@ const Node = rule($ => [
   Text,
 ]);
 
-// An element. Shapes tried in order (the parser backtracks):
+// An element. Shapes tried in order (the parser keeps the LONGEST match, so the close-tag
+// container always wins over the to-EOF arm when a close tag is present):
 //   1. void:           <br>  <img src="x">  <br/>   (name retagged to VoidName by the lexer)
 //   2. self-closing:   <Foo/>  <svg .../>            (non-void, explicitly self-closed)
 //   3. container:      <div>…</div>  <p>text</p>
+//   4. raw-text to EOF: <script …>body            (a raw-text element with its close tag
+//      OMITTED — body runs to EOF). The RawText body token is the discriminator: the lexer
+//      emits RawText ONLY inside a raw-text element (<script>/<style>/<textarea>/<title>), so
+//      this arm can never fire for an ordinary element. It also catches `<script …/>body`
+//      because the lexer (per WHATWG) IGNORES the self-close `/` on a raw-text tag and runs
+//      the body as raw-text — matching parse5 (`<script src=… />…</…>` is NOT self-closed).
 // Void comes first so a `<br>` never enters the container branch and swallows its
 // following siblings + a mismatched close tag.
 const Element = rule($ => [
   ['<', VoidName, many(Attr), opt('/'), '>'],
   ['<', Name, many(Attr), '/', '>'],
   ['<', Name, many(Attr), '>', many(Node), '<', '/', Name, '>'],
+  ['<', Name, many(Attr), '>', RawText],
 ]);
 
 // A document: a sequence of top-level nodes (elements, comments, text, doctype).
@@ -88,6 +96,12 @@ export const markup: MarkupConfig = {
   tagOpen: '<',
   tagClose: '>',
   closeMarker: '/',
+  // WHATWG tag-open state: `<` opens a tag ONLY before a letter (tag name), `/` (close tag),
+  // or `!`/`?` (markup-declaration / bogus-comment). A `<` before anything else (`<` then a
+  // space/digit/`=`, or at EOF) is a literal text char — so `<p>a < b</p>` and `<p>5 < 3</p>`
+  // are text, matching parse5, instead of throwing. (`<p>a<b</p>` — `<`+letter — still opens a
+  // tag and is rejected as malformed, exactly as before; that is a different branch.)
+  tagOpenAfter: 'a-zA-Z/!?',
   attributeAssign: '=',          // `name = value`
   attributeQuotes: ['"', "'"],   // quoted attribute values
   unquotedValueToken: 'UnquotedValue', // scan a whole unquoted value after `=` (so `/` in a URL/path stays in the value, not a self-close)

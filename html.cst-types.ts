@@ -42,6 +42,7 @@ export interface ElementNode extends CstPos {
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
     | (CstLeaf & { tokenType: 'Name' })
+    | (CstLeaf & { tokenType: 'RawText' })
     | (CstLeaf & { tokenType: 'VoidName' })
     | AttrNode
     | NodeNode
