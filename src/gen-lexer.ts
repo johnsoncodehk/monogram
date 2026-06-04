@@ -124,8 +124,20 @@ export function createLexer(grammar: CstGrammar) {
   // tag-mode tokenizing. The void-name token is a RETAG target (never matched fresh),
   // skipped here too so its placeholder pattern can't shadow the identifier token.
   const markupTokenNames = new Set<string>(
-    [markup?.textToken, markup?.rawText?.token, markup?.comment?.token, markup?.voidNameToken].filter(Boolean) as string[],
+    [markup?.textToken, markup?.rawText?.token, markup?.comment?.token, markup?.voidNameToken,
+     markup?.unquotedValueToken].filter(Boolean) as string[],
   );
+  // Character set BOUNDING an unquoted attribute value (HTML `href=foo`): everything except
+  // whitespace, the attribute quotes, the tag delimiters, the assign char and a backtick — `/`
+  // is INCLUDED (URLs / paths). Mirrors gen-tm's derived `string.unquoted` value pattern exactly,
+  // so the lexer and the highlighter agree on the value span. Built once; used by the tag-mode
+  // value scan below. Only meaningful when `markup.unquotedValueToken` is declared.
+  const attrQuoteChars = markup?.attributeQuotes ?? ['"', "'"];
+  const ccEscape = (s: string) => s.replace(/[\[\]\\^-]/g, '\\$&');   // escape char-class metachars
+  const unquotedValueRe = markup ? new RegExp(
+    '^[^\\s' + ccEscape(attrQuoteChars.join('') + markup.tagOpen + markup.tagClose +
+      (markup.attributeAssign ?? '=') + '`') + ']+',
+  ) : null;
 
   // ── Indentation mode (opt-in; dormant unless the grammar declares `indent`) ──
   // Like markup, the INDENT/DEDENT/NEWLINE tokens are EMITTED by a state machine (not matched
@@ -385,6 +397,26 @@ export function createLexer(grammar: CstGrammar) {
         }
         pos = end;
         continue;
+      }
+
+      // ── Markup UNQUOTED attribute value: the moment we sit right after an `attributeAssign`
+      // in tag mode (whitespace already skipped) and the next char doesn't open a quoted value,
+      // scan the WHOLE unquoted value as one token — up to whitespace or `tagClose`. This is the
+      // WHATWG unquoted-value state: `/` is a value char here, so `href=https://x/` keeps its
+      // trailing `/` and `href=/css/app.css` works, while the `/>` self-close marker (which only
+      // appears where NO value is being read) still tokenizes as punctuation. Scanning whole also
+      // beats the declaration-order race that would let the identifier token grab `https:` alone. ──
+      if (markup && mode === 'tag' && markup.unquotedValueToken && unquotedValueRe) {
+        const prev = tokens[tokens.length - 1];
+        if (prev && markup.attributeAssign && prev.text === markup.attributeAssign
+            && !attrQuoteChars.includes(source[pos])) {
+          const vm = source.slice(pos).match(unquotedValueRe);
+          if (vm) {
+            push({ type: markup.unquotedValueToken, text: vm[0], offset: pos });
+            pos += vm[0].length;
+            continue;
+          }
+        }
       }
 
       const remaining = source.slice(pos);

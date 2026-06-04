@@ -78,6 +78,16 @@ export interface MarkupConfig {
   // and `" '`; a grammar declares them (see html.ts) and the injection layer reads them too.
   attributeAssign?: string;    // e.g. '='
   attributeQuotes?: string[];  // e.g. ['"', "'"]
+  // Token TYPE the lexer emits for an UNQUOTED attribute value (HTML `href=foo`, `colspan=2`).
+  // When declared, the lexer SCANS the whole value as one token the moment it sits right after an
+  // `attributeAssign` (and the next char is not a quote) — stopping only at whitespace or `tagClose`,
+  // exactly the WHATWG unquoted-value state. This is what lets a value contain `/` (URLs / paths:
+  // `href=https://x/`, `href=/css/app.css`): once a value is being read, `/` is a value char, so the
+  // `/>` self-close marker stays punctuation ONLY where no value is being read (after the tag name,
+  // after whitespace, or after a completed attribute). Scanning the value whole also sidesteps the
+  // declaration-order token race (the identifier token would otherwise grab `https:` and stop at the
+  // first `/`). ABSENT → values are tokenized by the ordinary matchers (legacy behaviour).
+  unquotedValueToken?: string;
   // Attributes whose VALUE is embedded source, selected by a name pattern (HTML event handlers:
   // `on*`→source.js, like the official). The value is CAPTURE-embedded (bounded to the quoted
   // span) via the SAME helper Vue directive values use — so the embedded grammar can't run past

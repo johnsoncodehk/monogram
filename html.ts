@@ -23,11 +23,14 @@ const Name = token(/[a-zA-Z][\w:.-]*/, { identifier: true });
 const VoidName = token(/[a-zA-Z][\w:.-]*/, { scope: 'entity.name.tag' });
 // Quoted attribute value (double or single).
 const AttrValue = token(/"[^"]*"|'[^']*'/, { string: true });
-// Unquoted attribute value (`colspan=2`, `value=5px`, `data-x=foo`): any run that
-// isn't whitespace, a quote, or a structural delimiter. Excludes `/` so a trailing
-// `/>` self-close stays punctuation. Declared after Name → Name still wins for
-// alphabetic values; this is the fallback for numbers / symbol-leading values.
-const UnquotedValue = token(/[^\s"'<>=\/]+/, { scope: 'string.unquoted.html' });
+// Unquoted attribute value (`colspan=2`, `value=5px`, `href=https://x/`, `href=/a/b.css`):
+// per WHATWG, an unquoted value ends ONLY at whitespace or `>`, so `/` is a legal value char
+// (URLs / paths). The lexer scans the whole value as ONE token the moment it follows `=` (see
+// markup.unquotedValueToken below) — so the leading `/` of a path and the trailing `/` of a URL
+// stay in the value, while a `/>` self-close (where no value is being read) stays punctuation.
+// `\`` excluded to mirror the highlighter's value pattern. The leading-char-class scan in the
+// lexer makes this token's own pattern a backstop (it is no longer subject to the Name-first race).
+const UnquotedValue = token(/[^\s"'<>=`]+/, { scope: 'string.unquoted.html' });
 // Markup-mode content tokens — emitted by the lexer state machine, not matched by
 // these patterns (the patterns are placeholders; see gen-lexer markupTokenNames).
 const Text = token(/[^<]+/, { scope: 'text.html' });
@@ -87,6 +90,7 @@ export const markup: MarkupConfig = {
   closeMarker: '/',
   attributeAssign: '=',          // `name = value`
   attributeQuotes: ['"', "'"],   // quoted attribute values
+  unquotedValueToken: 'UnquotedValue', // scan a whole unquoted value after `=` (so `/` in a URL/path stays in the value, not a self-close)
   // `on*` event-handler attributes carry JS, and `style` carries CSS — embed the platform's
   // source.js / source.css, capture-bounded to the quoted value. The JS embed also beats the
   // official, whose inline-JS value rule hand-rolls a `//` splitter that mis-reads `//` inside a
