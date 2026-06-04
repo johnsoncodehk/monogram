@@ -88,7 +88,9 @@ export function createLexer(grammar: CstGrammar) {
   // grammar's template token; only called when such a token is declared.
   function scanTemplateSpan(source: string, pos: number, validateEscapes: boolean): { endsWithInterp: boolean; end: number } {
     while (pos < source.length) {
-      if (source[pos] === '\\') {
+      if (source.startsWith(tplInterpOpen, pos)) {
+        return { endsWithInterp: true, end: pos + tplInterpOpen.length };
+      } else if (source[pos] === '\\') {
         // In tag position invalid escapes are legal (validateEscapes=false): just skip
         // `\` + next char. Otherwise the escape must match the token's declared
         // escapeValid pattern, else it's a scan error (e.g. `\u{110000}`, `\u{r}`).
@@ -100,8 +102,6 @@ export function createLexer(grammar: CstGrammar) {
         } else {
           pos += 2;
         }
-      } else if (source.startsWith(tplInterpOpen, pos)) {
-        return { endsWithInterp: true, end: pos + tplInterpOpen.length };
       } else if (source.startsWith(tplOpen, pos)) {
         return { endsWithInterp: false, end: pos + tplOpen.length };
       } else {
