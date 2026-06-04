@@ -1064,7 +1064,9 @@ export const multiLineTests: MultiLineTest[] = [
     checks: [
       { line: 0, text: 'function', scope: 'storage.type.function' },
       { line: 0, text: 'myFunction', scope: 'entity.name.function' },
-      { line: 1, text: 'null', scope: 'constant.language.null' },
+      // `null` in the RETURN TYPE union is a type-builtin (official: support.type.builtin),
+      // not the value constant — only `return null` in the body is constant.language.null.
+      { line: 1, text: 'null', scope: 'support.type.builtin' },
       { line: 4, text: 'return', scope: 'keyword.control' },
       { line: 4, text: 'null', scope: 'constant.language.null' },
     ],
@@ -1444,7 +1446,9 @@ export const multiLineTests: MultiLineTest[] = [
     checks: [
       { line: 0, text: 'let', scope: 'storage.type' },
       { line: 2, text: '|', scope: 'keyword.operator.type' },        // official: keyword.operator.bitwise
-      { line: 2, text: 'undefined', scope: 'constant' },
+      // `undefined` in a type union is a type-builtin (official: support.type.builtin),
+      // not the value constant — the line-2 check still proves the type context survives.
+      { line: 2, text: 'undefined', scope: 'support.type.builtin' },
     ],
   },
 

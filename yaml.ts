@@ -49,21 +49,31 @@ const PLAIN_BODY = String.raw`(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}])|#(?<=\S#))*`;
 // A plain scalar is a mapping KEY when a `:` key-separator (colon + whitespace / EOL, or—inside a
 // flow collection—colon + `,`/`]`/`}`) follows it. Matched BEFORE the value/number tokens so a
 // numeric-looking key (`123:`) is still a key (entity.name.tag), as the `yaml` oracle resolves it.
+// A PLAIN scalar needs the colon to be followed by whitespace/EOL/flow-indicator, because a bare
+// `:` glued to more text is plain-scalar content (`foo:bar` is one scalar, `http://x` a URL).
 const KEY_SEP = String.raw`(?=[\t ]*:(?:[\s,\[\]{}]|$))`;
+// A QUOTED scalar, by contrast, is a mapping KEY whenever ANY `:` follows it (after optional
+// spaces) — `"x":v` (glued) and `"x": v` are both keys, and a quoted scalar can never run past its
+// closing quote, so the colon is always the entry separator, never scalar content. (In valid YAML a
+// quoted scalar immediately followed by `:` is ALWAYS a key — verified against the `yaml` package:
+// the only `"x":y` shapes it rejects are block-context errors, which the grader excludes. This is
+// what colours the JSON-style flow key `{"foo":bar}` / `["k":v]`, vscode#203212 / yaml-test-suite
+// C2DT·5T43·4MUZ.) Spaced/EOL still match (`(?=[\t ]*:)` covers `"x" : v` and `"x":`).
+const QKEY_SEP = String.raw`(?=[\t ]*:)`;
 
 // Plain scalar that is a mapping key → entity.name.tag (the YAML convention for a key name).
 const Key = token(
   new RegExp(`${PLAIN_HEAD}${PLAIN_BODY}${KEY_SEP}`),
   { scope: 'entity.name.tag' },
 );
-// Double-quoted scalar in KEY position (a `"…"` immediately followed by a key-separator `:`).
+// Double-quoted scalar in KEY position (a `"…"` immediately followed by a `:` key-separator).
 const DQuoteKey = token(
-  new RegExp(`"(?:\\\\.|[^"\\\\])*"${KEY_SEP}`),
+  new RegExp(`"(?:\\\\.|[^"\\\\])*"${QKEY_SEP}`),
   { string: true, scope: 'entity.name.tag' },
 );
 // Single-quoted scalar in KEY position.
 const SQuoteKey = token(
-  new RegExp(`'(?:''|[^'])*'${KEY_SEP}`),
+  new RegExp(`'(?:''|[^'])*'${QKEY_SEP}`),
   { string: true, scope: 'entity.name.tag' },
 );
 

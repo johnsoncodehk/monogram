@@ -3057,6 +3057,12 @@ interface DeclInfo {
   hasParams: boolean;     // has '(' ... ')' in the sequence
   hasTypeParams: boolean; // has ref to angle-bracket-sep rule (e.g., TypeParams)
   hasBody: boolean;       // has '{' ... '}' or Block ref
+  // The body is OPTIONAL: the keyword appears in BOTH a body-having expansion and a
+  // body-LESS one — i.e. `alt(Block, opt(';'))` (a function overload / ambient
+  // `declare function f();`). Such a declaration must close its region on the
+  // body-less `;` terminator too, not only `(?<=\})`, or the meta.function region
+  // runs away into the next statement. Derived from the expanded sequences.
+  optionalBody: boolean;
   typeParamKeywords: string[];  // keywords in type param rule (e.g., ['extends'])
   endHint?: string;       // for bodyless decls: next literal after name/type-params
   midLiterals: string[];  // non-alphabetic literals between keyword and name (e.g., ['*'] for function*)
@@ -3218,6 +3224,9 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
     // DeclInfo, OR-ing flags so no detail is lost regardless of expansion order.
     const existing = results.find(r => r.keyword === keyword);
     if (existing) {
+      // A body-having expansion meeting a body-less one (or vice versa) for the same
+      // keyword ⇒ the body is optional (`function f(){}` AND overload `function f();`).
+      if (existing.hasBody !== hasBody && hasParams && existing.hasParams) existing.optionalBody = true;
       existing.hasBody = existing.hasBody || hasBody;
       existing.hasParams = existing.hasParams || hasParams;
       if (hasTypeParams && !existing.hasTypeParams) {
@@ -3241,6 +3250,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
       hasParams,
       hasTypeParams,
       hasBody,
+      optionalBody: false,
       typeParamKeywords,
       endHint,
       midLiterals: midLits,
@@ -3278,7 +3288,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
  *     the lookahead (same head, broadest scope) supplies the key BODY pattern.
  * Returns null when the shape is absent (so non-YAML grammars are unaffected).
  */
-function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: string; keyBody: string } | null {
+function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: string; keyBody: string; prefix: string | null } | null {
   if (!grammar.indent) return null;
 
   // Find a separator literal S that heads a nested seq sibling of a head-indicator literal I.
@@ -3326,7 +3336,58 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
     if (keyScope) break;
   }
   if (!keyScope || !keyBody) return null;
-  return { indicator, keyScope, keyBody };
+
+  // NODE-PREFIX tokens — the optional decorators a value/node may carry BEFORE the scalar
+  // (YAML's anchor `&a` and tag `!!t`): in an explicit entry `? &a a` / `? !!str a` the key
+  // scalar is preceded by them, so the bare `(indicator)(ws)(key)` shape misses it. They are
+  // exactly the tokens that appear as an `opt(token)` (a `?`-quantified ref to a TOKEN) as a
+  // NON-FINAL element of some seq AND carry a real pattern (the structural indent/dedent/newline
+  // placeholders are `(?!)` and excluded). Their patterns join into an optional, repeatable
+  // `(?:<pat>[\t ]+)*` group inserted between the indicator's whitespace and the key body — so a
+  // node decorated by any run of anchors/tags still resolves the trailing scalar as the key.
+  // The prefix group is NON-CAPTURING: it CONSUMES the anchor/tag so the key (group 3) is reached,
+  // which means an anchor/tag sitting in this rare `? <prefix> key` position is left UNSCOPED
+  // (variable-length, order-free → no fixed capture can scope it, and a begin/end region risks
+  // over-running the value on the next line). Those decorators are NOT a graded role (the oracle
+  // emits only key/value scalars + comments), and the KEY — the role that matters — is scoped
+  // correctly; outside the explicit-key indicator, anchors/tags keep their normal `#anchor`/`#tag`
+  // scopes. Derived from the grammar; `null` when the family has no such prefix token (most grammars).
+  const tokenByName = new Map(grammar.tokens.map(t => [t.name, t] as const));
+  const prefixPats = new Set<string>();
+  // A NODE-prefix token is an `opt(token)` that decorates a value: it sits in a seq whose tail
+  // (after it) eventually reaches the VALUE ALTERNATION — i.e. the seq contains an `alt` later on.
+  // This selects YAML's `opt(Anchor)`/`opt(Tag)` at the head of `Node`/`InlineNode` (each followed
+  // by the collection/scalar `alt`) while EXCLUDING stream-level optionals like `opt(DocEnd)` /
+  // `opt(Newline)`, whose seq is a flat marker list with no value alternation.
+  const containsAlt = (e: RuleExpr): boolean =>
+    e.type === 'alt' ? true
+    : e.type === 'seq' ? e.items.some(containsAlt)
+    : e.type === 'quantifier' || e.type === 'group' || e.type === 'not' ? containsAlt(e.body)
+    : e.type === 'sep' ? containsAlt(e.element)
+    : false;
+  const seqHasAltLater = (items: RuleExpr[], from: number): boolean => {
+    for (let j = from; j < items.length; j++) if (containsAlt(items[j])) return true;
+    return false;
+  };
+  const findPrefix = (e: RuleExpr): void => {
+    if (e.type === 'seq') {
+      for (let i = 0; i < e.items.length - 1; i++) {       // non-final items only
+        const it = e.items[i];
+        if (it.type === 'quantifier' && it.kind === '?' && it.body.type === 'ref' && seqHasAltLater(e.items, i + 1)) {
+          const t = tokenByName.get(it.body.name);
+          if (t && t.pattern && t.pattern !== '(?!)' && !t.string) prefixPats.add(t.pattern);
+        }
+      }
+      e.items.forEach(findPrefix);
+    } else if (e.type === 'alt') e.items.forEach(findPrefix);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') findPrefix(e.body);
+    else if (e.type === 'sep') findPrefix(e.element);
+  };
+  for (const r of grammar.rules) findPrefix(r.body);
+  const prefix = prefixPats.size
+    ? `(?:(?:${[...prefixPats].join('|')})[\\t ]+)*`
+    : null;
+  return { indicator, keyScope, keyBody, prefix };
 }
 
 // ── Constructor-call keyword detection ──
@@ -4435,9 +4496,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // (the indicator literal, the key scope, the key body); null for non-indentation grammars.
   const explicitKey = detectExplicitKey(grammar);
   if (explicitKey) {
+    // `(indicator)( whitespace )(optional node-prefix: anchors/tags)(key-scalar)` on one line —
+    // the dominant explicit-key shape. The prefix group is NON-capturing so the key stays group 3.
+    const prefixGroup = explicitKey.prefix ?? '';
     repository['explicit-key'] = {
-      // `(indicator)( whitespace )(key-scalar)` on one line — the dominant explicit-key shape.
-      match: `(${escapeRegex(explicitKey.indicator)})([\\t ]+)(${explicitKey.keyBody})`,
+      match: `(${escapeRegex(explicitKey.indicator)})([\\t ]+)${prefixGroup}(${explicitKey.keyBody})`,
       captures: {
         '1': { name: `punctuation.definition.map.key.${langName}` },
         '3': { name: `${explicitKey.keyScope}.${langName}` },
@@ -4710,8 +4773,59 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // through to #type-inner and recurses as a type, as intended. (Anchoring on the `[`
   // rather than including the whole #type-object-member region avoids the member
   // rule's `,`/`}` end leaking across tuple elements.)
+  // Mapped-type connector keyword(s) — the `in` of `{ [K in T]: V }`. Derived from
+  // the grammar's own shape: a `[`-bracketed clause whose body is an identifier
+  // immediately followed by an alternation that branches on a RESERVED keyword
+  // (`[Ident, alt(['in', Type, …], [':', Type, …])]` in the type-member rule). In a
+  // type-context `[…]` this keyword would otherwise be eaten by #simple-type and
+  // mis-painted entity.name.type (it is a value-position operator, so it carries no
+  // type-context keyword include); a head match restores its keyword scope and
+  // paints the mapped key as a type name (matching the official mappedtype rule).
+  // Keyword-agnostic: the connector + its scope both come from the grammar.
+  const mappedTypeConnectors = new Set<string>();
+  {
+    const mtIdentName = identToken?.name;
+    const walk = (e: RuleExpr | undefined, underBracket: boolean): void => {
+      if (!e) return;
+      if (e.type === 'seq') {
+        const hasBracket = underBracket || e.items.some(it => it.type === 'literal' && it.value === '[');
+        for (let i = 0; i < e.items.length; i++) {
+          const a = e.items[i], b = e.items[i + 1];
+          // Ident-ref directly followed by an alt whose a branch starts with a keyword
+          if (hasBracket && a && a.type === 'ref' && a.name === mtIdentName && b && b.type === 'alt') {
+            for (const branch of b.items) {
+              const head = branch.type === 'seq' ? branch.items[0] : branch;
+              if (head && head.type === 'literal' && isKeywordLiteral(head.value)) {
+                mappedTypeConnectors.add(head.value);
+              }
+            }
+          }
+          walk(a, hasBracket);
+        }
+      } else if (e.type === 'alt') {
+        for (const it of e.items) walk(it, underBracket);
+      } else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') {
+        walk(e.body, underBracket);
+      } else if (e.type === 'sep') {
+        walk(e.element, underBracket);
+      }
+    };
+    if (mtIdentName) for (const r of grammar.rules) walk(r.body, false);
+  }
   if (repository['type-bracket']) {
+    const mappedTypeHeads = [...mappedTypeConnectors]
+      .map(kw => ({ kw, scope: getScope(scopeOverrides, kw) }))
+      .filter((x): x is { kw: string; scope: string } => !!x.scope)
+      .map(({ kw, scope }) => ({
+        // `[ K in …` — the mapped key is a type name, the connector keeps its scope.
+        match: `(?<=\\[)\\s*(${identPattern})\\s+(${escapeRegex(kw)})\\b`,
+        captures: {
+          '1': { name: `entity.name.type.${langName}` },
+          '2': { name: `${scope}.${langName}` },
+        },
+      }));
     repository['type-bracket'].patterns = [
+      ...mappedTypeHeads,
       {
         match: `(?<=\\[)\\s*(${identPattern})(\\s*:)`,
         captures: {
@@ -5132,6 +5246,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         end = `(?=${escapeRegex(decl.endHint)})`;
       } else if (!decl.hasBody) {
         end = '(?=;|$)';
+      } else if (decl.optionalBody) {
+        // Body OPTIONAL (`function f(){}` OR overload/ambient `function f();`): close
+        // after the body `}` as usual, but ALSO on a body-less `;` terminator —
+        // otherwise the region runs into the next statement. The body's own `;`s are
+        // inside the nested #code-block region, so the outer `(?=;)` only sees the
+        // signature terminator (TM never tests the outer end inside a child region).
+        end = '(?<=\\})|(?=;)';
       }
 
       // Build begin regex: keyword [midLiterals?] name
@@ -6347,6 +6468,65 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         const order = (s: string) => s.startsWith('support.type.') ? 0 : 1;
         return order(a) - order(b);
       });
+      // TYPE-POSITION builtin literals — `undefined`/`null`/`true`/`false` are
+      // value `constant.language.*` keywords in EXPRESSION position, but in a TYPE
+      // they are primitive type-builtins (official's `type-builtin-literals` →
+      // support.type.builtin: `this|true|false|undefined|null|object`). In type
+      // position tsc lexes a bare `undefined` as a type keyword (support.type),
+      // never the value constant; the literal-type `null`/`true`/`false` are
+      // defensibly a type-builtin too. So a constant.language keyword that the
+      // grammar ALSO admits in type position (it appears in a @type rule, i.e. is a
+      // typeContextKeyword) is re-scoped support.type.builtin HERE — type-inner is
+      // only reached in type position, so the value-context match is untouched.
+      // `this`/`super` (variable.language) are deliberately excluded: a type `this`
+      // is the polymorphic-this binding, defensibly variable.language, not a
+      // type-builtin. Derived from the grammar's own typeContextKeywords ∩
+      // constant.language groups — no hardcoded word list.
+      const typeBuiltinLiterals = [...keywordGroups.entries()]
+        .filter(([scope]) => scope.startsWith('constant.language.'))
+        .flatMap(([, kws]) => kws)
+        .filter(kw => typeContextKeywords.has(kw));
+      const typeBuiltinKey = 'type-builtin-literals';
+      if (typeBuiltinLiterals.length > 0) {
+        repository[typeBuiltinKey] = {
+          match: `\\b(${typeBuiltinLiterals.map(escapeRegex).join('|')})\\b`,
+          name: `support.type.builtin.${langName}`,
+        };
+      }
+      // TYPE-POSITION storage modifiers — `readonly` of `readonly T[]` (and the
+      // index/mapped `readonly [`) is a `storage.modifier` keyword that ALSO heads a
+      // type operator (it appears in a @type rule → typeContextKeyword). In type
+      // position it would otherwise be eaten by #simple-type → entity.name.type; a
+      // dedicated include keeps its storage.modifier scope (matching official, which
+      // paints type-position `readonly` storage.modifier). Only storage.modifier
+      // keywords that are typeContextKeywords are emitted (the pure declaration
+      // modifiers `public`/`static`/… never reach type position), so this is exactly
+      // `readonly` for TS — derived from the grammar, no hardcoded word.
+      const typeStorageMods = new Map<string, string[]>();
+      for (const [scope, kws] of keywordGroups) {
+        if (!scope.startsWith('storage.modifier')) continue;
+        const inType = kws.filter(kw => typeContextKeywords.has(kw));
+        if (inType.length > 0) typeStorageMods.set(scope, inType);
+      }
+      const typeStorageModIncludes: { include: string }[] = [];
+      for (const [scope, kws] of typeStorageMods) {
+        const tmKey = `type-${scope.replace(/\./g, '-')}`;
+        repository[tmKey] = {
+          match: `\\b(${kws.map(escapeRegex).join('|')})\\b`,
+          name: `${scope}.${langName}`,
+        };
+        typeStorageModIncludes.push({ include: `#${tmKey}` });
+      }
+      // The constant.language type-builtins are emitted by #type-builtin-literals
+      // above, so drop their value-scope includes from the type-context injection
+      // (otherwise the value scope would win first, since type-builtin runs after).
+      const typeBuiltinLiteralSet = new Set(typeBuiltinLiterals);
+      const supportConstIncludes = supportConstScopes.filter(scope => {
+        if (!scope.startsWith('constant.language.')) return true;
+        const kws = keywordGroups.get(scope) ?? [];
+        // keep the include only if it still has keywords NOT promoted to type-builtin
+        return kws.some(kw => !typeBuiltinLiteralSet.has(kw));
+      });
       const typeRelatedIncludes = [
         // Comments first: a `//` / `/* */` may sit anywhere in type position
         // (notably inside a multiline generic argument list). Without these the
@@ -6363,7 +6543,12 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // closing `>` is mis-read as a relational operator. Gated on the entry
         // existing (a grammar with no generic declarations emits none).
         ...(repository['declaration-type-params'] ? [{ include: '#declaration-type-params' }] : []),
-        ...supportConstScopes.map(scope => ({ include: `#scope-${scope.replace(/\./g, '-')}` })),
+        // type-builtin literals (undefined/null/true/false → support.type.builtin)
+        // must precede the remaining support.type / constant.language includes.
+        ...(typeBuiltinLiterals.length > 0 ? [{ include: `#${typeBuiltinKey}` }] : []),
+        // type-position storage modifiers (`readonly T[]` → storage.modifier).
+        ...typeStorageModIncludes,
+        ...supportConstIncludes.map(scope => ({ include: `#scope-${scope.replace(/\./g, '-')}` })),
         ...operatorExprIncludeKeys.map(key => ({ include: `#${key}` })),
       ];
       if (typeRelatedIncludes.length > 0) {

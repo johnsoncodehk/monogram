@@ -1257,6 +1257,17 @@
       },
       "patterns": [
         {
+          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)\\s+(in)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.ts"
+            },
+            "2": {
+              "name": "keyword.control.loop.ts"
+            }
+          }
+        },
+        {
           "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\s*:)",
           "captures": {
             "1": {
@@ -1552,7 +1563,7 @@
           "include": "$self"
         }
       ],
-      "end": "(?<=\\})"
+      "end": "(?<=\\})|(?=;)"
     },
     "function-anon-declaration": {
       "name": "meta.function.ts",
@@ -2591,6 +2602,14 @@
       "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b(?!\\s*(?:\\.|\\?\\.|\\())",
       "name": "support.class.ts"
     },
+    "type-builtin-literals": {
+      "match": "\\b(true|false|null|undefined)\\b",
+      "name": "support.type.builtin.ts"
+    },
+    "type-storage-modifier": {
+      "match": "\\b(readonly|abstract)\\b",
+      "name": "storage.modifier.ts"
+    },
     "scope-storage-type-function-arrow": {
       "match": "=>",
       "name": "storage.type.function.arrow.ts"
@@ -3077,16 +3096,13 @@
           "include": "#type-parameters"
         },
         {
+          "include": "#type-builtin-literals"
+        },
+        {
+          "include": "#type-storage-modifier"
+        },
+        {
           "include": "#scope-support-type-primitive"
-        },
-        {
-          "include": "#scope-constant-language-boolean-true"
-        },
-        {
-          "include": "#scope-constant-language-boolean-false"
-        },
-        {
-          "include": "#scope-constant-language-null"
         },
         {
           "include": "#scope-keyword-operator-expression"
