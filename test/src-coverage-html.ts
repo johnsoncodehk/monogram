@@ -40,7 +40,16 @@ function collect(node: any, out: El[]): void {
 function p5Tree(node: any): El[] {
   const out: El[] = [];
   for (const c of node.childNodes ?? []) {
-    if (c.tagName) out.push({ tag: c.tagName.toLowerCase(), children: p5Tree(c) });
+    if (!c.tagName) continue;
+    // parse5's tree construction synthesises spec-mandated containers (implied <tbody>,
+    // <colgroup>, …) that are NOT in the source; those carry a null sourceCodeLocation
+    // (requires parseFragment(..., {sourceCodeLocationInfo:true})). Drop them and hoist
+    // their real children, so we compare SOURCE structure (the CST's basis) against SOURCE
+    // structure — not Monogram's source-faithful CST against parse5's constructed DOM.
+    // Relocations (foster-parenting) keep their location → still differ; a Monogram parse
+    // failure still throws → still a disagreement. So only pure implied-container inserts flip.
+    if (c.sourceCodeLocation == null) { out.push(...p5Tree(c)); continue; }
+    out.push({ tag: c.tagName.toLowerCase(), children: p5Tree(c) });
   }
   return out;
 }
@@ -120,11 +129,11 @@ await run({
   oracle: 'structural tree-equality (parse5)',
   urlMatch: (url) => /node_modules\/parse5\/dist\//.test(url),
   loadCorpus: (): CorpusItem[] => corpus.map((c) => ({ code: c.html, origin: c.origin })),
-  warmup: () => { parseFragment('<div><p>a<b>x</b></p></div>'); parseFragment('<table><tr><td>c</td></table>'); },
+  warmup: () => { const o = { sourceCodeLocationInfo: true } as const; parseFragment('<div><p>a<b>x</b></p></div>', o); parseFragment('<table><tr><td>c</td></table>', o); },
   // CRITICAL: parseFragment is the ONE measured official parse. The agreement tree comes
   // from THIS call's result (reused below) — never re-parse parse5, or the per-file delta
   // collapses (the harness snapshots immediately after this returns, before Monogram runs).
-  runOfficial: (html) => ({ tree: JSON.stringify(p5Tree(parseFragment(html))) }),
+  runOfficial: (html) => ({ tree: JSON.stringify(p5Tree(parseFragment(html, { sourceCodeLocationInfo: true }))) }),
   agree: (html, official): AgreeResult => {
     const off = (official as { tree: string }).tree;
     let monoStr = '<throw>', agree = false;

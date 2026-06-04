@@ -39,11 +39,16 @@ function collect(node: any, out: El[]): void {
   for (const c of node.children ?? []) collect(c, out); // descend through wrappers (Node, …)
 }
 
-// Same element tree from a parse5 fragment.
+// Same element tree from a parse5 fragment. Spec-mandated containers parse5 SYNTHESISES
+// (implied <tbody>, <colgroup>, …) carry a null sourceCodeLocation (needs
+// {sourceCodeLocationInfo:true}); drop them and hoist their real children so this compares
+// SOURCE structure against the source-faithful CST, not against parse5's constructed DOM.
 function p5Tree(node: any): El[] {
   const out: El[] = [];
   for (const c of node.childNodes ?? []) {
-    if (c.tagName) out.push({ tag: c.tagName.toLowerCase(), children: p5Tree(c) });
+    if (!c.tagName) continue;
+    if (c.sourceCodeLocation == null) { out.push(...p5Tree(c)); continue; }
+    out.push({ tag: c.tagName.toLowerCase(), children: p5Tree(c) });
   }
   return out;
 }
@@ -77,6 +82,10 @@ const corpus: string[] = [
   '<div><!-- a comment --><p>x</p></div>',
   '<p>Price: $5 — 50% off (today)!</p>',
   '<custom-element data-x="1"><slot-content>hi</slot-content></custom-element>',
+  // Well-formed (proper nesting, explicit tags). parse5 inserts an implied <tbody> the
+  // source omits; the oracle now normalises that synthesised container away, so this is a
+  // true source-structure match — not the "B-lite gap" it was previously misfiled as.
+  '<table><tr><td>1</td></tr></table>',
 ];
 
 // Known B-lite gaps (documented, not gated): things parse5 handles via error-recovery
@@ -85,7 +94,6 @@ const unsupported: [string, string][] = [
   ['optional close tags', '<ul><li>a<li>b</ul>'],
   ['DOCTYPE', '<!DOCTYPE html><html><body>x</body></html>'],
   ['unescaped < in text (needs &lt;)', '<p>a < b</p>'],
-  ['implicit <tbody> insertion (WHATWG tree construction)', '<table><tr><td>1</td></tr></table>'],
 ];
 
 let accepted = 0, treeMatch = 0;
@@ -95,7 +103,7 @@ for (const html of corpus) {
   try { mono = parse(html); accepted++; }
   catch (e) { acceptFails.push(`${html}\n      → ${String((e as Error).message).split('\n')[0]}`); continue; }
   const a = JSON.stringify(monoTree(mono));
-  const b = JSON.stringify(p5Tree(parseFragment(html)));
+  const b = JSON.stringify(p5Tree(parseFragment(html, { sourceCodeLocationInfo: true })));
   if (a === b) treeMatch++;
   else treeFails.push(`${html}\n      mono:   ${a}\n      parse5: ${b}`);
 }
