@@ -146,14 +146,29 @@ await run({
   ledgerTop: 12,
   renderHeader: (_results, corpus) => {
     for (const [origin, list] of sources) console.log(`    - ${list.length.toString().padStart(3)} from ${origin}`);
-    console.log(`  Monogram threw: ${monoThrew}/${corpus.length} (HTML has no reject; a throw = a Monogram parser gap)`);
+    console.log(`  Monogram declined (threw): ${monoThrew}/${corpus.length} (HTML has no reject; parse5 recovers from anything — see the footer for the declined-vs-wrong-tree split)`);
   },
   renderFooter: () => {
-    console.log(`\n  -- files where Monogram's tree != parse5's tree (${treeFails.length}) --`);
-    for (const f of treeFails) {
-      console.log(`  x ${JSON.stringify(f.html)}`);
-      console.log(`      mono   : ${f.mono.slice(0, 160)}`);
-      console.log(`      parse5 : ${f.off.slice(0, 160)}`);
+    // Classify the residual disagreements by NATURE (the honest breakdown — the headline
+    // agree count above already counts BOTH; this separates them so the real gaps stay visible).
+    // A THROW = Monogram declined the input (parse5 recovers from anything; on the current corpus
+    // these are malformed — overlap/adoption-agency — or out-of-fragment, e.g. DOCTYPE, where a
+    // CST parser declining is the B-lite design, not a wrong answer). A WRONG-TREE = Monogram
+    // parsed but produced a structure != parse5: a positive wrong claim = a genuine structural gap.
+    const wrong = treeFails.filter((f) => !f.mono.startsWith('<throw'));
+    const threw = treeFails.filter((f) => f.mono.startsWith('<throw'));
+    console.log(`\n  -- ${treeFails.length} disagreement(s) = ${threw.length} declined (threw) + ${wrong.length} WRONG-TREE (real structural gap) --`);
+    if (wrong.length) {
+      console.log(`  WRONG-TREE (Monogram parsed, structure != parse5 — the real gaps):`);
+      for (const f of wrong) {
+        console.log(`  x ${JSON.stringify(f.html)}`);
+        console.log(`      mono   : ${f.mono.slice(0, 160)}`);
+        console.log(`      parse5 : ${f.off.slice(0, 160)}`);
+      }
+    }
+    if (threw.length) {
+      console.log(`  declined (threw — parse5 recovers, Monogram does not):`);
+      for (const f of threw) console.log(`  x ${JSON.stringify(f.html)}  ${f.mono.slice(0, 70)}`);
     }
   },
 });
