@@ -15,6 +15,11 @@ interface TokenOptions {
   embed?: string;
   // ── Lexer hints (keep gen-parser language-agnostic; all optional) ──
   identifier?: boolean;
+  // A token that is a fixed literal prefix followed by an IdentifierName (e.g. JS private
+  // names, `#x`). Declares the prefix so the lexer's Unicode ID_Start/ID_Continue fallback
+  // can match a non-ASCII `prefix`-name (`#℘`, `#<ZWNJ>`) the ASCII token pattern misses —
+  // the same fallback the bare `identifier` token gets, just behind the prefix.
+  identifierPrefix?: string;
   template?: { open: string; interpOpen: string; interpClose: string };
   regexContext?: {
     divisionAfterTypes?: string[];
@@ -353,6 +358,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
       escapeValidPattern: tok.opts.escapeValid?.source,
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,
+      identifierPrefix: tok.opts.identifierPrefix,
       template: tok.opts.template,
       regexContext: tok.opts.regexContext && {
         divisionAfterTypes: tok.opts.regexContext.divisionAfterTypes ?? [],

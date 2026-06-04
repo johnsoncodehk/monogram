@@ -9,6 +9,8 @@ export interface TokenDecl {
   // ── Lexer hints (keep the engine language-agnostic; all optional) ──
   identifier?: boolean;          // THE identifier token: engine uses its name for the
                                  // Unicode-identifier fallback and regex division-after context.
+  identifierPrefix?: string;     // a prefixed-identifier token (e.g. `#name`): the engine's Unicode
+                                 // ID fallback also matches `<prefix>`+non-ASCII-identifier under this name.
   template?: TemplateDelimiters; // a template-literal token: engine tokenizes interpolation holes.
   regexContext?: RegexContext;   // a `regex`-flagged token: when `/` is a regex vs division.
   string?: boolean;              // a string-literal token: its delimiters drive editor auto-close/surround.

@@ -181,15 +181,15 @@ module.exports = grammar({
 
     ident: $ => token(/(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/),
 
-    hex_number: $ => token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*/),
+    hex_number: $ => token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*n?/),
 
-    octal_number: $ => token(/0[oO][0-7]+(_[0-7]+)*/),
+    octal_number: $ => token(/0[oO][0-7]+(_[0-7]+)*n?/),
 
-    binary_number: $ => token(/0[bB][01]+(_[01]+)*/),
+    binary_number: $ => token(/0[bB][01]+(_[01]+)*n?/),
 
     big_int: $ => token(/[0-9]+(_[0-9]+)*n/),
 
-    number: $ => token(/[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?/),
+    number: $ => token(/(?:[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?|\.[0-9]+(_[0-9]+)*)(?:[eE][+-]?[0-9]+(_[0-9]+)*)?/),
 
     string: $ => token(/"(?:[^"\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*'/),
 
@@ -197,9 +197,9 @@ module.exports = grammar({
 
     jsxclose: $ => token(/<\//),
 
-    decorator: $ => token(/@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?/),
+    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\}|\.)*)?/),
 
-    private_field: $ => token(/#[a-zA-Z_$][a-zA-Z0-9_$]*/),
+    private_field: $ => token(/#(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/),
 
     template: $ => seq(
       "`",

@@ -36,6 +36,50 @@ export function createLexer(grammar: CstGrammar) {
   // ── Lexer hints (declared per-token in the grammar; nothing here hardcodes a
   // specific language's tokens — see the `identifier`/`template`/`regexContext` opts) ──
   const identTokenName = grammar.tokens.find(t => t.identifier)?.name;
+  // Unicode identifier fallback: a literal identifier character the declared identifier
+  // token's (necessarily ASCII / escape-only — patterns compile without /u) pattern can't
+  // match — `℘` (Other_ID_Start), accented letters, ZWNJ/ZWJ, combining marks. ID_Start /
+  // ID_Continue are the spec's identifier classes (`$` and `_` are ID_Start; an
+  // IdentifierPart additionally admits `$`, ZWNJ U+200C and ZWJ U+200D). Built once.
+  const uniIdentRe = /^[$_\p{ID_Start}][$‌‍\p{ID_Continue}]*/u;
+  // An IdentifierPart run (ID_Continue + `$`, ZWNJ, ZWJ): used to EXTEND an ASCII identifier
+  // token that stopped at a continue-only Unicode char (`ab<ZWNJ>cd` — the ASCII pattern emits
+  // `ab`, then this consumes `<ZWNJ>cd` and folds it back into the preceding identifier).
+  const uniIdentContRe = /^[$‌‍\p{ID_Continue}]+/u;
+  // Prefixed-identifier tokens (e.g. `#name`): same Unicode fallback behind a fixed literal
+  // prefix, tagged with that token's name (so `#℘` lexes as the private-name token, not Ident).
+  const prefixedIdentTokens = grammar.tokens
+    .filter(t => t.identifierPrefix)
+    .map(t => ({ name: t.name, prefix: t.identifierPrefix as string }));
+  // Token names that denote an identifier (the bare one + any prefixed) — the ones the
+  // continue-run extension above may legitimately grow.
+  const identLikeTokenNames = new Set<string>(
+    [identTokenName, ...prefixedIdentTokens.map(t => t.name)].filter(Boolean) as string[],
+  );
+  // Per token name, the fixed literal prefix to strip before validating its identifier body
+  // (the bare identifier token has none). Used by identTextValid below.
+  const identPrefixByName = new Map<string, string>(prefixedIdentTokens.map(t => [t.name, t.prefix]));
+  // An identifier token's ASCII pattern admits `\uXXXX` / `\u{cp}` escapes but cannot (no /u
+  // flag) check that the ESCAPED codepoint is a legal identifier character — so `!` (`!`)
+  // or a ZWNJ-at-start would wrongly tokenize. Validate post-match: decode every escape, then
+  // require the decoded text to be a well-formed IdentifierName (uniIdentRe). A pure-ASCII /
+  // escape-free identifier needs no decoding (fast path). Returns false ⇒ reject (lex error,
+  // TS's "Invalid character"). Only ever REJECTS escaped identifiers, so it cannot accept more.
+  const decodeEsc = /\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})/g;
+  function identTextValid(name: string, text: string): boolean {
+    const prefix = identPrefixByName.get(name) ?? '';
+    const body = text.slice(prefix.length);
+    if (!body.includes('\\')) return true;   // no escapes → the regex already validated it
+    let bad = false;
+    const decoded = body.replace(decodeEsc, (_m, braced, fixed) => {
+      const cp = parseInt(braced ?? fixed, 16);
+      if (cp > 0x10FFFF) { bad = true; return ''; }
+      return String.fromCodePoint(cp);
+    });
+    if (bad) return false;
+    const m = decoded.match(uniIdentRe);
+    return m !== null && m[0].length === decoded.length;
+  }
   const templateToken = grammar.tokens.find(t => t.template);
   const templateTokenName = templateToken?.name;
   const tplOpen = templateToken?.template?.open ?? '';
@@ -357,6 +401,11 @@ export function createLexer(grammar: CstGrammar) {
         }
         const m = remaining.match(tm.regex);
         if (m) {
+          // An identifier(-prefix) token whose `\u` escapes decode to a non-identifier
+          // codepoint (`!` = `!`, a ZWNJ at start) is a lex error, not a token.
+          if (identLikeTokenNames.has(tm.name) && !identTextValid(tm.name, m[0])) {
+            throw new Error(`Invalid identifier escape at offset ${pos}: '${m[0]}'`);
+          }
           if (!tm.skip) {
             push({ type: tm.name, text: m[0], offset: pos });
           } else if (m[0].includes('\n')) {
@@ -398,14 +447,46 @@ export function createLexer(grammar: CstGrammar) {
         }
       }
 
+      if (!matched && identLikeTokenNames.size) {
+        // Extend a just-emitted identifier token that the ASCII pattern cut short at a
+        // continue-only Unicode char: `ab<ZWNJ>cd` lexes `ab` (ASCII), then this absorbs
+        // `<ZWNJ>cd` into it. Only when the previous token is an identifier(-prefix) token
+        // immediately adjacent to `pos` (no whitespace/other token between).
+        const prev = tokens[tokens.length - 1];
+        if (prev && identLikeTokenNames.has(prev.type) && prev.offset + prev.text.length === pos) {
+          const cont = remaining.match(uniIdentContRe);
+          if (cont) {
+            prev.text += cont[0];
+            pos += cont[0].length;
+            matched = true;
+          }
+        }
+      }
+
       if (!matched && identTokenName) {
         // Fallback: a Unicode identifier the declared identifier token's pattern may have
-        // missed (e.g. accented or non-Latin names). Tagged with that token's name.
-        const identMatch = remaining.match(/^[\p{L}\p{Nl}_$][\p{L}\p{Nl}\p{Nd}\p{Mn}\p{Mc}\p{Pc}_$]*/u);
+        // missed (e.g. accented or non-Latin names, `℘`, ZWNJ/ZWJ). Tagged with that token's name.
+        const identMatch = remaining.match(uniIdentRe);
         if (identMatch) {
           push({ type: identTokenName, text: identMatch[0], offset: pos });
           pos += identMatch[0].length;
           matched = true;
+        }
+      }
+
+      if (!matched && prefixedIdentTokens.length) {
+        // Same Unicode fallback for a prefixed-identifier token (`#℘`): match the literal
+        // prefix, then a Unicode IdentifierName on the rest, and emit the whole as one token.
+        for (const pt of prefixedIdentTokens) {
+          if (!remaining.startsWith(pt.prefix)) continue;
+          const m = remaining.slice(pt.prefix.length).match(uniIdentRe);
+          if (m) {
+            const text = pt.prefix + m[0];
+            push({ type: pt.name, text, offset: pos });
+            pos += text.length;
+            matched = true;
+            break;
+          }
         }
       }
 

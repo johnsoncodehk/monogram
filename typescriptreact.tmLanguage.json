@@ -1665,15 +1665,15 @@
     },
     "hexnumber": {
       "name": "constant.numeric.hex.tsx",
-      "match": "0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*(?![0-9A-Za-z_$\\\\])"
+      "match": "0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*n?(?![0-9A-Za-z_$\\\\])"
     },
     "octalnumber": {
       "name": "constant.numeric.octal.tsx",
-      "match": "0[oO][0-7]+(_[0-7]+)*(?![0-9A-Za-z_$\\\\])"
+      "match": "0[oO][0-7]+(_[0-7]+)*n?(?![0-9A-Za-z_$\\\\])"
     },
     "binarynumber": {
       "name": "constant.numeric.binary.tsx",
-      "match": "0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\\\])"
+      "match": "0[bB][01]+(_[01]+)*n?(?![0-9A-Za-z_$\\\\])"
     },
     "bigint": {
       "name": "constant.numeric.bigint.tsx",
@@ -1681,7 +1681,7 @@
     },
     "number": {
       "name": "constant.numeric.decimal.tsx",
-      "match": "[0-9]+(_[0-9]+)*(?:\\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:[0-9]+(_[0-9]+)*(?:\\.[0-9]*(_[0-9]+)*)?|\\.[0-9]+(_[0-9]+)*)(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
     },
     "template": {
       "name": "string.quoted.other.template.tsx",
@@ -1726,11 +1726,11 @@
     },
     "decorator": {
       "name": "entity.name.function.decorator.tsx",
-      "match": "@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?"
+      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\}|\\.)*)?"
     },
     "privatefield": {
       "name": "variable.other.property.tsx",
-      "match": "#[a-zA-Z_$][a-zA-Z0-9_$]*"
+      "match": "#(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*"
     },
     "type-paren": {
       "begin": "\\(",

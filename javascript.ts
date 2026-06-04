@@ -33,7 +33,15 @@ import {
 
 // ── Tokens ──
 
-const Ident        = token(/(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/, { identifier: true });
+// IdentifierName, ASCII + `\u`-escape forms. The `\uXXXX` / `\u{cp}` alternatives let an
+// identifier (or a private `#name`) spell any character via an escape — e.g. `\u{6F}_` or
+// `#\u{6F}_` — which the spec permits anywhere an IdentifierStart/Part is allowed. Non-ASCII
+// *literal* identifier characters (`℘`, accented letters, ZWNJ/ZWJ, combining marks) are matched
+// by the lexer's Unicode ID_Start/ID_Continue fallback instead (no /u flag is compiled here —
+// YAML's token patterns use escapes that /u rejects — so \p{…} cannot live in these patterns).
+const idStart    = String.raw`[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\}`;
+const idPart     = String.raw`[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\}`;
+const Ident        = token(new RegExp(`(?:${idStart})(?:${idPart})*`), { identifier: true });
 // Numeric tokens end with `(?![0-9A-Za-z_$\\])`: the spec rule that a numeric literal
 // may not be immediately followed by an IdentifierStart or DecimalDigit. Without it,
 // `0b2`/`0B1102110`/`0o81010` would munch a valid prefix (`0b1`, `0B110`) and leave the
@@ -41,11 +49,20 @@ const Ident        = token(/(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})
 // With it the bad literal matches no token and the lexer throws — the correct rejection.
 // (ASCII IdentifierStart + `\` for `\u`-escapes; the lexer compiles patterns without the
 // /u flag so \p{L} is unavailable, and every affected conformance case is ASCII.)
-const HexNumber    = token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*(?![0-9A-Za-z_$\\])/,            { scope: 'constant.numeric.hex' });
-const OctalNumber  = token(/0[oO][0-7]+(_[0-7]+)*(?![0-9A-Za-z_$\\])/,                         { scope: 'constant.numeric.octal' });
-const BinaryNumber = token(/0[bB][01]+(_[01]+)*(?![0-9A-Za-z_$\\])/,                            { scope: 'constant.numeric.binary' });
+// Radix literals may carry a trailing `n` BigInt suffix (`0x5an`/`0o17n`/`0b101n`); the `n` is
+// only valid here (radix forms have no fractional part), so it lives on each radix token rather
+// than on the decimal `BigInt_` below. The shared `(?!IdentifierStart|DecimalDigit)` tail still
+// rejects a stray trailing identifier (`0x5anabc`).
+const HexNumber    = token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*n?(?![0-9A-Za-z_$\\])/,            { scope: 'constant.numeric.hex' });
+const OctalNumber  = token(/0[oO][0-7]+(_[0-7]+)*n?(?![0-9A-Za-z_$\\])/,                         { scope: 'constant.numeric.octal' });
+const BinaryNumber = token(/0[bB][01]+(_[01]+)*n?(?![0-9A-Za-z_$\\])/,                            { scope: 'constant.numeric.binary' });
 const BigInt_      = token(/[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\])/,                              { scope: 'constant.numeric.bigint' });
-const Number_      = token(/[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\])/);
+// DecimalLiteral, including the leading-dot form (`.5`, `.0e1`): an integer part with optional
+// fraction/exponent, OR a bare fraction `.digits` with optional exponent. Same trailing guard.
+// Scope is set explicitly (not inferred from a `[0-9]`-leading pattern) because the leading-dot
+// alternative makes the pattern start with `(?:` — gen-tm's decimal-numeric detector keys on a
+// `[0-9]`/`\d` prefix, so without this the token would lose its `constant.numeric` scope.
+const Number_      = token(/(?:[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?|\.[0-9]+(_[0-9]+)*)(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\])/, { scope: 'constant.numeric.decimal' });
 // A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must
 // match their strict forms — a `\u{cp}` with cp ≤ 0x10FFFF, a 4-hex `\uXXXX`, or a
 // 2-hex `\xXX` — while `\` + any *other* char (\n, \\, \q non-escape, line
@@ -87,8 +104,13 @@ const Regex_       = token(/\/(?:[^\/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[gims
     postfixAfterValueTexts: ['!'],
   },
 });
-const Decorator    = token(/@(?:[a-zA-Z_$][a-zA-Z0-9_$.]*)?/,                { scope: 'entity.name.function.decorator' });
-const PrivateField = token(/#[a-zA-Z_$][a-zA-Z0-9_$]*/,                     { scope: 'variable.other.property' });
+// `@name` / `@ns.name` — each dotted segment is an IdentifierName, so it admits the same
+// `\u`-escape forms as `Ident` (`@℘`, `@ZW_‌_NJ`); the parser owns the `(args)` tail.
+const Decorator    = token(new RegExp(`@(?:(?:${idStart})(?:${idPart}|\\.)*)?`), { scope: 'entity.name.function.decorator' });
+// PrivateIdentifier: `#` + an IdentifierName, so it admits the same `\u`-escape forms as `Ident`
+// (`#\u{6F}_`). A non-ASCII literal `#name` (`#℘`, `#ZWNJ`) is handled by the lexer's Unicode
+// fallback, which recognises this token's leading `#` as a name prefix.
+const PrivateField = token(new RegExp(`#(?:${idStart})(?:${idPart})*`),     { scope: 'variable.other.property', identifierPrefix: '#' });
 const Shebang      = token(/^#![^\n]*/,           { skip: true, scope: 'comment.line.shebang' });
 const JSDoc        = token(/\/\*\*(?!\/)[\s\S]*?\*\//,  { skip: true, scope: 'comment.block.documentation', embed: 'jsdoc' });
 const TripleSlash  = token(/\/\/\/\s*<[^\n]*/,    { skip: true, scope: 'comment.line.triple-slash' });
