@@ -64,6 +64,20 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
+
+      # Cheap LR-conflict gate: `tree-sitter generate` (no wasm) for every derived
+      # grammar that is a tree-sitter target, so a conflict introduced by a grammar
+      # change is caught even for the dialects whose wasm is not built below (tsx/js/jsx)
+      # — exactly the gap that let an unresolved `type`/`class_heritage` conflict ship.
+      # yaml is excluded: its indentation tokens are not yet wired as tree-sitter
+      # externals, so its generated grammar.js is not loadable (separate open issue).
+      - name: Generate every derived tree-sitter grammar (conflict gate, no wasm)
+        run: |
+          for g in typescript typescriptreact javascript javascriptreact html; do
+            echo "── tree-sitter generate: $g"
+            ( cd "tree-sitter/$g" && npx tree-sitter generate )
+          done
+
       - name: Build the derived tree-sitter grammar to wasm
         run: |
           cd tree-sitter/typescript
