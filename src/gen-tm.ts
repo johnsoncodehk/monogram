@@ -3390,6 +3390,144 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
   return { indicator, keyScope, keyBody, prefix };
 }
 
+// ── Flow-collection detection (YAML `{ … }` mapping / `[ … ]` sequence) ──
+//
+// A flat per-token grammar cannot scope a flow MAPPING's keys: in `{ a: 1 }` the `a` is a key
+// (entity.name.tag) but in `{ [1]: v }` the `1` is a SEQUENCE element (a value) — the distinction
+// is the ENCLOSING bracket, which a context-free token can't see. The maintained RedCMD grammar
+// solves this with nested begin/end FLOW REGIONS (a `{`…`}` / `[`…`]` region IS a scope-stack
+// frame, so depth nests), scoping a scalar that leads an entry as a key inside a mapping and as a
+// value inside a sequence. This derives that structure from the grammar's OWN flow rules — the
+// bracket pair (from `indent.flowOpen`/`flowClose`), the entry/value separators, and whether a
+// collection is a mapping (its entry carries a `:` key/value separator) or a sequence (it does not).
+//
+// Signal (all from the grammar, nothing hardcoded):
+//   • the grammar is INDENTATION-mode AND declares `flowOpen`/`flowClose` bracket pairs;
+//   • for a pair (O,C): a rule whose body is a `seq` headed by literal `O` and ended by literal `C`
+//     — that is the flow-collection rule. Its entry-separator literal (the `,` repeated between
+//     entries) and, for a mapping, its key/value-separator literal (the `:` inside the entry rule)
+//     are read off the rule's own literals.
+//   • the KEY scope + plain-scalar shape come from the same Key/Plain token pair detectExplicitKey
+//     uses (a scalar token whose pattern is `<plain>(?=…sep…)` over a broader plain scalar).
+// Returns null when the family has no flow collections (every non-YAML grammar).
+interface FlowColl { open: string; close: string; sep: string; colon: string | null; }
+function detectFlowCollections(grammar: CstGrammar): {
+  colls: FlowColl[];
+  plainStart: string;          // plain-scalar LEADING char class (no enclosing group)
+  keyScope: string;            // the key scope (e.g. entity.name.tag)
+  plainScope: string;          // the broad plain-scalar scope (e.g. string.unquoted)
+  dq: string | null;           // double-quoted scalar body pattern (`"(?:\\.|…)*"`)
+  sq: string | null;           // single-quoted scalar body pattern
+  dqScope: string | null;      // double-quoted scalar scope (string.quoted.double)
+  sqScope: string | null;      // single-quoted scalar scope
+  dqEscape: string | null;     // in-string escape sub-pattern for the double quote
+  sqEscape: string | null;     // in-string escape sub-pattern for the single quote
+} | null {
+  const indent = grammar.indent;
+  if (!indent || !indent.flowOpen?.length || !indent.flowClose?.length) return null;
+  const PLACEHOLDER = '(?!)';
+
+  // top-level literals of a rule body: direct children only (unwrap quantifier/group/sep), do NOT
+  // descend into `alt` or `ref` (those are nested sub-constructs, not THIS rule's own structure).
+  const topLits = (e: RuleExpr, out: string[]): void => {
+    if (e.type === 'literal') out.push(e.value);
+    else if (e.type === 'seq') e.items.forEach(x => topLits(x, out));
+    else if (e.type === 'quantifier' || e.type === 'group') topLits(e.body, out);
+    else if (e.type === 'sep') { out.push(e.delimiter); topLits(e.element, out); }
+  };
+  // refs reachable anywhere inside an expr.
+  const allRefs = (e: RuleExpr, out: Set<string>): void => {
+    if (e.type === 'ref') out.add(e.name);
+    else if (e.type === 'seq' || e.type === 'alt') e.items.forEach(x => allRefs(x, out));
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') allRefs(e.body, out);
+    else if (e.type === 'sep') allRefs(e.element, out);
+  };
+  const ruleByName = new Map(grammar.rules.map(r => [r.name, r] as const));
+
+  const colls: FlowColl[] = [];
+  const n = Math.min(indent.flowOpen.length, indent.flowClose.length);
+  for (let i = 0; i < n; i++) {
+    const open = indent.flowOpen[i], close = indent.flowClose[i];
+    // the collection rule: seq starting with lit(open), ending with lit(close).
+    const collRule = grammar.rules.find(r => {
+      const b = r.body;
+      if (b.type !== 'seq' || b.items.length < 2) return false;
+      const first = b.items[0], last = b.items[b.items.length - 1];
+      return first.type === 'literal' && first.value === open && last.type === 'literal' && last.value === close;
+    });
+    if (!collRule) continue;
+    // entry separator = a non-bracket single-char punctuation literal repeated in the collection
+    // (the `,` of `many(',', Entry)` — surfaces as a top-level literal alongside the brackets).
+    const collLits: string[] = []; topLits(collRule.body, collLits);
+    const sep = collLits.find(l => l.length === 1 && l !== open && l !== close && !/[\w\s]/.test(l)) ?? ',';
+    // mapping vs sequence: the ENTRY rule (a ref inside the collection) carries a `:` key/value
+    // separator (top-level literal) → mapping; otherwise → sequence.
+    const refs = new Set<string>(); allRefs(collRule.body, refs);
+    let colon: string | null = null;
+    for (const rn of refs) {
+      const er = ruleByName.get(rn);
+      if (!er) continue;
+      const eLits: string[] = []; topLits(er.body, eLits);
+      const c = eLits.find(l => l.length === 1 && l !== sep && l !== open && l !== close && !/[\w\s]/.test(l));
+      if (c) { colon = c; break; }
+    }
+    colls.push({ open, close, sep, colon });
+  }
+  if (!colls.length) return null;
+
+  // The Key/Plain token pair (same shape detectExplicitKey pins): a non-string token whose pattern
+  // is `<plain>(?=…)` over a broader plain-scalar token `plain`. `plain` gives the LEADING char
+  // class (its first balanced group) + the plain scope; the key token gives the key scope.
+  let keyScope: string | null = null, plainPat: string | null = null, plainScope: string | null = null;
+  for (const k of grammar.tokens) {
+    if (!k.scope || k.string || k.pattern === PLACEHOLDER) continue;
+    for (const p of grammar.tokens) {
+      if (p === k || !p.pattern || p.pattern === PLACEHOLDER || !k.pattern.startsWith(p.pattern)) continue;
+      const tail = k.pattern.slice(p.pattern.length);
+      if (/^\(\?=.*\)$/.test(tail)) { keyScope = k.scope; plainPat = p.pattern; plainScope = p.scope ?? null; break; }
+    }
+    if (keyScope) break;
+  }
+  if (!keyScope || !plainPat || !plainScope) return null;
+
+  // LEADING char class = the first balanced group of the plain pattern, unwrapped from its `(?:…)`.
+  const firstBalancedGroup = (pat: string): string | null => {
+    if (pat[0] !== '(') return null;
+    let depth = 0;
+    for (let i = 0; i < pat.length; i++) {
+      if (pat[i] === '\\') { i++; continue; }
+      if (pat[i] === '(') depth++;
+      else if (pat[i] === ')') { depth--; if (depth === 0) return pat.slice(0, i + 1); }
+    }
+    return null;
+  };
+  const lead = firstBalancedGroup(plainPat);
+  if (!lead) return null;
+  const plainStart = lead.replace(/^\(\?:/, '(').replace(/^\((.*)\)$/, '$1');
+
+  // Quoted-scalar tokens (string-flagged begin/end OR a match): give the flow quoted-KEY regions
+  // (a quoted scalar in key position carries entity.name.tag). Detect by the `string` flag; the
+  // body pattern is the token's `match` (key/quoted-scalar tokens are match-form here).
+  const quoteByScope = (suffix: string) =>
+    grammar.tokens.find(t => t.string && t.pattern !== PLACEHOLDER && t.scope?.startsWith(`string.quoted.${suffix}`) && !t.scope.includes('entity'));
+  const dqTok = quoteByScope('double'), sqTok = quoteByScope('single');
+  // The in-string escape: the FIRST sub-alternation of the quoted body after the opening quote
+  // (`\\.` for double, `''` for single). Derive it from the token's own pattern.
+  const quoteEscape = (tok: typeof dqTok): string | null => {
+    if (!tok) return null;
+    // pattern is `<q>(?:<esc>|[^<q><...>])*<q>` — the escape is the first `(?:…|` alternative.
+    const m = tok.pattern.match(/^.\(\?:([^|]*)\|/);
+    return m ? m[1] : null;
+  };
+
+  return {
+    colls, plainStart, keyScope, plainScope,
+    dq: dqTok?.pattern ?? null, sq: sqTok?.pattern ?? null,
+    dqScope: dqTok?.scope ?? null, sqScope: sqTok?.scope ?? null,
+    dqEscape: quoteEscape(dqTok), sqEscape: quoteEscape(sqTok),
+  };
+}
+
 // ── Constructor-call keyword detection ──
 
 function detectConstructorKeywords(
@@ -4507,6 +4645,193 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       },
     };
     topPatterns.push({ include: '#explicit-key' });
+  }
+
+  // ── 2c. Flow collections (`{ … }` mapping / `[ … ]` sequence) as nested begin/end regions ──
+  // A flat token grammar mis-scopes a flow mapping's keys (the enclosing bracket — invisible to a
+  // context-free token — decides whether an entry-leading scalar is a key or a sequence value).
+  // Emit nested begin/end regions (the TM scope stack carries flow depth) modelled on the
+  // maintained RedCMD grammar: inside a MAPPING the entry-leading scalar is a key (entity.name.tag),
+  // inside a SEQUENCE a scalar is a key only when a `:` separator follows. All shapes — bracket
+  // pair, `:`/`,` separators, plain/quoted scalar patterns, key scope — are DERIVED (see
+  // detectFlowCollections); null for every non-flow grammar, so other families are untouched.
+  const flow = detectFlowCollections(grammar);
+  if (flow) {
+    const ln = langName;
+    const P = `punctuation.${ln}`;
+    // Comment includes (derived from the grammar's comment-scoped tokens — not a hardcoded key),
+    // spread into every flow sub-region so a `#…` comment is scoped even mid-entry / mid-value.
+    const commentIncs = commentIncludeKeys.map(k => ({ include: `#${k}` }));
+    const start = flow.plainStart;                 // plain-scalar leading char class (bare)
+    // The flow-boundary char class: every flow bracket (open AND close) + the entry separator
+    // (`{`,`}`,`[`,`]`,`,`). A flow scalar/entry/value ends before any of them — a `,` (next entry),
+    // a closer (`}`/`]`), or a nested-collection opener (`{`/`[`, which begins the value). The
+    // key/value separator colon is NOT a boundary char (it separates key from value WITHIN an
+    // entry); it is handled by the dedicated colonSep branch below.
+    const closers = [...new Set(flow.colls.flatMap(c => [c.open, c.close, c.sep]))];
+    const closeCls = closers.map(escapeForCharClass).join('');     // for a [...] class
+    const colon = flow.colls.map(c => c.colon).find(Boolean) ?? ':';
+    const eColon = escapeRegex(colon);
+    // A flow scalar ENDS before: a separator-colon (`:` + flow-indicator/space/EOL), any closer
+    // (`,`/`}`/`]`), or a ` #` comment. (No `$` — a multi-line flow scalar spans lines.)
+    const colonSep = `${eColon}(?=[\\s${closeCls}]|$)`;
+    const flowEnd = `(?=[\\t ]*(?:${colonSep}|[${closeCls}])|(?:^|[\\t ])#)`;
+    const beforeClose = `(?=[${closeCls}])`;       // entry/value end: before a closer
+    // Does a `:` separator follow the upcoming plain scalar? (sequence single-pair-map test)
+    const hasColonAhead = `(?=(?:${start})(?:[^${escapeForCharClass(colon)}#${closeCls}]|${eColon}(?![\\s${closeCls}])|(?<=\\S)#)*${colonSep})`;
+
+    // Build the quoted-key region for a string-flagged quote token (carries entity.name.tag). The
+    // quote DELIMITER is the token pattern's first char (derived, never a hardcoded `"`/`'`), and
+    // applyEndPatternLast is set when the escape IS the doubled quote (`''`) — otherwise an empty
+    // `''` would be read as close-then-reopen instead of one escaped quote.
+    const quoteChar = (pat: string): string => pat[0] === '\\' ? pat.slice(0, 2) : pat[0];
+    const quoteKeyRegion = (q: string, scope: string, esc: string | null): TmPattern => ({
+      name: `${scope}.${ln} ${flow.keyScope}.${ln}`,
+      begin: escapeRegex(q), beginCaptures: { '0': { name: `punctuation.definition.string.begin.${ln}` } },
+      end: escapeRegex(q), endCaptures: { '0': { name: `punctuation.definition.string.end.${ln}` } },
+      ...(esc ? { patterns: [{ match: esc, name: `constant.character.escape.${ln}` }] } : {}),
+      ...(esc === q + q ? { applyEndPatternLast: true } : {}),
+    });
+    const quoteIncludes: { include: string }[] = [];
+    const quoteChars: string[] = [];
+    if (flow.dq && flow.dqScope) { const q = quoteChar(flow.dq); quoteChars.push(q); repository['flow-key-double'] = quoteKeyRegion(q, flow.dqScope, flow.dqEscape); quoteIncludes.push({ include: '#flow-key-double' }); }
+    if (flow.sq && flow.sqScope) { const q = quoteChar(flow.sq); quoteChars.push(q); repository['flow-key-single'] = quoteKeyRegion(q, flow.sqScope, flow.sqEscape); quoteIncludes.push({ include: '#flow-key-single' }); }
+    const quoteCls = quoteChars.map(escapeForCharClass).join('');   // for a [...] class
+    // A quoted-scalar match (for the sequence map-key lookahead "quoted then colon").
+    const quoteAlts = [flow.dq, flow.sq].filter(Boolean) as string[];
+
+    // The VALUE colon (a flow separator `:`); and the JSON-style value colon glued after a closed
+    // key (`{"a":b}` — `:` preceded by a quote/closer/line-start, where no space-separator exists).
+    repository['flow-map-value'] = {
+      begin: colonSep, beginCaptures: { '0': { name: P } }, end: beforeClose,
+      patterns: [...commentIncs, { include: '#flow-node' }],
+    };
+    repository['flow-map-value-json'] = {
+      begin: `(?<=[${quoteCls}${closeCls}])[\\t ]*${eColon}|(?<=^)[\\t ]*${eColon}`,
+      beginCaptures: { '0': { name: P } }, end: beforeClose,
+      patterns: [...commentIncs, { include: '#flow-node' }],
+    };
+    // A plain scalar as a VALUE / as a KEY (entity.name.tag); both end at the flow boundary.
+    repository['flow-plain'] = { begin: `(?=${start})`, end: flowEnd, name: `${flow.plainScope}.${ln}` };
+    repository['flow-key-plain'] = { begin: `\\G(?=${start})`, end: flowEnd, name: `${flow.plainScope}.${ln} ${flow.keyScope}.${ln}` };
+
+    // A flow NODE = any value in flow context (nested collection, alias/anchor/tag, quoted, typed,
+    // plain). The decorator/scalar token includes are taken from the grammar's existing token keys.
+    const has = (k: string) => !!repository[k];
+    const nodeIncludes: { include: string }[] = [...commentIncs];
+    for (const c of flow.colls) nodeIncludes.push({ include: c.colon ? '#flow-mapping' : '#flow-sequence' });
+    for (const k of ['anchor', 'tag', 'alias', 'dquote', 'squote', 'num', 'boolnull']) if (has(k)) nodeIncludes.push({ include: `#${k}` });
+    nodeIncludes.push({ include: '#flow-plain' });
+    const seenInc = new Set<string>();
+    repository['flow-node'] = { patterns: nodeIncludes.filter(p => !seenInc.has(p.include) && seenInc.add(p.include)) };
+
+    // The explicit `? key` indicator (if the grammar models one): a `?` followed by a flow
+    // boundary opens a key region. Derived from the explicit-key indicator when present.
+    const qmark = explicitKey ? escapeRegex(explicitKey.indicator) : null;
+    const explicitKeyEntry: TmPattern[] = qmark ? [{
+      begin: `${qmark}(?=[\\s${closeCls}]|$)`, beginCaptures: { '0': { name: P } }, end: beforeClose,
+      patterns: [...commentIncs, { include: '#flow-mapping-map-key' }, { include: '#flow-map-value' }, { include: '#flow-node' }],
+    }] : [];
+
+    // Emit one region per collection. A MAPPING (`colon != null`): every entry-leading scalar is a
+    // key. A SEQUENCE: a scalar is a key only when a `:` separator follows (single-pair map element).
+    for (const c of flow.colls) {
+      const eOpen = escapeRegex(c.open), eClose = escapeRegex(c.close), eSep = escapeRegex(c.sep);
+      if (c.colon) {
+        repository['flow-mapping'] = {
+          name: `meta.flow.mapping.${ln}`,
+          begin: eOpen, beginCaptures: { '0': { name: P } }, end: eClose, endCaptures: { '0': { name: P } },
+          patterns: [
+            ...commentIncs, { match: eSep, name: P },
+            { include: '#flow-mapping-map-key' }, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }, { include: '#flow-node' },
+          ],
+        };
+        repository['flow-mapping-map-key'] = {
+          patterns: [
+            ...explicitKeyEntry,
+            ...(quoteIncludes.length ? [{
+              begin: `(?=[${quoteCls}])`, end: beforeClose,
+              patterns: [...commentIncs, ...quoteIncludes, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }],
+            }] : []),
+            { begin: `(?=${start})`, end: beforeClose,
+              patterns: [...commentIncs, { include: '#flow-key-plain' }, { include: '#flow-map-value' }] },
+          ],
+        };
+      } else {
+        repository['flow-sequence'] = {
+          name: `meta.flow.sequence.${ln}`,
+          begin: eOpen, beginCaptures: { '0': { name: P } }, end: eClose, endCaptures: { '0': { name: P } },
+          patterns: [
+            ...commentIncs, { match: eSep, name: P },
+            { include: '#flow-sequence-map-key' }, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }, { include: '#flow-node' },
+          ],
+        };
+        repository['flow-sequence-map-key'] = {
+          patterns: [
+            ...explicitKeyEntry,
+            ...(quoteAlts.length ? [{
+              begin: `(?=(?:${quoteAlts.join('|')})[\\t ]*${eColon})`, end: beforeClose,
+              patterns: [...commentIncs, ...quoteIncludes, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }],
+            }] : []),
+            { begin: `(?<=[\\t ${closeCls}]|^)${hasColonAhead}`, end: beforeClose,
+              patterns: [...commentIncs, { include: '#flow-key-plain' }, { include: '#flow-map-value' }] },
+          ],
+        };
+      }
+    }
+    // Top-level: the flow regions open on a `{`/`[` (which a plain scalar can never lead, so no
+    // overlap with the scalar tokens); ranked before #punctuation so the bracket opens the region.
+    for (const c of flow.colls) topPatterns.push({ include: c.colon ? '#flow-mapping' : '#flow-sequence' });
+
+    // ── Block-context plain scalars absorb the flow-indicator chars (`{`,`}`,`[`,`]`,`,`) ──
+    // These chars are indicators ONLY inside a flow region (now handled above); in BLOCK context
+    // they are ordinary plain-scalar content (`- bla]keks: foo`, a key with `]`; a key full of
+    // `[]{},` punctuation — yaml-test-suite AZW3 / 2EBW). The shared token EXCLUDES them from its
+    // body (the parser's context-free lexer needs that to stop a flow scalar at a `,`/`]`), but the
+    // block-context TM rule — reached only OUTSIDE a flow region (the flow regions never include the
+    // top-level plain/key tokens; they use #flow-plain/#flow-key-plain) — can safely absorb them.
+    // Transform: in the broad plain scalar (string.unquoted) and its key variant (the key scope),
+    // drop the flow-boundary chars from the BODY's NEGATED character classes only — never from the
+    // LEADING char (a scalar still can't START with `{`/`[`, which opens a flow region) nor from the
+    // trailing key-separator's POSITIVE lookahead. Derived from `flowOpen`/`flowClose`/separator, so
+    // it is agnostic and fires only for an indentation grammar that declares flow collections.
+    const boundaryChars = new Set(flow.colls.flatMap(c => [c.open, c.close, c.sep]));
+    const firstGroupLen = (pat: string): number => {
+      if (pat[0] !== '(') return 0;
+      let depth = 0;
+      for (let i = 0; i < pat.length; i++) {
+        if (pat[i] === '\\') { i++; continue; }
+        if (pat[i] === '(') depth++;
+        else if (pat[i] === ')') { depth--; if (depth === 0) return i + 1; }
+      }
+      return 0;
+    };
+    // Remove the boundary chars from every NEGATED class `[^…]` in `s` (positive classes untouched).
+    // Handles both bare (`,`,`{`,`}`) and escaped (`\[`,`\]`) forms of a boundary char in the class.
+    const stripBoundaryFromNegatedClasses = (s: string): string =>
+      s.replace(/\[\^((?:\\.|[^\]\\])*)\]/g, (whole, inner: string) => {
+        let out = '', i = 0;
+        while (i < inner.length) {
+          if (inner[i] === '\\') {
+            if (boundaryChars.has(inner[i + 1])) { i += 2; continue; }   // drop escaped boundary char
+            out += inner.slice(i, i + 2); i += 2; continue;
+          }
+          if (boundaryChars.has(inner[i])) { i++; continue; }            // drop bare boundary char
+          out += inner[i++];
+        }
+        return `[^${out}]`;
+      });
+    const loosenBlockScalar = (pat: string): string => {
+      const lead = firstGroupLen(pat);
+      if (!lead) return pat;
+      return pat.slice(0, lead) + stripBoundaryFromNegatedClasses(pat.slice(lead));
+    };
+    // Identify the block plain & key repo entries by their DERIVED scopes (not by name) and loosen.
+    for (const entry of Object.values(repository)) {
+      if (!entry.match || !entry.name) continue;
+      const scope = entry.name.replace(new RegExp(`\\.${ln}$`), '');
+      if (scope === flow.plainScope || scope === flow.keyScope) entry.match = loosenBlockScalar(entry.match);
+    }
   }
 
   // ── 3. Collect all literals from rules ──
@@ -6756,6 +7081,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // An explicit mapping-key rule (`? key`) is the most specific scalar context — its indicator
     // pins the following scalar as a key — so it must be tried before the bare key/plain scalars.
     if (key === 'explicit-key') return 0.8;
+    // A flow collection (`{ … }` / `[ … ]`) is a begin/end region opened by a bracket; it must be
+    // tried before #punctuation (which would otherwise claim the `{`/`[` as a bare bracket) and
+    // before the scalar tokens. Its `{`/`[` can never lead a plain scalar, so this ranking is safe.
+    if (key === 'flow-mapping' || key === 'flow-sequence') return 0.85;
     // A top-level token-match scoped `entity.name.tag` (e.g. an indentation grammar's mapping
     // KEY — a scalar that is the LHS of `:`) is a NAME, more specific than any string/typed-value
     // scalar it overlaps, so it must be tried first. (Markup tag names live inside begin/end
