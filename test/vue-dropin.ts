@@ -9,7 +9,7 @@
 //  official-HTML path is UNDER-tested. This test closes that gap: it wires Monogram's vue
 //  grammar + the two thin-stub injections onto VS Code's actual derivative/basic/ts, with the
 //  official `injectTo`, and asserts the real reported regression cases still hold. If VS Code
-//  isn't installed (CI without it), it SKIPS — like html-bench / highlight-bench (dev-only).
+//  isn't installed (CI without it), it SKIPS — like html-bench / the scope-gap benches (dev-only).
 //
 //  Run: node test/vue-dropin.ts
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-// JavaScript bidirectional conformance, mirroring test/conformance-matrix.ts but
+// JavaScript bidirectional conformance, mirroring the accept/reject oracle but
 // for javascript.ts. Ground truth is TS's OWN parser in JS mode
 // (`ts.createSourceFile(..., ts.ScriptKind.JS)` → `parseDiagnostics`).
 //

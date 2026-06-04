@@ -1,4 +1,4 @@
-import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig } from './types.ts';
+import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig } from './types.ts';
 
 // ── Token ──
 
@@ -324,6 +324,7 @@ interface GrammarConfig {
   scopes?: Record<string, string[]>;
   entry: RuleRef;
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
+  indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML)
   expression?: RuleRef;   // the rule that produces an EXPRESSION; enables a derived `#expression` sub-grammar (expression-only embeds)
   aliasScopes?: { scope: string; file: string }[];  // extra grammars re-exposing this one under another scopeName (e.g. text.html.derivative)
   canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-tm RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see CstGrammar.canonicalRepoNames)
@@ -393,5 +394,5 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     }
   }
 
-  return { name: config.name, scopeName: config.scopeName, tokens, precs, rules, scopeOverrides, markup: config.markup, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
+  return { name: config.name, scopeName: config.scopeName, tokens, precs, rules, scopeOverrides, markup: config.markup, indent: config.indent, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
 }

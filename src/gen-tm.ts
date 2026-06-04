@@ -7,6 +7,7 @@ interface TmPattern {
   match?: string;
   begin?: string;
   end?: string;
+  applyEndPatternLast?: boolean;
   while?: string;
   captures?: Record<string, TmCapture>;
   beginCaptures?: Record<string, TmCapture>;
@@ -187,6 +188,31 @@ function extractInterpPrefix(pattern: string): string | null {
   return null;
 }
 
+/**
+ * Recognise a simple quote-delimited string token regex and return its single delimiter char
+ * plus the in-string ESCAPE sub-pattern (so an escaped delimiter doesn't close the region).
+ * Two delimiter-escape shapes are understood, matching how a quoted scalar is written:
+ *   • backslash escape:  `"(?:\\.|[^"\\])*"`   → delim `"`, escape `\\.`
+ *   • doubled delimiter: `'(?:''|[^'])*'`      → delim `'`, escape `''`
+ * Returns null for anything else (multi-char delimiters, lookahead-bearing key tokens, …) so
+ * the caller keeps emitting a flat `match`. The shape is read from the regex itself — no
+ * hardcoded quote char — so it is language-agnostic.
+ */
+function quoteDelimAndEscape(pattern: string): { delim: string; escape: string } | null {
+  // Opening delimiter: a single non-alphanumeric char (optionally backslash-escaped in the regex).
+  const m = /^(\\?)([^\s\w])\(\?:/.exec(pattern);
+  if (!m) return null;
+  const delim = m[2];
+  const d = delim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // delimiter, regex-escaped
+  // The regex must CLOSE on the same bare delimiter, and its body must be the alternation of an
+  // escape with "any char but the delimiter (and backslash)". Match the two canonical shapes.
+  const backslash = new RegExp(`^${m[1]}${d}\\(\\?:\\\\\\\\\\.\\|\\[\\^${d}\\\\\\\\\\]\\)\\*${m[1]}${d}$`);
+  const doubled   = new RegExp(`^${m[1]}${d}\\(\\?:${d}${d}\\|\\[\\^${d}\\]\\)\\*${m[1]}${d}$`);
+  if (backslash.test(pattern)) return { delim, escape: '\\\\.' };
+  if (doubled.test(pattern)) return { delim, escape: d + d };
+  return null;
+}
+
 interface ContextualPattern {
   keyword: string;
   identScope: string;
@@ -314,6 +340,154 @@ function hasColonTypeAnnotation(grammar: CstGrammar, typeRuleNames: Set<string>)
     return false;
   }
   return grammar.rules.some(r => walk(r.body));
+}
+
+/**
+ * Derive the CLOSE brackets that terminate a destructuring BINDING PATTERN
+ * (`{ a } : T`, `[ a ] : T`), data-driven from the grammar.
+ *
+ * A binding-pattern rule is one whose every alternative is a bracket-delimited
+ * sequence (`OPEN … CLOSE`) AND which is referenced as a direct alternative
+ * standing in for the identifier — i.e. it appears in an `alt(…)` whose items also
+ * reach the grammar's identifier token (the `alt([Ident,…], BindingPattern)` shape
+ * every binding/param uses). That co-reference is what distinguishes a binding
+ * pattern from a same-bracketed block / object-type body, which never substitutes
+ * for a name. The brackets themselves are read off the rule, not hardcoded: a
+ * grammar whose patterns are delimited by other paired brackets yields those, and a
+ * grammar with no destructuring binding yields the empty set (so the dependent rule
+ * is omitted entirely). `:`/`?` stay literal here, matching the rest of this
+ * generator's type-annotation derivations (`#param-type-annotation`, etc.).
+ */
+function deriveBindingCloseBrackets(grammar: CstGrammar, identName: string | undefined): string[] {
+  const PAIR: Record<string, string> = { '{': '}', '[': ']', '(': ')' };
+  const directRef = (expr: RuleExpr | undefined, name: string): boolean => {
+    if (!expr) return false;
+    if (expr.type === 'ref') return expr.name === name;
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(i => directRef(i, name));
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+      return directRef((expr as { body?: RuleExpr }).body, name);
+    }
+    if (expr.type === 'sep') return directRef((expr as { element: RuleExpr }).element, name);
+    return false;
+  };
+  // Rule names that appear in an `alt` whose siblings reach the identifier token —
+  // candidates for "stands in for a binding name".
+  const nameSubstitutes = new Set<string>();
+  const scan = (expr: RuleExpr | undefined): void => {
+    if (!expr) return;
+    if (expr.type === 'alt' && identName && expr.items.some(i => directRef(i, identName))) {
+      for (const it of expr.items) if (it.type === 'ref') nameSubstitutes.add(it.name);
+    }
+    if (expr.type === 'seq' || expr.type === 'alt') for (const i of expr.items) scan(i);
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+      scan((expr as { body?: RuleExpr }).body);
+    }
+    if (expr.type === 'sep') scan((expr as { element: RuleExpr }).element);
+  };
+  for (const r of grammar.rules) scan(r.body);
+
+  const closes = new Set<string>();
+  for (const r of grammar.rules) {
+    if (!nameSubstitutes.has(r.name)) continue;
+    const alts = r.body.type === 'alt' ? r.body.items : [r.body];
+    const allBracketed = alts.length > 0 && alts.every(a => {
+      if (a.type !== 'seq' || a.items.length < 2) return false;
+      const f = a.items[0], l = a.items[a.items.length - 1];
+      return f.type === 'literal' && l.type === 'literal' &&
+        PAIR[(f as { value: string }).value] === (l as { value: string }).value;
+    });
+    if (!allBracketed) continue;
+    for (const a of alts as { items: RuleExpr[] }[]) {
+      const l = a.items[a.items.length - 1];
+      if (l.type === 'literal') closes.add((l as { value: string }).value);
+    }
+  }
+  return [...closes];
+}
+
+/**
+ * Derive the CLOSE bracket(s) of a COMPUTED MEMBER KEY (`[ expr ] : T`), data-driven
+ * from the grammar. A member's `: Type` annotation only opens a type region when the
+ * key is a plain identifier (`#member-type-annotation`'s ident-anchored begin); a
+ * computed key ends in a non-identifier bracket (`['x']: T`, `[Symbol.iterator]: T`),
+ * so its `:` would otherwise fall through to bare punctuation and the type name be
+ * scoped as a value — the same gap `#param-bind-type-annotation` closes for binding
+ * patterns. This finds the bracket that wraps a computed key: a member-NAME rule
+ * (one whose `ref` stands immediately before a member `(':' Type)` annotation) that
+ * has a `[ OPEN … CLOSE ]` alternative; the CLOSE is read off the rule, not hardcoded.
+ */
+function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: Set<string>): string[] {
+  const PAIR: Record<string, string> = { '{': '}', '[': ']', '(': ')' };
+  // Member-NAME rules: a `ref` that, within some sequence, is followed (allowing an
+  // intervening optional `?`/group) by a literal `:` then a type-rule ref — the
+  // `key (?) : Type` member shape. Those refs name the rules that occupy a key slot.
+  const memberNameRules = new Set<string>();
+  const scanSeq = (items: RuleExpr[]): void => {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      // A member KEY is never a type-rule ref itself (excludes a TYPE `ref` that
+      // happens to sit before a `:` in a type-internal construct — a conditional
+      // type `T extends U ? X : Y`, a mapped-type `[K in T]: U`, etc.).
+      if (it.type !== 'ref' || typeRuleNames.has(it.name)) continue;
+      // look ahead for `… : <typeRef>` after this ref (skip an optional `?`/group)
+      for (let j = i + 1; j < items.length; j++) {
+        const nx = items[j];
+        if (nx.type === 'literal' && (nx as { value: string }).value === ':') {
+          const after = items[j + 1];
+          if (after && after.type === 'ref' && typeRuleNames.has((after as { name: string }).name)) {
+            memberNameRules.add((it as { name: string }).name);
+          }
+          break;
+        }
+        // allow an optional `?` or a small group/quantifier to sit between key and `:`
+        if (nx.type === 'literal' && (nx as { value: string }).value === '?') continue;
+        if (nx.type === 'quantifier' || nx.type === 'group') continue;
+        break;
+      }
+    }
+  };
+  const walk = (expr: RuleExpr | undefined): void => {
+    if (!expr) return;
+    if (expr.type === 'seq') scanSeq(expr.items);
+    if (expr.type === 'seq' || expr.type === 'alt') for (const i of expr.items) walk(i);
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+      walk((expr as { body?: RuleExpr }).body);
+    }
+    if (expr.type === 'sep') walk((expr as { element: RuleExpr }).element);
+  };
+  for (const r of grammar.rules) walk(r.body);
+
+  // Does a rule-expr (transitively, within this alternative) reference a non-type
+  // rule — i.e. wrap an EXPRESSION? A computed property KEY brackets an expression
+  // (`[ Expr ]`); a TUPLE type brackets types (`[ Type, … ]`). Requiring an
+  // expression ref inside the bracket pair keeps this to genuine computed keys.
+  const wrapsExpr = (expr: RuleExpr | undefined): boolean => {
+    if (!expr) return false;
+    if (expr.type === 'ref') return !typeRuleNames.has(expr.name);
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(wrapsExpr);
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+      return wrapsExpr((expr as { body?: RuleExpr }).body);
+    }
+    if (expr.type === 'sep') return wrapsExpr((expr as { element: RuleExpr }).element);
+    return false;
+  };
+
+  const closes = new Set<string>();
+  for (const r of grammar.rules) {
+    if (!memberNameRules.has(r.name)) continue;
+    const alts = r.body.type === 'alt' ? r.body.items : [r.body];
+    for (const a of alts) {
+      if (a.type !== 'seq' || a.items.length < 2) continue;
+      const f = a.items[0], l = a.items[a.items.length - 1];
+      if (f.type === 'literal' && l.type === 'literal' &&
+          PAIR[(f as { value: string }).value] === (l as { value: string }).value &&
+          // the bracket must wrap an expression (computed key), not types (a tuple)
+          a.items.slice(1, -1).some(wrapsExpr)) {
+        closes.add((l as { value: string }).value);
+      }
+    }
+  }
+  return [...closes];
 }
 
 // ── Token classification ──
@@ -846,6 +1020,14 @@ interface JsxDisambigDelims {
   topTypeParam: string;    // "is a type-param list" body: top-level comma OR constraint keyword
   balancedAngles: string;  // recursive balanced `<…>` named group `(?<B>…)`
   arrowParamShape: string; // the arrow-shaped `(` confirm after `>`
+  // Lookbehind body asserting the `>` just left closes a type-param LIST that carried a
+  // top-level comma or constraint keyword (`<T,>`, `<T extends X>`) — i.e. the SAME
+  // generic-arrow disambiguation signal as `topTypeParam`, but for matching a `(` that
+  // sits immediately after the `>`. Used to confirm a deferred (next-line) arrow param
+  // list while excluding a generic CALL `foo<Bar>(` / comparison `a > (` (neither has
+  // the comma/constraint). Depth-0 (`skip` never crosses a nested `<…>`), so a nested-
+  // generic constraint inside the param-list's own `<…>` is conservatively not matched.
+  typeParamCloseBehind: string;
 }
 
 /**
@@ -962,7 +1144,17 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   // confirm — so both read from the same derived delimiter.
   const [pOpen, pClose] = paramParens ? [paramParens.open, paramParens.close] : ['(', ')'];
   const arrowParamShape = `${escapeRegex(pOpen)}\\s*(?:${escapeRegex(pClose)}|\\.\\.\\.|${identRegex}\\s*[:,?${escapeForCharClass(pClose)}]|[{\\[]|$)`;
-  return { topComma, topTypeParam, balancedAngles, arrowParamShape };
+  // `<` … (top-level comma OR constraint keyword) … `>` as a LOOKBEHIND body. Oniguruma
+  // allows variable-length lookbehind (the `skip` `*` runs) but NOT a nested lookahead,
+  // so the `\s*(?!=)` JSX-attr guard `topTypeParam` carries is dropped here — it isn't
+  // needed once we are already standing just past the closing `>` (the `<…>` is a proven
+  // type-param list). `skip` stays depth-0, so this conservatively confirms a top-level
+  // comma/constraint without crossing a nested `<…>`.
+  const behindKw = constraintAlts.length
+    ? `|${skip}\\b(?:${constraintKeywords.map(escapeRegex).join('|')})\\b`
+    : '';
+  const typeParamCloseBehind = `${escapeRegex(open)}(?:${topComma}${behindKw})${skip}${escapeRegex(close)}`;
+  return { topComma, topTypeParam, balancedAngles, arrowParamShape, typeParamCloseBehind };
 }
 
 /**
@@ -1032,6 +1224,20 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   const optTagTypeArgs = jsx.typeArgRule
     ? '(?:\\s*<(?<TA>[^<>]*(?:<\\g<TA>>[^<>]*)*)>)?'
     : '';
+
+  // An open tag is terminated by EITHER a plain `>` (children follow) or the
+  // self-close `/>`. Both share their last character — the self-close token (`/>`)
+  // is the open terminator (`>`) prefixed by a `/`. Derive both from the grammar's
+  // own self-close token rather than hardcoding `>`/`/`: the terminator char is its
+  // last char, the self-close prefix is everything before it. `tagEndAhead` is the
+  // zero-width "open tag ends here" lookahead `(?=/?>)` (prefix optional → matches a
+  // bare `>` or the full `/>`); a grammar whose self-close were spelled differently
+  // (e.g. a hypothetical `|>`) would yield that spelling. This lets the open-tag body
+  // stop just before the terminator, so the element's `end` can claim a self-close
+  // `/>` (no children) while a bare `>` opens the children region instead.
+  const tagEndChar = jsx.selfCloseTok.slice(-1);
+  const selfClosePrefix = jsx.selfCloseTok.slice(0, -1);
+  const tagEndAhead = `(?=${escapeRegex(selfClosePrefix)}?${escapeRegex(tagEndChar)})`;
 
   // A JSX tag name: optional `ns:` prefix, then a dotted member-expression OR a
   // lowercase-intrinsic OR a (non-dotted) component. Captures, in order:
@@ -1143,7 +1349,15 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   };
   result['jsx-children'] = {
     patterns: [
-      { include: '#jsx-self-closing-element' },
+      // A child element — `#jsx-element` covers BOTH the self-closing `<br/>` and the
+      // open `<span>…</span>` shape (its `end` matches `/>` OR `</name>`), so the
+      // separate `#jsx-self-closing-element` is NOT listed here: that rule's begin
+      // (`<name`, CONSUMING — unlike `#jsx-element`'s zero-width lookahead begin)
+      // would greedily claim a NON-self-closing child `<span>` and, never finding a
+      // `/>`, run its region to EOF — mis-scoping the child's `>`, body and the rest
+      // of the children as tag text (the top-level `-in-expression` triggers avoid
+      // this with a `/>`-anchored lookahead, which can't be reproduced here because a
+      // child's `/>` may sit past an embedded `{…}` the lookahead can't scan).
       { include: '#jsx-element' },
       { include: '#jsx-fragment' },
       // A tag whose `<` is alone at end-of-line, its NAME on a following line
@@ -1237,35 +1451,49 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
     patterns: [...tagTypeArgsInclude, { include: '#jsx-attributes' }],
   };
 
-  // ── jsx-element: `<Tag …> children </Tag>` ──
-  // Two-phase: an inner open-tag begin/end scopes the attributes up to `>`, then
-  // a children begin/end (contentName meta.jsx.children) runs to the `</…>`.
+  // ── jsx-element: `<Tag …/>` (self-closing) OR `<Tag …> children </Tag>` ──
+  // ONE region covers BOTH shapes (like the official `jsx-tag`), so the self-close-vs-
+  // open decision is NOT made by a brittle lookahead at the trigger (which can't see
+  // a `>` buried in an attribute value — e.g. the `>` of an arrow `{x => …}` or a
+  // string `attr=">"` — and would mis-route such a self-closing tag to the open form,
+  // leaving `meta.jsx.children` running to EOF). Instead:
+  //   • the open-tag BODY ends at the zero-width `(?=/?>)` lookahead — it stops just
+  //     before the terminator without consuming it, so the terminator is decided here;
+  //   • the element's `end` matches the self-close `/>` FIRST (closing the whole element,
+  //     no children) and the `</…>` close second;
+  //   • the children region's begin is the literal `>` (consumed, scoped tag-end). A
+  //     self-close's `/>` is claimed by the element `end` before this can fire, so a
+  //     self-closing tag never opens a children region.
   result['jsx-element'] = {
     name: `meta.tag.${langName}`,
     begin: `(?=(<)\\s*${nameRe}(?:\\s|/?>|<))`,
-    // The closing tag's name is optional (our model doesn't enforce name-match,
-    // matching TS treating a mismatch as a semantic — not parse — error). Wrap
-    // the whole name in `(?:…)?` so the optional `?` attaches to the group, not
-    // to `nameRe`'s trailing `(?<!\.|-)` lookbehind (a quantified zero-width
-    // assertion is an invalid Oniguruma regex).
-    end: `(${escapeRegex(jsx.closeTok)})\\s*(?:${nameRe})?\\s*(>)`,
+    // End on EITHER the self-close `/>` (capture 1) OR the `</name>` close (`</` is
+    // capture 2, the name sub-captures 3..7, the `>` capture 8). The closing tag's
+    // name is optional (our model doesn't enforce name-match, matching TS treating a
+    // mismatch as a semantic — not parse — error). Wrap the whole name in `(?:…)?` so
+    // the optional `?` attaches to the group, not to `nameRe`'s trailing `(?<!\.|-)`
+    // lookbehind (a quantified zero-width assertion is an invalid Oniguruma regex).
+    end: `(${escapeRegex(jsx.selfCloseTok)})|(${escapeRegex(jsx.closeTok)})\\s*(?:${nameRe})?\\s*(>)`,
     endCaptures: {
-      '1': { name: tagBegin },
-      ...nameCaptures(2),   // name sub-captures 2..6 (ns, sep, member, intrinsic, component)
-      '7': { name: tagEnd },
+      '1': { name: tagEnd },   // self-close `/>`
+      '2': { name: tagBegin }, // close-tag `</`
+      ...nameCaptures(3),      // name sub-captures 3..7 (ns, sep, member, intrinsic, component)
+      '8': { name: tagEnd },   // close-tag `>`
     },
     patterns: [
-      // open tag: `<Tag …>` — type-args (if any) then attributes, ends at `>`.
+      // open tag: `<Tag …>` — type-args (if any) then attributes, ends (zero-width)
+      // just before the terminator so the element `end` decides `/>` vs `>`.
       {
         begin: `(<)\\s*${nameRe}`,
         beginCaptures: { '1': { name: tagBegin }, ...nameCaptures(2) },
-        end: '(>)',
-        endCaptures: { '1': { name: tagEnd } },
+        end: tagEndAhead,
         patterns: [...tagTypeArgsInclude, { include: '#jsx-attributes' }],
       },
-      // children region.
+      // children region — opens on the bare `>` terminator (a self-close `/>` is
+      // taken by the element `end` first), runs to the `</…>` close.
       {
-        begin: '(?<=>)',
+        begin: `(${escapeRegex(tagEndChar)})`,
+        beginCaptures: { '1': { name: tagEnd } },
         end: `(?=${escapeRegex(jsx.closeTok)})`,
         contentName: `meta.jsx.children.${langName}`,
         patterns: [{ include: '#jsx-children' }],
@@ -2829,6 +3057,12 @@ interface DeclInfo {
   hasParams: boolean;     // has '(' ... ')' in the sequence
   hasTypeParams: boolean; // has ref to angle-bracket-sep rule (e.g., TypeParams)
   hasBody: boolean;       // has '{' ... '}' or Block ref
+  // The body is OPTIONAL: the keyword appears in BOTH a body-having expansion and a
+  // body-LESS one — i.e. `alt(Block, opt(';'))` (a function overload / ambient
+  // `declare function f();`). Such a declaration must close its region on the
+  // body-less `;` terminator too, not only `(?<=\})`, or the meta.function region
+  // runs away into the next statement. Derived from the expanded sequences.
+  optionalBody: boolean;
   typeParamKeywords: string[];  // keywords in type param rule (e.g., ['extends'])
   endHint?: string;       // for bodyless decls: next literal after name/type-params
   midLiterals: string[];  // non-alphabetic literals between keyword and name (e.g., ['*'] for function*)
@@ -2990,6 +3224,9 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
     // DeclInfo, OR-ing flags so no detail is lost regardless of expansion order.
     const existing = results.find(r => r.keyword === keyword);
     if (existing) {
+      // A body-having expansion meeting a body-less one (or vice versa) for the same
+      // keyword ⇒ the body is optional (`function f(){}` AND overload `function f();`).
+      if (existing.hasBody !== hasBody && hasParams && existing.hasParams) existing.optionalBody = true;
       existing.hasBody = existing.hasBody || hasBody;
       existing.hasParams = existing.hasParams || hasParams;
       if (hasTypeParams && !existing.hasTypeParams) {
@@ -3013,6 +3250,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
       hasParams,
       hasTypeParams,
       hasBody,
+      optionalBody: false,
       typeParamKeywords,
       endHint,
       midLiterals: midLits,
@@ -3028,6 +3266,266 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
   }
 
   return results;
+}
+
+/**
+ * Explicit mapping-key detection (e.g. YAML `? key` / `: value`).
+ *
+ * An indentation grammar may mark a mapping key NOT by a trailing key-separator on the key
+ * itself but by a PRECEDING indicator (YAML's `?`): `? somekey` on one line, `: value` on
+ * the next. The key scalar then carries no `:` and a flat per-token rule scopes it as an
+ * ordinary string. The official grammar paints it as a key (entity.name.tag), so this derives
+ * the shape and lets gen-tm emit a contextual rule scoping the scalar right after the
+ * indicator as a key.
+ *
+ * Signal (all from the grammar, nothing hardcoded):
+ *   • the grammar is INDENTATION-mode (`grammar.indent`) — the family this construct lives in;
+ *   • some rule has an alternative `seq` whose HEAD is a single-char punctuation literal `I`
+ *     and which contains, as a sibling, a `seq` headed by another single-char literal `S`
+ *     (the value-separator) — i.e. the `I … S …` explicit-entry shape;
+ *   • the grammar has a KEY token: a scalar token whose pattern ends in a lookahead that
+ *     mentions `S` (`(?=…S…)`) — its scope is THE key scope, and the matching scalar WITHOUT
+ *     the lookahead (same head, broadest scope) supplies the key BODY pattern.
+ * Returns null when the shape is absent (so non-YAML grammars are unaffected).
+ */
+function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: string; keyBody: string; prefix: string | null } | null {
+  if (!grammar.indent) return null;
+
+  // Find a separator literal S that heads a nested seq sibling of a head-indicator literal I.
+  const headSinglePunct = (e: RuleExpr): string | null =>
+    e.type === 'literal' && e.value.length === 1 && !/[\w\s]/.test(e.value) ? e.value : null;
+  let indicator: string | null = null;
+  let separator: string | null = null;
+  const visit = (e: RuleExpr): void => {
+    if (e.type === 'seq') {
+      const head = headSinglePunct(e.items[0]);
+      if (head) {
+        for (let i = 1; i < e.items.length; i++) {
+          let inner = e.items[i];
+          if (inner.type === 'quantifier') inner = inner.body;
+          if (inner.type === 'seq') {
+            const sep = headSinglePunct(inner.items[0]);
+            if (sep && sep !== head) { indicator = head; separator = sep; }
+          }
+        }
+      }
+      e.items.forEach(visit);
+    } else if (e.type === 'alt') e.items.forEach(visit);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') visit(e.body);
+    else if (e.type === 'sep') visit(e.element);
+  };
+  for (const r of grammar.rules) visit(r.body);
+  if (!indicator || !separator) return null;
+  const sep: string = separator;
+
+  // KEY token = a plain-scalar token PLUS a trailing key-separator lookahead — i.e. its pattern
+  // is `<P.pattern>(?=…sep…)` for some OTHER (broader, no-lookahead) scalar token P. P supplies
+  // the key BODY, the key token supplies the key SCOPE. This pairing pins exactly the "plain key"
+  // token (not a typed value like a number, whose body differs), with no hardcoded scope. The
+  // remainder after P's pattern must be a single trailing lookahead group mentioning the separator
+  // (so an internal `(?=…)` inside P's own body is never mistaken for the key separator).
+  let keyScope: string | null = null;
+  let keyBody: string | null = null;
+  for (const k of grammar.tokens) {
+    if (!k.scope || k.string) continue;
+    for (const p of grammar.tokens) {
+      if (p === k || !p.pattern || !k.pattern.startsWith(p.pattern)) continue;
+      const tail = k.pattern.slice(p.pattern.length);
+      if (/^\(\?=.*\)$/.test(tail) && tail.includes(sep)) { keyScope = k.scope; keyBody = p.pattern; break; }
+    }
+    if (keyScope) break;
+  }
+  if (!keyScope || !keyBody) return null;
+
+  // NODE-PREFIX tokens — the optional decorators a value/node may carry BEFORE the scalar
+  // (YAML's anchor `&a` and tag `!!t`): in an explicit entry `? &a a` / `? !!str a` the key
+  // scalar is preceded by them, so the bare `(indicator)(ws)(key)` shape misses it. They are
+  // exactly the tokens that appear as an `opt(token)` (a `?`-quantified ref to a TOKEN) as a
+  // NON-FINAL element of some seq AND carry a real pattern (the structural indent/dedent/newline
+  // placeholders are `(?!)` and excluded). Their patterns join into an optional, repeatable
+  // `(?:<pat>[\t ]+)*` group inserted between the indicator's whitespace and the key body — so a
+  // node decorated by any run of anchors/tags still resolves the trailing scalar as the key.
+  // The prefix group is NON-CAPTURING: it CONSUMES the anchor/tag so the key (group 3) is reached,
+  // which means an anchor/tag sitting in this rare `? <prefix> key` position is left UNSCOPED
+  // (variable-length, order-free → no fixed capture can scope it, and a begin/end region risks
+  // over-running the value on the next line). Those decorators are NOT a graded role (the oracle
+  // emits only key/value scalars + comments), and the KEY — the role that matters — is scoped
+  // correctly; outside the explicit-key indicator, anchors/tags keep their normal `#anchor`/`#tag`
+  // scopes. Derived from the grammar; `null` when the family has no such prefix token (most grammars).
+  const tokenByName = new Map(grammar.tokens.map(t => [t.name, t] as const));
+  const prefixPats = new Set<string>();
+  // A NODE-prefix token is an `opt(token)` that decorates a value: it sits in a seq whose tail
+  // (after it) eventually reaches the VALUE ALTERNATION — i.e. the seq contains an `alt` later on.
+  // This selects YAML's `opt(Anchor)`/`opt(Tag)` at the head of `Node`/`InlineNode` (each followed
+  // by the collection/scalar `alt`) while EXCLUDING stream-level optionals like `opt(DocEnd)` /
+  // `opt(Newline)`, whose seq is a flat marker list with no value alternation.
+  const containsAlt = (e: RuleExpr): boolean =>
+    e.type === 'alt' ? true
+    : e.type === 'seq' ? e.items.some(containsAlt)
+    : e.type === 'quantifier' || e.type === 'group' || e.type === 'not' ? containsAlt(e.body)
+    : e.type === 'sep' ? containsAlt(e.element)
+    : false;
+  const seqHasAltLater = (items: RuleExpr[], from: number): boolean => {
+    for (let j = from; j < items.length; j++) if (containsAlt(items[j])) return true;
+    return false;
+  };
+  const findPrefix = (e: RuleExpr): void => {
+    if (e.type === 'seq') {
+      for (let i = 0; i < e.items.length - 1; i++) {       // non-final items only
+        const it = e.items[i];
+        if (it.type === 'quantifier' && it.kind === '?' && it.body.type === 'ref' && seqHasAltLater(e.items, i + 1)) {
+          const t = tokenByName.get(it.body.name);
+          if (t && t.pattern && t.pattern !== '(?!)' && !t.string) prefixPats.add(t.pattern);
+        }
+      }
+      e.items.forEach(findPrefix);
+    } else if (e.type === 'alt') e.items.forEach(findPrefix);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') findPrefix(e.body);
+    else if (e.type === 'sep') findPrefix(e.element);
+  };
+  for (const r of grammar.rules) findPrefix(r.body);
+  const prefix = prefixPats.size
+    ? `(?:(?:${[...prefixPats].join('|')})[\\t ]+)*`
+    : null;
+  return { indicator, keyScope, keyBody, prefix };
+}
+
+// ── Flow-collection detection (YAML `{ … }` mapping / `[ … ]` sequence) ──
+//
+// A flat per-token grammar cannot scope a flow MAPPING's keys: in `{ a: 1 }` the `a` is a key
+// (entity.name.tag) but in `{ [1]: v }` the `1` is a SEQUENCE element (a value) — the distinction
+// is the ENCLOSING bracket, which a context-free token can't see. The maintained RedCMD grammar
+// solves this with nested begin/end FLOW REGIONS (a `{`…`}` / `[`…`]` region IS a scope-stack
+// frame, so depth nests), scoping a scalar that leads an entry as a key inside a mapping and as a
+// value inside a sequence. This derives that structure from the grammar's OWN flow rules — the
+// bracket pair (from `indent.flowOpen`/`flowClose`), the entry/value separators, and whether a
+// collection is a mapping (its entry carries a `:` key/value separator) or a sequence (it does not).
+//
+// Signal (all from the grammar, nothing hardcoded):
+//   • the grammar is INDENTATION-mode AND declares `flowOpen`/`flowClose` bracket pairs;
+//   • for a pair (O,C): a rule whose body is a `seq` headed by literal `O` and ended by literal `C`
+//     — that is the flow-collection rule. Its entry-separator literal (the `,` repeated between
+//     entries) and, for a mapping, its key/value-separator literal (the `:` inside the entry rule)
+//     are read off the rule's own literals.
+//   • the KEY scope + plain-scalar shape come from the same Key/Plain token pair detectExplicitKey
+//     uses (a scalar token whose pattern is `<plain>(?=…sep…)` over a broader plain scalar).
+// Returns null when the family has no flow collections (every non-YAML grammar).
+interface FlowColl { open: string; close: string; sep: string; colon: string | null; }
+function detectFlowCollections(grammar: CstGrammar): {
+  colls: FlowColl[];
+  plainStart: string;          // plain-scalar LEADING char class (no enclosing group)
+  keyScope: string;            // the key scope (e.g. entity.name.tag)
+  plainScope: string;          // the broad plain-scalar scope (e.g. string.unquoted)
+  dq: string | null;           // double-quoted scalar body pattern (`"(?:\\.|…)*"`)
+  sq: string | null;           // single-quoted scalar body pattern
+  dqScope: string | null;      // double-quoted scalar scope (string.quoted.double)
+  sqScope: string | null;      // single-quoted scalar scope
+  dqEscape: string | null;     // in-string escape sub-pattern for the double quote
+  sqEscape: string | null;     // in-string escape sub-pattern for the single quote
+} | null {
+  const indent = grammar.indent;
+  if (!indent || !indent.flowOpen?.length || !indent.flowClose?.length) return null;
+  const PLACEHOLDER = '(?!)';
+
+  // top-level literals of a rule body: direct children only (unwrap quantifier/group/sep), do NOT
+  // descend into `alt` or `ref` (those are nested sub-constructs, not THIS rule's own structure).
+  const topLits = (e: RuleExpr, out: string[]): void => {
+    if (e.type === 'literal') out.push(e.value);
+    else if (e.type === 'seq') e.items.forEach(x => topLits(x, out));
+    else if (e.type === 'quantifier' || e.type === 'group') topLits(e.body, out);
+    else if (e.type === 'sep') { out.push(e.delimiter); topLits(e.element, out); }
+  };
+  // refs reachable anywhere inside an expr.
+  const allRefs = (e: RuleExpr, out: Set<string>): void => {
+    if (e.type === 'ref') out.add(e.name);
+    else if (e.type === 'seq' || e.type === 'alt') e.items.forEach(x => allRefs(x, out));
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') allRefs(e.body, out);
+    else if (e.type === 'sep') allRefs(e.element, out);
+  };
+  const ruleByName = new Map(grammar.rules.map(r => [r.name, r] as const));
+
+  const colls: FlowColl[] = [];
+  const n = Math.min(indent.flowOpen.length, indent.flowClose.length);
+  for (let i = 0; i < n; i++) {
+    const open = indent.flowOpen[i], close = indent.flowClose[i];
+    // the collection rule: seq starting with lit(open), ending with lit(close).
+    const collRule = grammar.rules.find(r => {
+      const b = r.body;
+      if (b.type !== 'seq' || b.items.length < 2) return false;
+      const first = b.items[0], last = b.items[b.items.length - 1];
+      return first.type === 'literal' && first.value === open && last.type === 'literal' && last.value === close;
+    });
+    if (!collRule) continue;
+    // entry separator = a non-bracket single-char punctuation literal repeated in the collection
+    // (the `,` of `many(',', Entry)` — surfaces as a top-level literal alongside the brackets).
+    const collLits: string[] = []; topLits(collRule.body, collLits);
+    const sep = collLits.find(l => l.length === 1 && l !== open && l !== close && !/[\w\s]/.test(l)) ?? ',';
+    // mapping vs sequence: the ENTRY rule (a ref inside the collection) carries a `:` key/value
+    // separator (top-level literal) → mapping; otherwise → sequence.
+    const refs = new Set<string>(); allRefs(collRule.body, refs);
+    let colon: string | null = null;
+    for (const rn of refs) {
+      const er = ruleByName.get(rn);
+      if (!er) continue;
+      const eLits: string[] = []; topLits(er.body, eLits);
+      const c = eLits.find(l => l.length === 1 && l !== sep && l !== open && l !== close && !/[\w\s]/.test(l));
+      if (c) { colon = c; break; }
+    }
+    colls.push({ open, close, sep, colon });
+  }
+  if (!colls.length) return null;
+
+  // The Key/Plain token pair (same shape detectExplicitKey pins): a non-string token whose pattern
+  // is `<plain>(?=…)` over a broader plain-scalar token `plain`. `plain` gives the LEADING char
+  // class (its first balanced group) + the plain scope; the key token gives the key scope.
+  let keyScope: string | null = null, plainPat: string | null = null, plainScope: string | null = null;
+  for (const k of grammar.tokens) {
+    if (!k.scope || k.string || k.pattern === PLACEHOLDER) continue;
+    for (const p of grammar.tokens) {
+      if (p === k || !p.pattern || p.pattern === PLACEHOLDER || !k.pattern.startsWith(p.pattern)) continue;
+      const tail = k.pattern.slice(p.pattern.length);
+      if (/^\(\?=.*\)$/.test(tail)) { keyScope = k.scope; plainPat = p.pattern; plainScope = p.scope ?? null; break; }
+    }
+    if (keyScope) break;
+  }
+  if (!keyScope || !plainPat || !plainScope) return null;
+
+  // LEADING char class = the first balanced group of the plain pattern, unwrapped from its `(?:…)`.
+  const firstBalancedGroup = (pat: string): string | null => {
+    if (pat[0] !== '(') return null;
+    let depth = 0;
+    for (let i = 0; i < pat.length; i++) {
+      if (pat[i] === '\\') { i++; continue; }
+      if (pat[i] === '(') depth++;
+      else if (pat[i] === ')') { depth--; if (depth === 0) return pat.slice(0, i + 1); }
+    }
+    return null;
+  };
+  const lead = firstBalancedGroup(plainPat);
+  if (!lead) return null;
+  const plainStart = lead.replace(/^\(\?:/, '(').replace(/^\((.*)\)$/, '$1');
+
+  // Quoted-scalar tokens (string-flagged begin/end OR a match): give the flow quoted-KEY regions
+  // (a quoted scalar in key position carries entity.name.tag). Detect by the `string` flag; the
+  // body pattern is the token's `match` (key/quoted-scalar tokens are match-form here).
+  const quoteByScope = (suffix: string) =>
+    grammar.tokens.find(t => t.string && t.pattern !== PLACEHOLDER && t.scope?.startsWith(`string.quoted.${suffix}`) && !t.scope.includes('entity'));
+  const dqTok = quoteByScope('double'), sqTok = quoteByScope('single');
+  // The in-string escape: the FIRST sub-alternation of the quoted body after the opening quote
+  // (`\\.` for double, `''` for single). Derive it from the token's own pattern.
+  const quoteEscape = (tok: typeof dqTok): string | null => {
+    if (!tok) return null;
+    // pattern is `<q>(?:<esc>|[^<q><...>])*<q>` — the escape is the first `(?:…|` alternative.
+    const m = tok.pattern.match(/^.\(\?:([^|]*)\|/);
+    return m ? m[1] : null;
+  };
+
+  return {
+    colls, plainStart, keyScope, plainScope,
+    dq: dqTok?.pattern ?? null, sq: sqTok?.pattern ?? null,
+    dqScope: dqTok?.scope ?? null, sqScope: sqTok?.scope ?? null,
+    dqEscape: quoteEscape(dqTok), sqEscape: quoteEscape(sqTok),
+  };
 }
 
 // ── Constructor-call keyword detection ──
@@ -3949,6 +4447,23 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // (a multiline generic arg list spans several lines) can re-include them —
   // the official grammar allows a comment anywhere a type may appear.
   const commentIncludeKeys = commentRepoKeys(grammar);
+  // Repository keys of the grammar's STRING- and NUMBER-family literal tokens,
+  // collected in declaration order as their repo entries are built below. These
+  // are the leaf literals that can appear inside a TYPE expression (a literal
+  // type — `type X = "foo" | 1`, a generic arg `Foo<"a">`, a literal param-type
+  // annotation), so the type-context regions (#type-inner et al.) re-include them
+  // to KEEP the string/number scope instead of letting the literal fall through
+  // to the region's own `meta.type.*` name. The classification is the same
+  // scope-family test the token loop already uses, so the set is fully derived
+  // from the grammar's own token scopes — no hardcoded `"`/digit literals.
+  const literalLiteralKeys: string[] = [];
+  const literalTokenNames = new Set<string>();
+  const rememberLiteralKey = (scope: string, repoKey: string, tokName?: string) => {
+    if (scope.startsWith('string.') || scope.startsWith('constant.numeric')) {
+      literalLiteralKeys.push(repoKey);
+      if (tokName) literalTokenNames.add(tokName);
+    }
+  };
   for (const tok of grammar.tokens) {
     // Skip @regex tokens — handled by regex literal disambiguation above
     if (tok.flags.includes('regex')) continue;
@@ -4009,6 +4524,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           patterns: [escapePat],
         };
         topPatterns.push({ include: `#${key}` });
+        rememberLiteralKey(delimScope, key, tok.name);
       } else {
         // Multiple delimiters: generate separate entries
         for (const [delim, delimScope] of delimiters) {
@@ -4022,8 +4538,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
             patterns: [escapePat],
           };
           topPatterns.push({ include: `#${subKey}` });
+          rememberLiteralKey(delimScope, subKey, tok.name);
         }
       }
+
+    } else if (tok.string && scope.startsWith('string.') && quoteDelimAndEscape(tok.pattern)) {
+      // A quote-delimited string token that carries NO @escape declaration (e.g. YAML's
+      // double/single-quoted scalars). A flat `match` is line-bounded, but such a string can
+      // legally span newlines (a YAML flow scalar folds across lines). Emit a begin/end REGION
+      // — which naturally spans lines — deriving the delimiter and the in-string escape SHAPE
+      // (`\.` backslash-escape vs a doubled delimiter like `''`) straight from the token regex.
+      // JS/TS strings declare an @escape and take the escapePattern branch above, so they are
+      // untouched; this fires only for the otherwise-flat quoted-string token.
+      const { delim, escape } = quoteDelimAndEscape(tok.pattern)!;
+      const region: TmPattern = {
+        name: `${scope}.${langName}`,
+        begin: escapeRegex(delim),
+        beginCaptures: { '0': { name: `punctuation.definition.string.begin.${langName}` } },
+        end: escapeRegex(delim),
+        endCaptures: { '0': { name: `punctuation.definition.string.end.${langName}` } },
+        patterns: [{ match: escape, name: `constant.character.escape.${langName}` }],
+      };
+      // A doubled-delimiter escape (`''`) shares its first char with the region's `end`, so the
+      // escape pattern must be tried BEFORE the end (else `'a''b'` closes at the inner pair).
+      if (escape === escapeRegex(delim) + escapeRegex(delim)) region.applyEndPatternLast = true;
+      repository[key] = region;
+      topPatterns.push({ include: `#${key}` });
+      rememberLiteralKey(scope, key, tok.name);
 
     } else if (isBlock) {
       // Block comments: extract begin/end delimiters from the pattern.
@@ -4078,6 +4619,218 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         match: tok === identToken ? identPattern : tok.pattern,
       };
       topPatterns.push({ include: `#${key}` });
+      // Numeric-literal tokens (decimal/hex/octal/binary/bigint) land here — record
+      // them so a literal type (`type X = 1 | 2`) keeps its `constant.numeric` scope.
+      if (tok !== identToken) rememberLiteralKey(emittedScope, key, tok.name);
+    }
+  }
+
+  // ── 2b. Explicit mapping key (`? key`) ──
+  // An indentation grammar may flag a mapping key by a PRECEDING indicator instead of a
+  // trailing separator (YAML `? key`). The key scalar then has no `:` and the flat token loop
+  // above scopes it as an ordinary string; re-scope the scalar that immediately follows the
+  // indicator as a key. A flat per-token rule can't see the preceding indicator, but a
+  // contextual MATCH can — the indicator is captured in the same rule. Derived from the grammar
+  // (the indicator literal, the key scope, the key body); null for non-indentation grammars.
+  const explicitKey = detectExplicitKey(grammar);
+  if (explicitKey) {
+    // `(indicator)( whitespace )(optional node-prefix: anchors/tags)(key-scalar)` on one line —
+    // the dominant explicit-key shape. The prefix group is NON-capturing so the key stays group 3.
+    const prefixGroup = explicitKey.prefix ?? '';
+    repository['explicit-key'] = {
+      match: `(${escapeRegex(explicitKey.indicator)})([\\t ]+)${prefixGroup}(${explicitKey.keyBody})`,
+      captures: {
+        '1': { name: `punctuation.definition.map.key.${langName}` },
+        '3': { name: `${explicitKey.keyScope}.${langName}` },
+      },
+    };
+    topPatterns.push({ include: '#explicit-key' });
+  }
+
+  // ── 2c. Flow collections (`{ … }` mapping / `[ … ]` sequence) as nested begin/end regions ──
+  // A flat token grammar mis-scopes a flow mapping's keys (the enclosing bracket — invisible to a
+  // context-free token — decides whether an entry-leading scalar is a key or a sequence value).
+  // Emit nested begin/end regions (the TM scope stack carries flow depth) modelled on the
+  // maintained RedCMD grammar: inside a MAPPING the entry-leading scalar is a key (entity.name.tag),
+  // inside a SEQUENCE a scalar is a key only when a `:` separator follows. All shapes — bracket
+  // pair, `:`/`,` separators, plain/quoted scalar patterns, key scope — are DERIVED (see
+  // detectFlowCollections); null for every non-flow grammar, so other families are untouched.
+  const flow = detectFlowCollections(grammar);
+  if (flow) {
+    const ln = langName;
+    const P = `punctuation.${ln}`;
+    // Comment includes (derived from the grammar's comment-scoped tokens — not a hardcoded key),
+    // spread into every flow sub-region so a `#…` comment is scoped even mid-entry / mid-value.
+    const commentIncs = commentIncludeKeys.map(k => ({ include: `#${k}` }));
+    const start = flow.plainStart;                 // plain-scalar leading char class (bare)
+    // The flow-boundary char class: every flow bracket (open AND close) + the entry separator
+    // (`{`,`}`,`[`,`]`,`,`). A flow scalar/entry/value ends before any of them — a `,` (next entry),
+    // a closer (`}`/`]`), or a nested-collection opener (`{`/`[`, which begins the value). The
+    // key/value separator colon is NOT a boundary char (it separates key from value WITHIN an
+    // entry); it is handled by the dedicated colonSep branch below.
+    const closers = [...new Set(flow.colls.flatMap(c => [c.open, c.close, c.sep]))];
+    const closeCls = closers.map(escapeForCharClass).join('');     // for a [...] class
+    const colon = flow.colls.map(c => c.colon).find(Boolean) ?? ':';
+    const eColon = escapeRegex(colon);
+    // A flow scalar ENDS before: a separator-colon (`:` + flow-indicator/space/EOL), any closer
+    // (`,`/`}`/`]`), or a ` #` comment. (No `$` — a multi-line flow scalar spans lines.)
+    const colonSep = `${eColon}(?=[\\s${closeCls}]|$)`;
+    const flowEnd = `(?=[\\t ]*(?:${colonSep}|[${closeCls}])|(?:^|[\\t ])#)`;
+    const beforeClose = `(?=[${closeCls}])`;       // entry/value end: before a closer
+    // Does a `:` separator follow the upcoming plain scalar? (sequence single-pair-map test)
+    const hasColonAhead = `(?=(?:${start})(?:[^${escapeForCharClass(colon)}#${closeCls}]|${eColon}(?![\\s${closeCls}])|(?<=\\S)#)*${colonSep})`;
+
+    // Build the quoted-key region for a string-flagged quote token (carries entity.name.tag). The
+    // quote DELIMITER is the token pattern's first char (derived, never a hardcoded `"`/`'`), and
+    // applyEndPatternLast is set when the escape IS the doubled quote (`''`) — otherwise an empty
+    // `''` would be read as close-then-reopen instead of one escaped quote.
+    const quoteChar = (pat: string): string => pat[0] === '\\' ? pat.slice(0, 2) : pat[0];
+    const quoteKeyRegion = (q: string, scope: string, esc: string | null): TmPattern => ({
+      name: `${scope}.${ln} ${flow.keyScope}.${ln}`,
+      begin: escapeRegex(q), beginCaptures: { '0': { name: `punctuation.definition.string.begin.${ln}` } },
+      end: escapeRegex(q), endCaptures: { '0': { name: `punctuation.definition.string.end.${ln}` } },
+      ...(esc ? { patterns: [{ match: esc, name: `constant.character.escape.${ln}` }] } : {}),
+      ...(esc === q + q ? { applyEndPatternLast: true } : {}),
+    });
+    const quoteIncludes: { include: string }[] = [];
+    const quoteChars: string[] = [];
+    if (flow.dq && flow.dqScope) { const q = quoteChar(flow.dq); quoteChars.push(q); repository['flow-key-double'] = quoteKeyRegion(q, flow.dqScope, flow.dqEscape); quoteIncludes.push({ include: '#flow-key-double' }); }
+    if (flow.sq && flow.sqScope) { const q = quoteChar(flow.sq); quoteChars.push(q); repository['flow-key-single'] = quoteKeyRegion(q, flow.sqScope, flow.sqEscape); quoteIncludes.push({ include: '#flow-key-single' }); }
+    const quoteCls = quoteChars.map(escapeForCharClass).join('');   // for a [...] class
+    // A quoted-scalar match (for the sequence map-key lookahead "quoted then colon").
+    const quoteAlts = [flow.dq, flow.sq].filter(Boolean) as string[];
+
+    // The VALUE colon (a flow separator `:`); and the JSON-style value colon glued after a closed
+    // key (`{"a":b}` — `:` preceded by a quote/closer/line-start, where no space-separator exists).
+    repository['flow-map-value'] = {
+      begin: colonSep, beginCaptures: { '0': { name: P } }, end: beforeClose,
+      patterns: [...commentIncs, { include: '#flow-node' }],
+    };
+    repository['flow-map-value-json'] = {
+      begin: `(?<=[${quoteCls}${closeCls}])[\\t ]*${eColon}|(?<=^)[\\t ]*${eColon}`,
+      beginCaptures: { '0': { name: P } }, end: beforeClose,
+      patterns: [...commentIncs, { include: '#flow-node' }],
+    };
+    // A plain scalar as a VALUE / as a KEY (entity.name.tag); both end at the flow boundary.
+    repository['flow-plain'] = { begin: `(?=${start})`, end: flowEnd, name: `${flow.plainScope}.${ln}` };
+    repository['flow-key-plain'] = { begin: `\\G(?=${start})`, end: flowEnd, name: `${flow.plainScope}.${ln} ${flow.keyScope}.${ln}` };
+
+    // A flow NODE = any value in flow context (nested collection, alias/anchor/tag, quoted, typed,
+    // plain). The decorator/scalar token includes are taken from the grammar's existing token keys.
+    const has = (k: string) => !!repository[k];
+    const nodeIncludes: { include: string }[] = [...commentIncs];
+    for (const c of flow.colls) nodeIncludes.push({ include: c.colon ? '#flow-mapping' : '#flow-sequence' });
+    for (const k of ['anchor', 'tag', 'alias', 'dquote', 'squote', 'num', 'boolnull']) if (has(k)) nodeIncludes.push({ include: `#${k}` });
+    nodeIncludes.push({ include: '#flow-plain' });
+    const seenInc = new Set<string>();
+    repository['flow-node'] = { patterns: nodeIncludes.filter(p => !seenInc.has(p.include) && seenInc.add(p.include)) };
+
+    // The explicit `? key` indicator (if the grammar models one): a `?` followed by a flow
+    // boundary opens a key region. Derived from the explicit-key indicator when present.
+    const qmark = explicitKey ? escapeRegex(explicitKey.indicator) : null;
+    const explicitKeyEntry: TmPattern[] = qmark ? [{
+      begin: `${qmark}(?=[\\s${closeCls}]|$)`, beginCaptures: { '0': { name: P } }, end: beforeClose,
+      patterns: [...commentIncs, { include: '#flow-mapping-map-key' }, { include: '#flow-map-value' }, { include: '#flow-node' }],
+    }] : [];
+
+    // Emit one region per collection. A MAPPING (`colon != null`): every entry-leading scalar is a
+    // key. A SEQUENCE: a scalar is a key only when a `:` separator follows (single-pair map element).
+    for (const c of flow.colls) {
+      const eOpen = escapeRegex(c.open), eClose = escapeRegex(c.close), eSep = escapeRegex(c.sep);
+      if (c.colon) {
+        repository['flow-mapping'] = {
+          name: `meta.flow.mapping.${ln}`,
+          begin: eOpen, beginCaptures: { '0': { name: P } }, end: eClose, endCaptures: { '0': { name: P } },
+          patterns: [
+            ...commentIncs, { match: eSep, name: P },
+            { include: '#flow-mapping-map-key' }, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }, { include: '#flow-node' },
+          ],
+        };
+        repository['flow-mapping-map-key'] = {
+          patterns: [
+            ...explicitKeyEntry,
+            ...(quoteIncludes.length ? [{
+              begin: `(?=[${quoteCls}])`, end: beforeClose,
+              patterns: [...commentIncs, ...quoteIncludes, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }],
+            }] : []),
+            { begin: `(?=${start})`, end: beforeClose,
+              patterns: [...commentIncs, { include: '#flow-key-plain' }, { include: '#flow-map-value' }] },
+          ],
+        };
+      } else {
+        repository['flow-sequence'] = {
+          name: `meta.flow.sequence.${ln}`,
+          begin: eOpen, beginCaptures: { '0': { name: P } }, end: eClose, endCaptures: { '0': { name: P } },
+          patterns: [
+            ...commentIncs, { match: eSep, name: P },
+            { include: '#flow-sequence-map-key' }, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }, { include: '#flow-node' },
+          ],
+        };
+        repository['flow-sequence-map-key'] = {
+          patterns: [
+            ...explicitKeyEntry,
+            ...(quoteAlts.length ? [{
+              begin: `(?=(?:${quoteAlts.join('|')})[\\t ]*${eColon})`, end: beforeClose,
+              patterns: [...commentIncs, ...quoteIncludes, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }],
+            }] : []),
+            { begin: `(?<=[\\t ${closeCls}]|^)${hasColonAhead}`, end: beforeClose,
+              patterns: [...commentIncs, { include: '#flow-key-plain' }, { include: '#flow-map-value' }] },
+          ],
+        };
+      }
+    }
+    // Top-level: the flow regions open on a `{`/`[` (which a plain scalar can never lead, so no
+    // overlap with the scalar tokens); ranked before #punctuation so the bracket opens the region.
+    for (const c of flow.colls) topPatterns.push({ include: c.colon ? '#flow-mapping' : '#flow-sequence' });
+
+    // ── Block-context plain scalars absorb the flow-indicator chars (`{`,`}`,`[`,`]`,`,`) ──
+    // These chars are indicators ONLY inside a flow region (now handled above); in BLOCK context
+    // they are ordinary plain-scalar content (`- bla]keks: foo`, a key with `]`; a key full of
+    // `[]{},` punctuation — yaml-test-suite AZW3 / 2EBW). The shared token EXCLUDES them from its
+    // body (the parser's context-free lexer needs that to stop a flow scalar at a `,`/`]`), but the
+    // block-context TM rule — reached only OUTSIDE a flow region (the flow regions never include the
+    // top-level plain/key tokens; they use #flow-plain/#flow-key-plain) — can safely absorb them.
+    // Transform: in the broad plain scalar (string.unquoted) and its key variant (the key scope),
+    // drop the flow-boundary chars from the BODY's NEGATED character classes only — never from the
+    // LEADING char (a scalar still can't START with `{`/`[`, which opens a flow region) nor from the
+    // trailing key-separator's POSITIVE lookahead. Derived from `flowOpen`/`flowClose`/separator, so
+    // it is agnostic and fires only for an indentation grammar that declares flow collections.
+    const boundaryChars = new Set(flow.colls.flatMap(c => [c.open, c.close, c.sep]));
+    const firstGroupLen = (pat: string): number => {
+      if (pat[0] !== '(') return 0;
+      let depth = 0;
+      for (let i = 0; i < pat.length; i++) {
+        if (pat[i] === '\\') { i++; continue; }
+        if (pat[i] === '(') depth++;
+        else if (pat[i] === ')') { depth--; if (depth === 0) return i + 1; }
+      }
+      return 0;
+    };
+    // Remove the boundary chars from every NEGATED class `[^…]` in `s` (positive classes untouched).
+    // Handles both bare (`,`,`{`,`}`) and escaped (`\[`,`\]`) forms of a boundary char in the class.
+    const stripBoundaryFromNegatedClasses = (s: string): string =>
+      s.replace(/\[\^((?:\\.|[^\]\\])*)\]/g, (whole, inner: string) => {
+        let out = '', i = 0;
+        while (i < inner.length) {
+          if (inner[i] === '\\') {
+            if (boundaryChars.has(inner[i + 1])) { i += 2; continue; }   // drop escaped boundary char
+            out += inner.slice(i, i + 2); i += 2; continue;
+          }
+          if (boundaryChars.has(inner[i])) { i++; continue; }            // drop bare boundary char
+          out += inner[i++];
+        }
+        return `[^${out}]`;
+      });
+    const loosenBlockScalar = (pat: string): string => {
+      const lead = firstGroupLen(pat);
+      if (!lead) return pat;
+      return pat.slice(0, lead) + stripBoundaryFromNegatedClasses(pat.slice(lead));
+    };
+    // Identify the block plain & key repo entries by their DERIVED scopes (not by name) and loosen.
+    for (const entry of Object.values(repository)) {
+      if (!entry.match || !entry.name) continue;
+      const scope = entry.name.replace(new RegExp(`\\.${ln}$`), '');
+      if (scope === flow.plainScope || scope === flow.keyScope) entry.match = loosenBlockScalar(entry.match);
     }
   }
 
@@ -4115,6 +4868,29 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     repository['type-paren'] = {
       begin: '\\(',
       end: '\\)',
+      // patterns filled after type-inner is built
+    };
+  }
+
+  // Type-bracket: `[ … ]` inside type contexts — a TUPLE type (`[A, B]`) or an
+  // indexed-access type's index (`T[K]`). Without this region a tuple's inner `,`
+  // (or an object-type member's `: [A, B]` value) prematurely satisfies the
+  // enclosing type region's `end` (`#type-object-member` ends on `,`), so every
+  // element after the first falls back to value mode. Modelled exactly like
+  // #type-paren (recurse via #type-inner), keyed on the SAME signal — the grammar's
+  // @type rules containing `[` and `]` (typeLiterals) — so it is agnostic and emitted
+  // only when the language actually has bracket types. It is included in #type-inner
+  // AFTER the `\[\]` empty-array-suffix match, so `T[]` still reads as an array
+  // operator and only a `[` carrying content opens the tuple region.
+  const hasBracketType = grammar.rules.some(r =>
+    r.flags.includes('type') && collectLiterals(r.body).includes('[') && collectLiterals(r.body).includes(']')
+  );
+  if (hasBracketType && hasTypeAnnotations) {
+    repository['type-bracket'] = {
+      begin: '\\[',
+      beginCaptures: { '0': { name: `punctuation.definition.block.${langName}` } },
+      end: '\\]',
+      endCaptures: { '0': { name: `punctuation.definition.block.${langName}` } },
       // patterns filled after type-inner is built
     };
   }
@@ -4184,6 +4960,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     }
   }
 
+  // Literal types — a STRING/NUMBER literal can stand as a type (`type X =
+  // "foo" | 1`, a generic arg `Foo<"a">`, a literal param-type `(p: "on") =>`).
+  // If any @type rule references one of the grammar's string/number literal
+  // tokens, re-include those leaf token repo entries inside the type context so
+  // the literal keeps its `string`/`constant.numeric` scope rather than falling
+  // through to the enclosing region's `meta.type.*` name. Both the trigger
+  // (a literal-token ref reachable from a @type rule) and the included keys are
+  // derived from the grammar's own tokens/rules — no hardcoded `"`/digit shapes.
+  const typeRefsLiteralToken = literalTokenNames.size > 0 && grammar.rules.some(r => {
+    if (!r.flags.includes('type')) return false;
+    let found = false;
+    const walk = (e: RuleExpr): void => {
+      if (found || !e) return;
+      switch (e.type) {
+        case 'ref': if (literalTokenNames.has(e.name)) found = true; return;
+        case 'seq': case 'alt': e.items.forEach(walk); return;
+        case 'quantifier': case 'group': case 'not': walk(e.body); return;
+        case 'sep': walk(e.element); return;
+      }
+    };
+    walk(r.body);
+    return found;
+  });
+  const literalTypeIncludes: { include: string }[] = typeRefsLiteralToken
+    ? literalLiteralKeys.map(k => ({ include: `#${k}` }))
+    : [];
+
   // Shared type inner patterns — exposed as a repository entry so all consumers
   // reference it via `{ include: '#type-inner' }`.  No shared mutable array;
   // later injections rebuild the patterns array non-destructively.
@@ -4193,6 +4996,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     ...(repository['type-object-type'] ? [{ include: '#type-object-type' }] : []),
     ...(repository['type-paren'] ? [{ include: '#type-paren' }] : []),
     ...(repository['type-predicate'] ? [{ include: '#type-predicate' }] : []),
+    // Literal types (string/number literal standing as a type) — before
+    // #simple-type so a `"foo"`/`1` keeps its literal scope instead of being
+    // swallowed by the surrounding type region's name.
+    ...literalTypeIncludes,
     { include: '#simple-type' },
   ];
   // Union/intersection operators — only if present in @type rules
@@ -4206,6 +5013,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // Array bracket type — only if @type rules contain both [ and ]
   if (typeLiterals.has('[') && typeLiterals.has(']')) {
     typeInnerPats.push({ match: '\\[\\]', name: `keyword.operator.type.array.${langName}` });
+    // A `[` carrying content opens the recursive tuple / indexed-access region
+    // (#type-bracket), listed AFTER the empty-array match so `T[]` stays an array op.
+    if (repository['type-bracket']) typeInnerPats.push({ include: '#type-bracket' });
   }
   // Arrow function type — only if => appears in @type rules
   if (typeLiterals.has('=>')) {
@@ -4278,6 +5088,79 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   if (repository['type-paren']) {
     repository['type-paren'].patterns = [{ include: '#type-inner' }];
   }
+  // Wire up deferred type-bracket (tuple / indexed-access). A bare ident `[`-adjacent
+  // and followed by `:` is an INDEX-SIGNATURE param (`[key: string]`) or a LABELLED
+  // tuple element (`[first: A, …]`) — that leading identifier is a binding/parameter
+  // name, NOT a type, so a narrow head match scopes it `variable.parameter` (and its
+  // `:` as the annotation) BEFORE #type-inner would paint it entity.name.type. The
+  // match is anchored to the `[` (lookbehind) and the `:`, so a plain tuple element
+  // (`[A, B]`) / indexed-access index (`T[K]`) — ident NOT followed by `:` — falls
+  // through to #type-inner and recurses as a type, as intended. (Anchoring on the `[`
+  // rather than including the whole #type-object-member region avoids the member
+  // rule's `,`/`}` end leaking across tuple elements.)
+  // Mapped-type connector keyword(s) — the `in` of `{ [K in T]: V }`. Derived from
+  // the grammar's own shape: a `[`-bracketed clause whose body is an identifier
+  // immediately followed by an alternation that branches on a RESERVED keyword
+  // (`[Ident, alt(['in', Type, …], [':', Type, …])]` in the type-member rule). In a
+  // type-context `[…]` this keyword would otherwise be eaten by #simple-type and
+  // mis-painted entity.name.type (it is a value-position operator, so it carries no
+  // type-context keyword include); a head match restores its keyword scope and
+  // paints the mapped key as a type name (matching the official mappedtype rule).
+  // Keyword-agnostic: the connector + its scope both come from the grammar.
+  const mappedTypeConnectors = new Set<string>();
+  {
+    const mtIdentName = identToken?.name;
+    const walk = (e: RuleExpr | undefined, underBracket: boolean): void => {
+      if (!e) return;
+      if (e.type === 'seq') {
+        const hasBracket = underBracket || e.items.some(it => it.type === 'literal' && it.value === '[');
+        for (let i = 0; i < e.items.length; i++) {
+          const a = e.items[i], b = e.items[i + 1];
+          // Ident-ref directly followed by an alt whose a branch starts with a keyword
+          if (hasBracket && a && a.type === 'ref' && a.name === mtIdentName && b && b.type === 'alt') {
+            for (const branch of b.items) {
+              const head = branch.type === 'seq' ? branch.items[0] : branch;
+              if (head && head.type === 'literal' && isKeywordLiteral(head.value)) {
+                mappedTypeConnectors.add(head.value);
+              }
+            }
+          }
+          walk(a, hasBracket);
+        }
+      } else if (e.type === 'alt') {
+        for (const it of e.items) walk(it, underBracket);
+      } else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') {
+        walk(e.body, underBracket);
+      } else if (e.type === 'sep') {
+        walk(e.element, underBracket);
+      }
+    };
+    if (mtIdentName) for (const r of grammar.rules) walk(r.body, false);
+  }
+  if (repository['type-bracket']) {
+    const mappedTypeHeads = [...mappedTypeConnectors]
+      .map(kw => ({ kw, scope: getScope(scopeOverrides, kw) }))
+      .filter((x): x is { kw: string; scope: string } => !!x.scope)
+      .map(({ kw, scope }) => ({
+        // `[ K in …` — the mapped key is a type name, the connector keeps its scope.
+        match: `(?<=\\[)\\s*(${identPattern})\\s+(${escapeRegex(kw)})\\b`,
+        captures: {
+          '1': { name: `entity.name.type.${langName}` },
+          '2': { name: `${scope}.${langName}` },
+        },
+      }));
+    repository['type-bracket'].patterns = [
+      ...mappedTypeHeads,
+      {
+        match: `(?<=\\[)\\s*(${identPattern})(\\s*:)`,
+        captures: {
+          '1': { name: `variable.parameter.${langName}` },
+          '2': { name: `keyword.operator.type.annotation.${langName}` },
+        },
+      },
+      { include: '#type-inner' },
+    ];
+  }
   // Wire up deferred type-object patterns now that type-inner exists
   if (repository['type-object-member']) {
     repository['type-object-member'].patterns = [{ include: '#type-inner' }];
@@ -4314,8 +5197,17 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // Build while pattern for type alias continuation.
   // A line continues the type alias if it starts with type-continuation content:
   // type operators, type keywords, comments, or identifiers that aren't statement keywords.
+  // The alias body separator (the literal that introduces `= Body`) — the same
+  // literal the type-alias detector keys on below (`decl.endHint === '='`), kept
+  // in one place so the `while` and the detector agree on what a type alias is.
+  const typeAliasSeparator = '=';
   let typeAliasWhile: string | undefined;
   if (typeLiterals.size > 0) {
+    // Operators that may LEAD a continuation line (`| A`, `& B`, …). Closing
+    // brackets (`]`/`)`/`}`/`>`) and `=>` are excluded — a line that opens with a
+    // bare closer normally ENDS the type (it closes an enclosing block), so it
+    // must NOT keep the region alive on its own (see the closer-run handling
+    // below, which only continues when a closer is FOLLOWED by a type operator).
     const typeContinueOps = [...typeLiterals]
       .filter(l => !isKeywordLiteral(l) && l !== '=>' && l !== ']' && l !== ')' && l !== '}' && l !== '>')
       .map(escapeForCharClass).join('');
@@ -4325,12 +5217,41 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (typeKwAlt) whileParts.push(`(?:${typeKwAlt})\\b`);
     whileParts.push('//');
     whileParts.push('/\\*');
+    // Multi-line type tail: a continuation line that OPENS with one or more
+    // closing brackets that finish a multi-line sub-type (a `}` object body, a
+    // `>` type-arg or type-PARAM list, a `)`/`]` paren/tuple) and is then
+    // immediately followed by a token that keeps the type going:
+    //   • a type-continuation operator `& Other` / `| Extra` (the union/
+    //     intersection TAIL after a multi-line body — `} & Other`, `> & Extra`)
+    //   • the body-introducing `=` (a multi-line type-PARAMETER list laid out
+    //     before the `=`: `type T<\n  P extends X\n> = Body` — line 3 opens with
+    //     the `>` that closes the params, then `= Body`)
+    // Without this, such a line opened with `}`/`>`/`)`, failed the `while`, and
+    // tore the region down — dropping the tail / body to expression mode (the
+    // tail's `type.ref` and the body's types lost their scope). The trailing
+    // operator/`=` is REQUIRED so a bare enclosing-block closer (`type T = X`
+    // then a lone `}` ending a namespace/function body) still terminates the
+    // alias. The closing brackets, the operators and the `=` body-introducer are
+    // all the grammar's own type/assignment literals — agnostic.
+    const typeCloserChars = [...typeLiterals]
+      .filter(l => l === ']' || l === ')' || l === '}' || l === '>')
+      .map(escapeForCharClass).join('');
+    const aliasSep = escapeForCharClass(typeAliasSeparator);
+    if (typeCloserChars && typeContinueOps) {
+      whileParts.push(`[${typeCloserChars}](?:\\s*[${typeCloserChars}])*\\s*(?=[${typeContinueOps}${aliasSep}])`);
+    }
     // Identifiers: must not be statement keywords, and must not be followed
     // by ( or . (which indicate expression statements like foo() or foo.bar).
     // Use \b after the identifier to prevent backtracking to a partial match.
+    // The keyword alternation MUST be grouped — `(?:kw1|kw2)\b`, not `kw1|kw2\b` —
+    // or the trailing `\b` binds to the LAST alternative only and the others match
+    // a mere PREFIX: a continuation line opening with an identifier that starts with
+    // a keyword (`getTranslationEntry`, `interfaceName`, `newThing`, `inferred`) would
+    // fail the negative lookahead and tear the whole multi-line type region down,
+    // dropping the tail to value mode (the type.ref miss this region exists to close).
     if (stmtStartKeywords.size > 0) {
       const stmtAlt = [...stmtStartKeywords].map(escapeRegex).join('|');
-      whileParts.push(`(?!${stmtAlt}\\b)${identPattern}\\b(?!\\s*[.(])`);
+      whileParts.push(`(?!(?:${stmtAlt})\\b)${identPattern}\\b(?!\\s*[.(])`);
     } else {
       whileParts.push(`${identPattern}\\b(?!\\s*[.(])`);
     }
@@ -4403,6 +5324,34 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           patterns: [{ include: '#type-inner' }],
         };
         paramsInnerPatterns.push({ include: '#param-type-annotation' });
+
+        // Destructuring-binding parameter type annotation: `{ a } : T`, `[ a ] : T`
+        // (and with defaults `{ a = 0 } : T`). #param-type-annotation above only
+        // opens on a SIMPLE-identifier param before `:`; when the param is a binding
+        // pattern its `:` annotation would otherwise fall through to bare punctuation
+        // and the type name be scoped as a value. The binding pattern's `{…}`/`[…]`
+        // body — its bound names, nested patterns and `= default` expressions — is
+        // consumed by `$self` exactly as before (so those scopes are unchanged); this
+        // rule only opens the type region at the trailing `:`. The begin is anchored
+        // by a lookbehind on the binding-pattern CLOSE bracket (derived from the
+        // grammar, see deriveBindingCloseBrackets), which at param-list level can only
+        // be a destructuring close — a default-value object/array literal is nested
+        // inside `$self` and never surfaces here, so it cannot trigger this region.
+        const bindCloses = deriveBindingCloseBrackets(grammar, identToken?.name);
+        if (bindCloses.length) {
+          const closeClass = bindCloses.map(escapeForCharClass).join('');
+          repository['param-bind-type-annotation'] = {
+            name: `meta.type.annotation.parameter.${langName}`,
+            begin: `(?<=[${closeClass}])\\s*(\\??)\\s*(:)`,
+            beginCaptures: {
+              '1': { name: `keyword.operator.optional.${langName}` },
+              '2': { name: `keyword.operator.type.annotation.${langName}` },
+            },
+            end: '(?=[,)]|=(?!>))',
+            patterns: [{ include: '#type-inner' }],
+          };
+          paramsInnerPatterns.push({ include: '#param-bind-type-annotation' });
+        }
 
         // Bare ':' return-type pattern (for use inside declaration scopes,
         // after declaration-params consumes the ')')
@@ -4594,7 +5543,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // Type alias: `type Foo = Type;` — scope covers the type body.
         // Use begin/while so the scope auto-closes when the next line
         // can't be part of a type expression (e.g., starts with a statement keyword
-        // or an expression like `foo()`).
+        // or an expression like `foo()`). `while` tears the WHOLE region (and any
+        // open inner object-type/type-arg frames) down when it fails, so an inner
+        // sub-type that doesn't close cleanly can never run away into later code —
+        // the per-line re-test re-establishes the boundary every line.
         end = '(?=;)|;';
         if (!repository['type-body']) {
           const eqScope = getScope(scopeOverrides, '=') ?? 'keyword.operator.assignment';
@@ -4619,6 +5571,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         end = `(?=${escapeRegex(decl.endHint)})`;
       } else if (!decl.hasBody) {
         end = '(?=;|$)';
+      } else if (decl.optionalBody) {
+        // Body OPTIONAL (`function f(){}` OR overload/ambient `function f();`): close
+        // after the body `}` as usual, but ALSO on a body-less `;` terminator —
+        // otherwise the region runs into the next statement. The body's own `;`s are
+        // inside the nested #code-block region, so the outer `(?=;)` only sees the
+        // signature terminator (TM never tests the outer end inside a child region).
+        end = '(?<=\\})|(?=;)';
       }
 
       // Build begin regex: keyword [midLiterals?] name
@@ -4815,11 +5774,71 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         '2': { name: `keyword.operator.optional.${langName}` },
         '3': { name: `keyword.operator.type.annotation.${langName}` },
       },
-      end: '(?=[;=},)])',
+      // The `=` boundary (member initializer `x: T = …`) is matched as `=(?!>)`
+      // so the `=` of a function-type return arrow (`x: () => T`) does not close
+      // the annotation early and strip the return type of its type scope.
+      end: '(?=[;},)]|=(?!>))',
       patterns: [{ include: '#type-inner' }],
     };
     const bodyPatterns = repository['declaration-body'].patterns!;
     bodyPatterns.splice(bodyPatterns.length - 1, 0, { include: '#member-type-annotation' });
+
+    // Computed-member-key type annotation: `[ 'k' ] : T`, `[Symbol.iterator]: T`.
+    // #member-type-annotation above only opens on a SIMPLE-identifier key before `:`;
+    // when the key is a computed `[ expr ]` the trailing `:` would otherwise fall
+    // through to bare punctuation and the type name be scoped as a VALUE (the type.ref
+    // miss this closes — e.g. `['x']: React.DOMAttributes<unknown>`). The key's
+    // `[ expr ]` — its brackets and inner expression — is consumed by the body's
+    // expression patterns (`$self`) exactly as before, so those scopes are unchanged;
+    // this rule only opens the type region at the trailing `:`, anchored by a
+    // lookbehind on the computed-key CLOSE bracket (derived from the grammar's member
+    // rules, see deriveComputedMemberCloseBrackets), mirroring #param-bind-type-annotation.
+    // An index signature `[k: T]: U` is unaffected: its inner `k:` opens
+    // #member-type-annotation first (a leftmost match), whose region already spans the
+    // trailing `]: U`, so this pattern never fires there.
+    const memberKeyCloses = deriveComputedMemberCloseBrackets(grammar, typeRuleNames);
+    if (memberKeyCloses.length) {
+      const closeClass = memberKeyCloses.map(escapeForCharClass).join('');
+      repository['member-bind-type-annotation'] = {
+        name: `meta.type.annotation.member.${langName}`,
+        begin: `(?<=[${closeClass}])\\s*(\\??)\\s*(:)`,
+        beginCaptures: {
+          '1': { name: `keyword.operator.optional.${langName}` },
+          '2': { name: `keyword.operator.type.annotation.${langName}` },
+        },
+        end: '(?=[;},)]|=(?!>))',
+        patterns: [{ include: '#type-inner' }],
+      };
+      bodyPatterns.splice(bodyPatterns.length - 1, 0, { include: '#member-bind-type-annotation' });
+    }
+
+    // Class-field INITIALIZER object literal (`foo = { … }`). Inside a declaration
+    // body the `{ … }` after a field's `=` would otherwise be consumed by the
+    // self-recursive #declaration-body block — which carries #member-type-annotation —
+    // so an object-literal key (`{ a: PropTypes.number }`) is mis-read as a member
+    // type annotation (key → variable.object.property, value → entity.name.type). A
+    // field initializer is an EXPRESSION, not a class body: this region opens on the
+    // member `=` (a lone assignment — the compound-operator lookbehind/ahead keep it
+    // off `==`/`=>`/`>=`/`+=`) when an object `{` follows, and routes the `{ … }`
+    // through #code-block (the self-recursive block that includes `$self` but NOT the
+    // class-member patterns), so the object literal's keys/values read as plain
+    // expression tokens exactly as a top-level `const x = { … }` does. Emitted only
+    // when both the member-annotation regime (the source of the leak) and #code-block
+    // exist, and keyed on the grammar's `{`/`=` — agnostic, no TS-specific names.
+    if (repository['member-type-annotation'] && repository['code-block']) {
+      const asgnScope = getScope(scopeOverrides, '=') ?? 'keyword.operator.assignment';
+      repository['member-initializer-object'] = {
+        begin: `(?<![=!<>+\\-*/%&|^~])(=)(?![=>])(?=\\s*\\{)`,
+        beginCaptures: { '1': { name: `${asgnScope}.${langName}` } },
+        end: '(?<=\\})',
+        patterns: [{ include: '#code-block' }],
+      };
+      // Front of the body patterns: its `=`-anchored begin sits one position LEFT of
+      // the bare `\{` self-recursion and of `$self`'s `=` operator match, so leftmost-
+      // match makes it claim `= {` first; a non-object initializer (`= bar`) lacks the
+      // `{` lookahead and is untouched.
+      repository['declaration-body'].patterns!.unshift({ include: '#member-initializer-object' });
+    }
   }
 
   // ── 4. Contextual patterns (keyword + Ident → entity.name.*) ──
@@ -5347,6 +6366,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (hasTypeAnnotations && repository['param-type-annotation']) {
       arrowInner.push({ include: '#param-type-annotation' });
     }
+    // Destructuring-binding param annotation (`({ a = 0 }: T) => …`), same rule as
+    // the declaration-param list — emitted only when the grammar has binding patterns.
+    if (repository['param-bind-type-annotation']) {
+      arrowInner.push({ include: '#param-bind-type-annotation' });
+    }
     // Bare parameter ident at param-start positions only (after '(' or ',').
     // Followed by ',', ')', '=' (default), ':' (type annotation), or '?' (optional).
     // Use lookbehind to avoid matching default value expressions like `= level`.
@@ -5376,6 +6400,42 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       patterns: arrowInner,
     };
     topPatterns.push({ include: '#arrow-function-params' });
+
+    // Generic-arrow param list whose `(` is deferred to a LATER line:
+    //   const f = <T extends X>(
+    //     a: T,
+    //   ) => …
+    // #arrow-function-params' same-line lookahead (`(?=[^()]*\)…=>)`) can't confirm
+    // the closing `)`/`=>` when the param list spans lines, so the params would fall
+    // to value mode (their annotations lose type scope). But here #arrow-type-parameters
+    // has ALREADY disambiguated the arrow (its begin verified the `<…>` + arrow-shaped
+    // `(`, allowing the `(`-at-end-of-line form) and ended at the type-param `>`; the
+    // very next `(` therefore opens the arrow's param list. We re-open the SAME typed
+    // param region keyed on that `>` close. Two guards keep it surgical:
+    //   • the `(` must be at END OF LINE (`\s*$`) — the single-line generic arrow
+    //     `<T,>(x:T)=>x` is already handled by #arrow-function-params, and a one-line
+    //     parenthesised expression after a comparison/call `>` (`a > (b)`) is left alone;
+    //   • the preceding `>` must close a type-param list carrying a top-level comma or
+    //     constraint keyword (`typeParamCloseBehind`, the SAME signal #arrow-type-
+    //     parameters disambiguates on) — so a multi-line generic CALL `foo<Bar>(` or
+    //     comparison `a > (` (neither has the comma/constraint) does NOT open params.
+    // Emitted only when generic-arrow type params exist (angleDisambig), so non-generic
+    // grammars are unaffected.
+    if (angleBracket && angleDisambig) {
+      repository['arrow-function-params-generic'] = {
+        name: `meta.parameters.arrow.${langName}`,
+        begin: `(?<=${angleDisambig.typeParamCloseBehind})\\s*(\\()\\s*$`,
+        beginCaptures: {
+          '1': { name: `punctuation.definition.parameters.begin.${langName}` },
+        },
+        end: '(\\))',
+        endCaptures: {
+          '1': { name: `punctuation.definition.parameters.end.${langName}` },
+        },
+        patterns: arrowInner,
+      };
+      topPatterns.push({ include: '#arrow-function-params-generic' });
+    }
   }
 
   // ── 4b4. Ternary expression (? ... :) ──
@@ -5476,10 +6536,20 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const kwAlt = usedVarDecls.map(escapeRegex).join('|');
 
       // Variable declaration: (let|const|var) ident :
-      const varAnnotEndParts = ['(?=[=;,])'];
+      // The annotation ends at the initializer `=`, the statement `;`, or the
+      // next declarator `,`. The `=` is matched as `=(?!>)` so the `=` of a
+      // function-type return arrow (`const f: () => T = …`) does NOT prematurely
+      // close the type region — keeping the post-arrow return type in type mode
+      // (same arrow-vs-assignment guard #param-type-annotation already uses). The
+      // `=>` arrow is the grammar's own type literal, so this stays agnostic.
+      const varAnnotEndParts = ['(?=[;,]|=(?!>))'];
       if (stmtStartKeywords.size > 0) {
         const stmtAlt = [...stmtStartKeywords].map(escapeRegex).join('|');
-        varAnnotEndParts.push(`^\\s*(?=${stmtAlt})\\b`);
+        // Group the alternation so `\b` requires a WHOLE keyword: `^\s*(?=(?:kw)\b)`.
+        // Ungrouped (`(?=kw1|kw2)\b`) the `\b` binds to the last alternative only and
+        // the rest match a prefix, so a continuation line like `interfaceName: T` would
+        // falsely look like a statement keyword and terminate the annotation early.
+        varAnnotEndParts.push(`^\\s*(?=(?:${stmtAlt})\\b)`);
       }
       repository['type-annotation-var'] = {
         name: `meta.type.annotation.${langName}`,
@@ -5619,8 +6689,45 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // `import defer from "m"`).
       const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k) && !ctxModSet.has(k) && !contextDeclaredKws.has(k) && !phaseModifierKws.has(k));
       if (globalKws.length > 0) {
+        // A `support.class` group names BUILTIN CLASS/TYPE identifiers (Object, Array,
+        // Promise, …) — but, unlike a true keyword, those words also appear as runtime
+        // VALUES: `Object.keys(x)` (member-access LHS), `Object(x)` (call). tsc/official
+        // scope a builtin in value position as a value, NOT a class, so the unconditional
+        // flat match over-paints it. Guard the flat match with a NEGATIVE lookahead that
+        // makes it ABSTAIN when the builtin is immediately followed by a member accessor
+        // (`.`/`?.`) or a call `(`; the word then falls through to the already-derived
+        // value rules (#method-call/#property-access for the `.member`, #function-call for
+        // a direct call, #ident for the bare LHS) — exactly as a non-builtin capitalised
+        // name does. TYPE positions (annotation/heritage/type-args) reach the builtin
+        // through `<`/whitespace, never `.`/`(`, so they still hit the flat match and keep
+        // `support.class`; member-LHS/call positions are never type positions, so this is
+        // type-position-safe by construction. Convention-driven (keys on the `support.class`
+        // scope name like the storage.type.*/`*.extends` handling above), not on any word.
+        // Value-position openers are the member accessors (`.`/`?.`) and the call `(`.
+        // Detect each from the grammar's own punctuation data (its scope map / accessor
+        // detection) rather than assuming the JS spellings: `.` via accessor detection
+        // OR a `punctuation.accessor` scope entry, `?.` via its `punctuation.accessor`
+        // (optional) scope entry, `(` via its `punctuation.bracket`/round scope entry.
+        const accessorChar = (lit: string): string | undefined => {
+          const sc = getScope(scopeOverrides, lit);
+          return sc && /(^|\.)accessor(\.|$)/.test(sc) ? escapeRegex(lit) : undefined;
+        };
+        const callOpener = (): string | undefined => {
+          for (const [lit, scopes] of scopeOverrides)
+            if (/(^|\.)bracket\.round(\.|$)/.test(scopes[0] ?? '') && /[([{]/.test(lit)) return escapeRegex(lit);
+          return undefined;
+        };
+        const valuePosOpeners = [
+          propAccess.hasDot ? '\\.' : accessorChar('.'),
+          accessorChar('?.'),
+          callOpener(),
+        ].filter((x): x is string => !!x);
+        const isBuiltinClass = scope === 'support.class' || scope.startsWith('support.class.');
+        const valueAbstain = isBuiltinClass && valuePosOpeners.length > 0
+          ? `(?!\\s*(?:${valuePosOpeners.join('|')}))`
+          : '';
         repository[key] = {
-          match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b`,
+          match: `\\b(${globalKws.map(escapeRegex).join('|')})\\b${valueAbstain}`,
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${key}` });
@@ -5686,13 +6793,87 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         const order = (s: string) => s.startsWith('support.type.') ? 0 : 1;
         return order(a) - order(b);
       });
+      // TYPE-POSITION builtin literals — `undefined`/`null`/`true`/`false` are
+      // value `constant.language.*` keywords in EXPRESSION position, but in a TYPE
+      // they are primitive type-builtins (official's `type-builtin-literals` →
+      // support.type.builtin: `this|true|false|undefined|null|object`). In type
+      // position tsc lexes a bare `undefined` as a type keyword (support.type),
+      // never the value constant; the literal-type `null`/`true`/`false` are
+      // defensibly a type-builtin too. So a constant.language keyword that the
+      // grammar ALSO admits in type position (it appears in a @type rule, i.e. is a
+      // typeContextKeyword) is re-scoped support.type.builtin HERE — type-inner is
+      // only reached in type position, so the value-context match is untouched.
+      // `this`/`super` (variable.language) are deliberately excluded: a type `this`
+      // is the polymorphic-this binding, defensibly variable.language, not a
+      // type-builtin. Derived from the grammar's own typeContextKeywords ∩
+      // constant.language groups — no hardcoded word list.
+      const typeBuiltinLiterals = [...keywordGroups.entries()]
+        .filter(([scope]) => scope.startsWith('constant.language.'))
+        .flatMap(([, kws]) => kws)
+        .filter(kw => typeContextKeywords.has(kw));
+      const typeBuiltinKey = 'type-builtin-literals';
+      if (typeBuiltinLiterals.length > 0) {
+        repository[typeBuiltinKey] = {
+          match: `\\b(${typeBuiltinLiterals.map(escapeRegex).join('|')})\\b`,
+          name: `support.type.builtin.${langName}`,
+        };
+      }
+      // TYPE-POSITION storage modifiers — `readonly` of `readonly T[]` (and the
+      // index/mapped `readonly [`) is a `storage.modifier` keyword that ALSO heads a
+      // type operator (it appears in a @type rule → typeContextKeyword). In type
+      // position it would otherwise be eaten by #simple-type → entity.name.type; a
+      // dedicated include keeps its storage.modifier scope (matching official, which
+      // paints type-position `readonly` storage.modifier). Only storage.modifier
+      // keywords that are typeContextKeywords are emitted (the pure declaration
+      // modifiers `public`/`static`/… never reach type position), so this is exactly
+      // `readonly` for TS — derived from the grammar, no hardcoded word.
+      const typeStorageMods = new Map<string, string[]>();
+      for (const [scope, kws] of keywordGroups) {
+        if (!scope.startsWith('storage.modifier')) continue;
+        const inType = kws.filter(kw => typeContextKeywords.has(kw));
+        if (inType.length > 0) typeStorageMods.set(scope, inType);
+      }
+      const typeStorageModIncludes: { include: string }[] = [];
+      for (const [scope, kws] of typeStorageMods) {
+        const tmKey = `type-${scope.replace(/\./g, '-')}`;
+        repository[tmKey] = {
+          match: `\\b(${kws.map(escapeRegex).join('|')})\\b`,
+          name: `${scope}.${langName}`,
+        };
+        typeStorageModIncludes.push({ include: `#${tmKey}` });
+      }
+      // The constant.language type-builtins are emitted by #type-builtin-literals
+      // above, so drop their value-scope includes from the type-context injection
+      // (otherwise the value scope would win first, since type-builtin runs after).
+      const typeBuiltinLiteralSet = new Set(typeBuiltinLiterals);
+      const supportConstIncludes = supportConstScopes.filter(scope => {
+        if (!scope.startsWith('constant.language.')) return true;
+        const kws = keywordGroups.get(scope) ?? [];
+        // keep the include only if it still has keywords NOT promoted to type-builtin
+        return kws.some(kw => !typeBuiltinLiteralSet.has(kw));
+      });
       const typeRelatedIncludes = [
         // Comments first: a `//` / `/* */` may sit anywhere in type position
         // (notably inside a multiline generic argument list). Without these the
         // `/` would fall through unmatched and the comment body would be
         // mis-scoped as a type name.
         ...commentIncludeKeys.map(key => ({ include: `#${key}` })),
-        ...supportConstScopes.map(scope => ({ include: `#scope-${scope.replace(/\./g, '-')}` })),
+        // A LEADING `<…>` type-parameter list of a generic function-type
+        // (`<T, U>(x: T) => U`, e.g. `declare const f: <T>(…) => …`). In type
+        // position — the only place `#type-inner` is reached — a bare `<` (one not
+        // preceded by a type name, which `#generic-type`'s `name<` already claims)
+        // can only open such a list, so re-using the declaration type-param list
+        // (`extends`/defaults/nested generics scoped identically) is unambiguous.
+        // Without it the `<` falls through, the params get expression scopes and the
+        // closing `>` is mis-read as a relational operator. Gated on the entry
+        // existing (a grammar with no generic declarations emits none).
+        ...(repository['declaration-type-params'] ? [{ include: '#declaration-type-params' }] : []),
+        // type-builtin literals (undefined/null/true/false → support.type.builtin)
+        // must precede the remaining support.type / constant.language includes.
+        ...(typeBuiltinLiterals.length > 0 ? [{ include: `#${typeBuiltinKey}` }] : []),
+        // type-position storage modifiers (`readonly T[]` → storage.modifier).
+        ...typeStorageModIncludes,
+        ...supportConstIncludes.map(scope => ({ include: `#scope-${scope.replace(/\./g, '-')}` })),
         ...operatorExprIncludeKeys.map(key => ({ include: `#${key}` })),
       ];
       if (typeRelatedIncludes.length > 0) {
@@ -5721,10 +6902,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   }
 
   // Patch type-paren with param-type-annotation so function-type params
-  // like `(raw: unknown) => T` get variable.parameter scoping.
+  // like `(raw: unknown) => T` get variable.parameter scoping. A destructuring-binding
+  // function-type param (`({ a }: P) => void`) routes its `: P` through the same
+  // binding rule (when the grammar emitted it).
   if (repository['type-paren'] && repository['param-type-annotation']) {
     repository['type-paren'].patterns = [
       { include: '#param-type-annotation' },
+      ...(repository['param-bind-type-annotation'] ? [{ include: '#param-bind-type-annotation' }] : []),
       { include: '#type-inner' },
     ];
   }
@@ -5894,12 +7078,34 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     const entry = repository[key];
     const scope = entry?.name ?? '';
     if (scope.startsWith('comment.')) return 0;
+    // An explicit mapping-key rule (`? key`) is the most specific scalar context — its indicator
+    // pins the following scalar as a key — so it must be tried before the bare key/plain scalars.
+    if (key === 'explicit-key') return 0.8;
+    // A flow collection (`{ … }` / `[ … ]`) is a begin/end region opened by a bracket; it must be
+    // tried before #punctuation (which would otherwise claim the `{`/`[` as a bare bracket) and
+    // before the scalar tokens. Its `{`/`[` can never lead a plain scalar, so this ranking is safe.
+    if (key === 'flow-mapping' || key === 'flow-sequence') return 0.85;
+    // A top-level token-match scoped `entity.name.tag` (e.g. an indentation grammar's mapping
+    // KEY — a scalar that is the LHS of `:`) is a NAME, more specific than any string/typed-value
+    // scalar it overlaps, so it must be tried first. (Markup tag names live inside begin/end
+    // regions, never as a top-level include, so this only ranks the YAML-style key scalar.)
+    if (entry?.match && scope.startsWith('entity.name.tag')) return 0.9;
+    // An UNQUOTED plain-scalar catch-all (`string.unquoted`) is the least-specific scalar shape
+    // (it has no opening delimiter and matches almost any bare run), so — unlike a quoted/regex
+    // string — it must rank AFTER the typed-literal scalars (constant.numeric / constant.language)
+    // that overlap it, while still beating structural punctuation (so `-1` reads as the scalar,
+    // not a `-` operator). Only an indentation/plain-scalar grammar (YAML) has such a top-level
+    // token; quoted strings keep rank 1, so the TS/JS/markup families are unaffected.
+    if (scope.startsWith('string.unquoted')) return 8.8;
     if (scope.startsWith('string.')) return 1;
     if (scope.includes('entity.name.function.decorator')) return 1.5;
     if (key === 'type-annotation-var' || key === 'type-annotation-return') return 1.8;
     if (key === 'object-method-key') return 1.85;
     if (key.endsWith('-expression') && key !== 'ternary-expression' && !key.startsWith('scope-')) return 1.9;
     if (key === 'arrow-function-params') return 1.95;
+    // The deferred-`(` generic-arrow param list ranks with #arrow-function-params so it
+    // beats the bare bracket/punctuation rules that would otherwise claim the `(`.
+    if (key === 'arrow-function-params-generic') return 1.95;
     if (key === 'ternary-expression') return 1.97;
     if (key.endsWith('-declaration') || key.endsWith('-definition') || key.endsWith('-typekw') || key.endsWith('-binding') || key.endsWith('-destructure')) return 2;
     // import/export namespace `*` must beat both the import/export keyword group

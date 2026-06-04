@@ -1,0 +1,205 @@
+{
+  "defaultToken": "invalid",
+  "tokenPostfix": ".yaml",
+  "ignoreCase": false,
+  "brackets": [],
+  "tokenizer": {
+    "string_dquote_body": [
+      [
+        "[^\"\\\\]+",
+        "identifier"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_dquote": [
+      {
+        "include": "@string_dquote_body"
+      },
+      [
+        "\"",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_dquoteN": [
+      {
+        "include": "@string_dquote_body"
+      },
+      [
+        "\"",
+        {
+          "token": "identifier",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_squote_body": [
+      [
+        "[^'\\\\]+",
+        "identifier"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_squote": [
+      {
+        "include": "@string_squote_body"
+      },
+      [
+        "'",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_squoteN": [
+      {
+        "include": "@string_squote_body"
+      },
+      [
+        "'",
+        {
+          "token": "identifier",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "exprBody": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "#.*$",
+        "comment"
+      ],
+      [
+        "\"",
+        {
+          "token": "identifier",
+          "switchTo": "@string_dquote"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "identifier",
+          "switchTo": "@string_squote"
+        }
+      ],
+      [
+        "(?<!![\\t ]+)(?:[+-]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN)|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(?:\\.[0-9]+|[0-9]+(?:\\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)(?=[\\t ]+#|[\\t ]*(?:[\\r\\n,\\[\\]{}]|:(?:[\\s,\\[\\]{}]|$))|$)",
+        {
+          "token": "number",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "---",
+        {
+          "token": "delimiter",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "\\.\\.\\.",
+        {
+          "token": "delimiter",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "%(?:[^\\n#]|#(?<=\\S#))*",
+        {
+          "token": "keyword",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "&[^\\s\\[\\]{},]+",
+        {
+          "token": "type.identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "\\*[^\\s\\[\\]{},]+",
+        {
+          "token": "variable",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "!(?:<[^>]*>|[^\\s\\[\\]{},]*)",
+        {
+          "token": "keyword",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?:[^\\s\\-?:,\\[\\]{}#&*!|>'\"%@\\`]|[-?:](?=[^\\s,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\s,\\]}])|#(?<=\\S#))*(?=[\\t ]*:(?:[\\s,\\[\\]{}]|$))",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?<!![\\t ]+)(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)(?=[\\t ]+#|[\\t ]*(?:[\\r\\n,\\[\\]{}]|:(?:[\\s,\\[\\]{}]|$))|$)",
+        {
+          "token": "keyword",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?!)",
+        {
+          "token": "variable",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?!)",
+        {
+          "token": "variable",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "(?!)",
+        {
+          "cases": {
+            "@default": {
+              "token": "identifier",
+              "switchTo": "@value"
+            }
+          }
+        }
+      ],
+      [
+        ":|\\?|-|\\{|,|\\}|\\[|\\]",
+        {
+          "token": "delimiter",
+          "switchTo": "@root"
+        }
+      ]
+    ],
+    "root": [
+      {
+        "include": "@exprBody"
+      }
+    ],
+    "value": [
+      {
+        "include": "@exprBody"
+      }
+    ]
+  }
+}

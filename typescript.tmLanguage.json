@@ -64,6 +64,9 @@
       "include": "#arrow-function-params"
     },
     {
+      "include": "#arrow-function-params-generic"
+    },
+    {
       "include": "#ternary-expression"
     },
     {
@@ -1232,6 +1235,50 @@
           "include": "#parameter-type-annotation"
         },
         {
+          "include": "#param-bind-type-annotation"
+        },
+        {
+          "include": "#type"
+        }
+      ]
+    },
+    "type-bracket": {
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.ts"
+        }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.ts"
+        }
+      },
+      "patterns": [
+        {
+          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)\\s+(in)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.ts"
+            },
+            "2": {
+              "name": "keyword.control.loop.ts"
+            }
+          }
+        },
+        {
+          "match": "(?<=\\[)\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(\\s*:)",
+          "captures": {
+            "1": {
+              "name": "variable.parameter.ts"
+            },
+            "2": {
+              "name": "keyword.operator.type.annotation.ts"
+            }
+          }
+        },
+        {
           "include": "#type"
         }
       ]
@@ -1327,6 +1374,9 @@
       },
       "patterns": [
         {
+          "include": "#member-initializer-object"
+        },
+        {
           "include": "#declaration-body"
         },
         {
@@ -1337,6 +1387,9 @@
         },
         {
           "include": "#member-type-annotation"
+        },
+        {
+          "include": "#member-bind-type-annotation"
         },
         {
           "include": "$self"
@@ -1352,6 +1405,24 @@
         },
         {
           "include": "$self"
+        }
+      ]
+    },
+    "param-bind-type-annotation": {
+      "name": "meta.type.annotation.parameter.ts",
+      "begin": "(?<=[}\\]])\\s*(\\??)\\s*(:)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.optional.ts"
+        },
+        "2": {
+          "name": "keyword.operator.type.annotation.ts"
+        }
+      },
+      "end": "(?=[,)]|=(?!>))",
+      "patterns": [
+        {
+          "include": "#type"
         }
       ]
     },
@@ -1387,6 +1458,9 @@
       "patterns": [
         {
           "include": "#parameter-type-annotation"
+        },
+        {
+          "include": "#param-bind-type-annotation"
         },
         {
           "include": "#parameter-name"
@@ -1489,7 +1563,7 @@
           "include": "$self"
         }
       ],
-      "end": "(?<=\\})"
+      "end": "(?<=\\})|(?=;)"
     },
     "function-anon-declaration": {
       "name": "meta.function.ts",
@@ -1751,10 +1825,42 @@
           "name": "keyword.operator.type.annotation.ts"
         }
       },
-      "end": "(?=[;=},)])",
+      "end": "(?=[;},)]|=(?!>))",
       "patterns": [
         {
           "include": "#type"
+        }
+      ]
+    },
+    "member-bind-type-annotation": {
+      "name": "meta.type.annotation.member.ts",
+      "begin": "(?<=[\\]])\\s*(\\??)\\s*(:)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.optional.ts"
+        },
+        "2": {
+          "name": "keyword.operator.type.annotation.ts"
+        }
+      },
+      "end": "(?=[;},)]|=(?!>))",
+      "patterns": [
+        {
+          "include": "#type"
+        }
+      ]
+    },
+    "member-initializer-object": {
+      "begin": "(?<![=!<>+\\-*/%&|^~])(=)(?![=>])(?=\\s*\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.assignment.ts"
+        }
+      },
+      "end": "(?<=\\})",
+      "patterns": [
+        {
+          "include": "#code-block"
         }
       ]
     },
@@ -2161,6 +2267,49 @@
           "include": "#parameter-type-annotation"
         },
         {
+          "include": "#param-bind-type-annotation"
+        },
+        {
+          "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,:)?=])",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.spread.ts"
+            },
+            "2": {
+              "name": "variable.parameter.ts"
+            }
+          }
+        },
+        {
+          "include": "#nested-parens"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "arrow-function-params-generic": {
+      "name": "meta.parameters.arrow.ts",
+      "begin": "(?<=<(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\b(?:extends)\\b)(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*>)\\s*(\\()\\s*$",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.parameters.begin.ts"
+        }
+      },
+      "end": "(\\))",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.parameters.end.ts"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#parameter-type-annotation"
+        },
+        {
+          "include": "#param-bind-type-annotation"
+        },
+        {
           "match": "(?<=[,(])\\s*(\\.\\.\\.)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*)(?=\\s*[,:)?=])",
           "captures": {
             "1": {
@@ -2291,7 +2440,7 @@
           "name": "keyword.operator.type.annotation.ts"
         }
       },
-      "end": "(?=[=;,])|^\\s*(?=if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b",
+      "end": "(?=[;,]|=(?!>))|^\\s*(?=(?:if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -2450,8 +2599,16 @@
       "name": "keyword.control.from.ts"
     },
     "scope-support-class": {
-      "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b",
+      "match": "\\b(Promise|Array|Map|Set|WeakMap|WeakSet|Error|RegExp|Date|Object|Function|Symbol)\\b(?!\\s*(?:\\.|\\?\\.|\\())",
       "name": "support.class.ts"
+    },
+    "type-builtin-literals": {
+      "match": "\\b(true|false|null|undefined)\\b",
+      "name": "support.type.builtin.ts"
+    },
+    "type-storage-modifier": {
+      "match": "\\b(readonly|abstract)\\b",
+      "name": "storage.modifier.ts"
     },
     "scope-storage-type-function-arrow": {
       "match": "=>",
@@ -2692,6 +2849,9 @@
           "include": "#arrow-function-params"
         },
         {
+          "include": "#arrow-function-params-generic"
+        },
+        {
           "include": "#ternary-expression"
         },
         {
@@ -2894,6 +3054,27 @@
           "include": "#type-paren"
         },
         {
+          "include": "#hexnumber"
+        },
+        {
+          "include": "#octalnumber"
+        },
+        {
+          "include": "#binarynumber"
+        },
+        {
+          "include": "#bigint"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#qstring-double"
+        },
+        {
+          "include": "#qstring-single"
+        },
+        {
           "include": "#type-conditional"
         },
         {
@@ -2912,16 +3093,16 @@
           "include": "#blockcomment"
         },
         {
+          "include": "#type-parameters"
+        },
+        {
+          "include": "#type-builtin-literals"
+        },
+        {
+          "include": "#type-storage-modifier"
+        },
+        {
           "include": "#scope-support-type-primitive"
-        },
-        {
-          "include": "#scope-constant-language-boolean-true"
-        },
-        {
-          "include": "#scope-constant-language-boolean-false"
-        },
-        {
-          "include": "#scope-constant-language-null"
         },
         {
           "include": "#scope-keyword-operator-expression"
@@ -2954,6 +3135,9 @@
         {
           "match": "\\[\\]",
           "name": "keyword.operator.type.array.ts"
+        },
+        {
+          "include": "#type-bracket"
         },
         {
           "match": "=>",
@@ -3169,7 +3353,7 @@
           "include": "$self"
         }
       ],
-      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.]|(?:is|keyof|typeof|readonly|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|symbol|import)\\b|//|/\\*|(?!if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*\\b(?!\\s*[.(])))"
+      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.]|(?:is|keyof|typeof|readonly|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|symbol|import)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{;\\-.=])|(?!(?:if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*\\b(?!\\s*[.(])))"
     },
     "type-object": {
       "name": "meta.object-type.ts",

@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  scope-coverage.ts — what Monogram is MISSING to be a drop-in REPLACEMENT for the
-//  official grammar. This is NOT correctness (highlight-bench.ts already grades that
+//  official grammar. This is NOT correctness (scope-gap.ts already grades that
 //  against a neutral tsc oracle); it is drop-in COMPATIBILITY against the official
 //  scope vocabulary — the coverage + fidelity that "more correct on the bug ledger"
 //  does not capture. Three views, each a quantified, repeatable gap:

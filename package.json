@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts vue.ts",
+    "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts vue.ts && node src/cli.ts yaml.ts",
     "test": "node test/sanity-check.ts",
     "conformance": "node test/run-conformance.ts",
     "conformance:js": "node test/js-conformance.ts",
@@ -11,13 +11,8 @@
     "conformance:jsx": "node test/jsx-conformance.ts",
     "conformance:html": "node test/html-conformance.ts",
     "spike:html-lexer": "node test/html-lexer-spike.ts",
-    "bench": "node test/highlight-bench.ts",
-    "bench:js": "node test/js-highlight-bench.ts",
-    "bench:tsx": "node test/tsx-highlight.ts",
-    "bench:html": "node test/html-highlight.ts",
     "bench:html-official": "node test/html-bench.ts",
     "bench:html-embed": "node test/html-embed-js.ts",
-    "bench:vue": "node test/vue-highlight.ts",
     "bench:vue-directives": "node test/vue-directives.ts",
     "bench:vue-embed-boundary": "node test/vue-embed-boundary.ts",
     "bench:vue-interp-expr": "node test/vue-interp-expr.ts",
@@ -30,7 +25,21 @@
     "gate:treesitter": "(cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/treesitter-bench.ts",
     "bench:perf": "node test/perf-bench.ts",
     "coverage": "node test/scope-coverage.ts",
-    "compat": "node test/repo-compat.ts"
+    "compat": "node test/repo-compat.ts",
+    "src-coverage:ts": "node test/src-coverage-ts.ts",
+    "src-coverage:js": "node test/src-coverage-js.ts",
+    "src-coverage:jsx": "node test/src-coverage-jsx.ts",
+    "src-coverage:tsx": "node test/src-coverage-tsx.ts",
+    "src-coverage:html": "node test/src-coverage-html.ts",
+    "src-coverage:yaml": "node test/src-coverage-yaml.ts",
+    "scope-gap:ts": "node test/scope-gap-ts.ts",
+    "scope-gap:js": "node test/scope-gap-js.ts",
+    "scope-gap:jsx": "node test/scope-gap-jsx.ts",
+    "scope-gap:tsx": "node test/scope-gap-tsx.ts",
+    "scope-gap:html": "node test/scope-gap-html.ts",
+    "scope-gap:yaml": "node test/scope-gap-yaml.ts",
+    "scope-gap:vue": "node test/scope-gap-vue.ts",
+    "coverage:table": "node test/coverage-table.ts --write"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
@@ -43,6 +52,7 @@
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2",
     "vscode-tmlanguage-snapshot": "^1.0.1",
-    "web-tree-sitter": "^0.26.9"
+    "web-tree-sitter": "^0.26.9",
+    "yaml": "^2.9.0"
   }
 }

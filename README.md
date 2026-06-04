@@ -11,6 +11,26 @@ Write a language's grammar **once**, as an executable definition. Monogram runs 
 - **HTML** ([`html.ts`](html.ts)) — the engine reaching *past token streams into markup*; ~95 lines, validated against [`parse5`](https://github.com/inikulin/parse5).
 - **Vue** ([`vue.ts`](vue.ts)) — a dialect of `html.ts`: SFC blocks that embed Monogram's own TS/JS/CSS, plus directives and `{{ }}` interpolation.
 
+<!-- coverage:start -->
+Per-grammar comparison vs the **official parser** as the neutral oracle (`node test/coverage-table.ts --write`).
+
+**Parser** — Monogram's parser vs the official parser (`test/src-coverage.ts`). **agree** is the closeness number: Monogram and the official parser return the same verdict on each corpus file (both accept / both reject; **structural parse-tree equality** for HTML via parse5). **covered** is the share of the official parser's branches the corpus actually exercises — a blind-spot gauge; Monogram's behaviour on the uncovered remainder is untested, so read `agree` as "on the `covered` portion." For the non-HTML grammars `agree` is accept/reject, *not* tree-equality; their parse-**structure** correctness is exercised instead by the **Highlighter** axis below, whose token roles are read off the parse tree. (Each adapter's detailed output also prints a coverage-weighted branch-alignment %, which is more lenient than `agree`.)
+
+**Highlighter** — Monogram's derived TextMate grammar vs the official one, both graded against the parser's token roles (`test/scope-gap.ts`); the [vscode#203212](https://github.com/microsoft/vscode/issues/203212) comparison.
+
+| Grammar | Parser — agree · covered | Highlighter — Monogram vs official |
+|---|---|---|
+| TypeScript | 97.1% · 76.4% | 99.2% vs 99.3% |
+| JavaScript | 92.2% · 65.5% | 88.9% vs 83.6% |
+| JSX | 97.1% · 52.5% | 94.3% vs 94.3% |
+| TSX | 96.7% · 65.7% | 95.5% vs 95.4% |
+| HTML | 77.9% · 48.1% | 100.0% vs 98.8% |
+| YAML | 63.1% · 73.9% | 93.8% vs 92.4% |
+| Vue | — | 98.8% vs 98.0% |
+<!-- coverage:end -->
+
+<sub>**Which “official” grammar each row compares against:** HTML’s is the unmaintained [`textmate/html.tmbundle`](https://github.com/textmate/html.tmbundle) — the #203212 case Monogram targets. YAML’s is the maintained [RedCMD/YAML-Syntax-Highlighter](https://github.com/RedCMD/YAML-Syntax-Highlighter) that VS Code switched to ([microsoft/vscode#232244](https://github.com/microsoft/vscode/pull/232244)) — so YAML’s gap is Monogram vs a *maintained* grammar, not a dead bundle. JS/TS use Microsoft’s maintained [TypeScript-TmLanguage](https://github.com/microsoft/TypeScript-TmLanguage).</sub>
+
 ## Quick start
 
 Requires Node 24+ (runs `.ts` directly — no build step, no `tsx`).
@@ -174,6 +194,7 @@ _Each hand-written **official** grammar vs Monogram's **derived** one, on the bu
 <!-- issues:end -->
 
 <sub>A sampled ledger of real tracker issues, not an exhaustive audit. Run `npm run bench:issues` to regenerate (needs the official grammars: VS Code's installed TS/JS/HTML, and the Vue fixtures — see [`test/vue-bench.ts`](test/vue-bench.ts)). Sources: [`test/issue-cases.ts`](test/issue-cases.ts), [`test/html-issue-cases.ts`](test/html-issue-cases.ts), [`test/vue-issue-cases.ts`](test/vue-issue-cases.ts).</sub>
+
 
 ### The ceiling — and the bar for claiming it
 

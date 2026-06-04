@@ -2,7 +2,7 @@
 //  oracle.ts — the NEUTRAL answer key. Walk tsc's own parse tree and assign each
 //  leaf token a structural ROLE (scope-roles.ts), independent of any highlighter.
 //  Parameterised by ScriptKind so the SAME classification serves both TypeScript
-//  (highlight-bench.ts) and JavaScript (js-highlight-bench.ts) — share the
+//  and JavaScript scope-gap adapters — share the
 //  analysis, never duplicate it.
 // ─────────────────────────────────────────────────────────────────────────────
 import ts from 'typescript';
@@ -38,6 +38,11 @@ const STRUCTURAL_PUNCT = new Set<number>([
 function kwRole(text: string, node: ts.Node): RoleName {
   // `void` is dual-use: the `void expr` operator vs the `: void` type.
   if (text === 'void') return node.parent?.kind === ts.SyntaxKind.VoidExpression ? R.kwOperator : R.typeBuiltin;
+  // `undefined` in TYPE position is lexed as UndefinedKeyword (in VALUE position it is an
+  // Identifier, handled in identRole). Like `string`/`number`, official paints it support.type,
+  // which R.kwOther rejects — so role it typeBuiltin. (`null` as a type is a LiteralType whose
+  // NullKeyword → R.constBuiltin, whose family already accepts support.type, so it needs no change.)
+  if (text === 'undefined') return R.typeBuiltin;
   if (KW_CONST_BUILTIN.has(text)) return R.constBuiltin;
   if (KW_THIS_SUPER.has(text)) return R.thisSuper;
   if (KW_TYPE_BUILTIN.has(text)) return R.typeBuiltin;
@@ -47,12 +52,38 @@ function kwRole(text: string, node: ts.Node): RoleName {
   return R.kwOther;
 }
 
+// A JSX intrinsic (host) element name uses the React/TS convention: a simple tag
+// whose first character is a lowercase ASCII letter (`div`, `span`, `my-widget`) is a
+// host element scoped `entity.name.tag` by both grammars; an uppercase-initial tag
+// (`Foo`) is a COMPONENT = a genuine value reference and must NOT be reclassified.
+const isIntrinsicTagName = (text: string): boolean => /^[a-z]/.test(text);
+
 // Classify an identifier by its structural position in the parse tree.
 function identRole(node: ts.Node): RoleName {
   const p = node.parent;
   if (!p) return R.valueRef;
   const is = (fn: (n: ts.Node) => boolean) => fn(p);
   const named = (n: any) => n.name === node;
+
+  // ── JSX markup roles ──────────────────────────────────────────────────────────
+  // The simple-Identifier tagName of an opening/closing/self-closing element. A
+  // lowercase-initial name is an INTRINSIC/host element → entity.name.tag (R.tagName);
+  // an uppercase-initial name is a COMPONENT = a value reference → falls through to
+  // R.valueRef below (do NOT touch — Monogram's value scope legitimately beats
+  // official's support.class.component there). Dotted (`<Foo.Bar>`, a
+  // PropertyAccessExpression) and namespaced (`<svg:rect>`, a JsxNamespacedName) tag
+  // names are compound nodes, not the element's direct Identifier tagName, so they
+  // are unaffected — handled as their own node kinds, like member access.
+  if ((is(ts.isJsxOpeningElement) || is(ts.isJsxClosingElement) || is(ts.isJsxSelfClosingElement)) &&
+      (p as ts.JsxOpeningLikeElement | ts.JsxClosingElement).tagName === node &&
+      isIntrinsicTagName((node as ts.Identifier).text)) {
+    return R.tagName;
+  }
+  // A JSX attribute NAME (`className=`, `data-x=`) — both grammars scope it
+  // entity.other.attribute-name (R.attrName). The `name === node` guard excludes the
+  // attribute's VALUE; namespaced attr names (`xml:lang`) are a JsxNamespacedName, not
+  // an Identifier child of JsxAttribute, so they are unaffected.
+  if (is(ts.isJsxAttribute) && named(p)) return R.attrName;
 
   if (is(ts.isFunctionDeclaration) && named(p)) return R.funcDecl;
   if (is(ts.isFunctionExpression) && named(p)) return R.funcDecl;
@@ -65,6 +96,11 @@ function identRole(node: ts.Node): RoleName {
   if (is(ts.isTypeParameterDeclaration) && named(p)) return R.typeParam;
 
   if (is(ts.isVariableDeclaration) && named(p)) return R.varDecl;
+  // statement labels: the `loop:` of a LabeledStatement and the target of `break loop` /
+  // `continue loop`. tsc stores all three as a `.label` Identifier; official paints them
+  // entity.name.label (a value reference scope is too generic), so give them their own role.
+  if (is(ts.isLabeledStatement) && (p as ts.LabeledStatement).label === node) return R.label;
+  if ((is(ts.isBreakStatement) || is(ts.isContinueStatement)) && (p as ts.BreakOrContinueStatement).label === node) return R.label;
   if (is(ts.isBindingElement)) {
     if ((p as ts.BindingElement).propertyName === node) return R.propAccess;
     return R.varDecl;

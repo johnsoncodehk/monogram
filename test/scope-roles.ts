@@ -55,6 +55,7 @@ export const R = {
   enumMember: 'enum.member',
   namespace: 'namespace',
   varDecl: 'variable.decl',
+  label: 'label',
   constBuiltin: 'constant.builtin',
   thisSuper: 'this.super',
   litString: 'lit.string',
@@ -74,6 +75,9 @@ export const R = {
   importBinding: 'import.binding',
   // the ambiguity fork — graded (NOT lexical floor): < > / when used as operators
   opCompare: 'op.compare',
+  // markup (HTML/XML/…) — for the unified scope-gap harness across vscode#203212 languages
+  tagName: 'tag.name',
+  attrName: 'attr.name',
   // lexical floor
   op: 'op',
   punct: 'punct',
@@ -146,6 +150,12 @@ export const ROLE_SPEC: Record<RoleName, RoleSpec> = {
     desc: 'variable / binding declaration name',
     exact: ['variable.other.readwrite', 'variable.other.constant', 'meta.definition.variable', 'entity.name.variable'],
     family: ['variable.other', 'variable', 'meta.definition', 'entity.name'],
+  },
+  [R.label]: {
+    tier: 'strict',
+    desc: 'statement label (the `loop:` of a LabeledStatement, the target of break/continue)',
+    exact: ['entity.name.label'],
+    family: ['entity.name', 'variable.other.label', 'constant.other.label'],
   },
 
   // ── references in type position ──────────────────────────────────────────────
@@ -226,6 +236,10 @@ export const ROLE_SPEC: Record<RoleName, RoleSpec> = {
   // (string.regexp) instead of an operator is exactly the #978/#853 class — WRONG.
   [R.opCompare]: { tier: 'strict', desc: '< > / used as a binary operator', exact: ['keyword.operator'], family: ['keyword'] },
 
+  // ── markup roles (HTML/XML) — entity names a highlighter must get right ───────
+  [R.tagName]: { tier: 'strict', desc: 'element tag name (<div>, </div>)', exact: ['entity.name.tag'], family: ['entity.name', 'meta.tag', 'support.class.component'] },
+  [R.attrName]: { tier: 'strict', desc: 'attribute name (class=, id=)', exact: ['entity.other.attribute-name'], family: ['entity.other'] },
+
   // ── lexical floor: reported, excluded from the headline ───────────────────────
   [R.op]: { tier: 'lexical', desc: 'operator punctuation (+ - * = => …)', exact: ['keyword.operator'], family: ['keyword', 'punctuation', 'storage', 'meta'] },
   [R.punct]: { tier: 'lexical', desc: 'structural punctuation ( ) { } [ ] , ; …', exact: ['punctuation'], family: ['meta', 'source'] },
@@ -253,6 +267,63 @@ export function gradeScope(role: RoleName, rawScope: string): Verdict {
   if (startsWithAny(s, spec.exact)) return 'exact';
   if (startsWithAny(s, spec.family)) return 'family';
   return 'wrong';
+}
+
+// ─── stack-aware grading ────────────────────────────────────────────────────────
+// Innermost-only grading (gradeScope on scopes[last]) is BIASED toward flat-painting
+// grammars: an official grammar that correctly nests a role's scope as an ANCESTOR of a
+// more-specific refinement is marked wrong even though the role is rendered correctly.
+//   e.g. a YAML key is  source.yaml › entity.name.tag.yaml › punctuation.definition.string.begin.yaml
+//   the ROLE (tagName = entity.name.tag) is the PARENT; innermost-only sees the string
+//   delimiter and (wrongly) fails official. Monogram paints a single flat scope, so it wins
+//   for free. The SAME bias hit YAML block-scalar `|`/`>`, HTML `<svg>` under an overlay, etc.
+//
+// FIX: a token is correct for its role if the role's accepted scope appears ANYWHERE in the
+// token's scope chain — but ONLY role-bearing scopes (entity/variable/support/string/keyword/
+// constant/comment/punctuation/storage/markup/invalid…) may match from an ANCESTOR position.
+// The two COARSE region markers — `meta` and `source` — describe a *region*, not a token's
+// role, so they keep matching only at the INNERMOST position (exactly as gradeScope already
+// does). This is what preserves the #978/#859 cascade guard:
+//   a value mis-painted as a generic is  source › meta.type.parameters › entity.name.type
+//   innermost `entity.name.type` fails valueRef (whose family excludes type-name scopes); the
+//   ancestors are `source` (coarse) and `meta.type.parameters` (coarse) — neither is a value
+//   role-bearing scope, so NOTHING rescues it → still WRONG. A genuine mis-scope replaces the
+//   role scope, so role-in-chain naturally still fails. (Verified by the calibration negatives
+//   and by test/test-issues.ts, which must keep reading value-as-type / regex-as-operator wrong.)
+//
+// COARSE_PREFIXES is intentionally the *minimal* structural set; widening it could let a region
+// wrapper rescue a genuinely-wrong token. Role-bearing prefixes are everything else.
+const COARSE_PREFIXES = ['meta', 'source'];
+const isCoarse = (prefix: string): boolean =>
+  COARSE_PREFIXES.some((c) => prefix === c || prefix.startsWith(c + '.'));
+
+const better = (a: Verdict, b: Verdict): Verdict =>
+  a === 'exact' || b === 'exact' ? 'exact' : a === 'family' || b === 'family' ? 'family' : 'wrong';
+
+/**
+ * Grade a token by its WHOLE scope chain (outermost→innermost or innermost→outermost; order
+ * irrelevant). The innermost scope is graded exactly as gradeScope (coarse prefixes honoured);
+ * any ANCESTOR may additionally satisfy the role only via a role-bearing (non-coarse) accepted
+ * prefix. Returns the best verdict so a correctly-nested ancestor role is credited, while a
+ * value-painted-as-type cascade (whose only matching ancestors are coarse region markers) still
+ * reads WRONG. Use this everywhere the bench grades; `chain` is `token.scopes` (any order).
+ */
+export function gradeScopeStack(role: RoleName, chain: string[]): Verdict {
+  if (!chain.length) return 'wrong';
+  const spec = ROLE_SPEC[role];
+  if (!spec) return 'wrong';
+  // 1. innermost scope graded with full semantics (coarse `meta`/`source` allowed here only)
+  let best = gradeScope(role, chain[chain.length - 1]);
+  if (best === 'exact') return 'exact';
+  // 2. any scope (incl. ancestors) may match via a ROLE-BEARING accepted prefix
+  const exact = spec.exact.filter((p) => p !== '' && !isCoarse(p));
+  const family = spec.family.filter((p) => p !== '' && !isCoarse(p));
+  for (const raw of chain) {
+    const s = normScope(raw);
+    if (startsWithAny(s, exact)) return 'exact';
+    if (startsWithAny(s, family)) best = better(best, 'family');
+  }
+  return best;
 }
 
 /** correct = the grammar got the *role* right (exact or family). */
@@ -320,6 +391,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     [R.comment, 'comment.line.double-slash.ts', 'exact'],
     [R.kwControl, 'keyword.control.flow.ts', 'exact'],
     [R.constBuiltin, 'constant.language.null.ts', 'exact'],
+    // label role (entity.name.label): a generic value scope is NOT a label (official
+    // emits entity.name.label; Monogram's variable.other.readwrite must read WRONG here).
+    [R.label, 'entity.name.label.ts', 'exact'],
+    [R.label, 'variable.other.readwrite.ts', 'wrong'],
+    // `undefined`/`string`/… in TYPE position want support.type; a value-ish constant.language
+    // is NOT a type-builtin (this is why Monogram's constant.language.null for `: undefined` is
+    // honestly behind official's support.type.builtin — do NOT widen typeBuiltin to accept it).
+    [R.typeBuiltin, 'support.type.builtin.ts', 'exact'],
+    [R.typeBuiltin, 'constant.language.null.ts', 'wrong'],
     // lenient contested: both readings accepted, junk rejected
     [R.methodCall, 'entity.name.function.ts', 'exact'],
     [R.methodCall, 'variable.other.property.ts', 'exact'],
@@ -351,6 +431,46 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log('FAILURES:\n' + fails.join('\n'));
     process.exit(1);
   }
+
+  // ── stack-aware grading calibration (gradeScopeStack) ─────────────────────────
+  // The bench grades the WHOLE scope chain (token.scopes), not just the innermost, so a role
+  // correctly nested as an ANCESTOR is credited — WITHOUT letting a region wrapper rescue a
+  // genuinely-wrong token (the #978 cascade guard). These lock both halves in.
+  const stackCases: [RoleName, string[], Verdict, string][] = [
+    // THE FIX: a stacked key — entity.name.tag is the PARENT, the innermost is the string
+    // delimiter. Innermost-only marked official wrong; stack-aware credits the parent role.
+    [R.tagName, ['source.yaml', 'entity.name.tag.yaml', 'punctuation.definition.string.begin.yaml'], 'exact', 'YAML key: tagName is the parent of the string delimiter'],
+    // YAML block-scalar `|`/`>` is keyword.control nested UNDER the string scope.
+    [R.kwOther, ['source.yaml', 'string.unquoted.block.yaml', 'keyword.control.flow.block-scalar.yaml'], 'exact', 'block-scalar indicator under string'],
+    // HTML <svg> tag name correctly nested under an invalid.illegal overlay region.
+    [R.tagName, ['text.html', 'meta.tag.metadata.svg', 'entity.name.tag.svg', 'invalid.illegal.unrecognized-tag.html'], 'exact', 'svg tag name with an illegal overlay innermost'],
+    // a Vue cast leak: the value `msg` correctly painted, deeper scope is just a meta wrapper.
+    [R.valueRef, ['text.html.vue', 'source.ts', 'meta.cast.expr.ts', 'variable.other.readwrite.ts'], 'family', 'value under a cast meta wrapper'],
+    // THE GUARD: a value mis-painted as a generic — innermost is the type-name scope and the
+    // only matching ancestors are COARSE region markers (meta.type.parameters, source). Nothing
+    // role-bearing rescues it → still WRONG. (This is exactly #978/#859.)
+    [R.valueRef, ['source.ts', 'meta.type.parameters.ts', 'entity.name.type.ts'], 'wrong', 'value-as-generic cascade stays WRONG'],
+    // and the regex/operator cascade: `<` painted as a typeparameter bracket.
+    [R.opCompare, ['source.ts', 'meta.type.parameters.ts', 'punctuation.definition.typeparameters.begin.ts'], 'wrong', '< as a generic bracket stays WRONG'],
+    // a value left bare inside a meta block (innermost coarse) is still family-OK, as before.
+    [R.valueRef, ['source.ts', 'meta.objectliteral.ts', 'variable.other.readwrite.ts'], 'family', 'plain value under meta'],
+    // sanity: an empty chain is wrong; a flat single-scope chain matches gradeScope.
+    [R.varDecl, [], 'wrong', 'empty chain'],
+    [R.varDecl, ['source.ts', 'variable.other.readwrite.ts'], 'exact', 'flat single scope still graded'],
+  ];
+  let spass = 0;
+  const sfails: string[] = [];
+  for (const [role, chain, want, why] of stackCases) {
+    const got = gradeScopeStack(role, chain);
+    if (got === want) spass++;
+    else sfails.push(`  ${role.padEnd(12)} want=${want} got=${got}  [${why}]\n      chain=${chain.join(' › ')}`);
+  }
+  console.log(`scope-roles stack-aware calibration: ${spass}/${stackCases.length} passed`);
+  if (sfails.length) {
+    console.log('STACK FAILURES:\n' + sfails.join('\n'));
+    process.exit(1);
+  }
+
   // sanity: every role in R has a spec
   const missing = Object.values(R).filter((r) => !(r in ROLE_SPEC));
   if (missing.length) {

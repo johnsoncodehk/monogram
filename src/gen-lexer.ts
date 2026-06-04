@@ -83,6 +83,23 @@ export function createLexer(grammar: CstGrammar) {
     [markup?.textToken, markup?.rawText?.token, markup?.comment?.token, markup?.voidNameToken].filter(Boolean) as string[],
   );
 
+  // ── Indentation mode (opt-in; dormant unless the grammar declares `indent`) ──
+  // Like markup, the INDENT/DEDENT/NEWLINE tokens are EMITTED by a state machine (not matched
+  // by a regex) — so they are skipped in the regex loop and their grammar patterns are
+  // placeholders. Indentation is suspended inside flow delimiters via a flow-depth counter.
+  const indent = grammar.indent;
+  const indentTokenNames = new Set<string>(
+    indent ? ([indent.indentToken, indent.dedentToken, indent.newlineToken].filter(Boolean) as string[]) : [],
+  );
+  const flowOpenSet = new Set(indent?.flowOpen ?? []);
+  const flowCloseSet = new Set(indent?.flowClose ?? []);
+  // Block scalars (YAML | / >): an introducer char + indent/chomp indicators + optional trailing
+  // comment to end-of-line is the SIGNATURE (so `a > b` isn't mistaken for one); the following
+  // more-indented lines are verbatim content, emitted as one token (skipped in the regex loop).
+  const blockScalarIntro = new Set(indent?.blockScalar?.introducers ?? []);
+  const blockScalarSig = /^[|>](?:[1-9][+-]?|[+-][1-9]?|[+-]|)[ \t]*(?:#[^\n]*)?(?:\r?\n|$)/;
+  if (indent?.blockScalar) indentTokenNames.add(indent.blockScalar.token);
+
   // Scan from inside a template span to its next boundary: an interpolation hole
   // (`interpOpen`) or the closing delimiter (`open`). Delimiters come from the
   // grammar's template token; only called when such a token is declared.
@@ -138,9 +155,22 @@ export function createLexer(grammar: CstGrammar) {
     let curTag = '';            // tag name being read in tag mode (decides raw-text entry)
     let inTagName = false;      // the next tag-mode token is (part of) the tag name
     let sawCloseMarker = false; // this tag began `</…` → a close tag, never a raw-text opener
+    // Indentation state — active only when `indent` is declared (dormant otherwise).
+    let flowDepth = 0;               // >0 while inside flow delimiters ([ ] { }) → indentation suspended
+    let lineStart = !!indent;        // at a block-context line boundary (file start counts as one)
+    let emittedContent = false;      // any real (non-structural) token emitted yet — suppress a leading NEWLINE/DEDENT
+    let currentLineCol = 0;          // leading-space column of the current logical line (bounds block scalars)
+    const indentStack: number[] = [0];
     function push(t: Token): void {
       if (pendingNl) { t.newlineBefore = true; pendingNl = false; }
       tokens.push(t);
+      if (indent) {
+        if (!indentTokenNames.has(t.type)) emittedContent = true;   // a real token (not INDENT/DEDENT/NEWLINE)
+        if (t.type === '') {                                         // track flow depth on punctuation literals
+          if (flowOpenSet.has(t.text)) flowDepth++;
+          else if (flowCloseSet.has(t.text)) flowDepth = Math.max(0, flowDepth - 1);
+        }
+      }
     }
     // Is the previous token a completed VALUE? Then `/` after it is division (not a
     // regex) and a template after it is TAGGED (not a fresh literal). Same question,
@@ -192,9 +222,79 @@ export function createLexer(grammar: CstGrammar) {
         continue;
       }
 
-      // Skip whitespace
-      const wsMatch = source.slice(pos).match(/^\s+/);
-      if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
+      // ── Indentation mode: at a block-context line start, skip blank/comment lines, measure
+      // the next content line's leading-space column, and emit NEWLINE / INDENT / DEDENT(s)
+      // before that line's tokens (relative to the indentation stack). ──
+      if (indent && flowDepth === 0 && lineStart) {
+        let p = pos, col = 0;
+        while (p < source.length && source[p] === ' ') { p++; col++; }
+        const ch = source[p];
+        if (p >= source.length) { pos = p; lineStart = false; continue; }   // EOF — final DEDENTs emitted after the loop
+        if (ch === '\n' || ch === '\r') {                                   // blank line — ignored for structure
+          pos = p + 1; if (ch === '\r' && source[pos] === '\n') pos++;
+          continue;                                                         // still at a line start
+        }
+        if (indent.comment && source.startsWith(indent.comment, p)) {       // comment-only line — ignored
+          let e = p; while (e < source.length && source[e] !== '\n') e++;
+          pos = e; continue;                                                // next iteration consumes the newline
+        }
+        pos = p;                                                            // consume the leading indentation
+        currentLineCol = col;                                               // bounds a block scalar started on this line
+        const top = indentStack[indentStack.length - 1];
+        if (col > top) {
+          indentStack.push(col);
+          push({ type: indent.indentToken, text: '', offset: pos });
+        } else {
+          while (indentStack.length > 1 && indentStack[indentStack.length - 1] > col) {
+            indentStack.pop();
+            push({ type: indent.dedentToken, text: '', offset: pos });
+          }
+          if (emittedContent && indentStack[indentStack.length - 1] === col) {
+            push({ type: indent.newlineToken, text: '', offset: pos });     // sibling separator at this level
+          }
+        }
+        lineStart = false;
+        continue;
+      }
+
+      // Whitespace. In indentation mode, inline spaces/tabs are skipped but a NEWLINE is a
+      // block-context line boundary (sets lineStart so the routine above runs next) — except
+      // inside flow delimiters, where newlines are insignificant. Otherwise skip any run.
+      if (indent) {
+        const c = source[pos];
+        if (c === ' ' || c === '\t') { pos++; continue; }
+        if (c === '\n' || c === '\r') {
+          pos++; if (c === '\r' && source[pos] === '\n') pos++;
+          if (flowDepth === 0) lineStart = true;
+          continue;
+        }
+      } else {
+        const wsMatch = source.slice(pos).match(/^\s+/);
+        if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
+      }
+
+      // ── Block scalar (YAML | / >): from the introducer line, take all following lines more
+      // indented than the current line's column as ONE verbatim token (blank lines included). ──
+      if (indent?.blockScalar && flowDepth === 0 && blockScalarIntro.has(source[pos]) && blockScalarSig.test(source.slice(pos))) {
+        const startPos = pos;
+        let p = pos; while (p < source.length && source[p] !== '\n') p++; if (p < source.length) p++;  // skip the header line
+        const parent = currentLineCol;
+        while (p < source.length) {
+          let q = p, c = 0;
+          while (q < source.length && source[q] === ' ') { q++; c++; }
+          if (q >= source.length) { p = q; break; }
+          if (source[q] === '\n' || source[q] === '\r') {                 // blank line — part of the scalar
+            p = q + 1; if (source[q] === '\r' && source[p] === '\n') p++;
+            continue;
+          }
+          if (c > parent) { let e = q; while (e < source.length && source[e] !== '\n') e++; p = e < source.length ? e + 1 : e; }
+          else break;                                                     // dedent → the block scalar ends
+        }
+        push({ type: indent.blockScalar!.token, text: source.slice(startPos, p), offset: startPos });
+        pos = p;
+        lineStart = true;
+        continue;
+      }
 
       // Close an interpolation hole (interpClose at baseline depth) → resume the template span.
       if (templateStack.length > 0 && source.startsWith(tplInterpClose, pos)) {
@@ -250,6 +350,7 @@ export function createLexer(grammar: CstGrammar) {
       for (const tm of tokenMatchers) {
         if (tm.name === templateTokenName) continue;
         if (markupTokenNames.has(tm.name)) continue;   // scanned by the markup state machine
+        if (indentTokenNames.has(tm.name)) continue;    // emitted by the indentation state machine
         if (tm.isRegex) {
           // prev is a completed value → `/` is division, not a regex literal → skip.
           if (prevIsValue(tokens[tokens.length - 1])) continue;
@@ -332,6 +433,14 @@ export function createLexer(grammar: CstGrammar) {
             }
           }
         }
+      }
+    }
+
+    // Indentation mode: unwind any still-open blocks at EOF (emit the closing DEDENTs).
+    if (indent) {
+      while (indentStack.length > 1) {
+        indentStack.pop();
+        push({ type: indent.dedentToken, text: '', offset: pos });
       }
     }
 
