@@ -82,6 +82,45 @@ function emitBracketRegion(opts: {
 }
 
 /**
+ * Emit the shared "keyword → begin/end scope region" skeleton.
+ *
+ * A keyword-anchored rule opens on a single word and scopes a body until some lookahead/
+ * lookbehind end: `begin: \b(kw)`, the keyword scoped via a single `'1'`-capture, `end` (a
+ * caller-supplied boundary — almost always a lookahead), and `patterns: bodyPatterns`. This
+ * centralizes the ONE footgun shared across these sites: the `\b(${escapeRegex(kw)})` begin
+ * spelling and the `'1'` keyword capture. Everything construct-specific stays at the call
+ * site and is passed in: the `end` boundary (each region computes its own terminator set),
+ * the body patterns, the region `name`, and two begin tweaks —
+ *   - `wordEnd`  : append a trailing `\b` after the captured keyword (`\b(kw)\b`). Most sites
+ *                  want it; a site whose keyword is immediately followed by `(`/whitespace it
+ *                  matches separately (e.g. `constructor` → `\b(kw)`) omits it.
+ *   - `guard`    : an extra suffix after the (optionally word-ended) keyword — e.g. a
+ *                  contextual-operator lookahead that keeps `as`/`is` off identifier uses.
+ *
+ * The CALLER decides "this rule IS a keyword region"; this helper only lays the structural
+ * skeleton once that decision is made. Key INSERTION ORDER is load-bearing — the grammar is
+ * `JSON.stringify`'d verbatim — so `name` (when given) is emitted first, then always
+ * `begin, beginCaptures, end, patterns`.
+ */
+function emitKeywordRegion(opts: {
+  kw: string;                                            // keyword literal (escaped by the helper)
+  kwScope: string;                                       // scope for the keyword ('1' capture)
+  end: string;                                           // end boundary (usually a lookahead)
+  patterns: (TmPattern | { include: string })[];        // region body
+  name?: string;                                         // optional region scope (emitted first)
+  wordEnd?: boolean;                                     // append `\b` after the keyword (default false)
+  guard?: string;                                        // extra begin suffix after the keyword (default '')
+}): TmPattern {
+  const region: TmPattern = {};
+  if (opts.name !== undefined) region.name = opts.name;
+  region.begin = `\\b(${escapeRegex(opts.kw)})${opts.wordEnd ? '\\b' : ''}${opts.guard ?? ''}`;
+  region.beginCaptures = { '1': { name: opts.kwScope } };
+  region.end = opts.end;
+  region.patterns = opts.patterns;
+  return region;
+}
+
+/**
  * Extract non-\w characters that are valid in identifiers from the Ident token regex.
  * E.g., `[a-zA-Z_$][a-zA-Z0-9_$]*` → `['$']` ($ is not covered by \w).
  * Returns escaped characters suitable for embedding in a regex character class.
@@ -5731,19 +5770,17 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       innerPatterns.push({ include: '#code-block' });
       innerPatterns.push({ include: '$self' });
 
-      repository[key] = {
+      repository[key] = emitKeywordRegion({
         name: `meta.${dpk.keyword}.${langName}`,
-        begin: `\\b(${escapeRegex(dpk.keyword)})`,
-        beginCaptures: {
-          '1': { name: `${dpk.keywordScope}.${langName}` },
-        },
+        kw: dpk.keyword,
+        kwScope: `${dpk.keywordScope}.${langName}`,
         // End after the body `}` (the inner #code-block consumes a `{ … }` body
         // first), OR at a `;`/`}` ahead for a body-LESS overload signature
         // (`constructor(a);`) — without this the context would run away to the
         // enclosing block's `}` and swallow the next member. Mirrors #method-signature.
         end: '(?<=\\})|(?=[;}])',
         patterns: innerPatterns,
-      };
+      });
       // A non-reserved direct-param keyword is a contextual keyword: its keyword
       // role is now fully covered by this declaration context, so drop it from the
       // flat global match (Section 5) to keep its identifier uses un-keyworded.
@@ -6286,12 +6323,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     const ctorEndEsc = [...ctorEndChars].map(escapeForCharClass).join('');
     const ctorEnd = ctorEndEsc ? `(?=[${ctorEndEsc}])` : '(?=[(])';
     const key = `${kw}-expression`;
-    repository[key] = {
+    repository[key] = emitKeywordRegion({
       name: `meta.${kw}-expr.${langName}`,
-      begin: `\\b(${escapeRegex(kw)})\\b`,
-      beginCaptures: {
-        '1': { name: `${kwScope}.${langName}` },
-      },
+      kw,
+      kwScope: `${kwScope}.${langName}`,
+      wordEnd: true,
       end: ctorEnd,
       patterns: [
         {
@@ -6299,7 +6335,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           name: `entity.name.function.${langName}`,
         },
       ],
-    };
+    });
     topPatterns.push({ include: `#${key}` });
   }
 
@@ -6550,15 +6586,15 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // unconditional — they are never identifiers.
       const guard = contextualOps.has(kw) ? ctxOpGuard : '';
 
-      repository[key] = {
+      repository[key] = emitKeywordRegion({
         name: `meta.type.${kw}.${langName}`,
-        begin: `\\b(${escapeRegex(kw)})\\b${guard}`,
-        beginCaptures: {
-          '1': { name: `${kwScope}.${langName}` },
-        },
+        kw,
+        kwScope: `${kwScope}.${langName}`,
+        wordEnd: true,
+        guard,
         end: typeKwEnd,
         patterns: [{ include: '#type-inner' }],
-      };
+      });
       topPatterns.push({ include: `#${key}` });
     }
   }
