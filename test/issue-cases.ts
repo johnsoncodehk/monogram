@@ -886,9 +886,10 @@ export const multiLineTests: MultiLineTest[] = [
   // ── Angle bracket: multiline new Map<> then broken method ──
   // #973's real repro puts the split `new Map<\n T1, T2>([])` inside a `readonly bar = { map: … }`
   // class field, with the victim being the following `private function()` method (its `return` is
-  // the reported casualty). Keep that wrapper + victim. NOTE: inside the `map: new Map<…>` field the
-  // constructor `Map` is a TYPE name (`entity.name.type`), not the `entity.name.function` it gets in
-  // the bare `new Map<…>` statement form — the richer context changes the (correct) scope.
+  // the reported casualty). Keep that wrapper + victim. NOTE: the object-literal key in a class-field
+  // initializer (`readonly bar = { map: … }`) is an expression position, so the constructor `Map` is
+  // `entity.name.function` — consistent with the bare `new Map<…>` form (#1020 / #855). (It was briefly
+  // `entity.name.type` only because field-object keys were mis-read as type annotations; that bug is fixed.)
   {
     label: '#973: split `new Map<…>([])` in a `readonly bar` field doesn\'t break the next method',
     lines: [
@@ -905,7 +906,7 @@ export const multiLineTests: MultiLineTest[] = [
     checks: [
       { line: 1, text: 'readonly', scope: 'storage.modifier' },
       { line: 2, text: 'new', scope: 'keyword.operator.expression' },
-      { line: 2, text: 'Map', scope: 'entity.name.type' },
+      { line: 2, text: 'Map', scope: 'entity.name.function' },
       { line: 3, text: 'Type1', scope: 'entity.name.type' },
       { line: 5, text: 'function', scope: 'entity.name.function' },  // victim method name survives
       { line: 6, text: 'return', scope: 'keyword.control' },         // reported victim: return not colored

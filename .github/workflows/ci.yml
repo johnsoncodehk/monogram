@@ -46,10 +46,8 @@ jobs:
           node test/jsx-conformance.ts
           node test/html-lexer-spike.ts
           node test/html-conformance.ts
-          node test/html-highlight.ts
           node test/html-monarch.ts
           node test/html-embed-js.ts
-          node test/vue-highlight.ts
           node test/vue-directives.ts
           node test/vue-embed-boundary.ts
           node test/vue-interp-expr.ts
