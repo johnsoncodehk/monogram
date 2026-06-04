@@ -47,6 +47,41 @@ function escapeForCharClass(s: string): string {
 }
 
 /**
+ * Emit the shared "bracket-pair → begin/end region" skeleton.
+ *
+ * A bracket-delimited rule (`OPEN … CLOSE`) becomes a begin/end TextMate region so depth
+ * nests on the scope stack: `begin: OPEN`, `end: CLOSE`, both delimiters scoped via a single
+ * `'0'`-capture, and `patterns: bodyPatterns` (the body — which RE-INCLUDES the region itself
+ * for nesting). This is the ONLY thing factored out: the structural begin/end + body wiring.
+ *
+ * Every construct-specific choice stays at the call site and is passed in: the literal brackets
+ * (`{ }`, or YAML's bare `{`/`[`), the delimiter scope names, the body patterns (which decide the
+ * recurse target — `$self`, `#code-block`, `#flow-node`, …), and the optional region `name`.
+ * The CALLER decides "this rule IS a bracket region" with its own predicate; this helper only
+ * lays down the skeleton once that decision is made (it never auto-fires on any `[OPEN,…,CLOSE]`).
+ *
+ * Key INSERTION ORDER is load-bearing — the grammar is `JSON.stringify`'d verbatim — so `name`
+ * (when given) is emitted first, then always `begin, beginCaptures, end, endCaptures, patterns`.
+ */
+function emitBracketRegion(opts: {
+  openLit: string;                                       // begin regex (already escaped)
+  closeLit: string;                                      // end regex (already escaped)
+  beginCapName: string;                                  // scope for the open delimiter ('0' capture)
+  endCapName: string;                                    // scope for the close delimiter ('0' capture)
+  bodyPatterns: (TmPattern | { include: string })[];     // region body (includes the recurse target)
+  name?: string;                                         // optional region scope (emitted first)
+}): TmPattern {
+  const region: TmPattern = {};
+  if (opts.name !== undefined) region.name = opts.name;
+  region.begin = opts.openLit;
+  region.beginCaptures = { '0': { name: opts.beginCapName } };
+  region.end = opts.closeLit;
+  region.endCaptures = { '0': { name: opts.endCapName } };
+  region.patterns = opts.bodyPatterns;
+  return region;
+}
+
+/**
  * Extract non-\w characters that are valid in identifiers from the Ident token regex.
  * E.g., `[a-zA-Z_$][a-zA-Z0-9_$]*` → `['$']` ($ is not covered by \w).
  * Returns escaped characters suitable for embedding in a regex character class.
@@ -4738,14 +4773,18 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     for (const c of flow.colls) {
       const eOpen = escapeRegex(c.open), eClose = escapeRegex(c.close), eSep = escapeRegex(c.sep);
       if (c.colon) {
-        repository['flow-mapping'] = {
+        // A YAML flow mapping `{ … }` is a bracket region. CALLER predicate: detectFlowCollections
+        // found a collection rule (`OPEN … CLOSE` seq) whose entry rule carries a `:` key/value
+        // separator (`c.colon != null`). Recurse is via the body's `#flow-node` include (which
+        // re-includes #flow-mapping/#flow-sequence for nested collections).
+        repository['flow-mapping'] = emitBracketRegion({
           name: `meta.flow.mapping.${ln}`,
-          begin: eOpen, beginCaptures: { '0': { name: P } }, end: eClose, endCaptures: { '0': { name: P } },
-          patterns: [
+          openLit: eOpen, closeLit: eClose, beginCapName: P, endCapName: P,
+          bodyPatterns: [
             ...commentIncs, { match: eSep, name: P },
             { include: '#flow-mapping-map-key' }, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }, { include: '#flow-node' },
           ],
-        };
+        });
         repository['flow-mapping-map-key'] = {
           patterns: [
             ...explicitKeyEntry,
@@ -4758,14 +4797,16 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           ],
         };
       } else {
-        repository['flow-sequence'] = {
+        // A YAML flow sequence `[ … ]` is a bracket region. CALLER predicate: same collection-rule
+        // shape, but the entry rule has NO `:` separator (`c.colon == null`). Same #flow-node recurse.
+        repository['flow-sequence'] = emitBracketRegion({
           name: `meta.flow.sequence.${ln}`,
-          begin: eOpen, beginCaptures: { '0': { name: P } }, end: eClose, endCaptures: { '0': { name: P } },
-          patterns: [
+          openLit: eOpen, closeLit: eClose, beginCapName: P, endCapName: P,
+          bodyPatterns: [
             ...commentIncs, { match: eSep, name: P },
             { include: '#flow-sequence-map-key' }, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }, { include: '#flow-node' },
           ],
-        };
+        });
         repository['flow-sequence-map-key'] = {
           patterns: [
             ...explicitKeyEntry,
@@ -5269,32 +5310,31 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   const declarationKeywords = new Set(declarations.map(d => d.keyword));
 
   if (declarations.length > 0) {
-    const blockBeginCap = { '0': { name: `punctuation.definition.block.${langName}` } };
-    const blockEndCap = { '0': { name: `punctuation.definition.block.${langName}` } };
+    // A `{ … }` declaration body is a bracket region (begin `{` / end `}`), so its depth nests
+    // on the scope stack. The CALLER's "this is a region" predicate: `detectDeclarations`
+    // returned a decl with a brace body — these `{`/`}` come from a keyword-anchored declaration
+    // rule, not from an arbitrary object-literal/binding-pattern `{}`. The bracket literals,
+    // delimiter scope, and recurse target (the body's own `#…` include + `$self`) are the only
+    // per-region bits; the begin/end skeleton is shared via emitBracketRegion.
+    const blockCapName = `punctuation.definition.block.${langName}`;
 
     // code-block: self-recursive {} for method/function bodies (no class-member patterns)
-    repository['code-block'] = {
-      begin: '\\{',
-      beginCaptures: blockBeginCap,
-      end: '\\}',
-      endCaptures: blockEndCap,
-      patterns: [
+    repository['code-block'] = emitBracketRegion({
+      openLit: '\\{', closeLit: '\\}', beginCapName: blockCapName, endCapName: blockCapName,
+      bodyPatterns: [
         { include: '#code-block' },
         { include: '$self' },
       ],
-    };
+    });
 
     // declaration-body: {} for class/interface bodies (has method-signature, member-type-annotation)
-    repository['declaration-body'] = {
-      begin: '\\{',
-      beginCaptures: blockBeginCap,
-      end: '\\}',
-      endCaptures: blockEndCap,
-      patterns: [
+    repository['declaration-body'] = emitBracketRegion({
+      openLit: '\\{', closeLit: '\\}', beginCapName: blockCapName, endCapName: blockCapName,
+      bodyPatterns: [
         { include: '#declaration-body' },
         { include: '$self' },
       ],
-    };
+    });
 
     // Parameter type annotation + params scope (if lang has type annotations)
     if (declarations.some(d => d.hasParams)) {
@@ -5523,13 +5563,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
               match: `(?<=[{,])\\s*(${identPattern})(?=\\s*[=,}])`,
               captures: { '1': { name: `variable.other.enummember.${langName}` } },
             };
-            repository['enum-body'] = {
-              begin: '\\{',
-              beginCaptures: { '0': { name: `punctuation.definition.block.${langName}` } },
-              end: '\\}',
-              endCaptures: { '0': { name: `punctuation.definition.block.${langName}` } },
-              patterns: [{ include: '#enum-member' }, { include: '$self' }],
-            };
+            // enum-body is the same `{ … }` bracket region; only its body differs (members are
+            // NAMES via #enum-member, not statements). CALLER predicate: a brace-bodied decl
+            // whose keyword scope ends in `.enum`.
+            repository['enum-body'] = emitBracketRegion({
+              openLit: '\\{', closeLit: '\\}', beginCapName: blockCapName, endCapName: blockCapName,
+              bodyPatterns: [{ include: '#enum-member' }, { include: '$self' }],
+            });
           }
           innerPatterns.push({ include: '#enum-body' });
         } else {
