@@ -131,7 +131,7 @@ console.log('   Emitting it as one JSXText token needs a context-sensitive lexer
 console.log('   Monogram lexes the whole source in ONE pass with NO parser feedback and a');
 console.log('   deliberately grammar-agnostic lexer (test/agnostic.ts) — it cannot know it');
 console.log('   is between `>` and `</`. The TextMate HIGHLIGHTER has no such limit (it is');
-console.log('   region-based): test/tsx-highlight.ts shows raw text + entities highlight');
+console.log('   region-based): the derived highlighter shows raw text + entities highlight');
 console.log('   correctly. So this is a PARSER-conformance boundary only, not a highlighter');
 console.log('   gap.)');
 for (const [name, code] of unsupported) {

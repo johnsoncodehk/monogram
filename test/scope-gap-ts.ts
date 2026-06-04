@@ -1,5 +1,5 @@
 // scope-gap-ts.ts — TypeScript adapter for the unified scope-gap harness. Demonstrates the
-// harness reproduces highlight-bench's official-vs-Monogram gap from a parser-role oracle
+// harness reproduces the official-vs-Monogram gap from a parser-role oracle
 // (oracle.ts = tsc → roles). Run (bare node): node test/scope-gap-ts.ts [N|all]
 import ts from 'typescript';
 import { readdirSync, readFileSync } from 'node:fs';

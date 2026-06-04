@@ -2,7 +2,7 @@
 // Thin: corpus + dialect knobs only; the TS-family adapter is in ./src-coverage-tsfamily.ts
 // and the coverage harness in ./src-coverage.ts.
 //
-// Oracle/corpus/Monogram-invocation mirror conformance-matrix.ts: ts.createSourceFile (TS),
+// Oracle/corpus/Monogram-invocation mirror the accept/reject oracle: ts.createSourceFile (TS),
 // accept iff no parseDiagnostics; /tmp/ts-repo/tests/cases/conformance, single-file .ts.
 //
 // Run (Node 24+, bare node — NOT tsx):

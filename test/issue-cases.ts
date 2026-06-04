@@ -1,13 +1,13 @@
 // issue-cases.ts — the documented microsoft/TypeScript-TmLanguage issues, as DATA.
 // Single source of truth shared by test/test-issues.ts (Monogram self-test) and
-// test/highlight-bench.ts (neutral-oracle bench). No side effects on import.
+// test/scope-gap.ts (neutral-oracle bench). No side effects on import.
 // Each case label carries its tracker #issue number (microsoft/TypeScript-TmLanguage).
 
 export interface Check { text: string; scope: string; }
 // `monoGap`: an honest reported bug the DERIVED grammar does NOT solve yet (only-official, or
 // both-miss). It still appears in the README cross-language comparison table (graded honestly by
 // test/issue-table.ts), but the Monogram-measurement consumers SKIP it — the self-test
-// (test/test-issues.ts) and the accuracy benches (test/highlight-bench.ts, test/treesitter-bench.ts)
+// (test/test-issues.ts) and the accuracy benches (test/scope-gap.ts, test/treesitter-bench.ts)
 // gate Monogram's KNOWN-GOOD corpus, not the full honest comparison universe, so a case Monogram
 // gets wrong must not fail them. Same convention as test/vue-issue-cases.ts.
 export interface TestCase { label: string; input: string; checks: Check[]; monoGap?: boolean; }

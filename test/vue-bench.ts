@@ -2,7 +2,7 @@
 //  vue-bench.ts — Monogram's DERIVED Vue grammar vs the hand-written official one
 //  (vuejs/language-tools: vue.tmLanguage.json + vue-directives.json + vue-interpolations.json),
 //  graded by a NEUTRAL oracle (@vue/compiler-sfc for block structure + boundaries,
-//  @vue/compiler-dom for directives + interpolations) — the same shape as highlight-bench
+//  @vue/compiler-dom for directives + interpolations) — the same shape as the scope-gap benches
 //  (both engines vs tsc) and html-bench (both vs parse5).
 //
 //  Both grammars are tokenized through `vscode-tmlanguage-snapshot` — vuejs/language-tools'

@@ -87,7 +87,7 @@ export function tsFamilyAdapter(opts: TsFamilyOpts): Adapter {
 
   let officialThrew = 0;
   const officialAccepts = (code: string): boolean => {
-    // Mirror conformance-matrix.ts. Guard the rare TS Debug.assert throw (a TS parser bug,
+    // The accept/reject oracle (ts.createSourceFile). Guard the rare TS Debug.assert throw (a TS parser bug,
     // not an accept) → count as reject; the partial parse still contributes coverage.
     try {
       const sf = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true, opts.scriptKind);

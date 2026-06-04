@@ -18,7 +18,7 @@
 //
 //  Pass an optional grammar name to scope the run (`node test/repo-compat.ts javascript`).
 //  Skips gracefully (exit 0) if VS Code's official grammars aren't installed (dev-only,
-//  like highlight-bench / vue-dropin). Run: node test/repo-compat.ts
+//  like the scope-gap benches / vue-dropin). Run: node test/repo-compat.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 

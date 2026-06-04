@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  scope-gap.ts — UNIFIED "true gap" harness. Score ANY language's OFFICIAL TextMate
 //  grammar AND Monogram's derived grammar against the PARSER as the neutral oracle, and
-//  report the gap. Generalizes highlight-bench.ts: a per-language adapter supplies a
+//  report the gap. Generalizes the old per-issue highlight bench: a per-language adapter supplies a
 //  roleOracle (parser → per-token structural ROLE) + the two grammars; this core tokenizes
 //  both with vscode-textmate, grades each oracle token's scope via the FROZEN neutral table
 //  in scope-roles.ts, and reports official% vs Monogram% correctness + the gap + the

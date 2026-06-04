@@ -2,7 +2,7 @@
 //  oracle.ts — the NEUTRAL answer key. Walk tsc's own parse tree and assign each
 //  leaf token a structural ROLE (scope-roles.ts), independent of any highlighter.
 //  Parameterised by ScriptKind so the SAME classification serves both TypeScript
-//  (highlight-bench.ts) and JavaScript (js-highlight-bench.ts) — share the
+//  and JavaScript scope-gap adapters — share the
 //  analysis, never duplicate it.
 // ─────────────────────────────────────────────────────────────────────────────
 import ts from 'typescript';

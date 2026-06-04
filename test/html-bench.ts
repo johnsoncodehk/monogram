@@ -7,7 +7,7 @@
 //
 //  For each role-bearing span we sample one offset, ask each engine for its scope there,
 //  and check the scope's family matches the role. Higher = more correct. Mirrors
-//  test/highlight-bench.ts (the README TS/JS table), with parse5 in tsc's seat.
+//  the scope-gap TS/JS adapters, with parse5 in tsc's seat.
 //
 //  Set MONOGRAM_OFFICIAL_HTML to override the official grammar path.
 //  Run: node test/html-bench.ts

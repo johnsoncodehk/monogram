@@ -43,7 +43,7 @@ const TIMED_RUNS = 3;           // best-of-N (min) — least noisy estimate of t
 const MONOGRAM_PATH = 'typescript.tmLanguage.json';
 const OFFICIAL_PATH = process.env.MONOGRAM_OFFICIAL_TM; // opt-in side-by-side
 
-// ── TextMate grammar loading (oniguruma + Registry; copied from highlight-bench.ts)
+// ── TextMate grammar loading (oniguruma + Registry; copied from the scope-gap bench)
 const require = createRequire(import.meta.url);
 const wasmBin = readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
 await loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + wasmBin.byteLength));
@@ -75,7 +75,7 @@ if (OFFICIAL_PATH) {
   if (!officialGrammar) throw new Error('failed to load official grammar');
 }
 
-// ── tokenize line by line (same shape as highlight-bench's tmTokenize) ───────────
+// ── tokenize line by line (same shape as the scope-gap bench's tmTokenize) ───────────
 // Returns total token count so the work can't be optimized away and so we can sanity
 // the grammar actually ran. Carries the rule stack across lines, exactly like an editor.
 function tokenizeAll(grammar: vsctm.IGrammar, text: string): number {
