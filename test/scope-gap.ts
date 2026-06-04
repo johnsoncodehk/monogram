@@ -16,7 +16,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
-import { gradeScope, isCorrect, ROLE_SPEC } from './scope-roles.ts';
+import { gradeScopeStack, isCorrect, ROLE_SPEC } from './scope-roles.ts';
 import type { RoleName } from './scope-roles.ts';
 
 // A parser-assigned token role over a span. The per-language oracle returns these (e.g.
@@ -68,23 +68,26 @@ function loadGrammarSet(mainScope: string, files: Record<string, string>) {
   return reg.loadGrammar(mainScope);
 }
 
-interface TmToken { start: number; end: number; scope: string }
+// Keep the FULL scope chain (not just the innermost) so grading can be STACK-AWARE: an
+// official grammar that nests a role's scope as an ancestor of a more-specific refinement
+// (e.g. a YAML key's entity.name.tag under punctuation.definition.string) must be credited.
+interface TmToken { start: number; end: number; scopes: string[] }
 function tmTokenize(grammar: vsctm.IGrammar, text: string): TmToken[] {
   const lines = text.split('\n');
   const toks: TmToken[] = [];
   let ruleStack = INITIAL, offset = 0;
   for (const line of lines) {
     const r = grammar.tokenizeLine(line, ruleStack);
-    for (const t of r.tokens) toks.push({ start: offset + t.startIndex, end: offset + t.endIndex, scope: t.scopes[t.scopes.length - 1] });
+    for (const t of r.tokens) toks.push({ start: offset + t.startIndex, end: offset + t.endIndex, scopes: t.scopes });
     ruleStack = r.ruleStack; offset += line.length + 1;
   }
   return toks;
 }
-// deepest scope of the TM token covering `pos` (binary search; '' if none)
-function scopeAt(toks: TmToken[], pos: number): string {
+// full scope chain of the TM token covering `pos` (binary search; [] if none)
+function scopeAt(toks: TmToken[], pos: number): string[] {
   let lo = 0, hi = toks.length - 1, ans = -1;
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (toks[mid].start <= pos) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
-  return ans >= 0 && toks[ans].end > pos ? toks[ans].scope : '';
+  return ans >= 0 && toks[ans].end > pos ? toks[ans].scopes : [];
 }
 
 export async function run(adapter: ScopeGapAdapter): Promise<void> {
@@ -115,15 +118,17 @@ export async function run(adapter: ScopeGapAdapter): Promise<void> {
     for (const t of gold) {
       const tier = ROLE_SPEC[t.role]?.tier;
       if (!tier || tier === 'lexical') continue;   // lexical floor: excluded from the headline
-      const so = scopeAt(tmO, t.start), sm = scopeAt(tmM, t.start);
-      const oc = isCorrect(gradeScope(t.role, so)), mc = isCorrect(gradeScope(t.role, sm));
+      const so = scopeAt(tmO, t.start), sm = scopeAt(tmM, t.start);   // full scope CHAINS
+      const vo = gradeScopeStack(t.role, so), vm = gradeScopeStack(t.role, sm);
+      const oc = isCorrect(vo), mc = isCorrect(vm);
       tally.total++; gradedHere++;
-      if (oc) tally.oCorrect++; if (gradeScope(t.role, so) === 'exact') tally.oExact++;
-      if (mc) tally.mCorrect++; if (gradeScope(t.role, sm) === 'exact') tally.mExact++;
+      if (oc) tally.oCorrect++; if (vo === 'exact') tally.oExact++;
+      if (mc) tally.mCorrect++; if (vm === 'exact') tally.mExact++;
       const pr = perRole.get(t.role) ?? { n: 0, oC: 0, mC: 0 }; pr.n++; if (oc) pr.oC++; if (mc) pr.mC++; perRole.set(t.role, pr);
       if (!oc) okO = false; if (!mc) okM = false;
-      if (mc && !oc && onlyMono.length < 40) onlyMono.push({ text: t.text, role: t.role, o: so || '(none)', m: sm || '(none)' });
-      if (oc && !mc && onlyOff.length < 40) onlyOff.push({ text: t.text, role: t.role, o: so || '(none)', m: sm || '(none)' });
+      const inner = (s: string[]) => s.length ? s[s.length - 1] : '(none)';
+      if (mc && !oc && onlyMono.length < 40) onlyMono.push({ text: t.text, role: t.role, o: inner(so), m: inner(sm) });
+      if (oc && !mc && onlyOff.length < 40) onlyOff.push({ text: t.text, role: t.role, o: inner(so), m: inner(sm) });
     }
     if (gradedHere) { snip.n++; if (okO) snip.o++; if (okM) snip.m++; }
   }

@@ -28,7 +28,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { vueOracle } from './vue-oracle.ts';
 import { scopeLookup, officialAvailable } from './vue-grammar-harness.ts';
-import { gradeScope, isCorrect, ROLE_SPEC } from './scope-roles.ts';
+import { gradeScopeStack, isCorrect, ROLE_SPEC } from './scope-roles.ts';
 import type { RoleName } from './scope-roles.ts';
 import type { GoldToken } from './scope-gap.ts';
 import { cases as vueIssueCases } from './vue-issue-cases.ts';
@@ -64,10 +64,12 @@ const corpus = [
 ];
 
 // ── tokenize via the faithful (injection-aware) harness; grade via the FROZEN table ──────────
-type ScopeAt = (offset: number) => string;
+// Return the FULL scope CHAIN (not just the innermost) so grading is STACK-AWARE, identical to
+// scope-gap.ts's run(): a role correctly nested as an ancestor of a refinement is credited.
+type ScopeAt = (offset: number) => string[];
 async function lookupFor(which: 'mono' | 'off', src: string): Promise<ScopeAt> {
   const at = await scopeLookup(which, src);             // offset → scopes[] (deepest last)
-  return (offset: number) => { const sc = at(offset); return sc.length ? sc[sc.length - 1] : ''; };
+  return (offset: number) => at(offset);
 }
 
 const tally = { oCorrect: 0, oExact: 0, mCorrect: 0, mExact: 0, total: 0 };
@@ -89,15 +91,17 @@ for (const { text } of corpus) {
   for (const t of gold) {
     const tier = ROLE_SPEC[t.role]?.tier;
     if (!tier || tier === 'lexical') continue;          // lexical floor: excluded from the headline
-    const so = oAt(t.start), sm = mAt(t.start);
-    const oc = isCorrect(gradeScope(t.role, so)), mc = isCorrect(gradeScope(t.role, sm));
+    const so = oAt(t.start), sm = mAt(t.start);         // full scope CHAINS
+    const vo = gradeScopeStack(t.role, so), vm = gradeScopeStack(t.role, sm);
+    const oc = isCorrect(vo), mc = isCorrect(vm);
     tally.total++; gradedHere++;
-    if (oc) tally.oCorrect++; if (gradeScope(t.role, so) === 'exact') tally.oExact++;
-    if (mc) tally.mCorrect++; if (gradeScope(t.role, sm) === 'exact') tally.mExact++;
+    if (oc) tally.oCorrect++; if (vo === 'exact') tally.oExact++;
+    if (mc) tally.mCorrect++; if (vm === 'exact') tally.mExact++;
     const pr = perRole.get(t.role) ?? { n: 0, oC: 0, mC: 0 }; pr.n++; if (oc) pr.oC++; if (mc) pr.mC++; perRole.set(t.role, pr);
     if (!oc) okO = false; if (!mc) okM = false;
-    if (mc && !oc && onlyMono.length < 40) onlyMono.push({ text: t.text, role: t.role, o: so || '(none)', m: sm || '(none)' });
-    if (oc && !mc && onlyOff.length < 40) onlyOff.push({ text: t.text, role: t.role, o: so || '(none)', m: sm || '(none)' });
+    const inner = (s: string[]) => s.length ? s[s.length - 1] : '(none)';
+    if (mc && !oc && onlyMono.length < 40) onlyMono.push({ text: t.text, role: t.role, o: inner(so), m: inner(sm) });
+    if (oc && !mc && onlyOff.length < 40) onlyOff.push({ text: t.text, role: t.role, o: inner(so), m: inner(sm) });
   }
   if (gradedHere) { snip.n++; if (okO) snip.o++; if (okM) snip.m++; }
 }

@@ -38,6 +38,11 @@ const STRUCTURAL_PUNCT = new Set<number>([
 function kwRole(text: string, node: ts.Node): RoleName {
   // `void` is dual-use: the `void expr` operator vs the `: void` type.
   if (text === 'void') return node.parent?.kind === ts.SyntaxKind.VoidExpression ? R.kwOperator : R.typeBuiltin;
+  // `undefined` in TYPE position is lexed as UndefinedKeyword (in VALUE position it is an
+  // Identifier, handled in identRole). Like `string`/`number`, official paints it support.type,
+  // which R.kwOther rejects — so role it typeBuiltin. (`null` as a type is a LiteralType whose
+  // NullKeyword → R.constBuiltin, whose family already accepts support.type, so it needs no change.)
+  if (text === 'undefined') return R.typeBuiltin;
   if (KW_CONST_BUILTIN.has(text)) return R.constBuiltin;
   if (KW_THIS_SUPER.has(text)) return R.thisSuper;
   if (KW_TYPE_BUILTIN.has(text)) return R.typeBuiltin;
@@ -91,6 +96,11 @@ function identRole(node: ts.Node): RoleName {
   if (is(ts.isTypeParameterDeclaration) && named(p)) return R.typeParam;
 
   if (is(ts.isVariableDeclaration) && named(p)) return R.varDecl;
+  // statement labels: the `loop:` of a LabeledStatement and the target of `break loop` /
+  // `continue loop`. tsc stores all three as a `.label` Identifier; official paints them
+  // entity.name.label (a value reference scope is too generic), so give them their own role.
+  if (is(ts.isLabeledStatement) && (p as ts.LabeledStatement).label === node) return R.label;
+  if ((is(ts.isBreakStatement) || is(ts.isContinueStatement)) && (p as ts.BreakOrContinueStatement).label === node) return R.label;
   if (is(ts.isBindingElement)) {
     if ((p as ts.BindingElement).propertyName === node) return R.propAccess;
     return R.varDecl;

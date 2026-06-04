@@ -20,12 +20,12 @@ Per-grammar comparison vs the **official parser** as the neutral oracle (`node t
 
 | Grammar | Parser — agree · covered | Highlighter — Monogram vs official |
 |---|---|---|
-| TypeScript | 97.1% · 76.4% | 99.5% vs 99.0% |
+| TypeScript | 97.1% · 76.4% | 99.2% vs 99.3% |
 | JavaScript | 92.2% · 65.5% | 88.9% vs 83.6% |
-| JSX | 97.1% · 52.5% | 94.6% vs 92.9% |
-| TSX | 96.7% · 65.7% | 95.3% vs 95.1% |
-| HTML | 77.9% · 48.1% | 100.0% vs 97.6% |
-| YAML | 63.1% · 73.9% | 91.8% vs 89.7% |
+| JSX | 97.1% · 52.5% | 94.3% vs 94.3% |
+| TSX | 96.7% · 65.7% | 95.1% vs 95.4% |
+| HTML | 77.9% · 48.1% | 100.0% vs 98.8% |
+| YAML | 63.1% · 73.9% | 91.8% vs 92.4% |
 | Vue | — | 98.8% vs 98.0% |
 <!-- coverage:end -->
 
