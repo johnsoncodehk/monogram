@@ -17,37 +17,75 @@ module.exports = grammar({
   ],
 
   rules: {
-    stream: $ => seq(repeat(seq($.directive, optional($.newline))), optional($.indent), optional($.node), optional($.dedent), repeat(seq(optional($.newline), optional($.doc_end), optional($.newline), $.doc_start, optional($.newline), repeat(seq($.directive, optional($.newline))), optional($.indent), optional($.node), optional($.dedent))), optional($.newline), optional($.doc_end), optional($.newline)),
+    stream: $ => seq(repeat(seq($.directive, optional($.newline))), optional($.indent), optional($.node), optional($.dedent), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline)),
 
-    node: $ => seq(optional($.anchor), optional($.tag), choice($.block_sequence, $.explicit_mapping, $.flow_mapping, $.flow_sequence, $.alias, $.mapping_or_scalar)),
+    property: $ => choice(seq($.anchor, optional($.tag)), seq($.tag, optional($.anchor))),
+
+    content_node: $ => choice($.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar),
+
+    node: $ => choice(seq(optional($.anchor), optional($.tag), optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), seq($.tag, $.anchor, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar)))),
 
     mapping_or_scalar: $ => seq($.scalar, optional(seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry))))),
 
-    map_entry: $ => choice(seq($.scalar, ":", optional($.map_value)), seq("?", optional($.map_value), optional($.newline), optional(seq(":", optional($.map_value))))),
+    alias_or_keyed: $ => seq($.alias, optional(seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry))))),
 
-    explicit_mapping: $ => seq("?", optional($.map_value), optional($.newline), optional(seq(":", optional($.map_value))), repeat(seq($.newline, $.map_entry))),
+    block_key: $ => choice(seq(optional($.property), $.scalar), $.alias),
 
-    value: $ => choice(seq($.indent, $.node, $.dedent), $.node),
+    explicit_entry: $ => seq("?", optional($.map_value), optional(choice(seq($.newline, ":", optional($.map_value)), seq(":", optional($.map_value))))),
 
-    map_value: $ => choice(seq($.indent, $.node, $.dedent), $.inline_node),
+    map_entry: $ => choice(seq($.block_key, ":", optional($.map_value)), $.explicit_entry, seq(":", optional($.map_value))),
 
-    inline_node: $ => seq(optional($.anchor), optional($.tag), choice($.flow_mapping, $.flow_sequence, $.alias, $.mapping_or_scalar)),
+    map_entry_no_empty: $ => choice(seq($.block_key, ":", optional($.map_value)), $.explicit_entry),
+
+    explicit_mapping: $ => seq($.explicit_entry, repeat(seq($.newline, $.map_entry))),
+
+    empty_key_mapping: $ => seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry_no_empty))),
+
+    value: $ => choice(seq($.indent, $.node, $.dedent), $.seq_value_node),
+
+    map_value: $ => choice(seq($.indent, $.node, $.dedent), $.map_value_node),
+
+    indented_value_node: $ => choice(seq($.property, choice(seq($.indent, $.indented_value_node, $.dedent), $.collection_content)), $.content_node),
+
+    collection_content: $ => choice($.block_sequence, $.explicit_mapping, $.flow_mapping, $.flow_sequence, $.mapping_from_scalar),
+
+    mapping_from_scalar: $ => seq($.scalar, ":", optional($.map_value), repeat(seq($.newline, $.map_entry))),
+
+    map_value_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.indented_value_node, $.dedent), $.map_inline_content))), $.map_inline_content),
+
+    map_inline_content: $ => choice($.flow_mapping, $.flow_sequence, $.alias, $.mapping_or_scalar),
+
+    seq_value_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.indented_value_node, $.dedent), $.seq_inline_content))), $.seq_inline_content),
+
+    seq_inline_content: $ => choice($.block_sequence, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias, $.mapping_or_scalar),
 
     block_sequence: $ => seq($.seq_item, repeat(seq($.newline, $.seq_item))),
 
     seq_item: $ => seq("-", optional($.value)),
 
-    flow_mapping: $ => seq("{", optional(seq($.flow_entry, repeat(seq(",", $.flow_entry)))), optional(","), "}"),
+    flow_node: $ => seq(optional($.property), optional(choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar))),
 
-    flow_entry: $ => seq($.flow_scalar_or_node, optional(seq(":", $.flow_value))),
+    flow_explicit: $ => seq("?", optional($.flow_node)),
 
-    flow_value: $ => choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar),
+    flow_map_entry: $ => seq(optional($.flow_explicit), optional($.flow_node), optional(seq(":", optional($.flow_node)))),
 
-    flow_scalar_or_node: $ => choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar),
+    flow_mapping: $ => seq("{", optional(seq($.flow_map_entry, repeat(seq(",", $.flow_map_entry)))), optional(","), "}"),
 
-    flow_sequence: $ => seq("[", optional(seq($.flow_value, repeat(seq(",", $.flow_value)))), optional(","), "]"),
+    flow_seq_entry: $ => choice(seq($.flow_seq_key, ":", optional($.flow_node)), seq("?", optional($.flow_node), optional(seq(":", optional($.flow_node)))), seq(":", optional($.flow_node)), $.flow_node),
+
+    flow_seq_key: $ => choice(seq(optional($.property), choice($.flow_mapping, $.flow_sequence, $.dquote_key, $.squote_key, $.key)), $.alias),
+
+    flow_sequence: $ => seq("[", optional(seq($.flow_seq_entry, repeat(seq(",", $.flow_seq_entry)))), optional(","), "]"),
 
     scalar: $ => choice($.dquote_key, $.squote_key, $.dquote, $.squote, $.block_scalar, $.key, $.num, $.bool_null, $.plain),
+
+    inline_doc_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.flow_mapping, $.flow_sequence, $.alias, $.scalar))), choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar)),
+
+    explicit_doc_body: $ => choice(seq($.newline, repeat(seq($.directive, optional($.newline))), optional($.indent), optional($.node), optional($.dedent)), $.inline_doc_node),
+
+    after_doc_end: $ => choice(seq($.doc_start, optional($.explicit_doc_body)), seq(optional($.indent), $.node, optional($.dedent))),
+
+    next_doc: $ => choice(seq($.doc_start, optional($.explicit_doc_body)), seq($.doc_end, optional(seq($.newline, optional($.after_doc_end))))),
 
     doc_start: $ => token(/---/),
 
