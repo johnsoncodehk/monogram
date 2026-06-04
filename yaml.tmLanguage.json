@@ -157,11 +157,11 @@
     },
     "num": {
       "name": "constant.numeric.yaml",
-      "match": "(?:[+-]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN)|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(?:\\.[0-9]+|[0-9]+(?:\\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)(?=[\\t ]+#|[\\t ]*(?:[\\r\\n,\\[\\]{}]|:(?:[\\s,\\[\\]{}]|$))|$)"
+      "match": "(?<!![\\t ]+)(?:[+-]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN)|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(?:\\.[0-9]+|[0-9]+(?:\\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)(?=[\\t ]+#|[\\t ]*(?:[\\r\\n,\\[\\]{}]|:(?:[\\s,\\[\\]{}]|$))|$)"
     },
     "boolnull": {
       "name": "constant.language.yaml",
-      "match": "(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)(?=[\\t ]+#|[\\t ]*(?:[\\r\\n,\\[\\]{}]|:(?:[\\s,\\[\\]{}]|$))|$)"
+      "match": "(?<!![\\t ]+)(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)(?=[\\t ]+#|[\\t ]*(?:[\\r\\n,\\[\\]{}]|:(?:[\\s,\\[\\]{}]|$))|$)"
     },
     "plain": {
       "name": "string.unquoted.yaml",

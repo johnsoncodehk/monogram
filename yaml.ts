@@ -81,11 +81,20 @@ const SQuoteKey = token(
 // WHOLE node, so it is followed by whitespace+comment, an end-of-value char (EOL / `,` / `]` /
 // `}`), or a key-separator `:`. Mirrors the maintained RedCMD grammar's core-schema lookaheads.
 const VALUE_END = String.raw`(?=[\t ]+#|[\t ]*(?:[\r\n,\[\]{}]|:(?:[\s,\[\]{}]|$))|$)`;
+// A NON-SPECIFIC tag (`!` followed by whitespace) forces its plain scalar to resolve as a STRING
+// regardless of the scalar's appearance (`! 12` is the string "12", not the number 12 — YAML 1.2
+// §6.9.1 / yaml-test-suite S4JQ). So the typed value tokens (Num / BoolNull) MUST NOT fire on a
+// scalar that is glued to a leading `!␣` tag — the negative lookbehind drops them so the scalar
+// falls through to the generic Plain (`string.unquoted`). A *specific* tag (`!!int 12`, `!!bool …`)
+// puts non-space chars between the `!` and the value, so this lookbehind leaves those untouched —
+// they keep resolving by appearance, matching what the `yaml` oracle reports.
+const NONSPECIFIC_TAG = String.raw`(?<!![\t ]+)`;
 // Numeric plain scalars (YAML 1.2 core schema): decimal / octal / hex integers, floats, ±.inf,
 // .nan. Anything outside the core schema (binary `0b…`, dates, `12:34:56`) stays a plain string,
 // matching what the `yaml` oracle resolves to a number.
 const Num = token(
   new RegExp(
+    NONSPECIFIC_TAG +
     String.raw`(?:[+-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)` +
     String.raw`|0x[0-9a-fA-F]+|0o[0-7]+` +
     String.raw`|[+-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)` +
@@ -93,9 +102,10 @@ const Num = token(
   ),
   { scope: 'constant.numeric' },
 );
-// Boolean / null plain scalars (core schema) → constant.language.
+// Boolean / null plain scalars (core schema) → constant.language. Same non-specific-tag guard:
+// `! true` is the string "true", not the boolean (yaml-test-suite cousins of S4JQ).
 const BoolNull = token(
-  new RegExp(String.raw`(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)${VALUE_END}`),
+  new RegExp(NONSPECIFIC_TAG + String.raw`(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)${VALUE_END}`),
   { scope: 'constant.language' },
 );
 
