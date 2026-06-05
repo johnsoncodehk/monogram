@@ -257,11 +257,101 @@ function analyze(grammar: CstGrammar) {
     }
   }
 
+  // ── Lever 1: integer token kinds ──
+  // Replace the per-call string dispatch in keyMatchesTok / canStartFT /
+  // ruleMightStart / matchLiteral / matchToken with integer compares. Two int fields
+  // are interned onto each token at parse time (see the emitted tokenize wiring):
+  //   tok.k = TYPE kind   — an int for tok.type ('' punctuation → PUNCT sentinel;
+  //                         each declared token name → its own int; the three
+  //                         template-token-kinds $templateHead/$templateMiddle/
+  //                         $templateTail get their own ints below PUNCT-named).
+  //   tok.t = LITERAL kind — if tok.text is a known keyword literal (for a named,
+  //                         non-'' token) OR a known punctuation literal (for a ''
+  //                         token), that literal's int; else 0 (NONE). Keyword ints
+  //                         and punct ints occupy DISJOINT ranges, so tok.t alone
+  //                         disambiguates keyword-vs-punct.
+  // A keyword token (an identifier-type token whose text is e.g. "if") therefore has
+  // tok.k = <Ident kind> AND tok.t = <KW_if>, so it matches BOTH the identifier
+  // token-name key and the keyword key — exactly the dual-match keyMatchesTok did.
+  //
+  // Kind ranges (so a single >= test answers "is a declared token name"):
+  //   PUNCT = 1; $templateHead = 2, $templateMiddle = 3, $templateTail = 4;
+  //   declared token names: 5, 6, … (NAMED_MIN = 5).
+  const KIND_PUNCT = 1;
+  const KIND_TEMPLATE_HEAD = 2;
+  const KIND_TEMPLATE_MIDDLE = 3;
+  const KIND_TEMPLATE_TAIL = 4;
+  const KIND_NAMED_MIN = 5;
+  const typeKind = new Map<string, number>();
+  typeKind.set('', KIND_PUNCT);
+  typeKind.set('$templateHead', KIND_TEMPLATE_HEAD);
+  typeKind.set('$templateMiddle', KIND_TEMPLATE_MIDDLE);
+  typeKind.set('$templateTail', KIND_TEMPLATE_TAIL);
+  let nextKind = KIND_NAMED_MIN;
+  for (const name of tokenNames) if (!typeKind.has(name)) typeKind.set(name, nextKind++);
+
+  // Literal ints: keyword literals in [1 .. kwCount], punct literals after, disjoint.
+  // The vocabulary must be a SUPERSET of every string classifyKey()/matchLiteralCall()
+  // is ever called with — otherwise an unlisted literal gets int 0 (NONE) and a t===0
+  // compare would false-match every plain token. classifyKey/matchLiteral see:
+  //   • every `literal` node value reachable in a rule body — INCLUDING inside `not`
+  //     (the reserved-word negative-lookahead), which shared collectLiterals
+  //     deliberately does NOT descend into; so we walk the full tree here.
+  //   • every operator value (prefix/infix/postfix) — keyword-shaped ops like `delete`
+  //     are matched as literals inside the reserved-word `not`, yet live only in `precs`.
+  //   • every FIRST-set member (defensive; these are literals or token names).
+  const allLiterals = new Set<string>();
+  function collectAllLiterals(e: RuleExpr): void {
+    switch (e.type) {
+      case 'literal': allLiterals.add(e.value); return;
+      case 'seq': case 'alt': e.items.forEach(collectAllLiterals); return;
+      case 'quantifier': case 'group': case 'not': collectAllLiterals(e.body); return;
+      case 'sep': collectAllLiterals(e.element); allLiterals.add(e.delimiter); return;
+      default: return;
+    }
+  }
+  for (const rule of grammar.rules) collectAllLiterals(rule.body);
+  for (const level of grammar.precs) for (const op of level.operators) allLiterals.add(op.value);
+  for (const fs of firstSets.values()) if (fs) for (const k of fs) if (!tokenNames.has(k)) allLiterals.add(k);
+  const kwLitKind = new Map<string, number>();
+  const puLitKind = new Map<string, number>();
+  let nextLit = 1;
+  for (const lit of allLiterals) if (isKeywordLiteral(lit) && !kwLitKind.has(lit)) kwLitKind.set(lit, nextLit++);
+  for (const lit of allLiterals) if (!isKeywordLiteral(lit) && !puLitKind.has(lit)) puLitKind.set(lit, nextLit++);
+
+  // Pre-classify a FIRST-set key the SAME way keyMatchesTok does, into an int
+  // descriptor the emitted checks consume. Order MUST match keyMatchesTok:
+  // tokenNames.has → token-name; else isKeywordLiteral → keyword; else punct.
+  type KeyDesc =
+    | { kind: 'tok'; k: number; template: boolean }
+    | { kind: 'kw'; t: number }
+    | { kind: 'punct'; t: number; v: string };
+  function classifyKey(key: string): KeyDesc {
+    if (tokenNames.has(key)) {
+      return { kind: 'tok', k: typeKind.get(key)!, template: templateTokenNames.has(key) };
+    }
+    if (isKeywordLiteral(key)) {
+      // A keyword key whose literal int we know (it is a literal in some rule body).
+      // If somehow not in the vocabulary (defensive), fall back to a never-matching 0.
+      return { kind: 'kw', t: kwLitKind.get(key) ?? 0 };
+    }
+    return { kind: 'punct', t: puLitKind.get(key) ?? 0, v: key };
+  }
+  // A sentinel kind for any non-'' token type the lexer did not declare (unreachable
+  // for this closed lexer, but kept faithful): one past the max declared kind, so it
+  // is >= NAMED_MIN (behaves as "a named token" for the keyword-by-text branch) yet
+  // collides with NO real token-name kind (so matchToken(name) never false-matches it).
+  const KIND_NAMED_FALLBACK = nextKind;
+  const symtab = {
+    KIND_PUNCT, KIND_TEMPLATE_HEAD, KIND_NAMED_MIN, KIND_NAMED_FALLBACK,
+    typeKind, kwLitKind, puLitKind, classifyKey,
+  };
+
   return {
     grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altFirst,
-    ledMeta, contMeta, nullableRules, firstSets,
+    ledMeta, contMeta, nullableRules, firstSets, symtab,
   };
 }
 
@@ -340,7 +430,7 @@ class Emitter {
     switch (expr.type) {
       case 'literal': {
         const v = this.id();
-        return `const ${v} = matchLiteral(${J(expr.value)}); if (${v} === null) { ${onFail} } ${out}.push(${v});`;
+        return `const ${v} = ${this.matchLiteralCall(expr.value)}; if (${v} === null) { ${onFail} } ${out}.push(${v});`;
       }
       case 'ref': {
         if (a.tokenNames.has(expr.name)) {
@@ -349,11 +439,11 @@ class Emitter {
             const tm = this.id(), lf = this.id();
             return [
               `{ const ${tm} = parseTemplateExpr(); if (${tm} !== null) { ${out}.push(${tm}); }`,
-              `  else { const ${lf} = matchToken(${J(expr.name)}); if (${lf} === null) { ${onFail} } ${out}.push(${lf}); } }`,
+              `  else { const ${lf} = ${this.matchTokenCall(expr.name)}; if (${lf} === null) { ${onFail} } ${out}.push(${lf}); } }`,
             ].join('\n');
           }
           const lf = this.id();
-          return `const ${lf} = matchToken(${J(expr.name)}); if (${lf} === null) { ${onFail} } ${out}.push(${lf});`;
+          return `const ${lf} = ${this.matchTokenCall(expr.name)}; if (${lf} === null) { ${onFail} } ${out}.push(${lf});`;
         }
         // Rule ref: FIRST-set guard (ruleMightStart) baked as a direct check, then call.
         const nd = this.id();
@@ -467,7 +557,7 @@ class Emitter {
       `  if (${first} !== null) {`,
       `    for (let _i = 0; _i < ${first}.length; _i++) ${out}.push(${first}[_i]);`,
       `    while (true) {`,
-      `      const _ds = pos; const ${dl} = matchLiteral(${J(delimiter)}); if (${dl} === null) { pos = _ds; break; }`,
+      `      const _ds = pos; const ${dl} = ${this.matchLiteralCall(delimiter)}; if (${dl} === null) { pos = _ds; break; }`,
       `      const ${next} = ${fn}();`,
       `      if (${next} === null) { ${out}.push(${dl}); break; }`,
       `      ${out}.push(${dl}); for (let _i = 0; _i < ${next}.length; _i++) ${out}.push(${next}[_i]);`,
@@ -485,9 +575,42 @@ class Emitter {
     const fs = a.firstSets.get(name);
     if (!fs) return '';
     // ruleMightStart: true iff some key in fs matches peek(); guard = NOT that.
-    // Bake the key set; the runtime keyMatchesTok stays shared (small, correct).
-    const keys = [...fs];
-    return `!ruleMightStartKeys(${J(keys)}, peek())`;
+    // Pre-classify each FIRST key into an int descriptor (same split keyMatchesTok
+    // does) and bake the descriptor array; the runtime uses integer compares.
+    const descs = [...fs].map(k => this.keyDescLiteral(k));
+    return `!ruleMightStartDescs([${descs.join(', ')}], peek())`;
+  }
+
+  // ── Lever 1 emit helpers ──
+  // A baked int descriptor literal for a FIRST-set KEY (matches keyMatchesTok's split):
+  //   {m:0,k,h} token-name (h=1 if a template token name) · {m:1,t} keyword · {m:2,t,v} punct.
+  keyDescLiteral(key: string): string {
+    const d = this.a.symtab.classifyKey(key);
+    if (d.kind === 'tok') return `{m:0,k:${d.k},h:${d.template ? 1 : 0}}`;
+    if (d.kind === 'kw') return `{m:1,t:${d.t}}`;
+    return `{m:2,t:${d.t},v:${J(d.v)}}`;
+  }
+  // A baked int descriptor literal for a first-TOKEN ({lit}/{tok}/null) — the alt/led
+  // canStartFT key. null FirstTok → `null` (canStartFT short-circuits to true).
+  firstTokDescLiteral(ft: FirstTok): string {
+    if (!ft) return 'null';
+    const key = 'tok' in ft ? ft.tok : ft.lit;
+    return this.keyDescLiteral(key);
+  }
+  // Specialized literal matcher call: keyword → matchKwLit, punct → matchPuLit, each
+  // with the value's baked int (so the runtime does int compares, not string work).
+  matchLiteralCall(value: string): string {
+    const d = this.a.symtab.classifyKey(value);
+    if (d.kind === 'kw') return `matchKwLit(${J(value)}, ${d.t})`;
+    if (d.kind === 'punct') return `matchPuLit(${J(value)}, ${d.t})`;
+    // A literal key that classifies as a token-name (a token name used as a literal):
+    // unreachable for real grammars, but stay safe via the generic matchLiteral.
+    return `matchLiteral(${J(value)})`;
+  }
+  // Specialized token matcher call: tok.k === <name kind>.
+  matchTokenCall(name: string): string {
+    const k = this.a.symtab.typeKind.get(name);
+    return k === undefined ? `matchLiteral(${J(name)})` : `matchTokK(${J(name)}, ${k})`;
   }
 }
 
@@ -521,7 +644,42 @@ export function emitParser(grammar: CstGrammar): string {
   e.emit(`import { isKeywordLiteral } from ${J(resolveUtilsImport())};`);
   e.emit(``);
   e.emit(`const LEX_GRAMMAR = ${J(lexGrammar)};`);
-  e.emit(`const { tokenize } = createLexer(LEX_GRAMMAR);`);
+  e.emit(`const { tokenize: _lexTokenize } = createLexer(LEX_GRAMMAR);`);
+  e.emit(``);
+  // ── Lever 1: integer token-kind tables (see analyze()'s symtab) ──
+  // TYPE_KIND: tok.type → int. LIT_KW / LIT_PU: tok.text → keyword / punct literal int.
+  // The interning wrapper below sets tok.k (type kind) + tok.t (literal kind) once per
+  // token, so the per-call string dispatch becomes integer compares.
+  const st = a.symtab;
+  e.emit(`const TYPE_KIND = ${J(Object.fromEntries(st.typeKind))};`);
+  e.emit(`const LIT_KW = ${J(Object.fromEntries(st.kwLitKind))};`);
+  e.emit(`const LIT_PU = ${J(Object.fromEntries(st.puLitKind))};`);
+  e.emit(`const K_PUNCT = ${st.KIND_PUNCT};`);
+  e.emit(`const K_TEMPLATE_HEAD = ${st.KIND_TEMPLATE_HEAD};`);
+  e.emit(`const K_NAMED_MIN = ${st.KIND_NAMED_MIN};`);
+  e.emit(`const K_NAMED_FALLBACK = ${st.KIND_NAMED_FALLBACK};`);
+  e.emit(``);
+  // Intern tok.k / tok.t for one token (also used when matchLiteral splices a `>>`).
+  // k = TYPE kind (PUNCT for '' tokens, else the declared/template kind; an unforeseen
+  // named type → NAMED_FALLBACK, which is >= NAMED_MIN yet collides with no real
+  // token-name kind). t = LITERAL kind: a '' token's text in the punct table, a named
+  // token's text in the keyword table (keyMatchesTok's keyword branch needs tok.type !== '').
+  e.emit(String.raw`function internTok(tok) {
+  const ty = tok.type;
+  if (ty === '') {
+    tok.k = K_PUNCT;
+    tok.t = LIT_PU[tok.text] | 0;
+  } else {
+    const k = TYPE_KIND[ty];
+    tok.k = k === undefined ? K_NAMED_FALLBACK : k;
+    tok.t = LIT_KW[tok.text] | 0;
+  }
+}`);
+  e.emit(`function tokenize(source) {`);
+  e.emit(`  const toks = _lexTokenize(source);`);
+  e.emit(`  for (let i = 0; i < toks.length; i++) internTok(toks[i]);`);
+  e.emit(`  return toks;`);
+  e.emit(`}`);
   e.emit(``);
   // Baked maps. Emit as object literals → Map.
   e.emit(`const opTable = new Map(${J([...a.opTable])});`);
@@ -597,62 +755,83 @@ function offset() {
 function childOffset(c) { return c.offset; }
 function childEnd(c) { return c.end; }
 
-function matchLiteral(value) {
+// ── Lever 1: integer-kind matchers ──
+// Keyword literal: the interpreter required tok.type !== '' && tokenNames.has(tok.type)
+// && tok.text === value. With interned kinds that is tok.k >= K_NAMED_MIN (a declared
+// token name; '' is PUNCT, templates are below NAMED_MIN) && tok.t === KW(value).
+// Returns the SAME $keyword leaf as before. value/kw are baked by the caller.
+function matchKwLit(value, kw) {
   const tok = peek();
   if (!tok) return null;
-  if (isKeywordLiteral(value)) {
-    if (tok.type !== '' && tokenNames.has(tok.type) && tok.text === value) {
-      pos++;
-      return { kind: 'leaf', tokenType: '$keyword', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
-    }
-    return null;
+  if (tok.k >= K_NAMED_MIN && tok.t === kw) {
+    pos++;
+    return { kind: 'leaf', tokenType: '$keyword', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
   }
-  if (tok.type === '' && tok.text === value) {
+  return null;
+}
+// Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
+// tok.t === PU(value) is the exact-text fast path; the splice handles a longer
+// gt-led token matching the gt key. value/pu are baked by the caller.
+function matchPuLit(value, pu) {
+  const tok = peek();
+  if (!tok) return null;
+  if (tok.k === K_PUNCT && tok.t === pu) {
     pos++;
     return { kind: 'leaf', tokenType: '$punct', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
   }
-  if (value === '>' && tok.type === '' && tok.text.length > 1 && tok.text[0] === '>') {
+  if (value === '>' && tok.k === K_PUNCT && tok.text.length > 1 && tok.text[0] === '>') {
     const rest = tok.text.slice(1);
-    tokens.splice(pos, 1,
-      { type: '', text: '>', offset: tok.offset },
-      { type: '', text: rest, offset: tok.offset + 1 });
+    const a = { type: '', text: '>', offset: tok.offset };
+    const b = { type: '', text: rest, offset: tok.offset + 1 };
+    internTok(a); internTok(b);
+    tokens.splice(pos, 1, a, b);
     memo.clear();
     pos++;
     return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + 1 };
   }
   return null;
 }
+// Generic matchLiteral kept for any unspecialized site: classify value via the baked
+// tables (no per-call isKeywordLiteral / string compares) and delegate.
+function matchLiteral(value) {
+  const kw = LIT_KW[value];
+  if (kw !== undefined) return matchKwLit(value, kw);
+  return matchPuLit(value, LIT_PU[value] | 0);
+}
 
-function matchToken(name) {
+// Match a token ref by its baked TYPE kind: tok.type === name  ⟺  tok.k === nameKind.
+// (No named-token kind equals K_NAMED_FALLBACK, so an unforeseen type never matches.)
+function matchTokK(name, nameKind) {
   const tok = peek();
   if (!tok) return null;
-  if (tok.type === name) {
+  if (tok.k === nameKind) {
     pos++;
     return { kind: 'leaf', tokenType: name, text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
   }
   return null;
 }
 
-// FIRST-set membership (shared; baked key arrays are passed by the generated guards).
-function keyMatchesTok(key, tok) {
-  if (tokenNames.has(key)) {
-    if (tok.type === key) return true;
-    return templateTokenNames.has(key) && tok.type === '$templateHead';
+// FIRST-set membership against a baked INT descriptor (one of):
+//   {m:0,k,h} token-name → tok.k === k  (h=1: also $templateHead, mirroring the
+//                          templateTokenNames.has(key) && tok.type==='$templateHead' arm)
+//   {m:1,t}   keyword     → tok.k !== K_PUNCT && tok.t === t   (tok.type !== '')
+//   {m:2,t,v} punct       → tok.k === K_PUNCT && (tok.t === t || tok.text.startsWith(v))
+function descMatchesTok(d, tok) {
+  switch (d.m) {
+    case 0: return tok.k === d.k || (d.h === 1 && tok.k === K_TEMPLATE_HEAD);
+    case 1: return tok.k !== K_PUNCT && tok.t === d.t;
+    default: return tok.k === K_PUNCT && (tok.t === d.t || tok.text.startsWith(d.v));
   }
-  if (isKeywordLiteral(key)) {
-    return tok.type !== '' && tok.text === key;
-  }
-  return tok.type === '' && (tok.text === key || tok.text.startsWith(key));
 }
-function ruleMightStartKeys(keys, tok) {
+function ruleMightStartDescs(descs, tok) {
   if (!tok) return true;
-  for (let i = 0; i < keys.length; i++) if (keyMatchesTok(keys[i], tok)) return true;
+  for (let i = 0; i < descs.length; i++) if (descMatchesTok(descs[i], tok)) return true;
   return false;
 }
-// canStart for a baked first-token descriptor ({lit}/{tok}/null).
-function canStartFT(ft, tok) {
-  if (!ft || !tok) return true;
-  return keyMatchesTok(ft.tok !== undefined ? ft.tok : ft.lit, tok);
+// canStart for a baked first-token int descriptor (the {m:…} shape above, or null).
+function canStartFT(d, tok) {
+  if (!d || !tok) return true;
+  return descMatchesTok(d, tok);
 }
 
 function parseTemplateExpr() {
@@ -718,7 +897,7 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
   alts.forEach((alt, i) => {
     const ft = a.altFirst.get(alt) ?? null;
     e.emit(`  // alt ${i}`);
-    e.emit(`  if (canStartFT(${J(ft)}, startTok)) {`);
+    e.emit(`  if (canStartFT(${e.firstTokDescLiteral(ft)}, startTok)) {`);
     e.emit(`    pos = saved;`);
     e.emit(`    const children = arm_${sanitize(rule.name)}_${i}();`);
     e.emit(`    if (children !== null && pos > bestPos) {`);
@@ -752,7 +931,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   e.emit(`  const startTok = tokens[saved] ?? null;`);
   atoms.forEach((atom, i) => {
     const ft = a.altFirst.get(atom) ?? null;
-    e.emit(`  if (canStartFT(${J(ft)}, startTok)) {`);
+    e.emit(`  if (canStartFT(${e.firstTokDescLiteral(ft)}, startTok)) {`);
     e.emit(`    pos = saved;`);
     e.emit(`    const children = atom_${sanitize(rule.name)}_${i}();`);
     e.emit(`    if (children !== null && pos > bestAtomPos) {`);
@@ -809,7 +988,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     const items = nud.type === 'seq' ? nud.items : [nud];
     const ft = a.altFirst.get(nud) ?? null;
     e.emit(`  // nud ${i}`);
-    e.emit(`  if (canStartFT(${J(ft)}, startTok)) {`);
+    e.emit(`  if (canStartFT(${e.firstTokDescLiteral(ft)}, startTok)) {`);
     e.emit(`    pos = saved;`);
     if (items[0]?.type === 'prefix') {
       // prefix $ pattern: identical to parsePratt's prefix branch.
@@ -852,7 +1031,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     // suppress: skip a LED whose first literal connector is in suppressCur.
     const firstLit = (led.items[0]?.type === 'literal') ? led.items[0].value : null;
     if (firstLit !== null) conds.push(`!(suppressCur && suppressCur.has(${J(firstLit)}))`);
-    conds.push(`canStartFT(${J(ft)}, tok)`);
+    conds.push(`canStartFT(${e.firstTokDescLiteral(ft)}, tok)`);
     e.emit(`    // led ${i}`);
     e.emit(`    if (!matched && ${conds.join(' && ')}) {`);
     e.emit(`      pos = ledSaved;`);
@@ -933,13 +1112,13 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
   const restItems = items.slice(3);
   e.emit(`function ${fnName}() {`);
   e.emit(`  const saved = pos;`);
-  e.emit(`  const openLeaf = matchLiteral(${J(info.openLit)});`);
+  e.emit(`  const openLeaf = ${e.matchLiteralCall(info.openLit)};`);
   e.emit(`  if (!openLeaf) { pos = saved; return null; }`);
   e.emit(`  const afterOpen = pos;`);
   e.emit(`  const operand = ${ruleFn}();`);
   e.emit(`  if (!operand) { pos = saved; return null; }`);
   e.emit(`  const greedyEnd = pos;`);
-  e.emit(`  if (matchLiteral(${J(info.sepLit)})) { pos = saved; return null; }`);
+  e.emit(`  if (${e.matchLiteralCall(info.sepLit)}) { pos = saved; return null; }`);
   e.emit(`  let depth = 0; const candidates = [];`);
   e.emit(`  for (let i = afterOpen; i < greedyEnd; i++) {`);
   e.emit(`    const t = tokens[i];`);
@@ -954,7 +1133,7 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
   e.emit(`    const reOperand = ${ruleFn}();`);
   e.emit(`    parseLimit = prevLimit;`);
   e.emit(`    if (!reOperand || pos !== sepIdx) continue;`);
-  e.emit(`    const sepLeaf = matchLiteral(${J(info.sepLit)});`);
+  e.emit(`    const sepLeaf = ${e.matchLiteralCall(info.sepLit)};`);
   e.emit(`    if (!sepLeaf) continue;`);
   // rest = matchSeq(items[3:]) — inline.
   e.emit(`    const rest = (function(){ const _save = pos; const out = [];`);
