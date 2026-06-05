@@ -11,6 +11,8 @@ export interface Token {
   newlineBefore?: boolean;   // a line terminator preceded this token (drives ASI / "no LineTerminator here" rules)
   commentBefore?: boolean;   // a comment was skipped before this token (indentation grammars: a comment
                              // ENDS a plain scalar, so a folded multi-line scalar must not cross it)
+  multilineFlowBefore?: boolean; // the flow collection that closed immediately before this token spanned >1 line
+                             // (indentation grammars: a flow used as an implicit block KEY must be single-line, §7.4.2)
 }
 
 // Build a standalone lexer from the grammar's token definitions + lexer hints.
@@ -37,6 +39,7 @@ export function createLexer(grammar: CstGrammar) {
     skip: t.flags.includes('skip'),
     isRegex: t.flags.includes('regex'),
     isString: !!t.string,
+    blockOnly: !!t.blockOnly,   // matched only outside flow (flowDepth===0) — see TokenDecl.blockOnly
   }));
 
   // ── Lexer hints (declared per-token in the grammar; nothing here hardcodes a
@@ -160,6 +163,18 @@ export function createLexer(grammar: CstGrammar) {
   );
   const flowOpenSet = new Set(indent?.flowOpen ?? []);
   const flowCloseSet = new Set(indent?.flowClose ?? []);
+  // String-literal token names (the `string`-flagged tokens — quoted scalars in YAML). Used by the
+  // flow mapping-separator guard below: a quoted scalar can never run past its closing quote, so a
+  // `:` immediately after one (inside flow) is ALWAYS the mapping `key: value` separator, never the
+  // start of a plain scalar — derived from the `string` flag, not a hardcoded token name.
+  const stringTokenNames = new Set(grammar.tokens.filter(t => t.string).map(t => t.name));
+  // Plain-scalar token names: the tokens carrying a block-context pattern variant (`blockPattern`).
+  // In YAML these are exactly the UNQUOTED scalar family (plain / key / number / boolean-null) — the
+  // ones whose flow-vs-block forms differ because flow indicators are content in block. Used by the
+  // flow multi-line-plain FOLD post-pass: a plain scalar folded across a flow-internal newline arrives
+  // as ADJACENT plain tokens (a space-separated plain is already one token; only a NEWLINE splits it),
+  // which the post-pass re-merges. Derived from `blockPattern`, not a hardcoded token name.
+  const plainScalarTokenNames = new Set(grammar.tokens.filter(t => t.blockPattern).map(t => t.name));
   // Block scalars (YAML | / >): an introducer char + indent/chomp indicators + optional trailing
   // comment to end-of-line is the SIGNATURE (so `a > b` isn't mistaken for one); the following
   // more-indented lines are verbatim content, emitted as one token (skipped in the regex loop).
@@ -285,6 +300,12 @@ export function createLexer(grammar: CstGrammar) {
     // `commentBefore` (indentation grammars only — it drives the YAML rule that a comment ENDS a
     // plain scalar, so a multi-line fold must not absorb a line that follows a comment).
     let pendingComment = false;
+    // The OUTERMOST flow collection currently open contained a newline (indentation grammars). Set on
+    // a flow-internal newline; when the flow returns to depth 0, if set, the flow spanned >1 line and
+    // the NEXT token is stamped `multilineFlowBefore` (so a multi-line flow can't be an implicit block
+    // KEY, §7.4.2). Reset when the outermost flow opens.
+    let flowSawNewline = false;
+    let pendingMultilineFlow = false;  // stamp `multilineFlowBefore` onto the next token (a multi-line flow just closed)
     // Markup state machine — active only when `markup` is declared. 'tag' is also the
     // resting mode for token-stream grammars, where the text/raw-text branches below
     // never fire (markup is undefined) → tokenization is byte-identical to before.
@@ -306,9 +327,17 @@ export function createLexer(grammar: CstGrammar) {
     let currentLineCol = 0;          // leading-space column of the current logical line (bounds block scalars)
     let atLineLead = false;          // the next emitted token is the FIRST content token of its line (compact-indicator probe)
     const indentStack: number[] = [0];
+    // §7.4 multi-line flow indentation: when the OUTERMOST flow collection opens as a block VALUE or
+    // ITEM (the `[`/`{` directly follows a `:`/`-` indicator), every CONTENT line of that flow must be
+    // indented strictly MORE than the enclosing block node's column `n` — else the flow is
+    // mis-indented (yaml-test-suite 9C9N / VJP3 / Y79Y). `-1` ⇒ the rule is OFF (a top-level / doc-root
+    // flow whose content may sit at column 0, or a flow not in value/item position). Captured when
+    // flowDepth goes 0→1; reset to -1 when it returns to 0.
+    let flowValueIndent = -1;
     function push(t: Token): void {
       if (pendingNl) { t.newlineBefore = true; pendingNl = false; }
       if (pendingComment) { t.commentBefore = true; pendingComment = false; }
+      if (pendingMultilineFlow) { t.multilineFlowBefore = true; pendingMultilineFlow = false; }
       tokens.push(t);
       if (indent) {
         if (!indentTokenNames.has(t.type)) {
@@ -316,8 +345,25 @@ export function createLexer(grammar: CstGrammar) {
           atLineLead = false;                                        // line-lead consumed once a real token lands
         }
         if (t.type === '') {                                         // track flow depth on punctuation literals
-          if (flowOpenSet.has(t.text)) flowDepth++;
-          else if (flowCloseSet.has(t.text)) flowDepth = Math.max(0, flowDepth - 1);
+          if (flowOpenSet.has(t.text)) {
+            // Entering the OUTERMOST flow (0→1): if it opens right after a `:`/`-` block indicator,
+            // it is a block VALUE/ITEM → arm the §7.4 indent rule with n = the current block column
+            // (the indent-stack top). Anywhere else (top-level / after `,` / as a key) the rule is OFF.
+            if (flowDepth === 0) {
+              const prevTok = tokens[tokens.length - 2];   // the token before this just-pushed open
+              flowValueIndent = (prevTok && prevTok.type === '' && (prevTok.text === ':' || prevTok.text === '-'))
+                ? indentStack[indentStack.length - 1] : -1;
+              flowSawNewline = false;                      // start tracking whether this flow spans >1 line
+            }
+            flowDepth++;
+          } else if (flowCloseSet.has(t.text)) {
+            flowDepth = Math.max(0, flowDepth - 1);
+            if (flowDepth === 0) {
+              flowValueIndent = -1;
+              if (flowSawNewline) pendingMultilineFlow = true;   // a multi-line flow just closed → flag the next token
+              flowSawNewline = false;
+            }
+          }
         }
       }
     }
@@ -472,6 +518,26 @@ export function createLexer(grammar: CstGrammar) {
         if (c === '\n' || c === '\r') {
           pos++; if (c === '\r' && source[pos] === '\n') pos++;
           if (flowDepth === 0) lineStart = true;
+          else {
+            flowSawNewline = true;   // this outermost flow spans >1 line → it can't be an implicit block key
+            // §7.4: inside a value/item-position flow, a CONTENT line must be indented MORE than the
+            // enclosing block column `n` (flowValueIndent). The indentation column is the leading-SPACE
+            // count (a TAB is NOT indentation per §6.1, so a line starting with a tab has column 0 →
+            // fails the check — yaml-test-suite Y79Y). A WHITESPACE-ONLY (blank) line — spaces AND/OR
+            // tabs to the line end — is ignored, as is a COMMENT-only line; a line whose first content
+            // char is the flow CLOSE delimiter (`]`/`}`) is allowed at any column (the closer may dedent).
+            if (flowValueIndent >= 0) {
+              let col = 0; while (source[pos + col] === ' ') col++;     // indentation = leading spaces only
+              let q = pos + col; while (source[q] === ' ' || source[q] === '\t') q++;   // first content char
+              const fc = source[q];
+              const blank = fc === undefined || fc === '\n' || fc === '\r';
+              const isComment = indent!.comment !== undefined && source.startsWith(indent!.comment, q);
+              const isClose = fc !== undefined && flowCloseSet.has(fc);
+              if (!blank && !isComment && !isClose && col <= flowValueIndent) {
+                throw new Error(`Flow collection line is not sufficiently indented at offset ${q}`);
+              }
+            }
+          }
           continue;
         }
       } else {
@@ -611,6 +677,25 @@ export function createLexer(grammar: CstGrammar) {
         }
       }
 
+      // Flow mapping-separator after a quoted key or a closed flow collection (indentation grammars):
+      // inside a flow collection a `:` immediately following a quoted (string) scalar OR a flow-CLOSE
+      // delimiter (`]`/`}`) is the `key: value` separator, NOT the start of a plain scalar. The
+      // plain-scalar token's head admits a leading `:` (`[:value]` is a legal `:`-led plain), so
+      // without this guard it greedily swallows the separator-plus-value (`"k":v` → DQuoteKey + Plain
+      // `:v`; `{a:1}:v` → … `}` + Plain `:v`), eating the entry separator. Neither a quoted scalar nor
+      // a flow collection can run past its closing delimiter, so a `:` glued to one is unambiguously
+      // the separator — emit it as the `:` punctuation literal here. Gated on flow (block-context `:`
+      // separators are handled by the KEY-position lookaheads). yaml-test-suite 5MUD / 5T43 / 9MMW
+      // / C2DT / K3WX (quoted key) and the flow-collection-key cohort.
+      if (indent && flowDepth > 0 && source[pos] === ':') {
+        const prevTok = tokens[tokens.length - 1];
+        if (prevTok && (stringTokenNames.has(prevTok.type) || (prevTok.type === '' && flowCloseSet.has(prevTok.text)))) {
+          push({ type: '', text: ':', offset: pos });
+          pos += 1;
+          continue;
+        }
+      }
+
       const remaining = source.slice(pos);
       let matched = false;
 
@@ -619,6 +704,7 @@ export function createLexer(grammar: CstGrammar) {
         if (tm.name === templateTokenName) continue;
         if (markupTokenNames.has(tm.name)) continue;   // scanned by the markup state machine
         if (indentTokenNames.has(tm.name)) continue;    // emitted by the indentation state machine
+        if (tm.blockOnly && flowDepth > 0) continue;    // line-structural token (YAML directive) — content in flow
         if (tm.isRegex) {
           // prev is a completed value → `/` is division, not a regex literal → skip.
           if (prevIsValue(tokens[tokens.length - 1])) continue;
@@ -820,6 +906,39 @@ export function createLexer(grammar: CstGrammar) {
         indentStack.pop();
         push({ type: indent.dedentToken, text: '', offset: pos });
       }
+    }
+
+    // Multi-line PLAIN-scalar FOLD inside flow (indentation grammars): a plain scalar may span several
+    // lines inside a flow collection (`{ multi\n  line: value }` → key "multi line"). The lexer breaks
+    // it at each newline (a `\n` is not plain-scalar content), so it arrives as ADJACENT plain-scalar
+    // tokens with no punctuation between (a SPACE-separated plain is already one token — only a newline
+    // splits one — so two consecutive plain tokens were necessarily newline-separated, i.e. a fold).
+    // Merge each such run into one token, taking the LAST token's TYPE (a trailing `key:` line makes the
+    // whole fold a key; an unkeyed run stays a plain value) and the first's offset/leading flags. Only
+    // inside flow (block context separates siblings with a NEWLINE token, so plains are never adjacent
+    // there). yaml-test-suite 8KB6 / NJ66 / CT4Q. A `,`/`:`/bracket between scalars is a separate token,
+    // so it naturally breaks the run (the next scalar isn't adjacent) — no over-merge across separators.
+    if (indent && plainScalarTokenNames.size) {
+      const merged: Token[] = [];
+      let depth = 0;
+      for (const t of tokens) {
+        const prev = merged[merged.length - 1];
+        // A comment ENDS a plain scalar (§6.6), so a scalar that follows a skipped comment (flagged
+        // `commentBefore`) must NOT fold into the previous one — yaml-test-suite CML9 rejects
+        // `[ word1\n# c\n word2 ]`. Guarding on `t.commentBefore` keeps that a reject.
+        if (depth > 0 && prev && !t.commentBefore
+            && plainScalarTokenNames.has(prev.type) && plainScalarTokenNames.has(t.type)) {
+          prev.text += ' ' + t.text;   // fold: newline+indent → a single space
+          prev.type = t.type;          // the run's type is its LAST line's (key-ness follows the trailing `:`)
+        } else {
+          merged.push(t);
+        }
+        if (t.type === '') {
+          if (flowOpenSet.has(t.text)) depth++;
+          else if (flowCloseSet.has(t.text)) depth = Math.max(0, depth - 1);
+        }
+      }
+      return merged;
     }
 
     return tokens;

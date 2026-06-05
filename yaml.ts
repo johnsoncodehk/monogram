@@ -7,7 +7,7 @@
 // KNOWN first-cut gaps (the src-coverage metric localizes them against yaml-test-suite):
 //   block scalars (`|`, `>`), plain scalars containing ':' (e.g. URLs) or trailing '# comment',
 //   explicit/complex keys (`? key`), multi-line plain scalars, directives (`%YAML`).
-import { token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore } from './src/api.ts';
+import { token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore, noMultilineFlowBefore } from './src/api.ts';
 import type { IndentConfig } from './src/types.ts';
 
 // ── Structural tokens emitted by the lexer's indentation state machine. They are NEVER
@@ -47,13 +47,13 @@ const Tag = token(/!(?:<[^>]*>|[^\s\[\]{},]*)/, { scope: 'storage.type.tag' });
 // token and the stray `%` then fails to lex → reject (H7TQ / ZYU8). The trailing comment is left
 // OUTSIDE the token (only looked at) so a ` # comment` is tokenised/scoped as a Comment, not folded
 // into the directive — keeps the highlighter's comment scope intact.
-const YamlDirective = token(/%YAML[ \t]+[0-9]+\.[0-9]+(?=[ \t]*(?:#|\r|\n|$))/, { scope: 'keyword.other.directive' });
+const YamlDirective = token(/%YAML[ \t]+[0-9]+\.[0-9]+(?=[ \t]*(?:#|\r|\n|$))/, { scope: 'keyword.other.directive', blockOnly: true });
 // Directive (`%TAG …`, unknown `%FOO …`): runs to EOL but stops before a ` #` trailing comment — a
 // `#` is a comment indicator only after whitespace, so a glued `#` (`%YAML 1.1#x`) stays part of
 // the directive while a spaced ` # comment` falls to the Comment token (same rule as plain scalars).
 // EXCLUDES the `%YAML␣` version form (handled by YamlDirective above) so a bad-arity version line is
 // not silently re-absorbed here; `%YAML1.2` (no space) is NOT the version form, so it still matches.
-const Directive = token(/%(?!YAML[ \t])(?:[^\n#]|#(?<=\S#))*/, { scope: 'keyword.other.directive' });
+const Directive = token(/%(?!YAML[ \t])(?:[^\n#]|#(?<=\S#))*/, { scope: 'keyword.other.directive', blockOnly: true });
 // Block scalar (| / >): EMITTED by the lexer's block-scalar mode (placeholder pattern, skipped
 // in the regex loop) so the more-indented content lines arrive as a single token.
 const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block' });
@@ -185,7 +185,7 @@ const Property = rule(() => [[Anchor, opt(Tag)], [Tag, opt(Anchor)]]);
 // A node WITHOUT a property prefix: the bare content shapes. Split out so a property-led node
 // (Property + content) and a bare node are FIRST-disjoint (Property begins with `&`/`!`,
 // ContentNode with `-`/`?`/`{`/`[`/`*`/a scalar) — the parser never has to guess between them.
-const ContentNode = rule(() => [alt(BlockSequence, ExplicitMapping, EmptyKeyMapping, FlowMapping, FlowSequence, AliasOrKeyed, MappingOrScalar)]);
+const ContentNode = rule(() => [alt(BlockSequence, ExplicitMapping, EmptyKeyMapping, FlowMapping, FlowSequence, MappingFromFlow, AliasOrKeyed, MappingOrScalar)]);
 
 // A node (document level, or the content of an indented block): an optional anchor/tag property
 // then content that is inline, INDENTED, on the NEXT LINE at the same column (`&seq\n- a`,
@@ -202,7 +202,10 @@ const ContentNode = rule(() => [alt(BlockSequence, ExplicitMapping, EmptyKeyMapp
 // ref. Keeping the inline shape here lets `? &a key` / `? !!t key` keep highlighting the key.
 const nodeContentAlts = () => [
   [Indent, Node, Dedent], [Newline, Node],
-  BlockSequence, ExplicitMapping, EmptyKeyMapping, FlowMapping, FlowSequence, AliasOrKeyed, MappingOrScalar,
+  // MappingFromFlow precedes the bare FlowMapping/FlowSequence: this is a NESTED alt (first-match,
+  // not longest), so the flow-keyed-mapping form must be tried before the bare-flow form. It fails
+  // fast when no `:` follows the flow, so a bare flow node still falls through to FlowMapping/Sequence.
+  BlockSequence, ExplicitMapping, EmptyKeyMapping, MappingFromFlow, FlowMapping, FlowSequence, AliasOrKeyed, MappingOrScalar,
 ] as const;
 // `not('-')` after the property: a block SEQUENCE may not begin INLINE after a node property — a
 // `-` indicator must start a fresh line, so `&anchor - seq` / `!!seq - a` are illegal (the valid
@@ -283,25 +286,29 @@ const MappingOrScalar = rule(() => [
 // the bare-alias node and the alias-keyed mapping share no FIRST token (both begin with `*`; the
 // trailing ':' decides).
 //
-// NOTE: a FLOW collection as a block-mapping KEY (`[a,b]: v`, `{}: c`; LX3P / 4FJ6) is NOT modelled
-// here. YAML requires an implicit key — flow-collection keys included — to be on a SINGLE line, but
-// the lexer suspends indentation inside flow and emits no newline token there, so a multi-line flow
-// key (`[23\n]: 42`, yaml-test-suite C2SP) is indistinguishable from the single-line form at the
-// grammar level. Supporting `flow: ':'` (measured) fixed 2 single-line cases but ALSO accepted C2SP
-// (+1 over-accept), which the FP-must-not-rise gate forbids; it was backed out. The bare flow
-// collection is still a valid VALUE/node (it just cannot be a block KEY) — a lexer-info-loss limit.
+// NOTE: a FLOW collection as a block-mapping KEY (`[a,b]: v`, `{}: c`; LX3P / 4FJ6) is modelled in
+// BlockKey, not here (a flow opens with `[`/`{`, disjoint from the alias `*`). YAML requires an
+// implicit key — flow-collection keys included — to be on a SINGLE line; the lexer DOES preserve
+// that information (it stamps `multilineFlowBefore` on the token after a multi-line flow's close),
+// so the single-line form (`[a,b]: v`) accepts and the multi-line form (`[23\n]: 42`, C2SP) is
+// rejected by BlockKey's `noMultilineFlowBefore` guard. The bare flow collection is also a valid
+// VALUE/node (FlowMapping/FlowSequence via ContentNode).
 const AliasOrKeyed = rule(() => [
   [Alias, opt(':', opt(MapValue), many(Newline, MapEntry))],
 ]);
 // A block-mapping KEY: a plain/quoted scalar optionally carrying its OWN anchor/tag property
-// (`&anchor c: 3` ZWK4, `!!str baz : …` HMQ5) — OR a bare ALIAS (`*b : v`, yaml-test-suite E76Z).
-// An alias key may NOT take a property (`&b *alias` / `!!str *alias` are illegal — an alias is a
-// reference, yaml-test-suite SU74), so it is a distinct branch with no property. A FLOW-collection
-// key is intentionally omitted (the single-line implicit-key constraint is unobservable after the
-// lexer drops in-flow newlines — see AliasOrKeyed). Used by every implicit mapping entry.
+// (`&anchor c: 3` ZWK4, `!!str baz : …` HMQ5) — OR a bare ALIAS (`*b : v`, yaml-test-suite E76Z) —
+// OR a single-line FLOW collection (`[flow]: v`, `{a: 1}: v`; LX3P / Q9WF / 6BFJ). An alias key may
+// NOT take a property (`&b *alias` / `!!str *alias` are illegal — an alias is a reference,
+// yaml-test-suite SU74), so it is a distinct branch with no property. A flow-collection key MUST be
+// on ONE line (§7.4.2): the lexer stamps `multilineFlowBefore` on the token after a multi-line flow's
+// close, and the `noMultilineFlowBefore` guard (checking the following `:`) rejects the multi-line
+// form (`[23\n]: 42`, C2SP) while the single-line form accepts. A flow key may carry its own property
+// (`&key [ … ]: v`, 6BFJ). Used by every implicit mapping entry.
 const BlockKey = rule(() => [
   [opt(Property), BlockKeyScalar],
   Alias,
+  [opt(Property), alt(FlowMapping, FlowSequence), noMultilineFlowBefore],
 ]);
 // An EXPLICIT `? key : value` entry. The `: value` half is optional (`? key` alone is a null-valued
 // entry, yaml-test-suite 2XXW), and may sit on the SAME line (`? a : b`) or the NEXT line (`? a\n:
@@ -373,8 +380,14 @@ const IndentedValueNode = rule(() => [
 ]);
 // A node content that is a COLLECTION (never a bare scalar): a block/flow sequence or mapping, an
 // explicit `?`-mapping, or a scalar that is REQUIRED to be a mapping key (a `:` must follow).
-const CollectionContent = rule(() => [alt(BlockSequence, ExplicitMapping, FlowMapping, FlowSequence, MappingFromScalar)]);
+const CollectionContent = rule(() => [alt(BlockSequence, ExplicitMapping, FlowMapping, FlowSequence, MappingFromFlow, MappingFromScalar)]);
 const MappingFromScalar = rule(() => [[BlockKeyScalar, ':', opt(MapValue), many(Newline, MapEntry)]]);
+// A block mapping whose FIRST entry's KEY is a single-line FLOW collection (`[a,b]: v`, `{x:1}: v`;
+// yaml-test-suite LX3P / Q9WF / 6BFJ). The analogue of MappingFromScalar for a flow key: the flow
+// collection, then a `:`-led entry, then any further entries. The `noMultilineFlowBefore` guard (on
+// the following `:`) keeps it SINGLE-LINE — a multi-line flow key (`[23\n]: 42`, C2SP) is rejected.
+// Property-less (a leading `&a`/`!t` on the key node is consumed by the caller, e.g. Node — 6BFJ).
+const MappingFromFlow = rule(() => [[alt(FlowMapping, FlowSequence), noMultilineFlowBefore, ':', opt(MapValue), many(Newline, MapEntry)]]);
 // A node in MAP-VALUE position (after `:`): a property whose content is inline, INDENTED, or
 // EMPTY (no same-column [Newline, …] tail — that line is a sibling); OR a bare inline content
 // node (flow/alias/scalar-led). NEVER an inline block sequence (`key: - a` is invalid YAML).
@@ -540,7 +553,7 @@ export default defineGrammar({
   // so `Stream` must come last.
   rules: {
     Property, ContentNode, Node, MappingOrScalar, AliasOrKeyed, BlockKey, ExplicitEntry, MapEntry, MapEntryNoEmpty, ExplicitMapping, EmptyKeyMapping, Value, MapValue,
-    IndentedValueNode, CollectionContent, MappingFromScalar,
+    IndentedValueNode, CollectionContent, MappingFromScalar, MappingFromFlow,
     MapValueNode, MapInlineContent, SeqValueNode, SeqInlineContent, BlockSequence, SeqItem,
     FlowNode, FlowExplicit, FlowMapEntry, FlowMapping, FlowSeqEntry, FlowSeqKey, FlowSequence, Scalar, BlockKeyScalar, DocFold, InlineDocNode, ExplicitDocBody, AfterDocEnd, NextDoc, Stream,
   },

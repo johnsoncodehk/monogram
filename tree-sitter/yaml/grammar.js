@@ -21,15 +21,15 @@ module.exports = grammar({
 
     property: $ => choice(seq($.anchor, optional($.tag)), seq($.tag, optional($.anchor))),
 
-    content_node: $ => choice($.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar),
+    content_node: $ => choice($.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.mapping_from_flow, $.alias_or_keyed, $.mapping_or_scalar),
 
-    node: $ => choice(seq(optional($.anchor), optional($.tag), optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), seq($.tag, $.anchor, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), $.block_sequence),
+    node: $ => choice(seq(optional($.anchor), optional($.tag), optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.mapping_from_flow, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), seq($.tag, $.anchor, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.mapping_from_flow, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), $.block_sequence),
 
     mapping_or_scalar: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, $.plain, repeat(seq($.newline, $.plain)), $.dedent), seq($.block_key_scalar, ":", optional($.map_value), repeat(seq($.newline, $.map_entry))), $.scalar),
 
     alias_or_keyed: $ => seq($.alias, optional(seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry))))),
 
-    block_key: $ => choice(seq(optional($.property), $.block_key_scalar), $.alias),
+    block_key: $ => choice(seq(optional($.property), $.block_key_scalar), $.alias, seq(optional($.property), choice($.flow_mapping, $.flow_sequence))),
 
     explicit_entry: $ => seq("?", optional($.map_value), optional(choice(seq($.newline, ":", optional($.map_value)), seq(":", optional($.map_value))))),
 
@@ -47,9 +47,11 @@ module.exports = grammar({
 
     indented_value_node: $ => choice(seq($.property, choice(seq($.indent, $.indented_value_node, $.dedent), $.collection_content)), $.content_node),
 
-    collection_content: $ => choice($.block_sequence, $.explicit_mapping, $.flow_mapping, $.flow_sequence, $.mapping_from_scalar),
+    collection_content: $ => choice($.block_sequence, $.explicit_mapping, $.flow_mapping, $.flow_sequence, $.mapping_from_flow, $.mapping_from_scalar),
 
     mapping_from_scalar: $ => seq($.block_key_scalar, ":", optional($.map_value), repeat(seq($.newline, $.map_entry))),
+
+    mapping_from_flow: $ => seq(choice($.flow_mapping, $.flow_sequence), ":", optional($.map_value), repeat(seq($.newline, $.map_entry))),
 
     map_value_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.indented_value_node, $.dedent), $.map_inline_content))), $.map_inline_content),
 

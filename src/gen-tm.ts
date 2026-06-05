@@ -3226,10 +3226,10 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
         nameIdx++;
         continue;
       }
-      // Zero-width guards (`not(...)` / `sameLine` / `noCommentBefore`) consume no token, so they
-      // can sit between the keyword and the name (e.g. `'type' not(reserved) Ident`) without
-      // changing the `keyword name` highlight pattern — skip past them.
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore') {
+      // Zero-width guards (`not(...)` / `sameLine` / `noCommentBefore` / `noMultilineFlowBefore`)
+      // consume no token, so they can sit between the keyword and the name (e.g. `'type' not(reserved)
+      // Ident`) without changing the `keyword name` highlight pattern — skip past them.
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') {
         nameIdx++;
         continue;
       }
@@ -4201,7 +4201,7 @@ function ruleIsNullable(e: RuleExpr, byName: Map<string, RuleExpr>, seen = new S
     case 'alt': return e.items.some(i => ruleIsNullable(i, byName, seen));
     case 'quantifier': return e.kind === '*' || e.kind === '?';
     case 'group': return ruleIsNullable(e.body, byName, seen);
-    case 'not': case 'sameLine': case 'noCommentBefore': return true;  // zero-width assertions
+    case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return true;  // zero-width assertions
     case 'ref': { if (seen.has(e.name)) return false; seen.add(e.name); const b = byName.get(e.name); return b ? ruleIsNullable(b, byName, seen) : false; }
     default: return false;                                     // literal / token / op / prefix / postfix / sep
   }

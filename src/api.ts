@@ -32,6 +32,8 @@ interface TokenOptions {
   string?: boolean;
   // Block-context (flowDepth===0) pattern variant for indentation grammars — see TokenDecl.blockPattern.
   blockPattern?: RegExp;
+  // Block-context ONLY (indentation grammars): match this token only outside flow — see TokenDecl.blockOnly.
+  blockOnly?: boolean;
 }
 
 export class TokenRef {
@@ -78,6 +80,7 @@ export function rule(def: RuleBody, opts?: RuleOptions): RuleRef {
 interface OpMarker { readonly __kind: 'op' }
 interface SameLineMarker { readonly __kind: 'sameLine' }
 interface NoCommentMarker { readonly __kind: 'noCommentBefore' }
+interface NoMultilineFlowMarker { readonly __kind: 'noMultilineFlowBefore' }
 interface PrefixSlot {
   readonly __kind: 'prefix';
   (...ops: string[]): PrefixOps;
@@ -90,7 +93,7 @@ interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[] }
 interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[] }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
 
-type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker;
+type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker;
 
 export const op: OpMarker = { __kind: 'op' };
 
@@ -101,6 +104,12 @@ export const sameLine: SameLineMarker = { __kind: 'sameLine' };
 // comment ENDS a plain scalar in YAML, so a multi-line plain fold guards each continuation line
 // with this so it cannot reabsorb a line that follows a comment (see RuleExpr 'noCommentBefore').
 export const noCommentBefore: NoCommentMarker = { __kind: 'noCommentBefore' };
+
+// Zero-width "the flow collection that just closed was single-line" assertion (indentation
+// grammars). A flow collection may be an implicit block mapping KEY only on one line (YAML §7.4.2),
+// so the flow-collection-as-block-key rule guards the `:` with this so a multi-line flow key is
+// rejected while a single-line one accepts (see RuleExpr 'noMultilineFlowBefore').
+export const noMultilineFlowBefore: NoMultilineFlowMarker = { __kind: 'noMultilineFlowBefore' };
 
 export const prefix: PrefixSlot = Object.assign(
   (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops }),
@@ -312,6 +321,7 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
   if (marker.__kind === 'postfix') return { type: 'postfix' };
   if (marker.__kind === 'sameLine') return { type: 'sameLine' };
   if (marker.__kind === 'noCommentBefore') return { type: 'noCommentBefore' };
+  if (marker.__kind === 'noMultilineFlowBefore') return { type: 'noMultilineFlowBefore' };
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
 }
 
@@ -362,6 +372,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
       name,
       pattern: tok.pattern.source,
       blockPattern: tok.opts.blockPattern?.source,
+      blockOnly: tok.opts.blockOnly,
       flags,
       scope: tok.opts.scope,
       escapePattern: tok.opts.escape?.source,

@@ -69,6 +69,7 @@ export interface ContentNodeNode extends CstPos {
     | ExplicitMappingNode
     | FlowMappingNode
     | FlowSequenceNode
+    | MappingFromFlowNode
     | MappingOrScalarNode
   >;
 }
@@ -89,6 +90,7 @@ export interface NodeNode extends CstPos {
     | ExplicitMappingNode
     | FlowMappingNode
     | FlowSequenceNode
+    | MappingFromFlowNode
     | MappingOrScalarNode
     | NodeNode
   >;
@@ -133,6 +135,8 @@ export interface BlockKeyNode extends CstPos {
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
     | BlockKeyScalarNode
+    | FlowMappingNode
+    | FlowSequenceNode
     | PropertyNode
   >;
 }
@@ -252,6 +256,7 @@ export interface CollectionContentNode extends CstPos {
     | ExplicitMappingNode
     | FlowMappingNode
     | FlowSequenceNode
+    | MappingFromFlowNode
     | MappingFromScalarNode
   >;
 }
@@ -264,6 +269,20 @@ export interface MappingFromScalarNode extends CstPos {
     | (CstLeaf & { tokenType: '$punct' })
     | (CstLeaf & { tokenType: 'Newline' })
     | BlockKeyScalarNode
+    | MapEntryNode
+    | MapValueNode
+  >;
+}
+
+/** `MappingFromFlow` node. Children (flattened, in source order) are drawn from: */
+export interface MappingFromFlowNode extends CstPos {
+  kind: 'node';
+  rule: 'MappingFromFlow';
+  children: Array<
+    | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: 'Newline' })
+    | FlowMappingNode
+    | FlowSequenceNode
     | MapEntryNode
     | MapValueNode
   >;
@@ -567,6 +586,7 @@ export type CstNode =
   | IndentedValueNodeNode
   | CollectionContentNode
   | MappingFromScalarNode
+  | MappingFromFlowNode
   | MapValueNodeNode
   | MapInlineContentNode
   | SeqValueNodeNode
@@ -607,6 +627,7 @@ export type RuleName =
   | 'IndentedValueNode'
   | 'CollectionContent'
   | 'MappingFromScalar'
+  | 'MappingFromFlow'
   | 'MapValueNode'
   | 'MapInlineContent'
   | 'SeqValueNode'

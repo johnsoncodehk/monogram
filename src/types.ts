@@ -20,6 +20,13 @@ export interface TokenDecl {
   // gen-tm reads, so the highlighter is unaffected; only the PARSER's lexer consults this in block
   // context. (YAML plain scalars: `a,b`/`bla]keks` are one scalar in block, two tokens in flow.)
   blockPattern?: string;
+  // Block-context ONLY token (indentation grammars only): when set, the lexer matches this token
+  // ONLY outside flow collections (flowDepth===0); inside flow its leading indicator is ordinary
+  // content. YAML directives (`%YAML`/`%TAG`) are line-structural — a `%` inside `[ ]`/`{ }` is
+  // plain scalar content, not a directive (yaml-test-suite UT92 `{ matches\n% : 20 }`). DATA, so
+  // the engine stays agnostic (a grammar declaring none is unaffected). Highlight-only generators
+  // ignore it (a `%`-led directive in flow is vanishingly rare and the flat TM grammar is unchanged).
+  blockOnly?: boolean;
 }
 
 /** Delimiters an interpolated template literal is made of (e.g. JS: `` ` ``, `${`, `}`). */
@@ -306,6 +313,12 @@ export type RuleExpr =
   // rule that a comment ENDS a plain scalar, so a multi-line fold cannot cross a comment. Like
   // `sameLine`, non-consuming → invisible to other generators (a no-op marker).
   | { type: 'noCommentBefore' }
+  // Zero-width "the preceding flow collection was single-line" assertion (indentation grammars):
+  // matches (consuming nothing) iff the next token is NOT flagged `multilineFlowBefore`. Encodes
+  // YAML's §7.4.2 rule that a flow collection used as an implicit block KEY must be on one line
+  // (`[flow]: v` is a key, `[23\n]: v` is not). Like `noCommentBefore`, non-consuming → invisible
+  // to other generators (a no-op marker).
+  | { type: 'noMultilineFlowBefore' }
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
   | { type: 'prefix' }

@@ -221,6 +221,10 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       // Zero-width "no comment before" assertion (YAML plain-scalar fold) — like `sameLine`,
       // a scanner-level restriction; a no-op in the CFG.
       return 'blank()';
+    case 'noMultilineFlowBefore':
+      // Zero-width "preceding flow was single-line" assertion (YAML flow-as-block-key) — like
+      // `noCommentBefore`, a scanner-level restriction; a no-op in the CFG.
+      return 'blank()';
     case 'sep': {
       // sep(elem, ',') = optional(seq(elem, repeat(seq(',', elem)), optional(',')))
       // Trailing delimiter is allowed (matches the parser's matchSep behavior).
