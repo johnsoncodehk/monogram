@@ -7,7 +7,7 @@ import grammar from '../yaml.ts';
 
 const { parse } = createParser(grammar);
 const SUITE = '/tmp/yaml-test-suite/src';
-const decode = (s: string) => s.replace(/␣/g, ' ').replace(/—+»/g, '\t').replace(/[↵∎]/g, '');
+const decode = (s: string) => s.replace(/␣/g, ' ').replace(/—*»/g, '\t').replace(/[↵∎]/g, '');
 const corpus: { code: string; origin: string; name: string }[] = [];
 for (const f of readdirSync(SUITE).filter((n) => n.endsWith('.yaml'))) {
   try {

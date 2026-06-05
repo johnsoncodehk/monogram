@@ -175,6 +175,43 @@ export function createLexer(grammar: CstGrammar) {
   // as ADJACENT plain tokens (a space-separated plain is already one token; only a NEWLINE splits it),
   // which the post-pass re-merges. Derived from `blockPattern`, not a hardcoded token name.
   const plainScalarTokenNames = new Set(grammar.tokens.filter(t => t.blockPattern).map(t => t.name));
+  // The generic (catch-all) plain-scalar token: the LAST-declared blockPattern token. Declaration
+  // order is specific-before-general (YAML: Key, Num, BoolNull, Plain — the typed/key shapes win
+  // earlier, so the broadest string-valued plain is necessarily last). Used as the type emitted for
+  // a folded plain-scalar CONTINUATION line — a more-indented line after a plain LEAF whose leading
+  // glyph (`-`/`&`/`!`/`[`/`?`/`*`) is plain CONTENT here, not structure (so it can't be lexed by
+  // the plain head pattern, which forbids those starts). Null when no blockPattern token exists.
+  const plainContinuationTokenName = [...grammar.tokens].reverse().find(t => t.blockPattern)?.name ?? null;
+  // Does the line content starting at `start` carry a KEY SEPARATOR — an unquoted `:` followed by
+  // whitespace / EOL / a flow indicator (`,`/`[`/`]`/`{`/`}`)? This is the colon-sniff shared with
+  // startsBlockStructuralNode (skipping "…"/'…' regions, stopping at a ` #` comment / EOL), isolated
+  // so the plain-continuation FOLD can ask it WITHOUT the leading-glyph structural checks: a fold
+  // line begins with content (an `&`/`!`/`-`/… that is scalar content), so only a real key separator
+  // makes it a mapping line that must NOT fold (`k: a\n  b: c` stays a reject). Returns false ⇒ no
+  // separator ⇒ the line is plain content eligible to fold.
+  function lineHasKeySeparator(src: string, start: number): boolean {
+    for (let i = start; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '\n' || ch === '\r') break;
+      // A quoted region (`"…"`/`'…'`) is skipped so a `:` inside it isn't a separator. An UNTERMINATED
+      // quote (the closing one is missing before EOL) means this line is NOT a quoted key — the quote
+      // and everything after it to EOL is plain CONTENT, so no key separator can follow → stop scanning
+      // the line (break, NOT continue, which would leak the scan into the next line — yaml-test-suite
+      // FBC9, a plain continuation `!"#$…` whose lone `"` previously made the scan cross into `safe
+      // question mark: …` and wrongly report a separator).
+      if (ch === '"') {
+        i++; while (i < src.length && src[i] !== '"' && src[i] !== '\n' && src[i] !== '\r') { if (src[i] === '\\') i++; i++; }
+        if (src[i] !== '"') break; continue;
+      }
+      if (ch === "'") {
+        i++; while (i < src.length && src[i] !== '\n' && src[i] !== '\r') { if (src[i] === "'" && src[i + 1] !== "'") break; if (src[i] === "'") i++; i++; }
+        if (src[i] !== "'") break; continue;
+      }
+      if ((ch === ' ' || ch === '\t') && src[i + 1] === '#') break;            // trailing comment → any sep would be earlier
+      if (ch === ':') { const n = src[i + 1]; if (n === undefined || n === ' ' || n === '\t' || n === '\n' || n === '\r' || n === ',' || n === '[' || n === ']' || n === '{' || n === '}') return true; }
+    }
+    return false;
+  }
   // Block scalars (YAML | / >): an introducer char + indent/chomp indicators + optional trailing
   // comment to end-of-line is the SIGNATURE (so `a > b` isn't mistaken for one); the following
   // more-indented lines are verbatim content, emitted as one token (skipped in the regex loop).
@@ -198,6 +235,17 @@ export function createLexer(grammar: CstGrammar) {
   // Compact-notation entry indicators (`-`/`?`) whose inline content's column is the real
   // indentation of the nested node (see IndentConfig.compactIndicators).
   const compactIndicatorSet = new Set(indent?.compactIndicators ?? []);
+  // Tag-handle per-document membership (IndentConfig.tagScope). All token names + patterns are DATA;
+  // dormant unless declared. The handle/directive patterns are compiled once; the builtin handles
+  // seed every document's declared set. See the push() membership check below.
+  const tagScope = indent?.tagScope;
+  const tagScopeTagToken = tagScope?.tagToken;
+  const tagScopeDirectiveTokens = new Set(tagScope?.directiveTokens ?? []);
+  const tagScopeActivateTokens = new Set(tagScope?.activateTokens ?? []);
+  const tagScopeResetTokens = new Set(tagScope?.resetTokens ?? []);
+  const tagScopeBuiltins = new Set(tagScope?.builtinHandles ?? []);
+  const tagScopeHandleRe = tagScope ? new RegExp(tagScope.handlePattern) : null;
+  const tagScopeDirectiveRe = tagScope ? new RegExp(tagScope.directiveHandlePattern) : null;
   // Does the line content starting at `start` begin a BLOCK-STRUCTURAL node — one whose leading
   // whitespace serves as its indentation (so a tab there is a §6.1 error)? True for a `-`/`?`
   // indicator, an empty-`:` key, a node property (`&`/`!`), or a plain/quoted scalar that is a
@@ -334,6 +382,12 @@ export function createLexer(grammar: CstGrammar) {
     // flow whose content may sit at column 0, or a flow not in value/item position). Captured when
     // flowDepth goes 0→1; reset to -1 when it returns to 0.
     let flowValueIndent = -1;
+    // Tag-handle membership state (IndentConfig.tagScope; dormant unless declared). `declaredHandles`
+    // = handles valid in the CURRENT document body (seeded with the builtins, reset at each boundary);
+    // `pendingHandles` = handles a directive prologue has declared, awaiting the `---` that activates
+    // them for the document they head. Both reset per document — like the indent stack.
+    const declaredHandles = new Set(tagScopeBuiltins);
+    let pendingHandles = new Set<string>();
     function push(t: Token): void {
       if (pendingNl) { t.newlineBefore = true; pendingNl = false; }
       if (pendingComment) { t.commentBefore = true; pendingComment = false; }
@@ -363,6 +417,40 @@ export function createLexer(grammar: CstGrammar) {
               if (flowSawNewline) pendingMultilineFlow = true;   // a multi-line flow just closed → flag the next token
               flowSawNewline = false;
             }
+          }
+        }
+      }
+      // ── Tag-handle per-document MEMBERSHIP (IndentConfig.tagScope) ──
+      if (tagScope) {
+        if (tagScopeDirectiveTokens.has(t.type)) {
+          // A directive (`%TAG !h! …`) STAGES its handle into the prologue; it activates for the next
+          // `---`-headed document, not the current line. A directive with no handle (`%YAML 1.2`,
+          // unknown `%FOO`) yields no match → ignored.
+          const m = tagScopeDirectiveRe!.exec(t.text);
+          if (m && m[1]) pendingHandles.add(m[1]);
+        } else if (tagScopeActivateTokens.has(t.type)) {
+          // `---`: the prologue's staged handles become valid for THIS document; reset to builtins +
+          // prologue and clear the accumulator (the next document starts a fresh prologue).
+          declaredHandles.clear();
+          for (const h of tagScopeBuiltins) declaredHandles.add(h);
+          for (const h of pendingHandles) declaredHandles.add(h);
+          pendingHandles = new Set();
+        } else if (tagScopeResetTokens.has(t.type)) {
+          // `...`: the document ends; named handles do NOT carry to a following bare document. Reset to
+          // builtins and clear any pending prologue (a directive block after `...` re-accumulates and
+          // activates at the next `---`).
+          declaredHandles.clear();
+          for (const h of tagScopeBuiltins) declaredHandles.add(h);
+          pendingHandles = new Set();
+        } else if (t.type === tagScopeTagToken) {
+          // A tag's handle must be a builtin or have been declared in this document's prologue. A
+          // verbatim/primary tag (`!<uri>`, `!foo`, `!`) resolves to the primary `!` handle (a builtin),
+          // so only an UNDECLARED named handle (`!h!suffix` with `!h!` ∉ declared) is a parse error —
+          // a MEMBERSHIP check, not URI resolution (a declared-but-unknown prefix stays accepted).
+          const m = tagScopeHandleRe!.exec(t.text);
+          const handle = m ? m[1] : null;
+          if (handle && !tagScopeBuiltins.has(handle) && !declaredHandles.has(handle)) {
+            throw new Error(`Undeclared tag handle '${handle}' at offset ${t.offset}`);
           }
         }
       }
@@ -474,6 +562,36 @@ export function createLexer(grammar: CstGrammar) {
         currentLineCol = col;                                               // bounds a block scalar started on this line
         const top = indentStack[indentStack.length - 1];
         if (col > top) {
+          // PLAIN-SCALAR CONTINUATION fold: a more-indented line right after a plain LEAF (Plain /
+          // Num / BoolNull — never a Key, which is always glued to a `:` and so never the last token
+          // here) is a CONTINUATION of that scalar (`a\n  - b` folds to "a - b"; also `&`/`!`/`[`/
+          // `?`/`*`-led — those glyphs are plain content mid-scalar). A plain scalar is a LEAF (it
+          // cannot own nested structure), so a deeper following line is a continuation or an error —
+          // UNLESS the line read-as-plain carries a key separator (`  b: c`), which would make it a
+          // nested mapping (kept a reject). When eligible, consume the WHOLE line as one generic-plain
+          // CONTINUATION token (its leading glyph stays content) so the foldedPlain grammar rule
+          // (`leaf Indent Plain (Newline Plain)* Dedent`) absorbs it. The strictly-deeper gate (col >
+          // top) is load-bearing: a SAME-column line is a sibling/dedent, not a fold. yaml-test-suite
+          // 3MYT / A2M4 / AB8U / FBC9 / JTV5.
+          const prevReal = tokens[tokens.length - 1];
+          if (plainContinuationTokenName && prevReal && plainScalarTokenNames.has(prevReal.type)
+              && !lineHasKeySeparator(source, pos)) {
+            indentStack.push(col);
+            push({ type: indent.indentToken, text: '', offset: pos });
+            let e = pos;
+            while (e < source.length && source[e] !== '\n' && source[e] !== '\r'
+                   && !(indent.comment !== undefined && (source[e] === ' ' || source[e] === '\t') && source.startsWith(indent.comment, e + 1))) e++;
+            // Trim trailing inline whitespace (a ` #…` comment or EOL follows) so the comment/EOL is
+            // handled by the normal loop on the next pass — the fold token is the bare content.
+            let end = e; while (end > pos && (source[end - 1] === ' ' || source[end - 1] === '\t')) end--;
+            push({ type: plainContinuationTokenName, text: source.slice(pos, end), offset: pos });
+            pos = e;
+            lineStart = false;
+            // If a trailing comment / EOL remains on the line, leaving lineStart=false lets the loop
+            // skip it (a ` #` falls to the Comment token, stamping pendingComment so a NEXT line won't
+            // re-fold across the comment); the following newline then sets lineStart for the next line.
+            continue;
+          }
           indentStack.push(col);
           push({ type: indent.indentToken, text: '', offset: pos });
         } else {

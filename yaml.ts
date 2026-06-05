@@ -540,6 +540,21 @@ const indent: IndentConfig = {
   comment: '#',
   blockScalar: { introducers: ['|', '>'], token: 'BlockScalar', documentMarkers: ['---', '...'] },
   compactIndicators: ['-', '?'],
+  // Tag-handle per-document membership (§6.8.2 / §6.9.1): a named handle `!h!` used by a Tag must
+  // have been declared by a `%TAG !h! …` directive in the SAME document's prologue (the default `!`
+  // and `!!` handles are always valid). `Directive` carries the `%TAG …` declarations; a `---`
+  // (DocStart) activates the accumulated prologue for the document it heads; a `...` (DocEnd) resets.
+  // A YAML handle is `! ns-word-char* !` (ns-word-char = [0-9A-Za-z-]); the patterns capture it from a
+  // tag's leading chars and from a directive's `%TAG␣<handle>` field. (yaml-test-suite QLJ7.)
+  tagScope: {
+    tagToken: 'Tag',
+    directiveTokens: ['Directive'],
+    activateTokens: ['DocStart'],
+    resetTokens: ['DocEnd'],
+    builtinHandles: ['!', '!!'],
+    handlePattern: String.raw`^(![0-9A-Za-z-]*!|!)`,
+    directiveHandlePattern: String.raw`%TAG[ \t]+(![0-9A-Za-z-]*!|!)`,
+  },
 };
 
 export default defineGrammar({

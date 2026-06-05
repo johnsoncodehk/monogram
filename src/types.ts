@@ -275,6 +275,22 @@ export interface IndentConfig {
   // pushes that content column (emitting one INDENT after the indicator) so the compact form yields
   // the same INDENT/NEWLINE/DEDENT shape as the equivalent next-line-indented form. Absent → off.
   compactIndicators?: string[];
+  // Tag-handle per-document MEMBERSHIP (YAML §6.8.2 / §6.9.1): a `%TAG !h! prefix` directive declares
+  // the named handle `!h!` for the document it heads ONLY. A tag using a named handle that was not
+  // declared in the SAME document's directive prologue is a parse error (a membership check — NOT URI
+  // resolution; a declared-but-unknown prefix stays accepted). The handle set is bounded, declared
+  // before any use, and reset at each document boundary — exactly like the indent stack. All token
+  // NAMES and patterns are DATA (populated in the grammar), so the engine stays language-agnostic.
+  // Absent → no membership check (every tag accepted, the legacy behaviour). yaml-test-suite QLJ7.
+  tagScope?: {
+    tagToken: string;            // the tag token's name — checked for handle membership (e.g. 'Tag')
+    directiveTokens: string[];   // token names that may DECLARE a handle (e.g. ['Directive'] — `%TAG …`)
+    activateTokens: string[];    // boundary tokens that ACTIVATE the pending prologue for the doc they head (e.g. ['DocStart'] — `---`)
+    resetTokens: string[];       // boundary tokens that RESET the handle set to the builtins (e.g. ['DocEnd'] — `...`)
+    builtinHandles: string[];    // handles always valid without declaration (e.g. ['!', '!!'])
+    handlePattern: string;       // ^-anchored regex; group 1 = the handle prefixing a TAG token (e.g. '(![0-9A-Za-z-]*!|!)')
+    directiveHandlePattern: string; // regex over a DIRECTIVE token's text; group 1 = the handle it declares (e.g. '%TAG[ \\t]+(![0-9A-Za-z-]*!|!)')
+  };
 }
 
 export interface PrecOperator {

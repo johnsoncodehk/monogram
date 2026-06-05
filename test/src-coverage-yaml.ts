@@ -23,7 +23,7 @@ const { parse } = createParser(grammar);
 const SUITE = '/tmp/yaml-test-suite/src';
 // The suite's src format encodes whitespace visibly (per its ReadMe): ␣ = space, —…» = hard
 // tab, ↵/∎ = trailing-newline markers. Decode to real bytes so each input is genuine YAML.
-const decode = (s: string) => s.replace(/␣/g, ' ').replace(/—+»/g, '\t').replace(/[↵∎]/g, '');
+const decode = (s: string) => s.replace(/␣/g, ' ').replace(/—*»/g, '\t').replace(/[↵∎]/g, '');
 const corpus: { code: string; origin: string }[] = [];
 for (const f of readdirSync(SUITE).filter((n) => n.endsWith('.yaml'))) {
   try {
