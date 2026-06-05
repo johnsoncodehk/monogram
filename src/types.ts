@@ -14,6 +14,12 @@ export interface TokenDecl {
   template?: TemplateDelimiters; // a template-literal token: engine tokenizes interpolation holes.
   regexContext?: RegexContext;   // a `regex`-flagged token: when `/` is a regex vs division.
   string?: boolean;              // a string-literal token: its delimiters drive editor auto-close/surround.
+  // Block-context pattern variant (indentation grammars only): the pattern the lexer uses OUTSIDE
+  // flow collections (flowDepth===0), where chars that are flow indicators (`,`/`[`/`]`/`{`/`}`)
+  // are ordinary scalar content. The default `pattern` is the flow-restricted form and is what
+  // gen-tm reads, so the highlighter is unaffected; only the PARSER's lexer consults this in block
+  // context. (YAML plain scalars: `a,b`/`bla]keks` are one scalar in block, two tokens in flow.)
+  blockPattern?: string;
 }
 
 /** Delimiters an interpolated template literal is made of (e.g. JS: `` ` ``, `${`, `}`). */
@@ -284,6 +290,11 @@ export type RuleExpr =
   // which must not follow a line terminator. Non-consuming → invisible to other
   // generators (they treat it as a no-op marker).
   | { type: 'sameLine' }
+  // Zero-width "no comment was skipped before the next token" assertion (indentation grammars):
+  // matches (consuming nothing) iff the next token is not flagged `commentBefore`. Encodes YAML's
+  // rule that a comment ENDS a plain scalar, so a multi-line fold cannot cross a comment. Like
+  // `sameLine`, non-consuming → invisible to other generators (a no-op marker).
+  | { type: 'noCommentBefore' }
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
   | { type: 'prefix' }

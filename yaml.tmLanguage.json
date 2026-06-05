@@ -34,6 +34,9 @@
       "include": "#num"
     },
     {
+      "include": "#yamldirective"
+    },
+    {
       "include": "#directive"
     },
     {
@@ -82,9 +85,13 @@
       "name": "punctuation.definition.document-end.yaml",
       "match": "\\.\\.\\."
     },
+    "yamldirective": {
+      "name": "keyword.other.directive.yaml",
+      "match": "%YAML[ \\t]+[0-9]+\\.[0-9]+(?=[ \\t]*(?:#|\\r|\\n|$))"
+    },
     "directive": {
       "name": "keyword.other.directive.yaml",
-      "match": "%(?:[^\\n#]|#(?<=\\S#))*"
+      "match": "%(?!YAML[ \\t])(?:[^\\n#]|#(?<=\\S#))*"
     },
     "comment": {
       "name": "comment.line.number-sign.yaml",
@@ -92,7 +99,7 @@
     },
     "dquotekey": {
       "name": "entity.name.tag.yaml",
-      "match": "\"(?:\\\\.|[^\"\\\\])*\"(?=[\\t ]*:)"
+      "match": "\"(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)|[^\"\\\\])*\"(?=[\\t ]*:)"
     },
     "squotekey": {
       "name": "entity.name.tag.yaml",
@@ -114,7 +121,7 @@
       },
       "patterns": [
         {
-          "match": "\\\\.",
+          "match": "\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)",
           "name": "constant.character.escape.yaml"
         }
       ]
@@ -212,7 +219,7 @@
       },
       "patterns": [
         {
-          "match": "\\\\.",
+          "match": "\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)",
           "name": "constant.character.escape.yaml"
         }
       ]
@@ -382,7 +389,7 @@
           ]
         },
         {
-          "begin": "(?=(?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:''|[^'])*')[\\t ]*:)",
+          "begin": "(?=(?:\"(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)|[^\"\\\\])*\"|'(?:''|[^'])*')[\\t ]*:)",
           "end": "(?=[\\[\\],{}])",
           "patterns": [
             {

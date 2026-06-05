@@ -363,7 +363,7 @@ export function createParser(grammar: CstGrammar) {
         const acc = new Set<string>();
         for (const item of e.items) {
           if (item.type === 'prefix') return null;               // prefix op → any operator token: give up
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine') continue;  // non-consuming here
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore') continue;  // non-consuming here
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) acc.add(k);
@@ -381,7 +381,7 @@ export function createParser(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': return new Set();             // zero-width: contributes no FIRST tokens
+      case 'not': case 'sameLine': case 'noCommentBefore': return new Set();  // zero-width: contributes no FIRST tokens
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -865,6 +865,12 @@ export function createParser(grammar: CstGrammar) {
           // continue onto, so the assertion fails (nothing same-line follows).
           const tok = peek();
           return tok && !tok.newlineBefore ? [] : null;
+        }
+        case 'noCommentBefore': {
+          // Zero-width "no comment was skipped before the next token": succeed (no children) iff the
+          // next token isn't flagged `commentBefore`. At EOF there is no continuation, so it fails.
+          const tok = peek();
+          return tok && !tok.commentBefore ? [] : null;
         }
         case 'sep':
           return matchSep(expr.element, expr.delimiter);

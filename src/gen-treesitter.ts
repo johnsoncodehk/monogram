@@ -217,6 +217,10 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       // class of restriction with an external scanner, not the CFG; as a CFG node
       // it consumes nothing, so render a no-op.
       return 'blank()';
+    case 'noCommentBefore':
+      // Zero-width "no comment before" assertion (YAML plain-scalar fold) — like `sameLine`,
+      // a scanner-level restriction; a no-op in the CFG.
+      return 'blank()';
     case 'sep': {
       // sep(elem, ',') = optional(seq(elem, repeat(seq(',', elem)), optional(',')))
       // Trailing delimiter is allowed (matches the parser's matchSep behavior).

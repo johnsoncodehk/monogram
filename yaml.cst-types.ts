@@ -33,6 +33,7 @@ export type TokenType =
   | 'SQuote'
   | 'SQuoteKey'
   | 'Tag'
+  | 'YamlDirective'
   | '$keyword'
   | '$punct'
   | '$operator'
@@ -99,7 +100,12 @@ export interface MappingOrScalarNode extends CstPos {
   rule: 'MappingOrScalar';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: 'BoolNull' })
+    | (CstLeaf & { tokenType: 'Dedent' })
+    | (CstLeaf & { tokenType: 'Indent' })
     | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'Num' })
+    | (CstLeaf & { tokenType: 'Plain' })
     | MapEntryNode
     | MapValueNode
     | ScalarNode
@@ -193,8 +199,12 @@ export interface ValueNode extends CstPos {
   kind: 'node';
   rule: 'Value';
   children: Array<
+    | (CstLeaf & { tokenType: 'BoolNull' })
     | (CstLeaf & { tokenType: 'Dedent' })
     | (CstLeaf & { tokenType: 'Indent' })
+    | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'Num' })
+    | (CstLeaf & { tokenType: 'Plain' })
     | NodeNode
     | SeqValueNodeNode
   >;
@@ -205,8 +215,12 @@ export interface MapValueNode extends CstPos {
   kind: 'node';
   rule: 'MapValue';
   children: Array<
+    | (CstLeaf & { tokenType: 'BoolNull' })
     | (CstLeaf & { tokenType: 'Dedent' })
     | (CstLeaf & { tokenType: 'Indent' })
+    | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'Num' })
+    | (CstLeaf & { tokenType: 'Plain' })
     | MapValueNodeNode
     | NodeNode
   >;
@@ -447,6 +461,7 @@ export interface ExplicitDocBodyNode extends CstPos {
     | (CstLeaf & { tokenType: 'Directive' })
     | (CstLeaf & { tokenType: 'Indent' })
     | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'YamlDirective' })
     | InlineDocNodeNode
     | NodeNode
   >;
@@ -458,8 +473,11 @@ export interface AfterDocEndNode extends CstPos {
   rule: 'AfterDocEnd';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })
+    | (CstLeaf & { tokenType: 'Directive' })
     | (CstLeaf & { tokenType: 'DocStart' })
     | (CstLeaf & { tokenType: 'Indent' })
+    | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'YamlDirective' })
     | ExplicitDocBodyNode
     | NodeNode
   >;
@@ -488,6 +506,7 @@ export interface StreamNode extends CstPos {
     | (CstLeaf & { tokenType: 'DocEnd' })
     | (CstLeaf & { tokenType: 'Indent' })
     | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'YamlDirective' })
     | NextDocNode
     | NodeNode
   >;

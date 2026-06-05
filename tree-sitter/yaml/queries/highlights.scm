@@ -9,6 +9,7 @@
 ;; Literal token nodes.
 (doc_start) @punctuation.delimiter
 (doc_end) @punctuation.delimiter
+(yaml_directive) @keyword
 (directive) @keyword
 (comment) @comment
 (dquote_key) @constructor

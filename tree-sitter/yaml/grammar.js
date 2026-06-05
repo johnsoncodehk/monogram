@@ -17,7 +17,7 @@ module.exports = grammar({
   ],
 
   rules: {
-    stream: $ => seq(repeat(seq($.directive, optional($.newline))), optional($.indent), optional($.node), optional($.dedent), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline)),
+    stream: $ => seq(repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), optional($.indent), optional($.node), optional($.dedent), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline)),
 
     property: $ => choice(seq($.anchor, optional($.tag)), seq($.tag, optional($.anchor))),
 
@@ -25,7 +25,7 @@ module.exports = grammar({
 
     node: $ => choice(seq(optional($.anchor), optional($.tag), optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), seq($.tag, $.anchor, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar)))),
 
-    mapping_or_scalar: $ => seq($.scalar, optional(seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry))))),
+    mapping_or_scalar: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, $.plain, repeat(seq($.newline, $.plain)), $.dedent), seq($.scalar, optional(seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry)))))),
 
     alias_or_keyed: $ => seq($.alias, optional(seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry))))),
 
@@ -41,9 +41,9 @@ module.exports = grammar({
 
     empty_key_mapping: $ => seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry_no_empty))),
 
-    value: $ => choice(seq($.indent, $.node, $.dedent), $.seq_value_node),
+    value: $ => choice(seq($.indent, choice($.num, $.bool_null, $.plain), repeat1(seq($.newline, $.plain)), $.dedent), seq($.indent, $.node, $.dedent), $.seq_value_node),
 
-    map_value: $ => choice(seq($.indent, $.node, $.dedent), $.map_value_node),
+    map_value: $ => choice(seq($.indent, choice($.num, $.bool_null, $.plain), repeat1(seq($.newline, $.plain)), $.dedent), seq($.indent, $.node, $.dedent), $.map_value_node),
 
     indented_value_node: $ => choice(seq($.property, choice(seq($.indent, $.indented_value_node, $.dedent), $.collection_content)), $.content_node),
 
@@ -81,9 +81,9 @@ module.exports = grammar({
 
     inline_doc_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.flow_mapping, $.flow_sequence, $.alias, $.scalar))), choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar)),
 
-    explicit_doc_body: $ => choice(seq($.newline, repeat(seq($.directive, optional($.newline))), optional($.indent), optional($.node), optional($.dedent)), $.inline_doc_node),
+    explicit_doc_body: $ => choice(seq($.newline, repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), optional($.indent), optional($.node), optional($.dedent)), $.inline_doc_node),
 
-    after_doc_end: $ => choice(seq($.doc_start, optional($.explicit_doc_body)), seq(optional($.indent), $.node, optional($.dedent))),
+    after_doc_end: $ => choice(seq(repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), $.doc_start, optional($.explicit_doc_body)), seq(optional($.indent), $.node, optional($.dedent))),
 
     next_doc: $ => choice(seq($.doc_start, optional($.explicit_doc_body)), seq($.doc_end, optional(seq($.newline, optional($.after_doc_end))))),
 
@@ -91,15 +91,17 @@ module.exports = grammar({
 
     doc_end: $ => token(/\.\.\./),
 
+    yaml_directive: $ => token(/%YAML[ \t]+[0-9]+\.[0-9]+/),
+
     directive: $ => token(/%(?:[^\n#]|#)*/),
 
     comment: $ => token(/#[^\n]*/),
 
-    dquote_key: $ => token(/"(?:\\.|[^"\\])*"/),
+    dquote_key: $ => token(/"(?:\\(?:[0abtnvfre"\/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\r?\n)|[^"\\])*"/),
 
     squote_key: $ => token(/'(?:''|[^'])*'/),
 
-    dquote: $ => token(/"(?:\\.|[^"\\])*"/),
+    dquote: $ => token(/"(?:\\(?:[0abtnvfre"\/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\r?\n)|[^"\\])*"/),
 
     squote: $ => token(/'(?:''|[^'])*'/),
 

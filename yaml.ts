@@ -7,7 +7,7 @@
 // KNOWN first-cut gaps (the src-coverage metric localizes them against yaml-test-suite):
 //   block scalars (`|`, `>`), plain scalars containing ':' (e.g. URLs) or trailing '# comment',
 //   explicit/complex keys (`? key`), multi-line plain scalars, directives (`%YAML`).
-import { token, rule, defineGrammar, alt, many, opt } from './src/api.ts';
+import { token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore } from './src/api.ts';
 import type { IndentConfig } from './src/types.ts';
 
 // ── Structural tokens emitted by the lexer's indentation state machine. They are NEVER
@@ -22,15 +22,38 @@ const Newline = token(/(?!)/, {});
 const DocStart = token(/---/, { scope: 'punctuation.definition.directives-end' });
 const DocEnd = token(/\.\.\./, { scope: 'punctuation.definition.document-end' });
 const Comment = token(/#[^\n]*/, { skip: true, scope: 'comment.line.number-sign' });
-const DQuote = token(/"(?:\\.|[^"\\])*"/, { string: true, scope: 'string.quoted.double' });
+// Double-quoted scalar body. The escape set is FIXED (YAML 1.2 §5.7): a `\` may only precede one
+// of `0 a b t n v f r e " / \ N _ L P`, a literal space/tab, a `x`+2 / `u`+4 / `U`+8 hex escape, or
+// a LINE BREAK (`\`-at-EOL = line continuation). Any other `\.` (`\.`, `\'`, `\q`, `\x4`) is illegal
+// — validating the set rejects `55WF`/`HRE5`, and admitting `\`+newline accepts the folded
+// multi-line scalars `565N`/`NP9H`/`Q8AD` (where the old `\\.` failed because `.` skips newlines).
+const DQ_ESC = String.raw`\\(?:[0abtnvfre"/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\r?\n)`;
+const DQUOTE_BODY = String.raw`"(?:${DQ_ESC}|[^"\\])*"`;
+const DQuote = token(new RegExp(DQUOTE_BODY), { string: true, scope: 'string.quoted.double' });
 const SQuote = token(/'(?:''|[^'])*'/, { string: true, scope: 'string.quoted.single' });
 const Anchor = token(/&[^\s\[\]{},]+/, { scope: 'entity.name.type.anchor' });
 const Alias = token(/\*[^\s\[\]{},]+/, { scope: 'variable.other.alias' });
 const Tag = token(/!(?:<[^>]*>|[^\s\[\]{},]*)/, { scope: 'storage.type.tag' });
-// Directive (`%YAML 1.2`, `%TAG …`): runs to EOL but stops before a ` #` trailing comment — a
+// The `%YAML` version directive has a FIXED arity: exactly one `major.minor` parameter (§6.8.1).
+// A spaced trailing `# comment` is allowed; any other trailing token (`%YAML 1.2 foo`, a second
+// version `%YAML 1.1 1.2`) is illegal. Declared BEFORE the generic Directive so a well-formed
+// `%YAML X.Y` is taken here and trailing junk is LEFT for the parser to reject (it can't follow a
+// directive). `%YAML1.2` (no space) is NOT a version directive — it falls to the generic Directive
+// (an unknown directive named `YAML1.2`, which the `yaml` oracle accepts). Rejects H7TQ / ZYU8.
+// Matches just `%YAML major.minor`, then a LOOKAHEAD requires the rest of the line to be only
+// whitespace / a comment / EOL — a directive owns its whole line, so trailing junk (`%YAML 1.2 foo`,
+// a second version `%YAML 1.1 1.2`) makes the lookahead FAIL and the token not match. The generic
+// Directive below EXCLUDES the `%YAML␣` prefix, so such a malformed version line matches NEITHER
+// token and the stray `%` then fails to lex → reject (H7TQ / ZYU8). The trailing comment is left
+// OUTSIDE the token (only looked at) so a ` # comment` is tokenised/scoped as a Comment, not folded
+// into the directive — keeps the highlighter's comment scope intact.
+const YamlDirective = token(/%YAML[ \t]+[0-9]+\.[0-9]+(?=[ \t]*(?:#|\r|\n|$))/, { scope: 'keyword.other.directive' });
+// Directive (`%TAG …`, unknown `%FOO …`): runs to EOL but stops before a ` #` trailing comment — a
 // `#` is a comment indicator only after whitespace, so a glued `#` (`%YAML 1.1#x`) stays part of
 // the directive while a spaced ` # comment` falls to the Comment token (same rule as plain scalars).
-const Directive = token(/%(?:[^\n#]|#(?<=\S#))*/, { scope: 'keyword.other.directive' });
+// EXCLUDES the `%YAML␣` version form (handled by YamlDirective above) so a bad-arity version line is
+// not silently re-absorbed here; `%YAML1.2` (no space) is NOT the version form, so it still matches.
+const Directive = token(/%(?!YAML[ \t])(?:[^\n#]|#(?<=\S#))*/, { scope: 'keyword.other.directive' });
 // Block scalar (| / >): EMITTED by the lexer's block-scalar mode (placeholder pattern, skipped
 // in the regex loop) so the more-indented content lines arrive as a single token.
 const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block' });
@@ -46,6 +69,15 @@ const PLAIN_HEAD = String.raw`(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:](?=[^\s,\[\]{
 // then asserts the two chars ending here are «non-space»«#» — while ` #…` (space-prefixed) still
 // ends the scalar and falls to the Comment token.
 const PLAIN_BODY = String.raw`(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}])|#(?<=\S#))*`;
+// BLOCK-context variants (used by the lexer only outside flow — see TokenDecl.blockPattern). The
+// chars `,[]{}` are flow indicators ONLY inside a flow collection; in block context they are plain
+// scalar content (`key: a,b`, `- bla]keks` are one scalar each; yaml-test-suite FBC9 / AZW3 / DBG4
+// / S7BG / 2EBW). So the block body drops the `,[]{}` exclusions, and a `:` is content whenever it
+// is followed by ANY non-space (only a `: `/`:`-EOL still ends the scalar as a key/value separator).
+// A leading `[`/`{` still starts a FLOW collection and `,`/`]`/`}` are still illegal scalar STARTS,
+// so the leading-char set is unchanged; only the `-?:` head loosens to allow a following flow char.
+const PLAIN_HEAD_BLOCK = String.raw`(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:](?=[^\s]))`;
+const PLAIN_BODY_BLOCK = String.raw`(?:[^:#\n]|:(?=[^\s])|#(?<=\S#))*`;
 // A plain scalar is a mapping KEY when a `:` key-separator (colon + whitespace / EOL, or—inside a
 // flow collection—colon + `,`/`]`/`}`) follows it. Matched BEFORE the value/number tokens so a
 // numeric-looking key (`123:`) is still a key (entity.name.tag), as the `yaml` oracle resolves it.
@@ -64,11 +96,11 @@ const QKEY_SEP = String.raw`(?=[\t ]*:)`;
 // Plain scalar that is a mapping key → entity.name.tag (the YAML convention for a key name).
 const Key = token(
   new RegExp(`${PLAIN_HEAD}${PLAIN_BODY}${KEY_SEP}`),
-  { scope: 'entity.name.tag' },
+  { scope: 'entity.name.tag', blockPattern: new RegExp(`${PLAIN_HEAD_BLOCK}${PLAIN_BODY_BLOCK}${KEY_SEP}`) },
 );
 // Double-quoted scalar in KEY position (a `"…"` immediately followed by a `:` key-separator).
 const DQuoteKey = token(
-  new RegExp(`"(?:\\\\.|[^"\\\\])*"${QKEY_SEP}`),
+  new RegExp(`${DQUOTE_BODY}${QKEY_SEP}`),
   { string: true, scope: 'entity.name.tag' },
 );
 // Single-quoted scalar in KEY position.
@@ -81,6 +113,11 @@ const SQuoteKey = token(
 // WHOLE node, so it is followed by whitespace+comment, an end-of-value char (EOL / `,` / `]` /
 // `}`), or a key-separator `:`. Mirrors the maintained RedCMD grammar's core-schema lookaheads.
 const VALUE_END = String.raw`(?=[\t ]+#|[\t ]*(?:[\r\n,\[\]{}]|:(?:[\s,\[\]{}]|$))|$)`;
+// BLOCK-context value end-boundary: outside flow, `,`/`[`/`]`/`{`/`}` are NOT value terminators, so
+// a typed look-alike GLUED to one is a plain string, not a number/bool (`key: 1,2` is the string
+// "1,2", not the number 1 — yaml-test-suite DBG4). Dropping them lets such scalars fall through to
+// the (block) Plain token; only ws+comment, a line break, or a `:`-separator still ends the value.
+const VALUE_END_BLOCK = String.raw`(?=[\t ]+#|[\t ]*(?:[\r\n]|:(?:[\s]|$))|$)`;
 // A NON-SPECIFIC tag (`!` followed by whitespace) forces its plain scalar to resolve as a STRING
 // regardless of the scalar's appearance (`! 12` is the string "12", not the number 12 — YAML 1.2
 // §6.9.1 / yaml-test-suite S4JQ). So the typed value tokens (Num / BoolNull) MUST NOT fire on a
@@ -92,21 +129,21 @@ const NONSPECIFIC_TAG = String.raw`(?<!![\t ]+)`;
 // Numeric plain scalars (YAML 1.2 core schema): decimal / octal / hex integers, floats, ±.inf,
 // .nan. Anything outside the core schema (binary `0b…`, dates, `12:34:56`) stays a plain string,
 // matching what the `yaml` oracle resolves to a number.
+const NUM_BODY =
+  NONSPECIFIC_TAG +
+  String.raw`(?:[+-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)` +
+  String.raw`|0x[0-9a-fA-F]+|0o[0-7]+` +
+  String.raw`|[+-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)`;
 const Num = token(
-  new RegExp(
-    NONSPECIFIC_TAG +
-    String.raw`(?:[+-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)` +
-    String.raw`|0x[0-9a-fA-F]+|0o[0-7]+` +
-    String.raw`|[+-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)` +
-    VALUE_END,
-  ),
-  { scope: 'constant.numeric' },
+  new RegExp(NUM_BODY + VALUE_END),
+  { scope: 'constant.numeric', blockPattern: new RegExp(NUM_BODY + VALUE_END_BLOCK) },
 );
 // Boolean / null plain scalars (core schema) → constant.language. Same non-specific-tag guard:
 // `! true` is the string "true", not the boolean (yaml-test-suite cousins of S4JQ).
+const BOOLNULL_BODY = NONSPECIFIC_TAG + String.raw`(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)`;
 const BoolNull = token(
-  new RegExp(NONSPECIFIC_TAG + String.raw`(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)${VALUE_END}`),
-  { scope: 'constant.language' },
+  new RegExp(BOOLNULL_BODY + VALUE_END),
+  { scope: 'constant.language', blockPattern: new RegExp(BOOLNULL_BODY + VALUE_END_BLOCK) },
 );
 
 // Plain scalar. Leading char: a non-indicator, OR one of `- ? :` when followed by a non-space
@@ -115,7 +152,7 @@ const BoolNull = token(
 // to a non-space) — so `http://x`, `key:val` and `this is#not` are single plain scalars.
 const Plain = token(
   new RegExp(`${PLAIN_HEAD}${PLAIN_BODY}`),
-  { scope: 'string.unquoted' },
+  { scope: 'string.unquoted', blockPattern: new RegExp(`${PLAIN_HEAD_BLOCK}${PLAIN_BODY_BLOCK}`) },
 );
 
 // A Scalar is any of the above scalar SHAPES. The key / number / boolean tokens are finer
@@ -154,8 +191,35 @@ const Node = rule(() => [
   [Tag, Anchor, opt(alt(...nodeContentAlts()))],
 ]);
 
+// A multi-line PLAIN scalar folded across an indented continuation: an unquoted scalar (plain /
+// numeric-looking / bool-looking — a multi-line continuation makes them all plain strings, so
+// `1\n more` is the string "1 more", yaml-test-suite cousins of A984) followed by an INDENTED run
+// of further plain lines (`Indent Plain (Newline Plain)* Dedent`). The Indent/Dedent BOUND the
+// fold, so it cannot run past the scalar's block — safe (no over-accept). A QUOTED scalar does NOT
+// fold this way (`key: "x"\n  more` is illegal), so the head is the unquoted family only, never the
+// quoted/block tokens. Each continuation line is guarded by `noCommentBefore`: a comment ENDS a
+// plain scalar, so a line that follows a comment (an inline `b # c`, or a `# …` line between the
+// scalar's lines) must NOT be folded in (yaml-test-suite 8XDJ / BF9H). yaml-test-suite 36F6 / A984
+// / 4CQQ / 4ZYM.
+// The `noCommentBefore` guards sit on the STRUCTURAL token (Indent / Newline), since the lexer
+// stamps the comment flag onto the first token it emits after a skipped comment — which is that
+// Indent / Newline, not the following Plain.
+const foldedPlain = () => [alt(Num, BoolNull, Plain), noCommentBefore, Indent, Plain, many(noCommentBefore, Newline, Plain), Dedent] as const;
+// A SAME-COLUMN multi-line plain scalar that is the SOLE LEADING content of an INDENTED block
+// (`key:\n  a\n  b` → "a b"; yaml-test-suite 4CQQ / RZT7 / UGM3). The continuation lines sit at the
+// scalar's own column, bounded by the block's Indent/Dedent. Written as a whole `Indent … Dedent`
+// (not just the inner run) and added as a sibling of the plain `[Indent, Node, Dedent]` value
+// branch: the parser's longest-match picks this when the block's first node is a plain scalar with
+// ≥1 same-column continuation line, and falls back to `[Indent, Node, Dedent]` otherwise. Because it
+// requires the unquoted scalar to be the block's FIRST token, it never fires on a block that opens
+// with a sequence / mapping (`key:\n - a\n - b\n invalid` keeps the trailing `invalid` unconsumed →
+// reject, as the oracle requires). many1 = at least one continuation. Comment-guarded like
+// foldedPlain. This is the in-block (bounded) same-column fold ONLY; the doc-level same-column fold
+// is deliberately NOT modelled (it over-accepts `a: b\nc` / `- a\n- b\nc` and can't be CFG-gated).
+const foldedPlainBlock = () => [Indent, alt(Num, BoolNull, Plain), many1(noCommentBefore, Newline, Plain), Dedent] as const;
 // Scalar, optionally continued as a block mapping when a ':' follows.
 const MappingOrScalar = rule(() => [
+  foldedPlain(),
   [Scalar, opt(':', opt(MapValue), many(Newline, MapEntry))],
 ]);
 // An ALIAS, optionally continued as a block mapping when a ':' follows — an alias may be a
@@ -222,12 +286,12 @@ const MapEntryNoEmpty = rule(() => [
 // compact inline block sequence (`- - a` is valid YAML). A property's same-column-after-newline
 // content does NOT continue here (`- &x\n- 1` is two items, the first empty), so the property
 // leads only to an INDENTED block or an inline value, never a [Newline, …] tail.
-const Value = rule(() => [[Indent, Node, Dedent], SeqValueNode]);
+const Value = rule(() => [foldedPlainBlock(), [Indent, Node, Dedent], SeqValueNode]);
 // A MAPPING value (after `:`): an indented block, or an inline/empty node that is NOT a block
 // sequence — YAML forbids `key: - a` on one line (a block seq must begin on the next line). A
 // property here may be followed by an INDENTED block (`a: !!seq\n  - x`) or be EMPTY (`a: &x\nb: c`
 // → value null, `b` a sibling); a same-column line is the sibling, never the value.
-const MapValue = rule(() => [[Indent, Node, Dedent], MapValueNode]);
+const MapValue = rule(() => [foldedPlainBlock(), [Indent, Node, Dedent], MapValueNode]);
 // The content of an INDENTED value block (after `key: &prop\n  …` or `key:\n  …`): like Node,
 // but a node that carries a property AND is the content of an already-property-led value must
 // wrap a COLLECTION, never a bare scalar — `a: &x\n  &y scalar` stacks two anchors on one node
@@ -328,7 +392,7 @@ const InlineDocNode = rule(() => [
 // for an `opt(token)` followed LATER IN THE SAME SEQ by an `alt` — does not mistake this body's
 // alternation for YAML's anchor/tag node-prefix (a `ref` is opaque to that scan).
 const ExplicitDocBody = rule(() => [
-  [Newline, many(Directive, opt(Newline)), opt(Indent), opt(Node), opt(Dedent)],
+  [Newline, many(alt(YamlDirective, Directive), opt(Newline)), opt(Indent), opt(Node), opt(Dedent)],
   InlineDocNode,
 ]);
 
@@ -338,8 +402,13 @@ const ExplicitDocBody = rule(() => [
 // so the bare-doc branch lives behind a required DocEnd in NextDoc, not at stream top level. The
 // bare branch is non-nullable (Node required) so the rule never matches empty (which would return
 // null and break the `many`); its absence is handled by the `opt(AfterDocEnd)` caller.
+// After `...` a fresh `---` document may be preceded by DIRECTIVES (`...\n%YAML 1.2\n---\n…`,
+// `...\n%TAG ! …\n---\n…`; yaml-test-suite 6ZKB / 9DXL / 5TYM / 6WLZ / 9WXW) — a directive block
+// applies to the document that follows it. The `many(...)` is zero-or-more so the plain `---`
+// (no directives) is still covered by this branch; it can be empty, after which DocStart is
+// required, so the branch's FIRST set is {directive, DocStart} — disjoint from the bare-doc Node.
 const AfterDocEnd = rule(() => [
-  [DocStart, opt(ExplicitDocBody)],
+  [many(alt(YamlDirective, Directive), opt(Newline)), DocStart, opt(ExplicitDocBody)],
   [opt(Indent), Node, opt(Dedent)],
 ]);
 // The boundary + body of each document after the first: a `---` document, or a `...` end marker
@@ -356,7 +425,7 @@ const NextDoc = rule(() => [
 // A YAML stream: leading directives, an implicit first (bare) document, then a run of further
 // documents each introduced by `---` or separated by `...` (with an optional trailing `...`).
 const Stream = rule(() => [[
-  many(Directive, opt(Newline)),
+  many(alt(YamlDirective, Directive), opt(Newline)),
   opt(Indent), opt(Node), opt(Dedent),
   many(opt(Newline), NextDoc),
   opt(Newline), opt(DocEnd), opt(Newline),
@@ -378,7 +447,7 @@ export default defineGrammar({
   // Declaration order = lexer precedence (earlier wins). The KEY tokens precede the quoted /
   // value tokens (a numeric- or quoted-looking key is still a key); the typed value tokens
   // (Num, BoolNull) precede the generic Plain so a number / boolean resolves to its own scope.
-  tokens: { DocStart, DocEnd, Directive, Comment, DQuoteKey, SQuoteKey, DQuote, SQuote, Anchor, Alias, Tag, BlockScalar, Key, Num, BoolNull, Plain, Indent, Dedent, Newline },
+  tokens: { DocStart, DocEnd, YamlDirective, Directive, Comment, DQuoteKey, SQuoteKey, DQuote, SQuote, Anchor, Alias, Tag, BlockScalar, Key, Num, BoolNull, Plain, Indent, Dedent, Newline },
   // NOTE: the parser's entry rule is the LAST rule declared here (findEntryRule = rules[last]),
   // so `Stream` must come last.
   rules: {

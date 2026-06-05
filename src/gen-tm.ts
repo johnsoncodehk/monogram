@@ -279,10 +279,14 @@ function quoteDelimAndEscape(pattern: string): { delim: string; escape: string }
   const delim = m[2];
   const d = delim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // delimiter, regex-escaped
   // The regex must CLOSE on the same bare delimiter, and its body must be the alternation of an
-  // escape with "any char but the delimiter (and backslash)". Match the two canonical shapes.
-  const backslash = new RegExp(`^${m[1]}${d}\\(\\?:\\\\\\\\\\.\\|\\[\\^${d}\\\\\\\\\\]\\)\\*${m[1]}${d}$`);
+  // ESCAPE with "any char but the delimiter (and backslash)" — `<q>(?:<esc>|[^<q>\])*<q>`. The
+  // escape is a BACKSLASH followed by anything: the simple `\\.`, or a validated set such as
+  // `\\(?:[…]|x[0-9A-Fa-f]{2}|\r?\n)` (YAML §5.7) — which itself contains `|`. Capture it greedily up
+  // to the trailing `|[^<q>\])*<q>` so the in-string escape sub-scope highlights the real escape set.
+  const backslash = new RegExp(`^${m[1]}${d}\\(\\?:(\\\\\\\\.*)\\|\\[\\^${d}\\\\\\\\\\]\\)\\*${m[1]}${d}$`);
   const doubled   = new RegExp(`^${m[1]}${d}\\(\\?:${d}${d}\\|\\[\\^${d}\\]\\)\\*${m[1]}${d}$`);
-  if (backslash.test(pattern)) return { delim, escape: '\\\\.' };
+  const bm = backslash.exec(pattern);
+  if (bm) return { delim, escape: bm[1] };
   if (doubled.test(pattern)) return { delim, escape: d + d };
   return null;
 }
@@ -3222,10 +3226,10 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
         nameIdx++;
         continue;
       }
-      // Zero-width guards (`not(...)` / `sameLine`) consume no token, so they can sit
-      // between the keyword and the name (e.g. `'type' not(reserved) Ident`) without
+      // Zero-width guards (`not(...)` / `sameLine` / `noCommentBefore`) consume no token, so they
+      // can sit between the keyword and the name (e.g. `'type' not(reserved) Ident`) without
       // changing the `keyword name` highlight pattern — skip past them.
-      if (item.type === 'not' || item.type === 'sameLine') {
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore') {
         nameIdx++;
         continue;
       }
@@ -3589,9 +3593,14 @@ function detectFlowCollections(grammar: CstGrammar): {
   // (`\\.` for double, `''` for single). Derive it from the token's own pattern.
   const quoteEscape = (tok: typeof dqTok): string | null => {
     if (!tok) return null;
-    // pattern is `<q>(?:<esc>|[^<q><...>])*<q>` — the escape is the first `(?:…|` alternative.
-    const m = tok.pattern.match(/^.\(\?:([^|]*)\|/);
-    return m ? m[1] : null;
+    // pattern is `<q>(?:<esc>|[^<q>\])*<q>` — the escape is the body's first alternative. It may be
+    // a simple `\\.` OR a validated set `\\(?:…|x..|\r?\n)` that itself contains `|`, so capture the
+    // backslash escape greedily up to the trailing `|[^<q>\])*` rather than stopping at the first `|`.
+    const m = tok.pattern.match(/^.\(\?:(\\\\.*)\|\[\^.\\\\\]\)\*/);
+    if (m) return m[1];
+    // Doubled-delimiter (or other) bodies: fall back to the first `|`-free alternative.
+    const simple = tok.pattern.match(/^.\(\?:([^|]*)\|/);
+    return simple ? simple[1] : null;
   };
 
   return {
@@ -4192,7 +4201,7 @@ function ruleIsNullable(e: RuleExpr, byName: Map<string, RuleExpr>, seen = new S
     case 'alt': return e.items.some(i => ruleIsNullable(i, byName, seen));
     case 'quantifier': return e.kind === '*' || e.kind === '?';
     case 'group': return ruleIsNullable(e.body, byName, seen);
-    case 'not': case 'sameLine': return true;                 // zero-width assertions
+    case 'not': case 'sameLine': case 'noCommentBefore': return true;  // zero-width assertions
     case 'ref': { if (seen.has(e.name)) return false; seen.add(e.name); const b = byName.get(e.name); return b ? ruleIsNullable(b, byName, seen) : false; }
     default: return false;                                     // literal / token / op / prefix / postfix / sep
   }

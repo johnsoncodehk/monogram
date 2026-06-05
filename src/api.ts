@@ -30,6 +30,8 @@ interface TokenOptions {
     postfixAfterValueTexts?: string[];
   };
   string?: boolean;
+  // Block-context (flowDepth===0) pattern variant for indentation grammars — see TokenDecl.blockPattern.
+  blockPattern?: RegExp;
 }
 
 export class TokenRef {
@@ -75,6 +77,7 @@ export function rule(def: RuleBody, opts?: RuleOptions): RuleRef {
 
 interface OpMarker { readonly __kind: 'op' }
 interface SameLineMarker { readonly __kind: 'sameLine' }
+interface NoCommentMarker { readonly __kind: 'noCommentBefore' }
 interface PrefixSlot {
   readonly __kind: 'prefix';
   (...ops: string[]): PrefixOps;
@@ -87,12 +90,17 @@ interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[] }
 interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[] }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
 
-type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker;
+type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker;
 
 export const op: OpMarker = { __kind: 'op' };
 
 // Zero-width "no LineTerminator here" assertion (see RuleExpr 'sameLine').
 export const sameLine: SameLineMarker = { __kind: 'sameLine' };
+
+// Zero-width "no comment was skipped before the next token" assertion (indentation grammars). A
+// comment ENDS a plain scalar in YAML, so a multi-line plain fold guards each continuation line
+// with this so it cannot reabsorb a line that follows a comment (see RuleExpr 'noCommentBefore').
+export const noCommentBefore: NoCommentMarker = { __kind: 'noCommentBefore' };
 
 export const prefix: PrefixSlot = Object.assign(
   (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops }),
@@ -303,6 +311,7 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
   if (marker.__kind === 'prefix') return { type: 'prefix' };
   if (marker.__kind === 'postfix') return { type: 'postfix' };
   if (marker.__kind === 'sameLine') return { type: 'sameLine' };
+  if (marker.__kind === 'noCommentBefore') return { type: 'noCommentBefore' };
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
 }
 
@@ -352,6 +361,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     return {
       name,
       pattern: tok.pattern.source,
+      blockPattern: tok.opts.blockPattern?.source,
       flags,
       scope: tok.opts.scope,
       escapePattern: tok.opts.escape?.source,

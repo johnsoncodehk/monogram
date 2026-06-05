@@ -9,6 +9,8 @@ export interface Token {
   text: string;
   offset: number;
   newlineBefore?: boolean;   // a line terminator preceded this token (drives ASI / "no LineTerminator here" rules)
+  commentBefore?: boolean;   // a comment was skipped before this token (indentation grammars: a comment
+                             // ENDS a plain scalar, so a folded multi-line scalar must not cross it)
 }
 
 // Build a standalone lexer from the grammar's token definitions + lexer hints.
@@ -25,10 +27,13 @@ export function createLexer(grammar: CstGrammar) {
     .filter(l => !isKeywordLiteral(l))
     .sort((a, b) => b.length - a.length);
 
-  // Token matchers (order matters: earlier declarations win)
+  // Token matchers (order matters: earlier declarations win). `blockRegex` is the optional
+  // block-context (flowDepth===0) variant for indentation grammars — see TokenDecl.blockPattern;
+  // it is selected over `regex` only outside flow collections, so flow tokenization is unchanged.
   const tokenMatchers = grammar.tokens.map(t => ({
     name: t.name,
     regex: new RegExp(`^(?:${t.pattern})`),
+    blockRegex: t.blockPattern ? new RegExp(`^(?:${t.blockPattern})`) : null,
     skip: t.flags.includes('skip'),
     isRegex: t.flags.includes('regex'),
   }));
@@ -158,8 +163,41 @@ export function createLexer(grammar: CstGrammar) {
   // comment to end-of-line is the SIGNATURE (so `a > b` isn't mistaken for one); the following
   // more-indented lines are verbatim content, emitted as one token (skipped in the regex loop).
   const blockScalarIntro = new Set(indent?.blockScalar?.introducers ?? []);
-  const blockScalarSig = /^[|>](?:[1-9][+-]?|[+-][1-9]?|[+-]|)[ \t]*(?:#[^\n]*)?(?:\r?\n|$)/;
+  // A trailing `#…` on the header line is a comment only after whitespace (`> # c`), never glued
+  // to the indicator (`>#c` is invalid — §6.8); the `(?<=[ \t])` makes the comment require a
+  // preceding space, so a glued `#` fails the signature and the `>`/`|` is not taken as a header.
+  const blockScalarSig = /^[|>](?:[1-9][+-]?|[+-][1-9]?|[+-]|)[ \t]*(?:(?<=[ \t])#[^\n]*)?(?:\r?\n|$)/;
   if (indent?.blockScalar) indentTokenNames.add(indent.blockScalar.token);
+  // Does the line content starting at `start` begin a BLOCK-STRUCTURAL node — one whose leading
+  // whitespace serves as its indentation (so a tab there is a §6.1 error)? True for a `-`/`?`
+  // indicator, an empty-`:` key, a node property (`&`/`!`), or a plain/quoted scalar that is a
+  // mapping KEY (an unquoted `:` separator — `:` then ws/EOL/flow-indicator — follows it before
+  // the line ends). False for a flow collection (`[`/`{`), a bare alias (`*`), or a leaf plain
+  // scalar with no key separator — there the post-space column already satisfies the indent, so a
+  // following tab is legal separation, not indentation. (Only consulted for tab-indent detection.)
+  const sepAfter = (c: string | undefined) => c === undefined || c === ' ' || c === '\t' || c === '\n' || c === '\r';
+  // `allowProperty` (default true): does a node property `&`/`!` count as establishing indentation
+  // here? It does after a leading-indent or a `-`/`?` indicator (`-\t&a x` is an error), but NOT
+  // after a `:` map separator (`key:\t&a x` / `:\t&a x` are legal — the property is the inline
+  // value). The `yaml` oracle draws exactly this line; the flag lets the `:` callers opt out.
+  function startsBlockStructuralNode(src: string, start: number, allowProperty = true): boolean {
+    const c0 = src[start];
+    if (c0 === '[' || c0 === '{' || c0 === '*') return false;               // flow collection / alias → not indentation
+    if ((c0 === '-' || c0 === '?' || c0 === ':') && sepAfter(src[start + 1])) return true; // indicator / empty key
+    if ((c0 === '&' || c0 === '!') && allowProperty) return true;          // node property → establishes a node here
+    if (c0 === '&' || c0 === '!') return false;                            // property after `:` → inline value, legal
+    // Scalar key sniff: scan the line for an unquoted `:` followed by ws/EOL/flow-indicator (a
+    // block key separator), skipping over "…"/'…' regions and stopping at a ` #` comment / EOL.
+    for (let i = start; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '\n' || ch === '\r') break;
+      if (ch === '"') { i++; while (i < src.length && src[i] !== '"' && src[i] !== '\n') { if (src[i] === '\\') i++; i++; } continue; }
+      if (ch === "'") { i++; while (i < src.length && src[i] !== '\n') { if (src[i] === "'" && src[i + 1] !== "'") break; if (src[i] === "'") i++; i++; } continue; }
+      if ((ch === ' ' || ch === '\t') && src[i + 1] === '#') break;          // trailing comment → key sep would be earlier
+      if (ch === ':') { const n = src[i + 1]; if (n === undefined || n === ' ' || n === '\t' || n === '\n' || n === '\r' || n === ',' || n === '[' || n === ']' || n === '{' || n === '}') return true; }
+    }
+    return false;
+  }
 
   // Scan from inside a template span to its next boundary: an interpolation hole
   // (`interpOpen`) or the closing delimiter (`open`). Delimiters come from the
@@ -208,6 +246,10 @@ export function createLexer(grammar: CstGrammar) {
     // cleared — so the parser can honor "no LineTerminator here" restrictions
     // (e.g. an array/indexed-access type's `[` must be on the same line).
     let pendingNl = false;
+    // A comment was skipped since the last emitted token. Stamped onto the next token as
+    // `commentBefore` (indentation grammars only — it drives the YAML rule that a comment ENDS a
+    // plain scalar, so a multi-line fold must not absorb a line that follows a comment).
+    let pendingComment = false;
     // Markup state machine — active only when `markup` is declared. 'tag' is also the
     // resting mode for token-stream grammars, where the text/raw-text branches below
     // never fire (markup is undefined) → tokenization is byte-identical to before.
@@ -230,6 +272,7 @@ export function createLexer(grammar: CstGrammar) {
     const indentStack: number[] = [0];
     function push(t: Token): void {
       if (pendingNl) { t.newlineBefore = true; pendingNl = false; }
+      if (pendingComment) { t.commentBefore = true; pendingComment = false; }
       tokens.push(t);
       if (indent) {
         if (!indentTokenNames.has(t.type)) emittedContent = true;   // a real token (not INDENT/DEDENT/NEWLINE)
@@ -306,9 +349,26 @@ export function createLexer(grammar: CstGrammar) {
           pos = p + 1; if (ch === '\r' && source[pos] === '\n') pos++;
           continue;                                                         // still at a line start
         }
+        // YAML (§6.1) forbids a TAB in indentation. The tricky part: a tab is illegal only where
+        // the leading whitespace IS a node's indentation — i.e. the line begins a block-structural
+        // node (a `-`/`?` indicator, an empty-`:` key, a node property `&`/`!`, or a scalar that is
+        // a mapping KEY because a `:` separator follows it). A tab is HARMLESS before a flow
+        // collection (`\t[…]`, `\t{…}`) or a leaf plain-scalar / alias continuation (`x:\n \tval`),
+        // where the column past the spaces already satisfies the parent's indent. A tab-bearing
+        // line that is ALL whitespace up to its terminator is left for the indent logic below
+        // (its emitted NEWLINE/DEDENT either reject in value position or are harmless between
+        // siblings — matching the `yaml` oracle, which is context-sensitive there). We reject only
+        // the structural case, so no valid leaf-continuation is mis-rejected.
+        if (ch === '\t') {
+          let q = p; while (q < source.length && (source[q] === ' ' || source[q] === '\t')) q++;
+          const after = source[q];
+          if (q < source.length && after !== '\n' && after !== '\r' && startsBlockStructuralNode(source, q)) {
+            throw new Error(`Tab character used in indentation at offset ${p}`);
+          }
+        }
         if (indent.comment && source.startsWith(indent.comment, p)) {       // comment-only line — ignored
           let e = p; while (e < source.length && source[e] !== '\n') e++;
-          pos = e; continue;                                                // next iteration consumes the newline
+          pos = e; pendingComment = true; continue;                         // next iteration consumes the newline
         }
         pos = p;                                                            // consume the leading indentation
         currentLineCol = col;                                               // bounds a block scalar started on this line
@@ -334,7 +394,26 @@ export function createLexer(grammar: CstGrammar) {
       // inside flow delimiters, where newlines are insignificant. Otherwise skip any run.
       if (indent) {
         const c = source[pos];
-        if (c === ' ' || c === '\t') { pos++; continue; }
+        if (c === ' ' || c === '\t') {
+          // A TAB between a block indicator (`-`/`?`/map-`:`) and a NESTED block-structural node it
+          // introduces is a §6.1 indentation error: the separation after the indicator counts as
+          // the nested node's indentation (`-\t- x`, `?\tkey:`, `- \t-`, `:\tkey:`, `key:\t- a`). A
+          // tab before a leaf scalar / flow / alias (`-\tplain`, `-\t[a]`, `-\t*a`) is harmless
+          // separation, so the structural sniff gates it. After a `:` a node PROPERTY is the inline
+          // value (`key:\t&a x` is legal), so the `:` case excludes properties (allowProperty=false)
+          // while `-`/`?` include them (`-\t&a x` IS an error). Block context only (flowDepth===0).
+          if (flowDepth === 0) {
+            const prev = tokens[tokens.length - 1];
+            const isIndicator = prev && prev.type === '' && (prev.text === '-' || prev.text === '?' || prev.text === ':');
+            if (isIndicator) {
+              let q = pos; while (q < source.length && (source[q] === ' ' || source[q] === '\t')) q++;
+              if (source.slice(pos, q).includes('\t') && startsBlockStructuralNode(source, q, prev!.text !== ':')) {
+                throw new Error(`Tab character used in indentation at offset ${pos}`);
+              }
+            }
+          }
+          pos++; continue;
+        }
         if (c === '\n' || c === '\r') {
           pos++; if (c === '\r' && source[pos] === '\n') pos++;
           if (flowDepth === 0) lineStart = true;
@@ -447,8 +526,20 @@ export function createLexer(grammar: CstGrammar) {
           // prev is a completed value → `/` is division, not a regex literal → skip.
           if (prevIsValue(tokens[tokens.length - 1])) continue;
         }
-        const m = remaining.match(tm.regex);
+        // Outside flow collections, an indentation grammar may widen a token (its block variant
+        // treats flow indicators as plain content); inside flow, the default restricted form wins.
+        const re = tm.blockRegex && flowDepth === 0 ? tm.blockRegex : tm.regex;
+        const m = remaining.match(re);
         if (m) {
+          // Comment-separation (indentation grammars): a comment indicator (`#`) opens a comment
+          // only at line start or after whitespace (§6.6). A `#` GLUED to a preceding non-space
+          // (`]#x`, `,#x`, `"v"#c`) is NOT a comment — it is invalid content, so refuse the comment
+          // match here and let it fall through to a lex error. (A `#` inside a plain scalar is
+          // absorbed by the scalar token itself, so this only ever fires on a stray glued `#`.)
+          if (indent?.comment && m[0].startsWith(indent.comment) && pos > 0) {
+            const before = source[pos - 1];
+            if (before !== ' ' && before !== '\t' && before !== '\n' && before !== '\r') break;
+          }
           // An identifier(-prefix) token whose `\u` escapes decode to a non-identifier
           // codepoint (`!` = `!`, a ZWNJ at start) is a lex error, not a token.
           if (identLikeTokenNames.has(tm.name) && !identTextValid(tm.name, m[0])) {
@@ -456,8 +547,11 @@ export function createLexer(grammar: CstGrammar) {
           }
           if (!tm.skip) {
             push({ type: tm.name, text: m[0], offset: pos });
-          } else if (m[0].includes('\n')) {
-            pendingNl = true;   // a skipped comment spanning a newline still terminates the previous line
+          } else {
+            if (m[0].includes('\n')) pendingNl = true;   // a skipped comment spanning a newline still terminates the previous line
+            // An inline comment (indentation grammars) ENDS a plain scalar — flag the next token so a
+            // multi-line fold won't reabsorb a post-comment line (yaml-test-suite 8XDJ / BF9H).
+            if (indent?.comment && m[0].startsWith(indent.comment)) pendingComment = true;
           }
           pos += m[0].length;
           matched = true;

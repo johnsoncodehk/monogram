@@ -126,6 +126,7 @@ function formatExpr(expr: RuleExpr): string {
     case 'group': return `(${formatExpr(expr.body)})`;
     case 'not': return `not(${formatExpr(expr.body)})`;
     case 'sameLine': return 'sameLine';
+    case 'noCommentBefore': return 'noCommentBefore';
     case 'sep': return `sep(${formatExpr(expr.element)}, '${expr.delimiter}')`;
   }
 }
