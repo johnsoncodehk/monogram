@@ -110,7 +110,7 @@ export interface MappingOrScalarNode extends CstPos {
     | (CstLeaf & { tokenType: 'Plain' })
     | BlockKeyScalarNode
     | MapEntryNode
-    | MapValueNode
+    | MapValueScalarNode
     | ScalarNode
   >;
 }
@@ -124,7 +124,7 @@ export interface AliasOrKeyedNode extends CstPos {
     | (CstLeaf & { tokenType: 'Alias' })
     | (CstLeaf & { tokenType: 'Newline' })
     | MapEntryNode
-    | MapValueNode
+    | MapValueScalarNode
   >;
 }
 
@@ -160,7 +160,7 @@ export interface MapEntryNode extends CstPos {
     | (CstLeaf & { tokenType: '$punct' })
     | BlockKeyNode
     | ExplicitEntryNode
-    | MapValueNode
+    | MapValueScalarNode
   >;
 }
 
@@ -172,7 +172,7 @@ export interface MapEntryNoEmptyNode extends CstPos {
     | (CstLeaf & { tokenType: '$punct' })
     | BlockKeyNode
     | ExplicitEntryNode
-    | MapValueNode
+    | MapValueScalarNode
   >;
 }
 
@@ -195,7 +195,7 @@ export interface EmptyKeyMappingNode extends CstPos {
     | (CstLeaf & { tokenType: '$punct' })
     | (CstLeaf & { tokenType: 'Newline' })
     | MapEntryNoEmptyNode
-    | MapValueNode
+    | MapValueScalarNode
   >;
 }
 
@@ -227,7 +227,27 @@ export interface MapValueNode extends CstPos {
     | (CstLeaf & { tokenType: 'Num' })
     | (CstLeaf & { tokenType: 'Plain' })
     | BlockSequenceNode
+    | ContentNodeNode
     | MapValueNodeNode
+    | NodeNode
+    | PropertyNode
+  >;
+}
+
+/** `MapValueScalar` node. Children (flattened, in source order) are drawn from: */
+export interface MapValueScalarNode extends CstPos {
+  kind: 'node';
+  rule: 'MapValueScalar';
+  children: Array<
+    | (CstLeaf & { tokenType: 'BoolNull' })
+    | (CstLeaf & { tokenType: 'Dedent' })
+    | (CstLeaf & { tokenType: 'Indent' })
+    | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'Num' })
+    | (CstLeaf & { tokenType: 'Plain' })
+    | BlockSequenceNode
+    | ContentNodeNode
+    | MapValueNodeScalarNode
     | NodeNode
     | PropertyNode
   >;
@@ -270,7 +290,7 @@ export interface MappingFromScalarNode extends CstPos {
     | (CstLeaf & { tokenType: 'Newline' })
     | BlockKeyScalarNode
     | MapEntryNode
-    | MapValueNode
+    | MapValueScalarNode
   >;
 }
 
@@ -284,7 +304,7 @@ export interface MappingFromFlowNode extends CstPos {
     | FlowMappingNode
     | FlowSequenceNode
     | MapEntryNode
-    | MapValueNode
+    | MapValueScalarNode
   >;
 }
 
@@ -310,6 +330,37 @@ export interface MapInlineContentNode extends CstPos {
     | FlowMappingNode
     | FlowSequenceNode
     | MappingOrScalarNode
+  >;
+}
+
+/** `MapValueNodeScalar` node. Children (flattened, in source order) are drawn from: */
+export interface MapValueNodeScalarNode extends CstPos {
+  kind: 'node';
+  rule: 'MapValueNodeScalar';
+  children: Array<
+    | (CstLeaf & { tokenType: 'Dedent' })
+    | (CstLeaf & { tokenType: 'Indent' })
+    | IndentedValueNodeNode
+    | MapInlineScalarNode
+    | PropertyNode
+  >;
+}
+
+/** `MapInlineScalar` node. Children (flattened, in source order) are drawn from: */
+export interface MapInlineScalarNode extends CstPos {
+  kind: 'node';
+  rule: 'MapInlineScalar';
+  children: Array<
+    | (CstLeaf & { tokenType: 'Alias' })
+    | (CstLeaf & { tokenType: 'BoolNull' })
+    | (CstLeaf & { tokenType: 'Dedent' })
+    | (CstLeaf & { tokenType: 'Indent' })
+    | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'Num' })
+    | (CstLeaf & { tokenType: 'Plain' })
+    | FlowMappingNode
+    | FlowSequenceNode
+    | ScalarNode
   >;
 }
 
@@ -583,12 +634,15 @@ export type CstNode =
   | EmptyKeyMappingNode
   | ValueNode
   | MapValueNode
+  | MapValueScalarNode
   | IndentedValueNodeNode
   | CollectionContentNode
   | MappingFromScalarNode
   | MappingFromFlowNode
   | MapValueNodeNode
   | MapInlineContentNode
+  | MapValueNodeScalarNode
+  | MapInlineScalarNode
   | SeqValueNodeNode
   | SeqInlineContentNode
   | BlockSequenceNode
@@ -624,12 +678,15 @@ export type RuleName =
   | 'EmptyKeyMapping'
   | 'Value'
   | 'MapValue'
+  | 'MapValueScalar'
   | 'IndentedValueNode'
   | 'CollectionContent'
   | 'MappingFromScalar'
   | 'MappingFromFlow'
   | 'MapValueNode'
   | 'MapInlineContent'
+  | 'MapValueNodeScalar'
+  | 'MapInlineScalar'
   | 'SeqValueNode'
   | 'SeqInlineContent'
   | 'BlockSequence'

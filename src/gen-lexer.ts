@@ -182,6 +182,16 @@ export function createLexer(grammar: CstGrammar) {
   // glyph (`-`/`&`/`!`/`[`/`?`/`*`) is plain CONTENT here, not structure (so it can't be lexed by
   // the plain head pattern, which forbids those starts). Null when no blockPattern token exists.
   const plainContinuationTokenName = [...grammar.tokens].reverse().find(t => t.blockPattern)?.name ?? null;
+  // The generic plain token's FLOW pattern (its `pattern`, not the block variant) — used by the flow
+  // illegal-head continuation fallback: a char that no token can START here (e.g. YAML's `%`/`@`/backtick,
+  // illegal as a plain START) is, when it follows a plain scalar inside a flow collection, mid-scalar
+  // CONTENT. We then consume that one head char plus whatever plain BODY follows (matched by this
+  // pattern at the next position), emit it as a plain-continuation token, and let the flow fold post-pass
+  // merge it with the preceding scalar. Compiled once; null when no generic plain token exists.
+  const plainFlowRe = (() => {
+    const t = [...grammar.tokens].reverse().find(t => t.blockPattern);
+    return t ? new RegExp(`^(?:${t.pattern})`) : null;
+  })();
   // Does the line content starting at `start` carry a KEY SEPARATOR — an unquoted `:` followed by
   // whitespace / EOL / a flow indicator (`,`/`[`/`]`/`{`/`}`)? This is the colon-sniff shared with
   // startsBlockStructuralNode (skipping "…"/'…' regions, stopping at a ` #` comment / EOL), isolated
@@ -374,6 +384,13 @@ export function createLexer(grammar: CstGrammar) {
     let emittedContent = false;      // any real (non-structural) token emitted yet — suppress a leading NEWLINE/DEDENT
     let currentLineCol = 0;          // leading-space column of the current logical line (bounds block scalars)
     let atLineLead = false;          // the next emitted token is the FIRST content token of its line (compact-indicator probe)
+    // Column of the most recent line-lead explicit-key `?` indicator that is still awaiting its paired
+    // `:` value-half (−1 = none). A line-lead `:` at this SAME column is an EXPLICIT-value separator, the
+    // one position where a compact same-line block sequence (`: - one`) is legal; a `:` at any other
+    // column (a misaligned `m:\n  ? a\n: -x`, or a bare empty-key `: - x` with no `?` at all) is NOT and
+    // must reject. Set when a line-lead `?` is emitted; cleared at a document boundary / when indentation
+    // dedents below it. (yaml-test-suite 5WE3 / KK5P — the compact `: -` edge.)
+    let lastExplicitKeyCol = -1;
     const indentStack: number[] = [0];
     // §7.4 multi-line flow indentation: when the OUTERMOST flow collection opens as a block VALUE or
     // ITEM (the `[`/`{` directly follows a `:`/`-` indicator), every CONTENT line of that flow must be
@@ -599,6 +616,9 @@ export function createLexer(grammar: CstGrammar) {
             indentStack.pop();
             push({ type: indent.dedentToken, text: '', offset: pos });
           }
+          // Dedenting to/below the pending explicit-key column ends that `? key` scope — a `:` arriving
+          // here can no longer be its compact-`:`-value half (yaml-test-suite KK5P misalignment guard).
+          if (col < lastExplicitKeyCol) lastExplicitKeyCol = -1;
           if (emittedContent && indentStack[indentStack.length - 1] === col) {
             push({ type: indent.newlineToken, text: '', offset: pos });     // sibling separator at this level
           }
@@ -677,11 +697,21 @@ export function createLexer(grammar: CstGrammar) {
         let lineBegin = startPos; while (lineBegin > 0 && source[lineBegin - 1] !== '\n') lineBegin--;
         const before = source.slice(lineBegin, startPos).replace(/^[ \t]+/, '');   // line content before the introducer
         const atRoot = currentLineCol === 0 && (before === '' || blockScalarDocMarkers.some((m) => before === m + ' ' || before.startsWith(m + ' ')));
-        const parent = atRoot ? -1 : currentLineCol;
+        // The PARENT NODE's indentation — the block level this value belongs to. When the introducer
+        // sits inline with its key/indicator, currentLineCol IS that level (= the stack top); when it
+        // sits on its OWN more-indented line (a property line then `>N` on the next, M5C3), currentLineCol
+        // is the property line's column, NOT the parent — so use the stack top, which has already
+        // dedented back to the owning block level. Equivalent to the stack top in both cases.
+        const parentNode = indentStack[indentStack.length - 1];
+        const parent = atRoot ? -1 : parentNode;
         // Does the header carry an EXPLICIT indentation indicator (`|N`/`>N`, a digit right after the
-        // introducer / chomp char)? If so the content column is pinned and the §8.1.1.1 auto-detect
-        // rule below does not apply (a leading-more-indented blank line is then legal — `>3`).
-        const hdr = source.slice(startPos + 1); const explicitIndicator = /^[+-]?[1-9]/.test(hdr);
+        // introducer / chomp char)? If so the content column is PINNED at parentNode + N (§8.1.1.1):
+        // content lines are those at column ≥ that pin, and the auto-detect / leading-blank rule below
+        // does not apply (a leading-more-indented blank line is then legal — `>3`). M5C3 `>1` after a
+        // property line: parentNode = the `folded` key column (0), so content sits at column 1.
+        const indMatch = source.slice(startPos + 1).match(/^[+-]?([1-9])/);
+        const explicitIndicator = !!indMatch;
+        const pinnedContentCol = indMatch && !atRoot ? parentNode + Number(indMatch[1]) : -1;
         let p = pos; while (p < source.length && source[p] !== '\n') p++; if (p < source.length) p++;  // skip the header line
         // §8.1.1.1: with NO explicit indicator the content indentation is auto-detected from the
         // first non-empty line, and a LEADING blank line may not be MORE indented than that content
@@ -713,7 +743,11 @@ export function createLexer(grammar: CstGrammar) {
             }
           }
           if (c === 0 && markerAt(source, q)) break;                       // a col-0 `---`/`...` ends the scalar
-          if (c > parent) {
+          // A content line is one indented more than the parent node — OR, with an EXPLICIT indicator,
+          // one at/above the pinned content column (parentNode + N). The pin lets content sit shallower
+          // than a property line that introduced the scalar (M5C3 `>1` content at col 1, property at col 3).
+          const isContent = pinnedContentCol >= 0 ? c >= pinnedContentCol : c > parent;
+          if (isContent) {
             if (!sawContent && maxLeadingBlankCol > c && !explicitIndicator) { // §8.1.1.1 leading blank more-indented than content
               throw new Error(`Block scalar leading empty line is more indented than content at offset ${q}`);
             }
@@ -853,6 +887,36 @@ export function createLexer(grammar: CstGrammar) {
               break;
             }
           }
+          // MULTI-LINE QUOTED scalar indentation (indentation grammars, block context only): each
+          // non-blank CONTINUATION line of a `"…"`/`'…'` that spans newlines must be indented MORE than
+          // the scalar's parent node — leading SPACES strictly greater than parentCol (a TAB is not
+          // indentation per §6.1, so a leading tab counts as 0 spaces → fails where indentation is
+          // required; a tab AFTER enough spaces is content). yaml rejects an under-indented continuation
+          // as "Missing closing quote" (the scalar can't continue). parentCol is context-sensitive:
+          //  • inline VALUE / compact (`foo: "a\nb`, `- "a\nb`) → currentLineCol (the indicator's line);
+          //  • inline after a doc marker (`--- "a\nb`) → -1 (a doc-root scalar may sit at column 0);
+          //  • LINE-LEAD own-line value (`k:\n  "a\n  b`) → the enclosing block level (stack[len-2]);
+          //  • LINE-LEAD at the document root (a bare top-level `"a\nb`, or `---\n"a\nb`) → -1.
+          // Blank (whitespace-only) continuation lines are skipped — they are folded line breaks, legal
+          // at any column. Flow is exempt (indentation suspended). yaml-test-suite DK95[1] / QB6E.
+          if (tm.isString && indent && flowDepth === 0 && m[0].includes('\n')) {
+            const prevT = tokens[tokens.length - 1];
+            const prevIsDocMarker = !!prevT && blockScalarDocMarkers.includes(prevT.text);
+            let parentCol: number;
+            if (atLineLead) parentCol = indentStack.length > 1 ? indentStack[indentStack.length - 2] : -1;
+            else if (prevIsDocMarker) parentCol = -1;
+            else parentCol = currentLineCol;
+            let bad = -1;
+            for (let k = 0; k < m[0].length; k++) {
+              if (m[0][k] !== '\n') continue;
+              let e = k + 1; while (e < m[0].length && m[0][e] !== '\n') e++;   // the continuation line
+              const line = m[0].slice(k + 1, e);
+              if (line.trim() === '') continue;                                // blank line — a folded break, any column
+              const sp = line.length - line.replace(/^ +/, '').length;        // leading SPACES (a tab is not indentation)
+              if (sp <= parentCol) { bad = pos + k + 1; break; }
+            }
+            if (bad >= 0) throw new Error(`Multi-line quoted scalar continuation is not sufficiently indented at offset ${bad}`);
+          }
           // Comment-separation (indentation grammars): a comment indicator (`#`) opens a comment
           // only at line start or after whitespace (§6.6). A `#` GLUED to a preceding non-space
           // (`]#x`, `,#x`, `"v"#c`) is NOT a comment — it is invalid content, so refuse the comment
@@ -911,9 +975,31 @@ export function createLexer(grammar: CstGrammar) {
             // line aligned with the content then DEDENTs/NEWLINEs correctly). A leaf scalar after the
             // indicator (`- a`) is NOT structural → no push (so simple sequences are unchanged).
             const wasLineLead = atLineLead;
+            // Track a line-lead `?` explicit-key column so its paired `:` can legalise a compact `: -`.
+            if (indent && flowDepth === 0 && wasLineLead && lit === '?') lastExplicitKeyCol = currentLineCol;
             push({ type: '', text: lit, offset: pos });
             pos += lit.length;
-            if (indent && flowDepth === 0 && wasLineLead && compactIndicatorSet.has(lit)) {
+            // The EXPLICIT-value half of a `? key` entry whose value is a `-` SEQUENCE on the SAME line
+            // (`? k\n: - one\n  - two`; yaml-test-suite 5WE3 / KK5P) needs the SAME compact push as a
+            // `-`/`?` indicator — without it the items split across indent levels (the `- one` never opens
+            // a block, so the aligned `- two` folds as a plain continuation). This compact `: -` is legal
+            // ONLY as an explicit value: the `:` must be LINE-LEAD and sit at the SAME column as its
+            // paired `?` (lastExplicitKeyCol). A `:` at any other column — an inline `? k : - one`, an
+            // implicit `key: - b`, a MISALIGNED `m:\n  ? a\n: - x` (the `:` dedented below its `?`), or a
+            // bare empty-key `: - x` (no `?` at all) — is a §-illegal same-line block-seq value that yaml
+            // rejects, so it must NOT push (leaving the items unindented → the parser rejects, as before).
+            // Restricted to a `-` value (a `: key: v` compact-mapping value is the separate ZCZ6 concern).
+            const dashAfter = (i: number): boolean => {
+              let q = i; while (q < source.length && source[q] === ' ') q++;
+              return q > i && source[q] === '-' && sepAfter(source[q + 1]);
+            };
+            const colonPairsExplicit = wasLineLead && lit === ':' && currentLineCol === lastExplicitKeyCol;
+            const compactColon = colonPairsExplicit && dashAfter(pos);
+            // A line-lead `:` at its `?`'s column USES UP that pairing — the explicit entry now has its
+            // value, so a SECOND `: …` at the same column (`? a\n: - b\n: - c`, yaml-test-suite cousin) is
+            // a bare empty-key entry, not another explicit value → it must not get the compact push.
+            if (colonPairsExplicit) lastExplicitKeyCol = -1;
+            if (indent && flowDepth === 0 && (compactColon || (wasLineLead && compactIndicatorSet.has(lit)))) {
               // Only SPACES separate the indicator from its inline content: a TAB there is the
               // nested node's indentation, which §6.1 forbids — so leave it for the whitespace
               // branch's tab check to reject (`-\t-`, `?\tkey:`) rather than nesting it.
@@ -975,6 +1061,25 @@ export function createLexer(grammar: CstGrammar) {
             matched = true;
             break;
           }
+        }
+      }
+
+      // FLOW illegal-head plain CONTINUATION (indentation grammars): a char that no token can START
+      // here (a plain-scalar HEAD forbids `%`/`@`/backtick — illegal plain STARTS), when it directly
+      // follows a plain scalar INSIDE a flow collection, is mid-scalar CONTENT (`{ matches\n% : 20 }`
+      // → key "matches %"; yaml-test-suite UT92). Consume that head char plus whatever plain BODY
+      // follows (the generic plain flow pattern at the next position), emit it as a plain-continuation
+      // token, and let the flow fold post-pass merge it with the preceding scalar. Gated on flowDepth>0
+      // AND prev being a plain-family token, so a leading illegal char with no preceding plain (`{ % :
+      // 20 }`) still falls through to the lex error below. Fully derived — no hardcoded char set.
+      if (!matched && indent && flowDepth > 0 && plainContinuationTokenName && plainFlowRe) {
+        const prevTok = tokens[tokens.length - 1];
+        if (prevTok && plainScalarTokenNames.has(prevTok.type)) {
+          const bodyM = source.slice(pos + 1).match(plainFlowRe);     // plain BODY after the illegal head char
+          const text = source[pos] + (bodyM ? bodyM[0] : '');
+          push({ type: plainContinuationTokenName, text, offset: pos });
+          pos += text.length;
+          matched = true;
         }
       }
 

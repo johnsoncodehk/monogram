@@ -232,7 +232,7 @@ const Node = rule(() => [
 // The `noCommentBefore` guards sit on the STRUCTURAL token (Indent / Newline), since the lexer
 // stamps the comment flag onto the first token it emits after a skipped comment — which is that
 // Indent / Newline, not the following Plain.
-const foldedPlain = () => [alt(Num, BoolNull, Plain), noCommentBefore, Indent, Plain, many(noCommentBefore, Newline, Plain), Dedent] as const;
+const foldedPlain = () => [alt(Num, BoolNull, Plain), noCommentBefore, Indent, alt(Num, BoolNull, Plain), many(noCommentBefore, Newline, alt(Num, BoolNull, Plain)), Dedent] as const;
 // A SAME-COLUMN multi-line plain scalar that is the SOLE LEADING content of an INDENTED block
 // (`key:\n  a\n  b` → "a b"; yaml-test-suite 4CQQ / RZT7 / UGM3). The continuation lines sit at the
 // scalar's own column, bounded by the block's Indent/Dedent. Written as a whole `Indent … Dedent`
@@ -278,7 +278,7 @@ const DocFold = rule(() => [
 // key arm for a single-line `key:` (it consumes more), so single-line mappings are unchanged.
 const MappingOrScalar = rule(() => [
   foldedPlain(),
-  [BlockKeyScalar, ':', opt(MapValue), many(Newline, MapEntry)],
+  [BlockKeyScalar, ':', opt(MapValueScalar), many(Newline, MapEntry)],
   Scalar,
 ]);
 // An ALIAS, optionally continued as a block mapping when a ':' follows — an alias may be a
@@ -294,7 +294,7 @@ const MappingOrScalar = rule(() => [
 // rejected by BlockKey's `noMultilineFlowBefore` guard. The bare flow collection is also a valid
 // VALUE/node (FlowMapping/FlowSequence via ContentNode).
 const AliasOrKeyed = rule(() => [
-  [Alias, opt(':', opt(MapValue), many(Newline, MapEntry))],
+  [Alias, opt(':', opt(MapValueScalar), many(Newline, MapEntry))],
 ]);
 // A block-mapping KEY: a plain/quoted scalar optionally carrying its OWN anchor/tag property
 // (`&anchor c: 3` ZWK4, `!!str baz : …` HMQ5) — OR a bare ALIAS (`*b : v`, yaml-test-suite E76Z) —
@@ -321,9 +321,9 @@ const ExplicitEntry = rule(() => [
 // Subsequent mapping entries: implicit (`key: value`, key via BlockKey), explicit (`? key`), or an
 // EMPTY key (`: value` — a mapping entry with a null key; yaml-test-suite NKF9 / S3PD / 6M2F).
 const MapEntry = rule(() => [
-  [BlockKey, ':', opt(MapValue)],
+  [BlockKey, ':', opt(MapValueScalar)],
   ExplicitEntry,
-  [':', opt(MapValue)],
+  [':', opt(MapValueScalar)],
 ]);
 // A mapping that STARTS with an explicit `? key` entry (FIRST = `?`, disjoint from scalar-led).
 const ExplicitMapping = rule(() => [
@@ -337,12 +337,12 @@ const ExplicitMapping = rule(() => [
 // not accepted — that is a duplicate-key error, which a CFG cannot detect in general, but the
 // all-empty-keys case is at least kept out by forbidding a repeated empty key here.
 const EmptyKeyMapping = rule(() => [
-  [':', opt(MapValue), many(Newline, MapEntryNoEmpty)],
+  [':', opt(MapValueScalar), many(Newline, MapEntryNoEmpty)],
 ]);
 // A mapping entry that is NOT an empty-key entry (implicit `key: value` or explicit `? …`). Used as
 // the continuation of an empty-key-led mapping to bar a second empty key (see EmptyKeyMapping).
 const MapEntryNoEmpty = rule(() => [
-  [BlockKey, ':', opt(MapValue)],
+  [BlockKey, ':', opt(MapValueScalar)],
   ExplicitEntry,
 ]);
 // A SEQUENCE-item value (after `-`): an indented block, or an inline/empty node — including a
@@ -367,7 +367,7 @@ const Value = rule(() => [foldedPlainBlock(), [Indent, Node, Dedent], SeqValueNo
 // `[Property, Newline, BlockSequence]` branch is the INLINE-property form (`sequence: !!seq\n- a`;
 // 57H4) — the property sits on the key's line, the sequence at the key's column. All three require
 // a `-`-led sequence; a same-column scalar/mapping still goes through the sibling path.
-const MapValue = rule(() => [foldedPlainBlock(), [Indent, Node, Dedent], [Indent, Property, Dedent, Newline, BlockSequence], [Property, Newline, BlockSequence], [Newline, BlockSequence], MapValueNode]);
+const MapValue = rule(() => [foldedPlain(), foldedPlainBlock(), [Indent, Node, Dedent], [Indent, Property, Dedent, ContentNode], [Indent, Property, Dedent, Newline, BlockSequence], [Property, Newline, BlockSequence], [Newline, BlockSequence], MapValueNode]);
 // The content of an INDENTED value block (after `key: &prop\n  …` or `key:\n  …`): like Node,
 // but a node that carries a property AND is the content of an already-property-led value must
 // wrap a COLLECTION, never a bare scalar — `a: &x\n  &y scalar` stacks two anchors on one node
@@ -381,13 +381,13 @@ const IndentedValueNode = rule(() => [
 // A node content that is a COLLECTION (never a bare scalar): a block/flow sequence or mapping, an
 // explicit `?`-mapping, or a scalar that is REQUIRED to be a mapping key (a `:` must follow).
 const CollectionContent = rule(() => [alt(BlockSequence, ExplicitMapping, FlowMapping, FlowSequence, MappingFromFlow, MappingFromScalar)]);
-const MappingFromScalar = rule(() => [[BlockKeyScalar, ':', opt(MapValue), many(Newline, MapEntry)]]);
+const MappingFromScalar = rule(() => [[BlockKeyScalar, ':', opt(MapValueScalar), many(Newline, MapEntry)]]);
 // A block mapping whose FIRST entry's KEY is a single-line FLOW collection (`[a,b]: v`, `{x:1}: v`;
 // yaml-test-suite LX3P / Q9WF / 6BFJ). The analogue of MappingFromScalar for a flow key: the flow
 // collection, then a `:`-led entry, then any further entries. The `noMultilineFlowBefore` guard (on
 // the following `:`) keeps it SINGLE-LINE — a multi-line flow key (`[23\n]: 42`, C2SP) is rejected.
 // Property-less (a leading `&a`/`!t` on the key node is consumed by the caller, e.g. Node — 6BFJ).
-const MappingFromFlow = rule(() => [[alt(FlowMapping, FlowSequence), noMultilineFlowBefore, ':', opt(MapValue), many(Newline, MapEntry)]]);
+const MappingFromFlow = rule(() => [[alt(FlowMapping, FlowSequence), noMultilineFlowBefore, ':', opt(MapValueScalar), many(Newline, MapEntry)]]);
 // A node in MAP-VALUE position (after `:`): a property whose content is inline, INDENTED, or
 // EMPTY (no same-column [Newline, …] tail — that line is a sibling); OR a bare inline content
 // node (flow/alias/scalar-led). NEVER an inline block sequence (`key: - a` is invalid YAML).
@@ -399,6 +399,21 @@ const MapValueNode = rule(() => [
   MapInlineContent,
 ]);
 const MapInlineContent = rule(() => [alt(FlowMapping, FlowSequence, Alias, MappingOrScalar)]);
+// An IMPLICIT (`key: …`) or EMPTY-KEY (`: …`) value's INLINE content, restricted to SCALARS — never a
+// compact mapping. YAML forbids a nested mapping as a compact (same-line) implicit/empty-key value:
+// `a: b: c` and `: b: c` are "Nested mappings are not allowed in compact mapping" errors (yaml-test-suite
+// ZCZ6 / ZL4Z). Only an EXPLICIT `? key`'s `:`-value may be a compact mapping (`? k\n: moon: white`,
+// V9D5) — that path keeps the full MapValue. So this drops MappingOrScalar's compact-mapping branch,
+// keeping its scalar / fold shapes plus flow / alias (`a: {x:1}`, `a: *x`, `a: hello world` stay legal).
+const MapInlineScalar = rule(() => [alt(FlowMapping, FlowSequence, Alias, foldedPlain(), Scalar)]);
+const MapValueNodeScalar = rule(() => [
+  [Property, not(Alias), opt(alt([Indent, IndentedValueNode, Dedent], MapInlineScalar))],
+  MapInlineScalar,
+]);
+// The IMPLICIT / EMPTY-KEY map value: every block / next-line-indented MapValue branch (where a nested
+// mapping IS legal — `a:\n  b: c`), but the trailing INLINE node is scalar-only (no same-line compact
+// mapping). The EXPLICIT `? key` value path keeps the full MapValue (compact mapping allowed there).
+const MapValueScalar = rule(() => [foldedPlain(), foldedPlainBlock(), [Indent, Node, Dedent], [Indent, Property, Dedent, ContentNode], [Indent, Property, Dedent, Newline, BlockSequence], [Property, Newline, BlockSequence], [Newline, BlockSequence], MapValueNodeScalar]);
 // A node in SEQUENCE-item position (after `-`): like MapValueNode but a compact inline block
 // sequence IS allowed (`- - a`).
 const SeqValueNode = rule(() => [
@@ -458,7 +473,7 @@ const FlowSequence = rule(() => [['[', opt(FlowSeqEntry, many(',', FlowSeqEntry)
 // line / indented (`--- !!map\n? a\n: b`, `--- !!str\nfoo`) or inline (`--- &a foo`); its inline
 // content is likewise a bare scalar / flow / alias, never an on-the-line block collection.
 const InlineDocNode = rule(() => [
-  [Property, opt(alt([Indent, Node, Dedent], [Newline, Node], FlowMapping, FlowSequence, Alias, Scalar))],
+  [Property, opt(alt([Indent, DocFold, Dedent], [Indent, Node, Dedent], [Newline, DocFold], [Newline, Node], FlowMapping, FlowSequence, Alias, Scalar))],
   DocFold,
   alt(FlowMapping, FlowSequence, Alias, Scalar),
 ]);
@@ -567,9 +582,9 @@ export default defineGrammar({
   // NOTE: the parser's entry rule is the LAST rule declared here (findEntryRule = rules[last]),
   // so `Stream` must come last.
   rules: {
-    Property, ContentNode, Node, MappingOrScalar, AliasOrKeyed, BlockKey, ExplicitEntry, MapEntry, MapEntryNoEmpty, ExplicitMapping, EmptyKeyMapping, Value, MapValue,
+    Property, ContentNode, Node, MappingOrScalar, AliasOrKeyed, BlockKey, ExplicitEntry, MapEntry, MapEntryNoEmpty, ExplicitMapping, EmptyKeyMapping, Value, MapValue, MapValueScalar,
     IndentedValueNode, CollectionContent, MappingFromScalar, MappingFromFlow,
-    MapValueNode, MapInlineContent, SeqValueNode, SeqInlineContent, BlockSequence, SeqItem,
+    MapValueNode, MapInlineContent, MapValueNodeScalar, MapInlineScalar, SeqValueNode, SeqInlineContent, BlockSequence, SeqItem,
     FlowNode, FlowExplicit, FlowMapEntry, FlowMapping, FlowSeqEntry, FlowSeqKey, FlowSequence, Scalar, BlockKeyScalar, DocFold, InlineDocNode, ExplicitDocBody, AfterDocEnd, NextDoc, Stream,
   },
   entry: Stream,
