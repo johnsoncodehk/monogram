@@ -10,9 +10,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const WRITE = process.argv.includes('--write');
 
-function runAdapter(script: string, args: string[], marker: string): any | null {
+function runAdapter(script: string, args: string[], marker: string, env?: NodeJS.ProcessEnv): any | null {
   try {
-    const out = execFileSync('node', [script, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 128 * 1024 * 1024 });
+    const out = execFileSync('node', [script, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 128 * 1024 * 1024, env: env ?? process.env });
     const line = out.split('\n').find((l) => l.startsWith(marker));
     return line ? JSON.parse(line.slice(marker.length).trim()) : null;
   } catch { return null; }
@@ -27,22 +27,33 @@ const COV = [
   { lang: 'HTML', script: 'test/src-coverage-html.ts', args: [] },
   { lang: 'YAML', script: 'test/src-coverage-yaml.ts', args: [] },
 ];
+// The 4 TS-family scope-gap adapters all read ONE shared env var (MONOGRAM_OFFICIAL_TM) for
+// the official grammar, so each needs its OWN grammar mapped in (CI sets MONOGRAM_OFFICIAL_TS/
+// TSX/JS/JSX). html/yaml read their own var (MONOGRAM_OFFICIAL_HTML/_YAML), inherited as-is;
+// vue is vendored. Absent (local, no env) → each adapter's VS Code-install fallback path.
 const GAP = [
-  { lang: 'TypeScript', script: 'test/scope-gap-ts.ts', args: ['800'] },
-  { lang: 'JavaScript', script: 'test/scope-gap-js.ts', args: ['800'] },
-  { lang: 'JSX', script: 'test/scope-gap-jsx.ts', args: [] },
-  { lang: 'TSX', script: 'test/scope-gap-tsx.ts', args: [] },
+  { lang: 'TypeScript', script: 'test/scope-gap-ts.ts', args: ['800'], officialEnv: 'MONOGRAM_OFFICIAL_TS' },
+  { lang: 'JavaScript', script: 'test/scope-gap-js.ts', args: ['800'], officialEnv: 'MONOGRAM_OFFICIAL_JS' },
+  { lang: 'JSX', script: 'test/scope-gap-jsx.ts', args: [], officialEnv: 'MONOGRAM_OFFICIAL_JSX' },
+  { lang: 'TSX', script: 'test/scope-gap-tsx.ts', args: [], officialEnv: 'MONOGRAM_OFFICIAL_TSX' },
   { lang: 'HTML', script: 'test/scope-gap-html.ts', args: [] },
   { lang: 'YAML', script: 'test/scope-gap-yaml.ts', args: [] },
   { lang: 'Vue', script: 'test/scope-gap-vue.ts', args: [] },
-];
+] as { lang: string; script: string; args: string[]; officialEnv?: string }[];
 
 const pct = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(1) + '%');
 
 console.error('Running src-coverage adapters…');
 const covRows = COV.map((a) => { console.error('  ' + a.lang); return { lang: a.lang, r: runAdapter(a.script, a.args, '##COV##') }; });
 console.error('Running scope-gap adapters…');
-const gapRows = GAP.map((a) => { console.error('  ' + a.lang); return { lang: a.lang, r: runAdapter(a.script, a.args, '##SCOPEGAP##') }; });
+const gapRows = GAP.map((a) => {
+  console.error('  ' + a.lang);
+  // Remap the per-language official grammar onto the adapter's shared MONOGRAM_OFFICIAL_TM
+  // (only the TS-family needs it; absent → no override → the adapter's own fallback).
+  const src = a.officialEnv ? process.env[a.officialEnv] : undefined;
+  const env = src ? { ...process.env, MONOGRAM_OFFICIAL_TM: src } : undefined;
+  return { lang: a.lang, r: runAdapter(a.script, a.args, '##SCOPEGAP##', env) };
+});
 
 const covBy = new Map(covRows.map((x) => [x.lang, x.r]));
 const gapBy = new Map(gapRows.map((x) => [x.lang, x.r]));
@@ -60,6 +71,19 @@ for (const lang of LANGS) {
 
 const block = '<!-- coverage:start -->\n' + md + '<!-- coverage:end -->';
 if (!WRITE) { console.log('\n' + md); process.exit(0); }
+
+// Refuse to clobber the committed table with a partial one: a missing corpus or official
+// grammar makes an adapter return null → "—". Vue has no parser-axis adapter, so its Parser
+// cell is the single allowed gap; every other cell must be present before we overwrite.
+const missing: string[] = [];
+for (const lang of LANGS) {
+  if (!gapBy.get(lang)) missing.push(`${lang} highlighter`);
+  if (lang !== 'Vue' && !covBy.get(lang)) missing.push(`${lang} parser`);
+}
+if (missing.length) {
+  console.error('Refusing to write a partial coverage table — missing: ' + missing.join(', '));
+  process.exit(1);
+}
 
 const README = 'README.md';
 let txt = readFileSync(README, 'utf8');

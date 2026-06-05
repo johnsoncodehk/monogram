@@ -88,6 +88,7 @@ jobs:
 
       - name: Commit the refreshed ledger (if it changed)
         run: |
+          set -euo pipefail
           if git diff --quiet -- README.md; then
             echo "README ledger already current — nothing to commit."
             exit 0
@@ -96,4 +97,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md
           git commit -m "chore: refresh README cross-language bug ledger [skip ci]"
-          git push
+          # Rebase-and-retry: the sibling "README coverage table" workflow may push a
+          # different-region edit concurrently. The two regions never overlap → clean rebase.
+          for attempt in 1 2 3 4 5; do
+            if git push; then exit 0; fi
+            echo "push rejected — rebasing onto latest master (attempt $attempt)"
+            git fetch -q origin master
+            git rebase -q origin/master
+          done
+          echo "push failed after 5 attempts"; exit 1

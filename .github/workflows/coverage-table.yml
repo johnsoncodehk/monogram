@@ -1,0 +1,129 @@
+name: README coverage table
+
+# Auto-refreshes the per-language alignment table in README.md (between the
+# <!-- coverage:start --> / <!-- coverage:end --> markers) and commits it back to master.
+#
+# Two axes (test/coverage-table.ts → `node test/coverage-table.ts --write`):
+#   - Parser — Monogram's parser vs the OFFICIAL parser over a real corpus (src-coverage-*.ts):
+#     agree % + branch-coverage %. Needs the corpora below, cloned to the fixed /tmp paths the
+#     adapters hard-code (/tmp/ts-repo, /tmp/test262, /tmp/yaml-test-suite).
+#   - Highlighter — Monogram's DERIVED TextMate grammar vs each hand-written OFFICIAL one, both
+#     graded against the parser's token roles (scope-gap-*.ts). Needs the official grammars; the
+#     four TS-family adapters share one env var, so coverage-table.ts maps each its own grammar.
+# coverage-table.ts refuses to write a partial table (a missing input → "—"), so a botched
+# fetch/clone fails the run instead of clobbering a committed cell.
+#
+# Determinism: the corpora are version-sensitive (the TS tests/cases count alone swings the
+# parser numbers), so EVERY input is pinned — official grammars at a tagged VS Code release, the
+# four corpora at explicit commits. Bump a pin deliberately to re-baseline.
+#
+# No infinite loop: the bot commit touches only README.md, which is NOT in the paths filter, so
+# it can't re-trigger ([skip ci] is a backstop). The sibling "README ledger" workflow also
+# commits README.md on grammar changes, so the push step rebases-and-retries to dodge that race
+# (the two workflows edit different marker regions, so the rebase is always clean).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      # Grammar models + every generator the derived grammars/parser are built from.
+      - '*.ts'
+      - 'src/**'
+      # The metric harness (corpus adapters + table writer).
+      - 'test/src-coverage*.ts'
+      - 'test/scope-gap*.ts'
+      - 'test/coverage-table.ts'
+      # The derived grammars the highlighter axis grades + the vendored Vue baseline.
+      - '*.tmLanguage.json'
+      - 'test/fixtures/vue-official/**'
+      - '.github/workflows/coverage-table.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: readme-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned VS Code tag whose bundled grammars are the "official" highlighter baseline.
+  OFFICIAL_TM_TAG: '1.96.0'
+  # Corpus pins (commits). Bump to re-baseline the parser axis against newer corpora.
+  TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
+  TEST262_SHA: '05bb032907160d66c212589d345fa0e335e2738c'
+  YAML_SUITE_SHA: 'da267a5c4782e7361e82889e76c0dc7df0e1e870'
+  REDCMD_SHA: '1ae4e9d32f42878270b7c8593d18bee7d618e59f'
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 24+ runs the .ts sources directly (native type stripping) — no build, no tsx.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: Fetch pinned official VS Code grammars (TS / TSX / JS / JSX / HTML)
+        run: |
+          set -euo pipefail
+          base="https://raw.githubusercontent.com/microsoft/vscode/${OFFICIAL_TM_TAG}/extensions"
+          curl -fsSL "$base/typescript-basics/syntaxes/TypeScript.tmLanguage.json"      -o /tmp/official-ts.json
+          curl -fsSL "$base/typescript-basics/syntaxes/TypeScriptReact.tmLanguage.json" -o /tmp/official-tsx.json
+          curl -fsSL "$base/javascript/syntaxes/JavaScript.tmLanguage.json"             -o /tmp/official-js.json
+          curl -fsSL "$base/javascript/syntaxes/JavaScriptReact.tmLanguage.json"        -o /tmp/official-jsx.json
+          curl -fsSL "$base/html/syntaxes/html.tmLanguage.json"                         -o /tmp/official-html.json
+
+      - name: Clone pinned corpora to the fixed /tmp paths the adapters read
+        run: |
+          set -euo pipefail
+          # Pinned-SHA, shallow, sparse: only the subtree each adapter walks. fetch-by-SHA works
+          # because every pin is a commit reachable from the repo's default branch.
+          pinclone() {  # $1=dir  $2=url  $3=sha  $4=sparse-subdir
+            rm -rf "$1"; mkdir -p "$1"
+            git -C "$1" init -q
+            git -C "$1" remote add origin "$2"
+            git -C "$1" config core.sparseCheckout true
+            printf '%s/\n' "$4" > "$1/.git/info/sparse-checkout"
+            git -C "$1" fetch -q --depth 1 --filter=blob:none origin "$3"
+            git -C "$1" checkout -q FETCH_HEAD
+          }
+          pinclone /tmp/ts-repo         https://github.com/microsoft/TypeScript           "$TS_REPO_SHA"    tests/cases
+          pinclone /tmp/test262         https://github.com/tc39/test262                   "$TEST262_SHA"    test/language
+          pinclone /tmp/yaml-test-suite https://github.com/yaml/yaml-test-suite           "$YAML_SUITE_SHA" src
+          pinclone /tmp/redcmd-yaml     https://github.com/RedCMD/YAML-Syntax-Highlighter "$REDCMD_SHA"     syntaxes
+
+      - name: Regenerate the README coverage table
+        env:
+          MONOGRAM_OFFICIAL_TS: /tmp/official-ts.json
+          MONOGRAM_OFFICIAL_TSX: /tmp/official-tsx.json
+          MONOGRAM_OFFICIAL_JS: /tmp/official-js.json
+          MONOGRAM_OFFICIAL_JSX: /tmp/official-jsx.json
+          MONOGRAM_OFFICIAL_HTML: /tmp/official-html.json
+          MONOGRAM_OFFICIAL_YAML: /tmp/redcmd-yaml/syntaxes/yaml.tmLanguage.json
+        run: node test/coverage-table.ts --write
+
+      - name: Commit the refreshed table (if it changed)
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- README.md; then
+            echo "README coverage table already current — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "chore: refresh README coverage table [skip ci]"
+          # Rebase-and-retry: the sibling README workflow may push a different-region edit
+          # concurrently. The two regions never overlap, so the rebase is conflict-free.
+          for attempt in 1 2 3 4 5; do
+            if git push; then exit 0; fi
+            echo "push rejected — rebasing onto latest master (attempt $attempt)"
+            git fetch -q origin master
+            git rebase -q origin/master
+          done
+          echo "push failed after 5 attempts"; exit 1
