@@ -32,14 +32,256 @@ export function createLexer(grammar: CstGrammar) {
   // Token matchers (order matters: earlier declarations win). `blockRegex` is the optional
   // block-context (flowDepth===0) variant for indentation grammars — see TokenDecl.blockPattern;
   // it is selected over `regex` only outside flow collections, so flow tokenization is unchanged.
+  // The regexes are STICKY (`y`): a sticky `(?:p)` anchored at `lastIndex = pos` matches exactly
+  // where `^(?:p)` would on `source.slice(pos)`, but WITHOUT allocating the rest-of-file slice
+  // every position. The token patterns compile without flags (no `^`/`$`/`m`), so `y` ≡ the old
+  // `^`-anchored form. `lastIndex` is set immediately before each `exec` in the loop (a stale
+  // value from a prior matcher's exec must never leak in).
+  // ── Win B: conservative first-char dispatch ──────────────────────────────────────────────
+  // Most positions are punctuation or identifiers; without help the loop runs EVERY token regex
+  // (comments, numbers, strings, …) and they all fail before the right one (or the punct loop) is
+  // reached. `firstCharSet` derives, from a token pattern, the set of bytes (ASCII codes 0–127) a
+  // match can BEGIN with, plus whether a non-ASCII char (code ≥128) can. In the loop a matcher whose
+  // set rejects `source.charCodeAt(pos)` is skipped — a pure speed filter. SOUNDNESS is the contract:
+  // the analyzer must NEVER claim a char can't start a match when it can; anything it can't prove it
+  // reports as `null` = "no filter, always try" (byte-identical, just slower). Gate 1 (cross-language
+  // token byte-identity over 100k+ tokens) is the proof the derivation is sound.
+  type FirstSet = { ascii: Set<number>; nonAscii: boolean } | null;
+  // Index just past the `]` of the char class starting at src[i] (`[`), WITHOUT interpreting its
+  // contents — used only to step over a non-first class while scanning for `|`/`)` delimiters (so a
+  // `\w`/`\d` inside a class we don't need the value of doesn't force a bail). −1 if unterminated.
+  function classEnd(src: string, i: number): number {
+    let j = i + 1;
+    if (src[j] === '^') j++;
+    if (src[j] === ']') j++;            // a leading ']' is a literal
+    while (j < src.length && src[j] !== ']') { if (src[j] === '\\') j++; j++; }
+    return src[j] === ']' ? j + 1 : -1;
+  }
+  // Parse a [...] / [^...] character class starting at `src[i]` (i points at `[`). Returns the set of
+  // ASCII codes it admits + whether it admits a non-ASCII char + the index just past the `]`. A
+  // NEGATED class ([^…]) admits "almost everything" → we report it as a full set (all ASCII + nonAscii)
+  // so the caller never wrongly skips on it (it just won't filter). Unparseable → null sentinel.
+  function parseClass(src: string, i: number): { set: Set<number>; nonAscii: boolean; end: number } | null {
+    // i at '['
+    let j = i + 1;
+    let negated = false;
+    if (src[j] === '^') { negated = true; j++; }
+    const set = new Set<number>();
+    let nonAscii = false;
+    const add = (c: number) => { if (c <= 127) set.add(c); else nonAscii = true; };
+    // A leading ']' is a literal in JS regex char classes.
+    const chars: number[] = [];
+    while (j < src.length && src[j] !== ']') {
+      let code: number;
+      if (src[j] === '\\') {
+        const n = src[j + 1];
+        if (n === undefined) return null;
+        // An escape that denotes a CLASS (\s \S \d \D \w \W \p \P \b \B) or a unicode/hex/control
+        // escape (\u \x \c \0): too broad to enumerate exactly here → bail the whole class to null
+        // (= no filter, always try). Sound: we never claim fewer first chars than the real class.
+        if ('sSdDwWpPbBuxc0'.includes(n)) return null;
+        // A simple escaped metachar / control: map common ones to their literal code.
+        const map: Record<string, number> = { n: 10, r: 13, t: 9, f: 12, v: 11 };
+        code = n in map ? map[n] : n.charCodeAt(0);
+        j += 2;
+      } else {
+        code = src.charCodeAt(j);
+        j++;
+      }
+      // Range a-b ?
+      if (src[j] === '-' && src[j + 1] !== ']' && src[j + 1] !== undefined) {
+        let hi: number;
+        if (src[j + 1] === '\\') {
+          const n = src[j + 2];
+          if (n === undefined) return null;
+          if ('sSdDwWpPbBuxc0'.includes(n)) return null;
+          const map: Record<string, number> = { n: 10, r: 13, t: 9, f: 12, v: 11 };
+          hi = n in map ? map[n] : n.charCodeAt(0);
+          j += 3;
+        } else {
+          hi = src.charCodeAt(j + 1);
+          j += 2;
+        }
+        for (let c = code; c <= hi; c++) chars.push(c);
+      } else {
+        chars.push(code);
+      }
+    }
+    if (src[j] !== ']') return null;   // unterminated
+    j++;
+    for (const c of chars) add(c);
+    if (negated) {
+      // Everything NOT in the listed set, across the full byte range + non-ASCII. We can't skip on a
+      // negated class usefully and must include non-ASCII, so report a "full" set.
+      const full = new Set<number>();
+      for (let c = 0; c <= 127; c++) if (!set.has(c)) full.add(c);
+      return { set: full, nonAscii: true, end: j };
+    }
+    return { set, nonAscii, end: j };
+  }
+  // The set of first chars an atom starting at src[i] admits, plus the index just past that atom
+  // (BEFORE any quantifier). Handles a literal char, an escape, a char class, and a group `(?:…)` /
+  // `(…)` (recursing into its alternatives). Returns null for anything not understood.
+  function atomFirst(src: string, i: number): { set: Set<number>; nonAscii: boolean; end: number } | null {
+    const ch = src[i];
+    if (ch === undefined) return null;
+    if (ch === '[') return parseClass(src, i);
+    if (ch === '(') {
+      // Skip a group prefix: (?: , (?= , (?! , (?<= , (?<! , or a plain capture ( .
+      let j = i + 1;
+      let assertion = false;
+      if (src[j] === '?') {
+        if (src[j + 1] === ':') j += 2;
+        else if (src[j + 1] === '=' || src[j + 1] === '!') { assertion = true; j += 2; }
+        else if (src[j + 1] === '<' && (src[j + 2] === '=' || src[j + 2] === '!')) { assertion = true; j += 3; }
+        else return null;   // named group (?<name>…) or other — bail
+      }
+      // Find the matching close paren (respecting nesting + char classes + escapes).
+      let depth = 1, k = j;
+      for (; k < src.length; k++) {
+        const c = src[k];
+        if (c === '\\') { k++; continue; }
+        if (c === '[') { const e = classEnd(src, k); if (e < 0) return null; k = e - 1; continue; }
+        if (c === '(') depth++;
+        else if (c === ')') { depth--; if (depth === 0) break; }
+      }
+      if (depth !== 0) return null;
+      const inner = src.slice(j, k);   // group body
+      const end = k + 1;               // past ')'
+      if (assertion) {
+        // A lookahead/lookbehind consumes nothing, so it does not DETERMINE the first char — the
+        // first consumed char comes from the atom AFTER it. Encode "zero-width, continue to the next
+        // atom" as an EMPTY set with nonAscii=false (the same shape seqFirst treats as transparent).
+        // Ignoring the assertion's own constraint can only WIDEN the set (superset = sound). An empty
+        // set never collides with a real consuming atom (those always admit ≥1 char).
+        return { set: new Set<number>(), nonAscii: false, end };
+      }
+      const fs = altFirst(inner);
+      if (!fs) return null;
+      return { set: fs.ascii, nonAscii: fs.nonAscii, end };
+    }
+    if (ch === '\\') {
+      const n = src[i + 1];
+      if (n === undefined) return null;
+      // A class escape (\s \d \w \b \p …) is too broad to enumerate → bail (always try).
+      if ('sSdDwWbBpP'.includes(n)) return null;
+      // \uXXXX / \xXX / \cX / \0 denote a specific char, but we don't decode them here → bail to null
+      // (always try). Sound: never narrows the set. (In practice such escapes appear only inside
+      // alternations the recursion handles, not as a token's literal first atom.)
+      if (n === 'u' || n === 'x' || n === 'c' || n === '0') return null;
+      const map: Record<string, number> = { n: 10, r: 13, t: 9, f: 12, v: 11 };
+      const code = n in map ? map[n] : n.charCodeAt(0);
+      const set = new Set<number>();
+      if (code <= 127) set.add(code);
+      return { set, nonAscii: code > 127, end: i + 2 };
+    }
+    if (ch === '^' || ch === '$') {
+      // Anchor: zero-width, contributes no first char — caller continues to the next atom. (Under the
+      // sticky no-`m` regex `^` only matches at pos 0, but the real regex still enforces that; the
+      // filter just must not be WRONG, and "continue to next atom" keeps it sound.)
+      return { set: new Set<number>(), nonAscii: false, end: i + 1 };
+    }
+    if (ch === ')' || ch === '|' || ch === ']' || ch === '?' || ch === '*' || ch === '+' || ch === '{') {
+      return null;   // structural char where an atom was expected — bail
+    }
+    if (ch === '.') return null;   // dot = any char (except newline) → no useful filter
+    // A plain literal char.
+    const code = src.charCodeAt(i);
+    const set = new Set<number>();
+    if (code <= 127) set.add(code);
+    return { set, nonAscii: code > 127, end: i + 1 };
+  }
+  // First-char set of one alternation branch sequence: walk atoms left to right; the first
+  // CONSUMING atom decides the set. A leading zero-width assertion/anchor contributes nothing and we
+  // continue. If the first consuming atom is OPTIONAL (`?`/`*` quantifier, or `{0,…}`) the NEXT atom
+  // can also be first → keep unioning until we hit a required atom (or run out → can match empty →
+  // null, "always try"). Returns null on anything unparseable.
+  function seqFirst(src: string): { ascii: Set<number>; nonAscii: boolean } | null {
+    const acc = new Set<number>();
+    let accNon = false;
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '|') break;   // handled by altFirst
+      const atom = atomFirst(src, i);
+      if (!atom) return null;
+      // Quantifier right after the atom?
+      let q = src[atom.end];
+      let optional = false;
+      let nextI = atom.end;
+      if (q === '?' || q === '*') { optional = true; nextI = atom.end + 1; if (src[nextI] === '?' || src[nextI] === '+') nextI++; }
+      else if (q === '+') { optional = false; nextI = atom.end + 1; if (src[nextI] === '?') nextI++; }
+      else if (q === '{') {
+        // {n} / {n,} / {n,m}: optional iff n === 0. Parse minimally.
+        const m = /^\{(\d*)(,(\d*))?\}/.exec(src.slice(atom.end));
+        if (!m) return null;
+        optional = (m[1] === '' || m[1] === '0');
+        nextI = atom.end + m[0].length;
+        if (src[nextI] === '?') nextI++;
+      }
+      const isAssertionOrAnchor = atom.set.size === 0 && !atom.nonAscii;
+      if (!isAssertionOrAnchor) {
+        for (const x of atom.set) acc.add(x);
+        if (atom.nonAscii) accNon = true;
+      }
+      if (isAssertionOrAnchor) { i = nextI; continue; }   // zero-width → next atom is still "first"
+      if (optional) { i = nextI; continue; }              // optional consuming atom → next can be first too
+      return { ascii: acc, nonAscii: accNon };            // hit a REQUIRED consuming atom → done
+    }
+    // Ran off the end without a required atom → the branch can match empty → any char could begin a
+    // longer surrounding match → unknown.
+    return null;
+  }
+  // First-char set across all top-level `|` alternatives of `src`. Union; null if any branch is null.
+  function altFirst(src: string): { ascii: Set<number>; nonAscii: boolean } | null {
+    // Split on top-level '|' (respecting groups + classes + escapes).
+    const branches: string[] = [];
+    let depth = 0, start = 0;
+    for (let k = 0; k < src.length; k++) {
+      const c = src[k];
+      if (c === '\\') { k++; continue; }
+      if (c === '[') { const e = classEnd(src, k); if (e < 0) return null; k = e - 1; continue; }
+      if (c === '(') depth++;
+      else if (c === ')') depth--;
+      else if (c === '|' && depth === 0) { branches.push(src.slice(start, k)); start = k + 1; }
+    }
+    branches.push(src.slice(start));
+    const ascii = new Set<number>();
+    let nonAscii = false;
+    for (const b of branches) {
+      const fs = seqFirst(b);
+      if (!fs) return null;        // a branch we can't analyze → whole thing unknown
+      for (const x of fs.ascii) ascii.add(x);
+      if (fs.nonAscii) nonAscii = true;
+    }
+    return { ascii, nonAscii };
+  }
+  // Public: the first-char filter for a whole token pattern. null ⇒ no filter (always try).
+  function firstCharSet(pattern: string): FirstSet {
+    // An always-failing pattern `(?!)` (YAML's placeholder tokens) never matches → empty filter set
+    // ⇒ never tried. Detect the exact form to keep this safe.
+    if (pattern === '(?!)') return { ascii: new Set<number>(), nonAscii: false };
+    try {
+      const fs = altFirst(pattern);
+      if (!fs) return null;
+      return { ascii: fs.ascii, nonAscii: fs.nonAscii };
+    } catch {
+      return null;   // any analyzer hiccup → always try (sound)
+    }
+  }
+
   const tokenMatchers = grammar.tokens.map(t => ({
     name: t.name,
-    regex: new RegExp(`^(?:${t.pattern})`),
-    blockRegex: t.blockPattern ? new RegExp(`^(?:${t.blockPattern})`) : null,
+    regex: new RegExp(`(?:${t.pattern})`, 'y'),
+    blockRegex: t.blockPattern ? new RegExp(`(?:${t.blockPattern})`, 'y') : null,
     skip: t.flags.includes('skip'),
     isRegex: t.flags.includes('regex'),
     isString: !!t.string,
     blockOnly: !!t.blockOnly,   // matched only outside flow (flowDepth===0) — see TokenDecl.blockOnly
+    // First-char filters for the default and block patterns (computed once). A char the set rejects
+    // can't start this token → the loop skips it. `null` = couldn't prove a filter → always try.
+    first: firstCharSet(t.pattern),
+    blockFirst: t.blockPattern ? firstCharSet(t.blockPattern) : null,
   }));
 
   // ── Lexer hints (declared per-token in the grammar; nothing here hardcodes a
@@ -51,10 +293,20 @@ export function createLexer(grammar: CstGrammar) {
   // ID_Continue are the spec's identifier classes (`$` and `_` are ID_Start; an
   // IdentifierPart additionally admits `$`, ZWNJ U+200C and ZWJ U+200D). Built once.
   const uniIdentRe = /^[$_\p{ID_Start}][$‌‍\p{ID_Continue}]*/u;
+  // Sticky (`y`) twins of the two Unicode-identifier regexes, used by the per-position scan loop
+  // to match at `lastIndex = pos` without slicing the rest of the source. The `^` anchor is
+  // dropped (under `y`, `^` without the `m` flag only matches at index 0, so it would fail at any
+  // pos>0); a bare sticky match at `lastIndex` is exactly the old `^`-on-slice behaviour. `identTextValid`
+  // still uses the `^`-anchored `uniIdentRe` (it validates a whole decoded string from index 0).
+  const uniIdentReY = /[$_\p{ID_Start}][$‌‍\p{ID_Continue}]*/uy;
   // An IdentifierPart run (ID_Continue + `$`, ZWNJ, ZWJ): used to EXTEND an ASCII identifier
   // token that stopped at a continue-only Unicode char (`ab<ZWNJ>cd` — the ASCII pattern emits
   // `ab`, then this consumes `<ZWNJ>cd` and folds it back into the preceding identifier).
-  const uniIdentContRe = /^[$‌‍\p{ID_Continue}]+/u;
+  const uniIdentContReY = /[$‌‍\p{ID_Continue}]+/uy;
+  // Sticky whitespace run, for the non-indentation hot path: matched at `lastIndex = pos` so the
+  // common "skip a run of whitespace" step never slices the rest of the source. (Indentation
+  // grammars use their own char-by-char line-boundary logic, not this.)
+  const wsReY = /\s+/y;
   // Prefixed-identifier tokens (e.g. `#name`): same Unicode fallback behind a fixed literal
   // prefix, tagged with that token's name (so `#℘` lexes as the private-name token, not Ident).
   const prefixedIdentTokens = grammar.tokens
@@ -143,9 +395,12 @@ export function createLexer(grammar: CstGrammar) {
   // value scan below. Only meaningful when `markup.unquotedValueToken` is declared.
   const attrQuoteChars = markup?.attributeQuotes ?? ['"', "'"];
   const ccEscape = (s: string) => s.replace(/[\[\]\\^-]/g, '\\$&');   // escape char-class metachars
+  // Sticky (`y`): scanned at `lastIndex = pos` in tag mode (no rest-of-source slice). No `^`
+  // anchor (under `y` it would only match at index 0); set lastIndex right before exec.
   const unquotedValueRe = markup ? new RegExp(
-    '^[^\\s' + ccEscape(attrQuoteChars.join('') + markup.tagOpen + markup.tagClose +
+    '[^\\s' + ccEscape(attrQuoteChars.join('') + markup.tagOpen + markup.tagClose +
       (markup.attributeAssign ?? '=') + '`') + ']+',
+    'y',
   ) : null;
   // What char (right after `tagOpen`) actually opens a tag (markup.tagOpenAfter is a char-class
   // BODY, so it's used verbatim, not re-escaped). When declared, a `tagOpen` followed by anything
@@ -229,7 +484,11 @@ export function createLexer(grammar: CstGrammar) {
   // A trailing `#…` on the header line is a comment only after whitespace (`> # c`), never glued
   // to the indicator (`>#c` is invalid — §6.8); the `(?<=[ \t])` makes the comment require a
   // preceding space, so a glued `#` fails the signature and the `>`/`|` is not taken as a header.
-  const blockScalarSig = /^[|>](?:[1-9][+-]?|[+-][1-9]?|[+-]|)[ \t]*(?:(?<=[ \t])#[^\n]*)?(?:\r?\n|$)/;
+  // Sticky (`y`): tested at `lastIndex = pos` (no rest-of-source slice). The leading `^` is dropped
+  // (under `y` it would only match at index 0); the trailing `$` is kept — under `y` without `m` it
+  // anchors at the very end of `source`, the same position the end of the old `source.slice(pos)`
+  // denoted, so the "newline-or-EOF" alternation is unchanged.
+  const blockScalarSig = /[|>](?:[1-9][+-]?|[+-][1-9]?|[+-]|)[ \t]*(?:(?<=[ \t])#[^\n]*)?(?:\r?\n|$)/y;
   if (indent?.blockScalar) indentTokenNames.add(indent.blockScalar.token);
   // Col-0 strings (`---`/`...`) that always end a block scalar — a document boundary outranks
   // indentation — and, when one heads the introducer's line, mark a document-ROOT scalar.
@@ -679,7 +938,8 @@ export function createLexer(grammar: CstGrammar) {
           continue;
         }
       } else {
-        const wsMatch = source.slice(pos).match(/^\s+/);
+        wsReY.lastIndex = pos;
+        const wsMatch = wsReY.exec(source);
         if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
       }
 
@@ -687,7 +947,8 @@ export function createLexer(grammar: CstGrammar) {
       // indented than the PARENT node as ONE verbatim token (blank lines included). The content
       // indentation auto-detects from the first non-empty body line; for a document-root scalar the
       // parent indentation is -1, so that first line (and the whole body) may sit at column 0. ──
-      if (indent?.blockScalar && flowDepth === 0 && blockScalarIntro.has(source[pos]) && blockScalarSig.test(source.slice(pos))) {
+      if (indent?.blockScalar && flowDepth === 0 && blockScalarIntro.has(source[pos])
+          && ((blockScalarSig.lastIndex = pos), blockScalarSig.test(source))) {
         const startPos = pos;
         // The header line's text before the introducer decides the parent indentation. If the line
         // begins with a document marker (`--- >`) or with the introducer itself (a bare top-level
@@ -820,7 +1081,8 @@ export function createLexer(grammar: CstGrammar) {
         const prev = tokens[tokens.length - 1];
         if (prev && markup.attributeAssign && prev.text === markup.attributeAssign
             && !attrQuoteChars.includes(source[pos])) {
-          const vm = source.slice(pos).match(unquotedValueRe);
+          unquotedValueRe.lastIndex = pos;
+          const vm = unquotedValueRe.exec(source);
           if (vm) {
             push({ type: markup.unquotedValueToken, text: vm[0], offset: pos });
             pos += vm[0].length;
@@ -848,10 +1110,15 @@ export function createLexer(grammar: CstGrammar) {
         }
       }
 
-      const remaining = source.slice(pos);
       let matched = false;
 
-      // Try token patterns in declaration order (the template token is handled above)
+      // Try token patterns in declaration order (the template token is handled above). Each matcher
+      // is a STICKY regex; setting `lastIndex = pos` and `exec(source)` matches exactly at `pos`
+      // with no rest-of-source slice (the old `remaining.match(/^…/)` allocated the whole tail every
+      // position — the O(N²) cost this loop removes). The per-position char code feeds the first-char
+      // filter (Win B): a matcher whose proven first-char set excludes it is skipped without running
+      // the regex (so a `(` skips all 16 word/number/string/comment regexes before the punct loop).
+      const cc = source.charCodeAt(pos);
       for (const tm of tokenMatchers) {
         if (tm.name === templateTokenName) continue;
         if (markupTokenNames.has(tm.name)) continue;   // scanned by the markup state machine
@@ -863,8 +1130,14 @@ export function createLexer(grammar: CstGrammar) {
         }
         // Outside flow collections, an indentation grammar may widen a token (its block variant
         // treats flow indicators as plain content); inside flow, the default restricted form wins.
-        const re = tm.blockRegex && flowDepth === 0 ? tm.blockRegex : tm.regex;
-        const m = remaining.match(re);
+        const useBlock = !!(tm.blockRegex && flowDepth === 0);
+        // First-char filter: skip a matcher whose proven set can't begin with `cc`. `null` ⇒ no proof
+        // ⇒ always try (sound). For cc ≥ 128 (non-ASCII), only matchers whose set admits non-ASCII run.
+        const filt = useBlock ? tm.blockFirst : tm.first;
+        if (filt && (cc > 127 ? !filt.nonAscii : !filt.ascii.has(cc))) continue;
+        const re = useBlock ? tm.blockRegex! : tm.regex;
+        re.lastIndex = pos;
+        const m = re.exec(source);
         if (m) {
           // Document marker inside a multi-line QUOTED scalar (indentation grammars): a col-0
           // `---`/`...` followed by ws/EOL is an UNCONDITIONAL document boundary that outranks an
@@ -948,7 +1221,7 @@ export function createLexer(grammar: CstGrammar) {
       if (!matched) {
         // Try punctuation literals (longest first)
         for (const lit of punctLiterals) {
-          if (remaining.startsWith(lit)) {
+          if (source.startsWith(lit, pos)) {
             // Track control-head parens so a `/` after `if (…)`/`while (…)` is a regex.
             // The keyword must be a real keyword head, not a member name: `obj.for(x) / y`
             // is a method call + division, so skip when the keyword is itself preceded by
@@ -1028,7 +1301,8 @@ export function createLexer(grammar: CstGrammar) {
         // immediately adjacent to `pos` (no whitespace/other token between).
         const prev = tokens[tokens.length - 1];
         if (prev && identLikeTokenNames.has(prev.type) && prev.offset + prev.text.length === pos) {
-          const cont = remaining.match(uniIdentContRe);
+          uniIdentContReY.lastIndex = pos;
+          const cont = uniIdentContReY.exec(source);
           if (cont) {
             prev.text += cont[0];
             pos += cont[0].length;
@@ -1040,7 +1314,8 @@ export function createLexer(grammar: CstGrammar) {
       if (!matched && identTokenName) {
         // Fallback: a Unicode identifier the declared identifier token's pattern may have
         // missed (e.g. accented or non-Latin names, `℘`, ZWNJ/ZWJ). Tagged with that token's name.
-        const identMatch = remaining.match(uniIdentRe);
+        uniIdentReY.lastIndex = pos;
+        const identMatch = uniIdentReY.exec(source);
         if (identMatch) {
           push({ type: identTokenName, text: identMatch[0], offset: pos });
           pos += identMatch[0].length;
@@ -1052,8 +1327,9 @@ export function createLexer(grammar: CstGrammar) {
         // Same Unicode fallback for a prefixed-identifier token (`#℘`): match the literal
         // prefix, then a Unicode IdentifierName on the rest, and emit the whole as one token.
         for (const pt of prefixedIdentTokens) {
-          if (!remaining.startsWith(pt.prefix)) continue;
-          const m = remaining.slice(pt.prefix.length).match(uniIdentRe);
+          if (!source.startsWith(pt.prefix, pos)) continue;
+          uniIdentReY.lastIndex = pos + pt.prefix.length;
+          const m = uniIdentReY.exec(source);
           if (m) {
             const text = pt.prefix + m[0];
             push({ type: pt.name, text, offset: pos });
