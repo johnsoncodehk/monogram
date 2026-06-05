@@ -99,11 +99,11 @@
     },
     "dquotekey": {
       "name": "entity.name.tag.yaml",
-      "match": "\"(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)|[^\"\\\\])*\"(?=[\\t ]*:)"
+      "match": "\"(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})|[^\"\\\\\\r\\n])*\"(?=[\\t ]*:)"
     },
     "squotekey": {
       "name": "entity.name.tag.yaml",
-      "match": "'(?:''|[^'])*'(?=[\\t ]*:)"
+      "match": "'(?:''|[^'\\r\\n])*'(?=[\\t ]*:)"
     },
     "dquote": {
       "name": "string.quoted.double.yaml",

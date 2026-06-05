@@ -17,19 +17,19 @@ module.exports = grammar({
   ],
 
   rules: {
-    stream: $ => seq(repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), optional($.indent), optional($.node), optional($.dedent), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline)),
+    stream: $ => choice(seq(repeat1(seq(choice($.yaml_directive, $.directive), optional($.newline))), optional(seq($.doc_start, optional($.explicit_doc_body), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline)))), seq(optional($.indent), optional(choice($.doc_fold, $.node)), optional($.dedent), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline))),
 
     property: $ => choice(seq($.anchor, optional($.tag)), seq($.tag, optional($.anchor))),
 
     content_node: $ => choice($.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar),
 
-    node: $ => choice(seq(optional($.anchor), optional($.tag), optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), seq($.tag, $.anchor, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar)))),
+    node: $ => choice(seq(optional($.anchor), optional($.tag), optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), seq($.tag, $.anchor, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), $.block_sequence),
 
-    mapping_or_scalar: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, $.plain, repeat(seq($.newline, $.plain)), $.dedent), seq($.scalar, optional(seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry)))))),
+    mapping_or_scalar: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, $.plain, repeat(seq($.newline, $.plain)), $.dedent), seq($.block_key_scalar, ":", optional($.map_value), repeat(seq($.newline, $.map_entry))), $.scalar),
 
     alias_or_keyed: $ => seq($.alias, optional(seq(":", optional($.map_value), repeat(seq($.newline, $.map_entry))))),
 
-    block_key: $ => choice(seq(optional($.property), $.scalar), $.alias),
+    block_key: $ => choice(seq(optional($.property), $.block_key_scalar), $.alias),
 
     explicit_entry: $ => seq("?", optional($.map_value), optional(choice(seq($.newline, ":", optional($.map_value)), seq(":", optional($.map_value))))),
 
@@ -49,7 +49,7 @@ module.exports = grammar({
 
     collection_content: $ => choice($.block_sequence, $.explicit_mapping, $.flow_mapping, $.flow_sequence, $.mapping_from_scalar),
 
-    mapping_from_scalar: $ => seq($.scalar, ":", optional($.map_value), repeat(seq($.newline, $.map_entry))),
+    mapping_from_scalar: $ => seq($.block_key_scalar, ":", optional($.map_value), repeat(seq($.newline, $.map_entry))),
 
     map_value_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.indented_value_node, $.dedent), $.map_inline_content))), $.map_inline_content),
 
@@ -79,11 +79,15 @@ module.exports = grammar({
 
     scalar: $ => choice($.dquote_key, $.squote_key, $.dquote, $.squote, $.block_scalar, $.key, $.num, $.bool_null, $.plain),
 
-    inline_doc_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.flow_mapping, $.flow_sequence, $.alias, $.scalar))), choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar)),
+    block_key_scalar: $ => choice($.dquote_key, $.squote_key, $.key, $.num, $.bool_null, $.plain),
 
-    explicit_doc_body: $ => choice(seq($.newline, repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), optional($.indent), optional($.node), optional($.dedent)), $.inline_doc_node),
+    doc_fold: $ => seq(choice($.num, $.bool_null, $.plain), repeat1(choice(seq($.newline, choice($.plain, $.yaml_directive, $.directive)), seq($.indent, choice($.plain, $.yaml_directive, $.directive), repeat(seq($.newline, choice($.plain, $.yaml_directive, $.directive))), $.dedent)))),
 
-    after_doc_end: $ => choice(seq(repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), $.doc_start, optional($.explicit_doc_body)), seq(optional($.indent), $.node, optional($.dedent))),
+    inline_doc_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.flow_mapping, $.flow_sequence, $.alias, $.scalar))), $.doc_fold, choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar)),
+
+    explicit_doc_body: $ => choice(seq($.newline, optional($.indent), optional(choice($.doc_fold, $.node)), optional($.dedent)), $.inline_doc_node),
+
+    after_doc_end: $ => choice(seq(repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), $.doc_start, optional($.explicit_doc_body)), seq(optional($.indent), choice($.doc_fold, $.node), optional($.dedent))),
 
     next_doc: $ => choice(seq($.doc_start, optional($.explicit_doc_body)), seq($.doc_end, optional(seq($.newline, optional($.after_doc_end))))),
 
@@ -97,9 +101,9 @@ module.exports = grammar({
 
     comment: $ => token(/#[^\n]*/),
 
-    dquote_key: $ => token(/"(?:\\(?:[0abtnvfre"\/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\r?\n)|[^"\\])*"/),
+    dquote_key: $ => token(/"(?:\\(?:[0abtnvfre"\/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})|[^"\\\r\n])*"/),
 
-    squote_key: $ => token(/'(?:''|[^'])*'/),
+    squote_key: $ => token(/'(?:''|[^'\r\n])*'/),
 
     dquote: $ => token(/"(?:\\(?:[0abtnvfre"\/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\r?\n)|[^"\\])*"/),
 

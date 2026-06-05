@@ -36,6 +36,7 @@ export function createLexer(grammar: CstGrammar) {
     blockRegex: t.blockPattern ? new RegExp(`^(?:${t.blockPattern})`) : null,
     skip: t.flags.includes('skip'),
     isRegex: t.flags.includes('regex'),
+    isString: !!t.string,
   }));
 
   // ── Lexer hints (declared per-token in the grammar; nothing here hardcodes a
@@ -387,6 +388,21 @@ export function createLexer(grammar: CstGrammar) {
           pos = p + 1; if (ch === '\r' && source[pos] === '\n') pos++;
           continue;                                                         // still at a line start
         }
+        // A WHITESPACE-ONLY line that contains a TAB (`\t`, ` \t`, `\t `) is ALSO blank — the
+        // space-only branch above (which only counted a run of spaces into `col`) does not see it,
+        // so without this it would be mis-measured as structure (a spurious INDENT/NEWLINE) or hit
+        // the §6.1 tab-error below. Scan the full leading space/tab run; if it ends at a line break
+        // or EOF the line is empty → skip it and stay at a line start. Must run BEFORE the §6.1
+        // tab check / any indent emission. (yaml-test-suite DK95 ` \t\nfoo: 1`, `foo: 1\n\t\nbar`,
+        // `foo: 1\n \t\nbar`; NB6Z a `  \t` blank line inside an indented same-column scalar fold.)
+        if (ch === '\t') {
+          let b = p; while (b < source.length && (source[b] === ' ' || source[b] === '\t')) b++;
+          const bc = source[b];
+          if (b >= source.length || bc === '\n' || bc === '\r') {
+            pos = b; if (bc === '\r' && source[pos + 1] === '\n') pos += 2; else if (bc !== undefined) pos++;
+            continue;
+          }
+        }
         // YAML (§6.1) forbids a TAB in indentation. The tricky part: a tab is illegal only where
         // the leading whitespace IS a node's indentation — i.e. the line begins a block-structural
         // node (a `-`/`?` indicator, an empty-`:` key, a node property `&`/`!`, or a scalar that is
@@ -478,17 +494,48 @@ export function createLexer(grammar: CstGrammar) {
         const before = source.slice(lineBegin, startPos).replace(/^[ \t]+/, '');   // line content before the introducer
         const atRoot = currentLineCol === 0 && (before === '' || blockScalarDocMarkers.some((m) => before === m + ' ' || before.startsWith(m + ' ')));
         const parent = atRoot ? -1 : currentLineCol;
+        // Does the header carry an EXPLICIT indentation indicator (`|N`/`>N`, a digit right after the
+        // introducer / chomp char)? If so the content column is pinned and the §8.1.1.1 auto-detect
+        // rule below does not apply (a leading-more-indented blank line is then legal — `>3`).
+        const hdr = source.slice(startPos + 1); const explicitIndicator = /^[+-]?[1-9]/.test(hdr);
         let p = pos; while (p < source.length && source[p] !== '\n') p++; if (p < source.length) p++;  // skip the header line
+        // §8.1.1.1: with NO explicit indicator the content indentation is auto-detected from the
+        // first non-empty line, and a LEADING blank line may not be MORE indented than that content
+        // (else the indentation is ambiguous → an error). Track the deepest leading-blank column;
+        // when the first content line lands, a deeper leading blank with no explicit indicator is a
+        // parse error. (yaml-test-suite 5LLU `> \n  \n   \n invalid`, S98Z `>` then deeper blanks +
+        // ` # comment`, W9L4 `|` then a 5-space blank before 2-space content.)
+        let maxLeadingBlankCol = -1, sawContent = false;
         while (p < source.length) {
           let q = p, c = 0;
           while (q < source.length && source[q] === ' ') { q++; c++; }
           if (q >= source.length) { p = q; break; }
           if (source[q] === '\n' || source[q] === '\r') {                 // blank line — part of the scalar
+            if (!sawContent && c > maxLeadingBlankCol) maxLeadingBlankCol = c; // a leading blank's column
             p = q + 1; if (source[q] === '\r' && source[p] === '\n') p++;
             continue;
           }
+          if (source[q] === '\t') {                                        // a TAB in a blank line of the body
+            let t = q; while (t < source.length && (source[t] === ' ' || source[t] === '\t')) t++;
+            if (t >= source.length || source[t] === '\n' || source[t] === '\r') {
+              // Whitespace-only line with a tab: the tab sits at column c. A tab at column ≤ the
+              // parent indent is a §6.1 indentation error inside the scalar (the line cannot be a
+              // more-indented content/blank line — `foo: |\n\t\nbar` Y79Y); a DEEPER tab (column >
+              // parent) is harmless blank content. Throw only the shallow case.
+              if (c <= parent) throw new Error(`Tab character used in indentation at offset ${q}`);
+              if (!sawContent && c > maxLeadingBlankCol) maxLeadingBlankCol = c;
+              p = t + 1; if (source[t] === '\r' && source[p] === '\n') p++;
+              continue;
+            }
+          }
           if (c === 0 && markerAt(source, q)) break;                       // a col-0 `---`/`...` ends the scalar
-          if (c > parent) { let e = q; while (e < source.length && source[e] !== '\n') e++; p = e < source.length ? e + 1 : e; }
+          if (c > parent) {
+            if (!sawContent && maxLeadingBlankCol > c && !explicitIndicator) { // §8.1.1.1 leading blank more-indented than content
+              throw new Error(`Block scalar leading empty line is more indented than content at offset ${q}`);
+            }
+            sawContent = true;
+            let e = q; while (e < source.length && source[e] !== '\n') e++; p = e < source.length ? e + 1 : e;
+          }
           else break;                                                     // dedent → the block scalar ends
         }
         push({ type: indent.blockScalar!.token, text: source.slice(startPos, p), offset: startPos });
@@ -581,6 +628,27 @@ export function createLexer(grammar: CstGrammar) {
         const re = tm.blockRegex && flowDepth === 0 ? tm.blockRegex : tm.regex;
         const m = remaining.match(re);
         if (m) {
+          // Document marker inside a multi-line QUOTED scalar (indentation grammars): a col-0
+          // `---`/`...` followed by ws/EOL is an UNCONDITIONAL document boundary that outranks an
+          // open quote (§9.1.1 — a quoted scalar may not span a document boundary). The quote regex
+          // greedily swallowed it; scan the matched text's INTERNAL lines (right after each `\n`) and
+          // if one begins at column 0 with such a marker, TRUNCATE the match to just before that
+          // `\n`. The now-unterminated quote leaves an opening delimiter the parser can't complete
+          // (and the trailing real quote later lex-errors) → reject, while the marker re-lexes as
+          // DocStart/DocEnd. FN-safe: a mid-line / indented / non-marker `---` keeps markerAt false.
+          // (yaml-test-suite 5TRB `---\n"\n---\n"`, 9MQT `--- "a\n... x\nb"`, RXY3 `---\n'\n...\n'`.)
+          if (tm.isString && indent?.blockScalar && m[0].includes('\n')) {
+            let cut = -1;
+            for (let k = 0; k < m[0].length; k++) {
+              if (m[0][k] === '\n' && markerAt(source, pos + k + 1)) { cut = k; break; }
+            }
+            if (cut >= 0) {
+              push({ type: tm.name, text: m[0].slice(0, cut), offset: pos });
+              pos += cut;
+              matched = true;
+              break;
+            }
+          }
           // Comment-separation (indentation grammars): a comment indicator (`#`) opens a comment
           // only at line start or after whitespace (§6.6). A `#` GLUED to a preceding non-space
           // (`]#x`, `,#x`, `"v"#c`) is NOT a comment — it is invalid content, so refuse the comment

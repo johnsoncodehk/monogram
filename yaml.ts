@@ -98,14 +98,25 @@ const Key = token(
   new RegExp(`${PLAIN_HEAD}${PLAIN_BODY}${KEY_SEP}`),
   { scope: 'entity.name.tag', blockPattern: new RegExp(`${PLAIN_HEAD_BLOCK}${PLAIN_BODY_BLOCK}${KEY_SEP}`) },
 );
-// Double-quoted scalar in KEY position (a `"…"` immediately followed by a `:` key-separator).
+// Double-quoted scalar in KEY position (a `"…"` immediately followed by a `:` key-separator). An
+// implicit key — a quoted scalar that is a mapping key — must be on a SINGLE line (§7.4.2 / the
+// 1024-char implicit-key limit), so the KEY-position body forbids a real line break: the escape set
+// drops the `\`-at-EOL line continuation and the unescaped class excludes `\n`/`\r`. A MULTI-LINE
+// quoted scalar before a `:` therefore does NOT match the key token — it lexes as the plain DQuote
+// value below (no `:` lookahead), so the block-key rule paths (which take only the key tokens) leave
+// the `:` unconsumed → reject (yaml-test-suite 7LBH/D49Q/JKF3 multi-line block keys; the flow-seq
+// single-pair multi-line key DK4H likewise). A multi-line quoted VALUE (`key: "a\nb"`) is unaffected
+// (it isn't in key position). The escaped `\n` form (`"a\\nb":`, a literal backslash-n) stays a
+// single-line key. Flow MAPPING keys come via FlowNode→DQuote (not this token), so `{ "a\nb": 1 }`
+// — a legal multi-line flow-map key — is also unaffected.
+const DQ_ESC_NONL = String.raw`\\(?:[0abtnvfre"/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})`;
 const DQuoteKey = token(
-  new RegExp(`${DQUOTE_BODY}${QKEY_SEP}`),
+  new RegExp(String.raw`"(?:${DQ_ESC_NONL}|[^"\\\r\n])*"${QKEY_SEP}`),
   { string: true, scope: 'entity.name.tag' },
 );
-// Single-quoted scalar in KEY position.
+// Single-quoted scalar in KEY position (single-line — see DQuoteKey).
 const SQuoteKey = token(
-  new RegExp(`'(?:''|[^'])*'${QKEY_SEP}`),
+  new RegExp(String.raw`'(?:''|[^'\r\n])*'${QKEY_SEP}`),
   { string: true, scope: 'entity.name.tag' },
 );
 
@@ -159,6 +170,13 @@ const Plain = token(
 // HIGHLIGHTING splits of the generic quoted/plain scalars; the parser accepts them all wherever
 // a scalar is legal, so the parse tree (and the src-coverage metric) is unchanged.
 const Scalar = rule(() => [DQuoteKey, SQuoteKey, DQuote, SQuote, BlockScalar, Key, Num, BoolNull, Plain]);
+// A scalar eligible to be a BLOCK-mapping KEY: the SINGLE-LINE shapes only. An implicit key must be
+// on one line, so the multi-line-capable DQuote/SQuote value tokens and the multi-line BlockScalar
+// are excluded — a single-line quoted key always lexes as the (now newline-free) DQuoteKey/SQuoteKey,
+// while a multi-line quoted scalar before `:` lexes as DQuote and so is NOT a key here, leaving the
+// `:` unconsumed → reject (7LBH/D49Q/JKF3). Used by every block-key path (MappingOrScalar key arm,
+// MappingFromScalar, BlockKey); flow-key paths keep their own tokens.
+const BlockKeyScalar = rule(() => [DQuoteKey, SQuoteKey, Key, Num, BoolNull, Plain]);
 
 // A NODE PROPERTY: an anchor and/or tag, in either order (`&a`, `!!t`, `&a !!t`, `!!t &a`).
 // At least one is present (a bare node with no property is parsed by ContentNode). A property
@@ -186,9 +204,16 @@ const nodeContentAlts = () => [
   [Indent, Node, Dedent], [Newline, Node],
   BlockSequence, ExplicitMapping, EmptyKeyMapping, FlowMapping, FlowSequence, AliasOrKeyed, MappingOrScalar,
 ] as const;
+// `not('-')` after the property: a block SEQUENCE may not begin INLINE after a node property — a
+// `-` indicator must start a fresh line, so `&anchor - seq` / `!!seq - a` are illegal (the valid
+// form has a Newline between, `&seq\n- a`, which the `[Newline, Node]` content branch matches; a
+// numeric `-1` lexes as one Num/Plain token, not a `-` literal, so `&a -1` is unaffected). The
+// guard fires only when a property is present, so the BARE inline block sequence (`- a`, no
+// property) is matched by its own dedicated last branch below. yaml-test-suite SY6V.
 const Node = rule(() => [
-  [opt(Anchor), opt(Tag), opt(alt(...nodeContentAlts()))],
-  [Tag, Anchor, opt(alt(...nodeContentAlts()))],
+  [opt(Anchor), opt(Tag), not('-'), opt(alt(...nodeContentAlts()))],
+  [Tag, Anchor, not('-'), opt(alt(...nodeContentAlts()))],
+  BlockSequence,
 ]);
 
 // A multi-line PLAIN scalar folded across an indented continuation: an unquoted scalar (plain /
@@ -217,10 +242,41 @@ const foldedPlain = () => [alt(Num, BoolNull, Plain), noCommentBefore, Indent, P
 // foldedPlain. This is the in-block (bounded) same-column fold ONLY; the doc-level same-column fold
 // is deliberately NOT modelled (it over-accepts `a: b\nc` / `- a\n- b\nc` and can't be CFG-gated).
 const foldedPlainBlock = () => [Indent, alt(Num, BoolNull, Plain), many1(noCommentBefore, Newline, Plain), Dedent] as const;
-// Scalar, optionally continued as a block mapping when a ':' follows.
+// A DOCUMENT-BODY same-column (and across-indent) multi-line plain scalar fold: an unquoted scalar
+// followed by ≥1 continuation that is either a SAME-column line (`Newline Plain`) or a more-indented
+// run (`Indent Plain (Newline Plain)* Dedent`). At document-body level (no enclosing key/item) a
+// same-column `Newline Plain` is a CONTINUATION of the scalar, not a sibling — `---word1\nword2`,
+// `a\nb\n  c\nd\n\ne`, the directive-looking `---\nscalar\n%YAML 1.2` (the `%…` line folds as plain
+// content), etc. (yaml-test-suite 82AN/9YRD/EX5H/EXG3/HS5T/XLQ9/M7A3). This is reachable ONLY from
+// document-body positions; in a VALUE/ITEM position a same-column `Newline Plain` IS a sibling, so
+// putting this in the shared MappingOrScalar would over-accept `a: b\nc` / `- a\n- b\nc`. The
+// continuation must be a bare `Plain`: a `b: c` line lexes `b` as the Key token (a `:` follows), so
+// it does NOT extend the fold and a structural continuation stays a reject (the FP gate). Each
+// continuation is `noCommentBefore`-guarded — a comment ENDS a plain scalar (a `# …` line, or an
+// inline `b # c`, must not be folded in). many1 ⇒ a bare single scalar is NOT a fold (it stays the
+// ordinary Scalar/Node path), so DocFold only ever fires on a genuine ≥2-line plain scalar.
+// A continuation LINE of a fold: a bare `Plain`, or a `%…` line that the lexer eagerly tokenised as
+// a directive but which — because it follows a plain-scalar line inside a document body — is actually
+// plain CONTENT (`---\nscalar\n%YAML 1.2`, XLQ9 — the "unmodeled doc fold" the directive-in-body
+// rejection deliberately leaves; a `%…` as the FIRST body token has no preceding scalar so DocFold
+// never reaches it and it stays a reject). The directive tokens carry no real key separator, so they
+// can only ever be folded content here, never reintroduce a structural mapping.
+const foldLine = () => alt(Plain, YamlDirective, Directive);
+const DocFold = rule(() => [
+  [alt(Num, BoolNull, Plain), many1(alt(
+    [noCommentBefore, Newline, foldLine()],
+    [noCommentBefore, Indent, foldLine(), many(noCommentBefore, Newline, foldLine()), Dedent],
+  ))],
+]);
+// Scalar, optionally continued as a block mapping when a ':' follows. UN-FACTORED into a key arm
+// (a SINGLE-LINE BlockKeyScalar then a required `:`) and a bare-value arm (any Scalar shape): a
+// multi-line quoted scalar before `:` is not a BlockKeyScalar, so it falls to the value arm and the
+// trailing `:` is left unconsumed → reject (7LBH/D49Q/JKF3). The parser's longest-match prefers the
+// key arm for a single-line `key:` (it consumes more), so single-line mappings are unchanged.
 const MappingOrScalar = rule(() => [
   foldedPlain(),
-  [Scalar, opt(':', opt(MapValue), many(Newline, MapEntry))],
+  [BlockKeyScalar, ':', opt(MapValue), many(Newline, MapEntry)],
+  Scalar,
 ]);
 // An ALIAS, optionally continued as a block mapping when a ':' follows — an alias may be a
 // block-mapping key (`*b : *a`; yaml-test-suite E76Z / 6M2F). Left-factored like MappingOrScalar so
@@ -244,7 +300,7 @@ const AliasOrKeyed = rule(() => [
 // key is intentionally omitted (the single-line implicit-key constraint is unobservable after the
 // lexer drops in-flow newlines — see AliasOrKeyed). Used by every implicit mapping entry.
 const BlockKey = rule(() => [
-  [opt(Property), Scalar],
+  [opt(Property), BlockKeyScalar],
   Alias,
 ]);
 // An EXPLICIT `? key : value` entry. The `: value` half is optional (`? key` alone is a null-valued
@@ -318,12 +374,15 @@ const IndentedValueNode = rule(() => [
 // A node content that is a COLLECTION (never a bare scalar): a block/flow sequence or mapping, an
 // explicit `?`-mapping, or a scalar that is REQUIRED to be a mapping key (a `:` must follow).
 const CollectionContent = rule(() => [alt(BlockSequence, ExplicitMapping, FlowMapping, FlowSequence, MappingFromScalar)]);
-const MappingFromScalar = rule(() => [[Scalar, ':', opt(MapValue), many(Newline, MapEntry)]]);
+const MappingFromScalar = rule(() => [[BlockKeyScalar, ':', opt(MapValue), many(Newline, MapEntry)]]);
 // A node in MAP-VALUE position (after `:`): a property whose content is inline, INDENTED, or
 // EMPTY (no same-column [Newline, …] tail — that line is a sibling); OR a bare inline content
 // node (flow/alias/scalar-led). NEVER an inline block sequence (`key: - a` is invalid YAML).
+// `not(Alias)` after the property: an ALIAS is a pure reference and cannot carry an anchor/tag, so
+// a property glued to an inline alias (`key2: &b *a`) is illegal (yaml-test-suite SR86). The bare
+// (property-less) inline alias stays legal via the second branch (MapInlineContent → Alias).
 const MapValueNode = rule(() => [
-  [Property, opt(alt([Indent, IndentedValueNode, Dedent], MapInlineContent))],
+  [Property, not(Alias), opt(alt([Indent, IndentedValueNode, Dedent], MapInlineContent))],
   MapInlineContent,
 ]);
 const MapInlineContent = rule(() => [alt(FlowMapping, FlowSequence, Alias, MappingOrScalar)]);
@@ -387,6 +446,7 @@ const FlowSequence = rule(() => [['[', opt(FlowSeqEntry, many(',', FlowSeqEntry)
 // content is likewise a bare scalar / flow / alias, never an on-the-line block collection.
 const InlineDocNode = rule(() => [
   [Property, opt(alt([Indent, Node, Dedent], [Newline, Node], FlowMapping, FlowSequence, Alias, Scalar))],
+  DocFold,
   alt(FlowMapping, FlowSequence, Alias, Scalar),
 ]);
 
@@ -404,8 +464,14 @@ const InlineDocNode = rule(() => [
 // site. Kept a RULE (not an inline `alt`) so gen-tm's explicit-key prefix detection — which scans
 // for an `opt(token)` followed LATER IN THE SAME SEQ by an `alt` — does not mistake this body's
 // alternation for YAML's anchor/tag node-prefix (a `ref` is opaque to that scan).
+// A DIRECTIVE may NOT appear inside a `---` document body — it heads a NEW document and so only
+// follows a `...` end marker (the `AfterDocEnd` `...`-then-directives path). The earlier in-body
+// `many(directive)` allowance here was redundant with that path AND over-accepted a directive as the
+// first body token (`%YAML 1.2\n---\n%YAML 1.2\n---`, yaml-test-suite MUS6). A doc-level `%…` line
+// that is actually a plain scalar (`---\nscalar\n%YAML 1.2`, XLQ9) folds via the doc-body plain fold,
+// not via this rule, so dropping the directive allowance does not regress it.
 const ExplicitDocBody = rule(() => [
-  [Newline, many(alt(YamlDirective, Directive), opt(Newline)), opt(Indent), opt(Node), opt(Dedent)],
+  [Newline, opt(Indent), opt(alt(DocFold, Node)), opt(Dedent)],
   InlineDocNode,
 ]);
 
@@ -422,7 +488,7 @@ const ExplicitDocBody = rule(() => [
 // required, so the branch's FIRST set is {directive, DocStart} — disjoint from the bare-doc Node.
 const AfterDocEnd = rule(() => [
   [many(alt(YamlDirective, Directive), opt(Newline)), DocStart, opt(ExplicitDocBody)],
-  [opt(Indent), Node, opt(Dedent)],
+  [opt(Indent), alt(DocFold, Node), opt(Dedent)],
 ]);
 // The boundary + body of each document after the first: a `---` document, or a `...` end marker
 // optionally followed by another (`---` or bare) document. Both branches begin with a required
@@ -437,12 +503,20 @@ const NextDoc = rule(() => [
 
 // A YAML stream: leading directives, an implicit first (bare) document, then a run of further
 // documents each introduced by `---` or separated by `...` (with an optional trailing `...`).
-const Stream = rule(() => [[
-  many(alt(YamlDirective, Directive), opt(Newline)),
-  opt(Indent), opt(Node), opt(Dedent),
-  many(opt(Newline), NextDoc),
-  opt(Newline), opt(DocEnd), opt(Newline),
-]]);
+// Two top-level shapes:
+//   (1) DIRECTIVE-LED — leading `%YAML`/`%TAG` directives apply to the document that follows, which
+//       must be an EXPLICIT `---` document (§9.1.1). The `---` doc (and everything after) is OPTIONAL
+//       so a directive-only stream that ends at EOF stays valid (`%YAML 1.2\n`, an implied empty
+//       document; yaml-test-suite 9MMA) — but when the `---` is ABSENT nothing else may follow, so a
+//       bare `...` after the directives (no intervening DocStart) is left unconsumed → reject
+//       (yaml-test-suite B63P `%YAML 1.2\n...`). After the first `---`, normal multi-doc continuation.
+//   (2) IMPLICIT — no leading directives: an implicit first (bare) document, then the same
+//       multi-doc continuation. A bare `...` here is fine (it is the empty first document's end).
+const streamTail = () => [many(opt(Newline), NextDoc), opt(Newline), opt(DocEnd), opt(Newline)] as const;
+const Stream = rule(() => [
+  [many1(alt(YamlDirective, Directive), opt(Newline)), opt(DocStart, opt(ExplicitDocBody), ...streamTail())],
+  [opt(Indent), opt(alt(DocFold, Node)), opt(Dedent), ...streamTail()],
+]);
 
 const indent: IndentConfig = {
   indentToken: 'Indent',
@@ -468,7 +542,7 @@ export default defineGrammar({
     Property, ContentNode, Node, MappingOrScalar, AliasOrKeyed, BlockKey, ExplicitEntry, MapEntry, MapEntryNoEmpty, ExplicitMapping, EmptyKeyMapping, Value, MapValue,
     IndentedValueNode, CollectionContent, MappingFromScalar,
     MapValueNode, MapInlineContent, SeqValueNode, SeqInlineContent, BlockSequence, SeqItem,
-    FlowNode, FlowExplicit, FlowMapEntry, FlowMapping, FlowSeqEntry, FlowSeqKey, FlowSequence, Scalar, InlineDocNode, ExplicitDocBody, AfterDocEnd, NextDoc, Stream,
+    FlowNode, FlowExplicit, FlowMapEntry, FlowMapping, FlowSeqEntry, FlowSeqKey, FlowSequence, Scalar, BlockKeyScalar, DocFold, InlineDocNode, ExplicitDocBody, AfterDocEnd, NextDoc, Stream,
   },
   entry: Stream,
   indent,

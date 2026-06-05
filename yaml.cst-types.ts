@@ -106,6 +106,7 @@ export interface MappingOrScalarNode extends CstPos {
     | (CstLeaf & { tokenType: 'Newline' })
     | (CstLeaf & { tokenType: 'Num' })
     | (CstLeaf & { tokenType: 'Plain' })
+    | BlockKeyScalarNode
     | MapEntryNode
     | MapValueNode
     | ScalarNode
@@ -131,8 +132,8 @@ export interface BlockKeyNode extends CstPos {
   rule: 'BlockKey';
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
+    | BlockKeyScalarNode
     | PropertyNode
-    | ScalarNode
   >;
 }
 
@@ -262,9 +263,9 @@ export interface MappingFromScalarNode extends CstPos {
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
     | (CstLeaf & { tokenType: 'Newline' })
+    | BlockKeyScalarNode
     | MapEntryNode
     | MapValueNode
-    | ScalarNode
   >;
 }
 
@@ -437,6 +438,36 @@ export interface ScalarNode extends CstPos {
   >;
 }
 
+/** `BlockKeyScalar` node. Children (flattened, in source order) are drawn from: */
+export interface BlockKeyScalarNode extends CstPos {
+  kind: 'node';
+  rule: 'BlockKeyScalar';
+  children: Array<
+    | (CstLeaf & { tokenType: 'BoolNull' })
+    | (CstLeaf & { tokenType: 'DQuoteKey' })
+    | (CstLeaf & { tokenType: 'Key' })
+    | (CstLeaf & { tokenType: 'Num' })
+    | (CstLeaf & { tokenType: 'Plain' })
+    | (CstLeaf & { tokenType: 'SQuoteKey' })
+  >;
+}
+
+/** `DocFold` node. Children (flattened, in source order) are drawn from: */
+export interface DocFoldNode extends CstPos {
+  kind: 'node';
+  rule: 'DocFold';
+  children: Array<
+    | (CstLeaf & { tokenType: 'BoolNull' })
+    | (CstLeaf & { tokenType: 'Dedent' })
+    | (CstLeaf & { tokenType: 'Directive' })
+    | (CstLeaf & { tokenType: 'Indent' })
+    | (CstLeaf & { tokenType: 'Newline' })
+    | (CstLeaf & { tokenType: 'Num' })
+    | (CstLeaf & { tokenType: 'Plain' })
+    | (CstLeaf & { tokenType: 'YamlDirective' })
+  >;
+}
+
 /** `InlineDocNode` node. Children (flattened, in source order) are drawn from: */
 export interface InlineDocNodeNode extends CstPos {
   kind: 'node';
@@ -446,6 +477,7 @@ export interface InlineDocNodeNode extends CstPos {
     | (CstLeaf & { tokenType: 'Dedent' })
     | (CstLeaf & { tokenType: 'Indent' })
     | (CstLeaf & { tokenType: 'Newline' })
+    | DocFoldNode
     | FlowMappingNode
     | FlowSequenceNode
     | NodeNode
@@ -460,10 +492,9 @@ export interface ExplicitDocBodyNode extends CstPos {
   rule: 'ExplicitDocBody';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })
-    | (CstLeaf & { tokenType: 'Directive' })
     | (CstLeaf & { tokenType: 'Indent' })
     | (CstLeaf & { tokenType: 'Newline' })
-    | (CstLeaf & { tokenType: 'YamlDirective' })
+    | DocFoldNode
     | InlineDocNodeNode
     | NodeNode
   >;
@@ -480,6 +511,7 @@ export interface AfterDocEndNode extends CstPos {
     | (CstLeaf & { tokenType: 'Indent' })
     | (CstLeaf & { tokenType: 'Newline' })
     | (CstLeaf & { tokenType: 'YamlDirective' })
+    | DocFoldNode
     | ExplicitDocBodyNode
     | NodeNode
   >;
@@ -506,9 +538,12 @@ export interface StreamNode extends CstPos {
     | (CstLeaf & { tokenType: 'Dedent' })
     | (CstLeaf & { tokenType: 'Directive' })
     | (CstLeaf & { tokenType: 'DocEnd' })
+    | (CstLeaf & { tokenType: 'DocStart' })
     | (CstLeaf & { tokenType: 'Indent' })
     | (CstLeaf & { tokenType: 'Newline' })
     | (CstLeaf & { tokenType: 'YamlDirective' })
+    | DocFoldNode
+    | ExplicitDocBodyNode
     | NextDocNode
     | NodeNode
   >;
@@ -546,6 +581,8 @@ export type CstNode =
   | FlowSeqKeyNode
   | FlowSequenceNode
   | ScalarNode
+  | BlockKeyScalarNode
+  | DocFoldNode
   | InlineDocNodeNode
   | ExplicitDocBodyNode
   | AfterDocEndNode
@@ -584,6 +621,8 @@ export type RuleName =
   | 'FlowSeqKey'
   | 'FlowSequence'
   | 'Scalar'
+  | 'BlockKeyScalar'
+  | 'DocFold'
   | 'InlineDocNode'
   | 'ExplicitDocBody'
   | 'AfterDocEnd'
