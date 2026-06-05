@@ -15,6 +15,7 @@ import vm from 'node:vm';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
 
 const grammar = (await import('../typescript.ts')).default;
+const yamlGrammar = (await import('../yaml.ts')).default;
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => {
@@ -96,6 +97,12 @@ function grammarExecutes(src: string): { ok: boolean; ruleCount: number; err?: s
 const exec = grammarExecutes(grammarJs);
 check(`grammar.js parses & executes as JS${exec.err ? ' (' + exec.err + ')' : ''}`, exec.ok);
 check(`grammar.js exposes all rules after execution (${exec.ruleCount})`, exec.ruleCount >= grammar.rules.length);
+
+const yamlGrammarJs = generateTreeSitter(yamlGrammar, 'yaml').grammarJs;
+const yamlExec = grammarExecutes(yamlGrammarJs);
+const emptyRegexTokenCall = 'token(/' + '/)';
+check('YAML grammar.js never emits empty regex token call', !yamlGrammarJs.includes(emptyRegexTokenCall));
+check(`YAML grammar.js parses & executes as JS${yamlExec.err ? ' (' + yamlExec.err + ')' : ''}`, yamlExec.ok);
 
 // Every rule and non-scanner token should appear as a rule entry.
 const ruleNamesSnake = grammar.rules.map(r => r.name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase());

@@ -1,13 +1,13 @@
 import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, TokenPattern } from './types.ts';
 import {
-  altPattern, followedBy, isTokenPattern, lit, named, never, noneOf, notFollowedBy,
+  altPattern, anyChar, followedBy, isTokenPattern, lit, never, noneOf, notFollowedBy,
   notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
-  seq, star, start, end, tokenPatternToRegex, toTokenPattern,
-  type TokenPatternInput, type TokenPatternSource,
+  seq, star, start, end, toTokenPattern,
+  type TokenPatternInput,
 } from './token-pattern.ts';
 
 export {
-  followedBy, lit, named, never, noneOf, notFollowedBy, notPrecededBy, oneOf,
+  anyChar, followedBy, lit, never, noneOf, notFollowedBy, notPrecededBy, oneOf,
   plus, precededBy, range, repeat, seq, star, start, end,
 };
 
@@ -16,12 +16,12 @@ export {
 interface TokenOptions {
   skip?: boolean;
   scope?: string;
-  escape?: TokenPatternSource;
+  escape?: TokenPatternInput;
   // A regex matching exactly one well-formed escape sequence. Engine-scanned tokens
   // (templates) validate each `\`-escape against it and reject any that don't match —
   // unlike `escape` (highlight-only), this drives tokenization. Skipped in tag
   // position, where invalid escapes are legal (cooked = undefined). Optional.
-  escapeValid?: TokenPatternSource;
+  escapeValid?: TokenPatternInput;
   regex?: boolean;
   embed?: string;
   // ── Lexer hints (keep gen-parser language-agnostic; all optional) ──
@@ -42,7 +42,7 @@ interface TokenOptions {
   };
   string?: boolean;
   // Block-context (flowDepth===0) pattern variant for indentation grammars — see TokenDecl.blockPattern.
-  blockPattern?: TokenPatternSource;
+  blockPattern?: TokenPatternInput;
   // Block-context ONLY (indentation grammars): match this token only outside flow — see TokenDecl.blockOnly.
   blockOnly?: boolean;
 }
@@ -63,7 +63,7 @@ export class TokenRef {
   }
 }
 
-export function token(pattern: TokenPatternSource, opts?: TokenOptions): TokenRef {
+export function token(pattern: TokenPatternInput, opts?: TokenOptions): TokenRef {
   return new TokenRef(toTokenPattern(pattern), normalizeTokenOptions(opts ?? {}));
 }
 
@@ -402,17 +402,13 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     if (tok.opts.regex) flags.push('regex');
     return {
       name,
-      pattern: tokenPatternToRegex(tok.pattern),
-      patternAst: tok.pattern,
-      blockPattern: tok.opts.blockPattern ? tokenPatternToRegex(tok.opts.blockPattern) : undefined,
-      blockPatternAst: tok.opts.blockPattern,
+      pattern: tok.pattern,
+      blockPattern: tok.opts.blockPattern,
       blockOnly: tok.opts.blockOnly,
       flags,
       scope: tok.opts.scope,
-      escapePattern: tok.opts.escape ? tokenPatternToRegex(tok.opts.escape) : undefined,
-      escapePatternAst: tok.opts.escape,
-      escapeValidPattern: tok.opts.escapeValid ? tokenPatternToRegex(tok.opts.escapeValid) : undefined,
-      escapeValidPatternAst: tok.opts.escapeValid,
+      escapePattern: tok.opts.escape,
+      escapeValidPattern: tok.opts.escapeValid,
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,
       identifierPrefix: tok.opts.identifierPrefix,

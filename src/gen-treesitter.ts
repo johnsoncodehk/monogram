@@ -1,5 +1,6 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { tokenPatternIsNever, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
 // gen-treesitter — derive a tree-sitter parser package from one CstGrammar.
@@ -360,7 +361,8 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
   // Skip-flagged tokens (comments, whitespace) go in `extras`, not as a named
   // rule reference — but we still emit them so highlights can capture comments.
   // tree-sitter's token() DFA rejects zero-width assertions, so strip them first.
-  return `token(${jsRegexLiteral(sanitizeTreeSitterRegex(tok.pattern))})`;
+  if (tokenPatternIsNever(tok)) return 'token(/[^\\s\\S]/)';
+  return `token(${jsRegexLiteral(sanitizeTreeSitterRegex(tokenPatternSource(tok)))})`;
 }
 
 // ── conflicts ────────────────────────────────────────────────────────────────
@@ -568,7 +570,7 @@ function externalSymbols(ctx: GrammarJsContext): string[] {
 function buildMarkupTreeSitter(grammar: CstGrammar, grammarName: string): TreeSitterOutput {
   const m = grammar.markup!;
   const idTok = grammar.tokens.find(t => t.identifier);
-  const namePat = idTok?.pattern ?? '[a-zA-Z][\\w:.-]*';
+  const namePat = idTok ? tokenPatternSource(idTok) : '[a-zA-Z][\\w:.-]*';
   const o = m.tagOpen, c = m.tagClose, sl = m.closeMarker ?? '/';
   const voidAlt = (m.voidTags ?? []).join('|');
   const cOpen = m.comment?.open ?? '<!--', cClose = m.comment?.close ?? '-->';
@@ -940,18 +942,18 @@ function scopeToCapture(scope: string): string | null {
  * `scopes` section — for numbers/strings/comments that don't appear there.
  * Mirrors gen-tm.ts's classifyToken families but emits captures.
  */
-function tokenCapture(pattern: string, flags: string[], explicitScope?: string): string | null {
-  if (explicitScope) {
-    const cap = scopeToCapture(explicitScope);
+function tokenCapture(token: CstGrammar['tokens'][number]): string | null {
+  if (token.scope) {
+    const cap = scopeToCapture(token.scope);
     if (cap) return cap;
   }
-  if (flags.includes('skip')) {
+  if (token.flags.includes('skip')) {
     return '@comment';
   }
-  if (flags.includes('regex')) return '@string.regexp';
-  if (pattern.startsWith('\\d') || pattern.startsWith('[0-9]')) return '@number';
-  if (pattern.includes('"') || pattern.includes("'")) return '@string';
-  if (pattern.includes('`')) return '@string';
+  if (token.flags.includes('regex')) return '@string.regexp';
+  if (tokenPatternStartsWithDecimal(token)) return '@number';
+  const delimiters = tokenPatternStringDelimiters(token);
+  if (token.string || delimiters.includes('"') || delimiters.includes("'") || delimiters.includes('`')) return '@string';
   return null;
 }
 
@@ -1054,7 +1056,7 @@ function buildHighlightsScm(
   const tokenNodeCaptures: ScmRule[] = [];
   for (const tok of grammar.tokens) {
     if (tok.identifier) continue; // identifier handled by fallback + keyword lists
-    const cap = tokenCapture(tok.pattern, tok.flags, tok.scope);
+    const cap = tokenCapture(tok);
     if (!cap) continue;
     // The interpolated-template token is now a RULE whose literal text is the
     // external `template_chars` node — capture THAT (and the delimiters below),
@@ -1620,8 +1622,7 @@ function buildScannerC(
 
   if (regexTok) {
     // Derive the regex literal scan from the token pattern + hints.
-    const flagMatch = regexTok.pattern.match(/\[([a-z]+)\]\*?\s*$/i);
-    const flagChars = flagMatch ? flagMatch[1] : 'gimsuyd';
+    const flagChars = tokenPatternTrailingCharClass(regexTok) ?? 'gimsuyd';
     const rc = regexTok.regexContext;
     const divTexts = rc?.divisionAfterTexts ?? [];
     const regexAfter = rc?.regexAfterTexts ?? [];

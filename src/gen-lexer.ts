@@ -1,5 +1,6 @@
 import type { CstGrammar } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternFirstCharSet, tokenPatternSource } from './token-pattern.ts';
 
 // A lexer token: a declared token (type = its name) or a punctuation literal (type = '').
 // `$templateHead/$templateMiddle/$templateTail` are synthetic types the lexer emits for
@@ -38,251 +39,26 @@ export function createLexer(grammar: CstGrammar) {
   // `^`-anchored form. `lastIndex` is set immediately before each `exec` in the loop (a stale
   // value from a prior matcher's exec must never leak in).
   // ── Win B: conservative first-char dispatch ──────────────────────────────────────────────
-  // Most positions are punctuation or identifiers; without help the loop runs EVERY token regex
-  // (comments, numbers, strings, …) and they all fail before the right one (or the punct loop) is
-  // reached. `firstCharSet` derives, from a token pattern, the set of bytes (ASCII codes 0–127) a
-  // match can BEGIN with, plus whether a non-ASCII char (code ≥128) can. In the loop a matcher whose
-  // set rejects `source.charCodeAt(pos)` is skipped — a pure speed filter. SOUNDNESS is the contract:
-  // the analyzer must NEVER claim a char can't start a match when it can; anything it can't prove it
-  // reports as `null` = "no filter, always try" (byte-identical, just slower). Gate 1 (cross-language
-  // token byte-identity over 100k+ tokens) is the proof the derivation is sound.
-  type FirstSet = { ascii: Set<number>; nonAscii: boolean } | null;
-  // Index just past the `]` of the char class starting at src[i] (`[`), WITHOUT interpreting its
-  // contents — used only to step over a non-first class while scanning for `|`/`)` delimiters (so a
-  // `\w`/`\d` inside a class we don't need the value of doesn't force a bail). −1 if unterminated.
-  function classEnd(src: string, i: number): number {
-    let j = i + 1;
-    if (src[j] === '^') j++;
-    if (src[j] === ']') j++;            // a leading ']' is a literal
-    while (j < src.length && src[j] !== ']') { if (src[j] === '\\') j++; j++; }
-    return src[j] === ']' ? j + 1 : -1;
-  }
-  // Parse a [...] / [^...] character class starting at `src[i]` (i points at `[`). Returns the set of
-  // ASCII codes it admits + whether it admits a non-ASCII char + the index just past the `]`. A
-  // NEGATED class ([^…]) admits "almost everything" → we report it as a full set (all ASCII + nonAscii)
-  // so the caller never wrongly skips on it (it just won't filter). Unparseable → null sentinel.
-  function parseClass(src: string, i: number): { set: Set<number>; nonAscii: boolean; end: number } | null {
-    // i at '['
-    let j = i + 1;
-    let negated = false;
-    if (src[j] === '^') { negated = true; j++; }
-    const set = new Set<number>();
-    let nonAscii = false;
-    const add = (c: number) => { if (c <= 127) set.add(c); else nonAscii = true; };
-    // A leading ']' is a literal in JS regex char classes.
-    const chars: number[] = [];
-    while (j < src.length && src[j] !== ']') {
-      let code: number;
-      if (src[j] === '\\') {
-        const n = src[j + 1];
-        if (n === undefined) return null;
-        // An escape that denotes a CLASS (\s \S \d \D \w \W \p \P \b \B) or a unicode/hex/control
-        // escape (\u \x \c \0): too broad to enumerate exactly here → bail the whole class to null
-        // (= no filter, always try). Sound: we never claim fewer first chars than the real class.
-        if ('sSdDwWpPbBuxc0'.includes(n)) return null;
-        // A simple escaped metachar / control: map common ones to their literal code.
-        const map: Record<string, number> = { n: 10, r: 13, t: 9, f: 12, v: 11 };
-        code = n in map ? map[n] : n.charCodeAt(0);
-        j += 2;
-      } else {
-        code = src.charCodeAt(j);
-        j++;
-      }
-      // Range a-b ?
-      if (src[j] === '-' && src[j + 1] !== ']' && src[j + 1] !== undefined) {
-        let hi: number;
-        if (src[j + 1] === '\\') {
-          const n = src[j + 2];
-          if (n === undefined) return null;
-          if ('sSdDwWpPbBuxc0'.includes(n)) return null;
-          const map: Record<string, number> = { n: 10, r: 13, t: 9, f: 12, v: 11 };
-          hi = n in map ? map[n] : n.charCodeAt(0);
-          j += 3;
-        } else {
-          hi = src.charCodeAt(j + 1);
-          j += 2;
-        }
-        for (let c = code; c <= hi; c++) chars.push(c);
-      } else {
-        chars.push(code);
-      }
-    }
-    if (src[j] !== ']') return null;   // unterminated
-    j++;
-    for (const c of chars) add(c);
-    if (negated) {
-      // Everything NOT in the listed set, across the full byte range + non-ASCII. We can't skip on a
-      // negated class usefully and must include non-ASCII, so report a "full" set.
-      const full = new Set<number>();
-      for (let c = 0; c <= 127; c++) if (!set.has(c)) full.add(c);
-      return { set: full, nonAscii: true, end: j };
-    }
-    return { set, nonAscii, end: j };
-  }
-  // The set of first chars an atom starting at src[i] admits, plus the index just past that atom
-  // (BEFORE any quantifier). Handles a literal char, an escape, a char class, and a group `(?:…)` /
-  // `(…)` (recursing into its alternatives). Returns null for anything not understood.
-  function atomFirst(src: string, i: number): { set: Set<number>; nonAscii: boolean; end: number } | null {
-    const ch = src[i];
-    if (ch === undefined) return null;
-    if (ch === '[') return parseClass(src, i);
-    if (ch === '(') {
-      // Skip a group prefix: (?: , (?= , (?! , (?<= , (?<! , or a plain capture ( .
-      let j = i + 1;
-      let assertion = false;
-      if (src[j] === '?') {
-        if (src[j + 1] === ':') j += 2;
-        else if (src[j + 1] === '=' || src[j + 1] === '!') { assertion = true; j += 2; }
-        else if (src[j + 1] === '<' && (src[j + 2] === '=' || src[j + 2] === '!')) { assertion = true; j += 3; }
-        else return null;   // named group (?<name>…) or other — bail
-      }
-      // Find the matching close paren (respecting nesting + char classes + escapes).
-      let depth = 1, k = j;
-      for (; k < src.length; k++) {
-        const c = src[k];
-        if (c === '\\') { k++; continue; }
-        if (c === '[') { const e = classEnd(src, k); if (e < 0) return null; k = e - 1; continue; }
-        if (c === '(') depth++;
-        else if (c === ')') { depth--; if (depth === 0) break; }
-      }
-      if (depth !== 0) return null;
-      const inner = src.slice(j, k);   // group body
-      const end = k + 1;               // past ')'
-      if (assertion) {
-        // A lookahead/lookbehind consumes nothing, so it does not DETERMINE the first char — the
-        // first consumed char comes from the atom AFTER it. Encode "zero-width, continue to the next
-        // atom" as an EMPTY set with nonAscii=false (the same shape seqFirst treats as transparent).
-        // Ignoring the assertion's own constraint can only WIDEN the set (superset = sound). An empty
-        // set never collides with a real consuming atom (those always admit ≥1 char).
-        return { set: new Set<number>(), nonAscii: false, end };
-      }
-      const fs = altFirst(inner);
-      if (!fs) return null;
-      return { set: fs.ascii, nonAscii: fs.nonAscii, end };
-    }
-    if (ch === '\\') {
-      const n = src[i + 1];
-      if (n === undefined) return null;
-      // A class escape (\s \d \w \b \p …) is too broad to enumerate → bail (always try).
-      if ('sSdDwWbBpP'.includes(n)) return null;
-      // \uXXXX / \xXX / \cX / \0 denote a specific char, but we don't decode them here → bail to null
-      // (always try). Sound: never narrows the set. (In practice such escapes appear only inside
-      // alternations the recursion handles, not as a token's literal first atom.)
-      if (n === 'u' || n === 'x' || n === 'c' || n === '0') return null;
-      const map: Record<string, number> = { n: 10, r: 13, t: 9, f: 12, v: 11 };
-      const code = n in map ? map[n] : n.charCodeAt(0);
-      const set = new Set<number>();
-      if (code <= 127) set.add(code);
-      return { set, nonAscii: code > 127, end: i + 2 };
-    }
-    if (ch === '^' || ch === '$') {
-      // Anchor: zero-width, contributes no first char — caller continues to the next atom. (Under the
-      // sticky no-`m` regex `^` only matches at pos 0, but the real regex still enforces that; the
-      // filter just must not be WRONG, and "continue to next atom" keeps it sound.)
-      return { set: new Set<number>(), nonAscii: false, end: i + 1 };
-    }
-    if (ch === ')' || ch === '|' || ch === ']' || ch === '?' || ch === '*' || ch === '+' || ch === '{') {
-      return null;   // structural char where an atom was expected — bail
-    }
-    if (ch === '.') return null;   // dot = any char (except newline) → no useful filter
-    // A plain literal char.
-    const code = src.charCodeAt(i);
-    const set = new Set<number>();
-    if (code <= 127) set.add(code);
-    return { set, nonAscii: code > 127, end: i + 1 };
-  }
-  // First-char set of one alternation branch sequence: walk atoms left to right; the first
-  // CONSUMING atom decides the set. A leading zero-width assertion/anchor contributes nothing and we
-  // continue. If the first consuming atom is OPTIONAL (`?`/`*` quantifier, or `{0,…}`) the NEXT atom
-  // can also be first → keep unioning until we hit a required atom (or run out → can match empty →
-  // null, "always try"). Returns null on anything unparseable.
-  function seqFirst(src: string): { ascii: Set<number>; nonAscii: boolean } | null {
-    const acc = new Set<number>();
-    let accNon = false;
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === '|') break;   // handled by altFirst
-      const atom = atomFirst(src, i);
-      if (!atom) return null;
-      // Quantifier right after the atom?
-      let q = src[atom.end];
-      let optional = false;
-      let nextI = atom.end;
-      if (q === '?' || q === '*') { optional = true; nextI = atom.end + 1; if (src[nextI] === '?' || src[nextI] === '+') nextI++; }
-      else if (q === '+') { optional = false; nextI = atom.end + 1; if (src[nextI] === '?') nextI++; }
-      else if (q === '{') {
-        // {n} / {n,} / {n,m}: optional iff n === 0. Parse minimally.
-        const m = /^\{(\d*)(,(\d*))?\}/.exec(src.slice(atom.end));
-        if (!m) return null;
-        optional = (m[1] === '' || m[1] === '0');
-        nextI = atom.end + m[0].length;
-        if (src[nextI] === '?') nextI++;
-      }
-      const isAssertionOrAnchor = atom.set.size === 0 && !atom.nonAscii;
-      if (!isAssertionOrAnchor) {
-        for (const x of atom.set) acc.add(x);
-        if (atom.nonAscii) accNon = true;
-      }
-      if (isAssertionOrAnchor) { i = nextI; continue; }   // zero-width → next atom is still "first"
-      if (optional) { i = nextI; continue; }              // optional consuming atom → next can be first too
-      return { ascii: acc, nonAscii: accNon };            // hit a REQUIRED consuming atom → done
-    }
-    // Ran off the end without a required atom → the branch can match empty → any char could begin a
-    // longer surrounding match → unknown.
-    return null;
-  }
-  // First-char set across all top-level `|` alternatives of `src`. Union; null if any branch is null.
-  function altFirst(src: string): { ascii: Set<number>; nonAscii: boolean } | null {
-    // Split on top-level '|' (respecting groups + classes + escapes).
-    const branches: string[] = [];
-    let depth = 0, start = 0;
-    for (let k = 0; k < src.length; k++) {
-      const c = src[k];
-      if (c === '\\') { k++; continue; }
-      if (c === '[') { const e = classEnd(src, k); if (e < 0) return null; k = e - 1; continue; }
-      if (c === '(') depth++;
-      else if (c === ')') depth--;
-      else if (c === '|' && depth === 0) { branches.push(src.slice(start, k)); start = k + 1; }
-    }
-    branches.push(src.slice(start));
-    const ascii = new Set<number>();
-    let nonAscii = false;
-    for (const b of branches) {
-      const fs = seqFirst(b);
-      if (!fs) return null;        // a branch we can't analyze → whole thing unknown
-      for (const x of fs.ascii) ascii.add(x);
-      if (fs.nonAscii) nonAscii = true;
-    }
-    return { ascii, nonAscii };
-  }
-  // Public: the first-char filter for a whole token pattern. null ⇒ no filter (always try).
-  function firstCharSet(pattern: string): FirstSet {
-    // An always-failing pattern `(?!)` (YAML's placeholder tokens) never matches → empty filter set
-    // ⇒ never tried. Detect the exact form to keep this safe.
-    if (pattern === '(?!)') return { ascii: new Set<number>(), nonAscii: false };
-    try {
-      const fs = altFirst(pattern);
-      if (!fs) return null;
-      return { ascii: fs.ascii, nonAscii: fs.nonAscii };
-    } catch {
-      return null;   // any analyzer hiccup → always try (sound)
-    }
-  }
+  // The filter is derived from Token Pattern IR. `null` means "no filter, always try"; that is
+  // always sound, only slower. Final matching still uses the emitted sticky RegExp below.
 
-  const tokenMatchers = grammar.tokens.map(t => ({
-    name: t.name,
-    regex: new RegExp(`(?:${t.pattern})`, 'y'),
-    blockRegex: t.blockPattern ? new RegExp(`(?:${t.blockPattern})`, 'y') : null,
-    skip: t.flags.includes('skip'),
-    isRegex: t.flags.includes('regex'),
-    isString: !!t.string,
-    blockOnly: !!t.blockOnly,   // matched only outside flow (flowDepth===0) — see TokenDecl.blockOnly
-    // First-char filters for the default and block patterns (computed once). A char the set rejects
-    // can't start this token → the loop skips it. `null` = couldn't prove a filter → always try.
-    first: firstCharSet(t.pattern),
-    blockFirst: t.blockPattern ? firstCharSet(t.blockPattern) : null,
-  }));
+  const tokenMatchers = grammar.tokens.map(t => {
+    const pattern = tokenPatternSource(t);
+    const blockPattern = tokenBlockPatternSource(t);
+    return {
+      name: t.name,
+      regex: new RegExp(`(?:${pattern})`, 'y'),
+      blockRegex: blockPattern ? new RegExp(`(?:${blockPattern})`, 'y') : null,
+      skip: t.flags.includes('skip'),
+      isRegex: t.flags.includes('regex'),
+      isString: !!t.string,
+      blockOnly: !!t.blockOnly,   // matched only outside flow (flowDepth===0) — see TokenDecl.blockOnly
+      // First-char filters for the default and block patterns (computed once). A char the set rejects
+      // can't start this token → the loop skips it. `null` = couldn't prove a filter → always try.
+      first: tokenPatternFirstCharSet(t),
+      blockFirst: blockPattern ? tokenBlockPatternFirstCharSet(t) : null,
+    };
+  });
 
   // ── Lexer hints (declared per-token in the grammar; nothing here hardcodes a
   // specific language's tokens — see the `identifier`/`template`/`regexContext` opts) ──
@@ -351,8 +127,9 @@ export function createLexer(grammar: CstGrammar) {
   // A valid single escape sequence inside a template; when declared, an escape that
   // does not match it is a scan error — but only outside tag position (a tagged
   // template legally carries invalid escapes). Sticky `y` so it matches at `pos`.
-  const templateEscapeValidRe = templateToken?.escapeValidPattern
-    ? new RegExp(templateToken.escapeValidPattern, 'y')
+  const templateEscapeValidPattern = templateToken ? tokenEscapeValidPatternSource(templateToken) : undefined;
+  const templateEscapeValidRe = templateEscapeValidPattern
+    ? new RegExp(templateEscapeValidPattern, 'y')
     : null;
 
   // Regex-vs-division context: declared by the grammar's `regex` token. ($templateTail
@@ -429,14 +206,14 @@ export function createLexer(grammar: CstGrammar) {
   // flow multi-line-plain FOLD post-pass: a plain scalar folded across a flow-internal newline arrives
   // as ADJACENT plain tokens (a space-separated plain is already one token; only a NEWLINE splits it),
   // which the post-pass re-merges. Derived from `blockPattern`, not a hardcoded token name.
-  const plainScalarTokenNames = new Set(grammar.tokens.filter(t => t.blockPattern).map(t => t.name));
+  const plainScalarTokenNames = new Set(grammar.tokens.filter(t => tokenBlockPatternSource(t)).map(t => t.name));
   // The generic (catch-all) plain-scalar token: the LAST-declared blockPattern token. Declaration
   // order is specific-before-general (YAML: Key, Num, BoolNull, Plain — the typed/key shapes win
   // earlier, so the broadest string-valued plain is necessarily last). Used as the type emitted for
   // a folded plain-scalar CONTINUATION line — a more-indented line after a plain LEAF whose leading
   // glyph (`-`/`&`/`!`/`[`/`?`/`*`) is plain CONTENT here, not structure (so it can't be lexed by
   // the plain head pattern, which forbids those starts). Null when no blockPattern token exists.
-  const plainContinuationTokenName = [...grammar.tokens].reverse().find(t => t.blockPattern)?.name ?? null;
+  const plainContinuationTokenName = [...grammar.tokens].reverse().find(t => tokenBlockPatternSource(t))?.name ?? null;
   // The generic plain token's FLOW pattern (its `pattern`, not the block variant) — used by the flow
   // illegal-head continuation fallback: a char that no token can START here (e.g. YAML's `%`/`@`/backtick,
   // illegal as a plain START) is, when it follows a plain scalar inside a flow collection, mid-scalar
@@ -444,8 +221,8 @@ export function createLexer(grammar: CstGrammar) {
   // pattern at the next position), emit it as a plain-continuation token, and let the flow fold post-pass
   // merge it with the preceding scalar. Compiled once; null when no generic plain token exists.
   const plainFlowRe = (() => {
-    const t = [...grammar.tokens].reverse().find(t => t.blockPattern);
-    return t ? new RegExp(`^(?:${t.pattern})`) : null;
+    const t = [...grammar.tokens].reverse().find(t => tokenBlockPatternSource(t));
+    return t ? new RegExp(`^(?:${tokenPatternSource(t)})`) : null;
   })();
   // Does the line content starting at `start` carry a KEY SEPARATOR — an unquoted `:` followed by
   // whitespace / EOL / a flow indicator (`,`/`[`/`]`/`{`/`}`)? This is the colon-sniff shared with

@@ -1,5 +1,23 @@
-import type { CstGrammar, RuleExpr, RuleDecl, InjectClause } from './types.ts';
-import { collectLiterals, isKeywordLiteral, stringDelimiters } from './grammar-utils.ts';
+import type { CstGrammar, RuleExpr, RuleDecl, InjectClause, TokenDecl } from './types.ts';
+import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import {
+  tokenEscapePatternSource,
+  tokenPatternBlockDelimiterSources,
+  tokenPatternBlockDelimiters,
+  tokenPatternIdentifierExtraChars,
+  tokenPatternEqualsPattern,
+  tokenPatternIsNever,
+  tokenPatternLeadingSource,
+  tokenPatternLiteralText,
+  tokenPatternLiteralPrefix,
+  tokenPatternNodeContainsLiteral,
+  tokenPatternPrefixBeforeTrailingLookahead,
+  tokenPatternQuoteDelimAndEscape,
+  tokenPatternSource,
+  tokenPatternStartsWithDecimal,
+  tokenPatternStringDelimiters,
+  tokenPatternTrailingCharClass,
+} from './token-pattern.ts';
 
 interface TmPattern {
   name?: string;
@@ -121,30 +139,10 @@ function emitKeywordRegion(opts: {
 }
 
 /**
- * Extract non-\w characters that are valid in identifiers from the Ident token regex.
- * E.g., `[a-zA-Z_$][a-zA-Z0-9_$]*` → `['$']` ($ is not covered by \w).
- * Returns escaped characters suitable for embedding in a regex character class.
+ * Return escaped non-\w characters that are valid in identifiers, derived from the Ident token IR.
  */
-function identExtraChars(identRegex: string): string {
-  const extras = new Set<string>();
-  let inClass = false;
-  for (let i = 0; i < identRegex.length; i++) {
-    const c = identRegex[i];
-    if (c === '\\') {
-      // Skip the escape and, for braced escapes (`\p{L}`, `\u{...}`), the whole
-      // `{...}` argument — otherwise the `{`/`}`/letters inside would be mistaken
-      // for literal identifier characters.
-      i++;
-      if (identRegex[i + 1] === '{') { while (i < identRegex.length && identRegex[i] !== '}') i++; }
-      continue;
-    }
-    if (c === '[') { inClass = true; continue; }
-    if (c === ']') { inClass = false; continue; }
-    if (inClass && !/[a-zA-Z0-9_\-^]/.test(c)) {
-      extras.add(c);
-    }
-  }
-  return [...extras].map(escapeForCharClass).join('');
+function identExtraClass(token: TokenDecl | undefined): string {
+  return token ? [...tokenPatternIdentifierExtraChars(token)].map(escapeForCharClass).join('') : '';
 }
 
 // Unicode identifier classes (the same set the parser's lexer accepts for non-ASCII
@@ -177,12 +175,12 @@ function unicodeWidenIdentPattern(identRegex: string): string {
 
 /**
  * Build a lookbehind that matches the end of an identifier, ] or ).
- * Derives extra identifier characters (e.g., `$`) from the Ident token regex
+ * Derives extra identifier characters (e.g., `$`) from the Ident token IR
  * instead of hardcoding them.
  */
-function buildIdentLookbehind(identRegex: string): string {
-  const extra = identExtraChars(identRegex);
-  return `(?<=[\\w${extra}\\]\\)])`;
+function buildIdentLookbehind(identToken: TokenDecl | undefined): string {
+  const extra = identExtraClass(identToken);
+    return `(?<=[\\w${extra}\\]\\)])`;
 }
 
 /**
@@ -223,90 +221,6 @@ function expandAlts(expr: RuleExpr): RuleExpr[][] {
     default:
       return [[expr]];   // literal, ref, sep, op, prefix, postfix
   }
-}
-
-/**
- * Extract begin/end delimiters from a block-style token pattern by splitting
- * on the "match-everything" body (e.g., [\s\S]*?).
- * Returns null if no such body is found (pattern is not block-style).
- */
-function extractBlockDelimiters(pattern: string): [string, string] | null {
-  const bodies = ['[\\s\\S]*?', '[\\s\\S]+?', '[^]*?'];
-  for (const body of bodies) {
-    const idx = pattern.indexOf(body);
-    if (idx !== -1) {
-      const begin = pattern.slice(0, idx);
-      const end = pattern.slice(idx + body.length);
-      if (begin && end) return [begin, end];
-    }
-  }
-  const guardedMarker = '(?:(?!';
-  const guardedIdx = pattern.indexOf(guardedMarker);
-  if (guardedIdx !== -1) {
-    const guardStart = guardedIdx + guardedMarker.length;
-    const tailMarker = ')[\\s\\S])';
-    const guardEnd = pattern.indexOf(tailMarker, guardStart);
-    if (guardEnd !== -1) {
-      const afterAtom = guardEnd + tailMarker.length;
-      const quant = pattern[afterAtom];
-      if (quant === '*' || quant === '+') {
-        const endStart = pattern[afterAtom + 1] === '?' ? afterAtom + 2 : afterAtom + 1;
-        const begin = pattern.slice(0, guardedIdx);
-        const guardedEnd = pattern.slice(guardStart, guardEnd);
-        const end = pattern.slice(endStart);
-        if (begin && end && guardedEnd === end) return [begin, end];
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Detect the interpolation prefix character from a template token pattern.
- * Looks for `\X(?!\{)` patterns — meaning X followed by { starts interpolation.
- * E.g., `\$(?!\{)` → prefix is '$', so `${...}` is interpolation.
- *       `\#(?!\{)` → prefix is '#', so `#{...}` is interpolation (Ruby).
- * Returns null if no interpolation pattern is found.
- */
-function extractInterpPrefix(pattern: string): string | null {
-  for (let i = 0; i < pattern.length - 5; i++) {
-    if (pattern[i] === '\\' && pattern.slice(i + 2, i + 5) === '(?!') {
-      const rest = pattern.slice(i + 5);
-      if (rest.startsWith('\\{)') || rest.startsWith('{)')) {
-        return pattern[i + 1];
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Recognise a simple quote-delimited string token regex and return its single delimiter char
- * plus the in-string ESCAPE sub-pattern (so an escaped delimiter doesn't close the region).
- * Two delimiter-escape shapes are understood, matching how a quoted scalar is written:
- *   • backslash escape:  `"(?:\\.|[^"\\])*"`   → delim `"`, escape `\\.`
- *   • doubled delimiter: `'(?:''|[^'])*'`      → delim `'`, escape `''`
- * Returns null for anything else (multi-char delimiters, lookahead-bearing key tokens, …) so
- * the caller keeps emitting a flat `match`. The shape is read from the regex itself — no
- * hardcoded quote char — so it is language-agnostic.
- */
-function quoteDelimAndEscape(pattern: string): { delim: string; escape: string } | null {
-  // Opening delimiter: a single non-alphanumeric char (optionally backslash-escaped in the regex).
-  const m = /^(\\?)([^\s\w])\(\?:/.exec(pattern);
-  if (!m) return null;
-  const delim = m[2];
-  const d = delim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // delimiter, regex-escaped
-  // The regex must CLOSE on the same bare delimiter, and its body must be the alternation of an
-  // ESCAPE with "any char but the delimiter (and backslash)" — `<q>(?:<esc>|[^<q>\])*<q>`. The
-  // escape is a BACKSLASH followed by anything: the simple `\\.`, or a validated set such as
-  // `\\(?:[…]|x[0-9A-Fa-f]{2}|\r?\n)` (YAML §5.7) — which itself contains `|`. Capture it greedily up
-  // to the trailing `|[^<q>\])*<q>` so the in-string escape sub-scope highlights the real escape set.
-  const backslash = new RegExp(`^${m[1]}${d}\\(\\?:(\\\\\\\\.*)\\|\\[\\^${d}\\\\\\\\\\]\\)\\*${m[1]}${d}$`);
-  const doubled   = new RegExp(`^${m[1]}${d}\\(\\?:${d}${d}\\|\\[\\^${d}\\]\\)\\*${m[1]}${d}$`);
-  const bm = backslash.exec(pattern);
-  if (bm) return { delim, escape: bm[1] };
-  if (doubled.test(pattern)) return { delim, escape: d + d };
-  return null;
 }
 
 interface ContextualPattern {
@@ -385,7 +299,7 @@ function findContextualPatterns(
   rules: RuleDecl[],
   identTokenName: string | null,
 ): ContextualPattern[] {
-  const patterns: ContextualPattern[] = [];
+    const patterns: ContextualPattern[] = [];
 
   function walkSeq(items: RuleExpr[]) {
     for (let i = 0; i < items.length - 1; i++) {
@@ -589,40 +503,13 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
 // ── Token classification ──
 
 /**
- * Extract the literal prefix from a regex pattern (the characters before any metachar).
- * E.g., `\/\/[^\n]*` → `//`, `#[^\n]*` → `#`, `--.*` → `--`.
- */
-function extractRegexLiteralPrefix(pattern: string): string {
-  let prefix = '';
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c === '\\' && i + 1 < pattern.length) {
-      const next = pattern[i + 1];
-      // Escaped literal char (e.g. `\/` → `/`)
-      if (!/[a-zA-Z0-9]/.test(next)) {
-        prefix += next;
-        i++;
-      } else {
-        break; // shorthand like \s, \d — not a literal
-      }
-    } else if ('[(.+*?^$|{'.includes(c)) {
-      break; // regex metachar
-    } else {
-      prefix += c;
-    }
-  }
-  return prefix;
-}
-
-/**
  * Derive a TextMate-conventional suffix for line comment scope based on the
  * literal prefix of the regex pattern.  E.g., `//` → `double-slash`,
  * `#` → `number-sign`.
  *
  * Uses a universal character-name mapping (not language-specific).
  */
-function lineCommentScopeSuffix(pattern: string): string {
-  const prefix = extractRegexLiteralPrefix(pattern);
+function lineCommentScopeSuffix(prefix: string | undefined): string {
   if (!prefix) return '';
   const charName: Record<string, string> = {
     '/': 'slash', '#': 'number-sign', '-': 'dash', ';': 'semicolon',
@@ -635,18 +522,20 @@ function lineCommentScopeSuffix(pattern: string): string {
   return `.${parts.join('-')}`;
 }
 
-function classifyToken(pattern: string, flags: string[]): { scope: string; isBlock?: boolean } {
-  if (flags.includes('skip')) {
-    // Block comment: pattern has a "match everything" body ([\s\S]*?, etc.)
-    // Use extractBlockDelimiters — language-agnostic, works for any delimiter pair.
-    if (extractBlockDelimiters(pattern)) {
+function classifyToken(token: TokenDecl, opts?: { explicitScope?: boolean }): { scope: string; isBlock?: boolean } {
+  const useExplicitScope = opts?.explicitScope ?? true;
+  const commentLike = token.flags.includes('skip') || token.scope?.startsWith('comment.');
+  const isBlock = commentLike && !!tokenPatternBlockDelimiters(token);
+  if (useExplicitScope && token.scope) return { scope: token.scope, isBlock: isBlock || undefined };
+  if (token.flags.includes('skip')) {
+    if (isBlock) {
       return { scope: 'comment.block', isBlock: true };
     }
-    const suffix = lineCommentScopeSuffix(pattern);
+    const suffix = lineCommentScopeSuffix(tokenPatternLiteralPrefix(token));
     return { scope: `comment.line${suffix}` };
   }
 
-  if (pattern.startsWith('\\d') || pattern.startsWith('[0-9]')) {
+  if (tokenPatternStartsWithDecimal(token)) {
     // A `[0-9]`/`\d`-leading token is a base-10 (decimal) numeric. The TextMate
     // `.decimal`/`.hex`/`.octal`/`.binary` axis names the BASE, not int-vs-float —
     // an optional fraction/exponent does not change the base — so a single
@@ -655,9 +544,10 @@ function classifyToken(pattern: string, flags: string[]): { scope: string; isBlo
     return { scope: 'constant.numeric.decimal' };
   }
 
-  if (pattern.includes('"')) return { scope: 'string.quoted.double' };
-  if (pattern.includes("'")) return { scope: 'string.quoted.single' };
-  if (pattern.includes('`')) return { scope: 'string.quoted.other.template' };
+  const delimiters = tokenPatternStringDelimiters(token);
+  if (delimiters.includes('"')) return { scope: 'string.quoted.double' };
+  if (delimiters.includes("'")) return { scope: 'string.quoted.single' };
+  if (delimiters.includes('`')) return { scope: 'string.quoted.other.template' };
 
   return { scope: 'variable.other' };
 }
@@ -676,7 +566,7 @@ function commentRepoKeys(grammar: CstGrammar): string[] {
   const keys: string[] = [];
   for (const tok of grammar.tokens) {
     if (tok.flags.includes('regex')) continue;   // @regex tokens aren't comments
-    const scope = tok.scope ?? classifyToken(tok.pattern, tok.flags).scope;
+    const scope = classifyToken(tok).scope;
     if (scope.startsWith('comment.')) keys.push(tok.name.toLowerCase());
   }
   return keys;
@@ -686,7 +576,7 @@ function commentRepoKeys(grammar: CstGrammar): string[] {
  * The full-match regexes of the grammar's BLOCK-comment tokens (a `comment.block…`
  * token whose pattern has a delimited body — `/* … *​/`, `(* … *)`, whatever the
  * grammar declared). Derived, never hardcoded: a token is a block comment iff its
- * classified scope is `comment.block…` AND `extractBlockDelimiters` finds a
+ * classified scope is `comment.block…` AND the token-pattern IR reports a
  * begin/body/end shape — the same `isBlock` test `classifyToken` uses. The
  * token's own `pattern` IS its full match, so it can be embedded directly into a
  * lookahead to "see through" a block comment (a LINE comment can't precede
@@ -696,9 +586,9 @@ function blockCommentMatchers(grammar: CstGrammar): string[] {
   const pats: string[] = [];
   for (const tok of grammar.tokens) {
     if (tok.flags.includes('regex')) continue;
-    const c = classifyToken(tok.pattern, tok.flags);
-    const scope = tok.scope ?? c.scope;
-    if (scope.startsWith('comment.') && c.isBlock) pats.push(tok.pattern);
+    const c = classifyToken(tok);
+    const scope = c.scope;
+    if (scope.startsWith('comment.') && c.isBlock) pats.push(tokenPatternSource(tok));
   }
   return pats;
 }
@@ -916,15 +806,15 @@ function findContextualAccessibilityModifiers(grammar: CstGrammar): Set<string> 
  * `x as T` / `keyof U` (keyword) from `const as = 1` / `as()` / `as.x` (identifier:
  * the next char is `=` / `(` / `.`, none of which start an operand).
  */
-function buildOperandStartClass(grammar: CstGrammar, identRegex: string): string {
+function buildOperandStartClass(grammar: CstGrammar, identToken: TokenDecl | undefined): string {
   const chars = new Set<string>();
   // Identifier-start: $/_ plus the non-\w extras from the Ident token.
   chars.add('_');
-  for (const ch of identExtraChars(identRegex)) chars.add(ch);
+  if (identToken) for (const ch of tokenPatternIdentifierExtraChars(identToken)) chars.add(ch);
   // String / template delimiters (first char of any string/template token).
   for (const tok of grammar.tokens) {
     if (tok.string || tok.template) {
-      const first = tok.pattern[0] === '\\' ? tok.pattern[1] : tok.pattern[0];
+      const first = tokenPatternStringDelimiters(tok)[0]?.[0];
       if (first && !/[a-zA-Z0-9]/.test(first)) chars.add(first);
     }
   }
@@ -970,25 +860,11 @@ interface JsxInfo {
  * is therefore byte-identical to before this feature existed.
  */
 function detectJsx(grammar: CstGrammar): JsxInfo | null {
-  const tokenText = (re: string): string | null => {
-    // Recover the literal string a simple punctuation token matches: strip
-    // regex escapes from a pattern that is only escaped literals (e.g. `\/>` →
-    // `/>`, `<\/` → `</`). Bail (null) on any metachar — a real JSX delimiter
-    // token is a fixed 2-char punctuation string.
-    let out = '';
-    for (let i = 0; i < re.length; i++) {
-      const c = re[i];
-      if (c === '\\') { const n = re[i + 1]; if (n === undefined || /[a-zA-Z0-9]/.test(n)) return null; out += n; i++; continue; }
-      if ('[](){}.*+?^$|'.includes(c)) return null;
-      out += c;
-    }
-    return out;
-  };
   let selfCloseTok: string | null = null;
   let closeTok: string | null = null;
   for (const tok of grammar.tokens) {
     if (tok.flags.includes('skip') || tok.flags.includes('regex')) continue;
-    const text = tokenText(tok.pattern);
+    const text = tokenPatternLiteralText(tok);
     if (text === '/>') selfCloseTok = text;
     else if (text === '</') closeTok = text;
   }
@@ -1209,7 +1085,7 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   const [open, close] = precOps.has('<') && precOps.has('>') ? ['<', '>'] : ['<', '>'];
   // Attr-value string delimiters from the `string`-flagged token(s) (e.g. `"`, `'`).
   const quotes = new Set<string>();
-  for (const t of grammar.tokens) if (t.string) for (const q of stringDelimiters(t.pattern)) quotes.add(q);
+  for (const t of grammar.tokens) if (t.string) for (const q of tokenPatternStringDelimiters(t)) quotes.add(q);
   const oc = `${escapeForCharClass(open)}${escapeForCharClass(close)}`;
   // Opaque alternatives in the comma scan: the `{…}` container and each `"…"`/`'…'`
   // attr string are skipped so a comma inside them is not a top-level separator.
@@ -1743,8 +1619,8 @@ function detectAngleBracketAmbiguity(grammar: CstGrammar): AngleBracketAmbiguity
       // If it references a token, extract its leading literal char
       const token = grammar.tokens.find(t => t.name === (item as { name: string }).name);
       if (token) {
-        const m = token.pattern.match(/^[`'"]/);
-        if (m) return m[0];
+        const delimiter = tokenPatternStringDelimiters(token)[0];
+        if (delimiter && /^[`'"]/.test(delimiter)) return delimiter[0];
       }
     }
     return null;
@@ -1878,14 +1754,15 @@ function generateAngleBracketPatterns(
   grammar: CstGrammar,
   langName: string,
   identRegex: string,
+  identToken: TokenDecl | undefined,
 ): Record<string, TmPattern> {
   // Build recursive type regex
   const typeRegex = buildRecursiveTypeRegex(grammar, ambiguity.innerRuleName, identRegex);
   const confirm = buildConfirmPattern(ambiguity.confirmTokens);
 
   // Lookbehind: generic '<' must follow identifier / ] / )
-  // Derives extra ident chars (e.g. $) from the Ident token regex.
-  const lookbehind = buildIdentLookbehind(identRegex);
+  // Derives extra ident chars (e.g. $) from the Ident token IR.
+  const lookbehind = buildIdentLookbehind(identToken);
 
   // Bail-out: expression-only operators (from prec table) that cannot appear
   // in type context.  Derived from @type rule literals plus angle brackets.
@@ -2403,14 +2280,8 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
     return null;
   }
 
-  // Extract flags pattern from token regex
-  // Pattern like: /\/(?:[^\/\\]|\\.)+\/[gimsuy]*/
-  // Flags part is after the last \/ — look for a character class at the end
-  let flagsPattern = '[a-z]*'; // safe fallback: any lowercase letter as flag
-  const flagsMatch = regexToken.pattern.match(/\[([a-z]+)\]\*?\s*$/);
-  if (flagsMatch) {
-    flagsPattern = flagsMatch[0];
-  }
+  const flagChars = tokenPatternTrailingCharClass(regexToken);
+  const flagsPattern = flagChars ? `[${flagChars}]*` : '[a-z]*';
 
   // Collect keywords that can directly precede expressions
   // Walk rules, find literal-string → Ref(grammar-rule) sequences
@@ -2523,13 +2394,14 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
   const seenBlock = new Set<string>();
   for (const tok of grammar.tokens) {
     if (!tok.flags.includes('skip')) continue;
-    const prefix = extractRegexLiteralPrefix(tok.pattern);
+    const prefix = tokenPatternLiteralPrefix(tok) ?? '';
     if (prefix.length >= 2 && prefix[0] === '/') {
       const ch = prefix[1];
       if (!commentSecondChars.includes(ch)) commentSecondChars.push(ch);
-      const delims = extractBlockDelimiters(tok.pattern);
+      const delims = tokenPatternBlockDelimiters(tok);
       if (delims) {
-        const [begin, end] = delims;
+        const [beginLit, endLit] = delims;
+        const [begin, end] = tokenPatternBlockDelimiterSources(tok) ?? [escapeRegex(beginLit), escapeRegex(endLit)];
         const sig = `${begin}${end}`;
         if (!seenBlock.has(sig)) { seenBlock.add(sig); blockComments.push({ begin, end }); }
       }
@@ -3414,22 +3286,16 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
   if (!indicator || !separator) return null;
   const sep: string = separator;
 
-  // KEY token = a plain-scalar token PLUS a trailing key-separator lookahead — i.e. its pattern
-  // is `<P.pattern>(?=…sep…)` for some OTHER (broader, no-lookahead) scalar token P. P supplies
-  // the key BODY, the key token supplies the key SCOPE. This pairing pins exactly the "plain key"
-  // token (not a typed value like a number, whose body differs), with no hardcoded scope. The
-  // remainder after P's pattern must be a single trailing lookahead group mentioning the separator
-  // (so an internal `(?=…)` inside P's own body is never mistaken for the key separator).
+  // KEY token = a plain-scalar token PLUS a trailing key-separator lookahead. The key token
+  // supplies the scope; the body before its final lookahead supplies the emitted key body.
   let keyScope: string | null = null;
   let keyBody: string | null = null;
   for (const k of grammar.tokens) {
     if (!k.scope || k.string) continue;
-    for (const p of grammar.tokens) {
-      if (p === k || !p.pattern || !k.pattern.startsWith(p.pattern)) continue;
-      const tail = k.pattern.slice(p.pattern.length);
-      if (/^\(\?=.*\)$/.test(tail) && tail.includes(sep)) { keyScope = k.scope; keyBody = p.pattern; break; }
-    }
-    if (keyScope) break;
+    const keyShape = tokenPatternPrefixBeforeTrailingLookahead(k);
+    if (!keyShape || !tokenPatternNodeContainsLiteral(keyShape.lookahead, sep)) continue;
+    const plain = grammar.tokens.find(t => t !== k && tokenPatternEqualsPattern(t, keyShape.body));
+    if (plain) { keyScope = k.scope; keyBody = keyShape.bodySource; break; }
   }
   if (!keyScope || !keyBody) return null;
 
@@ -3471,7 +3337,7 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
         const it = e.items[i];
         if (it.type === 'quantifier' && it.kind === '?' && it.body.type === 'ref' && seqHasAltLater(e.items, i + 1)) {
           const t = tokenByName.get(it.body.name);
-          if (t && t.pattern && t.pattern !== '(?!)' && !t.string) prefixPats.add(t.pattern);
+          if (t && !tokenPatternIsNever(t) && !t.string) prefixPats.add(tokenPatternSource(t));
         }
       }
       e.items.forEach(findPrefix);
@@ -3521,8 +3387,6 @@ function detectFlowCollections(grammar: CstGrammar): {
 } | null {
   const indent = grammar.indent;
   if (!indent || !indent.flowOpen?.length || !indent.flowClose?.length) return null;
-  const PLACEHOLDER = '(?!)';
-
   // top-level literals of a rule body: direct children only (unwrap quantifier/group/sep), do NOT
   // descend into `alt` or `ref` (those are nested sub-constructs, not THIS rule's own structure).
   const topLits = (e: RuleExpr, out: string[]): void => {
@@ -3571,59 +3435,37 @@ function detectFlowCollections(grammar: CstGrammar): {
   }
   if (!colls.length) return null;
 
-  // The Key/Plain token pair (same shape detectExplicitKey pins): a non-string token whose pattern
-  // is `<plain>(?=…)` over a broader plain-scalar token `plain`. `plain` gives the LEADING char
-  // class (its first balanced group) + the plain scope; the key token gives the key scope.
-  let keyScope: string | null = null, plainPat: string | null = null, plainScope: string | null = null;
+  // The Key/Plain token pair (same shape detectExplicitKey pins): a non-string token whose IR
+  // ends with a trailing lookahead. The body before the lookahead gives the plain scalar body;
+  // its leading token gives the flow scalar start pattern.
+  let keyScope: string | null = null, plainPat: string | null = null, plainScope: string | null = null, plainToken: TokenDecl | null = null;
   for (const k of grammar.tokens) {
-    if (!k.scope || k.string || k.pattern === PLACEHOLDER) continue;
-    for (const p of grammar.tokens) {
-      if (p === k || !p.pattern || p.pattern === PLACEHOLDER || !k.pattern.startsWith(p.pattern)) continue;
-      const tail = k.pattern.slice(p.pattern.length);
-      if (/^\(\?=.*\)$/.test(tail)) { keyScope = k.scope; plainPat = p.pattern; plainScope = p.scope ?? null; break; }
-    }
+    if (!k.scope || k.string || tokenPatternIsNever(k)) continue;
+    const keyShape = tokenPatternPrefixBeforeTrailingLookahead(k);
+    if (!keyShape) continue;
+    const p = grammar.tokens.find(t => t !== k && tokenPatternEqualsPattern(t, keyShape.body) && !tokenPatternIsNever(t));
+    if (p) { keyScope = k.scope; plainPat = keyShape.bodySource; plainScope = p.scope ?? null; plainToken = p; break; }
     if (keyScope) break;
   }
-  if (!keyScope || !plainPat || !plainScope) return null;
+  if (!keyScope || !plainPat || !plainScope || !plainToken) return null;
 
-  // LEADING char class = the first balanced group of the plain pattern, unwrapped from its `(?:…)`.
-  const firstBalancedGroup = (pat: string): string | null => {
-    if (pat[0] !== '(') return null;
-    let depth = 0;
-    for (let i = 0; i < pat.length; i++) {
-      if (pat[i] === '\\') { i++; continue; }
-      if (pat[i] === '(') depth++;
-      else if (pat[i] === ')') { depth--; if (depth === 0) return pat.slice(0, i + 1); }
-    }
-    return null;
-  };
-  const lead = firstBalancedGroup(plainPat);
+  const lead = tokenPatternLeadingSource(plainToken);
   if (!lead) return null;
-  const plainStart = lead.replace(/^\(\?:/, '(').replace(/^\((.*)\)$/, '$1');
+  const plainStart = lead;
 
   // Quoted-scalar tokens (string-flagged begin/end OR a match): give the flow quoted-KEY regions
   // (a quoted scalar in key position carries entity.name.tag). Detect by the `string` flag; the
   // body pattern is the token's `match` (key/quoted-scalar tokens are match-form here).
   const quoteByScope = (suffix: string) =>
-    grammar.tokens.find(t => t.string && t.pattern !== PLACEHOLDER && t.scope?.startsWith(`string.quoted.${suffix}`) && !t.scope.includes('entity'));
+    grammar.tokens.find(t => t.string && !tokenPatternIsNever(t) && t.scope?.startsWith(`string.quoted.${suffix}`) && !t.scope.includes('entity'));
   const dqTok = quoteByScope('double'), sqTok = quoteByScope('single');
   // The in-string escape: the FIRST sub-alternation of the quoted body after the opening quote
   // (`\\.` for double, `''` for single). Derive it from the token's own pattern.
-  const quoteEscape = (tok: typeof dqTok): string | null => {
-    if (!tok) return null;
-    // pattern is `<q>(?:<esc>|[^<q>\])*<q>` — the escape is the body's first alternative. It may be
-    // a simple `\\.` OR a validated set `\\(?:…|x..|\r?\n)` that itself contains `|`, so capture the
-    // backslash escape greedily up to the trailing `|[^<q>\])*` rather than stopping at the first `|`.
-    const m = tok.pattern.match(/^.\(\?:(\\\\.*)\|\[\^.\\\\\]\)\*/);
-    if (m) return m[1];
-    // Doubled-delimiter (or other) bodies: fall back to the first `|`-free alternative.
-    const simple = tok.pattern.match(/^.\(\?:([^|]*)\|/);
-    return simple ? simple[1] : null;
-  };
+  const quoteEscape = (tok: typeof dqTok): string | null => tok ? tokenPatternQuoteDelimAndEscape(tok)?.escape ?? null : null;
 
   return {
     colls, plainStart, keyScope, plainScope,
-    dq: dqTok?.pattern ?? null, sq: sqTok?.pattern ?? null,
+    dq: dqTok ? tokenPatternSource(dqTok) : null, sq: sqTok ? tokenPatternSource(sqTok) : null,
     dqScope: dqTok?.scope ?? null, sqScope: sqTok?.scope ?? null,
     dqEscape: quoteEscape(dqTok), sqEscape: quoteEscape(sqTok),
   };
@@ -3730,7 +3572,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
 
   // Tag / attribute name pattern = the grammar's identifier token (widened for Unicode).
   const identTok = grammar.tokens.find(t => t.identifier);
-  const namePat = identTok ? unicodeWidenIdentPattern(identTok.pattern) : '[a-zA-Z][\\w:.-]*';
+  const namePat = identTok ? unicodeWidenIdentPattern(tokenPatternSource(identTok)) : '[a-zA-Z][\\w:.-]*';
 
   // Punctuation scope for the tag delimiters is declared in the grammar (`<`,`>`,`/` →
   // punctuation.definition.tag); begin/end leaves follow the TextMate convention.
@@ -4406,17 +4248,17 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // `variable.other` and would otherwise be mistaken for the identifier pattern,
   // corrupting every ident-derived pattern).
   const identToken = grammar.tokens.find(t => t.identifier)
-    ?? grammar.tokens.find(t => classifyToken(t.pattern, t.flags).scope === 'variable.other');
+    ?? grammar.tokens.find(t => classifyToken(t, { explicitScope: false }).scope === 'variable.other');
   // Widen the identifier pattern so non-ASCII names (`Ω`, Cyrillic `А`) are scoped,
   // matching the parser lexer's Unicode fallback. This widened form is used only in
   // TextMate (Oniguruma) output, never by the lexer.
-  const identPattern = identToken ? unicodeWidenIdentPattern(identToken.pattern) : '[a-zA-Z_]\\w*';
+  const identPattern = identToken ? unicodeWidenIdentPattern(tokenPatternSource(identToken)) : '[a-zA-Z_]\\w*';
 
   // Contextual operator keywords (e.g. `as`/`keyof`/`is`/`satisfies`/`infer`):
   // keyword.operator.expression words that double as identifiers, so they are a
   // keyword ONLY in operator position — followed by whitespace then an operand.
   const contextualOps = findContextualOperatorKeywords(grammar);
-  const operandStart = buildOperandStartClass(grammar, identPattern);
+  const operandStart = buildOperandStartClass(grammar, identToken);
   // Keyword iff followed by whitespace + an operand, OR at end of line (the
   // operand continues on the next line — a cast/operator split across lines,
   // e.g. `x as\n  Foo`). `const as = 1` / `as()` / `as.x` still fall through
@@ -4439,7 +4281,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     for (const open of ['(', '{', '[']) if (allLits.has(open)) loopConnOpeners.add(open);
     for (const tok of grammar.tokens) {
       if (tok.string || tok.template) {
-        const first = tok.pattern[0] === '\\' ? tok.pattern[1] : tok.pattern[0];
+        const first = tokenPatternStringDelimiters(tok)[0]?.[0];
         if (first && !/[a-zA-Z0-9]/.test(first)) loopConnOpeners.add(first);
       }
       if (tok.flags.includes('regex')) loopConnOpeners.add('/');
@@ -4470,7 +4312,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // that predicate: a modifier is guarded iff EVERY follower begins here, so the
   // lookahead has to accept every such follower (`static {` block, `public ...`
   // rest, `public [e]` computed, `private #x`, the next modifier / member name).
-  const modifierGuard = `(?=\\s+(?:\\.\\.\\.|[[:alpha:]_${identExtraChars(identPattern)}\\[*#{"'0-9]))`;
+  const modifierGuard = `(?=\\s+(?:\\.\\.\\.|[[:alpha:]_${identExtraClass(identToken)}\\[*#{"'0-9]))`;
 
   // ── 1. Detect angle bracket ambiguity ──
   const angleBracket = detectAngleBracketAmbiguity(grammar);
@@ -4486,7 +4328,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     : null;
 
   if (angleBracket) {
-    const abPatterns = generateAngleBracketPatterns(angleBracket, grammar, langName, identPattern);
+    const abPatterns = generateAngleBracketPatterns(angleBracket, grammar, langName, identPattern, identToken);
     for (const [key, pattern] of Object.entries(abPatterns)) {
       repository[key] = pattern;
     }
@@ -4528,7 +4370,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     topPatterns.push({ include: '#jsx-element-in-expression' });
     topPatterns.push({ include: '#jsx-fragment-in-expression' });
     for (const tok of grammar.tokens) {
-      const t = tok.pattern.replace(/\\(?![a-zA-Z0-9])/g, '');
+      const t = tokenPatternLiteralText(tok);
       if (t === jsx.selfCloseTok || t === jsx.closeTok) jsxOwnedTokens.add(tok.name);
     }
   }
@@ -4572,25 +4414,22 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // the JSX patterns, not as a flat `variable.other` token match.
     if (jsxOwnedTokens.has(tok.name)) continue;
 
-    const classified = classifyToken(tok.pattern, tok.flags);
+    const classified = classifyToken(tok);
     const scope = tok.scope ?? classified.scope;  // @scope override wins
     const isBlock = classified.isBlock;
     const key = tok.name.toLowerCase();
 
     if (scope === 'string.quoted.other.template') {
-      const tmplEscape = tok.escapePattern ?? '\\\\.';
-      // Extract template delimiter from the token pattern (first/last char)
-      const tmplDelimChar = tok.pattern[0] === '\\' ? tok.pattern.slice(0, 2) : escapeRegex(tok.pattern[0]);
+      const tmplEscape = tokenEscapePatternSource(tok) ?? '\\\\.';
+      const tmplDelimChar = escapeRegex(tok.template?.open ?? tokenPatternLiteralPrefix(tok) ?? '`');
       const tmplPatterns: (TmPattern | { include: string })[] = [
         { match: tmplEscape, name: `constant.character.escape.${langName}` },
       ];
-      // Detect interpolation prefix from the pattern (e.g., $ in \$(?!\{) → ${...})
-      const interpPrefix = extractInterpPrefix(tok.pattern);
-      if (interpPrefix) {
+      if (tok.template) {
         tmplPatterns.push({
-          begin: `${escapeRegex(interpPrefix)}\\{`,
+          begin: escapeRegex(tok.template.interpOpen),
           beginCaptures: { '0': { name: `punctuation.definition.template-expression.begin.${langName}` } },
-          end: '\\}',
+          end: escapeRegex(tok.template.interpClose),
           endCaptures: { '0': { name: `punctuation.definition.template-expression.end.${langName}` } },
           name: `meta.embedded.expression.${langName}`,
           patterns: [{ include: '$self' }],
@@ -4606,12 +4445,14 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       };
       topPatterns.push({ include: `#${key}` });
 
-    } else if (tok.escapePattern && scope.startsWith('string.')) {
+    } else if (tokenEscapePatternSource(tok) && scope.startsWith('string.')) {
       // String with escape sequences: generate begin/end for each delimiter
-      const escapePat: TmPattern = { match: tok.escapePattern, name: `constant.character.escape.${langName}` };
+      const escapePat: TmPattern = { match: tokenEscapePatternSource(tok)!, name: `constant.character.escape.${langName}` };
       const delimiters: [string, string][] = [];
-      if (tok.pattern.includes('"')) delimiters.push(['"', 'string.quoted.double']);
-      if (tok.pattern.includes("'")) delimiters.push(["'", 'string.quoted.single']);
+      for (const delim of tokenPatternStringDelimiters(tok)) {
+        if (delim === '"') delimiters.push(['"', 'string.quoted.double']);
+        else if (delim === "'") delimiters.push(["'", 'string.quoted.single']);
+      }
       if (delimiters.length === 0) delimiters.push(['"', scope]); // fallback
 
       if (delimiters.length === 1) {
@@ -4643,7 +4484,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         }
       }
 
-    } else if (tok.string && scope.startsWith('string.') && quoteDelimAndEscape(tok.pattern)) {
+    } else if (tok.string && scope.startsWith('string.') && tokenPatternQuoteDelimAndEscape(tok)) {
       // A quote-delimited string token that carries NO @escape declaration (e.g. YAML's
       // double/single-quoted scalars). A flat `match` is line-bounded, but such a string can
       // legally span newlines (a YAML flow scalar folds across lines). Emit a begin/end REGION
@@ -4651,7 +4492,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // (`\.` backslash-escape vs a doubled delimiter like `''`) straight from the token regex.
       // JS/TS strings declare an @escape and take the escapePattern branch above, so they are
       // untouched; this fires only for the otherwise-flat quoted-string token.
-      const { delim, escape } = quoteDelimAndEscape(tok.pattern)!;
+      const { delim, escape } = tokenPatternQuoteDelimAndEscape(tok)!;
       const region: TmPattern = {
         name: `${scope}.${langName}`,
         begin: escapeRegex(delim),
@@ -4668,12 +4509,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       rememberLiteralKey(scope, key, tok.name);
 
     } else if (isBlock) {
-      // Block comments: extract begin/end delimiters from the pattern.
-      // E.g., \/\*[\s\S]*?\*\/  → begin: \/\*   end: \*\/
-      //        <!--[\s\S]*?-->   → begin: <!--   end: -->
-      const blockDelims = extractBlockDelimiters(tok.pattern);
-      const beginDelim = blockDelims ? blockDelims[0] : tok.pattern.slice(0, 2);
-      const endDelim = blockDelims ? blockDelims[1] : tok.pattern.slice(-2);
+      const blockDelims = tokenPatternBlockDelimiters(tok);
+      const blockSources = tokenPatternBlockDelimiterSources(tok);
+      const beginDelim = blockSources?.[0] ?? escapeRegex(blockDelims?.[0] ?? tokenPatternLiteralPrefix(tok) ?? '');
+      const endDelim = blockSources?.[1] ?? escapeRegex(blockDelims?.[1] ?? '');
 
       const blockEntry: TmPattern = {
         name: `${scope}.${langName}`,
@@ -4717,7 +4556,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       repository[key] = {
         name: `${emittedScope}.${langName}`,
         // The bare-identifier rule must scope non-ASCII names too (`Ω`, Cyrillic `А`).
-        match: tok === identToken ? identPattern : tok.pattern,
+        match: tok === identToken ? identPattern : tokenPatternSource(tok),
       };
       topPatterns.push({ include: `#${key}` });
       // Numeric-literal tokens (decimal/hex/octal/binary/bigint) land here — record
@@ -5009,7 +4848,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   );
   if (hasObjectType && hasTypeAnnotations) {
     // Detect if the grammar has a private-field-like token (for member ident pattern)
-    const hasPrivateFieldsForType = grammar.tokens.some(t => t.pattern.startsWith('#') || t.pattern.startsWith('\\#'));
+    const hasPrivateFieldsForType = grammar.tokens.some(t => tokenPatternLiteralPrefix(t)?.startsWith('#'));
     const objMemberIdent = hasPrivateFieldsForType ? `#?${identPattern}` : identPattern;
     repository['type-object-member'] = {
       name: `meta.type.annotation.member.${langName}`,
@@ -5868,7 +5707,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // ── 3e. Member type annotations inside declaration bodies ──
   if (repository['declaration-body'] && hasTypeAnnotations) {
     // Detect if the grammar has a private-field-like token (e.g., #identifier)
-    const hasPrivateFields = grammar.tokens.some(t => t.pattern.startsWith('#') || t.pattern.startsWith('\\#'));
+    const hasPrivateFields = grammar.tokens.some(t => tokenPatternLiteralPrefix(t)?.startsWith('#'));
     const memberIdentPattern = hasPrivateFields ? `#?${identPattern}` : identPattern;
     repository['member-type-annotation'] = {
       name: `meta.type.annotation.member.${langName}`,
@@ -6369,7 +6208,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // ── 4b2. Property access detection ──
   const propAccess = detectPropertyAccess(grammar, tokenNames);
   // Lookbehind for property access: derives extra ident chars from the Ident token
-  const propLookbehind = buildIdentLookbehind(identPattern);
+  const propLookbehind = buildIdentLookbehind(identToken);
   if (propAccess.hasDot || propAccess.hasOptionalChain) {
     if (propAccess.hasDot) {
       const dotScope = getScope(scopeOverrides,'.') ?? `punctuation.accessor.${langName}`;

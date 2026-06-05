@@ -2,13 +2,17 @@
 // named NOTHING like TypeScript's, with no template/regex/backtick at all, run
 // on the same engine. If the engine still hardcoded 'Ident'/'Template'/backtick,
 // these assertions would fail.
-import { token, rule, defineGrammar, alt, many, opt, sep, none } from '../src/api.ts';
+import { token, rule, defineGrammar, alt, many, opt, sep, none, seq, plus, oneOf, range, anyChar, star, noneOf } from '../src/api.ts';
+import { tokenPatternStartsWithDecimal } from '../src/token-pattern.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 
-const Word = token(/[a-z]+/, { identifier: true });   // identifier token, ASCII-only on purpose, NOT named "Ident"
-const Num = token(/[0-9]+/);
+const Word = token(plus(range('a', 'z')), { identifier: true });   // identifier token, ASCII-only on purpose, NOT named "Ident"
+const digit = range('0', '9');
+const word = oneOf(range('A', 'Z'), range('a', 'z'), digit, '_');
+const nonWhitespace = noneOf(oneOf('\t', '\n', '\f', '\r', ' '));
+const Num = token(plus(digit));
 const Program = rule(($: any) => [many(alt(Word, Num, '+'))]);
 
 const g = defineGrammar({ name: 'mini', tokens: { Word, Num }, rules: { Program }, entry: Program });
@@ -34,9 +38,15 @@ check('template machinery gated off when undeclared', !backtickHandled);
 // 4. The whole thing parses end-to-end on the shared engine.
 check('parses on the shared engine', parse('foo + 12 + bar').kind === 'node');
 
+check('token-pattern decimal-start fact handles range/char-class IR',
+  tokenPatternStartsWithDecimal(Num) &&
+  tokenPatternStartsWithDecimal(token(plus(word))) &&
+  !tokenPatternStartsWithDecimal(token(plus(nonWhitespace))) &&
+  !tokenPatternStartsWithDecimal(token(plus(anyChar()))));
+
 // 5. gen-vscode-config derives string delimiters from the `string` flag, not a
 //    hardcoded JS quote set: a `~…~` string token must yield `~` (and never `"`).
-const Str = token(/~[^~]*~/, { string: true });
+const Str = token(seq('~', star(noneOf('~')), '~'), { string: true });
 const StrProg = rule(() => [Word, Str]);
 const gc = defineGrammar({ name: 'mini2', tokens: { Word, Str }, rules: { StrProg }, entry: StrProg });
 const cfg = generateLanguageConfig(gc);
@@ -49,9 +59,9 @@ check('language-config quotes derived from grammar (~, not hardcoded \")',
 //    generics) whose strings are `~…~` must produce a carve-out that treats `~…~`
 //    as opaque (`~[^~]*~`) and never mentions `"[^"]*"`. Proves the JSX delimiter
 //    derivation (jsxDisambigDelims) is data-driven, like gen-vscode-config's quotes.
-const JTilde   = token(/~[^~]*~/, { string: true });    // ← non-quote attr-string delimiter
-const JSelfEnd = token(/\/>/);                           // JSX self-closing tag
-const JCloseTg = token(/<\//);                           // JSX close-tag opener
+const JTilde   = token(seq('~', star(noneOf('~')), '~'), { string: true });    // ← non-quote attr-string delimiter
+const JSelfEnd = token(seq('/', '>'));                           // JSX self-closing tag
+const JCloseTg = token(seq('<', '/'));                           // JSX close-tag opener
 const JType    = rule(() => [[Word]]);
 const JGeneric = rule(($: any) => [['<', sep(JType, ','), '>', '(', sep($, ','), ')']]);  // <T, U>(…) generics
 const JElement = rule(($: any) => [['<', Word, opt(JTilde), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]); // <Tag …/> JSX

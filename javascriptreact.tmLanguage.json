@@ -2690,7 +2690,7 @@
     },
     "directives": {
       "name": "comment.line.triple-slash.js.jsx",
-      "match": "///\\s*<[^\\n]*"
+      "match": "///[ \\t]*<[^\\n]*"
     },
     "this-literal": {
       "match": "\\b(this)\\b",

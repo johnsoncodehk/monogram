@@ -174,7 +174,7 @@ module.exports = grammar({
 
     jsdoc: $ => token(/\/\*\*(?:[\s\S])*?\*\//),
 
-    triple_slash: $ => token(/\/\/\/\s*<[^\n]*/),
+    triple_slash: $ => token(/\/\/\/[ \t]*<[^\n]*/),
 
     line_comment: $ => token(/\/\/[^\n]*/),
 

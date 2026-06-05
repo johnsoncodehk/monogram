@@ -1,7 +1,6 @@
 export type TokenPattern =
   | { __kind: 'token-pattern'; type: 'literal'; value: string }
-  | { __kind: 'token-pattern'; type: 'raw'; value: string }
-  | { __kind: 'token-pattern'; type: 'named'; name: string }
+  | { __kind: 'token-pattern'; type: 'anyChar' }
   | { __kind: 'token-pattern'; type: 'charClass'; negate: boolean; items: TokenCharClassItem[] }
   | { __kind: 'token-pattern'; type: 'seq'; items: TokenPattern[] }
   | { __kind: 'token-pattern'; type: 'alt'; items: TokenPattern[] }
@@ -13,19 +12,15 @@ export type TokenPattern =
 
 export type TokenCharClassItem =
   | { type: 'char'; value: string }
-  | { type: 'range'; from: string; to: string }
-  | { type: 'named'; name: string };
+  | { type: 'range'; from: string; to: string };
 
 export interface TokenDecl {
   name: string;
-  pattern: string;
-  patternAst?: TokenPattern;
+  pattern: TokenPattern;
   flags: string[];
   scope?: string;         // @scope(...) override
-  escapePattern?: string; // @escape /pattern/ — escape sequence regex (highlight only)
-  escapePatternAst?: TokenPattern;
-  escapeValidPattern?: string; // one well-formed escape; engine-scanned tokens reject non-matching `\`-escapes (skipped in tag position)
-  escapeValidPatternAst?: TokenPattern;
+  escapePattern?: TokenPattern; // @escape pattern — escape sequence pattern (highlight only)
+  escapeValidPattern?: TokenPattern; // one well-formed escape; engine-scanned tokens reject non-matching `\`-escapes (skipped in tag position)
   embed?: string;         // @embed(lang) — embedded language scope name
   // ── Lexer hints (keep the engine language-agnostic; all optional) ──
   identifier?: boolean;          // THE identifier token: engine uses its name for the
@@ -40,8 +35,7 @@ export interface TokenDecl {
   // are ordinary scalar content. The default `pattern` is the flow-restricted form and is what
   // gen-tm reads, so the highlighter is unaffected; only the PARSER's lexer consults this in block
   // context. (YAML plain scalars: `a,b`/`bla]keks` are one scalar in block, two tokens in flow.)
-  blockPattern?: string;
-  blockPatternAst?: TokenPattern;
+  blockPattern?: TokenPattern;
   // Block-context ONLY token (indentation grammars only): when set, the lexer matches this token
   // ONLY outside flow collections (flowDepth===0); inside flow its leading indicator is ordinary
   // content. YAML directives (`%YAML`/`%TAG`) are line-structural — a `%` inside `[ ]`/`{ }` is

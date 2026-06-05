@@ -1,5 +1,17 @@
-import type { CstGrammar, RuleExpr } from './types.ts';
+import type { CstGrammar, RuleExpr, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import {
+  tokenEscapePatternSource,
+  tokenPatternBlockDelimiterSources,
+  tokenPatternBlockDelimiters,
+  tokenPatternContainsLiteral,
+  tokenPatternHasStartAnchor,
+  tokenPatternIdentifierExtraChars,
+  tokenPatternLiteralPrefix,
+  tokenPatternSource,
+  tokenPatternStartsWithDecimal,
+  tokenPatternStringDelimiters,
+} from './token-pattern.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // gen-monarch — derive a Monaco *Monarch* tokenizer from ONE grammar.
@@ -75,104 +87,6 @@ function anchoredSource(pattern: string): string {
   return pattern.startsWith('^') ? pattern.slice(1) : pattern;
 }
 
-/**
- * Extract begin/end delimiters from a block-style token pattern by splitting on
- * the "match-everything" body (e.g. `[\s\S]*?`). Mirrors gen-tm so block comments
- * are detected identically. Returns null when the pattern is not block-style.
- */
-function extractBlockDelimiters(pattern: string): [string, string] | null {
-  const bodies = ['[\\s\\S]*?', '[\\s\\S]+?', '[^]*?', '[^]*'];
-  for (const body of bodies) {
-    const idx = pattern.indexOf(body);
-    if (idx !== -1) {
-      const begin = pattern.slice(0, idx);
-      const end = pattern.slice(idx + body.length);
-      if (begin && end) return [begin, end];
-    }
-  }
-  const guardedMarker = '(?:(?!';
-  const guardedIdx = pattern.indexOf(guardedMarker);
-  if (guardedIdx !== -1) {
-    const guardStart = guardedIdx + guardedMarker.length;
-    const tailMarker = ')[\\s\\S])';
-    const guardEnd = pattern.indexOf(tailMarker, guardStart);
-    if (guardEnd !== -1) {
-      const afterAtom = guardEnd + tailMarker.length;
-      const quant = pattern[afterAtom];
-      if (quant === '*' || quant === '+') {
-        const endStart = pattern[afterAtom + 1] === '?' ? afterAtom + 2 : afterAtom + 1;
-        const begin = pattern.slice(0, guardedIdx);
-        const guardedEnd = pattern.slice(guardStart, guardEnd);
-        const end = pattern.slice(endStart);
-        if (begin && end && guardedEnd === end) return [begin, end];
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Literal prefix of a regex pattern — the run of literal chars before the first
- * metachar, unescaping `\/`,`\#`,… but stopping at `\s`/`\d`/… shorthands.
- * e.g. `\/\/[^\n]*` → `//`, `#[^\n]*` → `#`, `<!--…` → `<!--`.
- */
-function regexLiteralPrefix(pattern: string): string {
-  let prefix = '';
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c === '\\' && i + 1 < pattern.length) {
-      const next = pattern[i + 1];
-      if (!/[a-zA-Z0-9]/.test(next)) { prefix += next; i++; }
-      else break;
-    } else if ('[(.+*?^$|{'.includes(c)) {
-      break;
-    } else {
-      prefix += c;
-    }
-  }
-  return prefix;
-}
-
-/** Top-level `|` alternatives of a regex source (depth 0, outside char classes). */
-function topLevelAlternatives(src: string): string[] {
-  const out: string[] = [];
-  let cur = '', depth = 0, inClass = false;
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i];
-    if (c === '\\') { cur += c + (src[i + 1] ?? ''); i++; continue; }
-    if (inClass) { cur += c; if (c === ']') inClass = false; continue; }
-    if (c === '[') { inClass = true; cur += c; continue; }
-    if (c === '(') { depth++; cur += c; continue; }
-    if (c === ')') { depth--; cur += c; continue; }
-    if (c === '|' && depth === 0) { out.push(cur); cur = ''; continue; }
-    cur += c;
-  }
-  out.push(cur);
-  return out;
-}
-
-/** Leading literal delimiter of each top-level alternative of a string token
- *  (`"`, `'`, `«`, … — derived from the pattern, never hardcoded to JS quotes). */
-function stringDelimiters(src: string): string[] {
-  return [...new Set(topLevelAlternatives(src).map(a => regexLiteralPrefix(a)).filter(Boolean))];
-}
-
-/** Non-`\w` chars that are still identifier chars, pulled from the ident token's
- *  regex char classes (e.g. `$`). Used to build a compact ident class for the
- *  generic-open lookahead without hardcoding language specifics. */
-function identExtraFromRegex(identRegex: string): string {
-  const extras = new Set<string>();
-  let inClass = false;
-  for (let i = 0; i < identRegex.length; i++) {
-    const c = identRegex[i];
-    if (c === '\\') { i++; continue; }
-    if (c === '[') { inClass = true; continue; }
-    if (c === ']') { inClass = false; continue; }
-    if (inClass && !/[a-zA-Z0-9_\-^]/.test(c)) extras.add(c);
-  }
-  return [...extras].join('');
-}
-
 /** An identifier-safe suffix for a state named after a delimiter. */
 function delimStateSuffix(delim: string): string {
   const names: Record<string, string> = {
@@ -232,19 +146,20 @@ function scopeToMonarch(scope: string): string {
 //
 // Resolve the highlight role of a *declared token* from its pattern + flags +
 // any `@scope` override. Same inference gen-tm performs → consistent roles.
-function classifyTokenScope(pattern: string, flags: string[], scope?: string): string {
-  if (scope) return scope;
-  if (flags.includes('skip')) {
-    if (extractBlockDelimiters(pattern)) return 'comment.block';
+function classifyTokenScope(token: TokenDecl): string {
+  if (token.scope) return token.scope;
+  if (token.flags.includes('skip')) {
+    if (tokenPatternBlockDelimiters(token)) return 'comment.block';
     return 'comment.line';
   }
-  if (pattern.startsWith('\\d') || pattern.startsWith('[0-9]') || pattern.startsWith('[0-9')) {
-    if (pattern.includes('\\.') || pattern.includes('.')) return 'constant.numeric.float';
+  if (tokenPatternStartsWithDecimal(token)) {
+    if (tokenPatternContainsLiteral(token, '.')) return 'constant.numeric.float';
     return 'constant.numeric.integer';
   }
-  if (pattern.includes('"')) return 'string.quoted.double';
-  if (pattern.includes("'")) return 'string.quoted.single';
-  if (pattern.includes('`')) return 'string.quoted.other.template';
+  const delimiters = tokenPatternStringDelimiters(token);
+  if (delimiters.includes('"')) return 'string.quoted.double';
+  if (delimiters.includes("'")) return 'string.quoted.single';
+  if (delimiters.includes('`')) return 'string.quoted.other.template';
   return 'variable.other';
 }
 
@@ -304,8 +219,8 @@ function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
     if (item.type === 'literal') return (item as { value: string }).value;
     if (item.type === 'ref') {
       const token = grammar.tokens.find(t => t.name === (item as { name: string }).name);
-      const m = token?.pattern.match(/^[`'"]/);
-      if (m) return m[0];
+      const delimiter = token ? tokenPatternStringDelimiters(token)[0] : undefined;
+      if (delimiter && /^[`'"]/.test(delimiter)) return delimiter[0];
     }
     return null;
   }
@@ -334,7 +249,7 @@ function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
 function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
   const m = grammar.markup!;
   const idTok = grammar.tokens.find(t => t.identifier);
-  const name = idTok?.pattern ?? '[a-zA-Z][\\w:.-]*';
+  const name = idTok ? tokenPatternSource(idTok) : '[a-zA-Z][\\w:.-]*';
   const o = escapeRegex(m.tagOpen), c = escapeRegex(m.tagClose), sl = escapeRegex(m.closeMarker ?? '/');
   const oc = m.tagOpen;                                   // raw open char for char classes (`<` is class-safe)
   // Attribute rules shared by the normal tag state and each raw-text start tag.
@@ -412,8 +327,8 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   //    source of truth), else the token gen-tm would treat as the identifier. ──
   const identToken =
     grammar.tokens.find(t => t.identifier) ??
-    grammar.tokens.find(t => classifyTokenScope(t.pattern, t.flags, t.scope) === 'variable.other');
-  const identRegex = identToken?.pattern ?? '[a-zA-Z_]\\w*';
+    grammar.tokens.find(t => classifyTokenScope(t) === 'variable.other');
+  const identRegex = identToken ? tokenPatternSource(identToken) : '[a-zA-Z_]\\w*';
 
   // ── Every literal from rules + prec ops (the lexer's punctuation universe) ──
   const allLiterals = new Set<string>();
@@ -503,7 +418,7 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   // precise than Monaco's hand-written TS Monarch, which has NO such guard.
   let genericGuard = '';
   if (angle) {
-    const cls = `[\\w${escapeForCharClass(identExtraFromRegex(identRegex))}]`;
+    const cls = `[\\w${escapeForCharClass(identToken ? tokenPatternIdentifierExtraChars(identToken) : '')}]`;
     const id = `${cls}+(?:\\s*\\.\\s*${cls}+)*`;            // dotted identifier
     const lvl0 = `${id}(?:\\s*\\[\\s*\\])*`;                // T, a.b, T[]
     const inner = `${lvl0}(?:\\s*<\\s*${lvl0}(?:\\s*,\\s*${lvl0})*\\s*>)?`; // 1 nesting level
@@ -529,17 +444,12 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   const commentRules: MonarchRule[] = [];
   for (const t of grammar.tokens) {
     if (!t.flags.includes('skip')) continue;
-    const scope = t.scope ?? classifyTokenScope(t.pattern, t.flags);
+    const scope = classifyTokenScope(t);
     const tok = scopeToMonarch(scope);
-    const block = extractBlockDelimiters(t.pattern);
+    const block = tokenPatternBlockDelimiters(t);
     if (block) {
-      // `extractBlockDelimiters` returns the begin/end as REGEX SOURCE already
-      // (e.g. `\/\*`, `\*\/`) — use them as the Monarch regex verbatim (mirrors
-      // gen-tm). The literal form (via regexLiteralPrefix) is only needed for the
-      // negated content class and the state name.
-      const [openRe, closeRe] = block;
-      const openLit = regexLiteralPrefix(openRe);
-      const closeLit = regexLiteralPrefix(closeRe);
+      const [openLit, closeLit] = block;
+      const [openRe, closeRe] = tokenPatternBlockDelimiterSources(t) ?? [escapeRegex(openLit), escapeRegex(closeLit)];
       const state = `comment_${delimStateSuffix(openLit)}`;
       commentRules.push([anchoredSource(openRe), { token: tok, next: `@${state}` }]);
       if (!tokenizer[state]) {
@@ -551,7 +461,8 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
         ];
       }
     } else {
-      const prefix = regexLiteralPrefix(t.pattern);
+      if (tokenPatternHasStartAnchor(t)) continue;
+      const prefix = tokenPatternLiteralPrefix(t);
       if (prefix) commentRules.push([`${escapeRegex(prefix)}.*$`, tok]);
     }
   }
@@ -579,16 +490,17 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
     // A token is a string if it carries the `string` lexer hint (the same signal
     // gen-vscode-config uses) OR its shape classifies as a string. The hint lets
     // a non-quote delimiter (e.g. `~…~`) be a string without hardcoding quotes.
-    const classified = classifyTokenScope(t.pattern, t.flags);
+    const classified = classifyTokenScope(t);
     if (!t.string && !classified.startsWith('string')) continue;
     const scope = t.scope ?? (classified.startsWith('string') ? classified : 'string.quoted');
     const tok = scopeToMonarch(scope);
-    for (const delim of stringDelimiters(t.pattern)) {
+    for (const delim of tokenPatternStringDelimiters(t)) {
       const suffix = delimStateSuffix(delim);
       const bodyState = `string_${suffix}_body`;
       if (!tokenizer[bodyState]) {
         const body: MonarchRule[] = [];
-        if (t.escapePattern) body.push([anchoredSource(t.escapePattern), 'string.escape']);
+        const escapePattern = tokenEscapePatternSource(t);
+        if (escapePattern) body.push([anchoredSource(escapePattern), 'string.escape']);
         body.push([`[^${escapeForCharClass(delim[0])}\\\\]+`, tok]);
         body.push(['\\\\.', 'string.escape']);
         tokenizer[bodyState] = body;
@@ -622,12 +534,13 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
     const scope = templateToken.scope ?? 'string.quoted.other.template';
     const tok = scopeToMonarch(scope);
     const interpOpenEsc = escapeRegex(interpOpen);
+    const escapePattern = tokenEscapePatternSource(templateToken);
     const stopChars = escapeForCharClass(open[0]) + '\\\\' + escapeForCharClass(interpOpen[0]);
 
     // Shared template body (content + escapes + `${` → interpolation), no close.
     const bodyState = 'template_body';
     const tbody: MonarchRule[] = [];
-    if (templateToken.escapePattern) tbody.push([anchoredSource(templateToken.escapePattern), 'string.escape']);
+    if (escapePattern) tbody.push([anchoredSource(escapePattern), 'string.escape']);
     tbody.push([interpOpenEsc, { token: 'delimiter.bracket', next: '@templateInterp' }]);
     tbody.push([`[^${stopChars}]+`, tok]);
     tokenizer[bodyState] = tbody;
@@ -677,9 +590,10 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   // ── Numbers (most-specific first; token decl order encodes specificity) ──
   const numberRules: MonarchRule[] = [];
   for (const t of grammar.tokens) {
-    const scope = classifyTokenScope(t.pattern, t.flags, t.scope);
+    const pattern = tokenPatternSource(t);
+    const scope = classifyTokenScope(t);
     if (!scope.startsWith('constant.numeric')) continue;
-    numberRules.push([anchoredSource(t.pattern), toValue(scopeToMonarch(scope))]);
+    numberRules.push([anchoredSource(pattern), toValue(scopeToMonarch(scope))]);
   }
 
   // ── Other simple scoped tokens (decorator @x, private #x, …) → value ──
@@ -687,9 +601,10 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   for (const t of grammar.tokens) {
     if (t.flags.includes('skip') || t.flags.includes('regex') || t.template || t === identToken) continue;
     if (t.string) continue;  // handled as a string span above
-    const scope = t.scope ?? classifyTokenScope(t.pattern, t.flags);
+    const pattern = tokenPatternSource(t);
+    const scope = classifyTokenScope(t);
     if (scope.startsWith('string') || scope.startsWith('constant.numeric')) continue;
-    otherTokenRules.push([anchoredSource(t.pattern), toValue(scopeToMonarch(scope))]);
+    otherTokenRules.push([anchoredSource(pattern), toValue(scopeToMonarch(scope))]);
   }
 
   // ── Identifier rule with keyword/built-in dispatch ──
@@ -750,12 +665,13 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   const valueSlashRules: MonarchRule[] = [];
   const interpSlashRules: MonarchRule[] = [];
   if (regexToken) {
-    exprSlashRules.push([anchoredSource(regexToken.pattern), toValue('regexp')]);
+    const regexPattern = tokenPatternSource(regexToken);
+    exprSlashRules.push([anchoredSource(regexPattern), toValue('regexp')]);
     const slashOps = symbolicLiterals.filter(o => o[0] === '/').sort((a, b) => b.length - a.length);
     const slashTok = symbolToken.get('/') ?? 'operator';
     if (slashOps.length) valueSlashRules.push([slashOps.map(escapeRegex).join('|'), toExpr(slashTok)]);
     // Inside holes (single-mode): prefer a regex literal, else division operator.
-    interpSlashRules.push([anchoredSource(regexToken.pattern), 'regexp']);
+    interpSlashRules.push([anchoredSource(regexPattern), 'regexp']);
     if (slashOps.length) interpSlashRules.push([slashOps.map(escapeRegex).join('|'), slashTok]);
   }
 

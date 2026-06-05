@@ -9,7 +9,7 @@
 //   explicit/complex keys (`? key`), multi-line plain scalars, directives (`%YAML`).
 import {
   token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore, noMultilineFlowBefore,
-  lit, seq, oneOf, noneOf, range, named, star, plus, repeat, followedBy, notFollowedBy,
+  lit, seq, oneOf, noneOf, range, star, plus, repeat, followedBy, notFollowedBy,
   precededBy, notPrecededBy, never, end,
 } from './src/api.ts';
 import type { IndentConfig } from './src/types.ts';
@@ -23,11 +23,13 @@ const Dedent = token(never(), {});
 const Newline = token(never(), {});
 
 // ── Scalars & lexical tokens (declaration order matters: earlier wins) ──
-const hexDigit = named('hexDigit');
-const digit = named('digit');
 const hspace = oneOf(' ', '\t');
 const lineBreak = seq(opt(lit('\r')), '\n');
-const hashAfterNonSpace = seq('#', precededBy(seq(named('nonWhitespace'), '#')));
+const digit = range('0', '9');
+const hexDigit = oneOf(digit, range('A', 'F'), range('a', 'f'));
+const whitespace = oneOf('\t', '\n', '\f', '\r', ' ');
+const nonWhitespace = noneOf(whitespace);
+const hashAfterNonSpace = seq('#', precededBy(seq(nonWhitespace, '#')));
 const DocStart = token(lit('---'), { scope: 'punctuation.definition.directives-end' });
 const DocEnd = token(lit('...'), { scope: 'punctuation.definition.document-end' });
 const Comment = token(seq('#', star(noneOf('\n'))), { skip: true, scope: 'comment.line.number-sign' });
@@ -45,9 +47,9 @@ const DQ_ESC = seq('\\', alt(
 ));
 const DQuote = token(seq('"', star(alt(DQ_ESC, noneOf('"', '\\'))), '"'), { string: true, scope: 'string.quoted.double' });
 const SQuote = token(seq("'", star(alt(seq("'", "'"), noneOf("'"))), "'"), { string: true, scope: 'string.quoted.single' });
-const Anchor = token(seq('&', plus(noneOf(named('whitespace'), '[', ']', '{', '}', ','))), { scope: 'entity.name.type.anchor' });
-const Alias = token(seq('*', plus(noneOf(named('whitespace'), '[', ']', '{', '}', ','))), { scope: 'variable.other.alias' });
-const Tag = token(seq('!', alt(seq('<', star(noneOf('>')), '>'), star(noneOf(named('whitespace'), '[', ']', '{', '}', ',')))), { scope: 'storage.type.tag' });
+const Anchor = token(seq('&', plus(noneOf(whitespace, '[', ']', '{', '}', ','))), { scope: 'entity.name.type.anchor' });
+const Alias = token(seq('*', plus(noneOf(whitespace, '[', ']', '{', '}', ','))), { scope: 'variable.other.alias' });
+const Tag = token(seq('!', alt(seq('<', star(noneOf('>')), '>'), star(noneOf(whitespace, '[', ']', '{', '}', ',')))), { scope: 'storage.type.tag' });
 // The `%YAML` version directive has a FIXED arity: exactly one `major.minor` parameter (§6.8.1).
 // A spaced trailing `# comment` is allowed; any other trailing token (`%YAML 1.2 foo`, a second
 // version `%YAML 1.1 1.2`) is illegal. Declared BEFORE the generic Directive so a well-formed
@@ -76,15 +78,15 @@ const BlockScalar = token(never(), { scope: 'string.unquoted.block' });
 // are what split a key (LHS of `: `) and a typed value (number / boolean / null) off the generic
 // string-valued plain scalar — a finer SCOPE for the highlighter, while the parser still treats
 // every one as a Scalar (they are all added to the `Scalar` rule, so the parse tree is unchanged).
-const plainHeadChar = noneOf(named('whitespace'), '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', "'", '"', '%', '@', '`');
-const PLAIN_HEAD = alt(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(named('whitespace'), ',', '[', ']', '{', '}'))));
+const plainHeadChar = noneOf(whitespace, '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', "'", '"', '%', '@', '`');
+const PLAIN_HEAD = alt(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(whitespace, ',', '[', ']', '{', '}'))));
 // A `#` is a COMMENT indicator only at line start or after whitespace; inside a plain scalar a
 // `#` glued to a non-space char is ordinary content (`this is#not` is ONE key, `http://a#b` is a
 // URL). So the body keeps a `#` whose preceding char is non-space — `#(?<=\S#)` matches the `#`
 // then asserts the two chars ending here are «non-space»«#» — while ` #…` (space-prefixed) still
 // ends the scalar and falls to the Comment token.
 const plainBodyChar = noneOf(':', '#', '\n', ',', '[', ']', '{', '}');
-const PLAIN_BODY = star(alt(plainBodyChar, seq(':', followedBy(noneOf(named('whitespace'), ',', ']', '}'))), hashAfterNonSpace));
+const PLAIN_BODY = star(alt(plainBodyChar, seq(':', followedBy(noneOf(whitespace, ',', ']', '}'))), hashAfterNonSpace));
 // BLOCK-context variants (used by the lexer only outside flow — see TokenDecl.blockPattern). The
 // chars `,[]{}` are flow indicators ONLY inside a flow collection; in block context they are plain
 // scalar content (`key: a,b`, `- bla]keks` are one scalar each; yaml-test-suite FBC9 / AZW3 / DBG4
@@ -92,14 +94,14 @@ const PLAIN_BODY = star(alt(plainBodyChar, seq(':', followedBy(noneOf(named('whi
 // is followed by ANY non-space (only a `: `/`:`-EOL still ends the scalar as a key/value separator).
 // A leading `[`/`{` still starts a FLOW collection and `,`/`]`/`}` are still illegal scalar STARTS,
 // so the leading-char set is unchanged; only the `-?:` head loosens to allow a following flow char.
-const PLAIN_HEAD_BLOCK = alt(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(named('whitespace')))));
-const PLAIN_BODY_BLOCK = star(alt(noneOf(':', '#', '\n'), seq(':', followedBy(noneOf(named('whitespace')))), hashAfterNonSpace));
+const PLAIN_HEAD_BLOCK = alt(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(whitespace))));
+const PLAIN_BODY_BLOCK = star(alt(noneOf(':', '#', '\n'), seq(':', followedBy(noneOf(whitespace))), hashAfterNonSpace));
 // A plain scalar is a mapping KEY when a `:` key-separator (colon + whitespace / EOL, or—inside a
 // flow collection—colon + `,`/`]`/`}`) follows it. Matched BEFORE the value/number tokens so a
 // numeric-looking key (`123:`) is still a key (entity.name.tag), as the `yaml` oracle resolves it.
 // A PLAIN scalar needs the colon to be followed by whitespace/EOL/flow-indicator, because a bare
 // `:` glued to more text is plain-scalar content (`foo:bar` is one scalar, `http://x` a URL).
-const KEY_SEP = followedBy(seq(star(hspace), ':', alt(named('whitespace'), ',', '[', ']', '{', '}', end())));
+const KEY_SEP = followedBy(seq(star(hspace), ':', alt(whitespace, ',', '[', ']', '{', '}', end())));
 // A QUOTED scalar, by contrast, is a mapping KEY whenever ANY `:` follows it (after optional
 // spaces) — `"x":v` (glued) and `"x": v` are both keys, and a quoted scalar can never run past its
 // closing quote, so the colon is always the entry separator, never scalar content. (In valid YAML a
@@ -146,7 +148,7 @@ const SQuoteKey = token(
 // `}`), or a key-separator `:`. Mirrors the maintained RedCMD grammar's core-schema lookaheads.
 const VALUE_END = followedBy(alt(
   seq(plus(hspace), '#'),
-  seq(star(hspace), alt('\r', '\n', ',', '[', ']', '{', '}', seq(':', alt(named('whitespace'), ',', '[', ']', '{', '}', end())))),
+  seq(star(hspace), alt('\r', '\n', ',', '[', ']', '{', '}', seq(':', alt(whitespace, ',', '[', ']', '{', '}', end())))),
   end(),
 ));
 // BLOCK-context value end-boundary: outside flow, `,`/`[`/`]`/`{`/`}` are NOT value terminators, so
@@ -155,7 +157,7 @@ const VALUE_END = followedBy(alt(
 // the (block) Plain token; only ws+comment, a line break, or a `:`-separator still ends the value.
 const VALUE_END_BLOCK = followedBy(alt(
   seq(plus(hspace), '#'),
-  seq(star(hspace), alt('\r', '\n', seq(':', alt(named('whitespace'), end())))),
+  seq(star(hspace), alt('\r', '\n', seq(':', alt(whitespace, end())))),
   end(),
 ));
 // A NON-SPECIFIC tag (`!` followed by whitespace) forces its plain scalar to resolve as a STRING
@@ -174,7 +176,7 @@ const NUM_BODY = seq(NONSPECIFIC_TAG, alt(
   seq(opt(sign), '.', alt(lit('inf'), 'Inf', 'INF')),
   seq('.', alt(lit('nan'), 'NaN', 'NAN')),
   seq('0x', plus(hexDigit)),
-  seq('0o', plus(oneOf(range('0', '7')))),
+  seq('0o', plus(range('0', '7'))),
   seq(opt(sign), alt(seq('.', plus(digit)), seq(plus(digit), opt(seq('.', star(digit))))), opt(seq(oneOf('e', 'E'), opt(sign), plus(digit)))),
 ));
 const Num = token(
