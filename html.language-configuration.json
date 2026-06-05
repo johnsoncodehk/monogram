@@ -38,5 +38,5 @@
     ]
   ],
   "autoCloseBefore": "> \n\t",
-  "wordPattern": "[a-zA-Z][\\w:.-]*"
+  "wordPattern": "[a-zA-Z][\\w:.\\-]*"
 }

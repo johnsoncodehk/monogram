@@ -33,13 +33,13 @@
 // rules include them only when the base has a `Type` rule (TS) and omit them for the
 // type-free JavaScript base.
 
-import { token, rule, defineGrammar, sameLine, sep, opt, many, alt } from './src/api.ts';
+import { token, rule, defineGrammar, sameLine, sep, opt, many, alt, seq } from './src/api.ts';
 import javascript, { Ident, Number_, String_ } from './javascript.ts';
 import type { CstGrammar, RuleDecl, TokenDecl, RuleExpr } from './src/types.ts';
 
 // `/>` (self-closing) and `</` (close-tag open) are atomic JSX punctuation tokens.
-const JSXSelfClose = token(/\/>/);
-const JSXClose = token(/<\//);
+const JSXSelfClose = token(seq('/', '>'));
+const JSXClose = token(seq('<', '/'));
 
 // Build the JSX rule + token DECLARATIONS (serialized, name-referenced). The JSX
 // rules reference `Expr`/`Type` via stub rules of those names, so once spliced into a

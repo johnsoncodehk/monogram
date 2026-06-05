@@ -90,6 +90,24 @@ function extractBlockDelimiters(pattern: string): [string, string] | null {
       if (begin && end) return [begin, end];
     }
   }
+  const guardedMarker = '(?:(?!';
+  const guardedIdx = pattern.indexOf(guardedMarker);
+  if (guardedIdx !== -1) {
+    const guardStart = guardedIdx + guardedMarker.length;
+    const tailMarker = ')[\\s\\S])';
+    const guardEnd = pattern.indexOf(tailMarker, guardStart);
+    if (guardEnd !== -1) {
+      const afterAtom = guardEnd + tailMarker.length;
+      const quant = pattern[afterAtom];
+      if (quant === '*' || quant === '+') {
+        const endStart = pattern[afterAtom + 1] === '?' ? afterAtom + 2 : afterAtom + 1;
+        const begin = pattern.slice(0, guardedIdx);
+        const guardedEnd = pattern.slice(guardStart, guardEnd);
+        const end = pattern.slice(endStart);
+        if (begin && end && guardedEnd === end) return [begin, end];
+      }
+    }
+  }
   return null;
 }
 

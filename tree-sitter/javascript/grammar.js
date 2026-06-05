@@ -158,31 +158,31 @@ module.exports = grammar({
 
     shebang: $ => token(/#![^\n]*/),
 
-    jsdoc: $ => token(/\/\*\*[\s\S]*?\*\//),
+    jsdoc: $ => token(/\/\*\*(?:[\s\S])*?\*\//),
 
     triple_slash: $ => token(/\/\/\/\s*<[^\n]*/),
 
     line_comment: $ => token(/\/\/[^\n]*/),
 
-    block_comment: $ => token(/\/\*[\s\S]*?\*\//),
+    block_comment: $ => token(/\/\*(?:[\s\S])*?\*\//),
 
-    ident: $ => token(/(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/),
+    ident: $ => token(/(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 
-    hex_number: $ => token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*n?/),
+    hex_number: $ => token(/0[xX][0-9A-Fa-f]+(?:_[0-9A-Fa-f]+)*n?/),
 
-    octal_number: $ => token(/0[oO][0-7]+(_[0-7]+)*n?/),
+    octal_number: $ => token(/0[oO][0-7]+(?:_[0-7]+)*n?/),
 
-    binary_number: $ => token(/0[bB][01]+(_[01]+)*n?/),
+    binary_number: $ => token(/0[bB][01]+(?:_[01]+)*n?/),
 
-    big_int: $ => token(/[0-9]+(_[0-9]+)*n/),
+    big_int: $ => token(/[0-9]+(?:_[0-9]+)*n/),
 
-    number: $ => token(/(?:[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?|\.[0-9]+(_[0-9]+)*)(?:[eE][+-]?[0-9]+(_[0-9]+)*)?/),
+    number: $ => token(/(?:[0-9]+(?:_[0-9]+)*(?:\.[0-9]*(?:_[0-9]+)*)?|\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\-]?[0-9]+(?:_[0-9]+)*)?/),
 
-    string: $ => token(/"(?:[^"\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux]))*'/),
+    string: $ => token(/"(?:[^"\\]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[^ux]))*"|'(?:[^'\\]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[^ux]))*'/),
 
-    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\}|\.)*)?/),
+    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.)*)?/),
 
-    private_field: $ => token(/#(?:[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})(?:[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})*/),
+    private_field: $ => token(/#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 
     template: $ => seq(
       "`",

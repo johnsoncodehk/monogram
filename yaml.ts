@@ -7,33 +7,47 @@
 // KNOWN first-cut gaps (the src-coverage metric localizes them against yaml-test-suite):
 //   block scalars (`|`, `>`), plain scalars containing ':' (e.g. URLs) or trailing '# comment',
 //   explicit/complex keys (`? key`), multi-line plain scalars, directives (`%YAML`).
-import { token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore, noMultilineFlowBefore } from './src/api.ts';
+import {
+  token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore, noMultilineFlowBefore,
+  lit, seq, oneOf, noneOf, range, named, star, plus, repeat, followedBy, notFollowedBy,
+  precededBy, notPrecededBy, never, end,
+} from './src/api.ts';
 import type { IndentConfig } from './src/types.ts';
 
 // ── Structural tokens emitted by the lexer's indentation state machine. They are NEVER
 // regex-matched (the patterns are placeholders — `(?!)` never matches); the lexer emits them
 // and skips them in the regex loop via gen-lexer's indentTokenNames. The grammar references
 // them like ordinary tokens (the parser matches by token TYPE). ──
-const Indent = token(/(?!)/, {});
-const Dedent = token(/(?!)/, {});
-const Newline = token(/(?!)/, {});
+const Indent = token(never(), {});
+const Dedent = token(never(), {});
+const Newline = token(never(), {});
 
 // ── Scalars & lexical tokens (declaration order matters: earlier wins) ──
-const DocStart = token(/---/, { scope: 'punctuation.definition.directives-end' });
-const DocEnd = token(/\.\.\./, { scope: 'punctuation.definition.document-end' });
-const Comment = token(/#[^\n]*/, { skip: true, scope: 'comment.line.number-sign' });
+const hexDigit = named('hexDigit');
+const digit = named('digit');
+const hspace = oneOf(' ', '\t');
+const lineBreak = seq(opt(lit('\r')), '\n');
+const hashAfterNonSpace = seq('#', precededBy(seq(named('nonWhitespace'), '#')));
+const DocStart = token(lit('---'), { scope: 'punctuation.definition.directives-end' });
+const DocEnd = token(lit('...'), { scope: 'punctuation.definition.document-end' });
+const Comment = token(seq('#', star(noneOf('\n'))), { skip: true, scope: 'comment.line.number-sign' });
 // Double-quoted scalar body. The escape set is FIXED (YAML 1.2 §5.7): a `\` may only precede one
 // of `0 a b t n v f r e " / \ N _ L P`, a literal space/tab, a `x`+2 / `u`+4 / `U`+8 hex escape, or
 // a LINE BREAK (`\`-at-EOL = line continuation). Any other `\.` (`\.`, `\'`, `\q`, `\x4`) is illegal
 // — validating the set rejects `55WF`/`HRE5`, and admitting `\`+newline accepts the folded
 // multi-line scalars `565N`/`NP9H`/`Q8AD` (where the old `\\.` failed because `.` skips newlines).
-const DQ_ESC = String.raw`\\(?:[0abtnvfre"/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\r?\n)`;
-const DQUOTE_BODY = String.raw`"(?:${DQ_ESC}|[^"\\])*"`;
-const DQuote = token(new RegExp(DQUOTE_BODY), { string: true, scope: 'string.quoted.double' });
-const SQuote = token(/'(?:''|[^'])*'/, { string: true, scope: 'string.quoted.single' });
-const Anchor = token(/&[^\s\[\]{},]+/, { scope: 'entity.name.type.anchor' });
-const Alias = token(/\*[^\s\[\]{},]+/, { scope: 'variable.other.alias' });
-const Tag = token(/!(?:<[^>]*>|[^\s\[\]{},]*)/, { scope: 'storage.type.tag' });
+const DQ_ESC = seq('\\', alt(
+  oneOf('0', 'a', 'b', 't', 'n', 'v', 'f', 'r', 'e', '"', '/', '\\', 'N', '_', 'L', 'P', ' ', '\t'),
+  seq('x', repeat(hexDigit, 2, 2)),
+  seq('u', repeat(hexDigit, 4, 4)),
+  seq('U', repeat(hexDigit, 8, 8)),
+  lineBreak,
+));
+const DQuote = token(seq('"', star(alt(DQ_ESC, noneOf('"', '\\'))), '"'), { string: true, scope: 'string.quoted.double' });
+const SQuote = token(seq("'", star(alt(seq("'", "'"), noneOf("'"))), "'"), { string: true, scope: 'string.quoted.single' });
+const Anchor = token(seq('&', plus(noneOf(named('whitespace'), '[', ']', '{', '}', ','))), { scope: 'entity.name.type.anchor' });
+const Alias = token(seq('*', plus(noneOf(named('whitespace'), '[', ']', '{', '}', ','))), { scope: 'variable.other.alias' });
+const Tag = token(seq('!', alt(seq('<', star(noneOf('>')), '>'), star(noneOf(named('whitespace'), '[', ']', '{', '}', ',')))), { scope: 'storage.type.tag' });
 // The `%YAML` version directive has a FIXED arity: exactly one `major.minor` parameter (§6.8.1).
 // A spaced trailing `# comment` is allowed; any other trailing token (`%YAML 1.2 foo`, a second
 // version `%YAML 1.1 1.2`) is illegal. Declared BEFORE the generic Directive so a well-formed
@@ -47,28 +61,30 @@ const Tag = token(/!(?:<[^>]*>|[^\s\[\]{},]*)/, { scope: 'storage.type.tag' });
 // token and the stray `%` then fails to lex → reject (H7TQ / ZYU8). The trailing comment is left
 // OUTSIDE the token (only looked at) so a ` # comment` is tokenised/scoped as a Comment, not folded
 // into the directive — keeps the highlighter's comment scope intact.
-const YamlDirective = token(/%YAML[ \t]+[0-9]+\.[0-9]+(?=[ \t]*(?:#|\r|\n|$))/, { scope: 'keyword.other.directive', blockOnly: true });
+const YamlDirective = token(seq('%YAML', plus(hspace), plus(digit), '.', plus(digit), followedBy(seq(star(hspace), alt(lit('#'), '\r', '\n', end())))), { scope: 'keyword.other.directive', blockOnly: true });
 // Directive (`%TAG …`, unknown `%FOO …`): runs to EOL but stops before a ` #` trailing comment — a
 // `#` is a comment indicator only after whitespace, so a glued `#` (`%YAML 1.1#x`) stays part of
 // the directive while a spaced ` # comment` falls to the Comment token (same rule as plain scalars).
 // EXCLUDES the `%YAML␣` version form (handled by YamlDirective above) so a bad-arity version line is
 // not silently re-absorbed here; `%YAML1.2` (no space) is NOT the version form, so it still matches.
-const Directive = token(/%(?!YAML[ \t])(?:[^\n#]|#(?<=\S#))*/, { scope: 'keyword.other.directive', blockOnly: true });
+const Directive = token(seq('%', notFollowedBy(seq('YAML', hspace)), star(alt(noneOf('\n', '#'), hashAfterNonSpace))), { scope: 'keyword.other.directive', blockOnly: true });
 // Block scalar (| / >): EMITTED by the lexer's block-scalar mode (placeholder pattern, skipped
 // in the regex loop) so the more-indented content lines arrive as a single token.
-const BlockScalar = token(/(?!)/, { scope: 'string.unquoted.block' });
+const BlockScalar = token(never(), { scope: 'string.unquoted.block' });
 // Plain-scalar shapes shared by the key / number / boolean tokens below. The BODY is the same
 // run of characters the general Plain scalar matches; the leading-char and the trailing context
 // are what split a key (LHS of `: `) and a typed value (number / boolean / null) off the generic
 // string-valued plain scalar — a finer SCOPE for the highlighter, while the parser still treats
 // every one as a Scalar (they are all added to the `Scalar` rule, so the parse tree is unchanged).
-const PLAIN_HEAD = String.raw`(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:](?=[^\s,\[\]{}]))`;
+const plainHeadChar = noneOf(named('whitespace'), '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', "'", '"', '%', '@', '`');
+const PLAIN_HEAD = alt(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(named('whitespace'), ',', '[', ']', '{', '}'))));
 // A `#` is a COMMENT indicator only at line start or after whitespace; inside a plain scalar a
 // `#` glued to a non-space char is ordinary content (`this is#not` is ONE key, `http://a#b` is a
 // URL). So the body keeps a `#` whose preceding char is non-space — `#(?<=\S#)` matches the `#`
 // then asserts the two chars ending here are «non-space»«#» — while ` #…` (space-prefixed) still
 // ends the scalar and falls to the Comment token.
-const PLAIN_BODY = String.raw`(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}])|#(?<=\S#))*`;
+const plainBodyChar = noneOf(':', '#', '\n', ',', '[', ']', '{', '}');
+const PLAIN_BODY = star(alt(plainBodyChar, seq(':', followedBy(noneOf(named('whitespace'), ',', ']', '}'))), hashAfterNonSpace));
 // BLOCK-context variants (used by the lexer only outside flow — see TokenDecl.blockPattern). The
 // chars `,[]{}` are flow indicators ONLY inside a flow collection; in block context they are plain
 // scalar content (`key: a,b`, `- bla]keks` are one scalar each; yaml-test-suite FBC9 / AZW3 / DBG4
@@ -76,14 +92,14 @@ const PLAIN_BODY = String.raw`(?:[^:#\n,\[\]{}]|:(?=[^\s,\]}])|#(?<=\S#))*`;
 // is followed by ANY non-space (only a `: `/`:`-EOL still ends the scalar as a key/value separator).
 // A leading `[`/`{` still starts a FLOW collection and `,`/`]`/`}` are still illegal scalar STARTS,
 // so the leading-char set is unchanged; only the `-?:` head loosens to allow a following flow char.
-const PLAIN_HEAD_BLOCK = String.raw`(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:](?=[^\s]))`;
-const PLAIN_BODY_BLOCK = String.raw`(?:[^:#\n]|:(?=[^\s])|#(?<=\S#))*`;
+const PLAIN_HEAD_BLOCK = alt(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(named('whitespace')))));
+const PLAIN_BODY_BLOCK = star(alt(noneOf(':', '#', '\n'), seq(':', followedBy(noneOf(named('whitespace')))), hashAfterNonSpace));
 // A plain scalar is a mapping KEY when a `:` key-separator (colon + whitespace / EOL, or—inside a
 // flow collection—colon + `,`/`]`/`}`) follows it. Matched BEFORE the value/number tokens so a
 // numeric-looking key (`123:`) is still a key (entity.name.tag), as the `yaml` oracle resolves it.
 // A PLAIN scalar needs the colon to be followed by whitespace/EOL/flow-indicator, because a bare
 // `:` glued to more text is plain-scalar content (`foo:bar` is one scalar, `http://x` a URL).
-const KEY_SEP = String.raw`(?=[\t ]*:(?:[\s,\[\]{}]|$))`;
+const KEY_SEP = followedBy(seq(star(hspace), ':', alt(named('whitespace'), ',', '[', ']', '{', '}', end())));
 // A QUOTED scalar, by contrast, is a mapping KEY whenever ANY `:` follows it (after optional
 // spaces) — `"x":v` (glued) and `"x": v` are both keys, and a quoted scalar can never run past its
 // closing quote, so the colon is always the entry separator, never scalar content. (In valid YAML a
@@ -91,12 +107,12 @@ const KEY_SEP = String.raw`(?=[\t ]*:(?:[\s,\[\]{}]|$))`;
 // the only `"x":y` shapes it rejects are block-context errors, which the grader excludes. This is
 // what colours the JSON-style flow key `{"foo":bar}` / `["k":v]`, vscode#203212 / yaml-test-suite
 // C2DT·5T43·4MUZ.) Spaced/EOL still match (`(?=[\t ]*:)` covers `"x" : v` and `"x":`).
-const QKEY_SEP = String.raw`(?=[\t ]*:)`;
+const QKEY_SEP = followedBy(seq(star(hspace), ':'));
 
 // Plain scalar that is a mapping key → entity.name.tag (the YAML convention for a key name).
 const Key = token(
-  new RegExp(`${PLAIN_HEAD}${PLAIN_BODY}${KEY_SEP}`),
-  { scope: 'entity.name.tag', blockPattern: new RegExp(`${PLAIN_HEAD_BLOCK}${PLAIN_BODY_BLOCK}${KEY_SEP}`) },
+  seq(PLAIN_HEAD, PLAIN_BODY, KEY_SEP),
+  { scope: 'entity.name.tag', blockPattern: seq(PLAIN_HEAD_BLOCK, PLAIN_BODY_BLOCK, KEY_SEP) },
 );
 // Double-quoted scalar in KEY position (a `"…"` immediately followed by a `:` key-separator). An
 // implicit key — a quoted scalar that is a mapping key — must be on a SINGLE line (§7.4.2 / the
@@ -109,26 +125,39 @@ const Key = token(
 // (it isn't in key position). The escaped `\n` form (`"a\\nb":`, a literal backslash-n) stays a
 // single-line key. Flow MAPPING keys come via FlowNode→DQuote (not this token), so `{ "a\nb": 1 }`
 // — a legal multi-line flow-map key — is also unaffected.
-const DQ_ESC_NONL = String.raw`\\(?:[0abtnvfre"/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})`;
+const DQ_ESC_NONL = seq('\\', alt(
+  oneOf('0', 'a', 'b', 't', 'n', 'v', 'f', 'r', 'e', '"', '/', '\\', 'N', '_', 'L', 'P', ' ', '\t'),
+  seq('x', repeat(hexDigit, 2, 2)),
+  seq('u', repeat(hexDigit, 4, 4)),
+  seq('U', repeat(hexDigit, 8, 8)),
+));
 const DQuoteKey = token(
-  new RegExp(String.raw`"(?:${DQ_ESC_NONL}|[^"\\\r\n])*"${QKEY_SEP}`),
+  seq('"', star(alt(DQ_ESC_NONL, noneOf('"', '\\', '\r', '\n'))), '"', QKEY_SEP),
   { string: true, scope: 'entity.name.tag' },
 );
 // Single-quoted scalar in KEY position (single-line — see DQuoteKey).
 const SQuoteKey = token(
-  new RegExp(String.raw`'(?:''|[^'\r\n])*'${QKEY_SEP}`),
+  seq("'", star(alt(seq("'", "'"), noneOf("'", '\r', '\n'))), "'", QKEY_SEP),
   { string: true, scope: 'entity.name.tag' },
 );
 
 // Value end-boundary for typed plain scalars (number / boolean / null): the scalar must be the
 // WHOLE node, so it is followed by whitespace+comment, an end-of-value char (EOL / `,` / `]` /
 // `}`), or a key-separator `:`. Mirrors the maintained RedCMD grammar's core-schema lookaheads.
-const VALUE_END = String.raw`(?=[\t ]+#|[\t ]*(?:[\r\n,\[\]{}]|:(?:[\s,\[\]{}]|$))|$)`;
+const VALUE_END = followedBy(alt(
+  seq(plus(hspace), '#'),
+  seq(star(hspace), alt('\r', '\n', ',', '[', ']', '{', '}', seq(':', alt(named('whitespace'), ',', '[', ']', '{', '}', end())))),
+  end(),
+));
 // BLOCK-context value end-boundary: outside flow, `,`/`[`/`]`/`{`/`}` are NOT value terminators, so
 // a typed look-alike GLUED to one is a plain string, not a number/bool (`key: 1,2` is the string
 // "1,2", not the number 1 — yaml-test-suite DBG4). Dropping them lets such scalars fall through to
 // the (block) Plain token; only ws+comment, a line break, or a `:`-separator still ends the value.
-const VALUE_END_BLOCK = String.raw`(?=[\t ]+#|[\t ]*(?:[\r\n]|:(?:[\s]|$))|$)`;
+const VALUE_END_BLOCK = followedBy(alt(
+  seq(plus(hspace), '#'),
+  seq(star(hspace), alt('\r', '\n', seq(':', alt(named('whitespace'), end())))),
+  end(),
+));
 // A NON-SPECIFIC tag (`!` followed by whitespace) forces its plain scalar to resolve as a STRING
 // regardless of the scalar's appearance (`! 12` is the string "12", not the number 12 — YAML 1.2
 // §6.9.1 / yaml-test-suite S4JQ). So the typed value tokens (Num / BoolNull) MUST NOT fire on a
@@ -136,25 +165,28 @@ const VALUE_END_BLOCK = String.raw`(?=[\t ]+#|[\t ]*(?:[\r\n]|:(?:[\s]|$))|$)`;
 // falls through to the generic Plain (`string.unquoted`). A *specific* tag (`!!int 12`, `!!bool …`)
 // puts non-space chars between the `!` and the value, so this lookbehind leaves those untouched —
 // they keep resolving by appearance, matching what the `yaml` oracle reports.
-const NONSPECIFIC_TAG = String.raw`(?<!![\t ]+)`;
+const NONSPECIFIC_TAG = notPrecededBy(seq('!', plus(hspace)));
 // Numeric plain scalars (YAML 1.2 core schema): decimal / octal / hex integers, floats, ±.inf,
 // .nan. Anything outside the core schema (binary `0b…`, dates, `12:34:56`) stays a plain string,
 // matching what the `yaml` oracle resolves to a number.
-const NUM_BODY =
-  NONSPECIFIC_TAG +
-  String.raw`(?:[+-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)` +
-  String.raw`|0x[0-9a-fA-F]+|0o[0-7]+` +
-  String.raw`|[+-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)`;
+const sign = oneOf('+', '-');
+const NUM_BODY = seq(NONSPECIFIC_TAG, alt(
+  seq(opt(sign), '.', alt(lit('inf'), 'Inf', 'INF')),
+  seq('.', alt(lit('nan'), 'NaN', 'NAN')),
+  seq('0x', plus(hexDigit)),
+  seq('0o', plus(oneOf(range('0', '7')))),
+  seq(opt(sign), alt(seq('.', plus(digit)), seq(plus(digit), opt(seq('.', star(digit))))), opt(seq(oneOf('e', 'E'), opt(sign), plus(digit)))),
+));
 const Num = token(
-  new RegExp(NUM_BODY + VALUE_END),
-  { scope: 'constant.numeric', blockPattern: new RegExp(NUM_BODY + VALUE_END_BLOCK) },
+  seq(NUM_BODY, VALUE_END),
+  { scope: 'constant.numeric', blockPattern: seq(NUM_BODY, VALUE_END_BLOCK) },
 );
 // Boolean / null plain scalars (core schema) → constant.language. Same non-specific-tag guard:
 // `! true` is the string "true", not the boolean (yaml-test-suite cousins of S4JQ).
-const BOOLNULL_BODY = NONSPECIFIC_TAG + String.raw`(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)`;
+const BOOLNULL_BODY = seq(NONSPECIFIC_TAG, alt(lit('true'), 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~'));
 const BoolNull = token(
-  new RegExp(BOOLNULL_BODY + VALUE_END),
-  { scope: 'constant.language', blockPattern: new RegExp(BOOLNULL_BODY + VALUE_END_BLOCK) },
+  seq(BOOLNULL_BODY, VALUE_END),
+  { scope: 'constant.language', blockPattern: seq(BOOLNULL_BODY, VALUE_END_BLOCK) },
 );
 
 // Plain scalar. Leading char: a non-indicator, OR one of `- ? :` when followed by a non-space
@@ -162,8 +194,8 @@ const BoolNull = token(
 // PLAIN_BODY (any non `:`/`,`/flow char, plus `:` not before space/`,`/`]`/`}`, plus a `#` glued
 // to a non-space) — so `http://x`, `key:val` and `this is#not` are single plain scalars.
 const Plain = token(
-  new RegExp(`${PLAIN_HEAD}${PLAIN_BODY}`),
-  { scope: 'string.unquoted', blockPattern: new RegExp(`${PLAIN_HEAD_BLOCK}${PLAIN_BODY_BLOCK}`) },
+  seq(PLAIN_HEAD, PLAIN_BODY),
+  { scope: 'string.unquoted', blockPattern: seq(PLAIN_HEAD_BLOCK, PLAIN_BODY_BLOCK) },
 );
 
 // A Scalar is any of the above scalar SHAPES. The key / number / boolean tokens are finer

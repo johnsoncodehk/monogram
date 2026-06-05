@@ -1010,7 +1010,7 @@
     },
     "tag": {
       "name": "meta.tag.html",
-      "begin": "(<)(/?)([a-zA-Z][\\w:.-]*)",
+      "begin": "(<)(/?)([a-zA-Z][\\w:.\\-]*)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -1196,7 +1196,7 @@
           ]
         },
         {
-          "match": "([a-zA-Z][\\w:.-]*)(?=\\s*=)",
+          "match": "([a-zA-Z][\\w:.\\-]*)(?=\\s*=)",
           "name": "entity.other.attribute-name.html"
         },
         {
@@ -1245,7 +1245,7 @@
           ]
         },
         {
-          "match": "([a-zA-Z][\\w:.-]*)",
+          "match": "([a-zA-Z][\\w:.\\-]*)",
           "name": "entity.other.attribute-name.html"
         }
       ]

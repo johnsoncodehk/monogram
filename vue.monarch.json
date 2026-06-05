@@ -54,7 +54,7 @@
         }
       ],
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][\\w:.\\-]*",
         {
           "token": "tag",
           "switchTo": "@tag"
@@ -68,7 +68,7 @@
     ],
     "closetag": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][\\w:.\\-]*",
         "tag"
       ],
       [
@@ -85,7 +85,7 @@
     ],
     "tag": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][\\w:.\\-]*",
         "attribute.name"
       ],
       [
@@ -163,7 +163,7 @@
     ],
     "rawtag_template": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][\\w:.\\-]*",
         "attribute.name"
       ],
       [
@@ -215,7 +215,7 @@
     ],
     "rawtag_script": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][\\w:.\\-]*",
         "attribute.name"
       ],
       [
@@ -267,7 +267,7 @@
     ],
     "rawtag_style": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][\\w:.\\-]*",
         "attribute.name"
       ],
       [
