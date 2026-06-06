@@ -185,16 +185,24 @@ export function createLexer(grammar: CstGrammar) {
   // → null, and a `tagOpen` always opens a tag (legacy behaviour, unchanged for other grammars).
   const tagOpenAfterRe = markup?.tagOpenAfter ? new RegExp('[' + markup.tagOpenAfter + ']') : null;
 
-  // ── Indentation mode (opt-in; dormant unless the grammar declares `indent`) ──
+  // ── Indentation / newline mode (opt-in; dormant unless the grammar declares `indent` or `newline`) ──
   // Like markup, the INDENT/DEDENT/NEWLINE tokens are EMITTED by a state machine (not matched
   // by a regex) — so they are skipped in the regex loop and their grammar patterns are
   // placeholders. Indentation is suspended inside flow delimiters via a flow-depth counter.
+  // `newline` is the line-boundary + flow-suspension LAYER that `indent` builds on: an indent
+  // grammar gets the full stack + INDENT/DEDENT/NEWLINE; a newline-only grammar emits just the
+  // NEWLINE token at each significant line boundary (no stack). `lineSensitive` gates the shared
+  // machinery; `indent`/`newline` are mutually exclusive (defineGrammar rejects declaring both).
   const indent = grammar.indent;
+  const newline = grammar.newline;
+  const lineSensitive = !!indent || !!newline;
+  const lineComment = (indent ?? newline)?.comment;   // line-comment introducer (both modes skip comment-only lines)
   const indentTokenNames = new Set<string>(
-    indent ? ([indent.indentToken, indent.dedentToken, indent.newlineToken].filter(Boolean) as string[]) : [],
+    indent ? ([indent.indentToken, indent.dedentToken, indent.newlineToken].filter(Boolean) as string[])
+           : newline ? [newline.token] : [],
   );
-  const flowOpenSet = new Set(indent?.flowOpen ?? []);
-  const flowCloseSet = new Set(indent?.flowClose ?? []);
+  const flowOpenSet = new Set((indent ?? newline)?.flowOpen ?? []);
+  const flowCloseSet = new Set((indent ?? newline)?.flowClose ?? []);
   // String-literal token names (the `string`-flagged tokens — quoted scalars in YAML). Used by the
   // flow mapping-separator guard below: a quoted scalar can never run past its closing quote, so a
   // `:` immediately after one (inside flow) is ALWAYS the mapping `key: value` separator, never the
@@ -416,7 +424,7 @@ export function createLexer(grammar: CstGrammar) {
         && tagOpenAfterRe.test(source[i + markup!.tagOpen.length]));
     // Indentation state — active only when `indent` is declared (dormant otherwise).
     let flowDepth = 0;               // >0 while inside flow delimiters ([ ] { }) → indentation suspended
-    let lineStart = !!indent;        // at a block-context line boundary (file start counts as one)
+    let lineStart = lineSensitive;   // at a block-context line boundary (file start counts as one)
     let emittedContent = false;      // any real (non-structural) token emitted yet — suppress a leading NEWLINE/DEDENT
     let currentLineCol = 0;          // leading-space column of the current logical line (bounds block scalars)
     let atLineLead = false;          // the next emitted token is the FIRST content token of its line (compact-indicator probe)
@@ -446,7 +454,7 @@ export function createLexer(grammar: CstGrammar) {
       if (pendingComment) { t.commentBefore = true; pendingComment = false; }
       if (pendingMultilineFlow) { t.multilineFlowBefore = true; pendingMultilineFlow = false; }
       tokens.push(t);
-      if (indent) {
+      if (lineSensitive) {
         if (!indentTokenNames.has(t.type)) {
           emittedContent = true;                                     // a real token (not INDENT/DEDENT/NEWLINE)
           atLineLead = false;                                        // line-lead consumed once a real token lands
@@ -456,7 +464,8 @@ export function createLexer(grammar: CstGrammar) {
             // Entering the OUTERMOST flow (0→1): if it opens right after a `:`/`-` block indicator,
             // it is a block VALUE/ITEM → arm the §7.4 indent rule with n = the current block column
             // (the indent-stack top). Anywhere else (top-level / after `,` / as a key) the rule is OFF.
-            if (flowDepth === 0) {
+            // The §7.4 / multi-line-flow bookkeeping is indent-only (a newline grammar has no stack).
+            if (flowDepth === 0 && indent) {
               const prevTok = tokens[tokens.length - 2];   // the token before this just-pushed open
               flowValueIndent = (prevTok && prevTok.type === '' && (prevTok.text === ':' || prevTok.text === '-'))
                 ? indentStack[indentStack.length - 1] : -1;
@@ -465,7 +474,7 @@ export function createLexer(grammar: CstGrammar) {
             flowDepth++;
           } else if (flowCloseSet.has(t.text)) {
             flowDepth = Math.max(0, flowDepth - 1);
-            if (flowDepth === 0) {
+            if (flowDepth === 0 && indent) {
               flowValueIndent = -1;
               if (flowSawNewline) pendingMultilineFlow = true;   // a multi-line flow just closed → flag the next token
               flowSawNewline = false;
@@ -566,7 +575,7 @@ export function createLexer(grammar: CstGrammar) {
       // ── Indentation mode: at a block-context line start, skip blank/comment lines, measure
       // the next content line's leading-space column, and emit NEWLINE / INDENT / DEDENT(s)
       // before that line's tokens (relative to the indentation stack). ──
-      if (indent && flowDepth === 0 && lineStart) {
+      if (lineSensitive && flowDepth === 0 && lineStart) {
         let p = pos, col = 0;
         while (p < source.length && source[p] === ' ') { p++; col++; }
         const ch = source[p];
@@ -600,18 +609,26 @@ export function createLexer(grammar: CstGrammar) {
         // (its emitted NEWLINE/DEDENT either reject in value position or are harmless between
         // siblings — matching the `yaml` oracle, which is context-sensitive there). We reject only
         // the structural case, so no valid leaf-continuation is mis-rejected.
-        if (ch === '\t') {
+        if (indent && ch === '\t') {   // §6.1 tab-in-indentation error is YAML-specific (newline mode has no stack)
           let q = p; while (q < source.length && (source[q] === ' ' || source[q] === '\t')) q++;
           const after = source[q];
           if (q < source.length && after !== '\n' && after !== '\r' && startsBlockStructuralNode(source, q)) {
             throw new Error(`Tab character used in indentation at offset ${p}`);
           }
         }
-        if (indent.comment && source.startsWith(indent.comment, p)) {       // comment-only line — ignored
+        if (lineComment && source.startsWith(lineComment, p)) {             // comment-only line — ignored
           let e = p; while (e < source.length && source[e] !== '\n') e++;
           pos = e; pendingComment = true; continue;                         // next iteration consumes the newline
         }
         pos = p;                                                            // consume the leading indentation
+        // ── newline-only mode: no indent stack — emit ONE NEWLINE at this real line boundary (a
+        // leading boundary before any content is suppressed via emittedContent) and move on. ──
+        if (!indent) {
+          if (emittedContent) push({ type: newline!.token, text: '', offset: pos });
+          lineStart = false;
+          atLineLead = true;
+          continue;
+        }
         currentLineCol = col;                                               // bounds a block scalar started on this line
         const top = indentStack[indentStack.length - 1];
         if (col > top) {
@@ -664,10 +681,10 @@ export function createLexer(grammar: CstGrammar) {
         continue;
       }
 
-      // Whitespace. In indentation mode, inline spaces/tabs are skipped but a NEWLINE is a
-      // block-context line boundary (sets lineStart so the routine above runs next) — except
-      // inside flow delimiters, where newlines are insignificant. Otherwise skip any run.
-      if (indent) {
+      // Whitespace. In an indentation / newline grammar, inline spaces/tabs are skipped but a
+      // NEWLINE is a block-context line boundary (sets lineStart so the routine above runs next) —
+      // except inside flow delimiters, where newlines are insignificant. Otherwise skip any run.
+      if (lineSensitive) {
         const c = source[pos];
         if (c === ' ' || c === '\t') {
           // A TAB between a block indicator (`-`/`?`/map-`:`) and a NESTED block-structural node it
@@ -677,7 +694,7 @@ export function createLexer(grammar: CstGrammar) {
           // separation, so the structural sniff gates it. After a `:` a node PROPERTY is the inline
           // value (`key:\t&a x` is legal), so the `:` case excludes properties (allowProperty=false)
           // while `-`/`?` include them (`-\t&a x` IS an error). Block context only (flowDepth===0).
-          if (flowDepth === 0) {
+          if (indent && flowDepth === 0) {   // §6.1 tab-after-indicator error is YAML-specific
             const prev = tokens[tokens.length - 1];
             const isIndicator = prev && prev.type === '' && (prev.text === '-' || prev.text === '?' || prev.text === ':');
             if (isIndicator) {
@@ -692,7 +709,7 @@ export function createLexer(grammar: CstGrammar) {
         if (c === '\n' || c === '\r') {
           pos++; if (c === '\r' && source[pos] === '\n') pos++;
           if (flowDepth === 0) lineStart = true;
-          else {
+          else if (indent) {
             flowSawNewline = true;   // this outermost flow spans >1 line → it can't be an implicit block key
             // §7.4: inside a value/item-position flow, a CONTENT line must be indented MORE than the
             // enclosing block column `n` (flowValueIndent). The indentation column is the leading-SPACE

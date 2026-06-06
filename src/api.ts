@@ -1,4 +1,4 @@
-import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, TokenPattern } from './types.ts';
+import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, NewlineConfig, TokenPattern } from './types.ts';
 import {
   altPattern, anyChar, followedBy, isTokenPattern, lit, never, noneOf, notFollowedBy,
   notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
@@ -381,6 +381,7 @@ interface GrammarConfig {
   entry: RuleRef;
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML)
+  newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack)
   expression?: RuleRef;   // the rule that produces an EXPRESSION; enables a derived `#expression` sub-grammar (expression-only embeds)
   aliasScopes?: { scope: string; file: string }[];  // extra grammars re-exposing this one under another scopeName (e.g. text.html.derivative)
   canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-tm RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see CstGrammar.canonicalRepoNames)
@@ -388,6 +389,11 @@ interface GrammarConfig {
 }
 
 export function defineGrammar(config: GrammarConfig): CstGrammar & { name: string; scopeName?: string } {
+  // `indent` is the richer layer built on top of newline-significant line boundaries, so the two
+  // modes are mutually exclusive — declaring both is a configuration error, not a merge.
+  if (config.indent && config.newline) {
+    throw new Error('A grammar may declare `indent` OR `newline`, not both — `indent` already implies newline-significant line boundaries.');
+  }
   const names = new Map<object, string>();
   for (const [name, tok] of Object.entries(config.tokens)) {
     names.set(tok, name);
@@ -453,5 +459,5 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     }
   }
 
-  return { name: config.name, scopeName: config.scopeName, tokens, precs, rules, scopeOverrides, markup: config.markup, indent: config.indent, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
+  return { name: config.name, scopeName: config.scopeName, tokens, precs, rules, scopeOverrides, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
 }

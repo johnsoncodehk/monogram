@@ -635,6 +635,7 @@ export function emitParser(grammar: CstGrammar): string {
     rules: [{ name: '$lits', body: litRuleBody, flags: [] }],
     markup: grammar.markup,
     indent: grammar.indent,
+    newline: grammar.newline,
     scopeOverrides: [],
   };
 

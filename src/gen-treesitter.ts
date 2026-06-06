@@ -541,6 +541,10 @@ function planTemplate(grammar: CstGrammar): TemplatePlan | null {
 /** Determine which tokens the external scanner must provide. */
 function planScannerTokens(grammar: CstGrammar): Map<string, string> {
   const map = new Map<string, string>();
+  // A newline-sensitive grammar's NEWLINE token is engine-emitted; in tree-sitter it becomes a
+  // stateless external token (the scanner emits it at each significant line boundary). Listed
+  // FIRST so it heads the enum / externals order.
+  if (grammar.newline) map.set(grammar.newline.token, toSnake(grammar.newline.token));
   // The regex token: '/' is context-sensitive (regex vs division). The scanner
   // resolves it.
   const regexTok = grammar.tokens.find(t => t.flags.includes('regex'));
@@ -1625,6 +1629,26 @@ function buildScannerC(
   L.push('static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }');
   L.push('');
 
+  const nl = grammar.newline;
+  if (nl) {
+    const nlSym = ctx.scannerTokenFor.get(nl.token)!.toUpperCase();
+    L.push('// ── Newline scan ────────────────────────────────────────────────');
+    L.push('// A newline-sensitive grammar emits one NEWLINE token at each significant line');
+    L.push('// boundary. tree-sitter only asks for it where the grammar permits it (statement');
+    L.push('// boundaries); inside flow delimiters the rules never reference NEWLINE, so');
+    L.push('// valid_symbols[NEWLINE] is false there and the line break falls through to');
+    L.push('// `extras` as ordinary whitespace. Stateless: one line break (\\n / \\r / \\r\\n) per token.');
+    L.push('static bool scan_newline(TSLexer *lexer) {');
+    L.push('  if (lexer->lookahead == \'\\r\') { advance(lexer); if (lexer->lookahead == \'\\n\') advance(lexer); }');
+    L.push('  else if (lexer->lookahead == \'\\n\') advance(lexer);');
+    L.push('  else return false;');
+    L.push(`  lexer->result_symbol = ${nlSym};`);
+    L.push('  lexer->mark_end(lexer);');
+    L.push('  return true;');
+    L.push('}');
+    L.push('');
+  }
+
   if (regexTok) {
     // Derive the regex literal scan from the token pattern + hints.
     const flagChars = tokenPatternTrailingCharClass(regexTok) ?? 'gimsuyd';
@@ -1734,6 +1758,14 @@ function buildScannerC(
   L.push('                                                          const bool *valid_symbols) {');
   L.push('  (void)payload;');
   L.push('');
+  if (grammar.newline) {
+    const nlSym = ctx.scannerTokenFor.get(grammar.newline.token)!.toUpperCase();
+    L.push('  // Newline first: a significant line boundary outranks every other external token.');
+    L.push(`  if (valid_symbols[${nlSym}] && (lexer->lookahead == '\\n' || lexer->lookahead == '\\r')) {`);
+    L.push('    if (scan_newline(lexer)) return true;');
+    L.push('  }');
+    L.push('');
+  }
   if (tp && regexTok) {
     const charsSym = tp.charsSnake.toUpperCase();
     const regexSym = ctx.scannerTokenFor.get(regexTok.name)!.toUpperCase();
