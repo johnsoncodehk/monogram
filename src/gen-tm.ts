@@ -4937,7 +4937,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // reference it via `{ include: '#type-inner' }`.  No shared mutable array;
   // later injections rebuild the patterns array non-destructively.
   // Type operators are derived from @type rule literals.
-  const typeInnerPats: (TmPattern | { include: string })[] = [
+  const typeInnerPats: (TmPattern | { include: string })[] = hasTypeAnnotations ? [
     ...(repository['generic-type'] ? [{ include: '#generic-type' }] : []),
     ...(repository['type-object-type'] ? [{ include: '#type-object-type' }] : []),
     ...(repository['type-paren'] ? [{ include: '#type-paren' }] : []),
@@ -4947,7 +4947,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // swallowed by the surrounding type region's name.
     ...literalTypeIncludes,
     { include: '#simple-type' },
-  ];
+  ] : [];
   // Union/intersection operators — only if present in @type rules
   const typeUnionOps = ['|', '&'].filter(op => typeLiterals.has(op));
   if (typeUnionOps.length > 0) {
@@ -5028,7 +5028,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     typeInnerPats.splice(idx === -1 ? typeInnerPats.length : idx, 0, { include: '#type-conditional' });
   }
 
-  repository['type-inner'] = { patterns: typeInnerPats };
+  if (hasTypeAnnotations) repository['type-inner'] = { patterns: typeInnerPats };
 
   // Wire up deferred type-paren pattern (basic wiring; patched after type injections)
   if (repository['type-paren']) {

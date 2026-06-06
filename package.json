@@ -10,6 +10,7 @@
     "conformance:tsx": "node test/tsx-conformance.ts",
     "conformance:jsx": "node test/jsx-conformance.ts",
     "conformance:html": "node test/html-conformance.ts",
+    "test:tm-diagnostics": "node test/redcmd-tm-diagnostics.ts",
     "spike:html-lexer": "node test/html-lexer-spike.ts",
     "bench:html-official": "node test/html-bench.ts",
     "bench:html-embed": "node test/html-embed-js.ts",

@@ -2086,13 +2086,6 @@
         }
       ]
     },
-    "type": {
-      "patterns": [
-        {
-          "include": "#simple-type"
-        }
-      ]
-    },
     "qstring-double": {
       "name": "string.quoted.double.js",
       "begin": "\"",

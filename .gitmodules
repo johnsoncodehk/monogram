@@ -1,0 +1,3 @@
+[submodule "vendor/RedCMD-TmLanguage-Syntax-Highlighter"]
+	path = vendor/RedCMD-TmLanguage-Syntax-Highlighter
+	url = https://github.com/RedCMD/TmLanguage-Syntax-Highlighter.git

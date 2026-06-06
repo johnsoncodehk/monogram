@@ -525,13 +525,6 @@
         }
       ]
     },
-    "type-inner": {
-      "patterns": [
-        {
-          "include": "#simple-type"
-        }
-      ]
-    },
     "punctuation": {
       "match": ":|\\?|-|\\{|,|\\}|\\[|\\]",
       "name": "punctuation.yaml"
