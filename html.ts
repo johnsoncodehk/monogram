@@ -9,10 +9,12 @@
 // tags). It does not implement the WHATWG error-recovery tree-construction
 // algorithm (that is not a context-free grammar); conformance is measured against
 // `parse5` on well-formed input. See memory: html-vue-markup.
-import { token, rule, defineGrammar, many, opt, alt, seq, oneOf, noneOf, range, anyChar, star, plus, notFollowedBy } from './src/api.ts';
+import { token, rule, defineGrammar, many, opt, alt, lit, seq, oneOf, noneOf, range, anyChar, star, plus, notFollowedBy } from './src/api.ts';
 import type { MarkupConfig } from './src/types.ts';
 
 // ── Tokens ──
+// ASCII word chars [A-Za-z0-9_] — NOT `\w` (Oniguruma treats `\w` as Unicode-aware); tag/attr
+// names and the `on*` embed selector are intentionally ASCII, so the IR enumerates the set.
 const word = oneOf(range('A', 'Z'), range('a', 'z'), range('0', '9'), '_');
 const whitespace = oneOf('\t', '\n', '\f', '\r', ' ');
 
@@ -120,8 +122,8 @@ export const markup: MarkupConfig = {
   // VS Code's own HTML grammar (a flat source.css blob there) and matching the hand-written Vue
   // grammar's `#vue-directives-style-attr` (its "Copy from source.css#rule-list-innards").
   attributeEmbed: [
-    { namePattern: 'on\\w+', embed: 'source.js' },
-    { namePattern: 'style', embed: 'source.css', include: 'source.css#rule-list-innards' },
+    { namePattern: seq(lit('on'), plus(word)), embed: 'source.js' },
+    { namePattern: lit('style'), embed: 'source.css', include: 'source.css#rule-list-innards' },
   ],
   // Raw-text element bodies are scanned verbatim by the parser, but the HIGHLIGHTER
   // delegates `<script>`/`<style>` to the platform's real JS/CSS grammars (exactly as

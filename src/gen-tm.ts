@@ -16,6 +16,7 @@ import {
   tokenPatternSource,
   tokenPatternStartsWithDecimal,
   tokenPatternStringDelimiters,
+  tokenPatternToRegex,
   tokenPatternTrailingCharClass,
 } from './token-pattern.ts';
 
@@ -3853,7 +3854,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   // name/value tie on a real `on*`; leftmost-match still prefers the generic name rule for
   // `data-on…` (it matches at the earlier, true attribute start). `(?![\w:.-])` completes the name.
   const attrEmbed: TmPattern[] = (m.attributeEmbed ?? []).map(spec => ({
-    begin: `(${spec.namePattern})(?![\\w:.-])`,
+    begin: `(${tokenPatternToRegex(spec.namePattern)})(?![\\w:.-])`,
     beginCaptures: { '1': { name: sAttr } },
     end: `(?=[\\s${escapeForCharClass(m.tagClose)}${escapeForCharClass(m.closeMarker ?? '/')}])`,
     patterns: embedValuePatterns(spec.embed, spec.include ?? spec.embed, sEq, assign, attrQuotes, quoteCc, { begin: sStrPunctB, end: sStrPunctE }, spec.valuePatterns),

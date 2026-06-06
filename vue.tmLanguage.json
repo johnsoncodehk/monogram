@@ -3286,7 +3286,7 @@
     "attribute": {
       "patterns": [
         {
-          "begin": "(on\\w+)(?![\\w:.-])",
+          "begin": "(on[A-Za-z0-9_]+)(?![\\w:.-])",
           "beginCaptures": {
             "1": {
               "name": "entity.other.attribute-name.vue"

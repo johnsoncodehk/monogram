@@ -141,7 +141,7 @@ export interface MarkupConfig {
   // {name,match}); when present it REPLACES `include` inside the value span (the quote bounding is
   // unchanged). Lets an embed mirror a hand-written grammar's value rule verbatim (e.g. Volar's
   // `vue-directives-generic-attr`) using the host's PUBLIC repository keys.
-  attributeEmbed?: { namePattern: string; embed: string; include?: string; valuePatterns?: RepoAlias[] }[];
+  attributeEmbed?: { namePattern: TokenPattern; embed: string; include?: string; valuePatterns?: RepoAlias[] }[];
   // Elements whose content is raw (CDATA-like): after the start tag's `tagClose`,
   // everything up to the matching `tagOpen+closeMarker+name` is one `token`. `embed`
   // optionally maps a tag → the grammar scope to embed in its body (e.g. Vue SFC blocks:

@@ -14,7 +14,7 @@
 // is HTML's raw-text mechanism with a per-block embed map) and only swaps the markup config
 // + scope name. We import those reusable pieces and build through `defineGrammar` — the same
 // API every other grammar uses — instead of spreading html's already-built grammar object.
-import { defineGrammar } from './src/api.ts';
+import { defineGrammar, lit } from './src/api.ts';
 import { tokens, rules, scopes, markup as htmlMarkup } from './html.ts';
 
 export default defineGrammar({
@@ -52,7 +52,7 @@ export default defineGrammar({
     // SAME vue grammar runs on either host (proven by test/vue-dropin.ts). Vue-only, so it extends
     // html.ts's `on*`/`style` embeds rather than polluting the HTML grammar.
     attributeEmbed: [...(htmlMarkup.attributeEmbed ?? []), {
-      namePattern: 'generic', embed: 'source.ts',
+      namePattern: lit('generic'), embed: 'source.ts',
       valuePatterns: [
         { include: 'source.ts#comment' },
         { name: 'storage.modifier.ts', match: '(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(extends|in|out)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))' },
