@@ -46,9 +46,6 @@
       "include": "#boolnull"
     },
     {
-      "include": "#blockscalar"
-    },
-    {
       "include": "#plain"
     },
     {
@@ -74,6 +71,9 @@
     },
     {
       "include": "#anchor"
+    },
+    {
+      "include": "#blockscalar"
     }
   ],
   "repository": {
@@ -161,8 +161,27 @@
       "match": "!(?:<[^>]*>|[^\\t\\n\\f\\r \\[\\]{},]*)"
     },
     "blockscalar": {
-      "name": "string.unquoted.block.yaml",
-      "match": "(?!)"
+      "begin": "([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))(.*\\n?)",
+      "beginCaptures": {
+        "1": {
+          "name": "string.unquoted.block.yaml"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#comment"
+            }
+          ]
+        }
+      },
+      "end": "^(?=\\S)|(?!\\G)",
+      "patterns": [
+        {
+          "begin": "^([ \\t]+)(?! )",
+          "end": "^(?!\\1|[ \\t]*$)",
+          "contentName": "string.unquoted.block.yaml"
+        }
+      ]
     },
     "key": {
       "name": "entity.name.tag.yaml",

@@ -4581,6 +4581,60 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     }
   }
 
+  // ── 2a. Block scalar (`|` / `>`) — a real begin/end region replacing the dead `(?!)` token ──
+  // The BlockScalar token is emitted by the lexer's indentation state machine (its pattern is a
+  // `never()` placeholder), so the flat token loop above produced a dead `(?!)` match for it and
+  // the verbatim body was never scoped — it fell through to the comment / plain rules (`# x` inside
+  // a body became a comment, the scalar "ended early", tabs mis-scoped). In TextMate the construct
+  // is a REGION: the `|`/`>` introducer (+ optional indentation / chomping indicators) opens it and
+  // the more-indented lines below are opaque string content, NEVER re-scanned. Everything is DERIVED
+  // from `indent.blockScalar`: the introducer chars and the header signature, which mirrors the
+  // lexer's `blockScalarSig` so the highlighter opens a region at EXACTLY the positions the parser
+  // tokenises a BlockScalar — and never on a `|`/`>` that is plain-scalar content (`a: b | c`),
+  // since the lookahead requires the rest of the header line to be only indicators + an optional
+  // ` #comment`.
+  const blockScalar = grammar.indent?.blockScalar;
+  if (blockScalar) {
+    const bsTok = grammar.tokens.find(t => t.name === blockScalar.token);
+    const bsKey = blockScalar.token.toLowerCase();
+    const bsScope = bsTok?.scope ?? 'string.unquoted.block';
+    const introClass = `[${blockScalar.introducers.map(escapeForCharClass).join('')}]`;
+    // introducer + indentation/chomping indicators (a digit and a `+`/`-`, in either order, or a
+    // lone `+`/`-`), then a lookahead requiring the rest of the header line to be blank or a comment.
+    const indicators = '(?:[1-9][-+]?|[-+][1-9]?|[-+])?';
+    const commentIncs = commentIncludeKeys.map(k => ({ include: `#${k}` }));
+    // This is the proven textmate/yaml.tmbundle structure (a `begin`/`end` region, NOT `begin`/
+    // `while`): a flat grammar has no enclosing line-spanning rule, and a top-level `while: \G`
+    // region cannot sustain itself across lines — vscode-textmate sets the while-anchor to -1
+    // unless a PARENT begin captured the end-of-line, so the chain collapses after the header line
+    // (the maintained RedCMD grammar's `while: \G` only survives because it is nested many regions
+    // deep). Two load-bearing details:
+    //   • the begin's trailing `(.*\n?)` group CAPTURES the newline. Without it the `(?!\G)` arm of
+    //     the `end` (below) fires at the very start of line 2 and the body is never scoped.
+    //   • `end: ^(?=\S)|(?!\G)` — the body ends at a line that dedents to a non-space at column 0
+    //     (a sibling key, a new node, a `---`/`...` marker), and `(?!\G)` guards the contiguity the
+    //     captured newline establishes.
+    // The inner rule auto-detects the body indentation (§8.1.1): `^([ \t]+)(?! )` captures the
+    // first content line's full indent as `\1`, and `end: ^(?!\1|[ \t]*$)` holds the body for every
+    // line that re-matches `\1` (or is blank) and releases at the first shallower non-blank line —
+    // so a deeper-nested scalar's siblings (`- a: |` … `  b: |`) are NOT swallowed.
+    repository[bsKey] = {
+      begin: `(${introClass}${indicators})(?=[\\t ]*(?:#|$))(.*\\n?)`,
+      beginCaptures: {
+        '1': { name: `${bsScope}.${langName}` },
+        '2': { patterns: commentIncs },
+      },
+      end: '^(?=\\S)|(?!\\G)',
+      patterns: [
+        {
+          begin: '^([ \\t]+)(?! )',
+          end: '^(?!\\1|[ \\t]*$)',
+          contentName: `${bsScope}.${langName}`,
+        },
+      ],
+    };
+  }
+
   // ── 2b. Explicit mapping key (`? key`) ──
   // An indentation grammar may flag a mapping key by a PRECEDING indicator instead of a
   // trailing separator (YAML `? key`). The key scalar then has no `:` and the flat token loop
