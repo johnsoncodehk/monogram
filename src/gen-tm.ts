@@ -4700,6 +4700,17 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     };
     topPatterns.push({ include: '#explicit-key' });
 
+    // The explicit-key INDICATOR alone on its line — a multi-line / collection key whose body is on
+    // the FOLLOWING lines (`?\n- a\n- b\n: …`), so the same-line `? key` rule above doesn't reach it.
+    // Scope the bare indicator as the same map-key punctuation. The blank/comment-only rest-of-line
+    // lookahead keeps it from stealing a `?` that is plain-scalar content (a plain scalar that merely
+    // ends in `?` is matched as one token starting earlier, so leftmost-match leaves this alone).
+    repository['explicit-key-indicator'] = {
+      match: `(${escapeRegex(explicitKey.indicator)})(?=[\\t ]*(?:#|$))`,
+      captures: { '1': { name: `punctuation.definition.map.key.${langName}` } },
+    };
+    topPatterns.push({ include: '#explicit-key-indicator' });
+
     // A block scalar can ALSO be an explicit key (`? |` / `? >`). An implicit key must be a single
     // line, so a multi-line block scalar key is ALWAYS `?`-introduced — and like every other scalar
     // key (plain / quoted, both already `entity.name.tag`) its content is the KEY NAME, not a value
@@ -7164,6 +7175,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // An explicit mapping-key rule (`? key`) is the most specific scalar context — its indicator
     // pins the following scalar as a key — so it must be tried before the bare key/plain scalars.
     if (key === 'explicit-key') return 0.8;
+    // The bare explicit-key indicator (`?` alone on its line) must beat the generic `?` punctuation
+    // token (rank 9) so it scopes as the map-key punctuation, not a plain bracket.
+    if (key === 'explicit-key-indicator') return 0.82;
     // A block scalar that is an explicit key (`? |` / `? >`) — its `?`-anchored begin must beat the
     // bare `?` punctuation token AND the value-position block scalar so the body scopes as the key
     // name. Its begin is highly specific (`?` + block introducer + blank/comment-only header), so

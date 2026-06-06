@@ -10,7 +10,7 @@
 import {
   token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore, noMultilineFlowBefore,
   lit, seq, oneOf, noneOf, range, star, plus, repeat, followedBy, notFollowedBy,
-  precededBy, notPrecededBy, never, end,
+  precededBy, never, end,
 } from './src/api.ts';
 import type { IndentConfig } from './src/types.ts';
 
@@ -166,28 +166,23 @@ const VALUE_END_BLOCK = followedBy(alt(
   seq(star(hspace), alt('\r', '\n', seq(':', alt(whitespace, end())))),
   end(),
 ));
-// A NON-SPECIFIC tag (`!` followed by whitespace) forces its plain scalar to resolve as a STRING
-// regardless of the scalar's appearance (`! 12` is the string "12", not the number 12 — YAML 1.2
-// §6.9.1 / yaml-test-suite S4JQ). So the typed value tokens (Num / BoolNull) MUST NOT fire on a
-// scalar that is glued to a leading `!␣` tag — the negative lookbehind drops them so the scalar
-// falls through to the generic Plain (`string.unquoted`). A *specific* tag (`!!int 12`, `!!bool …`)
-// puts non-space chars between the `!` and the value, so this lookbehind leaves those untouched —
-// they keep resolving by appearance, matching what the `yaml` oracle reports. TextMate 2.0 Onigmo
-// rejects variable-length lookbehind, so this is a bounded set of fixed-width guards.
-const NONSPECIFIC_TAG = seq(...Array.from({ length: 16 }, (_, index) =>
-  notPrecededBy(seq('!', repeat(hspace, index + 1, index + 1))),
-));
+// NOTE: a non-specific `!␣` tag forces its scalar to resolve as a STRING (`! 12` is "12"), which a
+// negative-lookbehind guard on Num / BoolNull used to honour. That guard is REMOVED (issue #12): a
+// negative lookbehind is rejected by TextMate 2.0 / GitHub-Linguist, so num/boolnull must stay
+// lookbehind-free to be portable. A `!␣`-tagged core value now types BY APPEARANCE — exactly what
+// the official grammar does (`! true` → constant.language.boolean there too) — a rare edge not in
+// the gradable corpus (the scope-gap metric is unchanged), traded for portable num/boolnull rules.
 // Numeric plain scalars (YAML 1.2 core schema): decimal / octal / hex integers, floats, ±.inf,
 // .nan. Anything outside the core schema (binary `0b…`, dates, `12:34:56`) stays a plain string,
 // matching what the `yaml` oracle resolves to a number.
 const sign = oneOf('+', '-');
-const NUM_BODY = seq(NONSPECIFIC_TAG, alt(
+const NUM_BODY = alt(
   seq(opt(sign), '.', alt(lit('inf'), 'Inf', 'INF')),
   seq('.', alt(lit('nan'), 'NaN', 'NAN')),
   seq('0x', plus(hexDigit)),
   seq('0o', plus(range('0', '7'))),
   seq(opt(sign), alt(seq('.', plus(digit)), seq(plus(digit), opt(seq('.', star(digit))))), opt(seq(oneOf('e', 'E'), opt(sign), plus(digit)))),
-));
+);
 // A typed plain scalar is FIRST a plain scalar (lexically an unquoted string) that the schema then
 // resolves to a number / boolean / null — so it carries a `string.unquoted` ancestor with the
 // `constant.*` leaf, exactly as the official grammar nests `string.unquoted.plain.out` › `constant`.
@@ -199,9 +194,9 @@ const Num = token(
   seq(NUM_BODY, VALUE_END),
   { scope: 'string.unquoted constant.numeric', blockPattern: seq(NUM_BODY, VALUE_END_BLOCK) },
 );
-// Boolean / null plain scalars (core schema). Same non-specific-tag guard:
-// `! true` is the string "true", not the boolean (yaml-test-suite cousins of S4JQ).
-const BOOLNULL_BODY = seq(NONSPECIFIC_TAG, alt(lit('true'), 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~'));
+// Boolean / null plain scalars (core schema). Types by appearance; a `!␣`-tagged value is no longer
+// special-cased (see the NUM_BODY note above — the lookbehind guard was removed for portability).
+const BOOLNULL_BODY = alt(lit('true'), 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~');
 const BoolNull = token(
   seq(BOOLNULL_BODY, VALUE_END),
   { scope: 'string.unquoted constant.language', blockPattern: seq(BOOLNULL_BODY, VALUE_END_BLOCK) },
