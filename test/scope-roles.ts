@@ -84,6 +84,13 @@ export const R = {
   alias: 'alias',
   docMarker: 'doc.marker',
   escape: 'escape',
+  // YAML scopes the coarse key/value/comment oracle never emitted a token for, so ANY grammar
+  // scope silently passed: block-scalar indicator (|/>), node tags (!!str), directives (%YAML),
+  // flow punctuation ([ ] { } ,). Emitting these makes those blind spots graded.
+  blockIndicator: 'block.indicator',
+  tagType: 'tag.type',
+  directive: 'directive',
+  flowPunct: 'flow.punct',
   // lexical floor
   op: 'op',
   punct: 'punct',
@@ -255,6 +262,16 @@ export const ROLE_SPEC: Record<RoleName, RoleSpec> = {
   // A string escape (`\n`, `\t`, `\\`, `\uXXXX`): both engines use constant.character.escape — for a
   // VALUE; a mis-scope (e.g. inside a quoted KEY painted flat entity.name.tag) reads WRONG.
   [R.escape]: { tier: 'strict', desc: 'string escape sequence (\\n, \\t, …)', exact: ['constant.character.escape'], family: ['constant.character', 'constant.other'] },
+  // ── YAML blind-spot roles (block indicator / tag / directive / flow punctuation) ───────────────
+  // Written from the public YAML TextMate convention, NOT from either grammar: the block-scalar
+  // `|`/`>` (+chomp/indent) is keyword.control.flow.block-scalar; a node tag is storage.type.tag;
+  // a directive is keyword.other.directive; flow brackets/separators are punctuation.definition/
+  // .separator. family accepts the defensible alternatives each grammar may legitimately use
+  // (e.g. a coarse generic `punctuation` for flow, the split punctuation.definition.tag for a tag).
+  [R.blockIndicator]: { tier: 'strict', desc: 'YAML block-scalar indicator (|/>, chomping, indent)', exact: ['keyword.control.flow.block-scalar'], family: ['keyword', 'storage.modifier', 'constant.numeric', 'punctuation.definition'] },
+  [R.tagType]: { tier: 'strict', desc: 'YAML node tag (!!str / !foo / !<verbatim>)', exact: ['storage.type.tag'], family: ['storage.type', 'storage', 'entity.name.type', 'support.type', 'keyword.other', 'punctuation.definition.tag'] },
+  [R.directive]: { tier: 'strict', desc: 'YAML directive name (%YAML / %TAG / %…)', exact: ['keyword.other.directive'], family: ['keyword.other', 'keyword', 'punctuation.definition.directive'] },
+  [R.flowPunct]: { tier: 'strict', desc: 'YAML flow punctuation ([ ] { } ,)', exact: ['punctuation.definition', 'punctuation.separator'], family: ['punctuation'] },
 
   // ── lexical floor: reported, excluded from the headline ───────────────────────
   [R.op]: { tier: 'lexical', desc: 'operator punctuation (+ - * = => …)', exact: ['keyword.operator'], family: ['keyword', 'punctuation', 'storage', 'meta'] },
@@ -363,7 +380,9 @@ export function roleFamily(role: RoleName): Family {
     case R.propAccess: case R.propDecl: case R.methodCall: return 'property';
     case R.litString: case R.litNumber: case R.litRegex: case R.litBigint: case R.litTemplate: case R.escape: return 'literal';
     case R.comment: return 'comment';
-    case R.docMarker: return 'keyword';
+    case R.docMarker: case R.blockIndicator: case R.directive: return 'keyword';
+    case R.tagType: return 'type';
+    case R.flowPunct: return 'punct';
     case R.kwControl: case R.kwOperator: case R.kwStorage: case R.kwOther: case R.constBuiltin: case R.thisSuper: return 'keyword';
     case R.op: case R.punct: return 'punct';
     default: return 'value'; // funcDecl, parameter, varDecl, valueRef, classRef, namespace, enumMember, importBinding
@@ -436,6 +455,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     [R.opCompare, 'string.regexp.ts', 'wrong'],
     // class.ref is the one value spot where a type scope is right (new X)
     [R.classRef, 'entity.name.type.ts', 'exact'],
+    // YAML blind-spot roles: public convention = exact; the coarse alternative each grammar may use = family
+    [R.blockIndicator, 'keyword.control.flow.block-scalar.yaml', 'exact'],
+    [R.blockIndicator, 'storage.modifier.chomping-indicator.yaml', 'family'],
+    [R.tagType, 'storage.type.tag.yaml', 'exact'],
+    [R.tagType, 'punctuation.definition.tag.begin.yaml', 'family'],
+    [R.directive, 'keyword.other.directive.yaml', 'exact'],
+    [R.flowPunct, 'punctuation.definition.sequence.begin.yaml', 'exact'],
+    [R.flowPunct, 'punctuation.yaml', 'family'],
   ];
   let pass = 0;
   const fails: string[] = [];

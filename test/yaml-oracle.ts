@@ -37,9 +37,29 @@ export function yamlOracle(text: string): GoldToken[] {
     ESCAPE.lastIndex = 0;
     while ((m = ESCAPE.exec(seg))) out.push({ start: r[0] + m.index, end: r[0] + m.index + m[0].length, text: m[0], role: R.escape });
   };
+  // A VALUE-position block scalar (`|`/`>`): split the introducer (a structural control sigil) from
+  // the verbatim body. introducer = `|`/`>` + chomping/indent on the header line; body = the lines
+  // below. (A block scalar in KEY position stays ONE tagName token — the whole scalar is the key name.)
+  const isBlockScalar = (n: any) => n?.type === 'BLOCK_LITERAL' || n?.type === 'BLOCK_FOLDED';
+  const pushBlockScalar = (node: any): void => {
+    const r = node?.range;
+    if (!r || r[1] <= r[0]) return;
+    const introLen = /^[|>][-+0-9]*/.exec(text.slice(r[0], r[1]))?.[0].length ?? 1;
+    out.push({ start: r[0], end: r[0] + introLen, text: text.slice(r[0], r[0] + introLen), role: R.blockIndicator });
+    // content body = the first NON-BLANK char after the header line (skip leading indent + blank
+    // lines — they are structural whitespace; grading them would test the INDENT's scope, not the
+    // scalar content, and whitespace is visually colourless either way).
+    const nl = text.indexOf('\n', r[0]);
+    let contentStart = nl >= 0 ? nl + 1 : r[0] + introLen;
+    while (contentStart < r[1] && (text[contentStart] === ' ' || text[contentStart] === '\t' || text[contentStart] === '\n')) contentStart++;
+    if (r[1] > contentStart) out.push({ start: contentStart, end: r[1], text: text.slice(contentStart, r[1]), role: R.litString });
+  };
   const walk = (node: any, isKey: boolean): void => {
     if (!node) return;
-    if (isScalar(node)) { push(node, isKey ? R.tagName : valueRole(node.value)); pushEscapes(node); }
+    if (isScalar(node)) {
+      if (!isKey && isBlockScalar(node)) pushBlockScalar(node);
+      else { push(node, isKey ? R.tagName : valueRole(node.value)); pushEscapes(node); }
+    }
     else if (isMap(node)) for (const p of node.items) { walk(p.key, true); walk(p.value, false); }
     else if (isSeq(node)) for (const it of node.items) walk(it, false);
   };
@@ -83,6 +103,26 @@ export function yamlOracle(text: string): GoldToken[] {
     if (before !== ' ' && before !== '\t' && before !== '\n') continue;
     if (inSpan(m.index)) continue;
     out.push({ start: m.index, end: m.index + m[0].length, text: m[0], role: R.comment });
+  }
+
+  // Node tags (!!str / !foo / !<verbatim> / ! non-specific): the sigil + handle/suffix at a node
+  // boundary (line start / whitespace / flow open). A `!` inside a scalar span is content, not a tag.
+  for (const tm of text.matchAll(/(?<=^|[\s[{,])!(?:<[^>\n]*>|[^\s[\]{},]*)/gm)) {
+    if (tm.index === undefined || inSpan(tm.index)) continue;
+    out.push({ start: tm.index, end: tm.index + tm[0].length, text: tm[0], role: R.tagType });
+  }
+  // Directives (%YAML / %TAG / %FOO): the directive NAME after `%`, line-start only (a directive
+  // owns its line). A `%`-led line folded into a plain scalar body sits in a span → inSpan skips it.
+  for (const dm of text.matchAll(/^%(\w[\w-]*)/gm)) {
+    if (dm.index === undefined || inSpan(dm.index)) continue;
+    out.push({ start: dm.index + 1, end: dm.index + 1 + dm[1].length, text: dm[1], role: R.directive });
+  }
+  // Flow punctuation ([ ] { } ,): structural only OUTSIDE a scalar span — a `,` inside a plain scalar
+  // is content (`a, b` is one plain scalar), and `[`/`{` cannot start a plain scalar, so a bare one
+  // always opens a flow collection. inSpan excludes the in-scalar occurrences.
+  for (const fm of text.matchAll(/[[\]{},]/g)) {
+    if (fm.index === undefined || inSpan(fm.index)) continue;
+    out.push({ start: fm.index, end: fm.index + 1, text: fm[0], role: R.flowPunct });
   }
   out.sort((a, b) => a.start - b.start);
   return out;
