@@ -2,16 +2,21 @@
 // side effects on import). The "official" YAML grammar is the MAINTAINED RedCMD/YAML-Syntax-
 // Highlighter (microsoft/vscode#232244 switched VS Code off the dead textmate/yaml.tmbundle to it),
 // so YAML's baseline is a maintained competitor — most of these it ALSO solves. Each id cites the
-// underlying upstream tracker; the canonical aggregator is RedCMD/YAML-Syntax-Highlighter#1
-// ("Pre-existing grammar issues"), which links the VS Code / textmate-yaml.tmbundle / atom-language-
-// yaml issues. The original report against Monogram was johnsoncodehk/monogram#12, since superseded
-// by RedCMD's organized #1. Shared by the README cross-language ✓ table (test/issue-table.ts).
+// most specific tracker: the ecosystem bugs filed against the official/upstream grammars (VS Code /
+// textmate-yaml.tmbundle / atom-language-yaml), and johnsoncodehk/monogram#12 ("YAML issues",
+// RedCMD's multi-item report against Monogram) for the explicit-key behaviors that have no single
+// dedicated upstream issue. RedCMD/YAML-Syntax-Highlighter#1 ("Pre-existing grammar issues") is the
+// broader cross-ecosystem aggregator that links the upstream issues. Shared by the README
+// cross-language ✓ table (test/issue-table.ts).
 //
 // Each snippet is VALID YAML; the question is whether the grammar scopes the marked span correctly.
 // Same predicate shape as html-issue-cases.ts: {id, title, src, at, nth?, want:(scope)=>boolean}.
 // `want` asserts the GENUINELY-correct scope (verified by tokenizing both grammars), not "whatever
-// Monogram emits". Several are both-✓ (the maintained RedCMD grammar handles them too) — that is
-// honest and correct to show; #119 below is the lone Monogram-only ✓ in this set.
+// Monogram emits". ALL are both-✓: the maintained RedCMD grammar handles them too — the honest
+// result is that Monogram MATCHES a maintained competitor on every one of these filed bugs (no
+// inflated "Monogram-only" wins; e.g. a block scalar used as an explicit key is NOT included —
+// RedCMD's grammar deliberately scopes the key's content as a block-scalar string and never filed
+// it as a bug, so it is a defensible design choice, not an official failure).
 
 export interface YamlCase { id: string; title: string; src: string; at: string; nth?: number; want: (scope: string) => boolean; }
 
@@ -20,7 +25,6 @@ const isEscape = (s: string) => s.includes('constant.character.escape');
 const isAnchor = (s: string) => s.includes('anchor') && !!s.replace(/source\.yaml/g, '').match(/entity\.name|variable\.other/); // an anchor scope, not bare source
 const isMapKeyPunct = (s: string) => s.includes('punctuation.definition.map.key');  // the `?` explicit-key indicator
 const isDocMarker = (s: string) => s.includes('entity.other.document') || s.includes('keyword.control');
-const isTag = (s: string) => s.includes('entity.name.tag');                          // scoped as a key NAME (entity.name.tag.yaml)
 const stringResolvesTo = (lang: string) => (s: string) => s.includes('string.unquoted') && s.includes(lang); // plain scalar is lexically a string that RESOLVES to a typed constant
 
 export const cases: YamlCase[] = [
@@ -37,13 +41,10 @@ export const cases: YamlCase[] = [
     at: '}', want: isBlockScalar },                                                  // the `}` is literal block-scalar content, not punctuation — and the indicator follows a TAB (tmbundle#18: `{ }` inside literal style breaks highlighting; #17 is the sibling colon case)
 
   // ── explicit-key (`?`) constructs ──
-  { id: 'RedCMD/YAML-Syntax-Highlighter#1', title: 'an anchor `&a` in explicit-key (`?`) position is still an anchor', src: '? &a a\n: &b b\n: *a\n',
+  { id: 'johnsoncodehk/monogram#12', title: 'an anchor `&a` in explicit-key (`?`) position is still an anchor', src: '? &a a\n: &b b\n: *a\n',
     at: '&a', want: isAnchor },                                                      // `&a` after the explicit-key `?` is an anchor (entity.name.type.anchor / variable.other.anchor), not bare source — the original monogram#12 multi-item repro
-  { id: 'RedCMD/YAML-Syntax-Highlighter#1', title: 'a bare `?` opening an explicit multi-line sequence key is the map-key indicator', src: '?\n- a\n- b\n:\n- c\n- d\n',
+  { id: 'johnsoncodehk/monogram#12', title: 'a bare `?` opening an explicit multi-line sequence key is the map-key indicator', src: '?\n- a\n- b\n:\n- c\n- d\n',
     at: '?', want: isMapKeyPunct },                                                  // the lone `?` (its value is the multi-line block sequence below) is punctuation.definition.map.key.yaml — both grammars handle the explicit complex-key form
-  { id: 'RedCMD/YAML-Syntax-Highlighter#1', title: 'a block scalar used AS an explicit key is scoped as a key name', src: '? |\n  block key\n: v\n',
-    at: 'block key', want: isTag },                                                  // MONOGRAM-ONLY ✓: Monogram scopes the block-scalar explicit key as a key NAME (entity.name.tag.yaml); the official leaves it string.unquoted.block (it has no entity.name.tag) → only-Monogram
-
   // ── quoted KEYS carry their escapes / plain scalars carry a string ancestor ──
   { id: 'atom/language-yaml#119', title: 'an escape inside a double-quoted KEY is highlighted', src: '"foo\\nbar": 23\n',
     at: '\\n', want: isEscape },                                                     // the `\n` inside the quoted key `"foo\nbar"` is constant.character.escape (atom#119: keys with escaped chars within are not highlighted correctly) — both grammars sub-scope escapes inside the key now
