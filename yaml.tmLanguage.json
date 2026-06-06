@@ -102,11 +102,46 @@
     },
     "dquotekey": {
       "name": "entity.name.tag.yaml",
-      "match": "\"(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})|[^\"\\\\\\r\\n])*\"(?=[ \\t]*:)"
+      "begin": "\"(?=(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})|[^\"\\\\\\r\\n])*\"(?=[ \\t]*:))",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.yaml"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.yaml"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})",
+          "name": "constant.character.escape.yaml"
+        }
+      ]
     },
     "squotekey": {
       "name": "entity.name.tag.yaml",
-      "match": "'(?:''|[^'\\r\\n])*'(?=[ \\t]*:)"
+      "begin": "'(?=(?:''|[^'\\r\\n])*'(?=[ \\t]*:))",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.yaml"
+        }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.yaml"
+        }
+      },
+      "patterns": [
+        {
+          "match": "''",
+          "name": "constant.character.escape.yaml"
+        }
+      ],
+      "applyEndPatternLast": true
     },
     "dquote": {
       "name": "string.quoted.double.yaml",

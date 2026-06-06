@@ -4529,6 +4529,31 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       topPatterns.push({ include: `#${key}` });
       rememberLiteralKey(scope, key, tok.name);
 
+    } else if (tok.string && scope.startsWith('entity.name.tag')
+        && tokenPatternPrefixBeforeTrailingLookahead(tok)
+        && tokenPatternQuoteDelimAndEscape({ pattern: tokenPatternPrefixBeforeTrailingLookahead(tok)!.body })) {
+      // A quoted KEY (`"a\nb": v` / `'a''b': v`) — scoped entity.name.tag, NOT string.*, so it skips
+      // the value-string region above and would emit as a FLAT token, leaving its in-string escapes
+      // un-sub-scoped. Emit a begin/end region so the escapes become constant.character.escape, but
+      // GATE the begin on a lookahead that the close delim is followed by the key separator — the
+      // token's OWN body + trailing key-sep lookahead, minus the opening delim — so a quoted VALUE
+      // (no trailing separator) still falls through to its own string region. The delim/escape come
+      // from the token's body (the 3-part `delim content delim`, after the key-sep lookahead is split
+      // off); all derived from the token.
+      const { delim, escape } = tokenPatternQuoteDelimAndEscape({ pattern: tokenPatternPrefixBeforeTrailingLookahead(tok)!.body })!;
+      const region: TmPattern = {
+        name: `${scope}.${langName}`,
+        begin: `${escapeRegex(delim)}(?=${tokenPatternSource(tok).slice(escapeRegex(delim).length)})`,
+        beginCaptures: { '0': { name: `punctuation.definition.string.begin.${langName}` } },
+        end: escapeRegex(delim),
+        endCaptures: { '0': { name: `punctuation.definition.string.end.${langName}` } },
+        patterns: [{ match: escape, name: `constant.character.escape.${langName}` }],
+      };
+      if (escape === escapeRegex(delim) + escapeRegex(delim)) region.applyEndPatternLast = true;
+      repository[key] = region;
+      topPatterns.push({ include: `#${key}` });
+      rememberLiteralKey(scope, key, tok.name);
+
     } else if (isBlock) {
       const blockDelims = tokenPatternBlockDelimiters(tok);
       const blockSources = tokenPatternBlockDelimiterSources(tok);
@@ -7152,7 +7177,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // KEY — a scalar that is the LHS of `:`) is a NAME, more specific than any string/typed-value
     // scalar it overlaps, so it must be tried first. (Markup tag names live inside begin/end
     // regions, never as a top-level include, so this only ranks the YAML-style key scalar.)
-    if (entry?.match && scope.startsWith('entity.name.tag')) return 0.9;
+    // A top-level token scoped `entity.name.tag` is a NAME (an indentation grammar's mapping KEY): a
+    // flat `match` (plain key) OR a begin/end region (a quoted key with sub-scoped escapes). Either
+    // must be tried before the value scalars / value-string regions it overlaps.
+    if ((entry?.match || entry?.begin) && scope.startsWith('entity.name.tag')) return 0.9;
     // A document marker (`---`/`...`, scoped entity.other.document) is a `lit`+lookahead token that
     // OVERLAPS the plain scalar (`---` also matches PLAIN_HEAD), so it must out-rank the plain-scalar
     // catch-all (8.8) — else `---` paints as string.unquoted. Its lookahead pins it to a real marker.
