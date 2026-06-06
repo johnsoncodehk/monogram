@@ -37,9 +37,10 @@ export function yamlOracle(text: string): GoldToken[] {
     ESCAPE.lastIndex = 0;
     while ((m = ESCAPE.exec(seg))) out.push({ start: r[0] + m.index, end: r[0] + m.index + m[0].length, text: m[0], role: R.escape });
   };
-  // A VALUE-position block scalar (`|`/`>`): split the introducer (a structural control sigil) from
-  // the verbatim body. introducer = `|`/`>` + chomping/indent on the header line; body = the lines
-  // below. (A block scalar in KEY position stays ONE tagName token — the whole scalar is the key name.)
+  // A block scalar (`|`/`>`), in KEY or VALUE position: split the introducer (a structural control
+  // sigil → block-indicator) from the verbatim body (a string). introducer = `|`/`>` + chomping/indent
+  // on the header line; body = the lines below. A block scalar reads the SAME wherever it sits — the
+  // key-ness of a `? |` key is carried by the `?`/`:`, NOT by recolouring the body as a name.
   const isBlockScalar = (n: any) => n?.type === 'BLOCK_LITERAL' || n?.type === 'BLOCK_FOLDED';
   const pushBlockScalar = (node: any): void => {
     const r = node?.range;
@@ -57,7 +58,7 @@ export function yamlOracle(text: string): GoldToken[] {
   const walk = (node: any, isKey: boolean): void => {
     if (!node) return;
     if (isScalar(node)) {
-      if (!isKey && isBlockScalar(node)) pushBlockScalar(node);
+      if (isBlockScalar(node)) pushBlockScalar(node);
       else { push(node, isKey ? R.tagName : valueRole(node.value)); pushEscapes(node); }
     }
     else if (isMap(node)) for (const p of node.items) { walk(p.key, true); walk(p.value, false); }

@@ -631,7 +631,7 @@
           "begin": "[\\t ]*([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))([\\t ]*.*)",
           "beginCaptures": {
             "1": {
-              "name": "entity.name.tag.yaml"
+              "name": "keyword.control.flow.block-scalar.yaml"
             },
             "2": {
               "patterns": [
@@ -650,7 +650,7 @@
                 {
                   "begin": "\\G( ++)$",
                   "while": "\\G(?>(\\1)$|(?!\\1)( *+)($|.))",
-                  "contentName": "entity.name.tag.yaml"
+                  "contentName": "string.unquoted.block.yaml"
                 },
                 {
                   "begin": "\\G(?!$)(?=( *+))",
@@ -659,7 +659,7 @@
                     {
                       "begin": "\\G( *+)",
                       "while": "\\G(?>(\\1)|( *+)($|[^\\t#]|[\\t ]++[^#]))",
-                      "contentName": "entity.name.tag.yaml"
+                      "contentName": "string.unquoted.block.yaml"
                     }
                   ]
                 },

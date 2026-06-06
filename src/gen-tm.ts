@@ -4636,6 +4636,8 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   let bsIntro = '';
   let bsFunkyIntroRule: ((indicatorScope: string, contentScope: string) => TmPattern) | null = null;
   let bsHeaderIncludes: { include: string }[] = [];
+  let bsIndicatorScope = '';
+  let bsContentScope = '';
   if (blockScalar) {
     const bsTok = grammar.tokens.find(t => t.name === blockScalar.token);
     const bsKey = blockScalar.token.toLowerCase();
@@ -4736,6 +4738,8 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     bsIntro = intro;
     bsFunkyIntroRule = bsIntroRule;
     bsHeaderIncludes = bsHeaderIncs;
+    bsIndicatorScope = bsIndicator;
+    bsContentScope = bsContent;
     repository[bsKey] = {
       begin: `^([ \\t]*)(?=${bsVp}${intro}[\\t ]*(?:#|$))`,
       while: '\\G(?=\\1[ \\t]|[ \\t]*$)',
@@ -4826,20 +4830,20 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     topPatterns.push({ include: '#explicit-key-indicator' });
 
     // A block scalar can ALSO be an explicit key (`? |` / `? >`). An implicit key must be a single
-    // line, so a multi-line block scalar key is ALWAYS `?`-introduced — and like every other scalar
-    // key (plain / quoted, both already `entity.name.tag`) its content is the KEY NAME, not a value
-    // string. Same PORTABLE structure as §2a (forward-captured node indent + funky body), but gated on
-    // the `?` indicator and scoping the introducer + body with the KEY scope. The `?` is captured as
-    // map-key punctuation; the inner introducer rule scopes the `|`/`>` and the body as the key name.
-    // Ranked above the value-position block scalar (scopeOrder) so `? |` wins; a `: |` value has no
-    // leading `?`, so it is untouched.
+    // line, so a multi-line block scalar key is ALWAYS `?`-introduced. The block scalar itself is
+    // scoped like ANY block scalar — introducer (`|`/`>`) → the block-scalar keyword, body →
+    // string.unquoted.block — and the KEY-ness is carried by the `?` (map-key punctuation) + the `:`
+    // separator, NOT by recolouring the body as a name. (`|`/`>` is a control sigil, never a name; and
+    // a block scalar should read the SAME in key or value position — the official grammar does exactly
+    // this.) Same PORTABLE structure as §2a (forward-captured node indent + funky body), gated on the
+    // `?` indicator. Ranked above the value-position block scalar (scopeOrder) so `? |` wins; a `: |`
+    // value has no leading `?`, so it is untouched.
     if (blockScalar && bsFunkyIntroRule) {
-      const keyScope = `${explicitKey.keyScope}.${langName}`;
       repository['blockscalar-key'] = {
         begin: `^([ \\t]*)(${escapeRegex(explicitKey.indicator)})([\\t ]+)(?=${bsIntro}[\\t ]*(?:#|$))`,
         beginCaptures: { '2': { name: `punctuation.definition.map.key.${langName}` } },
         while: '\\G(?=\\1[ \\t]|[ \\t]*$)',
-        patterns: [bsFunkyIntroRule(keyScope, keyScope), ...bsHeaderIncludes],
+        patterns: [bsFunkyIntroRule(bsIndicatorScope, bsContentScope), ...bsHeaderIncludes],
       };
       topPatterns.push({ include: '#blockscalar-key' });
     }
