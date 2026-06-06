@@ -263,6 +263,9 @@ function quantifier(min: number, max: number | undefined): string {
   return `{${min},${max}}`;
 }
 
+// A char class serializes to an explicit `[…]`, never a `\w`/`\d`/`\s` shorthand: Oniguruma's
+// shorthands are Unicode-aware (`\d` matches U+FF10, `\w` matches `é`/`你`), so condensing an
+// enumerated ASCII set to a shorthand would silently widen the meaning the IR declares.
 function emitCharClass(pattern: Extract<TokenPattern, { type: 'charClass' }>): string {
   return `[${pattern.negate ? '^' : ''}${pattern.items.map(emitClassItem).join('')}]`;
 }

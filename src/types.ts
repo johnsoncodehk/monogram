@@ -141,7 +141,7 @@ export interface MarkupConfig {
   // {name,match}); when present it REPLACES `include` inside the value span (the quote bounding is
   // unchanged). Lets an embed mirror a hand-written grammar's value rule verbatim (e.g. Volar's
   // `vue-directives-generic-attr`) using the host's PUBLIC repository keys.
-  attributeEmbed?: { namePattern: string; embed: string; include?: string; valuePatterns?: RepoAlias[] }[];
+  attributeEmbed?: { namePattern: TokenPattern; embed: string; include?: string; valuePatterns?: RepoAlias[] }[];
   // Elements whose content is raw (CDATA-like): after the start tag's `tagClose`,
   // everything up to the matching `tagOpen+closeMarker+name` is one `token`. `embed`
   // optionally maps a tag → the grammar scope to embed in its body (e.g. Vue SFC blocks:
@@ -236,7 +236,7 @@ export interface MarkupInject {
     scopeName: string;        // emitted file's scopeName, e.g. vue.directives
     repoKey: string;          // main-grammar repository key the stub includes, e.g. vue-directives
     selector: InjectClause[]; // host scopes (e.g. meta.tag / meta.element)
-    control: { match: string; scope: string }[];  // e.g. [{match:'v-for', scope:'keyword.control.loop.vue'}, …]
+    control: { match: TokenPattern; scope: string }[];  // e.g. [{match:lit('v-for'), scope:'keyword.control.loop.vue'}, …]
     shorthand: { char: string; scope: string }[];  // e.g. [{char:':', scope:'punctuation.attribute-shorthand.bind.html.vue'}, …]
     prefix: string;        // long-form directive prefix, e.g. 'v-'
     nameScope: string;     // scope for a directive name / argument (entity.other.attribute-name.html.vue)
