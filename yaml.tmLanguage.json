@@ -4,82 +4,180 @@
   "scopeName": "source.yaml",
   "patterns": [
     {
-      "include": "#comment"
+      "begin": "^(?!\\G)",
+      "while": "^",
+      "name": "meta.stream.yaml",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#blockscalar-seq"
+        },
+        {
+          "include": "#blockscalar-key"
+        },
+        {
+          "include": "#blockscalar"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#flow-sequence"
+        },
+        {
+          "include": "#flow-mapping"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#dquote"
+        },
+        {
+          "include": "#squote"
+        },
+        {
+          "include": "#yamldirective"
+        },
+        {
+          "include": "#directive"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#num"
+        },
+        {
+          "include": "#boolnull"
+        },
+        {
+          "include": "#plain"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#alias"
+        },
+        {
+          "include": "#indent"
+        },
+        {
+          "include": "#dedent"
+        },
+        {
+          "include": "#newline"
+        },
+        {
+          "include": "#anchor"
+        }
+      ]
     },
     {
-      "include": "#explicit-key"
-    },
-    {
-      "include": "#blockscalar-key"
-    },
-    {
-      "include": "#explicit-key-indicator"
-    },
-    {
-      "include": "#flow-sequence"
-    },
-    {
-      "include": "#flow-mapping"
-    },
-    {
-      "include": "#dquotekey"
-    },
-    {
-      "include": "#squotekey"
-    },
-    {
-      "include": "#key"
-    },
-    {
-      "include": "#docstart"
-    },
-    {
-      "include": "#docend"
-    },
-    {
-      "include": "#dquote"
-    },
-    {
-      "include": "#squote"
-    },
-    {
-      "include": "#yamldirective"
-    },
-    {
-      "include": "#directive"
-    },
-    {
-      "include": "#tag"
-    },
-    {
-      "include": "#num"
-    },
-    {
-      "include": "#boolnull"
-    },
-    {
-      "include": "#plain"
-    },
-    {
-      "include": "#punctuation"
-    },
-    {
-      "include": "#alias"
-    },
-    {
-      "include": "#indent"
-    },
-    {
-      "include": "#dedent"
-    },
-    {
-      "include": "#newline"
-    },
-    {
-      "include": "#anchor"
-    },
-    {
-      "include": "#blockscalar"
+      "begin": "\\G(?!$)",
+      "while": "\\G",
+      "name": "meta.stream.yaml",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#blockscalar-seq"
+        },
+        {
+          "include": "#blockscalar-key"
+        },
+        {
+          "include": "#blockscalar"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#flow-sequence"
+        },
+        {
+          "include": "#flow-mapping"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#dquote"
+        },
+        {
+          "include": "#squote"
+        },
+        {
+          "include": "#yamldirective"
+        },
+        {
+          "include": "#directive"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#num"
+        },
+        {
+          "include": "#boolnull"
+        },
+        {
+          "include": "#plain"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#alias"
+        },
+        {
+          "include": "#indent"
+        },
+        {
+          "include": "#dedent"
+        },
+        {
+          "include": "#newline"
+        },
+        {
+          "include": "#anchor"
+        }
+      ]
     }
   ],
   "repository": {
@@ -202,25 +300,87 @@
       "match": "!(?:<[^>]*>|[^\\t\\n\\f\\r \\[\\]{},]*)"
     },
     "blockscalar": {
-      "begin": "([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))(.*\\n?)",
-      "beginCaptures": {
-        "1": {
-          "name": "string.unquoted.block.yaml"
-        },
-        "2": {
-          "patterns": [
-            {
-              "include": "#comment"
-            }
-          ]
-        }
-      },
-      "end": "^(?=\\S)|(?!\\G)",
+      "begin": "^([ \\t]*)(?=(?:(?:---|\\.\\.\\.)[\\t ]+)?(?:[-?][\\t ]+)*(?:[^\\n]*?:[\\t ]+)?(?:[&!][^\\t\\n\\f\\r \\[\\]{},]*[\\t ]+)*[|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?[\\t ]*(?:#|$))",
+      "while": "\\G(?=\\1[ \\t]|[ \\t]*$)",
       "patterns": [
         {
-          "begin": "^([ \\t]+)(?! )",
-          "end": "^(?!\\1|[ \\t]*$)",
-          "contentName": "string.unquoted.block.yaml"
+          "begin": "[\\t ]*([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))([\\t ]*.*)",
+          "beginCaptures": {
+            "1": {
+              "name": "string.unquoted.block.yaml"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#comment"
+                }
+              ]
+            }
+          },
+          "while": "\\G",
+          "patterns": [
+            {
+              "begin": "$",
+              "while": "\\G",
+              "patterns": [
+                {
+                  "begin": "\\G( ++)$",
+                  "while": "\\G(?>(\\1)$|(?!\\1)( *+)($|.))",
+                  "contentName": "string.unquoted.block.yaml"
+                },
+                {
+                  "begin": "\\G(?!$)(?=( *+))",
+                  "end": "\\G(?!\\1)(?=[\\t ]*+#)",
+                  "patterns": [
+                    {
+                      "begin": "\\G( *+)",
+                      "while": "\\G(?>(\\1)|( *+)($|[^\\t#]|[\\t ]++[^#]))",
+                      "contentName": "string.unquoted.block.yaml"
+                    }
+                  ]
+                },
+                {
+                  "begin": "(?!\\G)(?=[\\t ]*+#)",
+                  "while": "\\G",
+                  "patterns": [
+                    {
+                      "include": "#comment"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#punctuation"
         }
       ]
     },
@@ -252,6 +412,96 @@
       "name": "variable.other.yaml",
       "match": "(?!)"
     },
+    "blockscalar-seq": {
+      "begin": "^([ \\t]*)(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+(?:[&!][^\\t\\n\\f\\r \\[\\]{},]*[\\t ]+)*[|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?[\\t ]*(?:#|$))",
+      "beginCaptures": {
+        "2": {
+          "name": "punctuation.yaml"
+        }
+      },
+      "while": "\\G(?=\\1[ \\t]\\3[ \\t]|[ \\t]*$)",
+      "patterns": [
+        {
+          "begin": "[\\t ]*([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))([\\t ]*.*)",
+          "beginCaptures": {
+            "1": {
+              "name": "string.unquoted.block.yaml"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#comment"
+                }
+              ]
+            }
+          },
+          "while": "\\G",
+          "patterns": [
+            {
+              "begin": "$",
+              "while": "\\G",
+              "patterns": [
+                {
+                  "begin": "\\G( ++)$",
+                  "while": "\\G(?>(\\1)$|(?!\\1)( *+)($|.))",
+                  "contentName": "string.unquoted.block.yaml"
+                },
+                {
+                  "begin": "\\G(?!$)(?=( *+))",
+                  "end": "\\G(?!\\1)(?=[\\t ]*+#)",
+                  "patterns": [
+                    {
+                      "begin": "\\G( *+)",
+                      "while": "\\G(?>(\\1)|( *+)($|[^\\t#]|[\\t ]++[^#]))",
+                      "contentName": "string.unquoted.block.yaml"
+                    }
+                  ]
+                },
+                {
+                  "begin": "(?!\\G)(?=[\\t ]*+#)",
+                  "while": "\\G",
+                  "patterns": [
+                    {
+                      "include": "#comment"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
     "explicit-key": {
       "match": "(\\?)([\\t ]+)(?:(?:(&[^\\t\\n\\f\\r \\[\\]{},]+)|(!(?:<[^>]*>|[^\\t\\n\\f\\r \\[\\]{},]*)))[\\t ]+)*((?:[^\\t\\n\\f\\r \\-?:,\\[\\]{}#&*!|>'\"%@`]|[\\-?:](?=[^\\t\\n\\f\\r ,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\t\\n\\f\\r ,\\]}])|#(?<=[^\\t\\n\\f\\r ]#))*)",
       "captures": {
@@ -278,28 +528,92 @@
       }
     },
     "blockscalar-key": {
-      "begin": "(\\?)([\\t ]+)([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))(.*\\n?)",
+      "begin": "^([ \\t]*)(\\?)([\\t ]+)(?=[|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?[\\t ]*(?:#|$))",
       "beginCaptures": {
-        "1": {
+        "2": {
           "name": "punctuation.definition.map.key.yaml"
-        },
-        "3": {
-          "name": "entity.name.tag.yaml"
-        },
-        "4": {
-          "patterns": [
-            {
-              "include": "#comment"
-            }
-          ]
         }
       },
-      "end": "^(?=\\S)|(?!\\G)",
+      "while": "\\G(?=\\1[ \\t]|[ \\t]*$)",
       "patterns": [
         {
-          "begin": "^([ \\t]+)(?! )",
-          "end": "^(?!\\1|[ \\t]*$)",
-          "contentName": "entity.name.tag.yaml"
+          "begin": "[\\t ]*([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))([\\t ]*.*)",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.name.tag.yaml"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#comment"
+                }
+              ]
+            }
+          },
+          "while": "\\G",
+          "patterns": [
+            {
+              "begin": "$",
+              "while": "\\G",
+              "patterns": [
+                {
+                  "begin": "\\G( ++)$",
+                  "while": "\\G(?>(\\1)$|(?!\\1)( *+)($|.))",
+                  "contentName": "entity.name.tag.yaml"
+                },
+                {
+                  "begin": "\\G(?!$)(?=( *+))",
+                  "end": "\\G(?!\\1)(?=[\\t ]*+#)",
+                  "patterns": [
+                    {
+                      "begin": "\\G( *+)",
+                      "while": "\\G(?>(\\1)|( *+)($|[^\\t#]|[\\t ]++[^#]))",
+                      "contentName": "entity.name.tag.yaml"
+                    }
+                  ]
+                },
+                {
+                  "begin": "(?!\\G)(?=[\\t ]*+#)",
+                  "while": "\\G",
+                  "patterns": [
+                    {
+                      "include": "#comment"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#punctuation"
         }
       ]
     },

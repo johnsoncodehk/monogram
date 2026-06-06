@@ -48,7 +48,10 @@ interface TmGrammar {
   $schema: string;
   name: string;
   scopeName: string;
-  patterns: ({ include: string })[];
+  // Usually a flat include list; an indentation grammar with a block scalar wraps these in a
+  // line-spanning `meta.stream` region (a `TmPattern` with begin/while/patterns) — see the grammar
+  // root return — so the top level admits region wrappers too, like `TmPattern.patterns` does.
+  patterns: (TmPattern | { include: string })[];
   repository: Record<string, TmPattern>;
 }
 
@@ -4627,6 +4630,12 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // since the lookahead requires the rest of the header line to be only indicators + an optional
   // ` #comment`.
   const blockScalar = grammar.indent?.blockScalar;
+  // Block-scalar helpers shared with §2b (the `? |` explicit-key block scalar): the introducer
+  // sub-pattern, the funky body builder, the inner introducer rule, and the header-prefix includes.
+  // Assigned inside §2a; reused in §2b so both block-scalar shapes use one portable structure.
+  let bsIntro = '';
+  let bsFunkyIntroRule: ((content: string) => TmPattern) | null = null;
+  let bsHeaderIncludes: { include: string }[] = [];
   if (blockScalar) {
     const bsTok = grammar.tokens.find(t => t.name === blockScalar.token);
     const bsKey = blockScalar.token.toLowerCase();
@@ -4635,37 +4644,110 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // introducer + indentation/chomping indicators (a digit and a `+`/`-`, in either order, or a
     // lone `+`/`-`), then a lookahead requiring the rest of the header line to be blank or a comment.
     const indicators = '(?:[1-9][-+]?|[-+][1-9]?|[-+])?';
+    const intro = `${introClass}${indicators}`;
     const commentIncs = commentIncludeKeys.map(k => ({ include: `#${k}` }));
-    // This is the proven textmate/yaml.tmbundle structure (a `begin`/`end` region, NOT `begin`/
-    // `while`): a flat grammar has no enclosing line-spanning rule, and a top-level `while: \G`
-    // region cannot sustain itself across lines — vscode-textmate sets the while-anchor to -1
-    // unless a PARENT begin captured the end-of-line, so the chain collapses after the header line
-    // (the maintained RedCMD grammar's `while: \G` only survives because it is nested many regions
-    // deep). Two load-bearing details:
-    //   • the begin's trailing `(.*\n?)` group CAPTURES the newline. Without it the `(?!\G)` arm of
-    //     the `end` (below) fires at the very start of line 2 and the body is never scoped.
-    //   • `end: ^(?=\S)|(?!\G)` — the body ends at a line that dedents to a non-space at column 0
-    //     (a sibling key, a new node, a `---`/`...` marker), and `(?!\G)` guards the contiguity the
-    //     captured newline establishes.
-    // The inner rule auto-detects the body indentation (§8.1.1): `^([ \t]+)(?! )` captures the
-    // first content line's full indent as `\1`, and `end: ^(?!\1|[ \t]*$)` holds the body for every
-    // line that re-matches `\1` (or is blank) and releases at the first shallower non-blank line —
-    // so a deeper-nested scalar's siblings (`- a: |` … `  b: |`) are NOT swallowed.
-    repository[bsKey] = {
-      begin: `(${introClass}${indicators})(?=[\\t ]*(?:#|$))(.*\\n?)`,
-      beginCaptures: {
-        '1': { name: `${bsScope}.${langName}` },
-        '2': { patterns: commentIncs },
+    const bsContent = `${bsScope}.${langName}`;
+    // A block scalar BODY must scope `string.unquoted.block` across EMPTY lines. A flat `begin`/`end`
+    // region (the old textmate/yaml.tmbundle shape) collapses at the first LEADING empty line: the
+    // inner indent rule has not opened yet, nothing is consumed, and the `(?!\G)` arm of the `end`
+    // fires (vscode-textmate#114 — a top-level region's `\G` anchor dies once a line is not contiguous
+    // with the begin's captured EOL). The maintained RedCMD grammar survives empties only because its
+    // block scalar sits many `while: \G` regions deep and each parent re-anchors `\G` at every line,
+    // blank ones included. We replicate the MINIMAL slice of that nesting, in three PORTABLE pieces
+    // (no variable-length lookbehind — those are rejected by TextMate 2.0/Onigmo and GitHub-Linguist):
+    //   1. a `meta.stream` parent (`begin: ^(?!\G)`/`while: ^`) wraps ALL top patterns (added at the
+    //      grammar root below) so `\G` is re-anchored every line — the empty-line survival lever.
+    //   2. the BODY is RedCMD's "funky wrapper" (`begin: $`/`while: \G`): three sub-rules auto-detect
+    //      the content indent `\1`, scope it `string.unquoted.block`, and — via the middle rule's
+    //      `end: \G(?!\1)(?=[\t ]*#)` — release at a SHALLOWER comment line (so a dedented `# c` is a
+    //      real comment, not swallowed). Empty-line-proof.
+    //   3. the OUTER region bounds SIBLINGS by the NODE indentation, captured by a FORWARD group: the
+    //      begin starts AT LINE START `^([ \t]*)` and CONSUMES the indent into `\1`, with a lookahead
+    //      (the value-prefix `bsVp` below) confirming the line actually carries a value-position block
+    //      scalar. `while: \G(?=\1[ \t]|[ \t]*$)` continues while a line is blank or indented past the
+    //      node and ends at a sibling at the node column. The header line's key / `:` / anchor / tag
+    //      are re-scoped by the normal token includes (`bsHeaderIncs`) since the indent consume put
+    //      them INSIDE the region; an inner `bsIntroRule` matches the `|`/`>` introducer (+ trailing
+    //      comment) and runs the funky body.
+    // Because the begin matches at LINE START it competes at column 0 with `#key`/quoted-keys (which
+    // also start there); on a same-start tie oniguruma picks the FIRST listed pattern, so these rules
+    // are ranked ABOVE the key/scalar tokens in scopeOrder. Their lookahead requires a real
+    // `[|>]…(#|$)` value-position header, so they never steal a non-block-scalar line.
+    const funkyBody = (content: string) => [
+      {
+        begin: '$',
+        while: '\\G',
+        patterns: [
+          { begin: '\\G( ++)$', while: '\\G(?>(\\1)$|(?!\\1)( *+)($|.))', contentName: content },
+          {
+            begin: '\\G(?!$)(?=( *+))',
+            end: '\\G(?!\\1)(?=[\\t ]*+#)',
+            patterns: [
+              { begin: '\\G( *+)', while: '\\G(?>(\\1)|( *+)($|[^\\t#]|[\\t ]++[^#]))', contentName: content },
+            ],
+          },
+          { begin: '(?!\\G)(?=[\\t ]*+#)', while: '\\G', patterns: commentIncs },
+        ],
       },
-      end: '^(?=\\S)|(?!\\G)',
-      patterns: [
-        {
-          begin: '^([ \\t]+)(?! )',
-          end: '^(?!\\1|[ \\t]*$)',
-          contentName: `${bsScope}.${langName}`,
-        },
-      ],
+    ];
+    // Inner introducer rule: leading `[\t ]*` skips the separator whitespace (the space after `:`/`-`),
+    // captures the `|`/`>` (+indicators) and the rest-of-line trailing comment, then runs the funky
+    // body (its `begin: $` opens at the header-line EOL). `while: \G` keeps it alive across the body.
+    const bsIntroRule = (content: string) => ({
+      begin: `[\\t ]*(${intro})(?=[\\t ]*(?:#|$))([\\t ]*.*)`,
+      beginCaptures: { '1': { name: content }, '2': { patterns: commentIncs } },
+      while: '\\G',
+      patterns: funkyBody(content),
+    });
+    // Header-prefix token includes: re-scope the part of the header line BEFORE the introducer (a doc
+    // marker / key / `:` / anchor / tag), since the line-start indent consume swallowed the engine
+    // position past them. Derived from what this grammar actually emits (an unresolved include is a
+    // no-op in vscode-textmate, but we list only the keys that exist to keep the grammar clean). The
+    // explicit-key entries are emitted in §2b (after this block) so they are gated by the same
+    // `detectExplicitKey` predicate; punctuation is emitted late so it is included unconditionally
+    // here (an indentation grammar with a block scalar always has the `:`/`-` punctuation token).
+    const bsHasExplicitKey = !!detectExplicitKey(grammar);
+    const bsHeaderIncs = [
+      ...(repository['docstart'] ? [{ include: '#docstart' }] : []),
+      ...(repository['docend'] ? [{ include: '#docend' }] : []),
+      ...(bsHasExplicitKey ? [{ include: '#explicit-key' }, { include: '#explicit-key-indicator' }] : []),
+      ...(repository['dquotekey'] ? [{ include: '#dquotekey' }] : []),
+      ...(repository['squotekey'] ? [{ include: '#squotekey' }] : []),
+      ...(repository['key'] ? [{ include: '#key' }] : []),
+      ...(repository['anchor'] ? [{ include: '#anchor' }] : []),
+      ...(repository['tag'] ? [{ include: '#tag' }] : []),
+      { include: '#punctuation' },
+    ];
+    // Value-PREFIX: the structural lead-in that may precede a value-position introducer on its header
+    // line AFTER the node indent is stripped. A genuine `|`/`>` introducer is the FIRST value token, so
+    // only separators (sequence dash `-`, explicit-key `?`, doc markers `---`/`...`), an optional
+    // mapping key + `:` separator, and node properties (anchors `&` / tags `!`) may sit before it —
+    // never plain-scalar content. This is what stops `a: foo|` / `a: foo |` (plain scalars that merely
+    // END in a pipe) from opening a region: after `a: ` the next token is `foo`, not a separator/
+    // key-colon/property, so the lookahead fails. The key arm matches up to the FIRST `: ` separator.
+    const bsProp = '(?:[&!][^\\t\\n\\f\\r \\[\\]{},]*[\\t ]+)*';
+    const bsVp = `(?:(?:---|\\.\\.\\.)[\\t ]+)?(?:[-?][\\t ]+)*(?:[^\\n]*?:[\\t ]+)?${bsProp}`;
+    // Expose the introducer / inner-rule / header-includes to §2b (the `? |` explicit-key variant).
+    bsIntro = intro;
+    bsFunkyIntroRule = bsIntroRule;
+    bsHeaderIncludes = bsHeaderIncs;
+    repository[bsKey] = {
+      begin: `^([ \\t]*)(?=${bsVp}${intro}[\\t ]*(?:#|$))`,
+      while: '\\G(?=\\1[ \\t]|[ \\t]*$)',
+      patterns: [bsIntroRule(bsContent), ...bsHeaderIncs],
     };
+    // Sequence entry whose mapping VALUE is the block scalar (`- a: |` … `  b:`): bound siblings at the
+    // KEY column, not the dash column, else the next entry key is swallowed. The begin consumes the
+    // leading indent `\1` AND the dash + its trailing spaces `\3`, and the bound `\1[ \t]\3[ \t]` is
+    // one column past the key. A pure-space backref (`\1`, `\3`) standing in for the dash column keeps
+    // it portable (no literal `- ` backref, which would never match space-indented body lines).
+    repository[`${bsKey}-seq`] = {
+      begin: `^([ \\t]*)(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+${bsProp}${intro}[\\t ]*(?:#|$))`,
+      beginCaptures: { '2': { name: `punctuation.${langName}` } },
+      while: '\\G(?=\\1[ \\t]\\3[ \\t]|[ \\t]*$)',
+      patterns: [bsIntroRule(bsContent), ...bsHeaderIncs],
+    };
+    topPatterns.push({ include: `#${bsKey}-seq` });
   }
 
   // ── 2b. Explicit mapping key (`? key`) ──
@@ -4714,26 +4796,18 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // A block scalar can ALSO be an explicit key (`? |` / `? >`). An implicit key must be a single
     // line, so a multi-line block scalar key is ALWAYS `?`-introduced — and like every other scalar
     // key (plain / quoted, both already `entity.name.tag`) its content is the KEY NAME, not a value
-    // string. The §2a region scopes a block body `string.unquoted.block`; here the SAME begin/end
-    // machinery is gated on the `?` indicator and scopes the introducer + body with the key scope.
-    // Leftmost-match makes the `?`-anchored begin win over the bare §2a block scalar; a block scalar
-    // in VALUE position (`: |`) has no leading `?`, so it is untouched.
-    if (blockScalar) {
-      const introClass = `[${blockScalar.introducers.map(escapeForCharClass).join('')}]`;
-      const indicators = '(?:[1-9][-+]?|[-+][1-9]?|[-+])?';
-      const commentIncs = commentIncludeKeys.map(k => ({ include: `#${k}` }));
+    // string. Same PORTABLE structure as §2a (forward-captured node indent + funky body), but gated on
+    // the `?` indicator and scoping the introducer + body with the KEY scope. The `?` is captured as
+    // map-key punctuation; the inner introducer rule scopes the `|`/`>` and the body as the key name.
+    // Ranked above the value-position block scalar (scopeOrder) so `? |` wins; a `: |` value has no
+    // leading `?`, so it is untouched.
+    if (blockScalar && bsFunkyIntroRule) {
       const keyScope = `${explicitKey.keyScope}.${langName}`;
       repository['blockscalar-key'] = {
-        begin: `(${escapeRegex(explicitKey.indicator)})([\\t ]+)(${introClass}${indicators})(?=[\\t ]*(?:#|$))(.*\\n?)`,
-        beginCaptures: {
-          '1': { name: `punctuation.definition.map.key.${langName}` },
-          '3': { name: keyScope },
-          '4': { patterns: commentIncs },
-        },
-        end: '^(?=\\S)|(?!\\G)',
-        patterns: [
-          { begin: '^([ \\t]+)(?! )', end: '^(?!\\1|[ \\t]*$)', contentName: keyScope },
-        ],
+        begin: `^([ \\t]*)(${escapeRegex(explicitKey.indicator)})([\\t ]+)(?=${bsIntro}[\\t ]*(?:#|$))`,
+        beginCaptures: { '2': { name: `punctuation.definition.map.key.${langName}` } },
+        while: '\\G(?=\\1[ \\t]|[ \\t]*$)',
+        patterns: [bsFunkyIntroRule(keyScope), ...bsHeaderIncludes],
       };
       topPatterns.push({ include: '#blockscalar-key' });
     }
@@ -7178,11 +7252,22 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // The bare explicit-key indicator (`?` alone on its line) must beat the generic `?` punctuation
     // token (rank 9) so it scopes as the map-key punctuation, not a plain bracket.
     if (key === 'explicit-key-indicator') return 0.82;
-    // A block scalar that is an explicit key (`? |` / `? >`) — its `?`-anchored begin must beat the
-    // bare `?` punctuation token AND the value-position block scalar so the body scopes as the key
-    // name. Its begin is highly specific (`?` + block introducer + blank/comment-only header), so
-    // ranking it with #explicit-key is safe. Mutually exclusive with #explicit-key (plain key body).
-    if (key === 'blockscalar-key') return 0.8;
+    // The value-position block scalars (`key: |` / `- |` / `--- |`) and the `? |` explicit-key
+    // variant now begin AT LINE START (`^([ \t]*)`), so they compete at column 0 with #key /
+    // quoted-keys / #docstart / #explicit-key (all of which also start there). On a same-start tie
+    // oniguruma's scanner picks the FIRST listed pattern, so these MUST out-rank every key/scalar/
+    // doc-marker token (rank ≥ 0.8) — their lookahead requires a real `[|>]…(#|$)` value-position
+    // header, so they never steal a non-block-scalar line. Three precedence facts decide the order:
+    //   • `-seq` (dash + KEY + `:`) and the plain rule BOTH match `- a: |`, but `-seq` bounds siblings
+    //     at the deeper KEY column, so it must be tried first → lowest rank.
+    //   • `blockscalar-key` (`?`-anchored) and the plain rule BOTH match `? |` (the plain VP admits a
+    //     leading `?`), but the key variant scopes the body as the key NAME, so it must win → below
+    //     the plain rule.
+    //   • the plain `blockscalar` is the fallback (bare `|`, `key: |`, `--- |`).
+    const bsRank = grammar.indent?.blockScalar?.token.toLowerCase();
+    if (bsRank && key === `${bsRank}-seq`) return 0.5;
+    if (key === 'blockscalar-key') return 0.55;
+    if (bsRank && key === bsRank) return 0.6;
     // A flow collection (`{ … }` / `[ … ]`) is a begin/end region opened by a bracket; it must be
     // tried before #punctuation (which would otherwise claim the `{`/`[` as a bare bracket) and
     // before the scalar tokens. Its `{`/`[` can never lead a plain scalar, so this ranking is safe.
@@ -7260,11 +7345,28 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // clobbers a key that already matches by name. Pure rename → tokenization unchanged.
   applyCanonicalRepoNames(grammar, repository, orderedPatterns);
 
+  // ── meta.stream wrapper (indentation grammars with a block scalar only) ──
+  // A block scalar BODY must survive EMPTY lines (see §2a). The mechanism is a line-spanning
+  // `while: \G` parent that RE-ANCHORS `\G` at the start of every line — including blank ones — so a
+  // nested `while: \G` body region stays alive across blanks instead of collapsing. We wrap ALL top
+  // patterns in RedCMD's two-arm `meta.stream` region: the first arm (`begin: ^(?!\G)`/`while: ^`)
+  // drives normal top-of-stream tokenisation; the second (`begin: \G(?!$)`/`while: \G`) is the
+  // embedded-start case (YAML inside a Markdown fence). Tokenisation of every construct is unchanged
+  // — the wrapper only adds the persistent `\G` anchor the block scalar needs. Gated to grammars that
+  // actually emit a block scalar so non-indentation languages (TS/HTML/…) stay byte-identical.
+  let finalPatterns: ({ include: string } | TmPattern)[] = orderedPatterns;
+  if (grammar.indent?.blockScalar) {
+    finalPatterns = [
+      { begin: '^(?!\\G)', while: '^', name: `meta.stream.${langName}`, patterns: orderedPatterns },
+      { begin: '\\G(?!$)', while: '\\G', name: `meta.stream.${langName}`, patterns: orderedPatterns },
+    ];
+  }
+
   return {
     $schema: 'https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json',
     name: grammarName,
     scopeName,
-    patterns: orderedPatterns,
+    patterns: finalPatterns,
     repository,
   };
 }
