@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       # Node 24+ runs the .ts sources directly (native type stripping) — no build, no tsx.
       - uses: actions/setup-node@v4
@@ -44,6 +46,7 @@ jobs:
           node test/js-conformance.ts
           node test/tsx-conformance.ts
           node test/jsx-conformance.ts
+          node test/redcmd-tm-diagnostics.ts
           node test/html-lexer-spike.ts
           node test/html-conformance.ts
           node test/html-monarch.ts
