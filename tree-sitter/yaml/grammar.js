@@ -117,27 +117,27 @@ module.exports = grammar({
 
     squote: $ => token(/'(?:''|[^'])*'/),
 
-    anchor: $ => token(/&[^\s\[\]{},]+/),
+    anchor: $ => token(/&[^\t\n\f\r \[\]{},]+/),
 
-    alias: $ => token(/\*[^\s\[\]{},]+/),
+    alias: $ => token(/\*[^\t\n\f\r \[\]{},]+/),
 
-    tag: $ => token(/!(?:<[^>]*>|[^\s\[\]{},]*)/),
+    tag: $ => token(/!(?:<[^>]*>|[^\t\n\f\r \[\]{},]*)/),
 
-    block_scalar: $ => token(//),
+    block_scalar: $ => token(/[^\s\S]/),
 
-    key: $ => token(/(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:])(?:[^:#\n,\[\]{}]|:|#)*/),
+    key: $ => token(/(?:[^\t\n\f\r \-?:,\[\]{}#&*!|>'"%@`]|[\-?:])(?:[^:#\n,\[\]{}]|:|#)*/),
 
-    num: $ => token(/(?:[+-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+-]?[0-9]+)?)/),
+    num: $ => token(/(?:[+\-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)|0x[0-9A-Fa-f]+|0o[0-7]+|[+\-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+\-]?[0-9]+)?)/),
 
     bool_null: $ => token(/(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)/),
 
-    plain: $ => token(/(?:[^\s\-?:,\[\]{}#&*!|>'"%@\`]|[-?:])(?:[^:#\n,\[\]{}]|:|#)*/),
+    plain: $ => token(/(?:[^\t\n\f\r \-?:,\[\]{}#&*!|>'"%@`]|[\-?:])(?:[^:#\n,\[\]{}]|:|#)*/),
 
-    indent: $ => token(//),
+    indent: $ => token(/[^\s\S]/),
 
-    dedent: $ => token(//),
+    dedent: $ => token(/[^\s\S]/),
 
-    newline: $ => token(//)
+    newline: $ => token(/[^\s\S]/)
   }
 });
 

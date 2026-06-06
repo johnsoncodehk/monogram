@@ -1,16 +1,27 @@
-import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig } from './types.ts';
+import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, TokenPattern } from './types.ts';
+import {
+  altPattern, anyChar, followedBy, isTokenPattern, lit, never, noneOf, notFollowedBy,
+  notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
+  seq, star, start, end, toTokenPattern,
+  type TokenPatternInput,
+} from './token-pattern.ts';
+
+export {
+  anyChar, followedBy, lit, never, noneOf, notFollowedBy, notPrecededBy, oneOf,
+  plus, precededBy, range, repeat, seq, star, start, end,
+};
 
 // ── Token ──
 
 interface TokenOptions {
   skip?: boolean;
   scope?: string;
-  escape?: RegExp;
+  escape?: TokenPatternInput;
   // A regex matching exactly one well-formed escape sequence. Engine-scanned tokens
   // (templates) validate each `\`-escape against it and reject any that don't match —
   // unlike `escape` (highlight-only), this drives tokenization. Skipped in tag
   // position, where invalid escapes are legal (cooked = undefined). Optional.
-  escapeValid?: RegExp;
+  escapeValid?: TokenPatternInput;
   regex?: boolean;
   embed?: string;
   // ── Lexer hints (keep gen-parser language-agnostic; all optional) ──
@@ -31,23 +42,38 @@ interface TokenOptions {
   };
   string?: boolean;
   // Block-context (flowDepth===0) pattern variant for indentation grammars — see TokenDecl.blockPattern.
-  blockPattern?: RegExp;
+  blockPattern?: TokenPatternInput;
   // Block-context ONLY (indentation grammars): match this token only outside flow — see TokenDecl.blockOnly.
   blockOnly?: boolean;
 }
 
+type NormalizedTokenOptions = Omit<TokenOptions, 'escape' | 'escapeValid' | 'blockPattern'> & {
+  escape?: TokenPattern;
+  escapeValid?: TokenPattern;
+  blockPattern?: TokenPattern;
+};
+
 export class TokenRef {
   readonly __kind = 'token' as const;
-  readonly pattern: RegExp;
-  readonly opts: TokenOptions;
-  constructor(pattern: RegExp, opts: TokenOptions) {
+  readonly pattern: TokenPattern;
+  readonly opts: NormalizedTokenOptions;
+  constructor(pattern: TokenPattern, opts: NormalizedTokenOptions) {
     this.pattern = pattern;
     this.opts = opts;
   }
 }
 
-export function token(pattern: RegExp, opts?: TokenOptions): TokenRef {
-  return new TokenRef(pattern, opts ?? {});
+export function token(pattern: TokenPatternInput, opts?: TokenOptions): TokenRef {
+  return new TokenRef(toTokenPattern(pattern), normalizeTokenOptions(opts ?? {}));
+}
+
+function normalizeTokenOptions(opts: TokenOptions): NormalizedTokenOptions {
+  return {
+    ...opts,
+    escape: opts.escape ? toTokenPattern(opts.escape) : undefined,
+    escapeValid: opts.escapeValid ? toTokenPattern(opts.escapeValid) : undefined,
+    blockPattern: opts.blockPattern ? toTokenPattern(opts.blockPattern) : undefined,
+  };
 }
 
 // ── Rule ──
@@ -186,8 +212,11 @@ export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
 }
 
-export function opt(...items: Element[]): OptNode {
-  return new OptNode(items);
+export function opt(...items: [TokenPattern, ...TokenPatternInput[]]): TokenPattern;
+export function opt(...items: Element[]): OptNode;
+export function opt(...items: (Element | TokenPatternInput)[]): OptNode | TokenPattern {
+  if (items.some(isTokenPattern)) return optPattern(...items as TokenPatternInput[]);
+  return new OptNode(items as Element[]);
 }
 
 export function many(...items: Element[]): ManyNode {
@@ -198,8 +227,11 @@ export function many1(...items: Element[]): Many1Node {
   return new Many1Node(items);
 }
 
-export function alt(...items: Alternative[]): AltNode {
-  return new AltNode(items);
+export function alt(...items: [TokenPattern, ...TokenPatternInput[]]): TokenPattern;
+export function alt(...items: Alternative[]): AltNode;
+export function alt(...items: (Alternative | TokenPatternInput)[]): AltNode | TokenPattern {
+  if (items.some(isTokenPattern)) return altPattern(...items as TokenPatternInput[]);
+  return new AltNode(items as Alternative[]);
 }
 
 // Parse `items` with the given LED connector(s) disabled at the top level (a
@@ -370,13 +402,13 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     if (tok.opts.regex) flags.push('regex');
     return {
       name,
-      pattern: tok.pattern.source,
-      blockPattern: tok.opts.blockPattern?.source,
+      pattern: tok.pattern,
+      blockPattern: tok.opts.blockPattern,
       blockOnly: tok.opts.blockOnly,
       flags,
       scope: tok.opts.scope,
-      escapePattern: tok.opts.escape?.source,
-      escapeValidPattern: tok.opts.escapeValid?.source,
+      escapePattern: tok.opts.escape,
+      escapeValidPattern: tok.opts.escapeValid,
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,
       identifierPrefix: tok.opts.identifierPrefix,

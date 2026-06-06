@@ -9,20 +9,23 @@
 // tags). It does not implement the WHATWG error-recovery tree-construction
 // algorithm (that is not a context-free grammar); conformance is measured against
 // `parse5` on well-formed input. See memory: html-vue-markup.
-import { token, rule, defineGrammar, many, opt, alt } from './src/api.ts';
+import { token, rule, defineGrammar, many, opt, alt, seq, oneOf, noneOf, range, anyChar, star, plus, notFollowedBy } from './src/api.ts';
 import type { MarkupConfig } from './src/types.ts';
 
 // ── Tokens ──
+const word = oneOf(range('A', 'Z'), range('a', 'z'), range('0', '9'), '_');
+const whitespace = oneOf('\t', '\n', '\f', '\r', ' ');
+
 // Tag and attribute names: a letter, then name chars (incl. `-` for custom
 // elements / data-*, `:` for namespaced names like `xlink:href`).
-const Name = token(/[a-zA-Z][\w:.-]*/, { identifier: true });
+const Name = token(seq(oneOf(range('a', 'z'), range('A', 'Z')), star(oneOf(word, ':', '.', '-'))), { identifier: true });
 // An OPEN void-element name (`br`, `img`, `meta`, …). The lexer retags these from
 // Name (driven by `markup.voidTags`); the pattern is a placeholder, never matched
 // fresh. A distinct token lets the parser's void branch match void elements without
 // the generic engine knowing any tag names.
-const VoidName = token(/[a-zA-Z][\w:.-]*/, { scope: 'entity.name.tag' });
+const VoidName = token(seq(oneOf(range('a', 'z'), range('A', 'Z')), star(oneOf(word, ':', '.', '-'))), { scope: 'entity.name.tag' });
 // Quoted attribute value (double or single).
-const AttrValue = token(/"[^"]*"|'[^']*'/, { string: true });
+const AttrValue = token(alt(seq('"', star(noneOf('"')), '"'), seq("'", star(noneOf("'")), "'")), { string: true });
 // Unquoted attribute value (`colspan=2`, `value=5px`, `href=https://x/`, `href=/a/b.css`):
 // per WHATWG, an unquoted value ends ONLY at whitespace or `>`, so `/` is a legal value char
 // (URLs / paths). The lexer scans the whole value as ONE token the moment it follows `=` (see
@@ -30,12 +33,12 @@ const AttrValue = token(/"[^"]*"|'[^']*'/, { string: true });
 // stay in the value, while a `/>` self-close (where no value is being read) stays punctuation.
 // `\`` excluded to mirror the highlighter's value pattern. The leading-char-class scan in the
 // lexer makes this token's own pattern a backstop (it is no longer subject to the Name-first race).
-const UnquotedValue = token(/[^\s"'<>=`]+/, { scope: 'string.unquoted.html' });
+const UnquotedValue = token(plus(noneOf(whitespace, '"', "'", '<', '>', '=', '`')), { scope: 'string.unquoted.html' });
 // Markup-mode content tokens — emitted by the lexer state machine, not matched by
 // these patterns (the patterns are placeholders; see gen-lexer markupTokenNames).
-const Text = token(/[^<]+/, { scope: 'text.html' });
-const RawText = token(/[^<]+/, { scope: 'source.embedded' });
-const Comment = token(/<!--[\s\S]*?-->/, { scope: 'comment.block.html' });
+const Text = token(plus(noneOf('<')), { scope: 'text.html' });
+const RawText = token(plus(noneOf('<')), { scope: 'source.embedded' });
+const Comment = token(seq('<!--', star(seq(notFollowedBy('-->'), anyChar()), { greedy: false }), '-->'), { scope: 'comment.block.html' });
 
 // ── Rules ──
 // An attribute: a name, optionally `= value` (quoted, or an unquoted name/number).

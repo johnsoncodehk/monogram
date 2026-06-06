@@ -61,7 +61,7 @@
         }
       ],
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][A-Za-z0-9_:.\\-]*",
         {
           "token": "tag",
           "switchTo": "@tag"
@@ -75,7 +75,7 @@
     ],
     "closetag": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][A-Za-z0-9_:.\\-]*",
         "tag"
       ],
       [
@@ -92,7 +92,7 @@
     ],
     "tag": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][A-Za-z0-9_:.\\-]*",
         "attribute.name"
       ],
       [
@@ -170,7 +170,7 @@
     ],
     "rawtag_script": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][A-Za-z0-9_:.\\-]*",
         "attribute.name"
       ],
       [
@@ -222,7 +222,7 @@
     ],
     "rawtag_style": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][A-Za-z0-9_:.\\-]*",
         "attribute.name"
       ],
       [
@@ -274,7 +274,7 @@
     ],
     "rawtag_textarea": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][A-Za-z0-9_:.\\-]*",
         "attribute.name"
       ],
       [
@@ -326,7 +326,7 @@
     ],
     "rawtag_title": [
       [
-        "[a-zA-Z][\\w:.-]*",
+        "[a-zA-Z][A-Za-z0-9_:.\\-]*",
         "attribute.name"
       ],
       [

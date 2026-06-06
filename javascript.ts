@@ -29,6 +29,7 @@ import {
   left, right, none, noUnaryLhs,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not,
+  lit, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
 
 // ── Tokens ──
@@ -39,9 +40,18 @@ import {
 // *literal* identifier characters (`℘`, accented letters, ZWNJ/ZWJ, combining marks) are matched
 // by the lexer's Unicode ID_Start/ID_Continue fallback instead (no /u flag is compiled here —
 // YAML's token patterns use escapes that /u rejects — so \p{…} cannot live in these patterns).
-const idStart    = String.raw`[a-zA-Z_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\}`;
-const idPart     = String.raw`[a-zA-Z0-9_$]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\}`;
-const Ident        = token(new RegExp(`(?:${idStart})(?:${idPart})*`), { identifier: true });
+const digit = range('0', '9');
+const hexDigit = oneOf(digit, range('A', 'F'), range('a', 'f'));
+const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_', '$');
+const idCont = oneOf(range('a', 'z'), range('A', 'Z'), digit, '_', '$');
+const lineTerminator = oneOf('\n', '\r', '\u2028', '\u2029');
+const hspace = oneOf(' ', '\t');
+const uEsc = alt(seq('\\u', repeat(hexDigit, 4, 4)), seq('\\u{', plus(hexDigit), '}'));
+const identStart = alt(idStart, uEsc);
+const identPart = alt(idCont, uEsc);
+const numericTailGuard = notFollowedBy(oneOf(range('0', '9'), range('A', 'Z'), range('a', 'z'), '_', '$', '\\'));
+const digits = seq(plus(digit), star(seq('_', plus(digit))));
+const Ident        = token(seq(identStart, star(identPart)), { identifier: true });
 // Numeric tokens end with `(?![0-9A-Za-z_$\\])`: the spec rule that a numeric literal
 // may not be immediately followed by an IdentifierStart or DecimalDigit. Without it,
 // `0b2`/`0B1102110`/`0o81010` would munch a valid prefix (`0b1`, `0B110`) and leave the
@@ -53,16 +63,18 @@ const Ident        = token(new RegExp(`(?:${idStart})(?:${idPart})*`), { identif
 // only valid here (radix forms have no fractional part), so it lives on each radix token rather
 // than on the decimal `BigInt_` below. The shared `(?!IdentifierStart|DecimalDigit)` tail still
 // rejects a stray trailing identifier (`0x5anabc`).
-const HexNumber    = token(/0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*n?(?![0-9A-Za-z_$\\])/,            { scope: 'constant.numeric.hex' });
-const OctalNumber  = token(/0[oO][0-7]+(_[0-7]+)*n?(?![0-9A-Za-z_$\\])/,                         { scope: 'constant.numeric.octal' });
-const BinaryNumber = token(/0[bB][01]+(_[01]+)*n?(?![0-9A-Za-z_$\\])/,                            { scope: 'constant.numeric.binary' });
-const BigInt_      = token(/[0-9]+(_[0-9]+)*n(?![0-9A-Za-z_$\\])/,                              { scope: 'constant.numeric.bigint' });
+const HexNumber    = token(seq('0', oneOf('x', 'X'), plus(hexDigit), star(seq('_', plus(hexDigit))), opt(lit('n')), numericTailGuard), { scope: 'constant.numeric.hex' });
+const OctalNumber  = token(seq('0', oneOf('o', 'O'), plus(range('0', '7')), star(seq('_', plus(range('0', '7')))), opt(lit('n')), numericTailGuard), { scope: 'constant.numeric.octal' });
+const BinaryNumber = token(seq('0', oneOf('b', 'B'), plus(oneOf('0', '1')), star(seq('_', plus(oneOf('0', '1')))), opt(lit('n')), numericTailGuard), { scope: 'constant.numeric.binary' });
+const BigInt_      = token(seq(digits, 'n', numericTailGuard), { scope: 'constant.numeric.bigint' });
 // DecimalLiteral, including the leading-dot form (`.5`, `.0e1`): an integer part with optional
 // fraction/exponent, OR a bare fraction `.digits` with optional exponent. Same trailing guard.
 // Scope is set explicitly (not inferred from a `[0-9]`-leading pattern) because the leading-dot
 // alternative makes the pattern start with `(?:` — gen-tm's decimal-numeric detector keys on a
 // `[0-9]`/`\d` prefix, so without this the token would lose its `constant.numeric` scope.
-const Number_      = token(/(?:[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?|\.[0-9]+(_[0-9]+)*)(?:[eE][+-]?[0-9]+(_[0-9]+)*)?(?![0-9A-Za-z_$\\])/, { scope: 'constant.numeric.decimal' });
+const fracTail = seq('.', star(digit), star(seq('_', plus(digit))));
+const expTail = seq(oneOf('e', 'E'), opt(oneOf('+', '-')), digits);
+const Number_      = token(seq(alt(seq(digits, opt(fracTail)), seq('.', digits)), opt(expTail), numericTailGuard), { scope: 'constant.numeric.decimal' });
 // A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must
 // match their strict forms — a `\u{cp}` with cp ≤ 0x10FFFF, a 4-hex `\uXXXX`, or a
 // 2-hex `\xXX` — while `\` + any *other* char (\n, \\, \q non-escape, line
@@ -70,20 +82,33 @@ const Number_      = token(/(?:[0-9]+(_[0-9]+)*(?:\.[0-9]*(_[0-9]+)*)?|\.[0-9]+(
 // `\u{r}`, `\u{}`, `\u{67`) matches no escape, so the string matches no token and the
 // lexer throws — TS's exact rejection. The in-range codepoint is `0*` leading zeros
 // then 1–5 hex (0–0xFFFFF) or `10`+4 hex (0x100000–0x10FFFF).
-const codePoint = String.raw`0*(?:[0-9a-fA-F]{1,5}|10[0-9a-fA-F]{4})`;
-const escape    = String.raw`\\(?:u\{${codePoint}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[^ux])`;
-const String_      = token(new RegExp(`"(?:[^"\\\\]|${escape})*"|'(?:[^'\\\\]|${escape})*'`), {
+const codePoint = seq(star('0'), alt(repeat(hexDigit, 1, 5), seq('10', repeat(hexDigit, 4, 4))));
+const escape = seq('\\', alt(seq('u{', codePoint, '}'), seq('u', repeat(hexDigit, 4, 4)), seq('x', repeat(hexDigit, 2, 2)), noneOf('u', 'x')));
+const highlightedEscape = seq('\\', alt(
+  oneOf('n', 'r', 't', 'b', 'f', 'v', '0', "'", '"', '\\'),
+  seq('x', repeat(hexDigit, 2, 2)),
+  seq('u', repeat(hexDigit, 4, 4)),
+  seq('u{', plus(hexDigit), '}'),
+));
+const String_      = token(alt(seq('"', star(alt(noneOf('"', '\\'), escape)), '"'), seq("'", star(alt(noneOf("'", '\\'), escape)), "'")), {
   string: true,
-  escape: /\\(?:[nrtbfv0'"\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})/,
+  escape: highlightedEscape,
 });
-const Template     = token(/`(?:[^`\\$]|\\.|\$(?!\{))*`/, {
-  escape: /\\(?:[nrtbfv0'"\\`$]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})/,
+const Template     = token(seq('`', star(alt(noneOf('`', '\\', '$'), seq('\\', noneOf(lineTerminator)), seq('$', notFollowedBy('{')))), '`'), {
+  escape: seq('\\', alt(
+    oneOf('n', 'r', 't', 'b', 'f', 'v', '0', "'", '"', '\\', '`', '$'),
+    seq('x', repeat(hexDigit, 2, 2)),
+    seq('u', repeat(hexDigit, 4, 4)),
+    seq('u{', plus(hexDigit), '}'),
+  )),
   // Same well-formed-escape rule as strings; the lexer rejects a malformed `\u`/`\x`
   // in an *untagged* template (`\u{110000}`, `\u{r}`), but allows it when tagged.
-  escapeValid: new RegExp(escape),
+  escapeValid: escape,
   template: { open: '`', interpOpen: '${', interpClose: '}' },
 });
-const Regex_       = token(/\/(?:[^\/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[gimsuydv]*/, {
+const regexEscape = seq('\\', noneOf(lineTerminator));
+const regexClassBody = star(alt(noneOf(']', '\\', '\n'), regexEscape));
+const Regex_       = token(seq('/', plus(alt(noneOf('/', '\\', '[', '\n'), regexEscape, seq('[', regexClassBody, ']'))), '/', star(oneOf('g', 'i', 'm', 's', 'u', 'y', 'd', 'v'))), {
   regex: true,
   regexContext: {
     divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],
@@ -106,16 +131,16 @@ const Regex_       = token(/\/(?:[^\/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+\/[gims
 });
 // `@name` / `@ns.name` — each dotted segment is an IdentifierName, so it admits the same
 // `\u`-escape forms as `Ident` (`@℘`, `@ZW_‌_NJ`); the parser owns the `(args)` tail.
-const Decorator    = token(new RegExp(`@(?:(?:${idStart})(?:${idPart}|\\.)*)?`), { scope: 'entity.name.function.decorator' });
+const Decorator    = token(seq('@', opt(seq(identStart, star(alt(identPart, '.'))))), { scope: 'entity.name.function.decorator' });
 // PrivateIdentifier: `#` + an IdentifierName, so it admits the same `\u`-escape forms as `Ident`
 // (`#\u{6F}_`). A non-ASCII literal `#name` (`#℘`, `#ZWNJ`) is handled by the lexer's Unicode
 // fallback, which recognises this token's leading `#` as a name prefix.
-const PrivateField = token(new RegExp(`#(?:${idStart})(?:${idPart})*`),     { scope: 'variable.other.property', identifierPrefix: '#' });
-const Shebang      = token(/^#![^\n]*/,           { skip: true, scope: 'comment.line.shebang' });
-const JSDoc        = token(/\/\*\*(?!\/)[\s\S]*?\*\//,  { skip: true, scope: 'comment.block.documentation', embed: 'jsdoc' });
-const TripleSlash  = token(/\/\/\/\s*<[^\n]*/,    { skip: true, scope: 'comment.line.triple-slash' });
-const LineComment  = token(/\/\/[^\n]*/,           { skip: true });
-const BlockComment = token(/\/\*[\s\S]*?\*\//,     { skip: true });
+const PrivateField = token(seq('#', identStart, star(identPart)), { scope: 'variable.other.property', identifierPrefix: '#' });
+const Shebang      = token(seq(start(), '#!', star(noneOf('\n'))), { skip: true, scope: 'comment.line.shebang' });
+const JSDoc        = token(seq('/**', notFollowedBy('/'), star(seq(notFollowedBy('*/'), anyChar()), { greedy: false }), '*/'), { skip: true, scope: 'comment.block.documentation', embed: 'jsdoc' });
+const TripleSlash  = token(seq('///', star(hspace), '<', star(noneOf('\n'))), { skip: true, scope: 'comment.line.triple-slash' });
+const LineComment  = token(seq('//', star(noneOf('\n'))), { skip: true });
+const BlockComment = token(seq('/*', star(seq(notFollowedBy('*/'), anyChar()), { greedy: false }), '*/'), { skip: true });
 
 // The token consts, reserved-word guards, precedence ladder, and scope map are
 // pure ECMAScript vocabulary — no rule wiring — so the TS grammar imports them from

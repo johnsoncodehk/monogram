@@ -14,19 +14,20 @@
 //
 //  Run: node test/html-lexer-spike.ts
 // ─────────────────────────────────────────────────────────────────────────────
-import { token, rule, defineGrammar } from '../src/api.ts';
+import { token, rule, defineGrammar, seq, plus, oneOf, range, anyChar, star, noneOf } from '../src/api.ts';
 import { createLexer } from '../src/gen-lexer.ts';
 
 // A minimal markup grammar: just enough tokens + a stub rule (so the `< > / =`
 // punctuation literals are collected) + the declarative markup config. The lexer
 // uses only tokens/literals/markup — it never parses the rule.
-const Name = token(/[a-zA-Z][\w-]*/, { identifier: true });
-const AttrValue = token(/"[^"]*"/, { string: true });
+const word = oneOf(range('A', 'Z'), range('a', 'z'), range('0', '9'), '_');
+const Name = token(seq(oneOf(range('a', 'z'), range('A', 'Z')), star(oneOf(word, '-'))), { identifier: true });
+const AttrValue = token(seq('"', star(noneOf('"')), '"'), { string: true });
 // Content tokens are emitted by the state machine; their patterns are placeholders
 // (the lexer skips them in the regex-matcher loop — see markupTokenNames).
-const Text = token(/[^<]+/, { scope: 'text' });
-const RawText = token(/[^<]+/, { scope: 'source' });
-const Comment = token(/<!--[\s\S]*?-->/, { scope: 'comment.block.html' });
+const Text = token(plus(noneOf('<')), { scope: 'text' });
+const RawText = token(plus(noneOf('<')), { scope: 'source' });
+const Comment = token(seq('<!--', star(anyChar(), { greedy: false }), '-->'), { scope: 'comment.block.html' });
 
 const Element = rule($ => [['<', Name, '=', AttrValue, '/', '>']]); // mentions every punctuation literal
 

@@ -63,7 +63,7 @@ function identRole(node: ts.Node): RoleName {
   const p = node.parent;
   if (!p) return R.valueRef;
   const is = (fn: (n: ts.Node) => boolean) => fn(p);
-  const named = (n: any) => n.name === node;
+  const hasName = (n: any) => n.name === node;
 
   // ── JSX markup roles ──────────────────────────────────────────────────────────
   // The simple-Identifier tagName of an opening/closing/self-closing element. A
@@ -83,19 +83,19 @@ function identRole(node: ts.Node): RoleName {
   // entity.other.attribute-name (R.attrName). The `name === node` guard excludes the
   // attribute's VALUE; namespaced attr names (`xml:lang`) are a JsxNamespacedName, not
   // an Identifier child of JsxAttribute, so they are unaffected.
-  if (is(ts.isJsxAttribute) && named(p)) return R.attrName;
+  if (is(ts.isJsxAttribute) && hasName(p)) return R.attrName;
 
-  if (is(ts.isFunctionDeclaration) && named(p)) return R.funcDecl;
-  if (is(ts.isFunctionExpression) && named(p)) return R.funcDecl;
-  if (is(ts.isMethodDeclaration) && named(p)) return R.funcDecl;
-  if (is(ts.isMethodSignature) && named(p)) return R.funcDecl;
-  if (is(ts.isGetAccessorDeclaration) && named(p)) return R.funcDecl;
-  if (is(ts.isSetAccessorDeclaration) && named(p)) return R.funcDecl;
+  if (is(ts.isFunctionDeclaration) && hasName(p)) return R.funcDecl;
+  if (is(ts.isFunctionExpression) && hasName(p)) return R.funcDecl;
+  if (is(ts.isMethodDeclaration) && hasName(p)) return R.funcDecl;
+  if (is(ts.isMethodSignature) && hasName(p)) return R.funcDecl;
+  if (is(ts.isGetAccessorDeclaration) && hasName(p)) return R.funcDecl;
+  if (is(ts.isSetAccessorDeclaration) && hasName(p)) return R.funcDecl;
 
-  if (is(ts.isParameter) && named(p)) return R.parameter;
-  if (is(ts.isTypeParameterDeclaration) && named(p)) return R.typeParam;
+  if (is(ts.isParameter) && hasName(p)) return R.parameter;
+  if (is(ts.isTypeParameterDeclaration) && hasName(p)) return R.typeParam;
 
-  if (is(ts.isVariableDeclaration) && named(p)) return R.varDecl;
+  if (is(ts.isVariableDeclaration) && hasName(p)) return R.varDecl;
   // statement labels: the `loop:` of a LabeledStatement and the target of `break loop` /
   // `continue loop`. tsc stores all three as a `.label` Identifier; official paints them
   // entity.name.label (a value reference scope is too generic), so give them their own role.
@@ -106,18 +106,18 @@ function identRole(node: ts.Node): RoleName {
     return R.varDecl;
   }
 
-  if (is(ts.isPropertyDeclaration) && named(p)) return R.propDecl;
-  if (is(ts.isPropertySignature) && named(p)) return R.propDecl;
-  if (is(ts.isPropertyAssignment) && named(p)) return R.propDecl;
+  if (is(ts.isPropertyDeclaration) && hasName(p)) return R.propDecl;
+  if (is(ts.isPropertySignature) && hasName(p)) return R.propDecl;
+  if (is(ts.isPropertyAssignment) && hasName(p)) return R.propDecl;
   if (is(ts.isShorthandPropertyAssignment)) return R.valueRef;
-  if (is(ts.isEnumMember) && named(p)) return R.enumMember;
+  if (is(ts.isEnumMember) && hasName(p)) return R.enumMember;
 
-  if (is(ts.isClassDeclaration) && named(p)) return R.typeDecl;
-  if (is(ts.isClassExpression) && named(p)) return R.typeDecl;
-  if (is(ts.isInterfaceDeclaration) && named(p)) return R.typeDecl;
-  if (is(ts.isTypeAliasDeclaration) && named(p)) return R.typeDecl;
-  if (is(ts.isEnumDeclaration) && named(p)) return R.typeDecl;
-  if (is(ts.isModuleDeclaration) && named(p)) return R.namespace;
+  if (is(ts.isClassDeclaration) && hasName(p)) return R.typeDecl;
+  if (is(ts.isClassExpression) && hasName(p)) return R.typeDecl;
+  if (is(ts.isInterfaceDeclaration) && hasName(p)) return R.typeDecl;
+  if (is(ts.isTypeAliasDeclaration) && hasName(p)) return R.typeDecl;
+  if (is(ts.isEnumDeclaration) && hasName(p)) return R.typeDecl;
+  if (is(ts.isModuleDeclaration) && hasName(p)) return R.namespace;
 
   if (is(ts.isTypeReferenceNode)) return R.typeRef;
   if (is(ts.isTypeQueryNode)) return R.typeRef;

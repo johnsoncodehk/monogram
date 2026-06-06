@@ -6,6 +6,7 @@ import { generateTreeSitter } from './gen-treesitter.ts';
 import { generateMonarch } from './gen-monarch.ts';
 import { generateAstTypes } from './gen-ast-types.ts';
 import type { CstGrammar, RuleExpr } from './types.ts';
+import { tokenPatternSource } from './token-pattern.ts';
 
 const file = process.argv[2];
 if (!file) {
@@ -27,7 +28,7 @@ console.log();
 console.log('── Tokens ──');
 for (const t of grammar.tokens) {
   const flags = t.flags.length > 0 ? `  @${t.flags.join(' @')}` : '';
-  console.log(`  ${t.name}: /${t.pattern}/${flags}`);
+  console.log(`  ${t.name}: /${tokenPatternSource(t)}/${flags}`);
 }
 
 console.log('\n── Precedence ──');

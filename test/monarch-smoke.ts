@@ -10,13 +10,14 @@
 //
 // Run with bare `node test/monarch-smoke.ts`.
 import { generateMonarch, type MonarchLanguage, type MonarchRule, type MonarchAction } from '../src/gen-monarch.ts';
-import { token, rule, defineGrammar, alt, many, left } from '../src/api.ts';
+import { token, rule, defineGrammar, alt, many, left, seq, plus, oneOf, range, star, noneOf } from '../src/api.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { cond ? ok++ : (fail++, console.log('  ✗', label)); };
 
 const grammar = (await import('../typescript.ts')).default;
 const mon: MonarchLanguage = generateMonarch(grammar);
+const digit = range('0', '9');
 
 // ── Helpers to walk the generated tokenizer ──
 const BUILTIN_TARGETS = new Set(['@pop', '@popall', '@push', '@rematch']);
@@ -175,9 +176,9 @@ check('line comment runs to end of line', !!lineComment);
 // ── 9. Language-agnosticism — a tiny grammar named NOTHING like TS, with NO
 //      template / regex / backtick, must still produce a valid tokenizer and
 //      must NOT fabricate template/regex/generics states it has no basis for. ──
-const Word = token(/[a-z]+/, { identifier: true });
-const Num = token(/[0-9]+/);
-const Str = token(/~[^~]*~/, { string: true });
+const Word = token(plus(range('a', 'z')), { identifier: true });
+const Num = token(plus(digit));
+const Str = token(seq('~', star(noneOf('~')), '~'), { string: true });
 const Mini = rule(($: any) => [many(alt(Word, Num, Str, '+'))]);
 const mini = defineGrammar({
   name: 'mini',

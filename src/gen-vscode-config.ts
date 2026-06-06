@@ -1,5 +1,6 @@
 import type { CstGrammar } from './types.ts';
-import { collectLiterals, literalRuns, stringDelimiters } from './grammar-utils.ts';
+import { collectLiterals } from './grammar-utils.ts';
+import { tokenPatternBlockDelimiters, tokenPatternHasStartAnchor, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStringDelimiters } from './token-pattern.ts';
 
 // Generate a VS Code `language-configuration.json` from the grammar. This is the
 // editor-behavior artifact (comments, bracket pairs, auto-close/surround, folding,
@@ -37,13 +38,13 @@ export function generateLanguageConfig(grammar: CstGrammar): LanguageConfig {
   const blockCands: [string, string][] = [];
   for (const t of grammar.tokens) {
     if (!t.flags.includes('skip')) continue;
-    const src = t.pattern;
-    const runs = literalRuns(src);
-    if (!runs.length) continue;
-    const isBlock = /\[\\s\\S\]|\[\^\]/.test(src);             // has a "match anything" body
-    const isLine = /\[\^\\n\]/.test(src) || /\.[*+]/.test(src); // runs to end of line
-    if (isBlock && runs.length >= 2) blockCands.push([runs[0], runs[runs.length - 1]]);
-    else if (isLine) lineCands.push({ marker: runs[0], anchored: src.startsWith('^') });
+    const block = tokenPatternBlockDelimiters(t);
+    if (block) {
+      blockCands.push(block);
+      continue;
+    }
+    const marker = tokenPatternLiteralPrefix(t);
+    if (marker) lineCands.push({ marker, anchored: tokenPatternHasStartAnchor(t) });
   }
   // Canonical line comment: the non-anchored one with the shortest marker (// over ///, not #!).
   const lineComment = lineCands.filter(c => !c.anchored).sort((a, b) => a.marker.length - b.marker.length)[0]?.marker;
@@ -83,7 +84,7 @@ export function generateLanguageConfig(grammar: CstGrammar): LanguageConfig {
 
   // ── Quotes — delimiters of `string`-flagged tokens + the template open ──
   const quotes = new Set<string>();
-  for (const t of grammar.tokens) if (t.string) for (const q of stringDelimiters(t.pattern)) quotes.add(q);
+  for (const t of grammar.tokens) if (t.string) for (const q of tokenPatternStringDelimiters(t)) quotes.add(q);
   if (tpl) quotes.add(tpl.open);
 
   // ── Auto-closing + surrounding pairs ──
@@ -117,7 +118,7 @@ export function generateLanguageConfig(grammar: CstGrammar): LanguageConfig {
 
   // ── Word pattern — the identifier token ──
   const ident = grammar.tokens.find(t => t.identifier);
-  if (ident) config.wordPattern = ident.pattern;
+  if (ident) config.wordPattern = tokenPatternSource(ident);
 
   // ── Indentation — derived from the single-char bracket pairs ──
   if (plain.length) {

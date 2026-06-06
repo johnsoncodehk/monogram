@@ -222,10 +222,17 @@ And — from the same grammar — generators for the rest of the ecosystem, at v
 A grammar is a TypeScript module: tokens, operator precedence, and rules built from small combinators. A self-contained mini-example:
 
 ```ts
-import { token, rule, defineGrammar, left, op, sep } from './src/api.ts';
+import {
+  token, rule, defineGrammar, left, op, sep,
+  seq, oneOf, range, named, plus, star, opt,
+} from './src/api.ts';
 
-const Ident  = token(/[a-zA-Z_$][a-zA-Z0-9_$]*/, { identifier: true });
-const Number = token(/[0-9]+(\.[0-9]+)?/);
+const digit = named('digit');
+const Ident = token(seq(
+  oneOf(range('a', 'z'), range('A', 'Z'), '_', '$'),
+  star(named('idCont')),
+), { identifier: true });
+const Number = token(seq(plus(digit), opt(seq('.', plus(digit)))));
 
 const Expr = rule($ => [
   Ident,
@@ -258,8 +265,27 @@ Flat, irreducible facts — which keywords are control flow, which punctuation i
 Nothing in the engine knows about TypeScript. Everything language-specific lives in the grammar — keywords, which token is the identifier, template-literal delimiters, the regex-vs-division lexer ambiguity — all *declared per token*:
 
 ```ts
-const Template = token(/`…`/, { template: { open: '`', interpOpen: '${', interpClose: '}' } });
-const Regex    = token(/\/…\//, {
+import { token, seq, alt, noneOf, named, oneOf, plus, star, notFollowedBy } from './src/api.ts';
+
+const escaped = seq('\\', named('any'));
+
+const Template = token(seq(
+  '`',
+  star(alt(noneOf('`', '\\', '$'), escaped, seq('$', notFollowedBy('{')))),
+  '`',
+), {
+  template: { open: '`', interpOpen: '${', interpClose: '}' },
+});
+const Regex = token(seq(
+  '/',
+  plus(alt(
+    noneOf('/', '\\', '[', '\n'),
+    escaped,
+    seq('[', star(alt(noneOf(']', '\\', '\n'), escaped)), ']'),
+  )),
+  '/',
+  star(oneOf('g', 'i', 'm', 's', 'u', 'y', 'd', 'v')),
+), {
   regex: true,
   regexContext: {
     divisionAfterTypes: ['Ident', 'Number', 'String', 'Template'],

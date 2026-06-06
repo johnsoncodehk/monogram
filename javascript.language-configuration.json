@@ -124,7 +124,7 @@
       "end": "^\\s*//\\s*#?endregion\\b"
     }
   },
-  "wordPattern": "(?:[a-zA-Z_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9a-fA-F]{4}|\\\\u\\{[0-9a-fA-F]+\\})*",
+  "wordPattern": "(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
   "indentationRules": {
     "decreaseIndentPattern": "^\\s*[)}\\]].*$",
     "increaseIndentPattern": "^.*(\\([^)]*|\\{[^}]*|\\[[^\\]]*)$"
