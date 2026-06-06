@@ -329,6 +329,25 @@ export interface IndentConfig {
   };
 }
 
+/**
+ * Opt-in NEWLINE-sensitive tokenization, INDEPENDENT of `indent`. For grammars that are
+ * newline-aware but NOT indentation-aware — statements are line-delimited, but nesting is via
+ * delimiters / expressions, not indentation (e.g. dotenv-style env specs). The lexer emits a single
+ * NEWLINE token at each significant line boundary (suppressed inside flow delimiters, and on blank /
+ * comment-only lines), with NO indent stack and NO INDENT/DEDENT tokens. `indent` is the richer
+ * layer built ON TOP of this same line-boundary + flow-suspension machinery (indent = newline +
+ * indent stack + YAML block-scalar semantics), so declaring BOTH is rejected. The NEWLINE token is
+ * engine-emitted (declared with a placeholder `never()` pattern and named here), exactly like the
+ * indent tokens. ABSENT for token-stream / indentation languages → dormant, tokenization
+ * byte-identical.
+ */
+export interface NewlineConfig {
+  token: string;        // token TYPE emitted at each significant line boundary (engine-emitted, like the indent tokens)
+  flowOpen?: string[];  // punctuation that SUSPENDS newline significance while open (e.g. ['(', '[', '{'])
+  flowClose?: string[]; // matching closers (e.g. [')', ']', '}'])
+  comment?: string;     // line-comment introducer; a comment-only line emits no NEWLINE (e.g. '#')
+}
+
 export interface PrecOperator {
   value: string;
   position: 'infix' | 'prefix' | 'postfix';
@@ -391,6 +410,7 @@ export interface CstGrammar {
   scopeName?: string;  // declared TextMate scope name (e.g. source.ts); its suffix drives every scope's language tag
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue); absent for token-stream languages
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML); absent → byte-identical token stream
+  newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack); absent → byte-identical token stream
   expressionRule?: string;  // name of the rule that produces an EXPRESSION; lets gen-tm derive a `#expression` sub-grammar (for expression-only embeds, e.g. Vue `{{ }}`)
   // Extra TextMate grammars that just RE-EXPOSE this one under another scopeName (thin
   // `{scopeName, patterns:[{include: <this.scopeName>}]}` wrappers). HTML declares
