@@ -23,7 +23,7 @@ Per-grammar comparison vs the **official parser** as the neutral oracle (`node t
 | TypeScript | 97.1% · 76.4% | 99.2% vs 99.3% |
 | JavaScript | 96.3% · 65.5% | 99.0% vs 83.6% |
 | JSX | 97.1% · 52.5% | 94.3% vs 94.3% |
-| TSX | 96.7% · 65.7% | 95.5% vs 95.4% |
+| TSX | 96.7% · 65.7% | 95.6% vs 95.4% |
 | HTML | 95.3% · 49.3% | 100.0% vs 98.8% |
 | YAML | 100.0% · 73.9% | 99.2% vs 99.0% |
 | Vue | — | 98.8% vs 98.0% |
