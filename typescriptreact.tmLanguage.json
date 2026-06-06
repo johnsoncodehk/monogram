@@ -40,6 +40,9 @@
       "include": "#blockcomment"
     },
     {
+      "include": "#regex-literal-prefix-ops"
+    },
+    {
       "include": "#regex"
     },
     {
@@ -953,6 +956,35 @@
         },
         {
           "include": "#jsx-fragment"
+        }
+      ]
+    },
+    "regex-literal-prefix-ops": {
+      "name": "string.regexp.tsx",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))s*([!](?:s*[!])*)s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.logical.prefix.tsx"
+        },
+        "2": {
+          "name": "comment.block.tsx"
+        },
+        "3": {
+          "name": "punctuation.definition.string.begin.regexp.tsx"
+        }
+      },
+      "end": "(/)([gimsuydv]*)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.regexp.tsx"
+        },
+        "2": {
+          "name": "keyword.other.regexp.tsx"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#regexp"
         }
       ]
     },
@@ -1980,7 +2012,7 @@
     },
     "arrow-type-parameters": {
       "name": "meta.type.parameters.tsx",
-      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}]\\s*))(<)(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?<B>[^<>]*(?:<\\g<B>>[^<>]*)*)>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
+      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(<)(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?=(?<B>[^<>]*(?:<\\g<B>>[^<>]*)*)>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.tsx"
@@ -2795,7 +2827,7 @@
     },
     "arrow-function-params-generic": {
       "name": "meta.parameters.arrow.tsx",
-      "begin": "(?<=<(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\b(?:extends)\\b)(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*>)\\s*(\\()\\s*$",
+      "begin": "(?<=>)\\s*(\\()\\s*$",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.parameters.begin.tsx"
@@ -3333,6 +3365,9 @@
           "include": "#blockcomment"
         },
         {
+          "include": "#regex-literal-prefix-ops"
+        },
+        {
           "include": "#regex"
         },
         {
@@ -3720,7 +3755,7 @@
     },
     "regex": {
       "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=(?:[=|\\^&<>+\\-*%~,\\[(?:{;.]|\\bis|\\bkeyof|\\btypeof|\\breadonly|\\bnew|\\bextends|\\bin|\\bas|\\binstanceof|\\bclass|\\basync|\\byield|\\bsatisfies|\\bfunction|\\bget|\\bset|\\belse|\\bdo|\\breturn|\\bthrow|\\btry|\\bfinally|\\bcatch|\\bpublic|\\bprivate|\\bprotected|\\bof|\\bcase|\\bdeclare|\\bexport|\\bdefault|\\bimport|\\btype|\\bstatic|\\babstract|\\boverride|\\baccessor|\\bvoid|\\bdelete|\\bawait|^)\\s*[!](?:\\s*[!])*)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.tsx"

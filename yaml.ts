@@ -166,8 +166,11 @@ const VALUE_END_BLOCK = followedBy(alt(
 // scalar that is glued to a leading `!␣` tag — the negative lookbehind drops them so the scalar
 // falls through to the generic Plain (`string.unquoted`). A *specific* tag (`!!int 12`, `!!bool …`)
 // puts non-space chars between the `!` and the value, so this lookbehind leaves those untouched —
-// they keep resolving by appearance, matching what the `yaml` oracle reports.
-const NONSPECIFIC_TAG = notPrecededBy(seq('!', plus(hspace)));
+// they keep resolving by appearance, matching what the `yaml` oracle reports. TextMate 2.0 Onigmo
+// rejects variable-length lookbehind, so this is a bounded set of fixed-width guards.
+const NONSPECIFIC_TAG = seq(...Array.from({ length: 16 }, (_, index) =>
+  notPrecededBy(seq('!', repeat(hspace, index + 1, index + 1))),
+));
 // Numeric plain scalars (YAML 1.2 core schema): decimal / octal / hex integers, floats, ±.inf,
 // .nan. Anything outside the core schema (binary `0b…`, dates, `12:34:56`) stays a plain string,
 // matching what the `yaml` oracle resolves to a number.

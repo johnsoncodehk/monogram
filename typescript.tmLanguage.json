@@ -34,6 +34,9 @@
       "include": "#blockcomment"
     },
     {
+      "include": "#regex-literal-prefix-ops"
+    },
+    {
       "include": "#regex"
     },
     {
@@ -450,6 +453,35 @@
     "comparison": {
       "match": "[<>]",
       "name": "keyword.operator.relational.ts"
+    },
+    "regex-literal-prefix-ops": {
+      "name": "string.regexp.ts",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))s*([!](?:s*[!])*)s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.logical.prefix.ts"
+        },
+        "2": {
+          "name": "comment.block.ts"
+        },
+        "3": {
+          "name": "punctuation.definition.string.begin.regexp.ts"
+        }
+      },
+      "end": "(/)([gimsuydv]*)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.regexp.ts"
+        },
+        "2": {
+          "name": "keyword.other.regexp.ts"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#regexp"
+        }
+      ]
     },
     "regexp": {
       "patterns": [
@@ -1475,7 +1507,7 @@
     },
     "arrow-type-parameters": {
       "name": "meta.type.parameters.ts",
-      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}]\\s*))(<)(?=(?<B>[^<>]*(?:<\\g<B>>[^<>]*)*)>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
+      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(<)(?=(?<B>[^<>]*(?:<\\g<B>>[^<>]*)*)>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.ts"
@@ -2290,7 +2322,7 @@
     },
     "arrow-function-params-generic": {
       "name": "meta.parameters.arrow.ts",
-      "begin": "(?<=<(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\b(?:extends)\\b)(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*>)\\s*(\\()\\s*$",
+      "begin": "(?<=>)\\s*(\\()\\s*$",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.parameters.begin.ts"
@@ -2822,6 +2854,9 @@
           "include": "#blockcomment"
         },
         {
+          "include": "#regex-literal-prefix-ops"
+        },
+        {
           "include": "#regex"
         },
         {
@@ -3209,7 +3244,7 @@
     },
     "regex": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=(?:[=|\\^&<>+\\-*%~,\\[(?:{;.]|\\bis|\\bkeyof|\\btypeof|\\breadonly|\\bnew|\\bextends|\\bin|\\bas|\\binstanceof|\\bclass|\\basync|\\byield|\\bsatisfies|\\bfunction|\\bget|\\bset|\\belse|\\bdo|\\breturn|\\bthrow|\\btry|\\bfinally|\\bcatch|\\bpublic|\\bprivate|\\bprotected|\\bof|\\bcase|\\bdeclare|\\bexport|\\bdefault|\\bimport|\\btype|\\bstatic|\\babstract|\\boverride|\\baccessor|\\bvoid|\\bdelete|\\bawait|^)\\s*[!](?:\\s*[!])*)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.ts"
@@ -3387,7 +3422,7 @@
     },
     "cast": {
       "name": "meta.cast.expr.ts",
-      "begin": "(?<![\\w$)\\]]\\s*)(<)(?=\\s*[[:alpha:]_$({\\[](?<TC>[\\w$.,\\[\\]\\s|&]*(?:<\\g<TC>>[\\w$.,\\[\\]\\s|&]*)*)>\\s*[[:alpha:][:digit:]_$\"`({\\[\\-])",
+      "begin": "(?<![\\w$)\\]])(?<![\\w$)\\]]\\s)(?<![\\w$)\\]]\\s\\s)(?<![\\w$)\\]]\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(<)(?=\\s*[[:alpha:]_$({\\[](?<TC>[\\w$.,\\[\\]\\s|&]*(?:<\\g<TC>>[\\w$.,\\[\\]\\s|&]*)*)>\\s*[[:alpha:][:digit:]_$\"`({\\[\\-])",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.begin.ts"

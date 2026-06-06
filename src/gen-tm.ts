@@ -833,6 +833,14 @@ function buildOperandStartClass(grammar: CstGrammar, identToken: TokenDecl | und
   return `[[:alpha:][:digit:]${cls}]`;
 }
 
+function notAfterValueWithOptionalWhitespace(valueCharClass: string, maxWhitespace = 16): string {
+  const assertions: string[] = [];
+  for (let spaces = 0; spaces <= maxWhitespace; spaces++) {
+    assertions.push(`(?<![${valueCharClass}]${'\\s'.repeat(spaces)})`);
+  }
+  return assertions.join('');
+}
+
 // ── JSX detection ──
 
 interface JsxInfo {
@@ -992,6 +1000,7 @@ interface JsxDisambigDelims {
   topTypeParam: string;    // "is a type-param list" body: top-level comma OR constraint keyword
   balancedAngles: string;  // recursive balanced `<…>` named group `(?<B>…)`
   arrowParamShape: string; // the arrow-shaped `(` confirm after `>`
+  close: string;           // the generic close delimiter (`>` for TS/TSX)
   // Lookbehind body asserting the `>` just left closes a type-param LIST that carried a
   // top-level comma or constraint keyword (`<T,>`, `<T extends X>`) — i.e. the SAME
   // generic-arrow disambiguation signal as `topTypeParam`, but for matching a `(` that
@@ -1126,7 +1135,7 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
     ? `|${skip}\\b(?:${constraintKeywords.map(escapeRegex).join('|')})\\b`
     : '';
   const typeParamCloseBehind = `${escapeRegex(open)}(?:${topComma}${behindKw})${skip}${escapeRegex(close)}`;
-  return { topComma, topTypeParam, balancedAngles, arrowParamShape, typeParamCloseBehind };
+  return { topComma, topTypeParam, balancedAngles, arrowParamShape, close, typeParamCloseBehind };
 }
 
 /**
@@ -1916,12 +1925,12 @@ function generateTypeCastPattern(
   const tpEnd = `punctuation.definition.typeparameters.end.${langName}`;
   // `<` only at expression-start. A prefix cast's `<` is never preceded by a value
   // OPERAND; a comparison's `<` always is (`a < b`). Reject the cast when `<` is
-  // preceded — across any whitespace — by an operand-ending char: an identifier
+  // preceded — across bounded whitespace — by an operand-ending char: an identifier
   // char, `)`, `]`, a numeric/quote tail. This keeps `a < b > c`, `f() < g`,
-  // `x] < y` as comparisons (variable-length lookbehind; Oniguruma supports it).
+  // `x] < y` as comparisons while staying compatible with TextMate 2.0 Onigmo.
   // Casts after a keyword that ends in a letter (`return <T>x`) stay a comparison
   // here — rare, and never a regression (they were unhighlighted before too).
-  const notAfter = `(?<![\\w$)\\]]\\s*)`;
+  const notAfter = notAfterValueWithOptionalWhitespace('\\w$)\\]');
   // Type-shaped, balanced-angle inner content (kept to type characters so an
   // ordinary `a < b > c` comparison — whose operands are arbitrary expressions —
   // is not swallowed). `\g<TC>` recurses for nested generics like `<Array<T>>`.
@@ -2445,26 +2454,7 @@ function generateRegexLiteralPatterns(
   // Also match at start of line
   const startOfLine = '(?<=^)';
 
-  // Ambiguous postfix/prefix op chars (TS `!`): a `/` may follow one ONLY when the op-run is
-  // the PREFIX form — i.e. the run is itself in a regex-start position (`= !/re/`, `!!/re/`,
-  // `return !/x/`), NOT the postfix non-null form (`x! / y` → division). We can't decide that
-  // from the single char before `/` (it's the op either way), so look back PAST the op-run and
-  // re-apply the same regex-start test there. The inner context is the SAME char-class +
-  // keywords + line-start used above, but un-wrapped (it sits inside this lookbehind), and the
-  // op-run is `[ops](?:\s*[ops])*` (chained `!!` allowed). Because these chars were excluded
-  // from `charLookbehind`, a postfix op (preceded by a value) matches NONE of the alternatives
-  // → the `/` falls through to the division operator.
-  const innerCtx = [
-    charEsc ? `[${charEsc}]` : null,
-    ...info.preceedingKeywords.map(kw => `\\b${escapeRegex(kw)}`),
-    '^',
-  ].filter(Boolean).join('|');
-  const opRun = info.postfixAmbiguousChars.map(escapeRegex).join('');
-  const postfixBangLookbehind = opRun
-    ? `(?<=(?:${innerCtx})\\s*[${opRun}](?:\\s*[${opRun}])*)`
-    : '';
-
-  const lbAlts = [charLookbehind, keywordLookbehinds, postfixBangLookbehind, startOfLine]
+  const lbAlts = [charLookbehind, keywordLookbehinds, startOfLine]
     .filter(Boolean).join('|');
   const fullLookbehind = `(?:${lbAlts})`;
 
@@ -2490,6 +2480,31 @@ function generateRegexLiteralPatterns(
     [slashGroup]: { name: `punctuation.definition.string.begin.regexp.${langName}` },
   };
   if (commentBody) beginCaptures['1'] = { name: `comment.block.${langName}` };
+
+  // Ambiguous postfix/prefix op chars (TS `!`): a `/` may follow one ONLY when the op-run is
+  // the PREFIX form (`= !/re/`, `return !!/x/`), not postfix non-null (`x! / y`). TextMate 2.0's
+  // Onigmo rejects the old variable-length lookbehind that looked past the whole op-run, so this
+  // separate pattern anchors on the fixed-width expression-start context and consumes the op-run.
+  const prefixOpClass = info.postfixAmbiguousChars.map(escapeForCharClass).join('');
+  if (prefixOpClass) {
+    const prefixSlashGroup = commentBody ? '3' : '2';
+    const prefixCaptures: Record<string, { name: string }> = {
+      '1': { name: `keyword.operator.logical.prefix.${langName}` },
+      [prefixSlashGroup]: { name: `punctuation.definition.string.begin.regexp.${langName}` },
+    };
+    if (commentBody) prefixCaptures['2'] = { name: `comment.block.${langName}` };
+    result['regex-literal-prefix-ops'] = {
+      name: `string.regexp.${langName}`,
+      begin: `${fullLookbehind}\s*([${prefixOpClass}](?:\s*[${prefixOpClass}])*)\s*${commentPrefix}(/)${commentExclude}`,
+      beginCaptures: prefixCaptures,
+      end: `(/)(${info.flagsPattern})`,
+      endCaptures: {
+        '1': { name: `punctuation.definition.string.end.regexp.${langName}` },
+        '2': { name: `keyword.other.regexp.${langName}` },
+      },
+      patterns: [{ include: '#regexp' }],
+    };
+  }
 
   result['regex-literal'] = {
     name: `string.regexp.${langName}`,
@@ -4382,6 +4397,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     for (const [key, pattern] of Object.entries(rlPatterns)) {
       repository[key] = pattern;
     }
+    if (rlPatterns['regex-literal-prefix-ops']) topPatterns.push({ include: '#regex-literal-prefix-ops' });
     topPatterns.push({ include: '#regex-literal' });
   }
 
@@ -5405,7 +5421,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       if (angleBracket && angleDisambig) {
         const balancedAngles = angleDisambig.balancedAngles;
         const arrowParamShape = angleDisambig.arrowParamShape;
-        const arrowPos = `(?:(?<=\\basync\\s)|(?<![\\w$)\\]}]\\s*))`;
+        const arrowPos = `(?:(?<=\\basync\\s)|${notAfterValueWithOptionalWhitespace('\\w$)\\]}')})`;
         // JSX-dialect disambiguator: in a `.tsx`/`.jsx` grammar a bare `<Foo>(…`
         // is a JSX element, so a generic-arrow type-param list is only recognised
         // when it carries a TOP-LEVEL comma inside the `<…>` (`<T,>`, `<T = X,>`,
@@ -6366,7 +6382,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (angleBracket && angleDisambig) {
       repository['arrow-function-params-generic'] = {
         name: `meta.parameters.arrow.${langName}`,
-        begin: `(?<=${angleDisambig.typeParamCloseBehind})\\s*(\\()\\s*$`,
+        begin: `(?<=${escapeRegex(angleDisambig.close)})\\s*(\\()\\s*$`,
         beginCaptures: {
           '1': { name: `punctuation.definition.parameters.begin.${langName}` },
         },
