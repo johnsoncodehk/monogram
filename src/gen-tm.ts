@@ -4658,6 +4658,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       },
     };
     topPatterns.push({ include: '#explicit-key' });
+
+    // A block scalar can ALSO be an explicit key (`? |` / `? >`). An implicit key must be a single
+    // line, so a multi-line block scalar key is ALWAYS `?`-introduced — and like every other scalar
+    // key (plain / quoted, both already `entity.name.tag`) its content is the KEY NAME, not a value
+    // string. The §2a region scopes a block body `string.unquoted.block`; here the SAME begin/end
+    // machinery is gated on the `?` indicator and scopes the introducer + body with the key scope.
+    // Leftmost-match makes the `?`-anchored begin win over the bare §2a block scalar; a block scalar
+    // in VALUE position (`: |`) has no leading `?`, so it is untouched.
+    if (blockScalar) {
+      const introClass = `[${blockScalar.introducers.map(escapeForCharClass).join('')}]`;
+      const indicators = '(?:[1-9][-+]?|[-+][1-9]?|[-+])?';
+      const commentIncs = commentIncludeKeys.map(k => ({ include: `#${k}` }));
+      const keyScope = `${explicitKey.keyScope}.${langName}`;
+      repository['blockscalar-key'] = {
+        begin: `(${escapeRegex(explicitKey.indicator)})([\\t ]+)(${introClass}${indicators})(?=[\\t ]*(?:#|$))(.*\\n?)`,
+        beginCaptures: {
+          '1': { name: `punctuation.definition.map.key.${langName}` },
+          '3': { name: keyScope },
+          '4': { patterns: commentIncs },
+        },
+        end: '^(?=\\S)|(?!\\G)',
+        patterns: [
+          { begin: '^([ \\t]+)(?! )', end: '^(?!\\1|[ \\t]*$)', contentName: keyScope },
+        ],
+      };
+      topPatterns.push({ include: '#blockscalar-key' });
+    }
   }
 
   // ── 2c. Flow collections (`{ … }` mapping / `[ … ]` sequence) as nested begin/end regions ──
@@ -7096,6 +7123,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // An explicit mapping-key rule (`? key`) is the most specific scalar context — its indicator
     // pins the following scalar as a key — so it must be tried before the bare key/plain scalars.
     if (key === 'explicit-key') return 0.8;
+    // A block scalar that is an explicit key (`? |` / `? >`) — its `?`-anchored begin must beat the
+    // bare `?` punctuation token AND the value-position block scalar so the body scopes as the key
+    // name. Its begin is highly specific (`?` + block introducer + blank/comment-only header), so
+    // ranking it with #explicit-key is safe. Mutually exclusive with #explicit-key (plain key body).
+    if (key === 'blockscalar-key') return 0.8;
     // A flow collection (`{ … }` / `[ … ]`) is a begin/end region opened by a bracket; it must be
     // tried before #punctuation (which would otherwise claim the `{`/`[` as a bare bracket) and
     // before the scalar tokens. Its `{`/`[` can never lead a plain scalar, so this ranking is safe.

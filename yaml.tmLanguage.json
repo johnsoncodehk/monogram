@@ -10,6 +10,9 @@
       "include": "#explicit-key"
     },
     {
+      "include": "#blockscalar-key"
+    },
+    {
       "include": "#flow-sequence"
     },
     {
@@ -221,6 +224,32 @@
           "name": "entity.name.tag.yaml"
         }
       }
+    },
+    "blockscalar-key": {
+      "begin": "(\\?)([\\t ]+)([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))(.*\\n?)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.map.key.yaml"
+        },
+        "3": {
+          "name": "entity.name.tag.yaml"
+        },
+        "4": {
+          "patterns": [
+            {
+              "include": "#comment"
+            }
+          ]
+        }
+      },
+      "end": "^(?=\\S)|(?!\\G)",
+      "patterns": [
+        {
+          "begin": "^([ \\t]+)(?! )",
+          "end": "^(?!\\1|[ \\t]*$)",
+          "contentName": "entity.name.tag.yaml"
+        }
+      ]
     },
     "flow-key-double": {
       "name": "string.quoted.double.yaml entity.name.tag.yaml",
