@@ -224,13 +224,13 @@ A grammar is a TypeScript module: tokens, operator precedence, and rules built f
 ```ts
 import {
   token, rule, defineGrammar, left, op, sep,
-  seq, oneOf, range, named, plus, star, opt,
+  seq, oneOf, range, plus, star, opt,
 } from './src/api.ts';
 
-const digit = named('digit');
+const digit = range('0', '9');
 const Ident = token(seq(
   oneOf(range('a', 'z'), range('A', 'Z'), '_', '$'),
-  star(named('idCont')),
+  star(oneOf(range('a', 'z'), range('A', 'Z'), digit, '_', '$')),
 ), { identifier: true });
 const Number = token(seq(plus(digit), opt(seq('.', plus(digit)))));
 
@@ -265,9 +265,9 @@ Flat, irreducible facts — which keywords are control flow, which punctuation i
 Nothing in the engine knows about TypeScript. Everything language-specific lives in the grammar — keywords, which token is the identifier, template-literal delimiters, the regex-vs-division lexer ambiguity — all *declared per token*:
 
 ```ts
-import { token, seq, alt, noneOf, named, oneOf, plus, star, notFollowedBy } from './src/api.ts';
+import { token, seq, alt, noneOf, anyChar, oneOf, plus, star, notFollowedBy } from './src/api.ts';
 
-const escaped = seq('\\', named('any'));
+const escaped = seq('\\', anyChar());
 
 const Template = token(seq(
   '`',
