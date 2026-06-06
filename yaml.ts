@@ -182,16 +182,23 @@ const NUM_BODY = seq(NONSPECIFIC_TAG, alt(
   seq('0o', plus(range('0', '7'))),
   seq(opt(sign), alt(seq('.', plus(digit)), seq(plus(digit), opt(seq('.', star(digit))))), opt(seq(oneOf('e', 'E'), opt(sign), plus(digit)))),
 ));
+// A typed plain scalar is FIRST a plain scalar (lexically an unquoted string) that the schema then
+// resolves to a number / boolean / null — so it carries a `string.unquoted` ancestor with the
+// `constant.*` leaf, exactly as the official grammar nests `string.unquoted.plain.out` › `constant`.
+// The ancestor is what lets a value fold correctly: when `null` is continued by a more-indented
+// line it is actually the multi-line plain string "null …", and a highlighter cannot see the
+// continuation while scoping line 1 — but the `string.unquoted` ancestor keeps it string-typed
+// regardless, while a standalone `null` still reads as the constant from the leaf.
 const Num = token(
   seq(NUM_BODY, VALUE_END),
-  { scope: 'constant.numeric', blockPattern: seq(NUM_BODY, VALUE_END_BLOCK) },
+  { scope: 'string.unquoted constant.numeric', blockPattern: seq(NUM_BODY, VALUE_END_BLOCK) },
 );
-// Boolean / null plain scalars (core schema) → constant.language. Same non-specific-tag guard:
+// Boolean / null plain scalars (core schema). Same non-specific-tag guard:
 // `! true` is the string "true", not the boolean (yaml-test-suite cousins of S4JQ).
 const BOOLNULL_BODY = seq(NONSPECIFIC_TAG, alt(lit('true'), 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~'));
 const BoolNull = token(
   seq(BOOLNULL_BODY, VALUE_END),
-  { scope: 'constant.language', blockPattern: seq(BOOLNULL_BODY, VALUE_END_BLOCK) },
+  { scope: 'string.unquoted constant.language', blockPattern: seq(BOOLNULL_BODY, VALUE_END_BLOCK) },
 );
 
 // Plain scalar. Leading char: a non-indicator, OR one of `- ? :` when followed by a non-space

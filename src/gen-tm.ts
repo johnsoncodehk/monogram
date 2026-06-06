@@ -4570,7 +4570,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // (`variable`) → correctness is unchanged; only the path is finer.
       const emittedScope = tok === identToken ? `${scope}.readwrite` : scope;
       repository[key] = {
-        name: `${emittedScope}.${langName}`,
+        // A space-separated scope (e.g. `string.unquoted constant.language` for a YAML plain
+        // scalar that resolves to a constant) becomes a multi-scope TM name — each part namespaced
+        // with `langName` independently. No-op for the common single-scope case.
+        name: emittedScope.split(' ').map(s => `${s}.${langName}`).join(' '),
         // The bare-identifier rule must scope non-ASCII names too (`Ω`, Cyrillic `А`).
         match: tok === identToken ? identPattern : tokenPatternSource(tok),
       };

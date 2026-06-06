@@ -72,6 +72,516 @@
         }
       ]
     ],
+    "string_u46nan_body": [
+      [
+        "[^.\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_u46nan": [
+      {
+        "include": "@string_u46nan_body"
+      },
+      [
+        "\\.nan",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_u46nanN": [
+      {
+        "include": "@string_u46nan_body"
+      },
+      [
+        "\\.nan",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_u46NaN_body": [
+      [
+        "[^.\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_u46NaN": [
+      {
+        "include": "@string_u46NaN_body"
+      },
+      [
+        "\\.NaN",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_u46NaNN": [
+      {
+        "include": "@string_u46NaN_body"
+      },
+      [
+        "\\.NaN",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_u46NAN_body": [
+      [
+        "[^.\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_u46NAN": [
+      {
+        "include": "@string_u46NAN_body"
+      },
+      [
+        "\\.NAN",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_u46NANN": [
+      {
+        "include": "@string_u46NAN_body"
+      },
+      [
+        "\\.NAN",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_0x_body": [
+      [
+        "[^0\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_0x": [
+      {
+        "include": "@string_0x_body"
+      },
+      [
+        "0x",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_0xN": [
+      {
+        "include": "@string_0x_body"
+      },
+      [
+        "0x",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_0o_body": [
+      [
+        "[^0\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_0o": [
+      {
+        "include": "@string_0o_body"
+      },
+      [
+        "0o",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_0oN": [
+      {
+        "include": "@string_0o_body"
+      },
+      [
+        "0o",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_true_body": [
+      [
+        "[^t\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_true": [
+      {
+        "include": "@string_true_body"
+      },
+      [
+        "true",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_trueN": [
+      {
+        "include": "@string_true_body"
+      },
+      [
+        "true",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_True_body": [
+      [
+        "[^T\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_True": [
+      {
+        "include": "@string_True_body"
+      },
+      [
+        "True",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_TrueN": [
+      {
+        "include": "@string_True_body"
+      },
+      [
+        "True",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_TRUE_body": [
+      [
+        "[^T\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_TRUE": [
+      {
+        "include": "@string_TRUE_body"
+      },
+      [
+        "TRUE",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_TRUEN": [
+      {
+        "include": "@string_TRUE_body"
+      },
+      [
+        "TRUE",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_false_body": [
+      [
+        "[^f\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_false": [
+      {
+        "include": "@string_false_body"
+      },
+      [
+        "false",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_falseN": [
+      {
+        "include": "@string_false_body"
+      },
+      [
+        "false",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_False_body": [
+      [
+        "[^F\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_False": [
+      {
+        "include": "@string_False_body"
+      },
+      [
+        "False",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_FalseN": [
+      {
+        "include": "@string_False_body"
+      },
+      [
+        "False",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_FALSE_body": [
+      [
+        "[^F\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_FALSE": [
+      {
+        "include": "@string_FALSE_body"
+      },
+      [
+        "FALSE",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_FALSEN": [
+      {
+        "include": "@string_FALSE_body"
+      },
+      [
+        "FALSE",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_null_body": [
+      [
+        "[^n\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_null": [
+      {
+        "include": "@string_null_body"
+      },
+      [
+        "null",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_nullN": [
+      {
+        "include": "@string_null_body"
+      },
+      [
+        "null",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_Null_body": [
+      [
+        "[^N\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_Null": [
+      {
+        "include": "@string_Null_body"
+      },
+      [
+        "Null",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_NullN": [
+      {
+        "include": "@string_Null_body"
+      },
+      [
+        "Null",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_NULL_body": [
+      [
+        "[^N\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_NULL": [
+      {
+        "include": "@string_NULL_body"
+      },
+      [
+        "NULL",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_NULLN": [
+      {
+        "include": "@string_NULL_body"
+      },
+      [
+        "NULL",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "string_tilde_body": [
+      [
+        "[^~\\\\]+",
+        "string"
+      ],
+      [
+        "\\\\.",
+        "string.escape"
+      ]
+    ],
+    "string_tilde": [
+      {
+        "include": "@string_tilde_body"
+      },
+      [
+        "~",
+        {
+          "token": "string",
+          "switchTo": "@value"
+        }
+      ]
+    ],
+    "string_tildeN": [
+      {
+        "include": "@string_tilde_body"
+      },
+      [
+        "~",
+        {
+          "token": "string",
+          "next": "@pop"
+        }
+      ]
+    ],
     "exprBody": [
       [
         "[ \\t\\r\\n]+",
@@ -96,10 +606,108 @@
         }
       ],
       [
-        "(?<!![ \\t]{1})(?<!![ \\t]{2})(?<!![ \\t]{3})(?<!![ \\t]{4})(?<!![ \\t]{5})(?<!![ \\t]{6})(?<!![ \\t]{7})(?<!![ \\t]{8})(?<!![ \\t]{9})(?<!![ \\t]{10})(?<!![ \\t]{11})(?<!![ \\t]{12})(?<!![ \\t]{13})(?<!![ \\t]{14})(?<!![ \\t]{15})(?<!![ \\t]{16})(?:[+\\-]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN)|0x[0-9A-Fa-f]+|0o[0-7]+|[+\\-]?(?:\\.[0-9]+|[0-9]+(?:\\.[0-9]*)?)(?:[eE][+\\-]?[0-9]+)?)(?=[ \\t]+#|[ \\t]*(?:\\r|\\n|,|\\[|\\]|\\{|\\}|:(?:[\\t\\n\\f\\r ]|,|\\[|\\]|\\{|\\}|$))|$)",
+        "\\.nan",
         {
-          "token": "number",
-          "switchTo": "@value"
+          "token": "string",
+          "switchTo": "@string_u46nan"
+        }
+      ],
+      [
+        "\\.NaN",
+        {
+          "token": "string",
+          "switchTo": "@string_u46NaN"
+        }
+      ],
+      [
+        "\\.NAN",
+        {
+          "token": "string",
+          "switchTo": "@string_u46NAN"
+        }
+      ],
+      [
+        "0x",
+        {
+          "token": "string",
+          "switchTo": "@string_0x"
+        }
+      ],
+      [
+        "0o",
+        {
+          "token": "string",
+          "switchTo": "@string_0o"
+        }
+      ],
+      [
+        "true",
+        {
+          "token": "string",
+          "switchTo": "@string_true"
+        }
+      ],
+      [
+        "True",
+        {
+          "token": "string",
+          "switchTo": "@string_True"
+        }
+      ],
+      [
+        "TRUE",
+        {
+          "token": "string",
+          "switchTo": "@string_TRUE"
+        }
+      ],
+      [
+        "false",
+        {
+          "token": "string",
+          "switchTo": "@string_false"
+        }
+      ],
+      [
+        "False",
+        {
+          "token": "string",
+          "switchTo": "@string_False"
+        }
+      ],
+      [
+        "FALSE",
+        {
+          "token": "string",
+          "switchTo": "@string_FALSE"
+        }
+      ],
+      [
+        "null",
+        {
+          "token": "string",
+          "switchTo": "@string_null"
+        }
+      ],
+      [
+        "Null",
+        {
+          "token": "string",
+          "switchTo": "@string_Null"
+        }
+      ],
+      [
+        "NULL",
+        {
+          "token": "string",
+          "switchTo": "@string_NULL"
+        }
+      ],
+      [
+        "~",
+        {
+          "token": "string",
+          "switchTo": "@string_tilde"
         }
       ],
       [
@@ -155,13 +763,6 @@
         "(?:[^\\t\\n\\f\\r \\-?:,\\[\\]{}#&*!|>'\"%@`]|[\\-?:](?=[^\\t\\n\\f\\r ,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\t\\n\\f\\r ,\\]}])|#(?<=[^\\t\\n\\f\\r ]#))*(?=[ \\t]*:(?:[\\t\\n\\f\\r ]|,|\\[|\\]|\\{|\\}|$))",
         {
           "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?<!![ \\t]{1})(?<!![ \\t]{2})(?<!![ \\t]{3})(?<!![ \\t]{4})(?<!![ \\t]{5})(?<!![ \\t]{6})(?<!![ \\t]{7})(?<!![ \\t]{8})(?<!![ \\t]{9})(?<!![ \\t]{10})(?<!![ \\t]{11})(?<!![ \\t]{12})(?<!![ \\t]{13})(?<!![ \\t]{14})(?<!![ \\t]{15})(?<!![ \\t]{16})(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)(?=[ \\t]+#|[ \\t]*(?:\\r|\\n|,|\\[|\\]|\\{|\\}|:(?:[\\t\\n\\f\\r ]|,|\\[|\\]|\\{|\\}|$))|$)",
-        {
-          "token": "keyword",
           "switchTo": "@value"
         }
       ],
