@@ -1,4 +1,4 @@
-import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, NewlineConfig, TokenPattern } from './types.ts';
+import type { CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern } from './types.ts';
 import {
   altPattern, anyChar, followedBy, isTokenPattern, lit, never, noneOf, notFollowedBy,
   notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
@@ -17,6 +17,9 @@ interface TokenOptions {
   skip?: boolean;
   scope?: string;
   escape?: TokenPatternInput;
+  // Highlight-only interpolation regions for ordinary string tokens (e.g. env-spec `${…}` / `$(…)`).
+  // The parser/lexer stay token-based; generators re-express these as nested regions.
+  interpolation?: StringInterpolation | StringInterpolation[];
   // A regex matching exactly one well-formed escape sequence. Engine-scanned tokens
   // (templates) validate each `\`-escape against it and reject any that don't match —
   // unlike `escape` (highlight-only), this drives tokenization. Skipped in tag
@@ -414,6 +417,9 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
       flags,
       scope: tok.opts.scope,
       escapePattern: tok.opts.escape,
+      interpolation: tok.opts.interpolation
+        ? (Array.isArray(tok.opts.interpolation) ? tok.opts.interpolation : [tok.opts.interpolation]).map((i) => ({ ...i }))
+        : undefined,
       escapeValidPattern: tok.opts.escapeValid,
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,

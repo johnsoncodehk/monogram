@@ -488,6 +488,11 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
 
   const stringTopRules: MonarchRule[] = [];      // entered from root/value
   const stringNestedRules: MonarchRule[] = [];   // entered from interpolation holes
+  // Highlight-only string interpolation regions (e.g. env-spec `${…}` / `$(…)`): per region we add a
+  // begin rule into the string body and build a dedicated interp state (re-enter the expression body,
+  // pop on the region's end). Specs are collected here; the states are built after templates, once the
+  // nested string/template rules they include are populated.
+  const interpStateSpecs: { name: string; end: string }[] = [];
 
   for (const t of grammar.tokens) {
     if (t.flags.includes('skip') || t.flags.includes('regex') || t.template) continue;
@@ -505,7 +510,19 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
         const body: MonarchRule[] = [];
         const escapePattern = tokenEscapePatternSource(t);
         if (escapePattern) body.push([anchoredSource(escapePattern), 'string.escape']);
-        body.push([`[^${escapeForCharClass(delim[0])}\\\\]+`, tok]);
+        // Interpolation openers come BEFORE the content run so they win; the content run then excludes
+        // any position that begins an interpolation (negative lookahead) so it can't swallow `${`.
+        const interps = t.interpolation ?? [];
+        interps.forEach((interp, i) => {
+          const name = `string_interp_${suffix}_${i + 1}`;
+          body.push([escapeRegex(interp.begin), { token: 'delimiter.bracket', next: `@${name}` }]);
+          interpStateSpecs.push({ name, end: interp.end });
+        });
+        const dc = escapeForCharClass(delim[0]);
+        const content = interps.length
+          ? `(?:(?!${interps.map(p => escapeRegex(p.begin)).join('|')})[^${dc}\\\\])+`
+          : `[^${dc}\\\\]+`;
+        body.push([content, tok]);
         body.push(['\\\\.', 'string.escape']);
         tokenizer[bodyState] = body;
       }
@@ -589,6 +606,28 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
       ['\\}', { token: 'delimiter.bracket', next: '@pop' }],
       { include: '@interpExprBody' },
     ];
+  }
+
+  // String-interpolation states (collected in the string loop above). Built here, after templates,
+  // so the nested string/template rules they include are populated; `@interpExprBody` is a lazy
+  // include resolved by Monarch. A bare `{` pushes a brace-counting frame (shared with templates).
+  if (interpStateSpecs.length) {
+    if (!tokenizer['bracketCounting']) {
+      tokenizer['bracketCounting'] = [
+        wsRule, ...commentRules, ...stringNestedRules, ...templateNestedRules,
+        ['\\{', { token: 'delimiter.bracket', next: '@bracketCounting' }],
+        ['\\}', { token: 'delimiter.bracket', next: '@pop' }],
+        { include: '@interpExprBody' },
+      ];
+    }
+    for (const spec of interpStateSpecs) {
+      tokenizer[spec.name] = [
+        wsRule, ...commentRules, ...stringNestedRules, ...templateNestedRules,
+        ['\\{', { token: 'delimiter.bracket', next: '@bracketCounting' }],
+        [escapeRegex(spec.end), { token: 'delimiter.bracket', next: '@pop' }],
+        { include: '@interpExprBody' },
+      ];
+    }
   }
 
   // ── Numbers (most-specific first; token decl order encodes specificity) ──

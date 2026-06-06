@@ -966,7 +966,7 @@ export function createLexer(grammar: CstGrammar) {
           //  • LINE-LEAD at the document root (a bare top-level `"a\nb`, or `---\n"a\nb`) → -1.
           // Blank (whitespace-only) continuation lines are skipped — they are folded line breaks, legal
           // at any column. Flow is exempt (indentation suspended). yaml-test-suite DK95[1] / QB6E.
-          if (tm.isString && indent && flowDepth === 0 && m[0].includes('\n')) {
+          if (tm.isString && indent?.blockScalar && flowDepth === 0 && m[0].includes('\n')) {
             const prevT = tokens[tokens.length - 1];
             const prevIsDocMarker = !!prevT && blockScalarDocMarkers.includes(prevT.text);
             let parentCol: number;

@@ -149,6 +149,9 @@ interface GrammarJsContext {
    * `template_chars` token. `null` when no template token exists.
    */
   templatePlan: TemplatePlan | null;
+  /** String tokens carrying highlight-only interpolation regions, each re-expressed as a rule
+   *  backed by an external `<rule>_chars` token (parallel to `templatePlan`). Empty if none. */
+  interpolationPlans: InterpolationPlan[];
   /**
    * Ref nodes (the identifier right after a definition keyword) that should be
    * wrapped in `field('name', …)` so highlights.scm can target them with the
@@ -358,6 +361,8 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
   // The interpolated-template token is re-expressed as a `template` RULE (with
   // `${ … }` holes that re-enter the expression grammar), emitted separately.
   if (ctx.templatePlan && ctx.templatePlan.tokenName === name) return null;
+  // A string token with interpolation regions is likewise re-expressed as a rule (emitted separately).
+  if (ctx.interpolationPlans.some(ip => ip.tokenName === name)) return null;
   // Skip-flagged tokens (comments, whitespace) go in `extras`, not as a named
   // rule reference — but we still emit them so highlights can capture comments.
   // tree-sitter's token() DFA rejects zero-width assertions, so strip them first.
@@ -538,6 +543,43 @@ function planTemplate(grammar: CstGrammar): TemplatePlan | null {
   };
 }
 
+/**
+ * A string token carrying highlight-only interpolation regions (e.g. env-spec `${…}` / `$(…)`),
+ * re-expressed as a tree-sitter RULE (open delim + chars/interpolation runs + close delim) — the
+ * same shape a template literal gets. The literal text between regions is an external
+ * `<rule>_chars` token (the scanner stops it at the close delim or any region opener).
+ */
+interface InterpolationPlan {
+  tokenName: string;     // original token name (e.g. 'DQ') — now emitted as a rule, not a token
+  ruleSnake: string;     // snake rule name (e.g. 'dq') — keeps `$.dq` references valid
+  charsSnake: string;    // external scanner symbol for the literal text (e.g. 'dq_chars')
+  open: string;          // opening delimiter (e.g. '"')
+  close: string;         // closing delimiter (same as open for a string token)
+  regions: { ruleSnake: string; open: string; close: string }[]; // one sub-rule per interpolation entry
+}
+
+function planInterpolations(grammar: CstGrammar): InterpolationPlan[] {
+  const plans: InterpolationPlan[] = [];
+  for (const tok of grammar.tokens) {
+    if (!tok.interpolation?.length) continue;
+    const open = tokenPatternStringDelimiters(tok)[0] ?? '"';
+    const ruleSnake = toSnake(tok.name);
+    plans.push({
+      tokenName: tok.name,
+      ruleSnake,
+      charsSnake: ruleSnake + '_chars',
+      open,
+      close: open,
+      regions: tok.interpolation.map((interp, i) => ({
+        ruleSnake: `${ruleSnake}_interpolation_${i + 1}`,
+        open: interp.begin,
+        close: interp.end,
+      })),
+    });
+  }
+  return plans;
+}
+
 /** Determine which tokens the external scanner must provide. */
 function planScannerTokens(grammar: CstGrammar): Map<string, string> {
   const map = new Map<string, string>();
@@ -560,6 +602,7 @@ function planScannerTokens(grammar: CstGrammar): Map<string, string> {
 function externalSymbols(ctx: GrammarJsContext): string[] {
   const syms = [...ctx.scannerTokenFor.values()];
   if (ctx.templatePlan) syms.push(ctx.templatePlan.charsSnake);
+  for (const ip of ctx.interpolationPlans) syms.push(ip.charsSnake);
   return syms;
 }
 
@@ -725,8 +768,10 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
 
   const scannerTokenFor = planScannerTokens(grammar);
   const templatePlan = planTemplate(grammar);
+  const interpolationPlans = planInterpolations(grammar);
   const externalSnake = new Set([...scannerTokenFor.values()]);
   if (templatePlan) externalSnake.add(templatePlan.charsSnake);
+  for (const ip of interpolationPlans) externalSnake.add(ip.charsSnake);
 
   // Find the identifier nodes that follow a declaration keyword, so we can wrap
   // them in `field('name', …)` in grammar.js AND emit standard `name:` highlight
@@ -736,6 +781,7 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
     templatePlan,
+    interpolationPlans,
     nameFieldNodes: nameFields.nodes,
   };
 
@@ -857,6 +903,27 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     ruleEntries.push(
       `    ${tp.substRuleSnake}: $ => seq(${jsString(tp.interpOpen)}, ${holeBody}, ${jsString(tp.interpClose)})`,
     );
+  }
+
+  // String-interpolation tokens: re-expressed as a rule (open + chars/interpolation runs + close);
+  // each interpolation region is a sub-rule whose hole re-enters the expression grammar (like a template).
+  const interpExprName = [...ctx.prattRules][0];
+  const interpExprSnake = interpExprName ? ctx.ruleSnake.get(interpExprName)! : null;
+  const interpHole = interpExprSnake ? `optional($.${interpExprSnake})` : 'blank()';
+  for (const ip of ctx.interpolationPlans) {
+    const choices = [`$.${ip.charsSnake}`, ...ip.regions.map(r => `$.${r.ruleSnake}`)].join(', ');
+    ruleEntries.push(
+      `    ${ip.ruleSnake}: $ => seq(\n` +
+      `      ${jsString(ip.open)},\n` +
+      `      repeat(choice(${choices})),\n` +
+      `      ${jsString(ip.close)}\n` +
+      `    )`,
+    );
+    for (const r of ip.regions) {
+      ruleEntries.push(
+        `    ${r.ruleSnake}: $ => seq(${jsString(r.open)}, ${interpHole}, ${jsString(r.close)})`,
+      );
+    }
   }
 
   lines.push(ruleEntries.join(',\n\n'));
@@ -1086,6 +1153,15 @@ function buildHighlightsScm(
     tokenNodeCaptures.push({ query: `(${tpl.ruleSnake} ${jsString(tpl.open)})`, capture: '@string' });
     tokenNodeCaptures.push({ query: `(${tpl.substRuleSnake} ${jsString(tpl.interpOpen)})`, capture: '@punctuation.special' });
     tokenNodeCaptures.push({ query: `(${tpl.substRuleSnake} ${jsString(tpl.interpClose)})`, capture: '@punctuation.special' });
+  }
+  // String-interpolation regions: the literal text reads as string; the region delimiters as
+  // punctuation — same treatment as a template hole, derived from the interpolation metadata.
+  for (const ip of ctx.interpolationPlans) {
+    tokenNodeCaptures.push({ query: `(${ip.charsSnake})`, capture: '@string' });
+    for (const r of ip.regions) {
+      tokenNodeCaptures.push({ query: `(${r.ruleSnake} ${jsString(r.open)})`, capture: '@punctuation.special' });
+      tokenNodeCaptures.push({ query: `(${r.ruleSnake} ${jsString(r.close)})`, capture: '@punctuation.special' });
+    }
   }
 
   // ── D. Contextual node captures via emitted fields ──
@@ -1753,6 +1829,49 @@ function buildScannerC(
     L.push('');
   }
 
+  // ── Interpolated-string char scanners (one per string token carrying interpolation) ──
+  // Each scans the literal run inside the string, stopping before the close delimiter or any
+  // interpolation opener (so the opener re-enters the expression grammar via its sub-rule). The
+  // openers are DATA from the interpolation metadata (decoded literals, length 1–2).
+  {
+    const cChar = (ch: string) => ch === '\\' ? "'\\\\'" : ch === "'" ? "'\\''" : `'${ch}'`;
+    for (const ip of ctx.interpolationPlans) {
+      const charsSym = ip.charsSnake.toUpperCase();
+      const up = ip.ruleSnake.toUpperCase();
+      const openerInit = ip.regions.map(r => jsString(r.open)).join(', ');
+      L.push(`// ── Interpolated-string scan (${ip.tokenName}): literal text up to the close delim or an opener ──`);
+      L.push(`static const char *${up}_OPENERS[] = { ${openerInit} };`);
+      L.push(`static const unsigned ${up}_OPENER_COUNT = ${ip.regions.length};`);
+      L.push(`static bool scan_${ip.ruleSnake}_chars(TSLexer *lexer) {`);
+      L.push('  bool has_content = false;');
+      L.push('  for (;;) {');
+      L.push('    lexer->mark_end(lexer);');
+      L.push('    int32_t c = lexer->lookahead;');
+      L.push('    if (c == 0) return false; // EOF — let the CFG report the unterminated string');
+      L.push(`    if (c == ${cChar(ip.close)}) break; // closing delimiter`);
+      L.push('    bool first_match = false;');
+      L.push(`    for (unsigned i = 0; i < ${up}_OPENER_COUNT; i++) if ((int32_t)${up}_OPENERS[i][0] == c) { first_match = true; break; }`);
+      L.push('    if (first_match) {');
+      L.push('      advance(lexer);                 // peek past the opener\'s first char');
+      L.push('      int32_t c2 = lexer->lookahead;');
+      L.push('      bool real = false;');
+      L.push(`      for (unsigned i = 0; i < ${up}_OPENER_COUNT; i++)`);
+      L.push(`        if ((int32_t)${up}_OPENERS[i][0] == c && (${up}_OPENERS[i][1] == 0 || (int32_t)${up}_OPENERS[i][1] == c2)) { real = true; break; }`);
+      L.push('      if (real) break;                // a real opener — token ends before it (mark_end frozen above)');
+      L.push('      has_content = true; continue;   // lone first char → literal content');
+      L.push('    }');
+      L.push('    if (c == \'\\\\\') { advance(lexer); if (lexer->lookahead != 0) advance(lexer); has_content = true; continue; }');
+      L.push('    advance(lexer);');
+      L.push('    has_content = true;');
+      L.push('  }');
+      L.push('  if (!has_content) return false;');
+      L.push(`  lexer->result_symbol = ${charsSym};`);
+      L.push('  return true;');
+      L.push('}');
+      L.push('');
+    }
+  }
+
   // ── scan() entry ──
   L.push('bool tree_sitter_' + grammarName + '_external_scanner_scan(void *payload, TSLexer *lexer,');
   L.push('                                                          const bool *valid_symbols) {');
@@ -1794,6 +1913,14 @@ function buildScannerC(
     L.push('    if (lexer->lookahead == \'/\') {');
     L.push('      if (scan_regex(lexer)) return true;');
     L.push('    }');
+    L.push('  }');
+    L.push('');
+  }
+  for (const ip of ctx.interpolationPlans) {
+    const charsSym = ip.charsSnake.toUpperCase();
+    L.push(`  // ${ip.tokenName} interpolated-string literal text (whitespace inside is content, not skipped).`);
+    L.push(`  if (valid_symbols[${charsSym}]) {`);
+    L.push(`    if (scan_${ip.ruleSnake}_chars(lexer)) return true;`);
     L.push('  }');
     L.push('');
   }

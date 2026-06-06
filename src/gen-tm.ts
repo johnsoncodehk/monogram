@@ -4464,12 +4464,26 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     } else if (tokenEscapePatternSource(tok) && scope.startsWith('string.')) {
       // String with escape sequences: generate begin/end for each delimiter
       const escapePat: TmPattern = { match: tokenEscapePatternSource(tok)!, name: `constant.character.escape.${langName}` };
+      // Highlight-only interpolation regions (e.g. env-spec `${…}` / `$(…)`): each becomes a nested
+      // begin/end region — the same shape a template literal's hole gets. `begin`/`end` are
+      // author-supplied regex SOURCES (not literals), so they are NOT re-escaped here.
+      const interpPats: TmPattern[] = (tok.interpolation ?? []).map((interp) => {
+        const p: TmPattern = { begin: escapeRegex(interp.begin), end: escapeRegex(interp.end), patterns: [{ include: interp.include ?? '$self' }] };
+        if (interp.beginScope) p.beginCaptures = { '0': { name: `${interp.beginScope}.${langName}` } };
+        if (interp.endScope) p.endCaptures = { '0': { name: `${interp.endScope}.${langName}` } };
+        if (interp.contentScope) p.name = `${interp.contentScope}.${langName}`;
+        return p;
+      });
+      const stringPats: (TmPattern | { include: string })[] = [escapePat, ...interpPats];
       const delimiters: [string, string][] = [];
+      // Drive the delimiter scope off the EXTRACTED delimiter generically: `"`/`'` keep their
+      // canonical scopes; any other delimiter (e.g. a backtick string) takes the token's own scope
+      // instead of the old loop's `"`-fallback (which mis-delimited backtick strings).
+      const scopeForDelim = (d: string) => d === '"' ? 'string.quoted.double' : d === "'" ? 'string.quoted.single' : scope;
       for (const delim of tokenPatternStringDelimiters(tok)) {
-        if (delim === '"') delimiters.push(['"', 'string.quoted.double']);
-        else if (delim === "'") delimiters.push(["'", 'string.quoted.single']);
+        delimiters.push([delim, scopeForDelim(delim)]);
       }
-      if (delimiters.length === 0) delimiters.push(['"', scope]); // fallback
+      if (delimiters.length === 0) delimiters.push(['"', scope]); // fallback: no delimiter extractable
 
       if (delimiters.length === 1) {
         const [delim, delimScope] = delimiters[0];
@@ -4479,7 +4493,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           beginCaptures: { '0': { name: `punctuation.definition.string.begin.${langName}` } },
           end: `${escapeRegex(delim)}|$`,
           endCaptures: { '0': { name: `punctuation.definition.string.end.${langName}` } },
-          patterns: [escapePat],
+          patterns: stringPats,
         };
         topPatterns.push({ include: `#${key}` });
         rememberLiteralKey(delimScope, key, tok.name);
@@ -4493,7 +4507,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
             beginCaptures: { '0': { name: `punctuation.definition.string.begin.${langName}` } },
             end: `${escapeRegex(delim)}|$`,
             endCaptures: { '0': { name: `punctuation.definition.string.end.${langName}` } },
-            patterns: [escapePat],
+            patterns: stringPats,
           };
           topPatterns.push({ include: `#${subKey}` });
           rememberLiteralKey(delimScope, subKey, tok.name);

@@ -20,6 +20,7 @@ export interface TokenDecl {
   flags: string[];
   scope?: string;         // @scope(...) override
   escapePattern?: TokenPattern; // @escape pattern — escape sequence pattern (highlight only)
+  interpolation?: StringInterpolation[]; // highlight-only interpolation regions inside a string token (e.g. `${…}` / `$(…)`)
   escapeValidPattern?: TokenPattern; // one well-formed escape; engine-scanned tokens reject non-matching `\`-escapes (skipped in tag position)
   embed?: string;         // @embed(lang) — embedded language scope name
   // ── Lexer hints (keep the engine language-agnostic; all optional) ──
@@ -43,6 +44,21 @@ export interface TokenDecl {
   // the engine stays agnostic (a grammar declaring none is unaffected). Highlight-only generators
   // ignore it (a `%`-led directive in flow is vanishingly rare and the flat TM grammar is unchanged).
   blockOnly?: boolean;
+}
+
+/**
+ * A highlight-only interpolation region inside a string token (e.g. an env-spec `"…${expr}…"`
+ * or `"…$(expr)…"`). The lexer/parser stay token-based — these only tell the highlight
+ * generators (TextMate / Monarch / tree-sitter) to re-express the string as nested regions.
+ * `begin`/`end` are regex-source fragments; scopes omit the language suffix (generators add it).
+ */
+export interface StringInterpolation {
+  begin: string;          // LITERAL begin delimiter, NOT a regex (e.g. '${'); generators escape it as needed
+  end: string;            // LITERAL end delimiter, NOT a regex (e.g. '}')
+  beginScope?: string;    // delimiter scope for the opener (without language suffix)
+  endScope?: string;      // delimiter scope for the closer (without language suffix)
+  contentScope?: string;  // body / container scope (without language suffix)
+  include?: string;       // TextMate include inside the body (default '$self')
 }
 
 /** Delimiters an interpolated template literal is made of (e.g. JS: `` ` ``, `${`, `}`). */
