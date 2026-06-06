@@ -43,6 +43,7 @@ jobs:
           node test/agnostic.ts
           node test/refactor-guard.ts
           node test/test-issues.ts
+          node test/tm-highlight-guards.ts
           node test/js-conformance.ts
           node test/tsx-conformance.ts
           node test/jsx-conformance.ts

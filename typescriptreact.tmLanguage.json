@@ -4,7 +4,7 @@
   "scopeName": "source.tsx",
   "patterns": [
     {
-      "include": "#arrow-type-parameters"
+      "include": "#generic-arrow-function"
     },
     {
       "include": "#jsx-self-closing-element-in-expression"
@@ -71,9 +71,6 @@
     },
     {
       "include": "#arrow-function-params"
-    },
-    {
-      "include": "#arrow-function-params-generic"
     },
     {
       "include": "#ternary-expression"
@@ -961,7 +958,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))s*([!](?:s*[!])*)s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bdeclare)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.tsx"
@@ -2069,6 +2066,18 @@
         }
       ]
     },
+    "generic-arrow-function": {
+      "begin": "(?:(?<=\\basync\\s)|(?<![\\w$)\\]}])(?<![\\w$)\\]}]\\s)(?<![\\w$)\\]}]\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s)(?<![\\w$)\\]}]\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s\\s))(?=<(?=(?:(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*,|(?:[^<>{}\"']|\\{[^{}]*\\}|\"[^\"]*\"|'[^']*')*\\bextends\\b\\s*(?!=)))(?<B>[^<>]*(?:<\\g<B>>[^<>]*)*)>\\s*\\(\\s*(?:\\)|\\.\\.\\.|(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*[:,?)]|[{\\[]|$))",
+      "end": "(?<=\\))",
+      "patterns": [
+        {
+          "include": "#arrow-type-parameters"
+        },
+        {
+          "include": "#arrow-function-params-generic"
+        }
+      ]
+    },
     "function-declaration": {
       "name": "meta.function.tsx",
       "begin": "\\b(function)\\s*(\\*)?\\s*((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)",
@@ -2827,7 +2836,7 @@
     },
     "arrow-function-params-generic": {
       "name": "meta.parameters.arrow.tsx",
-      "begin": "(?<=>)\\s*(\\()\\s*$",
+      "begin": "(\\()",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.parameters.begin.tsx"
@@ -3329,7 +3338,7 @@
           "include": "#code-block"
         },
         {
-          "include": "#arrow-type-parameters"
+          "include": "#generic-arrow-function"
         },
         {
           "include": "#jsx-self-closing-element-in-expression"
@@ -3393,9 +3402,6 @@
         },
         {
           "include": "#arrow-function-params"
-        },
-        {
-          "include": "#arrow-function-params-generic"
         },
         {
           "include": "#ternary-expression"

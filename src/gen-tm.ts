@@ -1004,15 +1004,6 @@ interface JsxDisambigDelims {
   topTypeParam: string;    // "is a type-param list" body: top-level comma OR constraint keyword
   balancedAngles: string;  // recursive balanced `<…>` named group `(?<B>…)`
   arrowParamShape: string; // the arrow-shaped `(` confirm after `>`
-  close: string;           // the generic close delimiter (`>` for TS/TSX)
-  // Lookbehind body asserting the `>` just left closes a type-param LIST that carried a
-  // top-level comma or constraint keyword (`<T,>`, `<T extends X>`) — i.e. the SAME
-  // generic-arrow disambiguation signal as `topTypeParam`, but for matching a `(` that
-  // sits immediately after the `>`. Used to confirm a deferred (next-line) arrow param
-  // list while excluding a generic CALL `foo<Bar>(` / comparison `a > (` (neither has
-  // the comma/constraint). Depth-0 (`skip` never crosses a nested `<…>`), so a nested-
-  // generic constraint inside the param-list's own `<…>` is conservatively not matched.
-  typeParamCloseBehind: string;
 }
 
 /**
@@ -1129,17 +1120,7 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   // confirm — so both read from the same derived delimiter.
   const [pOpen, pClose] = paramParens ? [paramParens.open, paramParens.close] : ['(', ')'];
   const arrowParamShape = `${escapeRegex(pOpen)}\\s*(?:${escapeRegex(pClose)}|\\.\\.\\.|${identRegex}\\s*[:,?${escapeForCharClass(pClose)}]|[{\\[]|$)`;
-  // `<` … (top-level comma OR constraint keyword) … `>` as a LOOKBEHIND body. Oniguruma
-  // allows variable-length lookbehind (the `skip` `*` runs) but NOT a nested lookahead,
-  // so the `\s*(?!=)` JSX-attr guard `topTypeParam` carries is dropped here — it isn't
-  // needed once we are already standing just past the closing `>` (the `<…>` is a proven
-  // type-param list). `skip` stays depth-0, so this conservatively confirms a top-level
-  // comma/constraint without crossing a nested `<…>`.
-  const behindKw = constraintAlts.length
-    ? `|${skip}\\b(?:${constraintKeywords.map(escapeRegex).join('|')})\\b`
-    : '';
-  const typeParamCloseBehind = `${escapeRegex(open)}(?:${topComma}${behindKw})${skip}${escapeRegex(close)}`;
-  return { topComma, topTypeParam, balancedAngles, arrowParamShape, close, typeParamCloseBehind };
+  return { topComma, topTypeParam, balancedAngles, arrowParamShape };
 }
 
 /**
@@ -2499,7 +2480,7 @@ function generateRegexLiteralPatterns(
     if (commentBody) prefixCaptures['2'] = { name: `comment.block.${langName}` };
     result['regex-literal-prefix-ops'] = {
       name: `string.regexp.${langName}`,
-      begin: `${fullLookbehind}\s*([${prefixOpClass}](?:\s*[${prefixOpClass}])*)\s*${commentPrefix}(/)${commentExclude}`,
+      begin: `${fullLookbehind}\\s*([${prefixOpClass}](?:\\s*[${prefixOpClass}])*)\\s*${commentPrefix}(/)${commentExclude}`,
       beginCaptures: prefixCaptures,
       end: `(/)(${info.flagsPattern})`,
       endCaptures: {
@@ -5718,7 +5699,27 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           },
           patterns: tpInner,
         };
-        topPatterns.push({ include: '#arrow-type-parameters' });
+        // Generic-arrow WRAPPER. A confirmed generic arrow is a `<…>` type-param list
+        // IMMEDIATELY followed by its param list `(…)`. The closing `>` of a generic ARROW
+        // is indistinguishable — by a FIXED-WIDTH look-behind — from a generic CALL's `>`
+        // (`foo<Bar>(`) or a comparison `>` (`a > (`): the deciding signal (the `<` sitting
+        // at expression-start) is a VARIABLE distance back, and Onigmo rejects variable-width
+        // look-behind. So rather than guess the params' `(` from behind, we OWN it: a
+        // zero-width begin re-uses #arrow-type-parameters' EXACT disambiguation (arrow
+        // position + `<…>` + `>\s*<arrow-param-shape>` confirm) to open a region holding the
+        // type-param list AND the param list as children. No look-behind → correct AND
+        // TextMate-2.0/Onigmo clean. The children carry the two metas (meta.type.parameters /
+        // meta.parameters.arrow); the wrapper is unnamed. Same trigger position (and -7 rank)
+        // as the old top-level #arrow-type-parameters, so all angle-bracket precedence holds.
+        repository['generic-arrow-function'] = {
+          begin: `${arrowPos}(?=<${topComma}${balancedAngles}>\\s*${arrowParamShape})`,
+          end: '(?<=\\))',
+          patterns: [
+            { include: '#arrow-type-parameters' },
+            { include: '#arrow-function-params-generic' },
+          ],
+        };
+        topPatterns.push({ include: '#generic-arrow-function' });
       }
     }
 
@@ -6627,30 +6628,24 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     };
     topPatterns.push({ include: '#arrow-function-params' });
 
-    // Generic-arrow param list whose `(` is deferred to a LATER line:
+    // Generic-arrow param list `(…)` — e.g. the deferred multi-line form:
     //   const f = <T extends X>(
     //     a: T,
     //   ) => …
-    // #arrow-function-params' same-line lookahead (`(?=[^()]*\)…=>)`) can't confirm
-    // the closing `)`/`=>` when the param list spans lines, so the params would fall
-    // to value mode (their annotations lose type scope). But here #arrow-type-parameters
-    // has ALREADY disambiguated the arrow (its begin verified the `<…>` + arrow-shaped
-    // `(`, allowing the `(`-at-end-of-line form) and ended at the type-param `>`; the
-    // very next `(` therefore opens the arrow's param list. We re-open the SAME typed
-    // param region keyed on that `>` close. Two guards keep it surgical:
-    //   • the `(` must be at END OF LINE (`\s*$`) — the single-line generic arrow
-    //     `<T,>(x:T)=>x` is already handled by #arrow-function-params, and a one-line
-    //     parenthesised expression after a comparison/call `>` (`a > (b)`) is left alone;
-    //   • the preceding `>` must close a type-param list carrying a top-level comma or
-    //     constraint keyword (`typeParamCloseBehind`, the SAME signal #arrow-type-
-    //     parameters disambiguates on) — so a multi-line generic CALL `foo<Bar>(` or
-    //     comparison `a > (` (neither has the comma/constraint) does NOT open params.
-    // Emitted only when generic-arrow type params exist (angleDisambig), so non-generic
-    // grammars are unaffected.
+    // Reachable ONLY as a child of #generic-arrow-function, AFTER #arrow-type-parameters
+    // has consumed the confirmed `<…>` and closed at its `>`. Because the wrapper already
+    // proved this is a generic arrow, the very next `(` opens the arrow's param list with
+    // NO look-behind — which is what makes it both correct AND Onigmo-clean (a fixed-width
+    // look-behind can't tell a generic ARROW's `>` from a generic CALL's `foo<Bar>(` or a
+    // comparison `a > (`, and the correct variable-width one is rejected by Onigmo). This
+    // single typed region replaces #arrow-function-params for generic arrows, so it covers
+    // BOTH the single-line `(x:T)=>x` and the deferred `(`-at-end-of-line form (their
+    // annotations keep type scope). Emitted only when generic-arrow type params exist
+    // (angleDisambig), so non-generic grammars are unaffected.
     if (angleBracket && angleDisambig) {
       repository['arrow-function-params-generic'] = {
         name: `meta.parameters.arrow.${langName}`,
-        begin: `(?<=${escapeRegex(angleDisambig.close)})\\s*(\\()\\s*$`,
+        begin: '(\\()',
         beginCaptures: {
           '1': { name: `punctuation.definition.parameters.begin.${langName}` },
         },
@@ -6660,7 +6655,6 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         },
         patterns: arrowInner,
       };
-      topPatterns.push({ include: '#arrow-function-params-generic' });
     }
   }
 
@@ -7290,6 +7284,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // generic-call / cast / comparison angle-bracket layers AND #arrow-type-
     // parameters: a `<` at expression-start with a tag-shaped lookahead is JSX,
     // and the lookahead is the most specific. Self-closing before open/fragment.
+    // #generic-arrow-function is the top-level wrapper that now owns the generic-arrow
+    // `<…>(…)`; it triggers at the same `<` position the old top-level #arrow-type-parameters
+    // did, so it inherits the same -7 slot (#arrow-type-parameters is now only its child).
+    if (key === 'generic-arrow-function') return -7;
     if (key === 'arrow-type-parameters') return -7;
     if (key === 'jsx-self-closing-element-in-expression') return -6;
     if (key === 'jsx-element-in-expression') return -5.5;
