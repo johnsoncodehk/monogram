@@ -3271,7 +3271,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
  *     the lookahead (same head, broadest scope) supplies the key BODY pattern.
  * Returns null when the shape is absent (so non-YAML grammars are unaffected).
  */
-function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: string; keyBody: string; prefix: string | null } | null {
+function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: string; keyBody: string; prefixGroups: { scope: string; pattern: string }[] } | null {
   if (!grammar.indent) return null;
 
   // Find a separator literal S that heads a nested seq sibling of a head-indicator literal I.
@@ -3322,15 +3322,13 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
   // placeholders are `(?!)` and excluded). Their patterns join into an optional, repeatable
   // `(?:<pat>[\t ]+)*` group inserted between the indicator's whitespace and the key body — so a
   // node decorated by any run of anchors/tags still resolves the trailing scalar as the key.
-  // The prefix group is NON-CAPTURING: it CONSUMES the anchor/tag so the key (group 3) is reached,
-  // which means an anchor/tag sitting in this rare `? <prefix> key` position is left UNSCOPED
-  // (variable-length, order-free → no fixed capture can scope it, and a begin/end region risks
-  // over-running the value on the next line). Those decorators are NOT a graded role (the oracle
-  // emits only key/value scalars + comments), and the KEY — the role that matters — is scoped
-  // correctly; outside the explicit-key indicator, anchors/tags keep their normal `#anchor`/`#tag`
-  // scopes. Derived from the grammar; `null` when the family has no such prefix token (most grammars).
+  // The prefix tokens are grouped BY SCOPE so §2b can emit one CAPTURING group per scope (anchor →
+  // entity.name.type.anchor, tag → storage.type.tag): a `*`-repeated capture takes the LAST match,
+  // which scopes the common single `? &a key` / `? !!t key` correctly (a rare multi-decorator run
+  // scopes only its last anchor + last tag — acceptable). Derived from the grammar; empty when the
+  // family has no such prefix token (most grammars).
   const tokenByName = new Map(grammar.tokens.map(t => [t.name, t] as const));
-  const prefixPats = new Set<string>();
+  const prefixByScope = new Map<string, Set<string>>();
   // A NODE-prefix token is an `opt(token)` that decorates a value: it sits in a seq whose tail
   // (after it) eventually reaches the VALUE ALTERNATION — i.e. the seq contains an `alt` later on.
   // This selects YAML's `opt(Anchor)`/`opt(Tag)` at the head of `Node`/`InlineNode` (each followed
@@ -3352,7 +3350,9 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
         const it = e.items[i];
         if (it.type === 'quantifier' && it.kind === '?' && it.body.type === 'ref' && seqHasAltLater(e.items, i + 1)) {
           const t = tokenByName.get(it.body.name);
-          if (t && !tokenPatternIsNever(t) && !t.string) prefixPats.add(tokenPatternSource(t));
+          if (t && !tokenPatternIsNever(t) && !t.string && t.scope) {
+            (prefixByScope.get(t.scope) ?? prefixByScope.set(t.scope, new Set()).get(t.scope)!).add(tokenPatternSource(t));
+          }
         }
       }
       e.items.forEach(findPrefix);
@@ -3361,10 +3361,8 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
     else if (e.type === 'sep') findPrefix(e.element);
   };
   for (const r of grammar.rules) findPrefix(r.body);
-  const prefix = prefixPats.size
-    ? `(?:(?:${[...prefixPats].join('|')})[\\t ]+)*`
-    : null;
-  return { indicator, keyScope, keyBody, prefix };
+  const prefixGroups = [...prefixByScope].map(([scope, pats]) => ({ scope, pattern: [...pats].join('|') }));
+  return { indicator, keyScope, keyBody, prefixGroups };
 }
 
 // ── Flow-collection detection (YAML `{ … }` mapping / `[ … ]` sequence) ──
@@ -4654,14 +4652,25 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // (the indicator literal, the key scope, the key body); null for non-indentation grammars.
   const explicitKey = detectExplicitKey(grammar);
   if (explicitKey) {
-    // `(indicator)( whitespace )(optional node-prefix: anchors/tags)(key-scalar)` on one line —
-    // the dominant explicit-key shape. The prefix group is NON-capturing so the key stays group 3.
-    const prefixGroup = explicitKey.prefix ?? '';
+    // `(indicator)( whitespace )(optional node-prefix: anchors/tags)(key-scalar)` on one line — the
+    // dominant explicit-key shape. The node-prefix decorators (`? &a key` / `? !!t key`) get one
+    // CAPTURING group per scope so they are scoped (anchor/tag), not silently consumed; the key
+    // scalar's capture index follows them: 1=indicator, 2=ws, 3…N=prefix scopes, N+1=key.
+    const prefixCaps: Record<string, { name: string }> = {};
+    const prefixAlts: string[] = [];
+    let grp = 3;
+    for (const pg of explicitKey.prefixGroups) {
+      prefixAlts.push(`(${pg.pattern})`);
+      prefixCaps[String(grp)] = { name: `${pg.scope}.${langName}` };
+      grp++;
+    }
+    const prefixGroup = prefixAlts.length ? `(?:(?:${prefixAlts.join('|')})[\\t ]+)*` : '';
     repository['explicit-key'] = {
       match: `(${escapeRegex(explicitKey.indicator)})([\\t ]+)${prefixGroup}(${explicitKey.keyBody})`,
       captures: {
         '1': { name: `punctuation.definition.map.key.${langName}` },
-        '3': { name: `${explicitKey.keyScope}.${langName}` },
+        ...prefixCaps,
+        [String(grp)]: { name: `${explicitKey.keyScope}.${langName}` },
       },
     };
     topPatterns.push({ include: '#explicit-key' });
