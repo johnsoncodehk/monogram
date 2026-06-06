@@ -3388,7 +3388,10 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
 //   • the KEY scope + plain-scalar shape come from the same Key/Plain token pair detectExplicitKey
 //     uses (a scalar token whose pattern is `<plain>(?=…sep…)` over a broader plain scalar).
 // Returns null when the family has no flow collections (every non-YAML grammar).
-interface FlowColl { open: string; close: string; sep: string; colon: string | null; }
+// `punct` (when present) are the SPECIFIC open/close/separator scopes the grammar declared for THIS
+// collection via `indent.flowScopes.byOpen[open]` (null → fall back to the generic `punctuation.*`).
+// Scope strings are bare (no `.${lang}` suffix); the region builder appends it.
+interface FlowColl { open: string; close: string; sep: string; colon: string | null; punct: { begin: string; end: string; separator: string } | null; }
 function detectFlowCollections(grammar: CstGrammar): {
   colls: FlowColl[];
   plainStart: string;          // plain-scalar LEADING char class (no enclosing group)
@@ -3400,6 +3403,8 @@ function detectFlowCollections(grammar: CstGrammar): {
   sqScope: string | null;      // single-quoted scalar scope
   dqEscape: string | null;     // in-string escape sub-pattern for the double quote
   sqEscape: string | null;     // in-string escape sub-pattern for the single quote
+  keyValueScope: string | null;   // declared `:` key/value separator scope (indent.flowScopes.keyValue), bare
+  explicitKeyScope: string | null; // declared `?` explicit-key indicator scope (indent.flowScopes.explicitKey), bare
 } | null {
   const indent = grammar.indent;
   if (!indent || !indent.flowOpen?.length || !indent.flowClose?.length) return null;
@@ -3447,7 +3452,10 @@ function detectFlowCollections(grammar: CstGrammar): {
       const c = eLits.find(l => l.length === 1 && l !== sep && l !== open && l !== close && !/[\w\s]/.test(l));
       if (c) { colon = c; break; }
     }
-    colls.push({ open, close, sep, colon });
+    // The grammar may DECLARE specific open/close/separator scopes for this collection (keyed by the
+    // open bracket); absent → null → the region builder uses the generic `punctuation.${lang}`.
+    const punct = indent.flowScopes?.byOpen?.[open] ?? null;
+    colls.push({ open, close, sep, colon, punct });
   }
   if (!colls.length) return null;
 
@@ -3484,6 +3492,8 @@ function detectFlowCollections(grammar: CstGrammar): {
     dq: dqTok ? tokenPatternSource(dqTok) : null, sq: sqTok ? tokenPatternSource(sqTok) : null,
     dqScope: dqTok?.scope ?? null, sqScope: sqTok?.scope ?? null,
     dqEscape: quoteEscape(dqTok), sqEscape: quoteEscape(sqTok),
+    keyValueScope: indent.flowScopes?.keyValue ?? null,
+    explicitKeyScope: indent.flowScopes?.explicitKey ?? null,
   };
 }
 
@@ -4861,6 +4871,12 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   if (flow) {
     const ln = langName;
     const P = `punctuation.${ln}`;
+    // Resolve a DECLARED bare scope (from indent.flowScopes) to a full scope, or fall back to the
+    // generic `P`. The grammar supplies the language-flavoured names (mapping/sequence/key-value);
+    // the engine only appends the language suffix — so gen-tm stays agnostic (no hardcoded names).
+    const withLang = (bare: string | null): string => bare ? `${bare}.${ln}` : P;
+    const kvScope = withLang(flow.keyValueScope);          // the flow-mapping `:` key/value separator
+    const ekScope = withLang(flow.explicitKeyScope);       // the flow `?` explicit-key indicator
     // Comment includes (derived from the grammar's comment-scoped tokens — not a hardcoded key),
     // spread into every flow sub-region so a `#…` comment is scoped even mid-entry / mid-value.
     const commentIncs = commentIncludeKeys.map(k => ({ include: `#${k}` }));
@@ -4905,12 +4921,12 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // The VALUE colon (a flow separator `:`); and the JSON-style value colon glued after a closed
     // key (`{"a":b}` — `:` preceded by a quote/closer/line-start, where no space-separator exists).
     repository['flow-map-value'] = {
-      begin: colonSep, beginCaptures: { '0': { name: P } }, end: beforeClose,
+      begin: colonSep, beginCaptures: { '0': { name: kvScope } }, end: beforeClose,
       patterns: [...commentIncs, { include: '#flow-node' }],
     };
     repository['flow-map-value-json'] = {
       begin: `(?<=[${quoteCls}${closeCls}])[\\t ]*${eColon}|(?<=^)[\\t ]*${eColon}`,
-      beginCaptures: { '0': { name: P } }, end: beforeClose,
+      beginCaptures: { '0': { name: kvScope } }, end: beforeClose,
       patterns: [...commentIncs, { include: '#flow-node' }],
     };
     // A plain scalar as a VALUE / as a KEY (entity.name.tag); both end at the flow boundary.
@@ -4931,7 +4947,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // boundary opens a key region. Derived from the explicit-key indicator when present.
     const qmark = explicitKey ? escapeRegex(explicitKey.indicator) : null;
     const explicitKeyEntry: TmPattern[] = qmark ? [{
-      begin: `${qmark}(?=[\\s${closeCls}]|$)`, beginCaptures: { '0': { name: P } }, end: beforeClose,
+      begin: `${qmark}(?=[\\s${closeCls}]|$)`, beginCaptures: { '0': { name: ekScope } }, end: beforeClose,
       patterns: [...commentIncs, { include: '#flow-mapping-map-key' }, { include: '#flow-map-value' }, { include: '#flow-node' }],
     }] : [];
 
@@ -4939,6 +4955,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // key. A SEQUENCE: a scalar is a key only when a `:` separator follows (single-pair map element).
     for (const c of flow.colls) {
       const eOpen = escapeRegex(c.open), eClose = escapeRegex(c.close), eSep = escapeRegex(c.sep);
+      // The SPECIFIC open/close/separator scopes the grammar declared for THIS collection (mapping vs
+      // sequence — the names are the grammar's, not the engine's); null → the generic `P`.
+      const beginScope = c.punct ? `${c.punct.begin}.${ln}` : P;
+      const endScope = c.punct ? `${c.punct.end}.${ln}` : P;
+      const sepScope = c.punct ? `${c.punct.separator}.${ln}` : P;
       if (c.colon) {
         // A YAML flow mapping `{ … }` is a bracket region. CALLER predicate: detectFlowCollections
         // found a collection rule (`OPEN … CLOSE` seq) whose entry rule carries a `:` key/value
@@ -4946,9 +4967,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // re-includes #flow-mapping/#flow-sequence for nested collections).
         repository['flow-mapping'] = emitBracketRegion({
           name: `meta.flow.mapping.${ln}`,
-          openLit: eOpen, closeLit: eClose, beginCapName: P, endCapName: P,
+          openLit: eOpen, closeLit: eClose, beginCapName: beginScope, endCapName: endScope,
           bodyPatterns: [
-            ...commentIncs, { match: eSep, name: P },
+            ...commentIncs, { match: eSep, name: sepScope },
             { include: '#flow-mapping-map-key' }, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }, { include: '#flow-node' },
           ],
         });
@@ -4968,9 +4989,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // shape, but the entry rule has NO `:` separator (`c.colon == null`). Same #flow-node recurse.
         repository['flow-sequence'] = emitBracketRegion({
           name: `meta.flow.sequence.${ln}`,
-          openLit: eOpen, closeLit: eClose, beginCapName: P, endCapName: P,
+          openLit: eOpen, closeLit: eClose, beginCapName: beginScope, endCapName: endScope,
           bodyPatterns: [
-            ...commentIncs, { match: eSep, name: P },
+            ...commentIncs, { match: eSep, name: sepScope },
             { include: '#flow-sequence-map-key' }, { include: '#flow-map-value-json' }, { include: '#flow-map-value' }, { include: '#flow-node' },
           ],
         });

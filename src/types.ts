@@ -275,6 +275,23 @@ export interface IndentConfig {
   newlineToken: string;   // token TYPE emitted at a same-column line boundary (sibling separator)
   flowOpen?: string[];    // punctuation that suspends indentation while open (e.g. ['[', '{'])
   flowClose?: string[];   // matching closers (e.g. [']', '}'])
+  // Per-collection SCOPES for the flow structural punctuation, keyed by the OPEN bracket. The flow
+  // region the highlighter derives (gen-tm §2c) otherwise paints every `{ } [ ] ,` as a generic
+  // `punctuation.${lang}` — graded only at the FAMILY tier. Declaring a `begin`/`end`/`separator`
+  // scope here lets the open/close brackets and the in-collection comma carry the SPECIFIC
+  // convention (a `{…}` is a "mapping", a `[…]` a "sequence" — language-FLAVOURED names that must
+  // come from the grammar, not the neutral engine). `keyValue` (optional) re-scopes the `:`
+  // key/value separator inside a flow mapping, and `explicitKey` the `?` explicit-key indicator.
+  // Scope strings are WITHOUT the trailing `.${lang}` segment (gen-tm appends it, like
+  // `blockScalar.indicatorScope`). Absent → the generic `punctuation.${lang}` (legacy). A bracket
+  // pair with no entry in `byOpen` likewise falls back to the generic scope, so partial
+  // declarations are safe. (e.g. YAML: `{` → punctuation.definition.mapping.begin, `}` → …end,
+  // `,` in `{…}` → punctuation.separator.mapping; `[` → …sequence.begin, etc.)
+  flowScopes?: {
+    byOpen: Record<string, { begin: string; end: string; separator: string }>;
+    keyValue?: string;     // the flow-mapping `:` key/value separator (e.g. punctuation.separator.key-value)
+    explicitKey?: string;  // the flow `?` explicit-key indicator (e.g. punctuation.definition.key-value)
+  };
   comment?: string;       // line-comment introducer ignored for indentation (e.g. '#')
   // Block scalars (YAML `|` / `>`): when the rest of a line is an introducer + indicators, the
   // following more-indented lines are verbatim content emitted as ONE token (like raw-text, but

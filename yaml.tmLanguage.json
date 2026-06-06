@@ -755,7 +755,7 @@
       "begin": ":(?=[\\s\\[\\],{}]|$)",
       "beginCaptures": {
         "0": {
-          "name": "punctuation.yaml"
+          "name": "punctuation.separator.key-value.yaml"
         }
       },
       "end": "(?=[\\[\\],{}])",
@@ -772,7 +772,7 @@
       "begin": "(?<=[\"'\\[\\],{}])[\\t ]*:|(?<=^)[\\t ]*:",
       "beginCaptures": {
         "0": {
-          "name": "punctuation.yaml"
+          "name": "punctuation.separator.key-value.yaml"
         }
       },
       "end": "(?=[\\[\\],{}])",
@@ -837,13 +837,13 @@
       "begin": "\\[",
       "beginCaptures": {
         "0": {
-          "name": "punctuation.yaml"
+          "name": "punctuation.definition.sequence.begin.yaml"
         }
       },
       "end": "\\]",
       "endCaptures": {
         "0": {
-          "name": "punctuation.yaml"
+          "name": "punctuation.definition.sequence.end.yaml"
         }
       },
       "patterns": [
@@ -852,7 +852,7 @@
         },
         {
           "match": ",",
-          "name": "punctuation.yaml"
+          "name": "punctuation.separator.sequence.yaml"
         },
         {
           "include": "#flow-sequence-map-key"
@@ -874,7 +874,7 @@
           "begin": "\\?(?=[\\s\\[\\],{}]|$)",
           "beginCaptures": {
             "0": {
-              "name": "punctuation.yaml"
+              "name": "punctuation.definition.key-value.yaml"
             }
           },
           "end": "(?=[\\[\\],{}])",
@@ -936,13 +936,13 @@
       "begin": "\\{",
       "beginCaptures": {
         "0": {
-          "name": "punctuation.yaml"
+          "name": "punctuation.definition.mapping.begin.yaml"
         }
       },
       "end": "\\}",
       "endCaptures": {
         "0": {
-          "name": "punctuation.yaml"
+          "name": "punctuation.definition.mapping.end.yaml"
         }
       },
       "patterns": [
@@ -951,7 +951,7 @@
         },
         {
           "match": ",",
-          "name": "punctuation.yaml"
+          "name": "punctuation.separator.mapping.yaml"
         },
         {
           "include": "#flow-mapping-map-key"
@@ -973,7 +973,7 @@
           "begin": "\\?(?=[\\s\\[\\],{}]|$)",
           "beginCaptures": {
             "0": {
-              "name": "punctuation.yaml"
+              "name": "punctuation.definition.key-value.yaml"
             }
           },
           "end": "(?=[\\[\\],{}])",

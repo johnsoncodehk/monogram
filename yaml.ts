@@ -597,6 +597,22 @@ const indent: IndentConfig = {
   newlineToken: 'Newline',
   flowOpen: ['[', '{'],
   flowClose: [']', '}'],
+  // SPECIFIC scopes for the flow structural punctuation `{ } [ ] ,` (the TextMate / maintained-RedCMD
+  // convention), keyed by the OPEN bracket. A `{…}` is a MAPPING, a `[…]` a SEQUENCE — these are
+  // YAML-flavoured names (a JS `{}` is an "object", a `[]` an "array"), so they belong in the grammar,
+  // not the agnostic engine; gen-tm only threads them onto the flow region's begin/end/separator
+  // captures and appends the `.yaml` suffix. Without this every flow bracket/comma was a generic
+  // `punctuation.yaml` (graded only FAMILY); declaring them makes the flowPunct role grade EXACT and
+  // gives bracket-pair colourisers the begin/end pairing. The `:` key/value separator and `?`
+  // explicit-key indicator (NOT graded by the oracle, but coloured for consistency with official).
+  flowScopes: {
+    byOpen: {
+      '{': { begin: 'punctuation.definition.mapping.begin', end: 'punctuation.definition.mapping.end', separator: 'punctuation.separator.mapping' },
+      '[': { begin: 'punctuation.definition.sequence.begin', end: 'punctuation.definition.sequence.end', separator: 'punctuation.separator.sequence' },
+    },
+    keyValue: 'punctuation.separator.key-value',
+    explicitKey: 'punctuation.definition.key-value',
+  },
   comment: '#',
   blockScalar: { introducers: ['|', '>'], token: 'BlockScalar', documentMarkers: ['---', '...'], indicatorScope: 'keyword.control.flow.block-scalar' },
   compactIndicators: ['-', '?'],
