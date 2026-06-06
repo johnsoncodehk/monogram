@@ -883,6 +883,10 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
  * not on specific keywords.
  */
 function scopeToCapture(scope: string): string | null {
+  // A space-separated scope is `ancestor… leaf` (e.g. `string.unquoted constant.numeric` for a
+  // plain scalar that resolves to a number); a single tree-sitter capture wants the LEAF — the
+  // semantic type — not the string ancestor that only supplies context for the TextMate chain.
+  if (scope.includes(' ')) scope = scope.slice(scope.lastIndexOf(' ') + 1);
   // Ordered most-specific-first.
   const table: [string, string][] = [
     ['comment.block.documentation', '@comment.documentation'],

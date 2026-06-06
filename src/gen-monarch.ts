@@ -104,6 +104,9 @@ function delimStateSuffix(delim: string): string {
 // BOTH highlighters agree on roles while each speaks its engine's idiom. Driven
 // by scope PREFIXES — language-agnostic.
 function scopeToMonarch(scope: string): string {
+  // A space-separated scope is `ancestor… leaf`; a single Monarch token wants the LEAF (the
+  // semantic type), not the string ancestor that only supplies the TextMate chain.
+  if (scope.includes(' ')) scope = scope.slice(scope.lastIndexOf(' ') + 1);
   if (scope.startsWith('comment')) return 'comment';
   if (scope.startsWith('string.regexp')) return 'regexp';
   if (scope.startsWith('string')) return 'string';

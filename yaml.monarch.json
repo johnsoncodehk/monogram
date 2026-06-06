@@ -75,7 +75,7 @@
     "string_u46nan_body": [
       [
         "[^.\\\\]+",
-        "string"
+        "number"
       ],
       [
         "\\\\.",
@@ -89,7 +89,7 @@
       [
         "\\.nan",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@value"
         }
       ]
@@ -101,7 +101,7 @@
       [
         "\\.nan",
         {
-          "token": "string",
+          "token": "number",
           "next": "@pop"
         }
       ]
@@ -109,7 +109,7 @@
     "string_u46NaN_body": [
       [
         "[^.\\\\]+",
-        "string"
+        "number"
       ],
       [
         "\\\\.",
@@ -123,7 +123,7 @@
       [
         "\\.NaN",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@value"
         }
       ]
@@ -135,7 +135,7 @@
       [
         "\\.NaN",
         {
-          "token": "string",
+          "token": "number",
           "next": "@pop"
         }
       ]
@@ -143,7 +143,7 @@
     "string_u46NAN_body": [
       [
         "[^.\\\\]+",
-        "string"
+        "number"
       ],
       [
         "\\\\.",
@@ -157,7 +157,7 @@
       [
         "\\.NAN",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@value"
         }
       ]
@@ -169,7 +169,7 @@
       [
         "\\.NAN",
         {
-          "token": "string",
+          "token": "number",
           "next": "@pop"
         }
       ]
@@ -177,7 +177,7 @@
     "string_0x_body": [
       [
         "[^0\\\\]+",
-        "string"
+        "number"
       ],
       [
         "\\\\.",
@@ -191,7 +191,7 @@
       [
         "0x",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@value"
         }
       ]
@@ -203,7 +203,7 @@
       [
         "0x",
         {
-          "token": "string",
+          "token": "number",
           "next": "@pop"
         }
       ]
@@ -211,7 +211,7 @@
     "string_0o_body": [
       [
         "[^0\\\\]+",
-        "string"
+        "number"
       ],
       [
         "\\\\.",
@@ -225,7 +225,7 @@
       [
         "0o",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@value"
         }
       ]
@@ -237,7 +237,7 @@
       [
         "0o",
         {
-          "token": "string",
+          "token": "number",
           "next": "@pop"
         }
       ]
@@ -245,7 +245,7 @@
     "string_true_body": [
       [
         "[^t\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -259,7 +259,7 @@
       [
         "true",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -271,7 +271,7 @@
       [
         "true",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -279,7 +279,7 @@
     "string_True_body": [
       [
         "[^T\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -293,7 +293,7 @@
       [
         "True",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -305,7 +305,7 @@
       [
         "True",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -313,7 +313,7 @@
     "string_TRUE_body": [
       [
         "[^T\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -327,7 +327,7 @@
       [
         "TRUE",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -339,7 +339,7 @@
       [
         "TRUE",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -347,7 +347,7 @@
     "string_false_body": [
       [
         "[^f\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -361,7 +361,7 @@
       [
         "false",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -373,7 +373,7 @@
       [
         "false",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -381,7 +381,7 @@
     "string_False_body": [
       [
         "[^F\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -395,7 +395,7 @@
       [
         "False",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -407,7 +407,7 @@
       [
         "False",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -415,7 +415,7 @@
     "string_FALSE_body": [
       [
         "[^F\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -429,7 +429,7 @@
       [
         "FALSE",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -441,7 +441,7 @@
       [
         "FALSE",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -449,7 +449,7 @@
     "string_null_body": [
       [
         "[^n\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -463,7 +463,7 @@
       [
         "null",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -475,7 +475,7 @@
       [
         "null",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -483,7 +483,7 @@
     "string_Null_body": [
       [
         "[^N\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -497,7 +497,7 @@
       [
         "Null",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -509,7 +509,7 @@
       [
         "Null",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -517,7 +517,7 @@
     "string_NULL_body": [
       [
         "[^N\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -531,7 +531,7 @@
       [
         "NULL",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -543,7 +543,7 @@
       [
         "NULL",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -551,7 +551,7 @@
     "string_tilde_body": [
       [
         "[^~\\\\]+",
-        "string"
+        "keyword"
       ],
       [
         "\\\\.",
@@ -565,7 +565,7 @@
       [
         "~",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@value"
         }
       ]
@@ -577,7 +577,7 @@
       [
         "~",
         {
-          "token": "string",
+          "token": "keyword",
           "next": "@pop"
         }
       ]
@@ -608,105 +608,105 @@
       [
         "\\.nan",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@string_u46nan"
         }
       ],
       [
         "\\.NaN",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@string_u46NaN"
         }
       ],
       [
         "\\.NAN",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@string_u46NAN"
         }
       ],
       [
         "0x",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@string_0x"
         }
       ],
       [
         "0o",
         {
-          "token": "string",
+          "token": "number",
           "switchTo": "@string_0o"
         }
       ],
       [
         "true",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_true"
         }
       ],
       [
         "True",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_True"
         }
       ],
       [
         "TRUE",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_TRUE"
         }
       ],
       [
         "false",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_false"
         }
       ],
       [
         "False",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_False"
         }
       ],
       [
         "FALSE",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_FALSE"
         }
       ],
       [
         "null",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_null"
         }
       ],
       [
         "Null",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_Null"
         }
       ],
       [
         "NULL",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_NULL"
         }
       ],
       [
         "~",
         {
-          "token": "string",
+          "token": "keyword",
           "switchTo": "@string_tilde"
         }
       ],
