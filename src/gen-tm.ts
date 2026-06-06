@@ -4741,6 +4741,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       while: '\\G(?=\\1[ \\t]|[ \\t]*$)',
       patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
     };
+    // DOCUMENT-ROOT block scalar (`--- |` / bare `|` at column 0, NO mapping key / sequence dash
+    // before it). Such a node sits at the document level, whose indentation is "-1", so its body may
+    // begin at COLUMN 0 (W4TN `--- |` / M7A3 bare `|`, both valid YAML). The node-indent–bounded
+    // `${bsKey}` region above fails here: its `while: \G(?=\1[ \t]|…)` has `\1` = the EMPTY column-0
+    // node indent, so `\1[ \t]` degenerates to `[ \t]` (one leading space REQUIRED) and a column-0
+    // body line matches neither arm → the region ends after the header and the body falls through to
+    // the directive/key tokens (a `%`-led body line mis-scopes as a directive). A document-root scalar
+    // is instead bounded by the next column-0 DOCUMENT MARKER (`---`/`...`) or EOF — exactly how the
+    // maintained RedCMD grammar bounds it (its block scalar sits under the document region whose
+    // `while: \G(?!(?:…|---)…)` releases only at a marker). Derived from `indent.blockScalar`: the
+    // introducer chars (`intro`) and the `documentMarkers` (the only YAML-specific literals, read from
+    // config — never hardcoded). The funky body still AUTO-DETECTS the content indent, so a doc-root
+    // scalar with an INDENTED body releases at its dedent too; only a genuinely column-0 body (indent
+    // 0) runs to the marker. Ranked ABOVE `${bsKey}` (scopeOrder) so it wins this column-0 case; its
+    // lookahead requires the introducer to be the FIRST value token (after an optional marker), so it
+    // never steals a `key: |` / `- |` / nested header (those keep their node-indent regions).
+    const docMarkers = blockScalar.documentMarkers;
+    if (docMarkers && docMarkers.length) {
+      const docMarkAlt = docMarkers.map(escapeRegex).join('|');
+      const docMark = `(?:${docMarkAlt})(?=[\\t ]|$)`;
+      repository[`${bsKey}-doc`] = {
+        begin: `^()(?=(?:${docMark}[\\t ]+)?${intro}[\\t ]*(?:#|$))`,
+        while: `\\G(?!${docMark})`,
+        patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
+      };
+      topPatterns.push({ include: `#${bsKey}-doc` });
+    }
     // Sequence entry whose mapping VALUE is the block scalar (`- a: |` … `  b:`): bound siblings at the
     // KEY column, not the dash column, else the next entry key is swallowed. The begin consumes the
     // leading indent `\1` AND the dash + its trailing spaces `\3`, and the bound `\1[ \t]\3[ \t]` is
@@ -7268,10 +7295,16 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     //   • `blockscalar-key` (`?`-anchored) and the plain rule BOTH match `? |` (the plain VP admits a
     //     leading `?`), but the key variant scopes the body as the key NAME, so it must win → below
     //     the plain rule.
-    //   • the plain `blockscalar` is the fallback (bare `|`, `key: |`, `--- |`).
+    //   • `-doc` (document-root: bare `|` / `--- |` at column 0, no key/dash) and the plain rule BOTH
+    //     match a column-0 header, but `-doc` bounds the body at the next document marker (so a
+    //     column-0 body survives, instead of the plain rule's node-indent `while` ending it early), so
+    //     `-doc` must be tried first → above the plain rule. It never collides with `-seq`/`-key`
+    //     (those carry a leading `-`/`?` its lookahead forbids).
+    //   • the plain `blockscalar` is the fallback (bare `|`, `key: |`, `--- |` with an indented body).
     const bsRank = grammar.indent?.blockScalar?.token.toLowerCase();
     if (bsRank && key === `${bsRank}-seq`) return 0.5;
     if (key === 'blockscalar-key') return 0.55;
+    if (bsRank && key === `${bsRank}-doc`) return 0.58;
     if (bsRank && key === bsRank) return 0.6;
     // A flow collection (`{ … }` / `[ … ]`) is a begin/end region opened by a bracket; it must be
     // tried before #punctuation (which would otherwise claim the `{`/`[` as a bare bracket) and

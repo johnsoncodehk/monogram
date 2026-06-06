@@ -18,6 +18,9 @@
           "include": "#blockscalar-key"
         },
         {
+          "include": "#blockscalar-doc"
+        },
+        {
           "include": "#blockscalar"
         },
         {
@@ -104,6 +107,9 @@
         },
         {
           "include": "#blockscalar-key"
+        },
+        {
+          "include": "#blockscalar-doc"
         },
         {
           "include": "#blockscalar"
@@ -411,6 +417,91 @@
     "newline": {
       "name": "variable.other.yaml",
       "match": "(?!)"
+    },
+    "blockscalar-doc": {
+      "begin": "^()(?=(?:(?:---|\\.\\.\\.)(?=[\\t ]|$)[\\t ]+)?[|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?[\\t ]*(?:#|$))",
+      "while": "\\G(?!(?:---|\\.\\.\\.)(?=[\\t ]|$))",
+      "patterns": [
+        {
+          "begin": "[\\t ]*([|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?)(?=[\\t ]*(?:#|$))([\\t ]*.*)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.flow.block-scalar.yaml"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#comment"
+                }
+              ]
+            }
+          },
+          "while": "\\G",
+          "patterns": [
+            {
+              "begin": "$",
+              "while": "\\G",
+              "patterns": [
+                {
+                  "begin": "\\G( ++)$",
+                  "while": "\\G(?>(\\1)$|(?!\\1)( *+)($|.))",
+                  "contentName": "string.unquoted.block.yaml"
+                },
+                {
+                  "begin": "\\G(?!$)(?=( *+))",
+                  "end": "\\G(?!\\1)(?=[\\t ]*+#)",
+                  "patterns": [
+                    {
+                      "begin": "\\G( *+)",
+                      "while": "\\G(?>(\\1)|( *+)($|[^\\t#]|[\\t ]++[^#]))",
+                      "contentName": "string.unquoted.block.yaml"
+                    }
+                  ]
+                },
+                {
+                  "begin": "(?!\\G)(?=[\\t ]*+#)",
+                  "while": "\\G",
+                  "patterns": [
+                    {
+                      "include": "#comment"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
     },
     "blockscalar-seq": {
       "begin": "^([ \\t]*)(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+(?:[&!][^\\t\\n\\f\\r \\[\\]{},]*[\\t ]+)*[|>](?:[1-9][-+]?|[-+][1-9]?|[-+])?[\\t ]*(?:#|$))",
