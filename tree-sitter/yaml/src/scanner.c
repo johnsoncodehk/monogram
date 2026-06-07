@@ -13,7 +13,10 @@
 #include <wctype.h>
 
 enum TokenType {
-  NO_EXTERNAL_TOKENS,
+  INDENT,
+  DEDENT,
+  NEWLINE,
+  BLOCK_SCALAR,
 };
 
 // The scanner is stateless — tree-sitter's `valid_symbols` already encodes

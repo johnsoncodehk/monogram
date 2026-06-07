@@ -143,6 +143,10 @@ interface GrammarJsContext {
   externalSnake: Set<string>;
   /** original token name → external scanner token name (snake) if scanner-provided */
   scannerTokenFor: Map<string, string>;
+  /** Non-start rules whose body can derive the empty string. tree-sitter rejects these, so their
+   *  bodies are made non-empty and every reference to them is wrapped in optional() (ε-elimination,
+   *  see makeNonEmpty / wrapNullableRefs). Empty for grammars with no nullable non-start rules. */
+  nullableNonStart: Set<string>;
   /**
    * If the grammar declares an interpolated-template token, the plan for turning it
    * into a `template` RULE (delimiters + the `${ … }` hole) backed by an external
@@ -342,9 +346,116 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   return `choice(\n      ${branches.join(',\n      ')}\n    )`;
 }
 
+// ── Nullable-rule elimination (ε-elimination) ────────────────────────────────
+// tree-sitter rejects a NON-START rule that can match the empty string. An indentation grammar like
+// YAML has several (a YAML node/entry may be NULL: `key:` with no value, `{a: }`, an empty doc), so
+// `node`/`flow_node`/`flow_map_entry`/… are nullable. We push the emptiness to the CALL SITES: make
+// each such rule's body NON-EMPTY (`makeNonEmpty`) and wrap every reference to it in `optional(...)`
+// (`wrapNullableRefs`). The accepted language is identical (rule-or-empty at each use), and ONLY the
+// tree-sitter target is touched — the parser and the other generators never see this. Computed once
+// and gated on the grammar actually having nullable non-start rules, so every grammar that already
+// `generate`s (no such rules) is byte-identical.
+
+/** Non-start rules whose body can derive ε. `isTerminal` flags tokens / external symbols (never nullable). */
+function computeNullableNonStart(grammar: CstGrammar, startName: string, isTerminal: (name: string) => boolean): Set<string> {
+  const ruleNames = new Set(grammar.rules.map(r => r.name));
+  const nullable = new Set<string>();
+  const exprNullable = (e: RuleExpr): boolean => {
+    switch (e.type) {
+      case 'literal': return e.value === '';
+      case 'ref': return ruleNames.has(e.name) && !isTerminal(e.name) && nullable.has(e.name);
+      case 'seq': return e.items.every(exprNullable);
+      case 'alt': return e.items.some(exprNullable);
+      case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true; // ?,* match empty
+      case 'group': return exprNullable(e.body);
+      case 'sep': return true;  // renders to optional(seq(...))
+      default: return true;     // not/sameLine/noCommentBefore/noMultilineFlowBefore/op/prefix/postfix → blank()
+    }
+  };
+  let changed = true;
+  while (changed) { changed = false; for (const r of grammar.rules) if (!nullable.has(r.name) && exprNullable(r.body)) { nullable.add(r.name); changed = true; } }
+  nullable.delete(startName); // the start rule MAY be nullable in tree-sitter
+  return nullable;
+}
+
+/** Wrap every reference to a made-non-empty (`nn`) rule in optional() — the may-be-empty form. */
+function wrapNullableRefs(e: RuleExpr, nn: Set<string>): RuleExpr {
+  switch (e.type) {
+    case 'ref': return nn.has(e.name) ? { type: 'quantifier', kind: '?', body: e } : e;
+    case 'seq': return { type: 'seq', items: e.items.map(i => wrapNullableRefs(i, nn)) };
+    case 'alt': return { type: 'alt', items: e.items.map(i => wrapNullableRefs(i, nn)) };
+    case 'quantifier': return { ...e, body: wrapNullableRefs(e.body, nn) };
+    case 'group': return { ...e, body: wrapNullableRefs(e.body, nn) };
+    case 'sep': return { ...e, element: wrapNullableRefs(e.element, nn) };
+    default: return e;
+  }
+}
+
+/** Whether e is nullable AFTER the transform (a ref to an `nn` rule is now wrapped optional → nullable;
+ *  every other ref is non-nullable, since `nn` is exactly the made-non-empty set). */
+function exprNullableAfter(e: RuleExpr, nn: Set<string>): boolean {
+  switch (e.type) {
+    case 'literal': return e.value === '';
+    case 'ref': return nn.has(e.name);
+    case 'seq': return e.items.every(i => exprNullableAfter(i, nn));
+    case 'alt': return e.items.some(i => exprNullableAfter(i, nn));
+    case 'quantifier': return e.kind === '+' ? exprNullableAfter(e.body, nn) : true;
+    case 'group': return exprNullableAfter(e.body, nn);
+    case 'sep': return true;
+    default: return true;
+  }
+}
+
+/** The non-empty form of a (nullable) expr — its language minus ε. `null` if that language is empty
+ *  (a purely zero-width expr). The chosen non-empty position is rendered UNWRAPPED; the rest get the
+ *  may-be-empty form `wrapNullableRefs`. */
+function makeNonEmpty(e: RuleExpr, nn: Set<string>): RuleExpr | null {
+  const T = (x: RuleExpr) => wrapNullableRefs(x, nn);
+  const NE = (x: RuleExpr) => makeNonEmpty(x, nn);
+  const nul = (x: RuleExpr) => exprNullableAfter(x, nn);
+  switch (e.type) {
+    case 'literal': return e.value === '' ? null : e;
+    case 'ref': return e;                                   // an nn rule (now non-empty) or a non-nullable rule/terminal
+    case 'group': { const b = NE(e.body); return b ? { ...e, body: b } : null; }
+    case 'alt': {
+      const parts: RuleExpr[] = [];
+      for (const m of e.items) { const r = nul(m) ? NE(m) : T(m); if (r) parts.push(r); }
+      return parts.length === 0 ? null : parts.length === 1 ? parts[0] : { type: 'alt', items: parts };
+    }
+    case 'seq': {
+      if (e.items.some(i => !nul(i))) return T(e);          // a non-nullable element already forces non-empty
+      const branches: RuleExpr[] = [];                       // all nullable → "first non-empty element is at i"
+      for (let i = 0; i < e.items.length; i++) {
+        const head = NE(e.items[i]);
+        if (!head) continue;
+        const tail = e.items.slice(i + 1).map(T);
+        branches.push(tail.length ? { type: 'seq', items: [head, ...tail] } : head);
+      }
+      return branches.length === 0 ? null : branches.length === 1 ? branches[0] : { type: 'alt', items: branches };
+    }
+    case 'quantifier': {
+      if (e.kind === '?') return nul(e.body) ? NE(e.body) : T(e.body);   // optional(x) non-empty = x non-empty
+      const head = nul(e.body) ? NE(e.body) : T(e.body);                 // *,+ non-empty = one non-empty iter, then repeat
+      return head ? { type: 'seq', items: [head, { type: 'quantifier', kind: '*', body: T(e.body) }] } : null;
+    }
+    case 'sep': {
+      const head = nul(e.element) ? NE(e.element) : T(e.element);
+      if (!head) return null;
+      const d: RuleExpr = { type: 'literal', value: e.delimiter };
+      return { type: 'seq', items: [head, { type: 'quantifier', kind: '*', body: { type: 'seq', items: [d, T(e.element)] } }, { type: 'quantifier', kind: '?', body: d }] };
+    }
+    default: return null;                                   // not/sameLine/…: zero-width, no non-empty form
+  }
+}
+
 /** Build a single rule's body string (Pratt or plain). */
 function buildRuleBody(rule: RuleDecl, ctx: GrammarJsContext): string {
   if (ctx.prattRules.has(rule.name)) return buildPrattRule(rule, ctx);
+  const nn = ctx.nullableNonStart;
+  if (nn.size > 0) {
+    const body = nn.has(rule.name) ? (makeNonEmpty(rule.body, nn) ?? rule.body) : wrapNullableRefs(rule.body, nn);
+    return renderExpr(body, ctx);
+  }
   return renderExpr(rule.body, ctx);
 }
 
@@ -423,6 +534,22 @@ const LR_CONFLICT_CLOSURE: string[][] = [
   // while completing the closure (CI builds only the typescript + html tree-sitters, so
   // tsx/jsx generate was never exercised). Each is inert for languages lacking the rule.
   ['type', 'class_heritage'], ['type_param', 'jsxtag_name'], ['expr', 'jsxcontainer'],
+  // YAML (issue #3): an indentation grammar is massively ambiguous — a newline may continue a node or
+  // start the next document, a `:` may open a value or be an empty-key map, a scalar may be a key or a
+  // leaf, a flow collection may be a value or an implicit block key. tree-sitter's GLR absorbs all of
+  // this once the states are declared. These 37 tuples are the fixpoint of its own analysis (collected
+  // via test/collect-conflicts.ts); every name is YAML-specific, so each is inert for the other
+  // languages (verified: zero rule-name overlap with the TS/JS/TSX/JSX grammars).
+  ['stream', 'node'], ['empty_key_mapping'], ['explicit_entry'], ['next_doc'], ['stream', 'next_doc'],
+  ['node'], ['key', 'plain'], ['scalar', 'doc_fold'], ['explicit_mapping'], ['block_sequence'],
+  ['map_value_scalar', 'map_value_node_scalar'], ['scalar', 'block_key_scalar'],
+  ['map_value', 'map_value_node'], ['flow_explicit'], ['flow_mapping'], ['flow_sequence'],
+  ['explicit_doc_body'], ['inline_doc_node'], ['alias_or_keyed'], ['doc_fold'], ['mapping_from_flow'],
+  ['mapping_or_scalar'], ['property', 'node'], ['seq_item'], ['property'], ['flow_node'],
+  ['node', 'explicit_doc_body'], ['node', 'after_doc_end'], ['after_doc_end'], ['map_entry'],
+  ['stream', 'explicit_doc_body'], ['map_entry_no_empty'], ['seq_value_node'],
+  ['mapping_or_scalar', 'doc_fold'], ['map_value_scalar', 'map_inline_scalar'],
+  ['content_node', 'mapping_from_flow'], ['mapping_or_scalar', 'map_value'],
 ];
 
 /**
@@ -475,9 +602,12 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
   }
 
   // 3. The LR(1) closure tree-sitter's own analysis reports for this grammar.
-  //    Applied only for tuples whose rules all exist here (inert otherwise).
+  //    Applied only for tuples whose symbols ALL exist here (inert otherwise). A conflict symbol may
+  //    be a RULE or a TOKEN (e.g. YAML's `key`/`plain` are tokens that conflict on a trailing `:`), so
+  //    both name sets count — `$.key` is a valid conflict symbol whether key is a rule or a token.
+  const tokenSnakes = new Set(ctx.tokenSnake.values());
   for (const tuple of LR_CONFLICT_CLOSURE) {
-    if (tuple.every(r => ruleSnakes.has(r))) push(tuple);
+    if (tuple.every(r => ruleSnakes.has(r) || tokenSnakes.has(r))) push(tuple);
   }
 
   return conflicts;
@@ -587,6 +717,19 @@ function planScannerTokens(grammar: CstGrammar): Map<string, string> {
   // stateless external token (the scanner emits it at each significant line boundary). Listed
   // FIRST so it heads the enum / externals order.
   if (grammar.newline) map.set(grammar.newline.token, toSnake(grammar.newline.token));
+  // An indentation-sensitive grammar (YAML): INDENT / DEDENT / NEWLINE and the block-scalar body are
+  // engine-emitted — the lexer's indent stack (src/gen-lexer.ts) decides them, not a regex — so their
+  // token IR is `never()`. In tree-sitter they become EXTERNAL tokens the C scanner (src/scanner.c)
+  // provides; without this they would serialize as never-match token rules (`token(/[^\s\S]/)`) that
+  // the parser can never match (and the block-scalar body would orphan the scalar). Ordered
+  // indent/dedent/newline/body so grammar.js's `externals` and scanner.c's enum agree positionally.
+  if (grammar.indent) {
+    const ind = grammar.indent;
+    map.set(ind.indentToken, toSnake(ind.indentToken));
+    map.set(ind.dedentToken, toSnake(ind.dedentToken));
+    map.set(ind.newlineToken, toSnake(ind.newlineToken));
+    if (ind.blockScalar) map.set(ind.blockScalar.token, toSnake(ind.blockScalar.token));
+  }
   // The regex token: '/' is context-sensitive (regex vs division). The scanner
   // resolves it.
   const regexTok = grammar.tokens.find(t => t.flags.includes('regex'));
@@ -778,8 +921,14 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
   // queries for them. Same shape rule gen-tm.ts uses (inferIdentScope).
   const nameFields = collectNameFields(grammar);
 
+  // ε-elimination set (see makeNonEmpty): the start rule is the entry rule, emitted FIRST below.
+  const entryName = grammar.rules[grammar.rules.length - 1].name;
+  const isTerminalName = (n: string) => tokenNames.has(n) || scannerTokenFor.has(n);
+  const nullableNonStart = computeNullableNonStart(grammar, entryName, isTerminalName);
+
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
+    nullableNonStart,
     templatePlan,
     interpolationPlans,
     nameFieldNodes: nameFields.nodes,
