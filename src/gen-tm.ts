@@ -4975,7 +4975,21 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // a flow collection (`{ a: b,\n  c }` / `a: { b: c,\n  d }`) is a multi-line begin/end region of
       // its own — a `{`/`[` before the `:` means the `:` is a FLOW separator, not a block one, so the
       // region must NOT open and steal those lines from #flow-mapping/#flow-sequence.
-      const plainVp = `(?:(?:${docAlt})[\\t ]+)?(?:(?:${compactCls}[\\t ]+)+(?:${flowEx}*?${kvSep}[\\t ]+)?|${flowEx}*?${kvSep}[\\t ]+)(?=${plainSrc})`;
+      // The key-scan up to the `:` separator. A leading / embedded QUOTED scalar is consumed as one
+      // WHOLE escape-aware token (`fc.dq`/`fc.sq`) so its INTERNAL `:` is never mistaken for the key
+      // separator: a line-start double/single-quoted scalar with an inner colon (`"a: b"`) is ONE
+      // scalar, not a `key: value`, and must NOT open a fold (it falls to #dquote/#squote). The bare
+      // run excludes the quote chars so a quote can ONLY match via the token branch — otherwise the
+      // engine skips the (optional) token and the bare class re-swallows the opening quote, re-mis-
+      // reading the inner colon. Derived from the grammar's quoted-scalar tokens; a grammar with no
+      // quoted scalar keeps the plain `flowEx` scan (byte-identical).
+      const fcQuote = detectFlowCollections(grammar);
+      const quotedScalarToks = [fcQuote?.dq, fcQuote?.sq].filter((s): s is string => !!s);
+      const quoteCharCls = quotedScalarToks.map(t => escapeForCharClass(t[0] === '\\' ? t.slice(0, 2) : t[0])).join('');
+      const keyToSep = quotedScalarToks.length
+        ? `(?:${quotedScalarToks.join('|')}|${flowEx.slice(0, -1)}${quoteCharCls}])*?`
+        : `${flowEx}*?`;
+      const plainVp = `(?:(?:${docAlt})[\\t ]+)?(?:(?:${compactCls}[\\t ]+)+(?:${keyToSep}${kvSep}[\\t ]+)?|${keyToSep}${kvSep}[\\t ]+)(?=${plainSrc})`;
       // Header-line token includes: the same shape any plain `key: value` line gets, so the header is
       // scoped identically to the top level (only the CONTINUATION changes). Includes the typed-value
       // tokens (`#num`/`#boolnull`) so a SINGLE-line `a: 1` keeps `constant.numeric`, and the full
@@ -5013,6 +5027,27 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           patterns: [continuationRule, ...plainHeaderIncs],
         });
         topPatterns.push({ include: '#plain-continuation' });
+      }
+
+      // ── 2a‴. Multi-line EXPLICIT-KEY continuation (`? a\n  true`) ──
+      // An explicit key (`? a`) may FOLD across deeper continuation lines exactly like a plain value —
+      // `? a\n  true` is the ONE key "a true" (CST: a single key scalar). #plain-continuation already
+      // opens on `? a` (its `?` is in `compactCls`), but it scopes the continuation as the VALUE plain
+      // scope (`string.unquoted`); a KEY continuation must instead take the KEY scope (entity.name.tag),
+      // so the folded key reads consistently with its first line (which #explicit-key scopes as the key).
+      // Same structure as #plain-continuation, but pinned to the explicit-key INDICATOR (so a `- ` seq /
+      // `key:` value fold stays on #plain-continuation) and the continuation takes the key scope. Ranked
+      // ABOVE #plain-continuation (scopeOrder) so a `? `-led header takes the key-scoped continuation.
+      const ekFold = detectExplicitKey(grammar);
+      if (ekFold && fold.hasDeeper) {
+        const ekContRule = { match: '\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*', name: `${ekFold.keyScope}.${langName}` };
+        repository['explicit-key-continuation'] = emitIndentRegion({
+          lookahead: `(?=${escapeRegex(ekFold.indicator)}[\\t ]+(?:${keyToSep}${kvSep}[\\t ]+)?(?=${plainSrc}))`,
+          cont: `\\1[ \\t]+(?!${structAhead})`,
+          blankFirst: true,
+          patterns: [ekContRule, ...plainHeaderIncs],
+        });
+        topPatterns.push({ include: '#explicit-key-continuation' });
       }
 
       // ── 2a″. BARE plain-scalar SAME-COLUMN fold (monogram#12 §9) ──
@@ -5126,11 +5161,14 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // scalar tokens, which paint it as a stray `string.unquoted`. But a `%` can never BEGIN a plain
   // scalar (YAML §7.3.3 — `%` is a c-indicator, excluded from ns-plain-first), so a `%`-led line the
   // clean directive tokens did NOT claim is always a malformed directive, never real scalar content.
-  // Re-scope the whole line as an invalid directive. The indicator (`%`) is read from the directive
-  // tokens' leading literal (never hardcoded); ranked just BELOW the clean directives and ABOVE the
-  // plain scalars (scopeOrder 6.5) so it only catches what they left and beats the stray-scalar mis-
-  // scope. Highlight-only — the parser still rejects the line. The `^` anchor pins it to a line-start
-  // `%` (an indented `%` mid-line — e.g. a `key: %v` value — is left to the scalar tokens).
+  // Re-scope the whole line AS A DIRECTIVE (keyword.other.directive) — the malformed trailing token is
+  // directive content (#4 `%YAML 1.2 foo`, #8 glued `%YAML 1.1#…`), and Monogram highlights questionable-
+  // but-renderable content NORMALLY rather than splashing `invalid.illegal` (the #12 #3 stance; this also
+  // matches the neutral `yaml`-CST oracle, which recovers such a line as a directive). The indicator
+  // (`%`) is read from the directive tokens' leading literal (never hardcoded); ranked just BELOW the
+  // clean directives and ABOVE the plain scalars (scopeOrder 6.5) so it only catches what they left and
+  // beats the stray-scalar mis-scope. Highlight-only — the parser still rejects the line. The `^` anchor
+  // pins it to a line-start `%` (an indented `%` mid-line — e.g. a `key: %v` value — stays a scalar).
   const directiveToks = grammar.tokens.filter(t => /(^|\.)keyword\.other\.directive(\.|$)/.test(t.scope ?? ''));
   if (directiveToks.length) {
     const lead = directiveToks.map(t => tokenPatternLeadingSource(t)).find((s): s is string => !!s);
@@ -5138,7 +5176,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (indicator) {
       repository['directive-malformed'] = {
         match: `^[ \\t]*(${escapeRegex(indicator)}[^\\n]*?)[\\t ]*$`,
-        captures: { '1': { name: `invalid.illegal.keyword.other.directive.${langName}` } },
+        captures: { '1': { name: `keyword.other.directive.${langName}` } },
       };
       topPatterns.push({ include: '#directive-malformed' });
     }
@@ -7648,6 +7686,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // deeper `!`/digit/`%` line falls through to #tag/#num/#directive). It ranks BELOW the
     // block-scalar regions (≤ 0.6) so a `key: |` keeps its block-scalar region — its lookahead requires
     // a real plain VALUE head (never `|`/`>`), so the two never collide on the same line anyway.
+    // The explicit-key continuation (`? a\n  true`) must out-rank #plain-continuation (0.7): both open
+    // on a `? `-led header (the `?` is in compactCls), but the explicit-key variant scopes the folded
+    // continuation as the KEY (entity.name.tag), so it must win for the `?` case; #plain-continuation
+    // still handles `key:`/`- ` folds (its lookahead, unlike this one, is not pinned to the `?`).
+    if (key === 'explicit-key-continuation') return 0.68;
     if (key === 'plain-continuation') return 0.7;
     // The BARE plain-scalar same-column fold (§2a″) likewise begins AT LINE START and must out-rank the
     // scalar tokens (#key/#num/#boolnull/#plain ≥ 0.8) so it opens on a bare value scalar and claims its

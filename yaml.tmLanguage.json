@@ -78,6 +78,9 @@
           "include": "#blockscalar"
         },
         {
+          "include": "#explicit-key-continuation"
+        },
+        {
           "include": "#plain-continuation"
         },
         {
@@ -232,6 +235,9 @@
           "include": "#blockscalar"
         },
         {
+          "include": "#explicit-key-continuation"
+        },
+        {
           "include": "#plain-continuation"
         },
         {
@@ -323,7 +329,7 @@
     },
     "yamldirective": {
       "name": "keyword.other.directive.yaml",
-      "match": "%YAML[ \\t]+[0-9]+\\.[0-9]+(?=[ \\t]*(?:#|\\r|\\n|$))"
+      "match": "%YAML[ \\t]+[0-9]+\\.[0-9]+(?=[ \\t]*(?:\\r|\\n|$)|[ \\t]+#)"
     },
     "directive": {
       "name": "keyword.other.directive.yaml",
@@ -1723,12 +1729,67 @@
       ]
     },
     "plain-continuation": {
-      "begin": "^([ \\t]*)(?=(?:(?:---|\\.\\.\\.)[\\t ]+)?(?:(?:[\\-?][\\t ]+)+(?:[^\\n\\[{\\]}]*?:[\\t ]+)?|[^\\n\\[{\\]}]*?:[\\t ]+)(?=(?:[^\\t\\n\\f\\r \\-?:,\\[\\]{}#&*!|>'\"%@`]|[\\-?:](?=[^\\t\\n\\f\\r ,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\t\\n\\f\\r ,\\]}])|#(?<=[^\\t\\n\\f\\r ]#))*))",
+      "begin": "^([ \\t]*)(?=(?:(?:---|\\.\\.\\.)[\\t ]+)?(?:(?:[\\-?][\\t ]+)+(?:(?:\"(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)|[^\"\\\\])*\"|'(?:''|[^'])*'|[^\\n\\[{\\]}\"'])*?:[\\t ]+)?|(?:\"(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)|[^\"\\\\])*\"|'(?:''|[^'])*'|[^\\n\\[{\\]}\"'])*?:[\\t ]+)(?=(?:[^\\t\\n\\f\\r \\-?:,\\[\\]{}#&*!|>'\"%@`]|[\\-?:](?=[^\\t\\n\\f\\r ,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\t\\n\\f\\r ,\\]}])|#(?<=[^\\t\\n\\f\\r ]#))*))",
       "while": "\\G(?=[ \\t]*$|\\1[ \\t]+(?!(?:#|-[\\t ]|\\?[\\t ]|[^\\n\\[{\\]}]*?:(?:[\\t ]|$))))",
       "patterns": [
         {
           "match": "\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*",
           "name": "string.unquoted.yaml"
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#alias"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#num"
+        },
+        {
+          "include": "#boolnull"
+        },
+        {
+          "include": "#plain"
+        },
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "explicit-key-continuation": {
+      "begin": "^([ \\t]*)(?=\\?[\\t ]+(?:(?:\"(?:\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)|[^\"\\\\])*\"|'(?:''|[^'])*'|[^\\n\\[{\\]}\"'])*?:[\\t ]+)?(?=(?:[^\\t\\n\\f\\r \\-?:,\\[\\]{}#&*!|>'\"%@`]|[\\-?:](?=[^\\t\\n\\f\\r ,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\t\\n\\f\\r ,\\]}])|#(?<=[^\\t\\n\\f\\r ]#))*))",
+      "while": "\\G(?=[ \\t]*$|\\1[ \\t]+(?!(?:#|-[\\t ]|\\?[\\t ]|[^\\n\\[{\\]}]*?:(?:[\\t ]|$))))",
+      "patterns": [
+        {
+          "match": "\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*",
+          "name": "entity.name.tag.yaml"
         },
         {
           "include": "#docstart"
@@ -1951,7 +2012,7 @@
       "match": "^[ \\t]*(%[^\\n]*?)[\\t ]*$",
       "captures": {
         "1": {
-          "name": "invalid.illegal.keyword.other.directive.yaml"
+          "name": "keyword.other.directive.yaml"
         }
       }
     },

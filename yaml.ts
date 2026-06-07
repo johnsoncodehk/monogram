@@ -74,7 +74,12 @@ const Tag = token(seq('!', altPattern(seq('<', star(noneOf('>')), '>'), star(non
 // token and the stray `%` then fails to lex → reject (H7TQ / ZYU8). The trailing comment is left
 // OUTSIDE the token (only looked at) so a ` # comment` is tokenised/scoped as a Comment, not folded
 // into the directive — keeps the highlighter's comment scope intact.
-const YamlDirective = token(seq('%YAML', plus(hspace), plus(digit), '.', plus(digit), followedBy(seq(star(hspace), altPattern('#', '\r', '\n', end())))), { scope: 'keyword.other.directive', blockOnly: true });
+// The trailing context is EOL (with optional trailing spaces) OR a real ` #` comment — a comment
+// indicator needs a PRECEDING space (§6.6, the same rule the Comment token's `notPrecededBy` guard
+// applies), so a GLUED `#` (`%YAML 1.1#…`) is NOT a comment and makes the lookahead FAIL: the line
+// then matches no directive token and the highlighter scopes the whole malformed line as a directive
+// (gen-tm `#directive-malformed`) instead of leaving the glued `#…` stray (monogram#12 #8).
+const YamlDirective = token(seq('%YAML', plus(hspace), plus(digit), '.', plus(digit), followedBy(altPattern(seq(star(hspace), altPattern('\r', '\n', end())), seq(plus(hspace), '#')))), { scope: 'keyword.other.directive', blockOnly: true });
 // Directive (`%TAG …`, unknown `%FOO …`): runs to EOL but stops before a ` #` trailing comment — a
 // `#` is a comment indicator only after whitespace, so a glued `#` (`%YAML 1.1#x`) stays part of
 // the directive while a spaced ` # comment` falls to the Comment token (same rule as plain scalars).
