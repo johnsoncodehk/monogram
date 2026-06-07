@@ -68,6 +68,26 @@ function escapeForCharClass(s: string): string {
   return s.replace(/[\[\]\\^-]/g, '\\$&');
 }
 
+// An INDENT-BOUNDED region: capture the line's leading indent into `\1`, then stay open while each
+// following line is BLANK or matches a `\1`-relative continuation condition (`cont`), releasing at a
+// sibling/dedent. This is the shared shape of every YAML block-scalar and plain-fold region — the
+// depth-bearing "indent region" (a TextMate rule-stack frame that remembers ONE nesting level's indent
+// via the `\1` backref). The `^([ \t]*)` capture and the blank-line arm are standard; the caller passes
+// the begin `lookahead` (+ optional `beginCaptures`), the `\1`-relative `cont` arm, and the `patterns`.
+// `blankFirst` chooses the order of the blank vs `cont` arms in the `while` (block scalars list `cont`
+// first; the plain folds list blank first) — kept as a knob so the emitted regex stays byte-identical
+// to the prior hand-written regions. (The document-root block scalar uses a doc-marker bound, not a
+// `\1`-indent bound, so it is NOT built through this helper.)
+function emitIndentRegion(o: { lookahead: string; cont: string; blankFirst?: boolean; beginCaptures?: Record<string, TmCapture>; patterns: (TmPattern | { include: string })[] }): TmPattern {
+  const blank = '[ \\t]*$';
+  return {
+    begin: `^([ \\t]*)${o.lookahead}`,
+    ...(o.beginCaptures ? { beginCaptures: o.beginCaptures } : {}),
+    while: `\\G(?=${o.blankFirst ? `${blank}|${o.cont}` : `${o.cont}|${blank}`})`,
+    patterns: o.patterns,
+  };
+}
+
 /**
  * Emit the shared "bracket-pair → begin/end region" skeleton.
  *
@@ -4799,11 +4819,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     bsHeaderIncludes = bsHeaderIncs;
     bsIndicatorScope = bsIndicator;
     bsContentScope = bsContent;
-    repository[bsKey] = {
-      begin: `^([ \\t]*)(?=${bsVp}${intro}[\\t ]*(?:#|$))`,
-      while: '\\G(?=\\1[ \\t]|[ \\t]*$)',
+    repository[bsKey] = emitIndentRegion({
+      lookahead: `(?=${bsVp}${intro}[\\t ]*(?:#|$))`,
+      cont: '\\1[ \\t]',
       patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
-    };
+    });
     // DOCUMENT-ROOT block scalar (`--- |` / bare `|` at column 0, NO mapping key / sequence dash
     // before it). Such a node sits at the document level, whose indentation is "-1", so its body may
     // begin at COLUMN 0 (W4TN `--- |` / M7A3 bare `|`, both valid YAML). The node-indent–bounded
@@ -4836,12 +4856,12 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // leading indent `\1` AND the dash + its trailing spaces `\3`, and the bound `\1[ \t]\3[ \t]` is
     // one column past the key. A pure-space backref (`\1`, `\3`) standing in for the dash column keeps
     // it portable (no literal `- ` backref, which would never match space-indented body lines).
-    repository[`${bsKey}-seq`] = {
-      begin: `^([ \\t]*)(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+${bsProp}${intro}[\\t ]*(?:#|$))`,
+    repository[`${bsKey}-seq`] = emitIndentRegion({
+      lookahead: `(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+${bsProp}${intro}[\\t ]*(?:#|$))`,
       beginCaptures: { '2': { name: `punctuation.${langName}` } },
-      while: '\\G(?=\\1[ \\t]\\3[ \\t]|[ \\t]*$)',
+      cont: '\\1[ \\t]\\3[ \\t]',
       patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
-    };
+    });
     topPatterns.push({ include: `#${bsKey}-seq` });
 
     // ── 2a′. Multi-line PLAIN scalar continuation (monogram#12 §6/§7) ──
@@ -4934,11 +4954,12 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const continuationRule = { match: '\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*', name: plainContent };
       // Emitted only when the grammar actually has a DEEPER fold (`Indent <leaf> … Dedent`).
       if (fold.hasDeeper) {
-        repository['plain-continuation'] = {
-          begin: `^([ \\t]*)(?=${plainVp})`,
-          while: `\\G(?=[ \\t]*$|\\1[ \\t]+(?!${structAhead}))`,
+        repository['plain-continuation'] = emitIndentRegion({
+          lookahead: `(?=${plainVp})`,
+          cont: `\\1[ \\t]+(?!${structAhead})`,
+          blankFirst: true,
           patterns: [continuationRule, ...plainHeaderIncs],
-        };
+        });
         topPatterns.push({ include: '#plain-continuation' });
       }
 
@@ -4972,11 +4993,12 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const bareCont = { match: '(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))+', name: plainContent };
       // Emitted only when the grammar actually has a SAME-COLUMN fold (`Newline <leaf>`).
       if (fold.hasSameColumn) {
-        repository['plain-bare-fold'] = {
-          begin: `^([ \\t]*)(?=${plainSrc})(?!${structRelease})`,
-          while: `\\G(?=[ \\t]*$|\\1(?=[ \\t]*\\S)(?![ \\t]*${structRelease}))`,
+        repository['plain-bare-fold'] = emitIndentRegion({
+          lookahead: `(?=${plainSrc})(?!${structRelease})`,
+          cont: `\\1(?=[ \\t]*\\S)(?![ \\t]*${structRelease})`,
+          blankFirst: true,
           patterns: [...plainHeaderIncs, bareCont],
-        };
+        });
         topPatterns.push({ include: '#plain-bare-fold' });
       }
     }
