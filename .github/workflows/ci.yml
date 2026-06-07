@@ -74,11 +74,11 @@ jobs:
       # grammar that is a tree-sitter target, so a conflict introduced by a grammar
       # change is caught even for the dialects whose wasm is not built below (tsx/js/jsx)
       # — exactly the gap that let an unresolved `type`/`class_heritage` conflict ship.
-      # yaml is excluded: its indentation tokens are not yet wired as tree-sitter
-      # externals, so its generated grammar.js is not loadable (separate open issue).
+      # yaml is now included (issue #3): its indent/scalar tokens are wired as tree-sitter
+      # externals and the C indentation scanner is implemented, so its grammar generates + builds.
       - name: Generate every derived tree-sitter grammar (conflict gate, no wasm)
         run: |
-          for g in typescript typescriptreact javascript javascriptreact html; do
+          for g in typescript typescriptreact javascript javascriptreact html yaml; do
             echo "── tree-sitter generate: $g"
             ( cd "tree-sitter/$g" && npx tree-sitter generate )
           done
@@ -97,3 +97,11 @@ jobs:
           npx tree-sitter build --wasm .
           cd ../..
           node test/html-treesitter.ts
+      # The derived YAML tree-sitter (issue #3) — build the wasm (its C indentation scanner must
+      # compile + link). The accuracy bench (test/treesitter-yaml-bench.ts) needs the yaml-test-suite
+      # checkout, so it runs in the readme-bench workflow where the suite is already cloned.
+      - name: Build the derived YAML tree-sitter grammar to wasm
+        run: |
+          cd tree-sitter/yaml
+          npx tree-sitter generate
+          npx tree-sitter build --wasm .
