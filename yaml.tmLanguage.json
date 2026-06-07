@@ -24,6 +24,9 @@
           "include": "#blockscalar"
         },
         {
+          "include": "#plain-continuation"
+        },
+        {
           "include": "#explicit-key"
         },
         {
@@ -113,6 +116,9 @@
         },
         {
           "include": "#blockscalar"
+        },
+        {
+          "include": "#plain-continuation"
         },
         {
           "include": "#explicit-key"
@@ -587,6 +593,61 @@
         },
         {
           "include": "#tag"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "plain-continuation": {
+      "begin": "^([ \\t]*)(?=(?:(?:---|\\.\\.\\.)[\\t ]+)?(?:(?:[-?][\\t ]+)+(?:[^\\n{}\\[\\]]*?:[\\t ]+)?|[^\\n{}\\[\\]]*?:[\\t ]+)(?=(?:[^\\t\\n\\f\\r \\-?:,\\[\\]{}#&*!|>'\"%@`]|[\\-?:](?=[^\\t\\n\\f\\r ,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\t\\n\\f\\r ,\\]}])|#(?<=[^\\t\\n\\f\\r ]#))*))",
+      "while": "\\G(?=[ \\t]*$|\\1[ \\t]+(?!(?:#|-[\\t ]|\\?[\\t ]|[^\\n{}\\[\\]]*?:(?:[\\t ]|$))))",
+      "patterns": [
+        {
+          "match": "\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*",
+          "name": "string.unquoted.yaml"
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#alias"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#num"
+        },
+        {
+          "include": "#boolnull"
+        },
+        {
+          "include": "#plain"
+        },
+        {
+          "include": "#comment"
         },
         {
           "include": "#punctuation"

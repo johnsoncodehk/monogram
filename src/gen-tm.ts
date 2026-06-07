@@ -4790,6 +4790,96 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
     };
     topPatterns.push({ include: `#${bsKey}-seq` });
+
+    // ── 2a′. Multi-line PLAIN scalar continuation (monogram#12 §6/§7) ──
+    // A plain scalar may FOLD across a more-indented continuation line (`key: a\n  b` → "a b";
+    // `? e\n  42` → the key "e 42"). The parser's lexer folds these into one scalar token, but a
+    // flat per-line TextMate grammar cannot see that a deeper line is the CONTINUATION of the scalar
+    // above it — so a continuation line that opens with a token-like char (`!`/digit/`%`) is wrongly
+    // re-scanned as a tag / number / directive (`#tag`/`#num`/`#directive` fire at top level). The
+    // HEADER line is already scoped correctly by the normal token includes (`#plain` paints the value),
+    // so the fix is a REGION that consumes only the DEEPER continuation lines as opaque
+    // `string.unquoted`, BEFORE those token rules get a chance. This mirrors the parser's `foldedPlain`
+    // (`Plain Indent Plain* Dedent`): a value-position plain scalar followed by a MORE-indented run of
+    // BARE plain lines (a continuation line is never a `key:`/`-`/`?` node — that would be a sibling).
+    // Structure reuses the block-scalar region (§2a): the begin captures the node indent with a FORWARD
+    // group `^([ \t]*)`; the `while` continues into BLANK lines and DEEPER lines that are BARE plain
+    // content, and RELEASES at a SIBLING at the node column (so a same-column doc-body fold —
+    // monogram#12 §9 — never over-fires) AND at the first deeper STRUCTURAL line (a mapping `key:`, seq
+    // `- `, explicit `? `, or a comment). Releasing at a structural line is what lets a compact nested
+    // mapping (`- a: x\n  b: 1`), a nested block scalar (`a: x\n  b: |`), or a comment line fall back to
+    // the TOP-LEVEL patterns (which scope `b`/`|`/`#…` correctly) instead of being swallowed as string —
+    // it mirrors the parser's foldedPlain, whose continuation is bare `Plain` lines only. The header
+    // line is re-scoped by the normal token includes (`plainHeaderIncs`, matched at the value position
+    // the begin's indent-consume leaves the engine at); a `continuationRule` matches each DEEPER
+    // bare-plain line (`\G[\t ]+…`, which only fires at a re-anchored line start, so it never touches the
+    // header line) and scopes it as string, stopping before an inline ` #` comment (which then falls to
+    // `#comment`). Gated on a plain-scalar token, so the OTHER six grammars (no `#plain`) regenerate
+    // byte-identical.
+    if (repository['plain']) {
+      // The plain-scalar match, used ONLY as a zero-width `(?=plainSrc)` value-head probe below. The
+      // flow→block body loosening (`loosenBlockScalar`, in the flow section further down) runs AFTER
+      // this point, so this is the flow-body snapshot — irrelevant here, since a lookahead only needs
+      // the HEAD char class (identical in both variants) to confirm a plain value opens the line.
+      const plainSrc = repository['plain'].match!;
+      // The continuation is PLAIN-scalar content, so it takes the plain token's own scope
+      // (`string.unquoted.<lang>`) — not the block-scalar body scope `bsContent`
+      // (`string.unquoted.block.<lang>`), which would mis-label a folded plain run as a block scalar.
+      const plainContent = repository['plain'].name!;
+      // A line (after its leading indent) that opens a STRUCTURAL node or comment, NOT plain content:
+      // a `#` comment, a `- `/`? ` indicator (a `-1`/`?x` plain scalar is NOT one — the indicator needs
+      // a trailing space), or a mapping key (`…: ` / `…:`-EOL). `[^\n{}\[\]]*?` stops the key scan at a
+      // flow bracket (a `{`/`[` is flow, handled elsewhere), and `:(?:[\t ]|$)` requires the colon to be
+      // a real key separator (`http://x` keeps its glued `:` → still plain content). Used as a NEGATIVE
+      // lookahead to bound the fold at the first sibling/comment line, matching the parser's foldedPlain.
+      const structAhead = `(?:#|-[\\t ]|\\?[\\t ]|[^\\n{}\\[\\]]*?:(?:[\\t ]|$))`;
+      // Value-position lookahead: after the node indent is stripped, the line must carry an INLINE
+      // BLOCK plain value — either `<key>: <plain>` (mapping value) or a `-`/`?` indicator + `<plain>`
+      // (sequence entry / explicit key). The plain value is confirmed by `(?=plainSrc)`, which only
+      // succeeds on a real plain-scalar head — so a tag/anchor/quoted/`|`/`>` value never triggers it,
+      // and a BARE `key:` introducing a NESTED block (no inline value, EOL after `:`) is excluded
+      // because both arms REQUIRE a value: the `:` arm needs `:[\t ]+` (colon + space + plain), and the
+      // indicator arm needs `[-?][\t ]+` + plain. This is what keeps `key:\n  nested: v` and the bare
+      // `a: b\nc: d` sibling out of the fold. The mapping-key run is `[^\n{}\[\]]*?` (NO flow brackets):
+      // a flow collection (`{ a: b,\n  c }` / `a: { b: c,\n  d }`) is a multi-line begin/end region of
+      // its own — a `{`/`[` before the `:` means the `:` is a FLOW separator, not a block one, so the
+      // region must NOT open and steal those lines from #flow-mapping/#flow-sequence.
+      const plainVp = `(?:(?:---|\\.\\.\\.)[\\t ]+)?(?:(?:[-?][\\t ]+)+(?:[^\\n{}\\[\\]]*?:[\\t ]+)?|[^\\n{}\\[\\]]*?:[\\t ]+)(?=${plainSrc})`;
+      // Header-line token includes: the same shape any plain `key: value` line gets, so the header is
+      // scoped identically to the top level (only the CONTINUATION changes). Includes the typed-value
+      // tokens (`#num`/`#boolnull`) so a SINGLE-line `a: 1` keeps `constant.numeric`, and the full
+      // key/sequence/comment set so a deeper STRUCTURAL line (which continuationRule skips) is scoped
+      // correctly. Listed only when the key exists.
+      const plainHeaderIncs = [
+        ...(repository['docstart'] ? [{ include: '#docstart' }] : []),
+        ...(repository['docend'] ? [{ include: '#docend' }] : []),
+        ...(bsHasExplicitKey ? [{ include: '#explicit-key' }, { include: '#explicit-key-indicator' }] : []),
+        ...(repository['dquotekey'] ? [{ include: '#dquotekey' }] : []),
+        ...(repository['squotekey'] ? [{ include: '#squotekey' }] : []),
+        ...(repository['key'] ? [{ include: '#key' }] : []),
+        ...(repository['anchor'] ? [{ include: '#anchor' }] : []),
+        ...(repository['alias'] ? [{ include: '#alias' }] : []),
+        ...(repository['tag'] ? [{ include: '#tag' }] : []),
+        ...(repository['num'] ? [{ include: '#num' }] : []),
+        ...(repository['boolnull'] ? [{ include: '#boolnull' }] : []),
+        { include: '#plain' },
+        ...(repository['comment'] ? [{ include: '#comment' }] : []),
+        { include: '#punctuation' },
+      ];
+      // The continuation-line consumer: `\G[\t ]+` anchors at a re-anchored LINE START with ≥1 leading
+      // space (so it never matches the header line, where the engine sits past the indent) — the `while`
+      // has already proven the line is a bare-plain continuation — and the body `(?:[^#\n]|#(?<=\S#))*`
+      // swallows the line as one opaque plain run, stopping before an inline ` #` comment (a `#` is
+      // content only when glued to a non-space, exactly as the plain-scalar body treats it) so the
+      // comment falls to `#comment`. Scoped with the plain string scope.
+      const continuationRule = { match: '\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*', name: plainContent };
+      repository['plain-continuation'] = {
+        begin: `^([ \\t]*)(?=${plainVp})`,
+        while: `\\G(?=[ \\t]*$|\\1[ \\t]+(?!${structAhead}))`,
+        patterns: [continuationRule, ...plainHeaderIncs],
+      };
+      topPatterns.push({ include: '#plain-continuation' });
+    }
   }
 
   // ── 2b. Explicit mapping key (`? key`) ──
@@ -7344,6 +7434,14 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (key === 'blockscalar-key') return 0.55;
     if (bsRank && key === `${bsRank}-doc`) return 0.58;
     if (bsRank && key === bsRank) return 0.6;
+    // The multi-line plain-scalar continuation region (§2a′) also begins AT LINE START (`^([ \t]*)`),
+    // so it competes at column 0 with #key / quoted-keys / #docstart / #explicit-key (rank ≥ 0.8) and
+    // MUST out-rank them: on a same-start tie oniguruma picks the FIRST listed pattern, and the region
+    // must open so it can claim the continuation lines (else #key/#explicit-key win the header and a
+    // deeper `!`/digit/`%` line falls through to #tag/#num/#directive). It ranks BELOW the
+    // block-scalar regions (≤ 0.6) so a `key: |` keeps its block-scalar region — its lookahead requires
+    // a real plain VALUE head (never `|`/`>`), so the two never collide on the same line anyway.
+    if (key === 'plain-continuation') return 0.7;
     // A flow collection (`{ … }` / `[ … ]`) is a begin/end region opened by a bracket; it must be
     // tried before #punctuation (which would otherwise claim the `{`/`[` as a bare bracket) and
     // before the scalar tokens. Its `{`/`[` can never lead a plain scalar, so this ranking is safe.
