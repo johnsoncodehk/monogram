@@ -1,14 +1,16 @@
 export type TokenPattern =
-  | { __kind: 'token-pattern'; type: 'literal'; value: string }
-  | { __kind: 'token-pattern'; type: 'anyChar' }
-  | { __kind: 'token-pattern'; type: 'charClass'; negate: boolean; items: TokenCharClassItem[] }
-  | { __kind: 'token-pattern'; type: 'seq'; items: TokenPattern[] }
-  | { __kind: 'token-pattern'; type: 'alt'; items: TokenPattern[] }
-  | { __kind: 'token-pattern'; type: 'repeat'; body: TokenPattern; min: number; max?: number; greedy: boolean }
-  | { __kind: 'token-pattern'; type: 'lookahead'; body: TokenPattern; negate: boolean }
-  | { __kind: 'token-pattern'; type: 'lookbehind'; body: TokenPattern; negate: boolean }
-  | { __kind: 'token-pattern'; type: 'anchor'; kind: 'start' | 'end' }
-  | { __kind: 'token-pattern'; type: 'never' };
+  // A bare string IS a literal pattern. Object variants are discriminated by `type` alone — no
+  // `__kind` marker (nothing reads it; walkers switch on `type` after a `typeof` string check).
+  | string
+  | { type: 'anyChar' }
+  | { type: 'charClass'; negate: boolean; items: TokenCharClassItem[] }
+  | { type: 'seq'; items: TokenPattern[] }
+  | { type: 'alt'; items: TokenPattern[] }
+  | { type: 'repeat'; body: TokenPattern; min: number; max?: number; greedy: boolean }
+  | { type: 'lookahead'; body: TokenPattern; negate: boolean }
+  | { type: 'lookbehind'; body: TokenPattern; negate: boolean }
+  | { type: 'anchor'; kind: 'start' | 'end' }
+  | { type: 'never' };
 
 export type TokenCharClassItem =
   | { type: 'char'; value: string }

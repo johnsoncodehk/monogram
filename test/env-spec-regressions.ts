@@ -6,7 +6,7 @@
 //
 // Run with: node test/env-spec-regressions.ts
 import { createParser } from '../src/gen-parser.ts';
-import { defineGrammar, many, opt, rule, token, seq, star, alt, lit, oneOf, noneOf, anyChar, never, range, plus, followedBy } from '../src/api.ts';
+import { defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 
 let ok = 0;
@@ -22,8 +22,8 @@ const check = (label: string, cond: boolean) => {
 // ---------------------------------------------------------------------------
 {
   const BT = token(
-    seq(lit('`'), star(alt(seq(lit('\\'), anyChar()), noneOf(oneOf('`', '\\')))), lit('`')),
-    { scope: 'string.quoted.other', string: true, escape: seq(lit('\\'), anyChar()) },
+    seq('`', star(altPattern(seq('\\', anyChar()), noneOf(oneOf('`', '\\')))), '`'),
+    { scope: 'string.quoted.other', string: true, escape: seq('\\', anyChar()) },
   );
   const File = rule(() => [[BT]]);
   const grammar = defineGrammar({ name: 'backtick-string', tokens: { BT }, rules: { File }, entry: File });
@@ -46,12 +46,12 @@ const check = (label: string, cond: boolean) => {
   const NEWLINE = token(never(), {});
   // KEY is `[A-Z_][A-Z0-9_]*` immediately followed by `=` (a lookahead).
   const KEY = token(
-    seq(oneOf(range('A', 'Z'), '_'), star(oneOf(range('A', 'Z'), range('0', '9'), '_')), followedBy(lit('='))),
+    seq(oneOf(range('A', 'Z'), '_'), star(oneOf(range('A', 'Z'), range('0', '9'), '_')), followedBy('=')),
     { identifier: true },
   );
   const DQ = token(
-    seq(lit('"'), star(alt(seq(lit('\\'), anyChar()), noneOf(oneOf('"', '\\')))), lit('"')),
-    { string: true, escape: seq(lit('\\'), anyChar()) },
+    seq('"', star(altPattern(seq('\\', anyChar()), noneOf(oneOf('"', '\\')))), '"'),
+    { string: true, escape: seq('\\', anyChar()) },
   );
 
   const Value = rule(() => [[DQ]]);

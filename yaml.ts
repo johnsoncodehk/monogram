@@ -9,7 +9,7 @@
 //   explicit/complex keys (`? key`), multi-line plain scalars, directives (`%YAML`).
 import {
   token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore, noMultilineFlowBefore,
-  lit, seq, oneOf, noneOf, range, star, plus, repeat, followedBy, notFollowedBy,
+  altPattern, optPattern, seq, oneOf, noneOf, range, star, plus, repeat, followedBy, notFollowedBy,
   precededBy, never, end,
 } from './src/api.ts';
 import type { IndentConfig } from './src/types.ts';
@@ -24,7 +24,7 @@ const Newline = token(never(), {});
 
 // ── Scalars & lexical tokens (declaration order matters: earlier wins) ──
 const hspace = oneOf(' ', '\t');
-const lineBreak = seq(opt(lit('\r')), '\n');
+const lineBreak = seq(optPattern('\r'), '\n');
 const digit = range('0', '9');
 const hexDigit = oneOf(digit, range('A', 'F'), range('a', 'f'));
 const whitespace = oneOf('\t', '\n', '\f', '\r', ' ');
@@ -35,7 +35,7 @@ const hashAfterNonSpace = seq('#', precededBy(seq(nonWhitespace, '#')));
 // lookahead keeps the marker from stealing a plain scalar's leading dashes/dots. Scoped
 // `entity.other.document.*` (the maintained-grammar convention) so the highlighter paints them as
 // document structure, not as a string.
-const docMarkerEnd = followedBy(alt(oneOf('\t', ' '), '\r', '\n', end()));
+const docMarkerEnd = followedBy(altPattern(oneOf('\t', ' '), '\r', '\n', end()));
 const DocStart = token(seq('---', docMarkerEnd), { scope: 'entity.other.document.begin' });
 const DocEnd = token(seq('...', docMarkerEnd), { scope: 'entity.other.document.end' });
 const Comment = token(seq('#', star(noneOf('\n'))), { skip: true, scope: 'comment.line.number-sign' });
@@ -44,18 +44,18 @@ const Comment = token(seq('#', star(noneOf('\n'))), { skip: true, scope: 'commen
 // a LINE BREAK (`\`-at-EOL = line continuation). Any other `\.` (`\.`, `\'`, `\q`, `\x4`) is illegal
 // — validating the set rejects `55WF`/`HRE5`, and admitting `\`+newline accepts the folded
 // multi-line scalars `565N`/`NP9H`/`Q8AD` (where the old `\\.` failed because `.` skips newlines).
-const DQ_ESC = seq('\\', alt(
+const DQ_ESC = seq('\\', altPattern(
   oneOf('0', 'a', 'b', 't', 'n', 'v', 'f', 'r', 'e', '"', '/', '\\', 'N', '_', 'L', 'P', ' ', '\t'),
   seq('x', repeat(hexDigit, 2, 2)),
   seq('u', repeat(hexDigit, 4, 4)),
   seq('U', repeat(hexDigit, 8, 8)),
   lineBreak,
 ));
-const DQuote = token(seq('"', star(alt(DQ_ESC, noneOf('"', '\\'))), '"'), { string: true, scope: 'string.quoted.double' });
-const SQuote = token(seq("'", star(alt(seq("'", "'"), noneOf("'"))), "'"), { string: true, scope: 'string.quoted.single' });
+const DQuote = token(seq('"', star(altPattern(DQ_ESC, noneOf('"', '\\'))), '"'), { string: true, scope: 'string.quoted.double' });
+const SQuote = token(seq("'", star(altPattern(seq("'", "'"), noneOf("'"))), "'"), { string: true, scope: 'string.quoted.single' });
 const Anchor = token(seq('&', plus(noneOf(whitespace, '[', ']', '{', '}', ','))), { scope: 'entity.name.type.anchor' });
 const Alias = token(seq('*', plus(noneOf(whitespace, '[', ']', '{', '}', ','))), { scope: 'variable.other.alias' });
-const Tag = token(seq('!', alt(seq('<', star(noneOf('>')), '>'), star(noneOf(whitespace, '[', ']', '{', '}', ',')))), { scope: 'storage.type.tag' });
+const Tag = token(seq('!', altPattern(seq('<', star(noneOf('>')), '>'), star(noneOf(whitespace, '[', ']', '{', '}', ',')))), { scope: 'storage.type.tag' });
 // The `%YAML` version directive has a FIXED arity: exactly one `major.minor` parameter (§6.8.1).
 // A spaced trailing `# comment` is allowed; any other trailing token (`%YAML 1.2 foo`, a second
 // version `%YAML 1.1 1.2`) is illegal. Declared BEFORE the generic Directive so a well-formed
@@ -69,13 +69,13 @@ const Tag = token(seq('!', alt(seq('<', star(noneOf('>')), '>'), star(noneOf(whi
 // token and the stray `%` then fails to lex → reject (H7TQ / ZYU8). The trailing comment is left
 // OUTSIDE the token (only looked at) so a ` # comment` is tokenised/scoped as a Comment, not folded
 // into the directive — keeps the highlighter's comment scope intact.
-const YamlDirective = token(seq('%YAML', plus(hspace), plus(digit), '.', plus(digit), followedBy(seq(star(hspace), alt(lit('#'), '\r', '\n', end())))), { scope: 'keyword.other.directive', blockOnly: true });
+const YamlDirective = token(seq('%YAML', plus(hspace), plus(digit), '.', plus(digit), followedBy(seq(star(hspace), altPattern('#', '\r', '\n', end())))), { scope: 'keyword.other.directive', blockOnly: true });
 // Directive (`%TAG …`, unknown `%FOO …`): runs to EOL but stops before a ` #` trailing comment — a
 // `#` is a comment indicator only after whitespace, so a glued `#` (`%YAML 1.1#x`) stays part of
 // the directive while a spaced ` # comment` falls to the Comment token (same rule as plain scalars).
 // EXCLUDES the `%YAML␣` version form (handled by YamlDirective above) so a bad-arity version line is
 // not silently re-absorbed here; `%YAML1.2` (no space) is NOT the version form, so it still matches.
-const Directive = token(seq('%', notFollowedBy(seq('YAML', hspace)), star(alt(noneOf('\n', '#'), hashAfterNonSpace))), { scope: 'keyword.other.directive', blockOnly: true });
+const Directive = token(seq('%', notFollowedBy(seq('YAML', hspace)), star(altPattern(noneOf('\n', '#'), hashAfterNonSpace))), { scope: 'keyword.other.directive', blockOnly: true });
 // Block scalar (| / >): EMITTED by the lexer's block-scalar mode (placeholder pattern, skipped
 // in the regex loop) so the more-indented content lines arrive as a single token.
 const BlockScalar = token(never(), { scope: 'string.unquoted.block' });
@@ -85,14 +85,14 @@ const BlockScalar = token(never(), { scope: 'string.unquoted.block' });
 // string-valued plain scalar — a finer SCOPE for the highlighter, while the parser still treats
 // every one as a Scalar (they are all added to the `Scalar` rule, so the parse tree is unchanged).
 const plainHeadChar = noneOf(whitespace, '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', "'", '"', '%', '@', '`');
-const PLAIN_HEAD = alt(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(whitespace, ',', '[', ']', '{', '}'))));
+const PLAIN_HEAD = altPattern(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(whitespace, ',', '[', ']', '{', '}'))));
 // A `#` is a COMMENT indicator only at line start or after whitespace; inside a plain scalar a
 // `#` glued to a non-space char is ordinary content (`this is#not` is ONE key, `http://a#b` is a
 // URL). So the body keeps a `#` whose preceding char is non-space — `#(?<=\S#)` matches the `#`
 // then asserts the two chars ending here are «non-space»«#» — while ` #…` (space-prefixed) still
 // ends the scalar and falls to the Comment token.
 const plainBodyChar = noneOf(':', '#', '\n', ',', '[', ']', '{', '}');
-const PLAIN_BODY = star(alt(plainBodyChar, seq(':', followedBy(noneOf(whitespace, ',', ']', '}'))), hashAfterNonSpace));
+const PLAIN_BODY = star(altPattern(plainBodyChar, seq(':', followedBy(noneOf(whitespace, ',', ']', '}'))), hashAfterNonSpace));
 // BLOCK-context variants (used by the lexer only outside flow — see TokenDecl.blockPattern). The
 // chars `,[]{}` are flow indicators ONLY inside a flow collection; in block context they are plain
 // scalar content (`key: a,b`, `- bla]keks` are one scalar each; yaml-test-suite FBC9 / AZW3 / DBG4
@@ -100,14 +100,14 @@ const PLAIN_BODY = star(alt(plainBodyChar, seq(':', followedBy(noneOf(whitespace
 // is followed by ANY non-space (only a `: `/`:`-EOL still ends the scalar as a key/value separator).
 // A leading `[`/`{` still starts a FLOW collection and `,`/`]`/`}` are still illegal scalar STARTS,
 // so the leading-char set is unchanged; only the `-?:` head loosens to allow a following flow char.
-const PLAIN_HEAD_BLOCK = alt(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(whitespace))));
-const PLAIN_BODY_BLOCK = star(alt(noneOf(':', '#', '\n'), seq(':', followedBy(noneOf(whitespace))), hashAfterNonSpace));
+const PLAIN_HEAD_BLOCK = altPattern(plainHeadChar, seq(oneOf('-', '?', ':'), followedBy(noneOf(whitespace))));
+const PLAIN_BODY_BLOCK = star(altPattern(noneOf(':', '#', '\n'), seq(':', followedBy(noneOf(whitespace))), hashAfterNonSpace));
 // A plain scalar is a mapping KEY when a `:` key-separator (colon + whitespace / EOL, or—inside a
 // flow collection—colon + `,`/`]`/`}`) follows it. Matched BEFORE the value/number tokens so a
 // numeric-looking key (`123:`) is still a key (entity.name.tag), as the `yaml` oracle resolves it.
 // A PLAIN scalar needs the colon to be followed by whitespace/EOL/flow-indicator, because a bare
 // `:` glued to more text is plain-scalar content (`foo:bar` is one scalar, `http://x` a URL).
-const KEY_SEP = followedBy(seq(star(hspace), ':', alt(whitespace, ',', '[', ']', '{', '}', end())));
+const KEY_SEP = followedBy(seq(star(hspace), ':', altPattern(whitespace, ',', '[', ']', '{', '}', end())));
 // A QUOTED scalar, by contrast, is a mapping KEY whenever ANY `:` follows it (after optional
 // spaces) — `"x":v` (glued) and `"x": v` are both keys, and a quoted scalar can never run past its
 // closing quote, so the colon is always the entry separator, never scalar content. (In valid YAML a
@@ -133,37 +133,37 @@ const Key = token(
 // (it isn't in key position). The escaped `\n` form (`"a\\nb":`, a literal backslash-n) stays a
 // single-line key. Flow MAPPING keys come via FlowNode→DQuote (not this token), so `{ "a\nb": 1 }`
 // — a legal multi-line flow-map key — is also unaffected.
-const DQ_ESC_NONL = seq('\\', alt(
+const DQ_ESC_NONL = seq('\\', altPattern(
   oneOf('0', 'a', 'b', 't', 'n', 'v', 'f', 'r', 'e', '"', '/', '\\', 'N', '_', 'L', 'P', ' ', '\t'),
   seq('x', repeat(hexDigit, 2, 2)),
   seq('u', repeat(hexDigit, 4, 4)),
   seq('U', repeat(hexDigit, 8, 8)),
 ));
 const DQuoteKey = token(
-  seq('"', star(alt(DQ_ESC_NONL, noneOf('"', '\\', '\r', '\n'))), '"', QKEY_SEP),
+  seq('"', star(altPattern(DQ_ESC_NONL, noneOf('"', '\\', '\r', '\n'))), '"', QKEY_SEP),
   { string: true, scope: 'entity.name.tag' },
 );
 // Single-quoted scalar in KEY position (single-line — see DQuoteKey).
 const SQuoteKey = token(
-  seq("'", star(alt(seq("'", "'"), noneOf("'", '\r', '\n'))), "'", QKEY_SEP),
+  seq("'", star(altPattern(seq("'", "'"), noneOf("'", '\r', '\n'))), "'", QKEY_SEP),
   { string: true, scope: 'entity.name.tag' },
 );
 
 // Value end-boundary for typed plain scalars (number / boolean / null): the scalar must be the
 // WHOLE node, so it is followed by whitespace+comment, an end-of-value char (EOL / `,` / `]` /
 // `}`), or a key-separator `:`. Mirrors the maintained RedCMD grammar's core-schema lookaheads.
-const VALUE_END = followedBy(alt(
+const VALUE_END = followedBy(altPattern(
   seq(plus(hspace), '#'),
-  seq(star(hspace), alt('\r', '\n', ',', '[', ']', '{', '}', seq(':', alt(whitespace, ',', '[', ']', '{', '}', end())))),
+  seq(star(hspace), altPattern('\r', '\n', ',', '[', ']', '{', '}', seq(':', altPattern(whitespace, ',', '[', ']', '{', '}', end())))),
   end(),
 ));
 // BLOCK-context value end-boundary: outside flow, `,`/`[`/`]`/`{`/`}` are NOT value terminators, so
 // a typed look-alike GLUED to one is a plain string, not a number/bool (`key: 1,2` is the string
 // "1,2", not the number 1 — yaml-test-suite DBG4). Dropping them lets such scalars fall through to
 // the (block) Plain token; only ws+comment, a line break, or a `:`-separator still ends the value.
-const VALUE_END_BLOCK = followedBy(alt(
+const VALUE_END_BLOCK = followedBy(altPattern(
   seq(plus(hspace), '#'),
-  seq(star(hspace), alt('\r', '\n', seq(':', alt(whitespace, end())))),
+  seq(star(hspace), altPattern('\r', '\n', seq(':', altPattern(whitespace, end())))),
   end(),
 ));
 // NOTE: a non-specific `!␣` tag forces its scalar to resolve as a STRING (`! 12` is "12"), which a
@@ -176,12 +176,12 @@ const VALUE_END_BLOCK = followedBy(alt(
 // .nan. Anything outside the core schema (binary `0b…`, dates, `12:34:56`) stays a plain string,
 // matching what the `yaml` oracle resolves to a number.
 const sign = oneOf('+', '-');
-const NUM_BODY = alt(
-  seq(opt(sign), '.', alt(lit('inf'), 'Inf', 'INF')),
-  seq('.', alt(lit('nan'), 'NaN', 'NAN')),
+const NUM_BODY = altPattern(
+  seq(optPattern(sign), '.', altPattern('inf', 'Inf', 'INF')),
+  seq('.', altPattern('nan', 'NaN', 'NAN')),
   seq('0x', plus(hexDigit)),
   seq('0o', plus(range('0', '7'))),
-  seq(opt(sign), alt(seq('.', plus(digit)), seq(plus(digit), opt(seq('.', star(digit))))), opt(seq(oneOf('e', 'E'), opt(sign), plus(digit)))),
+  seq(optPattern(sign), altPattern(seq('.', plus(digit)), seq(plus(digit), optPattern(seq('.', star(digit))))), optPattern(seq(oneOf('e', 'E'), optPattern(sign), plus(digit)))),
 );
 // A typed plain scalar is FIRST a plain scalar (lexically an unquoted string) that the schema then
 // resolves to a number / boolean / null — so it carries a `string.unquoted` ancestor with the
@@ -196,7 +196,7 @@ const Num = token(
 );
 // Boolean / null plain scalars (core schema). Types by appearance; a `!␣`-tagged value is no longer
 // special-cased (see the NUM_BODY note above — the lookbehind guard was removed for portability).
-const BOOLNULL_BODY = alt(lit('true'), 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~');
+const BOOLNULL_BODY = altPattern('true', 'True', 'TRUE', 'false', 'False', 'FALSE', 'null', 'Null', 'NULL', '~');
 const BoolNull = token(
   seq(BOOLNULL_BODY, VALUE_END),
   { scope: 'string.unquoted constant.language', blockPattern: seq(BOOLNULL_BODY, VALUE_END_BLOCK) },
