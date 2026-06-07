@@ -20,7 +20,9 @@ module.exports = grammar({
     $.indent,
     $.dedent,
     $.newline,
-    $.block_scalar
+    $.block_scalar,
+    $.plain,
+    $.key
   ],
 
   conflicts: $ => [
@@ -170,13 +172,9 @@ module.exports = grammar({
 
     tag: $ => token(/!(?:<[^>]*>|[^\t\n\f\r \[\]{},]*)/),
 
-    key: $ => token(/(?:[^\t\n\f\r \-?:,\[\]{}#&*!|>'"%@`]|[\-?:])(?:[^:#\n]|:|#)*/),
-
     num: $ => token(/(?:[+\-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)|0x[0-9A-Fa-f]+|0o[0-7]+|[+\-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+\-]?[0-9]+)?)/),
 
-    bool_null: $ => token(/(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)/),
-
-    plain: $ => token(/(?:[^\t\n\f\r \-?:,\[\]{}#&*!|>'"%@`]|[\-?:])(?:[^:#\n]|:|#)*/)
+    bool_null: $ => token(/(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)/)
   }
 });
 

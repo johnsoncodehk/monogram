@@ -14,6 +14,8 @@ enum TokenType {
   DEDENT,
   NEWLINE,
   BLOCK_SCALAR,
+  PLAIN,
+  KEY,
 };
 
 typedef struct {
@@ -103,6 +105,105 @@ static bool scan_block_scalar(Scanner *s, TSLexer *lexer) {
   return true;
 }
 
+// A PLAIN / KEY scalar. A tree-sitter token() DFA can't decide a plain scalar's boundary (a `:` is
+// content unless followed by space/EOL/flow-indicator; a `#` starts a comment only after a space),
+// so we scan it here where look-ahead IS available. The run starts at the current column and ends
+// BEFORE the first key/value `:`-separator, comment, flow indicator, newline, or EOF; trailing
+// whitespace is trimmed. KEY vs PLAIN is decided by whether a `:`-separator immediately follows.
+//
+// A number- or bool/null-SHAPED run is left to the regex `num`/`bool_null` tokens (return false →
+// tree-sitter rolls back our advances and the typed token matches) — but ONLY where such a token is
+// valid. A multi-line plain fold's continuation line is plain-ONLY (its KEY symbol is not valid), so
+// a numeric-looking continuation ("123" under a plain scalar) must stay PLAIN, not be handed to num.
+static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain) {
+  char buf[64];
+  unsigned blen = 0;        // run text (capped) — for the number/bool-null shape test
+  bool has_content = false;
+  bool stopped_at_kv = false; // ended at a `:`-separator → this scalar is a mapping KEY
+  for (;;) {
+    int32_t c = lexer->lookahead;
+    if (c == 0 || c == '\n' || c == '\r') break;                 // newline / EOF
+    if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') break; // flow indicators end a scalar
+    if (!has_content && (c == '-' || c == '?')) {
+      // A leading `-`/`?` is a block indicator (seq entry / explicit key) when followed by space/EOL/
+      // flow-indicator, and scalar content otherwise (`-1`, `?x`). Peek the next char to decide.
+      lexer->advance(lexer, false);
+      int32_t n = lexer->lookahead;
+      if (n == 0 || n == ' ' || n == '\t' || n == '\n' || n == '\r' ||
+          n == ',' || n == '[' || n == ']' || n == '{' || n == '}') return false; // indicator, not a scalar
+      if (blen < sizeof(buf)) buf[blen++] = (char)c;               // `-`/`?` glued to non-space is content
+      has_content = true;
+      lexer->mark_end(lexer);
+      continue;
+    }
+    if (c == ':') {
+      lexer->advance(lexer, false);                               // past the ':' to peek the next char
+      int32_t n = lexer->lookahead;
+      if (n == 0 || n == ' ' || n == '\t' || n == '\n' || n == '\r' ||
+          n == ',' || n == '[' || n == ']' || n == '{' || n == '}') {
+        stopped_at_kv = true; break;                              // ':' is a key/value separator → end before it
+      }
+      if (blen < sizeof(buf)) buf[blen++] = ':';                  // ':' glued to non-space is content
+      has_content = true;
+      lexer->mark_end(lexer);
+      continue;
+    }
+    if (c == ' ' || c == '\t') {
+      lexer->advance(lexer, false);                               // past the space to peek the next char
+      if (lexer->lookahead == '#') break;                        // " #" begins a comment → end before the space
+      if (blen < sizeof(buf)) buf[blen++] = ' ';                  // interior space (e.g. "hello world")
+      continue;                                                   // do NOT mark_end → trailing spaces are trimmed
+    }
+    if (blen < sizeof(buf)) buf[blen++] = (char)c;
+    has_content = true;
+    lexer->advance(lexer, false);
+    lexer->mark_end(lexer);                                       // token end follows the last content char
+  }
+  if (!has_content) return false;
+
+  // Number / bool-null SHAPE test (so the typed regex tokens still classify `1`/`true`). Decide KEY
+  // vs PLAIN first, because a typed-looking run is only deferred where a typed token is valid: a KEY
+  // position admits num/bool_null (block_key_scalar), and a non-KEY value position likewise — but a
+  // plain-ONLY fold continuation (neither KEY here, and the run is not a key) must stay PLAIN.
+  bool is_key = stopped_at_kv ? want_key : false;
+  // numeric: only [0-9 . + - e E x o a-f A-F _ : (already excluded)] — a loose superset is fine, the
+  // regex `num` makes the precise decision; if it doesn't match, tree-sitter falls back to us is NOT
+  // possible (we already returned), so keep the test TIGHT enough to never defer a real plain string.
+  bool numeric = blen > 0;
+  for (unsigned i = 0; i < blen; i++) {
+    char ch = buf[i];
+    bool ok = (ch >= '0' && ch <= '9') || ch == '.' || ch == '+' || ch == '-' || ch == 'e' || ch == 'E' ||
+              ch == 'x' || ch == 'o' || ch == 'n' /* inf/nan */ || ch == 'a' || ch == 'f' || ch == 'i' ||
+              ch == 'I' || ch == 'N' || ch == 'F' || (ch >= 'A' && ch <= 'F');
+    if (!ok) { numeric = false; break; }
+  }
+  // also require at least one digit OR a .inf/.nan/~ shape so a bare "e"/"a" word isn't called numeric
+  if (numeric) {
+    bool any_digit = false;
+    for (unsigned i = 0; i < blen; i++) if (buf[i] >= '0' && buf[i] <= '9') { any_digit = true; break; }
+    if (!any_digit) numeric = false;
+  }
+  bool boolnull = false;
+  {
+    static const char *WORDS[] = { "true","True","TRUE","false","False","FALSE","null","Null","NULL","~" };
+    for (unsigned w = 0; w < sizeof(WORDS)/sizeof(WORDS[0]); w++) {
+      const char *p = WORDS[w]; unsigned i = 0;
+      while (i < blen && p[i] && buf[i] == p[i]) i++;
+      if (i == blen && p[i] == 0) { boolnull = true; break; }
+    }
+  }
+  // Defer to the typed regex token ONLY when the run is typed-shaped AND a typed token is admissible
+  // here. `want_key` (a key slot) always admits num/bool_null; a value slot does too. A plain-ONLY
+  // fold continuation has want_key == false AND is not a key (stopped_at_kv == false) — but a value
+  // slot ALSO has want_key == false. We can't tell them apart from valid_symbols, so we defer in
+  // both: a numeric fold continuation typing as a number is the documented imprecise edge.
+  if ((numeric || boolnull) && want_plain) return false;
+
+  if (is_key) { lexer->result_symbol = want_key ? KEY : PLAIN; return true; }
+  lexer->result_symbol = want_plain ? PLAIN : KEY;
+  return true;
+}
+
 bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
   Scanner *s = (Scanner *)payload;
   bool want_indent = valid_symbols[INDENT];
@@ -130,6 +231,23 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
   if (want_block) {
     while (lexer->lookahead == ' ' || lexer->lookahead == '\t') skip(lexer);
     if (lexer->lookahead == '|' || lexer->lookahead == '>') { if (scan_block_scalar(s, lexer)) return true; }
+  }
+
+  // A PLAIN / KEY scalar on the CURRENT line (not at a line boundary — a leading newline falls through
+  // to the indent logic so INDENT/DEDENT/NEWLINE are emitted first). Skip inline spaces/tabs, then if
+  // the next char could begin a plain scalar (not a newline/EOF and not a YAML indicator — `-`/`?`/`:`
+  // are handled inside scan_scalar, which declines when they are followed by space/EOL/flow-indicator),
+  // scan it where look-ahead is available.
+  if (valid_symbols[KEY] || valid_symbols[PLAIN]) {
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\t') skip(lexer);
+    int32_t h = lexer->lookahead;
+    bool indicator = h == 0 || h == '\n' || h == '\r' || h == ',' || h == '[' || h == ']' || h == '{' ||
+                     h == '}' || h == '#' || h == '&' || h == '*' || h == '!' || h == '|' || h == '>' ||
+                     h == '\'' || h == '"' || h == '%' || h == '@' || h == '`';
+    if (!indicator) {
+      bool wk = valid_symbols[KEY] != 0, wp = valid_symbols[PLAIN] != 0;
+      if (scan_scalar(lexer, wk, wp)) { s->started = true; return true; }
+    }
   }
 
   if (!want_indent && !want_dedent && !want_newline) return false; // flow context — no indent tokens valid
