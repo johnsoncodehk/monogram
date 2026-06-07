@@ -22,7 +22,9 @@ module.exports = grammar({
     $.newline,
     $.block_scalar,
     $.plain,
-    $.key
+    $.key,
+    $.num,
+    $.bool_null
   ],
 
   conflicts: $ => [
@@ -170,11 +172,7 @@ module.exports = grammar({
 
     alias: $ => token(/\*[^\t\n\f\r \[\]{},]+/),
 
-    tag: $ => token(/!(?:<[^>]*>|[^\t\n\f\r \[\]{},]*)/),
-
-    num: $ => token(/(?:[+\-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)|0x[0-9A-Fa-f]+|0o[0-7]+|[+\-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+\-]?[0-9]+)?)/),
-
-    bool_null: $ => token(/(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)/)
+    tag: $ => token(/!(?:<[^>]*>|[^\t\n\f\r \[\]{},]*)/)
   }
 });
 

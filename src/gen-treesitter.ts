@@ -716,53 +716,25 @@ function planInterpolations(grammar: CstGrammar): InterpolationPlan[] {
   return plans;
 }
 
-/**
- * A "plain-family" scalar token (indentation grammars only): one whose boundary is a look-around
- * INSIDE its body loop — the `:(?=\S)` colon-is-content rule of a YAML plain/key scalar. Concretely,
- * its `blockPattern` contains, somewhere under a `repeat`, a `seq` ending in a POSITIVE char-class
- * lookahead. That in-loop assertion is exactly what a tree-sitter `token()` DFA cannot honour (it
- * needs look-ahead to decide where the scalar ends), so such a token must be scanned in C.
- *
- * A typed look-alike (num / bool-null) ALSO carries a `blockPattern`, but its boundary is a
- * TOP-LEVEL trailing lookahead (`<body>(?=…)` — not inside a repeat), which the DFA enforces
- * structurally; those are NOT plain-family and stay regex `token()` rules so the parser still
- * classifies `1` as a number and `true` as a bool. The test is therefore purely STRUCTURAL — it
- * never names a token — so any grammar without this shape is unaffected.
- */
-function isPlainFamilyToken(tok: CstGrammar['tokens'][number]): boolean {
-  const p = tok.blockPattern;
-  if (!p || typeof p === 'string') return false;
-  let found = false;
-  const walk = (node: TokenPattern, inRepeat: boolean): void => {
-    if (typeof node === 'string') return;
-    switch (node.type) {
-      case 'repeat': walk(node.body, true); break;
-      case 'seq': {
-        if (inRepeat) {
-          const last = node.items[node.items.length - 1];
-          if (last && typeof last !== 'string' && last.type === 'lookahead' && !last.negate) found = true;
-        }
-        for (const it of node.items) walk(it, inRepeat);
-        break;
-      }
-      case 'alt': for (const it of node.items) walk(it, inRepeat); break;
-      case 'lookahead': case 'lookbehind': walk(node.body, inRepeat); break;
-      default: break;
-    }
-  };
-  walk(p, false);
-  return found;
-}
-
-/** The plain-family tokens of an indentation grammar, split into the PLAIN scalar and the KEY scalar
- *  by their scope leaf (a cross-check on the structural detection): a plain scalar is scoped
- *  `string.unquoted…`, a key scalar `entity.name.tag…`. Either may be absent. */
-function planPlainScalarTokens(grammar: CstGrammar): { plain?: string; key?: string } {
+/** The block-context SCALAR tokens of an indentation grammar (those carrying a `blockPattern`), split
+ *  by their scope leaf: PLAIN `string.unquoted…`, KEY `entity.name.tag…`, NUM `constant.numeric…`,
+ *  bool/null `constant.language…`. All are scanned in C (see scan_scalar) — a YAML plain/key boundary
+ *  (`:(?=\S)`, `#`-after-space) is a look-around a tree-sitter token DFA can't honour, and a typed
+ *  value emitted by the regex lexer would not carry the key-vs-value decision the GLR parser needs to
+ *  chain top-level mapping entries. Any field may be absent. */
+function planPlainScalarTokens(grammar: CstGrammar): { plain?: string; key?: string; num?: string; boolnull?: string } {
   if (!grammar.indent) return {};
-  const fam = grammar.tokens.filter(isPlainFamilyToken);
-  const plain = fam.find(t => (t.scope ?? '').startsWith('string.unquoted'))?.name;
+  // Every token carrying a `blockPattern` is a block-context scalar; emitting num/bool-null from the
+  // scanner too (classified by shape) — not via a regex token + decline — keeps every scalar an
+  // external token, so the key-vs-value decision is carried and `x: 1\ny: 2` chains correctly.
+  // Split by the scope leaf (the convention is data in the grammar): plain `string.unquoted`, key
+  // `entity.name.tag`, num `constant.numeric`, bool/null `constant.language`.
+  const fam = grammar.tokens.filter(t => t.blockPattern !== undefined && typeof t.blockPattern !== 'string');
+  const num = fam.find(t => (t.scope ?? '').includes('constant.numeric'))?.name;
+  const boolnull = fam.find(t => (t.scope ?? '').includes('constant.language'))?.name;
   const key = fam.find(t => (t.scope ?? '').startsWith('entity.name.tag'))?.name;
-  return { plain, key };
+  const plain = fam.find(t => (t.scope ?? '').startsWith('string.unquoted') && !(t.scope ?? '').includes('constant.'))?.name;
+  return { plain, key, num, boolnull };
 }
 
 /** Determine which tokens the external scanner must provide. */
@@ -789,9 +761,11 @@ function planScannerTokens(grammar: CstGrammar): Map<string, string> {
     // DFA lacks — so they too become external tokens, scanned by `scan_scalar` in C. Appended AFTER
     // the block scalar so the enum stays INDENT,DEDENT,NEWLINE,BLOCK_SCALAR,PLAIN,KEY. (Num/BoolNull
     // are NOT plain-family — their boundary is DFA-expressible — so they stay regex token rules.)
-    const { plain, key } = planPlainScalarTokens(grammar);
+    const { plain, key, num, boolnull } = planPlainScalarTokens(grammar);
     if (plain) map.set(plain, toSnake(plain));
     if (key) map.set(key, toSnake(key));
+    if (num) map.set(num, toSnake(num));
+    if (boolnull) map.set(boolnull, toSnake(boolnull));
   }
   // The regex token: '/' is context-sensitive (regex vs division). The scanner
   // resolves it.
@@ -1856,12 +1830,19 @@ function buildIndentScannerC(grammar: CstGrammar, ctx: GrammarJsContext, grammar
   const sym = (tokenName: string) => ctx.scannerTokenFor.get(tokenName)!.toUpperCase();
   const INDENT = sym(ind.indentToken), DEDENT = sym(ind.dedentToken), NEWLINE = sym(ind.newlineToken);
   const BLOCK = ind.blockScalar ? sym(ind.blockScalar.token) : null;
-  // The PLAIN / KEY scalar externals (a `:` is a separator only before space/EOL/flow-indicator; a
-  // `#` a comment only after a space) — scanned by scan_scalar where look-ahead IS available.
-  const { plain: plainTok, key: keyTok } = planPlainScalarTokens(grammar);
+  // The block-context SCALAR externals — plain, key, and the typed num / bool-null — all scanned by
+  // scan_scalar (a `:` is a separator only before space/EOL/flow-indicator; a `#` a comment only after
+  // a space; a typed run is classified by shape). Emitting num/bool-null from the scanner (not via a
+  // regex token + decline) makes EVERY scalar an external token that carries the key-vs-value decision,
+  // which the GLR parser needs to chain top-level mapping entries.
+  const { plain: plainTok, key: keyTok, num: numTok, boolnull: boolnullTok } = planPlainScalarTokens(grammar);
   const PLAIN = plainTok ? sym(plainTok) : null;
   const KEY = keyTok ? sym(keyTok) : null;
-  const SCALAR = PLAIN || KEY; // either may be absent; scan_scalar is emitted when at least one is
+  const NUM = numTok ? sym(numTok) : null;
+  const BOOLNULL = boolnullTok ? sym(boolnullTok) : null;
+  const SCALAR = PLAIN || KEY || NUM || BOOLNULL; // scan_scalar is emitted when at least one exists
+  const scalarGate = [PLAIN, KEY, NUM, BOOLNULL].filter(Boolean).map(s => `valid_symbols[${s}]`).join(' || ') || '0';
+  const want = (s: string | null) => (s ? `valid_symbols[${s}] != 0` : 'false');
   const cmt = ind.comment ?? '#';
   const cmtC = cmt.length === 1 ? (cmt === '\\' || cmt === "'" ? `'\\${cmt}'` : `'${cmt}'`) : null;
   const introCond = (ind.blockScalar?.introducers ?? []).map(c => `lexer->lookahead == '${c}'`).join(' || ') || '0';
@@ -1980,7 +1961,7 @@ static bool scan_block_scalar(Scanner *s, TSLexer *lexer) {
 // tree-sitter rolls back our advances and the typed token matches) — but ONLY where such a token is
 // valid. A multi-line plain fold's continuation line is plain-ONLY (its KEY symbol is not valid), so
 // a numeric-looking continuation ("123" under a plain scalar) must stay PLAIN, not be handed to num.
-static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain) {
+static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain, bool want_num, bool want_boolnull) {
   char buf[64];
   unsigned blen = 0;        // run text (capped) — for the number/bool-null shape test
   bool has_content = false;
@@ -2030,10 +2011,9 @@ static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain) {
   // vs PLAIN first, because a typed-looking run is only deferred where a typed token is valid: a KEY
   // position admits num/bool_null (block_key_scalar), and a non-KEY value position likewise — but a
   // plain-ONLY fold continuation (neither KEY here, and the run is not a key) must stay PLAIN.
-  bool is_key = stopped_at_kv ? want_key : false;
-  // numeric: only [0-9 . + - e E x o a-f A-F _ : (already excluded)] — a loose superset is fine, the
-  // regex \`num\` makes the precise decision; if it doesn't match, tree-sitter falls back to us is NOT
-  // possible (we already returned), so keep the test TIGHT enough to never defer a real plain string.
+  // numeric / bool-null SHAPE test — a loose superset is fine for classification (only a typed-shaped
+  // run is emitted as NUM/BOOL_NULL; a run with any other char is PLAIN), at the cost of mis-typing a
+  // rare plain like \`1abc\` as numeric (the documented imprecise edge).
   bool numeric = blen > 0;
   for (unsigned i = 0; i < blen; i++) {
     char ch = buf[i];
@@ -2057,16 +2037,17 @@ static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain) {
       if (i == blen && p[i] == 0) { boolnull = true; break; }
     }
   }
-  // Defer to the typed regex token ONLY when the run is typed-shaped AND a typed token is admissible
-  // here. \`want_key\` (a key slot) always admits num/bool_null; a value slot does too. A plain-ONLY
-  // fold continuation has want_key == false AND is not a key (stopped_at_kv == false) — but a value
-  // slot ALSO has want_key == false. We can't tell them apart from valid_symbols, so we defer in
-  // both: a numeric fold continuation typing as a number is the documented imprecise edge.
-  if ((numeric || boolnull) && want_plain) return false;
-
-  if (is_key) { lexer->result_symbol = want_key ? ${KEY ?? PLAIN} : ${PLAIN ?? KEY}; return true; }
-  lexer->result_symbol = want_plain ? ${PLAIN ?? KEY} : ${KEY ?? PLAIN};
-  return true;
+  // Classify + emit. The external scalar token CARRIES the key-vs-value decision (a trailing \`: \`
+  // means KEY), which the GLR parser needs to chain mapping entries — so a typed value is emitted as
+  // NUM/BOOL_NULL here, NOT deferred to a regex token (deferring drops the disambiguation and
+  // mis-parses a top-level \`x: 1\\ny: 2\`). A key wins first; then the typed shapes; then PLAIN. Each
+  // is gated on its token being admissible here (valid_symbols), falling through otherwise.
+  if (stopped_at_kv && want_key) { lexer->result_symbol = ${KEY ?? PLAIN}; return true; }
+  if (numeric && want_num) { lexer->result_symbol = ${NUM ?? PLAIN}; return true; }
+  if (boolnull && want_boolnull) { lexer->result_symbol = ${BOOLNULL ?? PLAIN}; return true; }
+  if (want_plain) { lexer->result_symbol = ${PLAIN ?? KEY}; return true; }
+  if (want_key) { lexer->result_symbol = ${KEY ?? PLAIN}; return true; }
+  return false;
 }
 ` : ''}
 bool tree_sitter_${G}_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
@@ -2097,20 +2078,19 @@ ${BLOCK ? `
     if (${introCond}) { if (scan_block_scalar(s, lexer)) return true; }
   }
 ` : ''}${SCALAR ? `
-  // A PLAIN / KEY scalar on the CURRENT line (not at a line boundary — a leading newline falls through
-  // to the indent logic so INDENT/DEDENT/NEWLINE are emitted first). Skip inline spaces/tabs, then if
-  // the next char could begin a plain scalar (not a newline/EOF and not a YAML indicator — \`-\`/\`?\`/\`:\`
-  // are handled inside scan_scalar, which declines when they are followed by space/EOL/flow-indicator),
-  // scan it where look-ahead is available.
-  if (valid_symbols[${KEY ?? PLAIN}] || valid_symbols[${PLAIN ?? KEY}]) {
+  // A SCALAR (plain / key / num / bool-null) on the CURRENT line — NOT at a line boundary (a leading
+  // newline falls through to the indent logic so INDENT/DEDENT/NEWLINE are emitted first). Skip inline
+  // spaces/tabs, then if the next char could begin a plain scalar (not a newline/EOF and not a YAML
+  // indicator — a leading \`-\`/\`?\`/\`:\` is resolved inside scan_scalar), scan it where look-ahead is
+  // available. scan_scalar classifies the run and emits the admissible token.
+  if (${scalarGate}) {
     while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') skip(lexer);
     int32_t h = lexer->lookahead;
     bool indicator = h == 0 || h == '\\n' || h == '\\r' || h == ',' || h == '[' || h == ']' || h == '{' ||
                      h == '}' || h == '#' || h == '&' || h == '*' || h == '!' || h == '|' || h == '>' ||
                      h == '\\'' || h == '"' || h == '%' || h == '@' || h == '\`';
     if (!indicator) {
-      bool wk = valid_symbols[${KEY ?? PLAIN}] != 0, wp = valid_symbols[${PLAIN ?? KEY}] != 0;
-      if (scan_scalar(lexer, wk, wp)) { s->started = true; return true; }
+      if (scan_scalar(lexer, ${want(KEY)}, ${want(PLAIN)}, ${want(NUM)}, ${want(BOOLNULL)})) { s->started = true; return true; }
     }
   }
 ` : ''}
