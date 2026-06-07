@@ -27,6 +27,9 @@
           "include": "#plain-continuation"
         },
         {
+          "include": "#plain-bare-fold"
+        },
+        {
           "include": "#explicit-key"
         },
         {
@@ -119,6 +122,9 @@
         },
         {
           "include": "#plain-continuation"
+        },
+        {
+          "include": "#plain-bare-fold"
         },
         {
           "include": "#explicit-key"
@@ -651,6 +657,61 @@
         },
         {
           "include": "#punctuation"
+        }
+      ]
+    },
+    "plain-bare-fold": {
+      "begin": "^([ \\t]*)(?=(?:[^\\t\\n\\f\\r \\-?:,\\[\\]{}#&*!|>'\"%@`]|[\\-?:](?=[^\\t\\n\\f\\r ,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\t\\n\\f\\r ,\\]}])|#(?<=[^\\t\\n\\f\\r ]#))*)(?!(?:#|-[\\t ]|\\?[\\t ]|(?:---|\\.\\.\\.)(?:[\\t ]|$)|[^\\n{}\\[\\]]*?:(?:[\\t ]|$)))",
+      "while": "\\G(?=[ \\t]*$|\\1(?=[ \\t]*\\S)(?![ \\t]*(?:#|-[\\t ]|\\?[\\t ]|(?:---|\\.\\.\\.)(?:[\\t ]|$)|[^\\n{}\\[\\]]*?:(?:[\\t ]|$))))",
+      "patterns": [
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#alias"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#num"
+        },
+        {
+          "include": "#boolnull"
+        },
+        {
+          "include": "#plain"
+        },
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "match": "(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))+",
+          "name": "string.unquoted.yaml"
         }
       ]
     },

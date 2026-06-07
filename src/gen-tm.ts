@@ -4879,6 +4879,41 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         patterns: [continuationRule, ...plainHeaderIncs],
       };
       topPatterns.push({ include: '#plain-continuation' });
+
+      // ── 2a″. BARE plain-scalar SAME-COLUMN fold (monogram#12 §9) ──
+      // A plain scalar that is itself a NODE (a document value, or the leading value of an indented
+      // block) — NOT a `key:`/`-`/`?` — folds across SAME-COLUMN as well as deeper continuation lines:
+      // `scalar\n%YAML 1.2` is the ONE plain scalar "scalar %YAML 1.2" (the `%YAML` line is plain
+      // CONTENT, not a directive). The §2a′ region only handles a DEEPER continuation under an
+      // inline-value header (`key: v\n  cont`); a bare scalar's continuation may sit at its OWN column,
+      // which §2a′'s strictly-deeper `\1[ \t]+` misses. This region begins ONLY on a BARE plain scalar
+      // line (a plain head that is NOT a mapping key, sequence `- `, explicit `? `, doc marker, comment,
+      // or flow/quoted/anchor/tag — those are excluded by `structRelease`/the plain head class) and
+      // folds forward over same-column-OR-deeper lines that are bare plain content, RELEASING at the
+      // first STRUCTURAL line (a `key:`/`- `/`? `/doc marker/comment) at any depth and at a DEDENT below
+      // the node column. Because it opens only on a BARE plain scalar and releases at structural lines,
+      // a mapping/sequence sibling never folds: `a: b\nc: d` — both lines are keys, so it never opens;
+      // `- a\n- b\nc` — the `-` lines are structural. The header line is scoped by the normal includes;
+      // an inner `begin:$`/`while:\G` body swallows each following line as `string.unquoted` (stopping
+      // before an inline ` #` comment, which then falls to `#comment`). structRelease extends §2a′'s
+      // `structAhead` with the doc markers (a `---`/`...` ends a doc-body fold).
+      const structRelease = `(?:#|-[\\t ]|\\?[\\t ]|(?:---|\\.\\.\\.)(?:[\\t ]|$)|[^\\n{}\\[\\]]*?:(?:[\\t ]|$))`;
+      // The HEADER line is scoped by the normal token includes (so a standalone bare `42`/`true` keeps
+      // its `#num`/`#boolnull` typing). A CONTINUATION line that opens with a non-token char (`%`, which
+      // no header include matches) would leave that char unscoped and let a LATER `#plain` claim only the
+      // tail (`%YAML` → `%` unscoped + `YAML` string). A leftmost catch-all fixes this: `bareCont` is a
+      // plain-body run with NO `\G` anchor, so on a continuation line it matches from column 0 (the `%`)
+      // — leftmost-wins beats the `#plain` match that starts one char later — scoping the WHOLE line
+      // string.unquoted; on the HEADER line the includes match at the same (leftmost) position and, being
+      // listed first, win the tie, so header typing is preserved. It stops before a ` #` comment (a `#`
+      // is content only when glued to a non-space, as the plain body treats it).
+      const bareCont = { match: '(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))+', name: plainContent };
+      repository['plain-bare-fold'] = {
+        begin: `^([ \\t]*)(?=${plainSrc})(?!${structRelease})`,
+        while: `\\G(?=[ \\t]*$|\\1(?=[ \\t]*\\S)(?![ \\t]*${structRelease}))`,
+        patterns: [...plainHeaderIncs, bareCont],
+      };
+      topPatterns.push({ include: '#plain-bare-fold' });
     }
   }
 
@@ -7442,6 +7477,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // block-scalar regions (≤ 0.6) so a `key: |` keeps its block-scalar region — its lookahead requires
     // a real plain VALUE head (never `|`/`>`), so the two never collide on the same line anyway.
     if (key === 'plain-continuation') return 0.7;
+    // The BARE plain-scalar same-column fold (§2a″) likewise begins AT LINE START and must out-rank the
+    // scalar tokens (#key/#num/#boolnull/#plain ≥ 0.8) so it opens on a bare value scalar and claims its
+    // same-column/deeper continuation lines. Disjoint from #plain-continuation (that needs a key-colon/
+    // indicator value header; this forbids them), so their relative order is irrelevant.
+    if (key === 'plain-bare-fold') return 0.72;
     // A flow collection (`{ … }` / `[ … ]`) is a begin/end region opened by a bracket; it must be
     // tried before #punctuation (which would otherwise claim the `{`/`[` as a bare bracket) and
     // before the scalar tokens. Its `{`/`[` can never lead a plain scalar, so this ranking is safe.
