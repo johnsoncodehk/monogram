@@ -12,6 +12,7 @@
     "conformance:html": "node test/html-conformance.ts",
     "test:tm-diagnostics": "node test/redcmd-tm-diagnostics.ts",
     "test:tm-guards": "node test/tm-highlight-guards.ts",
+    "test:yaml-issues": "node test/yaml-issue12-regressions.ts",
     "spike:html-lexer": "node test/html-lexer-spike.ts",
     "bench:html-official": "node test/html-bench.ts",
     "bench:html-embed": "node test/html-embed-js.ts",

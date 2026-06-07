@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 import { parse as yamlParse, parseAllDocuments } from 'yaml';
 import { run } from './scope-gap.ts';
 import { yamlOracle } from './yaml-oracle.ts';
+import { cases as issue12 } from './yaml-issue12-regressions.ts';
 
 const OFFICIAL = process.env.MONOGRAM_OFFICIAL_YAML ?? '/tmp/redcmd-yaml/syntaxes/yaml.tmLanguage.json';
 // The RedCMD/VS Code YAML grammar is a dispatcher stub that include()s version-specific
@@ -37,6 +38,10 @@ for (const f of readdirSync(SUITE).filter((n) => n.endsWith('.yaml'))) {
     }
   } catch { /* skip */ }
 }
+// Plus the RedCMD monogram#12 repros (many are tiny edge/error inputs absent from the suite) so the
+// metric actually SEES the constructs the comment flagged. Asserted should-be scopes live in their
+// own gate (yaml-issue12-regressions.ts); here they just widen what the gap/differential pass covers.
+for (const c of issue12) corpus.push({ name: `monogram#12 ${c.id}`, text: c.src });
 
 await run({
   name: 'YAML',
@@ -46,6 +51,18 @@ await run({
   monogramPath: 'yaml.tmLanguage.json',
   loadCorpus: () => corpus,
   roleOracle: yamlOracle,
-  // grade only inputs the parser fully accepts (the oracle is meaningful there).
+  // The GRADED headline stays valid-only: on malformed YAML the AST's key/value resolution is itself
+  // unreliable, so grading it would inject false "Monogram-wrong" tokens and poison the very signal
+  // we're making trustworthy. The invalid-input blind spot is instead closed by TWO mechanisms that
+  // stay honest there: (1) the asserted regression gate (yaml-issue12-regressions.ts) pins the
+  // should-be scope of the specific malformed repros (#4/#5/#8); (2) the differential pass below runs
+  // on ALL inputs and FLAGS invalid-input divergences for human review without auto-judging them.
   isGradable: (text) => { try { return parseAllDocuments(text).every((d: any) => d.errors.length === 0); } catch { return false; } },
+  // YAML's oracle emits COARSE, role-homogeneous spans (a whole plain scalar, a block-scalar body, a
+  // directive line); grade every char so a bug mid-span (a `%YAML` folded into a scalar, a block line
+  // bailing to a comment) is caught instead of hidden behind a correct start. See scope-gap.ts.
+  fullSpan: true,
+  // Also report oracle-INDEPENDENT divergences (Monogram vs official, where the oracle is silent) so a
+  // construct the CST oracle doesn't model can't become a silent blind spot. See scope-gap.ts.
+  differential: true,
 });

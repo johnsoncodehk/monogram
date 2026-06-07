@@ -55,6 +55,7 @@ jobs:
           node test/vue-directives.ts
           node test/vue-embed-boundary.ts
           node test/vue-interp-expr.ts
+          node test/yaml-issue12-regressions.ts
 
   # The derived tree-sitter highlighter is the strongest thesis proof (a real GLR
   # parser from the same grammar, beating the official hand-written one). Build its

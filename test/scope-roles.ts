@@ -270,7 +270,19 @@ export const ROLE_SPEC: Record<RoleName, RoleSpec> = {
   // (e.g. a coarse generic `punctuation` for flow, the split punctuation.definition.tag for a tag).
   [R.blockIndicator]: { tier: 'strict', desc: 'YAML block-scalar indicator (|/>, chomping, indent)', exact: ['keyword.control.flow.block-scalar'], family: ['keyword', 'storage.modifier', 'constant.numeric', 'punctuation.definition'] },
   [R.tagType]: { tier: 'strict', desc: 'YAML node tag (!!str / !foo / !<verbatim>)', exact: ['storage.type.tag'], family: ['storage.type', 'storage', 'entity.name.type', 'support.type', 'keyword.other', 'punctuation.definition.tag'] },
-  [R.directive]: { tier: 'strict', desc: 'YAML directive name (%YAML / %TAG / %…)', exact: ['keyword.other.directive'], family: ['keyword.other', 'keyword', 'punctuation.definition.directive'] },
+  // A directive is graded over its WHOLE line (full-span): the name is keyword.other.directive, but
+  // the interior legitimately carries finer scopes a maintained grammar splits out — the version
+  // (constant.numeric), the tag handle (punctuation.definition.tag), the tag prefix (support.type),
+  // directive parameters (string.unquoted.directive-*). family accepts all of those so a correct
+  // fine-grained directive is not penalised, while STILL rejecting the two readings that are the
+  // monogram#12 bugs: a `#…` mis-read as a comment (#8) and a `,` mis-read as a flow separator (#1)
+  // — neither `comment` nor `punctuation.separator` is in the family.
+  // NB family carries `string.unquoted` (a maintained grammar scopes a directive's name/params as
+  // string.unquoted.directive-name / -parameter): the comparative bench grades by visual CLASS, and a
+  // string-coloured param is a defensible rendering, so it must not read WRONG. The PRECISE should-be
+  // (a param belongs to the directive, not a stray plain scalar — monogram#12 #4) is pinned by the
+  // strict regression gate yaml-issue12-regressions.ts, not relaxed here.
+  [R.directive]: { tier: 'strict', desc: 'YAML directive line (%YAML / %TAG / %…) — name + handle/prefix/version', exact: ['keyword.other.directive'], family: ['keyword', 'punctuation.definition', 'support', 'storage', 'constant.numeric', 'string.unquoted', 'entity.name', 'variable.other'] },
   [R.flowPunct]: { tier: 'strict', desc: 'YAML flow punctuation ([ ] { } ,)', exact: ['punctuation.definition', 'punctuation.separator'], family: ['punctuation'] },
 
   // ── lexical floor: reported, excluded from the headline ───────────────────────
@@ -461,6 +473,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     [R.tagType, 'storage.type.tag.yaml', 'exact'],
     [R.tagType, 'punctuation.definition.tag.begin.yaml', 'family'],
     [R.directive, 'keyword.other.directive.yaml', 'exact'],
+    // directive interior: the version/handle/prefix sub-scopes a maintained grammar splits out are
+    // FAMILY-correct; the two monogram#12 mis-readings (comment / flow-separator) stay WRONG.
+    [R.directive, 'constant.numeric.yaml-version.yaml', 'family'],
+    [R.directive, 'punctuation.definition.tag.begin.yaml', 'family'],
+    [R.directive, 'comment.line.number-sign.yaml', 'wrong'],
+    [R.directive, 'punctuation.separator.sequence.yaml', 'wrong'],
     [R.flowPunct, 'punctuation.definition.sequence.begin.yaml', 'exact'],
     [R.flowPunct, 'punctuation.yaml', 'family'],
   ];

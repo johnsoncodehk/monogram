@@ -1,11 +1,24 @@
-// yaml-oracle.ts — the `yaml` package (eemeli; maintained, spec-compliant) → per-token
-// structural ROLE, the neutral answer key for the unified scope-gap harness. The official VS
-// Code YAML grammar is the UNMAINTAINED textmate/yaml.tmbundle (vscode#203212), so the parser
-// is the arbiter. Emits: mapping keys (entity.name.tag, the YAML convention), scalar VALUES by
-// resolved type (string / number / boolean·null), comments, AND the structural constructs the
-// coarse key/value/comment oracle used to miss (issue #12): anchors (&a), aliases (*a), document
-// markers (--- / ...), and string escapes (\n) inside double-quoted scalars.
-import { parseAllDocuments, isScalar, isMap, isSeq } from 'yaml';
+// yaml-oracle.ts — the `yaml` package (eemeli; maintained, spec-compliant) → per-token structural
+// ROLE, the neutral answer key for the unified scope-gap harness. YAML has no neutral *highlighting*
+// oracle the way TS has tsc, so the closest INDEPENDENT authority is this parser — but the data-model
+// AST (`parseAllDocuments`) alone can't see presentation-only tokens (comments, directives, flow
+// punctuation, block-scalar boundaries), which is where the johnsoncodehk/monogram#12 bugs live.
+//
+// So this oracle is a HYBRID over two layers of the SAME independent package:
+//   • the low-level CST (`new Parser().parse()`) for PRESENTATION tokens — comment / directive /
+//     anchor / alias / tag / flow punctuation / block-scalar (header vs body), each with exact
+//     offsets. The CST is error-tolerant (it tokenizes invalid input the AST would reject), so the
+//     oracle now grades malformed YAML too — closing the old "valid-only" blind spot.
+//   • the AST (`parseAllDocuments`) for the DATA MODEL — scalar value typing (a plain scalar that
+//     resolves to a number/bool/null vs a string), mapping-key detection (entity.name.tag), and
+//     escapes inside double-quoted scalars.
+//
+// Why this is the fix for the bench's blind spots: the OLD oracle hand-rolled the presentation layer
+// with regexes that reproduced the very bugs (a `,` in a `%TAG` prefix → flow.punct; a `!` inside a
+// comment → tag; the `#…` after `%YAML 1.1` → comment), so it BLESSED them. The CST is written by a
+// different author than Monogram's grammar, so it cannot share those blind spots — it is the same
+// independence property that makes tsc a fair oracle for TS.
+import { Parser, parseAllDocuments, isScalar, isMap, isSeq } from 'yaml';
 import { R } from './scope-roles.ts';
 import type { GoldToken } from './scope-gap.ts';
 import type { RoleName } from './scope-roles.ts';
@@ -20,111 +33,70 @@ const ESCAPE = /\\(?:[0abtnvfre"/\\N_LP \t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-
 
 export function yamlOracle(text: string): GoldToken[] {
   const out: GoldToken[] = [];
-  let docs: any[];
-  try { docs = parseAllDocuments(text); } catch { return out; }
+  const add = (start: number, end: number, role: RoleName): void => {
+    if (end > start) out.push({ start, end, text: text.slice(start, end), role });
+  };
 
-  const push = (node: any, role: RoleName): void => {
-    const r = node?.range;
-    if (r && r[1] > r[0]) out.push({ start: r[0], end: r[1], text: text.slice(r[0], r[1]), role });
+  // ── layer 1: CST presentation tokens (independent, error-tolerant) ──────────────────────────
+  const visit = (n: any): void => {
+    if (!n || typeof n !== 'object') return;
+    const ty = n.type, off = n.offset, src = n.source;
+    if (typeof ty === 'string' && typeof off === 'number' && typeof src === 'string') {
+      switch (ty) {
+        case 'comment': add(off, off + src.length, R.comment); break;
+        case 'doc-start': case 'doc-end': add(off, off + src.length, R.docMarker); break;   // --- / ...
+        // A directive owns its whole line; its interior (name, handle, tag-prefix, version) is NEVER
+        // a comment or flow punctuation — grading the full span (see scope-gap.ts) catches a `#…`
+        // mis-read as a comment (#8) or a `,` mis-read as a flow separator (#1).
+        case 'directive': add(off, off + src.length, R.directive); break;
+        case 'anchor': add(off + 1, off + src.length, R.anchor); break;   // name after &
+        case 'alias': add(off + 1, off + src.length, R.alias); break;     // name after *
+        case 'tag': add(off, off + src.length, R.tagType); break;
+        case 'flow-map-start': case 'flow-map-end':
+        case 'flow-seq-start': case 'flow-seq-end':
+        case 'comma': add(off, off + src.length, R.flowPunct); break;
+        case 'block-scalar': {
+          // CST quirk: a block-scalar node's `offset` is the header start but its `source` is the
+          // BODY only; the header (|/> + chomp/indent) and the header-line newline live in `props`.
+          const props: any[] = n.props ?? [];
+          const header = props.find((p) => p.type === 'block-scalar-header');
+          if (header) add(header.offset, header.offset + header.source.length, R.blockIndicator);
+          const last = props[props.length - 1];
+          const bodyStart = last ? last.offset + last.source.length : off;
+          add(bodyStart, bodyStart + src.length, R.litString);
+          break;
+        }
+        // quoted scalars are typed (key/value) + escape-split by the AST layer below; the CST emits
+        // no role for them here, so there is nothing to dedupe against.
+      }
+    }
+    for (const k of Object.keys(n)) { const v = n[k]; if (Array.isArray(v)) v.forEach(visit); else if (v && typeof v === 'object') visit(v); }
   };
-  // A double-quoted scalar's escape sequences each get their own escape token (a KEY or a VALUE —
-  // #7 is escapes in a quoted KEY). The whole-scalar key/value token stays; escapes overlay it.
-  const pushEscapes = (node: any): void => {
-    const r = node?.range;
-    if (!r || node.type !== 'QUOTE_DOUBLE') return;
-    const seg = text.slice(r[0], r[1]);
-    let m: RegExpExecArray | null;
-    ESCAPE.lastIndex = 0;
-    while ((m = ESCAPE.exec(seg))) out.push({ start: r[0] + m.index, end: r[0] + m.index + m[0].length, text: m[0], role: R.escape });
-  };
-  // A block scalar (`|`/`>`), in KEY or VALUE position: split the introducer (a structural control
-  // sigil → block-indicator) from the verbatim body (a string). introducer = `|`/`>` + chomping/indent
-  // on the header line; body = the lines below. A block scalar reads the SAME wherever it sits — the
-  // key-ness of a `? |` key is carried by the `?`/`:`, NOT by recolouring the body as a name.
-  const isBlockScalar = (n: any) => n?.type === 'BLOCK_LITERAL' || n?.type === 'BLOCK_FOLDED';
-  const pushBlockScalar = (node: any): void => {
-    const r = node?.range;
-    if (!r || r[1] <= r[0]) return;
-    const introLen = /^[|>][-+0-9]*/.exec(text.slice(r[0], r[1]))?.[0].length ?? 1;
-    out.push({ start: r[0], end: r[0] + introLen, text: text.slice(r[0], r[0] + introLen), role: R.blockIndicator });
-    // content body = the first NON-BLANK char after the header line (skip leading indent + blank
-    // lines — they are structural whitespace; grading them would test the INDENT's scope, not the
-    // scalar content, and whitespace is visually colourless either way).
-    const nl = text.indexOf('\n', r[0]);
-    let contentStart = nl >= 0 ? nl + 1 : r[0] + introLen;
-    while (contentStart < r[1] && (text[contentStart] === ' ' || text[contentStart] === '\t' || text[contentStart] === '\n')) contentStart++;
-    if (r[1] > contentStart) out.push({ start: contentStart, end: r[1], text: text.slice(contentStart, r[1]), role: R.litString });
-  };
+  try { for (const t of new Parser().parse(text)) visit(t); } catch { /* CST best-effort */ }
+
+  // ── layer 2: AST data model — scalar value typing, key detection, escapes ───────────────────
+  let docs: any[] = [];
+  try { docs = parseAllDocuments(text); } catch { docs = []; }
   const walk = (node: any, isKey: boolean): void => {
     if (!node) return;
     if (isScalar(node)) {
-      if (isBlockScalar(node)) pushBlockScalar(node);
-      else { push(node, isKey ? R.tagName : valueRole(node.value)); pushEscapes(node); }
-    }
-    else if (isMap(node)) for (const p of node.items) { walk(p.key, true); walk(p.value, false); }
+      const r = node.range;
+      if (!r || r[1] <= r[0]) return;
+      // block scalars are owned by the CST layer (header vs body split); skip them here.
+      if (node.type === 'BLOCK_LITERAL' || node.type === 'BLOCK_FOLDED') return;
+      add(r[0], r[1], isKey ? R.tagName : valueRole(node.value));
+      if (node.type === 'QUOTE_DOUBLE') {
+        const seg = text.slice(r[0], r[1]);
+        ESCAPE.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = ESCAPE.exec(seg))) add(r[0] + m.index, r[0] + m.index + m[0].length, R.escape);
+      }
+    } else if (isMap(node)) for (const p of node.items) { walk(p.key, true); walk(p.value, false); }
     else if (isSeq(node)) for (const it of node.items) walk(it, false);
   };
   for (const doc of docs) walk(doc?.contents, false);
 
-  // The scalar spans collected so far bound the regex passes below: a `&`/`*`/`#`/`---` that falls
-  // INSIDE a scalar is content, not a sigil (e.g. `a & b` is one plain scalar).
-  const spans = out.map((t) => [t.start, t.end] as const);
-  const inSpan = (i: number): boolean => spans.some(([s, e]) => i >= s && i < e);
-
-  // Anchors (&a) and aliases (*a): the NAME after the sigil — graded so the official `&`-split
-  // (punctuation.definition.anchor + variable.other.anchor) and Monogram's single `&a` token both
-  // land on the name. The sigil sits at a node boundary (line start / whitespace / flow open).
-  for (const [re, role] of [
-    [/(?<=^|[\s[{,])&[^\s[\]{}",]+/gm, R.anchor],
-    [/(?<=^|[\s[{,])\*[^\s[\]{}",]+/gm, R.alias],
-  ] as const) {
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text))) {
-      if (inSpan(m.index)) continue;
-      out.push({ start: m.index + 1, end: m.index + m[0].length, text: m[0].slice(1), role });
-    }
-  }
-
-  // Document markers (--- / ...) — line-start, followed by whitespace or EOL.
-  {
-    const re = /^(?:---|\.\.\.)(?=[ \t]|$)/gm;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text))) {
-      if (inSpan(m.index)) continue;
-      out.push({ start: m.index, end: m.index + 3, text: m[0], role: R.docMarker });
-    }
-  }
-
-  // Comments: a `#` at line start or after whitespace, to EOL — unless it falls inside a scalar
-  // span (a `#` with no preceding space is plain-scalar content, e.g. `a#b`).
-  const re = /#[^\n]*/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    const before = m.index === 0 ? '\n' : text[m.index - 1];
-    if (before !== ' ' && before !== '\t' && before !== '\n') continue;
-    if (inSpan(m.index)) continue;
-    out.push({ start: m.index, end: m.index + m[0].length, text: m[0], role: R.comment });
-  }
-
-  // Node tags (!!str / !foo / !<verbatim> / ! non-specific): the sigil + handle/suffix at a node
-  // boundary (line start / whitespace / flow open). A `!` inside a scalar span is content, not a tag.
-  for (const tm of text.matchAll(/(?<=^|[\s[{,])!(?:<[^>\n]*>|[^\s[\]{},]*)/gm)) {
-    if (tm.index === undefined || inSpan(tm.index)) continue;
-    out.push({ start: tm.index, end: tm.index + tm[0].length, text: tm[0], role: R.tagType });
-  }
-  // Directives (%YAML / %TAG / %FOO): the directive NAME after `%`, line-start only (a directive
-  // owns its line). A `%`-led line folded into a plain scalar body sits in a span → inSpan skips it.
-  for (const dm of text.matchAll(/^%(\w[\w-]*)/gm)) {
-    if (dm.index === undefined || inSpan(dm.index)) continue;
-    out.push({ start: dm.index + 1, end: dm.index + 1 + dm[1].length, text: dm[1], role: R.directive });
-  }
-  // Flow punctuation ([ ] { } ,): structural only OUTSIDE a scalar span — a `,` inside a plain scalar
-  // is content (`a, b` is one plain scalar), and `[`/`{` cannot start a plain scalar, so a bare one
-  // always opens a flow collection. inSpan excludes the in-scalar occurrences.
-  for (const fm of text.matchAll(/[[\]{},]/g)) {
-    if (fm.index === undefined || inSpan(fm.index)) continue;
-    out.push({ start: fm.index, end: fm.index + 1, text: fm[0], role: R.flowPunct });
-  }
-  out.sort((a, b) => a.start - b.start);
+  // outermost-first at a shared start so the harness's coarse→fine walk sees the widest span first
+  out.sort((a, b) => a.start - b.start || b.end - a.end);
   return out;
 }
