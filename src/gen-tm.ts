@@ -3256,6 +3256,45 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
  *     the lookahead (same head, broadest scope) supplies the key BODY pattern.
  * Returns null when the shape is absent (so non-YAML grammars are unaffected).
  */
+// Whether — and HOW — a grammar's plain scalars FOLD across lines, DETECTED from its rules (not
+// hardcoded). The fold logic already lives in the PARSER rules (e.g. YAML's foldedPlain / foldedPlainBlock
+// / DocFold, assembled from the lexer's Indent/Dedent/Newline tokens), so the derived highlighter reads
+// it from there instead of re-encoding the same logic. A FOLD is a plain-scalar LEAF token that repeats
+// across an indent boundary: `Indent <leaf> … Dedent` is a DEEPER continuation (§2a′), `Newline <leaf>`
+// is a SAME-COLUMN continuation (§2a″). A leaf is a token declared with a `blockPattern` (the plain-scalar
+// marker) and a scope. Crucially, an `Indent`/`Newline` followed by a RULE ref (a sequence item / mapping
+// entry — e.g. BlockSequence's `many(Newline, SeqItem)`) is a SIBLING separator, not a fold — only a LEAF
+// TOKEN after the boundary counts, which is what distinguishes a scalar continuing itself from a new node.
+// Returns null when the grammar's plain scalars never fold → NO fold regions are emitted, so the
+// highlighter generalises to any indentation language (a non-folding one gets nothing).
+function detectFold(grammar: CstGrammar): { hasDeeper: boolean; hasSameColumn: boolean } | null {
+  if (!grammar.indent) return null;
+  const { indentToken, newlineToken } = grammar.indent;
+  const leafNames = new Set(grammar.tokens.filter(t => t.blockPattern && t.scope).map(t => t.name));
+  if (!leafNames.size) return null;
+  const refsLeaf = (e: RuleExpr): boolean =>
+    e.type === 'ref' ? leafNames.has(e.name)
+    : e.type === 'seq' || e.type === 'alt' ? e.items.some(refsLeaf)
+    : e.type === 'quantifier' || e.type === 'group' || e.type === 'not' ? refsLeaf(e.body)
+    : e.type === 'sep' ? refsLeaf(e.element)
+    : false;
+  const isRefTo = (e: RuleExpr, name: string): boolean => e.type === 'ref' && e.name === name;
+  let hasDeeper = false, hasSameColumn = false;
+  const visit = (e: RuleExpr): void => {
+    if (e.type === 'seq') {
+      for (let i = 0; i < e.items.length - 1; i++) {
+        if (isRefTo(e.items[i], indentToken) && refsLeaf(e.items[i + 1])) hasDeeper = true;
+        if (isRefTo(e.items[i], newlineToken) && refsLeaf(e.items[i + 1])) hasSameColumn = true;
+      }
+      e.items.forEach(visit);
+    } else if (e.type === 'alt') e.items.forEach(visit);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') visit(e.body);
+    else if (e.type === 'sep') visit(e.element);
+  };
+  for (const r of grammar.rules) visit(r.body);
+  return (hasDeeper || hasSameColumn) ? { hasDeeper, hasSameColumn } : null;
+}
+
 function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: string; keyBody: string; prefixGroups: { scope: string; pattern: string }[] } | null {
   if (!grammar.indent) return null;
 
@@ -4830,7 +4869,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // header line) and scopes it as string, stopping before an inline ` #` comment (which then falls to
     // `#comment`). Gated on a plain-scalar token, so the OTHER six grammars (no `#plain`) regenerate
     // byte-identical.
-    if (repository['plain']) {
+    // Whether — and HOW — this grammar's plain scalars fold is DETECTED from its rules (detectFold):
+    // a deeper continuation (`Indent <leaf> … Dedent`) → the §2a′ region, a same-column continuation
+    // (`Newline <leaf>`) → the §2a″ region. A grammar whose plain scalars never fold gets NEITHER (no
+    // over-emission). This drives the fold-region emission FROM the grammar's fold rules — the same
+    // rules the parser uses — rather than from the `repository['plain']` proxy.
+    const fold = detectFold(grammar);
+    if (repository['plain'] && fold) {
       // The plain-scalar match, used ONLY as a zero-width `(?=plainSrc)` value-head probe below. The
       // flow→block body loosening (`loosenBlockScalar`, in the flow section further down) runs AFTER
       // this point, so this is the flow-body snapshot — irrelevant here, since a lookahead only needs
@@ -4887,12 +4932,15 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // content only when glued to a non-space, exactly as the plain-scalar body treats it) so the
       // comment falls to `#comment`. Scoped with the plain string scope.
       const continuationRule = { match: '\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*', name: plainContent };
-      repository['plain-continuation'] = {
-        begin: `^([ \\t]*)(?=${plainVp})`,
-        while: `\\G(?=[ \\t]*$|\\1[ \\t]+(?!${structAhead}))`,
-        patterns: [continuationRule, ...plainHeaderIncs],
-      };
-      topPatterns.push({ include: '#plain-continuation' });
+      // Emitted only when the grammar actually has a DEEPER fold (`Indent <leaf> … Dedent`).
+      if (fold.hasDeeper) {
+        repository['plain-continuation'] = {
+          begin: `^([ \\t]*)(?=${plainVp})`,
+          while: `\\G(?=[ \\t]*$|\\1[ \\t]+(?!${structAhead}))`,
+          patterns: [continuationRule, ...plainHeaderIncs],
+        };
+        topPatterns.push({ include: '#plain-continuation' });
+      }
 
       // ── 2a″. BARE plain-scalar SAME-COLUMN fold (monogram#12 §9) ──
       // A plain scalar that is itself a NODE (a document value, or the leading value of an indented
@@ -4922,12 +4970,15 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // listed first, win the tie, so header typing is preserved. It stops before a ` #` comment (a `#`
       // is content only when glued to a non-space, as the plain body treats it).
       const bareCont = { match: '(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))+', name: plainContent };
-      repository['plain-bare-fold'] = {
-        begin: `^([ \\t]*)(?=${plainSrc})(?!${structRelease})`,
-        while: `\\G(?=[ \\t]*$|\\1(?=[ \\t]*\\S)(?![ \\t]*${structRelease}))`,
-        patterns: [...plainHeaderIncs, bareCont],
-      };
-      topPatterns.push({ include: '#plain-bare-fold' });
+      // Emitted only when the grammar actually has a SAME-COLUMN fold (`Newline <leaf>`).
+      if (fold.hasSameColumn) {
+        repository['plain-bare-fold'] = {
+          begin: `^([ \\t]*)(?=${plainSrc})(?!${structRelease})`,
+          while: `\\G(?=[ \\t]*$|\\1(?=[ \\t]*\\S)(?![ \\t]*${structRelease}))`,
+          patterns: [...plainHeaderIncs, bareCont],
+        };
+        topPatterns.push({ include: '#plain-bare-fold' });
+      }
     }
   }
 
