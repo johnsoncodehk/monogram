@@ -8,6 +8,7 @@
 #include "tree_sitter/parser.h"
 #include "tree_sitter/alloc.h"
 #include <string.h>
+#include <stdint.h>
 
 enum TokenType {
   INDENT,
@@ -18,6 +19,10 @@ enum TokenType {
   KEY,
   NUM,
   BOOL_NULL,
+  _FLOW_LBRACKET,
+  _FLOW_LBRACE,
+  _FLOW_RBRACKET,
+  _FLOW_RBRACE,
 };
 
 typedef struct {
@@ -28,6 +33,7 @@ typedef struct {
   bool pending_newline;  // a NEWLINE is still owed once dedents reach pending_col
   bool started;          // any content lexed yet (suppresses a leading NEWLINE)
   bool at_line_lead;     // the next real content token is its line's first (compact-indicator probe)
+  uint16_t flow_depth;   // > 0 inside flow collections ([ ] { }) → indentation suspended, ,/[/]/{/}
 } Scanner;
 
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
@@ -45,6 +51,7 @@ void *tree_sitter_yaml_external_scanner_create(void) {
   s->stack[0] = 0;
   s->pending_col = -1; s->pending_newline = false; s->started = false;
   s->at_line_lead = true;
+  s->flow_depth = 0;
   return s;
 }
 
@@ -61,6 +68,7 @@ unsigned tree_sitter_yaml_external_scanner_serialize(void *payload, char *buffer
   buffer[n++] = s->pending_newline ? 1 : 0;
   buffer[n++] = s->at_line_lead ? 1 : 0;
   memcpy(&buffer[n], &s->pending_col, sizeof(int16_t)); n += sizeof(int16_t);
+  memcpy(&buffer[n], &s->flow_depth, sizeof(uint16_t)); n += sizeof(uint16_t);
   uint32_t count = s->len;
   while (n + sizeof(uint32_t) + count * sizeof(int16_t) > TREE_SITTER_SERIALIZATION_BUFFER_SIZE && count > 0) count--;
   memcpy(&buffer[n], &count, sizeof(uint32_t)); n += sizeof(uint32_t);
@@ -72,12 +80,14 @@ void tree_sitter_yaml_external_scanner_deserialize(void *payload, const char *bu
   Scanner *s = (Scanner *)payload;
   s->len = 1; s->stack[0] = 0; s->pending_col = -1; s->pending_newline = false; s->started = false;
   s->at_line_lead = true;
-  if (length < 3 + sizeof(int16_t) + sizeof(uint32_t)) return;
+  s->flow_depth = 0;
+  if (length < 3 + sizeof(int16_t) + sizeof(uint16_t) + sizeof(uint32_t)) return;
   unsigned n = 0;
   s->started = buffer[n++] != 0;
   s->pending_newline = buffer[n++] != 0;
   s->at_line_lead = buffer[n++] != 0;
   memcpy(&s->pending_col, &buffer[n], sizeof(int16_t)); n += sizeof(int16_t);
+  memcpy(&s->flow_depth, &buffer[n], sizeof(uint16_t)); n += sizeof(uint16_t);
   uint32_t count; memcpy(&count, &buffer[n], sizeof(uint32_t)); n += sizeof(uint32_t);
   if (count == 0) return; // keep stack[0] = 0
   while (s->cap < count) { s->cap *= 2; s->stack = ts_realloc(s->stack, s->cap * sizeof(int16_t)); }
@@ -185,6 +195,7 @@ static bool compact_content_is_structural(TSLexer *lexer) {
 // next call (then compact_col is no longer deeper, so this path is skipped). A leaf scalar (no `:`)
 // is emitted as usual, its end marked at the run end. Mirrors compactNestsHere's mapping-key arm.
 static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain, bool want_num, bool want_boolnull,
+                        int flow_depth,
                         Scanner *s, int16_t compact_col, int indent_sym) {
   bool cm = compact_col >= 0;   // compact-eligible: suppress per-char mark_end (zero-width INDENT on KEY)
   char buf[64];
@@ -194,14 +205,14 @@ static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain, bool wan
   for (;;) {
     int32_t c = lexer->lookahead;
     if (c == 0 || c == '\n' || c == '\r') break;                 // newline / EOF
-    if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') break; // flow indicators end a scalar
+    if (flow_depth > 0 && (c == '[' || c == '{' || c == ']' || c == '}' || c == ',')) break; // flow indicators end a scalar — ONLY inside a flow collection
     if (!has_content && (c == '-' || c == '?')) {
       // A leading `-`/`?` is a block indicator (seq entry / explicit key) when followed by space/EOL/
       // flow-indicator, and scalar content otherwise (`-1`, `?x`). Peek the next char to decide.
       lexer->advance(lexer, false);
       int32_t n = lexer->lookahead;
       if (n == 0 || n == ' ' || n == '\t' || n == '\n' || n == '\r' ||
-          n == ',' || n == '[' || n == ']' || n == '{' || n == '}') return false; // indicator, not a scalar
+          (flow_depth > 0 && (n == '[' || n == '{' || n == ']' || n == '}' || n == ','))) return false; // indicator, not a scalar
       if (blen < sizeof(buf)) buf[blen++] = (char)c;               // `-`/`?` glued to non-space is content
       has_content = true;
       if (!cm) lexer->mark_end(lexer);
@@ -211,7 +222,7 @@ static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain, bool wan
       lexer->advance(lexer, false);                               // past the ':' to peek the next char
       int32_t n = lexer->lookahead;
       if (n == 0 || n == ' ' || n == '\t' || n == '\n' || n == '\r' ||
-          n == ',' || n == '[' || n == ']' || n == '{' || n == '}') {
+          (flow_depth > 0 && (n == '[' || n == '{' || n == ']' || n == '}' || n == ','))) {
         stopped_at_kv = true; break;                              // ':' is a key/value separator → end before it
       }
       if (blen < sizeof(buf)) buf[blen++] = ':';                  // ':' glued to non-space is content
@@ -311,6 +322,55 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
     return false;
   }
 
+  // Inside a flow collection (flow_depth > 0) a line break is INSIGNIFICANT — indentation is suspended,
+  // so a flow scalar / nested bracket may sit on a following line (`[a,\n b]`). tree-sitter's `/\s/`
+  // extra cannot skip the newline here: the external scanner is consulted first, and a `false` return
+  // (the only way to "decline") rolls back any advance, so the newline is never consumed and the parser
+  // stalls into error recovery. So when in flow, the scanner itself eats the flow-insignificant run
+  // (spaces, tabs, newlines, comments) as the LEADING trivia of the next token it returns — the bracket
+  // emission and scalar scan below both return TRUE, which makes the skip stick. (In block context this
+  // is skipped: a newline IS significant and drives the INDENT/DEDENT/NEWLINE boundary logic.)
+  if (s->flow_depth > 0) {
+    for (;;) {
+      int32_t c = lexer->lookahead;
+      if (c == ' ' || c == '\t' || c == '\n' || c == '\r') skip(lexer);
+      else if (c == '#') { while (lexer->lookahead != 0 && lexer->lookahead != '\n' && lexer->lookahead != '\r') skip(lexer); }
+      else break;
+    }
+  }
+  // Flow-collection delimiters ([ ] { }). These are emitted as EXTERNAL tokens (not the internal DFA) so
+  // flow_depth — the open-bracket nesting that suspends indentation — PERSISTS: tree-sitter keeps an
+  // external scanner's struct mutations only across a token it RETURNS (on a `false` return it restores
+  // the pre-scan serialized state, so a peek-then-false counter is silently rolled back before the
+  // internal bracket is lexed). Each is gated on its own valid_symbols, so a `[`/`{` that is plain
+  // content (a scalar contains but never STARTS with one — handled in scan_scalar) is NOT consumed here:
+  // at those positions the flow token isn't valid and we fall through. Skip inline space/tab first (the
+  // flow newline skip above already ran when in flow; in block a newline still drives the indent logic).
+  {
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\t') skip(lexer);
+    int32_t fc = lexer->lookahead;
+    if (fc == '[' && valid_symbols[_FLOW_LBRACKET]) {
+      advance(lexer); lexer->mark_end(lexer); lexer->result_symbol = _FLOW_LBRACKET;
+      if (s->flow_depth < UINT16_MAX) s->flow_depth++;
+      s->started = true; s->at_line_lead = false; return true;
+    }
+    if (fc == '{' && valid_symbols[_FLOW_LBRACE]) {
+      advance(lexer); lexer->mark_end(lexer); lexer->result_symbol = _FLOW_LBRACE;
+      if (s->flow_depth < UINT16_MAX) s->flow_depth++;
+      s->started = true; s->at_line_lead = false; return true;
+    }
+    if (fc == ']' && valid_symbols[_FLOW_RBRACKET]) {
+      advance(lexer); lexer->mark_end(lexer); lexer->result_symbol = _FLOW_RBRACKET;
+      if (s->flow_depth > 0) s->flow_depth--;
+      s->started = true; s->at_line_lead = false; return true;
+    }
+    if (fc == '}' && valid_symbols[_FLOW_RBRACE]) {
+      advance(lexer); lexer->mark_end(lexer); lexer->result_symbol = _FLOW_RBRACE;
+      if (s->flow_depth > 0) s->flow_depth--;
+      s->started = true; s->at_line_lead = false; return true;
+    }
+  }
+
   // Compact block notation (`- a: 1` / `- - x` / `- &a k: v` / `? key`). The line-lead indicator was
   // just lexed by tree-sitter's internal DFA, so at_line_lead is still set (the scanner emits no
   // indicator token to clear it) and tree-sitter now wants the nested node's INDENT on the SAME line.
@@ -324,7 +384,7 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
   //   • a plain/quoted SCALAR lead — fall through to scan_scalar (below), which pushes the compact
   //     INDENT itself when the run is a mapping KEY. (A bare scalar must NOT be sniffed-then-rewound: a
   //     plain scalar is external-only, so a false return here would loop.)
-  if (want_indent && s->at_line_lead) {
+  if (want_indent && s->at_line_lead && s->flow_depth == 0) {
     while (lexer->lookahead == ' ' || lexer->lookahead == '\t') skip(lexer);
     int32_t c = lexer->lookahead;
     bool nonscalar_lead = c == '&' || c == '!' || c == '[' || c == '{' || c == '*' || compact_is_indicator(c);
@@ -345,8 +405,9 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
   }
 
   // A block scalar value (`key: |`): scan its body before the indent logic — its more-indented
-  // lines are content, not nested structure. Skip the inline space after the `:`/`-` first.
-  if (want_block) {
+  // lines are content, not nested structure. Skip the inline space after the `:`/`-` first. Block
+  // scalars are a block-context construct — inside a flow collection `|`/`>` are plain content.
+  if (want_block && s->flow_depth == 0) {
     while (lexer->lookahead == ' ' || lexer->lookahead == '\t') skip(lexer);
     if (lexer->lookahead == '|' || lexer->lookahead == '>') { if (scan_block_scalar(s, lexer)) { s->at_line_lead = false; return true; } }
   }
@@ -371,11 +432,14 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
         compact_col = (int16_t)lexer->get_column(lexer);
         lexer->mark_end(lexer); // zero-width INDENT end at the content start (used iff the run is a KEY)
       }
-      if (scan_scalar(lexer, valid_symbols[KEY] != 0, valid_symbols[PLAIN] != 0, valid_symbols[NUM] != 0, valid_symbols[BOOL_NULL] != 0, s, compact_col, INDENT)) { s->started = true; s->at_line_lead = (lexer->result_symbol == INDENT); return true; }
+      if (scan_scalar(lexer, valid_symbols[KEY] != 0, valid_symbols[PLAIN] != 0, valid_symbols[NUM] != 0, valid_symbols[BOOL_NULL] != 0, s->flow_depth, s, compact_col, INDENT)) { s->started = true; s->at_line_lead = (lexer->result_symbol == INDENT); return true; }
     }
   }
 
-  if (!want_indent && !want_dedent && !want_newline) return false; // flow context — no indent tokens valid
+  if (!want_indent && !want_dedent && !want_newline) return false; // no indent tokens valid
+  // Inside a flow collection a newline is INSIGNIFICANT (indentation suspended): emit NO INDENT/DEDENT/
+  // NEWLINE so the line break is consumed by tree-sitter's `/\s/` extra and the flow spans the line.
+  if (s->flow_depth > 0) return false;
 
   // Skip blank lines, comment-only lines, and leading whitespace, noting whether a line break was
   // crossed (only a real boundary drives the indent logic).
