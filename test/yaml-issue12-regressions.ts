@@ -57,23 +57,23 @@ export const cases: Issue12Case[] = [
 
   { id: '#5', title: 'an escape inside a double-quoted scalar is highlighted',
     src: 'double: "quoted \\\' scalar"\n', at: "\\'", col: 0,
-    should: (s) => isEscapeOrInvalid(s), why: '`\\\'` in a double-quoted scalar is an (invalid) escape; it should be constant.character.escape or invalid, not plain string', bug: true },
+    should: (s) => isEscapeOrInvalid(s), why: '`\\\'` in a double-quoted scalar is an (invalid) escape; it should be constant.character.escape or invalid, not plain string' },
 
   { id: '#6', title: 'a `!` opening a plain-scalar CONTINUATION line is string content, not a tag',
     src: 'safe: a!"#$%&\'()*+,-./09:;<=>?@AZ\n     !"#$%&\'()*+,-./09:;<=>?@AZ\n', at: '     !', col: 5,
-    should: (s) => isString(s), why: 'the 2nd line folds into the one multi-line plain scalar (CST: one `scalar` token); the leading `!` is content, not storage.type.tag', bug: true },
+    should: (s) => isString(s), why: 'the 2nd line folds into the one multi-line plain scalar (CST: one `scalar` token); the leading `!` is content, not storage.type.tag' },
 
   { id: '#7', title: '`42` inside a multi-line plain-scalar KEY is string content, not a number',
     src: '? a\n  true\n: null\n  d\n? e\n  42\n', at: '  42', col: 2,
-    should: (s) => notNumber(s), why: 'the explicit key is the plain scalar "e 42" (CST/AST: one scalar that resolves to the STRING "e 42"); `42` is not a numeric literal', bug: true },
+    should: (s) => notNumber(s), why: 'the explicit key is the plain scalar "e 42" (CST/AST: one scalar that resolves to the STRING "e 42"); `42` is not a numeric literal' },
 
   { id: '#8', title: '`#...` immediately after `%YAML 1.1` is directive content, not a comment',
     src: '%YAML 1.1#...\n', at: '#...', col: 0,
-    should: (s) => notComment(s), why: 'no whitespace precedes the `#`, so it is not a comment; CST emits one `directive` token `%YAML 1.1#...`', bug: true },
+    should: (s) => notComment(s), why: 'no whitespace precedes the `#`, so it is not a comment; CST emits one `directive` token `%YAML 1.1#...`' },
 
   { id: '#9', title: '`%YAML` after document content is plain-scalar text, not a directive',
     src: '---\nscalar\n%YAML 1.2\n', at: '%YAML', col: 0,
-    should: (s) => notDirective(s) && isString(s), why: 'a directive cannot appear after content; `scalar\\n%YAML 1.2` folds into one plain scalar (CST: one `scalar` token)', bug: true },
+    should: (s) => notDirective(s) && isString(s), why: 'a directive cannot appear after content; `scalar\\n%YAML 1.2` folds into one plain scalar (CST: one `scalar` token)' },
 
   { id: '#10', title: 'a `#` line inside a `|5` block scalar body is string content, not a comment',
     src: 'abc: |5\n      # string 6\n     # string 5\n    #comment 4\n   #comment 3\n', at: '# string 5', col: 0,

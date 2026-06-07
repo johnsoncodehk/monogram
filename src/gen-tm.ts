@@ -4582,17 +4582,26 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // JS/TS strings declare an @escape and take the escapePattern branch above, so they are
       // untouched; this fires only for the otherwise-flat quoted-string token.
       const { delim, escape } = tokenPatternQuoteDelimAndEscape(tok)!;
+      const isDoubledDelim = escape === escapeRegex(delim) + escapeRegex(delim);
+      // A BACKSLASH-based escape string (e.g. YAML double-quoted): the valid escapes are scoped
+      // constant.character.escape; any OTHER `\.` is an INVALID escape and must still be highlighted
+      // (monogram#12 #5 — `"quoted \' scalar"`: `\'` is not a valid YAML escape but must not read as
+      // plain string content). The invalid catch is listed AFTER the valid pattern (same start → the
+      // valid escape wins the tie; only an unrecognised `\.` falls to it). NOT added for a doubled-
+      // delimiter escape (`''`), where a lone `\` is literal content, not an escape.
+      const escapePatterns: TmPattern[] = [{ match: escape, name: `constant.character.escape.${langName}` }];
+      if (!isDoubledDelim) escapePatterns.push({ match: '\\\\.', name: `invalid.illegal.constant.character.escape.${langName}` });
       const region: TmPattern = {
         name: `${scope}.${langName}`,
         begin: escapeRegex(delim),
         beginCaptures: { '0': { name: `punctuation.definition.string.begin.${langName}` } },
         end: escapeRegex(delim),
         endCaptures: { '0': { name: `punctuation.definition.string.end.${langName}` } },
-        patterns: [{ match: escape, name: `constant.character.escape.${langName}` }],
+        patterns: escapePatterns,
       };
       // A doubled-delimiter escape (`''`) shares its first char with the region's `end`, so the
       // escape pattern must be tried BEFORE the end (else `'a''b'` closes at the inner pair).
-      if (escape === escapeRegex(delim) + escapeRegex(delim)) region.applyEndPatternLast = true;
+      if (isDoubledDelim) region.applyEndPatternLast = true;
       repository[key] = region;
       topPatterns.push({ include: `#${key}` });
       rememberLiteralKey(scope, key, tok.name);

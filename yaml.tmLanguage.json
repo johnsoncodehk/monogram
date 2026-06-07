@@ -217,7 +217,7 @@
     },
     "comment": {
       "name": "comment.line.number-sign.yaml",
-      "match": "#[^\\n]*"
+      "match": "(?<![^\\t\\n\\f\\r ])#[^\\n]*"
     },
     "dquotekey": {
       "name": "entity.name.tag.yaml",
@@ -280,6 +280,10 @@
         {
           "match": "\\\\(?:[0abtnvfre\"/\\\\N_LP \\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|\\r?\\n)",
           "name": "constant.character.escape.yaml"
+        },
+        {
+          "match": "\\\\.",
+          "name": "invalid.illegal.constant.character.escape.yaml"
         }
       ]
     },

@@ -10,7 +10,7 @@
 import {
   token, rule, defineGrammar, alt, many, many1, opt, not, noCommentBefore, noMultilineFlowBefore,
   altPattern, optPattern, seq, oneOf, noneOf, range, star, plus, repeat, followedBy, notFollowedBy,
-  precededBy, never, end,
+  precededBy, notPrecededBy, never, end,
 } from './src/api.ts';
 import type { IndentConfig } from './src/types.ts';
 
@@ -38,7 +38,12 @@ const hashAfterNonSpace = seq('#', precededBy(seq(nonWhitespace, '#')));
 const docMarkerEnd = followedBy(altPattern(oneOf('\t', ' '), '\r', '\n', end()));
 const DocStart = token(seq('---', docMarkerEnd), { scope: 'entity.other.document.begin' });
 const DocEnd = token(seq('...', docMarkerEnd), { scope: 'entity.other.document.end' });
-const Comment = token(seq('#', star(noneOf('\n'))), { skip: true, scope: 'comment.line.number-sign' });
+// A `#` is a comment indicator only at line start or AFTER whitespace (YAML §6.6); a `#` glued to a
+// non-space char is content, not a comment (`a#b` is a plain scalar, `%YAML 1.1#…` keeps the `#…` as
+// directive content — monogram#12 #8). The `notPrecededBy(nonWhitespace)` guard (a fixed-width, portable
+// `(?<!\S)`) enforces that. Plain scalars already keep a glued `#` via `hashAfterNonSpace`; this stops
+// the Comment token from claiming a glued `#` that a non-scalar token (a directive) left behind.
+const Comment = token(seq(notPrecededBy(nonWhitespace), '#', star(noneOf('\n'))), { skip: true, scope: 'comment.line.number-sign' });
 // Double-quoted scalar body. The escape set is FIXED (YAML 1.2 §5.7): a `\` may only precede one
 // of `0 a b t n v f r e " / \ N _ L P`, a literal space/tab, a `x`+2 / `u`+4 / `U`+8 hex escape, or
 // a LINE BREAK (`\`-at-EOL = line continuation). Any other `\.` (`\.`, `\'`, `\q`, `\x4`) is illegal
