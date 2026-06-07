@@ -269,6 +269,17 @@ export default defineGrammar({
 });
 ```
 
+Token patterns are **combinators, not regular expressions** — `seq` / `oneOf` / `range` / `noneOf` / `plus` / `star` / `altPattern` / `optPattern` / … assemble a structured pattern IR (regex is a *derived* backend, not the source of truth). A bare `RegExp` is not a valid token pattern: `token(/…/)` is a `TS2345` type error. Coming from regex:
+
+| RegExp | Combinator |
+|---|---|
+| `/[ \t]+/` | `plus(oneOf(' ', '\t'))` |
+| `/[A-Z_][A-Z0-9_]*/` | `seq(oneOf(range('A', 'Z'), '_'), star(oneOf(range('A', 'Z'), range('0', '9'), '_')))` |
+| `/"[^"]*"/` | `seq('"', star(noneOf('"')), '"')` |
+| `/\d+(\.\d+)?/` | `seq(plus(digit), optPattern(seq('.', plus(digit))))` |
+
+Note `digit` above is just `range('0', '9')` — patterns are plain values you name and reuse, not magic strings.
+
 The parser uses these rules to build a CST. The highlighter reads the same rule **shapes** and infers most scopes structurally — with no per-rule annotation:
 
 - `foo(x)` → `foo` is `entity.name.function` (from the `$ '(' …` call form)
