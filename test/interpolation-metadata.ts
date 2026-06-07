@@ -5,7 +5,7 @@
 // by the token IR.
 //
 // Run with: node test/interpolation-metadata.ts
-import { defineGrammar, many, rule, token, seq, star, alt, lit, oneOf, noneOf, anyChar, range, plus } from '../src/api.ts';
+import { defineGrammar, many, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, range, plus } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateMonarch } from '../src/gen-monarch.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
@@ -22,13 +22,13 @@ const check = (label: string, cond: boolean) => {
 };
 
 const WS = token(plus(oneOf(' ', '\t')), { skip: true });
-const NL = token(seq(star(lit('\r')), lit('\n')), { skip: true });
+const NL = token(seq(star('\r'), '\n'), { skip: true });
 const KEY = token(seq(oneOf(range('A', 'Z'), '_'), star(oneOf(range('A', 'Z'), range('0', '9'), '_'))), { identifier: true });
 const DQ = token(
-  seq(lit('"'), star(alt(seq(lit('\\'), anyChar()), noneOf(oneOf('"', '\\')))), lit('"')),
+  seq('"', star(altPattern(seq('\\', anyChar()), noneOf(oneOf('"', '\\')))), '"'),
   {
     string: true,
-    escape: seq(lit('\\'), anyChar()),
+    escape: seq('\\', anyChar()),
     interpolation: [
       {
         begin: '${',

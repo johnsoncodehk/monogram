@@ -9,7 +9,7 @@
 // tags). It does not implement the WHATWG error-recovery tree-construction
 // algorithm (that is not a context-free grammar); conformance is measured against
 // `parse5` on well-formed input. See memory: html-vue-markup.
-import { token, rule, defineGrammar, many, opt, alt, lit, seq, oneOf, noneOf, range, anyChar, star, plus, notFollowedBy } from './src/api.ts';
+import { token, rule, defineGrammar, many, opt, alt, altPattern, seq, oneOf, noneOf, range, anyChar, star, plus, notFollowedBy } from './src/api.ts';
 import type { MarkupConfig } from './src/types.ts';
 
 // ── Tokens ──
@@ -27,7 +27,7 @@ const Name = token(seq(oneOf(range('a', 'z'), range('A', 'Z')), star(oneOf(word,
 // the generic engine knowing any tag names.
 const VoidName = token(seq(oneOf(range('a', 'z'), range('A', 'Z')), star(oneOf(word, ':', '.', '-'))), { scope: 'entity.name.tag' });
 // Quoted attribute value (double or single).
-const AttrValue = token(alt(seq('"', star(noneOf('"')), '"'), seq("'", star(noneOf("'")), "'")), { string: true });
+const AttrValue = token(altPattern(seq('"', star(noneOf('"')), '"'), seq("'", star(noneOf("'")), "'")), { string: true });
 // Unquoted attribute value (`colspan=2`, `value=5px`, `href=https://x/`, `href=/a/b.css`):
 // per WHATWG, an unquoted value ends ONLY at whitespace or `>`, so `/` is a legal value char
 // (URLs / paths). The lexer scans the whole value as ONE token the moment it follows `=` (see
@@ -122,8 +122,8 @@ export const markup: MarkupConfig = {
   // VS Code's own HTML grammar (a flat source.css blob there) and matching the hand-written Vue
   // grammar's `#vue-directives-style-attr` (its "Copy from source.css#rule-list-innards").
   attributeEmbed: [
-    { namePattern: seq(lit('on'), plus(word)), embed: 'source.js' },
-    { namePattern: lit('style'), embed: 'source.css', include: 'source.css#rule-list-innards' },
+    { namePattern: seq('on', plus(word)), embed: 'source.js' },
+    { namePattern: 'style', embed: 'source.css', include: 'source.css#rule-list-innards' },
   ],
   // Raw-text element bodies are scanned verbatim by the parser, but the HIGHLIGHTER
   // delegates `<script>`/`<style>` to the platform's real JS/CSS grammars (exactly as

@@ -242,7 +242,7 @@ A grammar is a TypeScript module: tokens, operator precedence, and rules built f
 ```ts
 import {
   token, rule, defineGrammar, left, op, sep,
-  seq, oneOf, range, plus, star, opt,
+  seq, oneOf, range, plus, star, optPattern,
 } from './src/api.ts';
 
 const digit = range('0', '9');
@@ -250,7 +250,7 @@ const Ident = token(seq(
   oneOf(range('a', 'z'), range('A', 'Z'), '_', '$'),
   star(oneOf(range('a', 'z'), range('A', 'Z'), digit, '_', '$')),
 ), { identifier: true });
-const Number = token(seq(plus(digit), opt(seq('.', plus(digit)))));
+const Number = token(seq(plus(digit), optPattern(seq('.', plus(digit)))));
 
 const Expr = rule($ => [
   Ident,
@@ -283,23 +283,23 @@ Flat, irreducible facts — which keywords are control flow, which punctuation i
 Nothing in the engine knows about TypeScript. Everything language-specific lives in the grammar — keywords, which token is the identifier, template-literal delimiters, the regex-vs-division lexer ambiguity — all *declared per token*:
 
 ```ts
-import { token, seq, alt, noneOf, anyChar, oneOf, plus, star, notFollowedBy } from './src/api.ts';
+import { token, seq, altPattern, noneOf, anyChar, oneOf, plus, star, notFollowedBy } from './src/api.ts';
 
 const escaped = seq('\\', anyChar());
 
 const Template = token(seq(
   '`',
-  star(alt(noneOf('`', '\\', '$'), escaped, seq('$', notFollowedBy('{')))),
+  star(altPattern(noneOf('`', '\\', '$'), escaped, seq('$', notFollowedBy('{')))),
   '`',
 ), {
   template: { open: '`', interpOpen: '${', interpClose: '}' },
 });
 const Regex = token(seq(
   '/',
-  plus(alt(
+  plus(altPattern(
     noneOf('/', '\\', '[', '\n'),
     escaped,
-    seq('[', star(alt(noneOf(']', '\\', '\n'), escaped)), ']'),
+    seq('[', star(altPattern(noneOf(']', '\\', '\n'), escaped)), ']'),
   )),
   '/',
   star(oneOf('g', 'i', 'm', 's', 'u', 'y', 'd', 'v')),

@@ -1,24 +1,7 @@
 import type { TokenCharClassItem, TokenDecl, TokenPattern } from './types.ts';
 
-export type TokenPatternInput = string | TokenPattern;
-export type TokenCharClassInput = string | TokenPattern;
-
-const mark = <T extends Omit<TokenPattern, '__kind'>>(node: T): TokenPattern => ({ __kind: 'token-pattern', ...node } as TokenPattern);
-
-export function isTokenPattern(value: unknown): value is TokenPattern {
-  return typeof value === 'object' && value !== null && (value as { __kind?: unknown }).__kind === 'token-pattern';
-}
-
-export function toTokenPattern(pattern: TokenPatternInput): TokenPattern {
-  return toPatternInput(pattern);
-}
-
-export function lit(value: string): TokenPattern {
-  return mark({ type: 'literal', value });
-}
-
 export function range(from: string, to: string): TokenPattern {
-  return mark({ type: 'charClass', negate: false, items: [rangeItem(from, to)] });
+  return { type: 'charClass', negate: false, items: [rangeItem(from, to)] };
 }
 
 function rangeItem(from: string, to: string): TokenCharClassItem {
@@ -28,73 +11,71 @@ function rangeItem(from: string, to: string): TokenCharClassItem {
 }
 
 export function anyChar(): TokenPattern {
-  return mark({ type: 'anyChar' });
+  return { type: 'anyChar' };
 }
 
-export function oneOf(...items: TokenCharClassInput[]): TokenPattern {
-  return mark({ type: 'charClass', negate: false, items: normalizeClassItems(items) });
+export function oneOf(...items: TokenPattern[]): TokenPattern {
+  return { type: 'charClass', negate: false, items: normalizeClassItems(items) };
 }
 
-export function noneOf(...items: TokenCharClassInput[]): TokenPattern {
-  return mark({ type: 'charClass', negate: true, items: normalizeClassItems(items) });
+export function noneOf(...items: TokenPattern[]): TokenPattern {
+  return { type: 'charClass', negate: true, items: normalizeClassItems(items) };
 }
 
-export function seq(...items: TokenPatternInput[]): TokenPattern {
-  const parts = items.map(toPatternInput);
-  if (parts.length === 1) return parts[0];
-  return mark({ type: 'seq', items: parts });
+export function seq(...items: TokenPattern[]): TokenPattern {
+  if (items.length === 1) return items[0];
+  return { type: 'seq', items };
 }
 
-export function altPattern(...items: TokenPatternInput[]): TokenPattern {
-  const parts = items.map(toPatternInput);
-  if (parts.length === 1) return parts[0];
-  return mark({ type: 'alt', items: parts });
+export function altPattern(...items: TokenPattern[]): TokenPattern {
+  if (items.length === 1) return items[0];
+  return { type: 'alt', items };
 }
 
-export function optPattern(...items: TokenPatternInput[]): TokenPattern {
+export function optPattern(...items: TokenPattern[]): TokenPattern {
   return repeat(seq(...items), 0, 1);
 }
 
-export function star(body: TokenPatternInput, opts?: { greedy?: boolean }): TokenPattern {
+export function star(body: TokenPattern, opts?: { greedy?: boolean }): TokenPattern {
   return repeat(body, 0, undefined, opts);
 }
 
-export function plus(body: TokenPatternInput, opts?: { greedy?: boolean }): TokenPattern {
+export function plus(body: TokenPattern, opts?: { greedy?: boolean }): TokenPattern {
   return repeat(body, 1, undefined, opts);
 }
 
-export function repeat(body: TokenPatternInput, min: number, max?: number, opts?: { greedy?: boolean }): TokenPattern {
+export function repeat(body: TokenPattern, min: number, max?: number, opts?: { greedy?: boolean }): TokenPattern {
   if (!Number.isInteger(min) || min < 0) throw new Error(`repeat min must be a non-negative integer, got ${min}`);
   if (max !== undefined && (!Number.isInteger(max) || max < min)) throw new Error(`repeat max must be an integer >= min, got ${max}`);
-  return mark({ type: 'repeat', body: toPatternInput(body), min, max, greedy: opts?.greedy ?? true });
+  return { type: 'repeat', body, min, max, greedy: opts?.greedy ?? true };
 }
 
-export function followedBy(body: TokenPatternInput): TokenPattern {
-  return mark({ type: 'lookahead', body: toPatternInput(body), negate: false });
+export function followedBy(body: TokenPattern): TokenPattern {
+  return { type: 'lookahead', body, negate: false };
 }
 
-export function notFollowedBy(body: TokenPatternInput): TokenPattern {
-  return mark({ type: 'lookahead', body: toPatternInput(body), negate: true });
+export function notFollowedBy(body: TokenPattern): TokenPattern {
+  return { type: 'lookahead', body, negate: true };
 }
 
-export function precededBy(body: TokenPatternInput): TokenPattern {
-  return mark({ type: 'lookbehind', body: toPatternInput(body), negate: false });
+export function precededBy(body: TokenPattern): TokenPattern {
+  return { type: 'lookbehind', body, negate: false };
 }
 
-export function notPrecededBy(body: TokenPatternInput): TokenPattern {
-  return mark({ type: 'lookbehind', body: toPatternInput(body), negate: true });
+export function notPrecededBy(body: TokenPattern): TokenPattern {
+  return { type: 'lookbehind', body, negate: true };
 }
 
 export function start(): TokenPattern {
-  return mark({ type: 'anchor', kind: 'start' });
+  return { type: 'anchor', kind: 'start' };
 }
 
 export function end(): TokenPattern {
-  return mark({ type: 'anchor', kind: 'end' });
+  return { type: 'anchor', kind: 'end' };
 }
 
 export function never(): TokenPattern {
-  return mark({ type: 'never' });
+  return { type: 'never' };
 }
 
 export function tokenPatternToRegex(pattern: TokenPattern): string {
@@ -134,7 +115,7 @@ export function tokenPatternLiteralText(token: Pick<TokenDecl, 'pattern'>): stri
 }
 
 export function tokenPatternQuoteDelimAndEscape(token: Pick<TokenDecl, 'pattern'>): { delim: string; escape: string } | null {
-  const parts = token.pattern.type === 'seq' ? token.pattern.items : [token.pattern];
+  const parts = seqParts(token.pattern);
   if (parts.length !== 3) return null;
   const delim = exactLiteralText(parts[0]);
   if (!delim || [...delim].length !== 1 || exactLiteralText(parts[2]) !== delim) return null;
@@ -143,20 +124,20 @@ export function tokenPatternQuoteDelimAndEscape(token: Pick<TokenDecl, 'pattern'
 }
 
 export function tokenPatternLeadingSource(token: Pick<TokenDecl, 'pattern'>): string | null {
-  const parts = token.pattern.type === 'seq' ? token.pattern.items : [token.pattern];
+  const parts = seqParts(token.pattern);
   return parts[0] ? tokenPatternToRegex(parts[0]) : null;
 }
 
 export function tokenPatternPrefixBeforeTrailingLookahead(token: Pick<TokenDecl, 'pattern'>): { body: TokenPattern; lookahead: TokenPattern; bodySource: string; lookaheadSource: string } | null {
-  const parts = token.pattern.type === 'seq' ? token.pattern.items : [token.pattern];
+  const parts = seqParts(token.pattern);
   const last = parts[parts.length - 1];
-  if (!last || last.type !== 'lookahead' || last.negate) return null;
+  if (!last || typeof last === 'string' || last.type !== 'lookahead' || last.negate) return null;
   const body = patternFromParts(parts.slice(0, -1));
   return body ? { body, lookahead: last.body, bodySource: tokenPatternToRegex(body), lookaheadSource: tokenPatternToRegex(last.body) } : null;
 }
 
 export function tokenPatternIsNever(token: Pick<TokenDecl, 'pattern'>): boolean {
-  return token.pattern.type === 'never';
+  return typeof token.pattern !== 'string' && token.pattern.type === 'never';
 }
 
 export function tokenPatternEqualsPattern(token: Pick<TokenDecl, 'pattern'>, pattern: TokenPattern): boolean {
@@ -175,8 +156,8 @@ export function tokenPatternBlockDelimiters(token: Pick<TokenDecl, 'pattern'>): 
 }
 
 export function tokenPatternBlockDelimiterSources(token: Pick<TokenDecl, 'pattern'>): [string, string] | null {
-  const parts = token.pattern.type === 'seq' ? token.pattern.items : [token.pattern];
-  const repeatIndex = parts.findIndex(part => part.type === 'repeat');
+  const parts = seqParts(token.pattern);
+  const repeatIndex = parts.findIndex(part => typeof part !== 'string' && part.type === 'repeat');
   if (repeatIndex <= 0 || repeatIndex >= parts.length - 1) return null;
   const begin = patternSourceForParts(parts.slice(0, repeatIndex));
   const end = patternSourceForParts(parts.slice(repeatIndex + 1));
@@ -203,21 +184,21 @@ export function tokenPatternIdentifierExtraChars(token: Pick<TokenDecl, 'pattern
 
 export function tokenPatternTrailingCharClass(token: Pick<TokenDecl, 'pattern'>): string | null {
   const last = lastConsumed(token.pattern);
-  if (!last || last.type !== 'repeat' || last.min !== 0 || last.max !== undefined) return null;
+  if (!last || typeof last === 'string' || last.type !== 'repeat' || last.min !== 0 || last.max !== undefined) return null;
   return charClassChars(last.body);
 }
 
 export type TokenPatternFirstSet = { ascii: Set<number>; nonAscii: boolean };
 
 export function tokenPatternFirstCharSet(token: Pick<TokenDecl, 'pattern'>): TokenPatternFirstSet | null {
-  if (token.pattern.type === 'never') return emptyFirstSet();
+  if (typeof token.pattern !== 'string' && token.pattern.type === 'never') return emptyFirstSet();
   if (patternCanMatchEmpty(token.pattern)) return null;
   return firstCharSetFromPattern(token.pattern);
 }
 
 export function tokenBlockPatternFirstCharSet(token: Pick<TokenDecl, 'blockPattern'>): TokenPatternFirstSet | null {
   if (!token.blockPattern) return null;
-  if (token.blockPattern.type === 'never') return emptyFirstSet();
+  if (typeof token.blockPattern !== 'string' && token.blockPattern.type === 'never') return emptyFirstSet();
   if (patternCanMatchEmpty(token.blockPattern)) return null;
   return firstCharSetFromPattern(token.blockPattern);
 }
@@ -232,8 +213,8 @@ const Prec = {
 type Prec = typeof Prec[keyof typeof Prec];
 
 function emit(pattern: TokenPattern, parentPrec: Prec): string {
+  if (typeof pattern === 'string') return escapeRegexLiteral(pattern);
   switch (pattern.type) {
-    case 'literal': return escapeRegexLiteral(pattern.value);
     case 'anyChar': return '[\\s\\S]';
     case 'charClass': return emitCharClass(pattern);
     case 'seq': return wrap(pattern.items.map(item => emit(item, Prec.Seq)).join(''), Prec.Seq, parentPrec);
@@ -278,8 +259,8 @@ function emitClassItem(item: TokenCharClassItem): string {
 }
 
 function firstCharSetFromPattern(pattern: TokenPattern): TokenPatternFirstSet | null {
+  if (typeof pattern === 'string') return firstCharSetFromLiteral(pattern);
   switch (pattern.type) {
-    case 'literal': return firstCharSetFromLiteral(pattern.value);
     case 'anyChar': return fullFirstSet();
     case 'charClass': return firstCharSetFromClass(pattern);
     case 'seq': return firstCharSetFromSequence(pattern.items);
@@ -348,8 +329,8 @@ function firstCharSetFromRange(from: string, to: string): TokenPatternFirstSet {
 }
 
 function patternCanMatchEmpty(pattern: TokenPattern): boolean {
+  if (typeof pattern === 'string') return pattern.length === 0;
   switch (pattern.type) {
-    case 'literal': return pattern.value.length === 0;
     case 'seq': return pattern.items.every(patternCanMatchEmpty);
     case 'alt': return pattern.items.some(patternCanMatchEmpty);
     case 'repeat': return pattern.min === 0 || patternCanMatchEmpty(pattern.body);
@@ -388,8 +369,8 @@ function unique(values: string[]): string[] {
 }
 
 function exactLiteralText(pattern: TokenPattern): string | null {
+  if (typeof pattern === 'string') return pattern;
   switch (pattern.type) {
-    case 'literal': return pattern.value;
     case 'seq': {
       let text = '';
       for (const item of pattern.items) {
@@ -403,25 +384,30 @@ function exactLiteralText(pattern: TokenPattern): string | null {
   }
 }
 
+// A bare-string literal is a leaf; only an object `seq` node has sub-parts.
+function seqParts(pattern: TokenPattern): TokenPattern[] {
+  return typeof pattern !== 'string' && pattern.type === 'seq' ? pattern.items : [pattern];
+}
+
 function quoteEscapeSource(body: TokenPattern, delim: string): string | null {
-  const inner = body.type === 'repeat' ? body.body : body;
-  const alternatives = inner.type === 'alt' ? inner.items : [inner];
+  const inner = typeof body !== 'string' && body.type === 'repeat' ? body.body : body;
+  const alternatives = typeof inner !== 'string' && inner.type === 'alt' ? inner.items : [inner];
   for (const alt of alternatives) {
     const literal = exactLiteralText(alt);
     if (literal === delim + delim) return tokenPatternToRegex(alt);
-    const parts = alt.type === 'seq' ? alt.items : [alt];
+    const parts = seqParts(alt);
     if (exactLiteralText(parts[0]) === '\\') return tokenPatternToRegex(alt);
   }
   return null;
 }
 
 function isZeroWidth(pattern: TokenPattern): boolean {
-  return pattern.type === 'lookahead' || pattern.type === 'lookbehind' || pattern.type === 'anchor';
+  return typeof pattern !== 'string' && (pattern.type === 'lookahead' || pattern.type === 'lookbehind' || pattern.type === 'anchor');
 }
 
 function literalPrefixInfo(pattern: TokenPattern): { runs: string[]; complete: boolean } {
+  if (typeof pattern === 'string') return { runs: [pattern], complete: true };
   switch (pattern.type) {
-    case 'literal': return { runs: [pattern.value], complete: true };
     case 'seq': {
       let runs = [''];
       for (const item of pattern.items) {
@@ -453,8 +439,8 @@ function literalPrefixInfo(pattern: TokenPattern): { runs: string[]; complete: b
 }
 
 function literalSuffixInfo(pattern: TokenPattern): { runs: string[]; complete: boolean } {
+  if (typeof pattern === 'string') return { runs: [pattern], complete: true };
   switch (pattern.type) {
-    case 'literal': return { runs: [pattern.value], complete: true };
     case 'seq': {
       let runs = [''];
       for (let i = pattern.items.length - 1; i >= 0; i--) {
@@ -491,6 +477,7 @@ function combineRuns(left: string[], right: string[]): string[] {
 }
 
 function hasLeadingStartAnchor(pattern: TokenPattern): boolean {
+  if (typeof pattern === 'string') return false;
   switch (pattern.type) {
     case 'anchor': return pattern.kind === 'start';
     case 'seq': return pattern.items.some(item => isZeroWidth(item) ? hasLeadingStartAnchor(item) : false);
@@ -500,8 +487,8 @@ function hasLeadingStartAnchor(pattern: TokenPattern): boolean {
 }
 
 function startsWithDecimal(pattern: TokenPattern): boolean {
+  if (typeof pattern === 'string') return pattern.length > 0 && isAsciiDigit(pattern[0]);
   switch (pattern.type) {
-    case 'literal': return pattern.value.length > 0 && isAsciiDigit(pattern.value[0]);
     case 'seq': {
       const first = pattern.items.find(item => !isZeroWidth(item));
       return first ? startsWithDecimal(first) : false;
@@ -534,8 +521,8 @@ function rangeOverlapsAsciiDigit(from: string, to: string): boolean {
 }
 
 function containsLiteral(pattern: TokenPattern, value: string): boolean {
+  if (typeof pattern === 'string') return pattern.includes(value);
   switch (pattern.type) {
-    case 'literal': return pattern.value.includes(value);
     case 'seq':
     case 'alt': return pattern.items.some(item => containsLiteral(item, value));
     case 'repeat':
@@ -546,8 +533,8 @@ function containsLiteral(pattern: TokenPattern, value: string): boolean {
 }
 
 function collectIdentifierExtras(pattern: TokenPattern, extras: Set<string>): void {
+  if (typeof pattern === 'string') return;
   switch (pattern.type) {
-    case 'literal': return;
     case 'charClass':
       if (pattern.negate) return;
       for (const item of pattern.items) collectClassItemExtras(item, extras);
@@ -572,6 +559,7 @@ function collectClassItemExtras(item: TokenCharClassItem, extras: Set<string>): 
 }
 
 function lastConsumed(pattern: TokenPattern): TokenPattern | null {
+  if (typeof pattern === 'string') return pattern;
   switch (pattern.type) {
     case 'seq': {
       for (let i = pattern.items.length - 1; i >= 0; i--) {
@@ -587,7 +575,7 @@ function lastConsumed(pattern: TokenPattern): TokenPattern | null {
 }
 
 function charClassChars(pattern: TokenPattern): string | null {
-  if (pattern.type !== 'charClass' || pattern.negate) return null;
+  if (typeof pattern === 'string' || pattern.type !== 'charClass' || pattern.negate) return null;
   let out = '';
   for (const item of pattern.items) {
     if (item.type !== 'char') return null;
@@ -599,19 +587,19 @@ function charClassChars(pattern: TokenPattern): string | null {
 function patternSourceForParts(parts: TokenPattern[]): string {
   if (parts.length === 0) return '';
   if (parts.length === 1) return tokenPatternToRegex(parts[0]);
-  return tokenPatternToRegex(mark({ type: 'seq', items: parts }));
+  return tokenPatternToRegex({ type: 'seq', items: parts });
 }
 
 function patternFromParts(parts: TokenPattern[]): TokenPattern | null {
   if (parts.length === 0) return null;
   if (parts.length === 1) return parts[0];
-  return mark({ type: 'seq', items: parts });
+  return { type: 'seq', items: parts };
 }
 
 function tokenPatternEquals(a: TokenPattern, b: TokenPattern): boolean {
+  if (typeof a === 'string' || typeof b === 'string') return a === b;
   if (a.type !== b.type) return false;
   switch (a.type) {
-    case 'literal': return a.value === (b as typeof a).value;
     case 'anyChar': return true;
     case 'charClass': {
       const other = b as typeof a;
@@ -653,11 +641,7 @@ function charClassItemEquals(a: TokenCharClassItem, b: TokenCharClassItem): bool
   }
 }
 
-function toPatternInput(input: TokenPatternInput): TokenPattern {
-  return typeof input === 'string' ? lit(input) : input;
-}
-
-function normalizeClassItems(items: TokenCharClassInput[]): TokenCharClassItem[] {
+function normalizeClassItems(items: TokenPattern[]): TokenCharClassItem[] {
   const out: TokenCharClassItem[] = [];
   for (const item of items) {
     if (typeof item === 'string') {
@@ -665,8 +649,7 @@ function normalizeClassItems(items: TokenCharClassInput[]): TokenCharClassItem[]
       out.push({ type: 'char', value: item });
       continue;
     }
-    if (!isTokenPattern(item)) throw new Error('Character class inputs must be strings or token patterns');
-    if (item.type !== 'charClass' || item.negate) throw new Error('Only non-negated character-class token patterns can be embedded in oneOf()/noneOf()');
+    if (item.type !== 'charClass' || item.negate) throw new Error('oneOf()/noneOf() inputs must be single-char strings or non-negated character-class patterns');
     out.push(...item.items);
   }
   return out;

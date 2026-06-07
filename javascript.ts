@@ -29,7 +29,7 @@ import {
   left, right, none, noUnaryLhs,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not,
-  lit, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
+  altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
 
 // ── Tokens ──
@@ -46,9 +46,9 @@ const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_', '$');
 const idCont = oneOf(range('a', 'z'), range('A', 'Z'), digit, '_', '$');
 const lineTerminator = oneOf('\n', '\r', '\u2028', '\u2029');
 const hspace = oneOf(' ', '\t');
-const uEsc = alt(seq('\\u', repeat(hexDigit, 4, 4)), seq('\\u{', plus(hexDigit), '}'));
-const identStart = alt(idStart, uEsc);
-const identPart = alt(idCont, uEsc);
+const uEsc = altPattern(seq('\\u', repeat(hexDigit, 4, 4)), seq('\\u{', plus(hexDigit), '}'));
+const identStart = altPattern(idStart, uEsc);
+const identPart = altPattern(idCont, uEsc);
 const numericTailGuard = notFollowedBy(oneOf(range('0', '9'), range('A', 'Z'), range('a', 'z'), '_', '$', '\\'));
 const digits = seq(plus(digit), star(seq('_', plus(digit))));
 const Ident        = token(seq(identStart, star(identPart)), { identifier: true });
@@ -63,9 +63,9 @@ const Ident        = token(seq(identStart, star(identPart)), { identifier: true 
 // only valid here (radix forms have no fractional part), so it lives on each radix token rather
 // than on the decimal `BigInt_` below. The shared `(?!IdentifierStart|DecimalDigit)` tail still
 // rejects a stray trailing identifier (`0x5anabc`).
-const HexNumber    = token(seq('0', oneOf('x', 'X'), plus(hexDigit), star(seq('_', plus(hexDigit))), opt(lit('n')), numericTailGuard), { scope: 'constant.numeric.hex' });
-const OctalNumber  = token(seq('0', oneOf('o', 'O'), plus(range('0', '7')), star(seq('_', plus(range('0', '7')))), opt(lit('n')), numericTailGuard), { scope: 'constant.numeric.octal' });
-const BinaryNumber = token(seq('0', oneOf('b', 'B'), plus(oneOf('0', '1')), star(seq('_', plus(oneOf('0', '1')))), opt(lit('n')), numericTailGuard), { scope: 'constant.numeric.binary' });
+const HexNumber    = token(seq('0', oneOf('x', 'X'), plus(hexDigit), star(seq('_', plus(hexDigit))), optPattern('n'), numericTailGuard), { scope: 'constant.numeric.hex' });
+const OctalNumber  = token(seq('0', oneOf('o', 'O'), plus(range('0', '7')), star(seq('_', plus(range('0', '7')))), optPattern('n'), numericTailGuard), { scope: 'constant.numeric.octal' });
+const BinaryNumber = token(seq('0', oneOf('b', 'B'), plus(oneOf('0', '1')), star(seq('_', plus(oneOf('0', '1')))), optPattern('n'), numericTailGuard), { scope: 'constant.numeric.binary' });
 const BigInt_      = token(seq(digits, 'n', numericTailGuard), { scope: 'constant.numeric.bigint' });
 // DecimalLiteral, including the leading-dot form (`.5`, `.0e1`): an integer part with optional
 // fraction/exponent, OR a bare fraction `.digits` with optional exponent. Same trailing guard.
@@ -73,8 +73,8 @@ const BigInt_      = token(seq(digits, 'n', numericTailGuard), { scope: 'constan
 // alternative makes the pattern start with `(?:` — gen-tm's decimal-numeric detector keys on a
 // `[0-9]`/`\d` prefix, so without this the token would lose its `constant.numeric` scope.
 const fracTail = seq('.', star(digit), star(seq('_', plus(digit))));
-const expTail = seq(oneOf('e', 'E'), opt(oneOf('+', '-')), digits);
-const Number_      = token(seq(alt(seq(digits, opt(fracTail)), seq('.', digits)), opt(expTail), numericTailGuard), { scope: 'constant.numeric.decimal' });
+const expTail = seq(oneOf('e', 'E'), optPattern(oneOf('+', '-')), digits);
+const Number_      = token(seq(altPattern(seq(digits, optPattern(fracTail)), seq('.', digits)), optPattern(expTail), numericTailGuard), { scope: 'constant.numeric.decimal' });
 // A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must
 // match their strict forms — a `\u{cp}` with cp ≤ 0x10FFFF, a 4-hex `\uXXXX`, or a
 // 2-hex `\xXX` — while `\` + any *other* char (\n, \\, \q non-escape, line
@@ -82,20 +82,20 @@ const Number_      = token(seq(alt(seq(digits, opt(fracTail)), seq('.', digits))
 // `\u{r}`, `\u{}`, `\u{67`) matches no escape, so the string matches no token and the
 // lexer throws — TS's exact rejection. The in-range codepoint is `0*` leading zeros
 // then 1–5 hex (0–0xFFFFF) or `10`+4 hex (0x100000–0x10FFFF).
-const codePoint = seq(star('0'), alt(repeat(hexDigit, 1, 5), seq('10', repeat(hexDigit, 4, 4))));
-const escape = seq('\\', alt(seq('u{', codePoint, '}'), seq('u', repeat(hexDigit, 4, 4)), seq('x', repeat(hexDigit, 2, 2)), noneOf('u', 'x')));
-const highlightedEscape = seq('\\', alt(
+const codePoint = seq(star('0'), altPattern(repeat(hexDigit, 1, 5), seq('10', repeat(hexDigit, 4, 4))));
+const escape = seq('\\', altPattern(seq('u{', codePoint, '}'), seq('u', repeat(hexDigit, 4, 4)), seq('x', repeat(hexDigit, 2, 2)), noneOf('u', 'x')));
+const highlightedEscape = seq('\\', altPattern(
   oneOf('n', 'r', 't', 'b', 'f', 'v', '0', "'", '"', '\\'),
   seq('x', repeat(hexDigit, 2, 2)),
   seq('u', repeat(hexDigit, 4, 4)),
   seq('u{', plus(hexDigit), '}'),
 ));
-const String_      = token(alt(seq('"', star(alt(noneOf('"', '\\'), escape)), '"'), seq("'", star(alt(noneOf("'", '\\'), escape)), "'")), {
+const String_      = token(altPattern(seq('"', star(altPattern(noneOf('"', '\\'), escape)), '"'), seq("'", star(altPattern(noneOf("'", '\\'), escape)), "'")), {
   string: true,
   escape: highlightedEscape,
 });
-const Template     = token(seq('`', star(alt(noneOf('`', '\\', '$'), seq('\\', noneOf(lineTerminator)), seq('$', notFollowedBy('{')))), '`'), {
-  escape: seq('\\', alt(
+const Template     = token(seq('`', star(altPattern(noneOf('`', '\\', '$'), seq('\\', noneOf(lineTerminator)), seq('$', notFollowedBy('{')))), '`'), {
+  escape: seq('\\', altPattern(
     oneOf('n', 'r', 't', 'b', 'f', 'v', '0', "'", '"', '\\', '`', '$'),
     seq('x', repeat(hexDigit, 2, 2)),
     seq('u', repeat(hexDigit, 4, 4)),
@@ -107,8 +107,8 @@ const Template     = token(seq('`', star(alt(noneOf('`', '\\', '$'), seq('\\', n
   template: { open: '`', interpOpen: '${', interpClose: '}' },
 });
 const regexEscape = seq('\\', noneOf(lineTerminator));
-const regexClassBody = star(alt(noneOf(']', '\\', '\n'), regexEscape));
-const Regex_       = token(seq('/', plus(alt(noneOf('/', '\\', '[', '\n'), regexEscape, seq('[', regexClassBody, ']'))), '/', star(oneOf('g', 'i', 'm', 's', 'u', 'y', 'd', 'v'))), {
+const regexClassBody = star(altPattern(noneOf(']', '\\', '\n'), regexEscape));
+const Regex_       = token(seq('/', plus(altPattern(noneOf('/', '\\', '[', '\n'), regexEscape, seq('[', regexClassBody, ']'))), '/', star(oneOf('g', 'i', 'm', 's', 'u', 'y', 'd', 'v'))), {
   regex: true,
   regexContext: {
     divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],
@@ -131,7 +131,7 @@ const Regex_       = token(seq('/', plus(alt(noneOf('/', '\\', '[', '\n'), regex
 });
 // `@name` / `@ns.name` — each dotted segment is an IdentifierName, so it admits the same
 // `\u`-escape forms as `Ident` (`@℘`, `@ZW_‌_NJ`); the parser owns the `(args)` tail.
-const Decorator    = token(seq('@', opt(seq(identStart, star(alt(identPart, '.'))))), { scope: 'entity.name.function.decorator' });
+const Decorator    = token(seq('@', optPattern(seq(identStart, star(altPattern(identPart, '.'))))), { scope: 'entity.name.function.decorator' });
 // PrivateIdentifier: `#` + an IdentifierName, so it admits the same `\u`-escape forms as `Ident`
 // (`#\u{6F}_`). A non-ASCII literal `#name` (`#℘`, `#ZWNJ`) is handled by the lexer's Unicode
 // fallback, which recognises this token's leading `#` as a name prefix.
