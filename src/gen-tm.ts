@@ -4794,6 +4794,18 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       while: '\\G',
       patterns: funkyBody(contentScope),
     });
+    // The `|N`/`>N` indentation indicator (a digit with optional chomping in either order). For the
+    // EXPLICIT-indent block scalars (§2a‴) the digit is LITERAL (one region per digit), so the floor is
+    // known and the body needs no funky auto-detect: a simpler inner rule opens at the header EOL and
+    // paints every line the outer `\1 {N}` bound admits as block content via `contentName` (a deeper
+    // key-/comment-shaped body line is therefore NOT re-scoped — it is opaque block string).
+    const bsDigitAlt = (n: number) => `(?:${n}[-+]?|[-+]${n})`;
+    const bsExplicitIntroRule = (n: number) => ({
+      begin: `[\\t ]*(${introClass}${bsDigitAlt(n)})(?=[\\t ]*(?:#|$))([\\t ]*.*)`,
+      beginCaptures: { '1': { name: bsIndicator }, '2': { patterns: commentIncs } },
+      while: '\\G',
+      contentName: bsContent,
+    });
     // Header-prefix token includes: re-scope the part of the header line BEFORE the introducer (a doc
     // marker / key / `:` / anchor / tag), since the line-start indent consume swallowed the engine
     // position past them. Derived from what this grammar actually emits (an unresolved include is a
@@ -4872,6 +4884,37 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
     });
     topPatterns.push({ include: `#${bsKey}-seq` });
+
+    // ── 2a‴. EXPLICIT-indent block scalars (`|N` / `>N`, monogram#12 #10) ──
+    // An explicit indentation indicator (`|5`) PINS the content indent at parent+N, OVERRIDING the
+    // funky body's auto-detect (which floors at the FIRST content line's indent). With `abc: |5` whose
+    // first body line is at column 6, auto-detect floors at 6, so a real body line at column 5
+    // (`# string 5`) is then SHALLOWER than the detected floor and RELEASED — re-scanned as a comment.
+    // The fix pins the floor to parent+N. TextMate cannot use a CAPTURED digit as a repeat count
+    // portably (RedCMD does, via Oniguruma `{\N}` backref-as-count + conditionals + subroutines — all
+    // rejected by Onigmo / GitHub-Linguist), so the only portable spelling is a region per digit with a
+    // LITERAL `{N}` count. Same structure as the auto-detect block scalars (forward-captured node indent
+    // + an inner introducer rule that opens the body at the header EOL); only two things change: the
+    // `while` bound is `\1 {N}` (parent+N) instead of `\1[ \t]` (parent+1), and the inner rule paints
+    // the body via `contentName` instead of the funky auto-detect (the floor is already known). Emitted
+    // for digits 1–9 in both value position (`key: |N`, nested, and doc-root `|N` / `--- |N` — `bsVp`
+    // admits the optional `---` / key / properties) and sequence position (`- a: |N`, whose floor adds
+    // the dash column via `\3` — same as `-seq`). Ranked above the auto-detect variants (scopeOrder).
+    for (let n = 1; n <= 9; n++) {
+      repository[`${bsKey}-explicit-${n}`] = emitIndentRegion({
+        lookahead: `(?=${bsVp}${introClass}${bsDigitAlt(n)}[\\t ]*(?:#|$))`,
+        cont: `\\1 {${n}}`,
+        patterns: [bsExplicitIntroRule(n), ...bsHeaderIncs],
+      });
+      topPatterns.push({ include: `#${bsKey}-explicit-${n}` });
+      repository[`${bsKey}-explicit-seq-${n}`] = emitIndentRegion({
+        lookahead: `(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+${bsProp}${introClass}${bsDigitAlt(n)}[\\t ]*(?:#|$))`,
+        beginCaptures: { '2': { name: `punctuation.${langName}` } },
+        cont: `\\1[ \\t]\\3 {${n}}`,
+        patterns: [bsExplicitIntroRule(n), ...bsHeaderIncs],
+      });
+      topPatterns.push({ include: `#${bsKey}-explicit-seq-${n}` });
+    }
 
     // ── 2a′. Multi-line PLAIN scalar continuation (monogram#12 §6/§7) ──
     // A plain scalar may FOLD across a more-indented continuation line (`key: a\n  b` → "a b";
@@ -5073,6 +5116,31 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         patterns: [bsFunkyIntroRule(bsIndicatorScope, bsContentScope), ...bsHeaderIncludes],
       };
       topPatterns.push({ include: '#blockscalar-key' });
+    }
+  }
+
+  // ── 2b′. Malformed directive line (monogram#12 #4) ──
+  // A directive owns its whole line (§6.8): `%YAML 1.2 foo` is an ILLEGAL directive (bad arity), and
+  // the parser rejects it — YamlDirective's arity lookahead fails and the generic Directive excludes
+  // the `%YAML␣` prefix, so NEITHER token matches and the trailing `foo` falls through to the plain-
+  // scalar tokens, which paint it as a stray `string.unquoted`. But a `%` can never BEGIN a plain
+  // scalar (YAML §7.3.3 — `%` is a c-indicator, excluded from ns-plain-first), so a `%`-led line the
+  // clean directive tokens did NOT claim is always a malformed directive, never real scalar content.
+  // Re-scope the whole line as an invalid directive. The indicator (`%`) is read from the directive
+  // tokens' leading literal (never hardcoded); ranked just BELOW the clean directives and ABOVE the
+  // plain scalars (scopeOrder 6.5) so it only catches what they left and beats the stray-scalar mis-
+  // scope. Highlight-only — the parser still rejects the line. The `^` anchor pins it to a line-start
+  // `%` (an indented `%` mid-line — e.g. a `key: %v` value — is left to the scalar tokens).
+  const directiveToks = grammar.tokens.filter(t => /(^|\.)keyword\.other\.directive(\.|$)/.test(t.scope ?? ''));
+  if (directiveToks.length) {
+    const lead = directiveToks.map(t => tokenPatternLeadingSource(t)).find((s): s is string => !!s);
+    const indicator = lead ? [...lead][0] : '';
+    if (indicator) {
+      repository['directive-malformed'] = {
+        match: `^[ \\t]*(${escapeRegex(indicator)}[^\\n]*?)[\\t ]*$`,
+        captures: { '1': { name: `invalid.illegal.keyword.other.directive.${langName}` } },
+      };
+      topPatterns.push({ include: '#directive-malformed' });
     }
   }
 
@@ -7561,6 +7629,14 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     //     (those carry a leading `-`/`?` its lookahead forbids).
     //   • the plain `blockscalar` is the fallback (bare `|`, `key: |`, `--- |` with an indented body).
     const bsRank = grammar.indent?.blockScalar?.token.toLowerCase();
+    // EXPLICIT-indent block scalars (`|N`, §2a‴) must out-rank their auto-detect counterparts so a
+    // `|N` header takes the digit-aware floor. The sequence variant (`- a: |N`) ranks above the value
+    // variant: a `- …: |N` line matches BOTH (the value `bsVp` admits a leading `- `), and only the
+    // sequence floor adds the dash column, so it must win. Both stay below `blockscalar-key` (0.55) so a
+    // `? |N` explicit-key block scalar still scopes its `?` as the map key. (`-explicit-seq-` is tested
+    // before `-explicit-` because the seq keys also start with the value prefix.)
+    if (bsRank && key.startsWith(`${bsRank}-explicit-seq-`)) return 0.45;
+    if (bsRank && key.startsWith(`${bsRank}-explicit-`)) return 0.57;
     if (bsRank && key === `${bsRank}-seq`) return 0.5;
     if (key === 'blockscalar-key') return 0.55;
     if (bsRank && key === `${bsRank}-doc`) return 0.58;
@@ -7623,6 +7699,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     if (scope.includes('constant.numeric')) return 3; // stable sort preserves DSL token order
     if (scope.includes('keyword.operator') && key.startsWith('scope-')) return 4;
     if (scope.includes('keyword.control')) return 5;
+    // A malformed-directive fallback (monogram#12 #4) is scoped keyword.other.directive, so it would
+    // otherwise tie the CLEAN directive tokens at 6. Rank it just below them and below constant.language
+    // (7) — so a well-formed directive still wins — but ABOVE the plain scalars (string.unquoted 8.8) so
+    // it claims a `%`-led line the clean tokens left, beating the stray-scalar mis-scope it exists to fix.
+    if (key === 'directive-malformed') return 6.5;
     if (scope.includes('storage.') || scope.includes('keyword.other')) return 6;
     if (scope.includes('constant.language')) return 7;
     if (scope.includes('variable.language')) return 7.5;

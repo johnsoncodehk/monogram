@@ -53,7 +53,7 @@ export const cases: Issue12Case[] = [
 
   { id: '#4', title: '`%YAML 1.2 foo` — the trailing param is part of the directive line',
     src: '%YAML 1.2 foo\n---\n', at: 'foo', col: 0,
-    should: (s) => isDirectiveish(s), why: 'CST emits one `directive` token `%YAML 1.2 foo`; the trailing token is directive content, not a stray plain string.unquoted scalar', bug: true },
+    should: (s) => isDirectiveish(s), why: 'CST emits one `directive` token `%YAML 1.2 foo`; the trailing token is directive content, not a stray plain string.unquoted scalar' },
 
   { id: '#5', title: 'an escape inside a double-quoted scalar is highlighted',
     src: 'double: "quoted \\\' scalar"\n', at: "\\'", col: 0,
@@ -77,7 +77,7 @@ export const cases: Issue12Case[] = [
 
   { id: '#10', title: 'a `#` line inside a `|5` block scalar body is string content, not a comment',
     src: 'abc: |5\n      # string 6\n     # string 5\n    #comment 4\n   #comment 3\n', at: '# string 5', col: 0,
-    should: (s) => isBlockString(s), why: 'with explicit indent 5, the `# string 5` line (indent 5) is block-scalar body; CST puts it inside the `block-scalar`, only `#comment 4` (indent 4 < 5) ends it', bug: true },
+    should: (s) => isBlockString(s), why: 'with explicit indent 5, the `# string 5` line (indent 5) is block-scalar body; CST puts it inside the `block-scalar`, only `#comment 4` (indent 4 < 5) ends it' },
 ];
 
 // ── runner ────────────────────────────────────────────────────────────────────
