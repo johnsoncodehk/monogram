@@ -179,12 +179,116 @@ export function createParser(grammar: CstGrammar) {
     return { atoms, continuations };
   }
 
+  // ── Left recursion = a left-corner cycle ──
+  // What "left-recursive" MEANS in this engine is the left-corner relation, not the
+  // syntactic `items[0]===self` shape. A rule is left-recursive iff it can derive
+  // ITSELF as its leftmost symbol without consuming input — i.e. it can reach itself
+  // through the transitive closure of the left-corner edge map below. That relation is
+  // the single source of truth: it captures DIRECT recursion (A → A …), INDIRECT cycles
+  // (A → B → A) and recursion HIDDEN behind a nullable prefix (A → opt(x) A …) alike,
+  // all of which re-enter the rule at the same input position. The narrower syntactic
+  // test `items[0]===self` is NOT the definition; it only identifies which alternatives
+  // the local atom/continuation (and Pratt NUD/LED) transform can peel into an iterative
+  // loop — see classifyAlts/classifyLeftRec and the residual graph below.
+  //
+  // Nullability feeds the left-corner edges (a nullable leftmost element passes through
+  // to the next), so compute it first. op/prefix/postfix consume an operator token, so
+  // they are left-edge BARRIERS, not pass-through.
+  const nullableRules = new Set<string>();
+  function exprNullable(e: RuleExpr): boolean {
+    switch (e.type) {
+      case 'literal': return false;
+      case 'ref': return tokenNames.has(e.name) ? false : nullableRules.has(e.name);
+      case 'seq': return e.items.every(exprNullable);
+      case 'alt': return e.items.some(exprNullable);
+      case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true;
+      case 'group': return exprNullable(e.body);
+      case 'not': return true;                                   // zero-width assertion: consumes nothing
+      case 'sep': return true;                                   // sep matches zero elements
+      default: return true;                                      // op/prefix/postfix markers don't consume
+    }
+  }
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const rule of grammar.rules) {
+      if (!nullableRules.has(rule.name) && exprNullable(rule.body)) { nullableRules.add(rule.name); changed = true; }
+    }
+  }
+  // The set of rules reachable at the LEFT CORNER of an expression: every rule ref that
+  // could be the leftmost symbol, looking through nullable prefixes and stopping at the
+  // first non-nullable element or operator barrier.
+  function leftRuleRefs(e: RuleExpr): Set<string> {
+    switch (e.type) {
+      case 'ref': return tokenNames.has(e.name) ? new Set() : new Set([e.name]);
+      case 'seq': {
+        const acc = new Set<string>();
+        for (const item of e.items) {
+          if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') break;  // consumes an operator token → barrier
+          for (const r of leftRuleRefs(item)) acc.add(r);
+          if (!exprNullable(item)) break;            // a non-nullable element ends the left edge
+        }
+        return acc;
+      }
+      case 'alt': { const acc = new Set<string>(); for (const b of e.items) for (const r of leftRuleRefs(b)) acc.add(r); return acc; }
+      case 'quantifier': case 'group': return leftRuleRefs(e.body);
+      case 'sep': return leftRuleRefs(e.element);
+      default: return new Set();                     // literal / not / sameLine / … : no leftmost rule ref
+    }
+  }
+  function altsOf(rule: RuleDecl): RuleExpr[] {
+    return rule.body.type === 'alt' ? rule.body.items : [rule.body];
+  }
+  function itemsOf(alt: RuleExpr): RuleExpr[] {
+    return alt.type === 'seq' ? alt.items : [alt];
+  }
+  // Does this alternative begin with a DIRECT self-reference (`A → A …`)? This is the
+  // ONLY thing `items[0]===self` decides: which alts the local transform peels into an
+  // iterative loop (and so which edges drop out of the residual graph). It is no longer
+  // a standalone definition of "is this rule left-recursive".
+  function peelsDirect(rule: RuleDecl, alt: RuleExpr): boolean {
+    const items = itemsOf(alt);
+    return items[0]?.type === 'ref' && items[0].name === rule.name;
+  }
+  // The PURE left-corner edge map, over ALL alternatives (nothing pre-excluded). This is
+  // the relation that DEFINES left recursion.
+  const leftCorner = new Map<string, Set<string>>();
+  for (const rule of grammar.rules) {
+    const edges = new Set<string>();
+    for (const alt of altsOf(rule)) for (const r of leftRuleRefs(alt)) edges.add(r);
+    leftCorner.set(rule.name, edges);
+  }
+  // The RESIDUAL left-corner edge map: same as `leftCorner` but with each rule's direct
+  // `items[0]===self` alts removed — those are exactly the edges the local transform
+  // turns into an iterative loop instead of a recursive descent. A left-recursive rule
+  // is HANDLEABLE iff peeling its direct self-alts breaks every cycle through it, i.e. it
+  // can no longer reach itself in this residual graph.
+  const residualCorner = new Map<string, Set<string>>();
+  for (const rule of grammar.rules) {
+    const edges = new Set<string>();
+    for (const alt of altsOf(rule)) {
+      if (peelsDirect(rule, alt)) continue;          // peeled into an iterative loop → not a recursive descent
+      for (const r of leftRuleRefs(alt)) edges.add(r);
+    }
+    residualCorner.set(rule.name, edges);
+  }
+  // Find a cycle start → … → start in a left-corner graph, returned as a path naming the
+  // genuinely-recursive edges; null if `start` cannot reach itself.
+  function cornerCycle(graph: Map<string, Set<string>>, start: string): string[] | null {
+    const stack: { node: string; path: string[] }[] = [{ node: start, path: [start] }];
+    const seen = new Set<string>();
+    while (stack.length) {
+      const { node, path } = stack.pop()!;
+      for (const next of graph.get(node) ?? []) {
+        if (next === start) return [...path, next];
+        if (!seen.has(next)) { seen.add(next); stack.push({ node: next, path: [...path, next] }); }
+      }
+    }
+    return null;
+  }
+  // THE definition of left recursion: the rule reaches itself through the transitive
+  // closure of the pure left-corner relation.
   function isLeftRecursive(rule: RuleDecl): boolean {
-    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-    return alts.some(alt => {
-      const items = alt.type === 'seq' ? alt.items : [alt];
-      return items[0]?.type === 'ref' && items[0].name === rule.name;
-    });
+    return cornerCycle(leftCorner, rule.name) !== null;
   }
 
   // Maximum binding power for non-operator LED patterns (member access, call, etc.)
@@ -195,8 +299,32 @@ export function createParser(grammar: CstGrammar) {
   // Rule lookup, left-recursion, and the NUD/LED (Pratt) / atom-continuation
   // (left-rec) classification are functions of the static grammar only, so we
   // compute them ONCE here instead of re-deriving them on every parse call.
+  //
+  // Left-recursive rules split two ways against the local transform:
+  //   • HANDLEABLE — peeling the direct `items[0]===self` alts breaks every cycle (the
+  //     residual graph is acyclic for this rule). These go in `leftRecSet`, and
+  //     classifyLeftRec / parseLeftRec (or the Pratt NUD/LED path) handle them unchanged.
+  //   • UNHANDLEABLE — a cycle survives in the residual graph (an INDIRECT cycle, or one
+  //     HIDDEN behind a nullable prefix so its first item is not a bare self-ref). The
+  //     local transform cannot peel it, recursive descent would not terminate, so we
+  //     reject it at build time with a diagnostic naming the residual cycle. This is the
+  //     correct product behavior — the engine does not parse indirect/hidden LR.
   const ruleByName = new Map<string, RuleDecl>(grammar.rules.map(r => [r.name, r]));
-  const leftRecSet = new Set<string>(grammar.rules.filter(isLeftRecursive).map(r => r.name));
+  const leftRecSet = new Set<string>();
+  for (const rule of grammar.rules) {
+    if (!isLeftRecursive(rule)) continue;            // not left-recursive (per the relation): ordinary rule
+    const residual = cornerCycle(residualCorner, rule.name);
+    if (residual) {
+      throw new Error(
+        `Unhandled left recursion in rule '${rule.name}': it can derive itself as its leftmost `
+        + `symbol without consuming input (left-corner cycle ${residual.join(' → ')}). The engine `
+        + `transforms only DIRECT left recursion (an alternative beginning with the rule itself); `
+        + `this cycle is indirect or hidden behind a nullable prefix, so recursive descent would `
+        + `not terminate. Break the cycle or rewrite it as a direct left-recursive/precedence rule.`,
+      );
+    }
+    leftRecSet.add(rule.name);                       // handleable: the residual graph is acyclic
+  }
   const prattClassified = new Map<string, ReturnType<typeof classifyAlts>>();
   const leftRecClassified = new Map<string, ReturnType<typeof classifyLeftRec>>();
   for (const rule of grammar.rules) {
@@ -333,27 +461,8 @@ export function createParser(grammar: CstGrammar) {
   // / prefix-operator rules, which can't be characterized). Used to skip parsing a
   // non-nullable rule reference outright when the lookahead can't start it — this
   // is what stops e.g. DecoratorExpr/TypeParams being speculatively parsed (and
-  // failing) at every member/parameter position.
-  const nullableRules = new Set<string>();
-  function exprNullable(e: RuleExpr): boolean {
-    switch (e.type) {
-      case 'literal': return false;
-      case 'ref': return tokenNames.has(e.name) ? false : nullableRules.has(e.name);
-      case 'seq': return e.items.every(exprNullable);
-      case 'alt': return e.items.some(exprNullable);
-      case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true;
-      case 'group': return exprNullable(e.body);
-      case 'not': return true;                                   // zero-width assertion: consumes nothing
-      case 'sep': return true;                                   // sep matches zero elements
-      default: return true;                                      // op/prefix/postfix markers don't consume
-    }
-  }
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const rule of grammar.rules) {
-      if (!nullableRules.has(rule.name) && exprNullable(rule.body)) { nullableRules.add(rule.name); changed = true; }
-    }
-  }
+  // failing) at every member/parameter position. (Nullability and the left-corner
+  // relation that DEFINES left recursion are computed earlier, above leftRecSet.)
   const firstSets = new Map<string, Set<string> | null>();   // null = top (anything)
   function exprFirst(e: RuleExpr): Set<string> | null {
     switch (e.type) {
