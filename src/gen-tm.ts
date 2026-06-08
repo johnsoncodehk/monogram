@@ -4775,6 +4775,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // the Anchor/Tag tokens, not the indent config) and stays inline.
     const ind = grammar.indent!;
     const cmtLit = escapeRegex(ind.comment ?? '#');
+    const cmtCc = escapeForCharClass(ind.comment ?? '#');  // the comment introducer, char-class-escaped
     const compactAlt = (ind.compactIndicators ?? []).map((c) => `${escapeRegex(c)}[\\t ]`).join('|');
     const compactCls = `[${(ind.compactIndicators ?? []).map(escapeForCharClass).join('')}]`;
     const docAlt = (blockScalar.documentMarkers ?? []).map(escapeRegex).join('|');
@@ -5154,28 +5155,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // no possessive `[ \t]++` can split from the deeper-fold case `x: y\n  - b` (same line, must fold).
       //
       // The fix mirrors the maintained RedCMD YAML grammar's block-sequence: a `\G`-anchored region whose
-      // rule stack carries the indent depth. The meta.stream wrapper re-anchors `\G` at every line, so the
-      // region's `( *+)`-captured column (`\1\2`) lets its `while` reclaim a same-column sibling `- ` while
-      // a DEEPER line stays folded into the item value. We emit it ONLY for the COMPACT case (a dash
-      // followed by ANOTHER dash on the same line) — `begin … (?=[\t ]+${dash}[\t ])` — so a single `- a`,
-      // a `- key: v` mapping item, a `- {…}`/`- "…"`/`- |` value, etc. are UNTOUCHED (still handled by the
-      // top-level token includes + the §2a′ fold), confining this region to exactly the bug's shape. The
-      // compact re-anchor `(?=((?<=${reanchor}) )?+)` (a FIXED-width lookbehind — portable, unlike RedCMD's
-      // variable-length `(?<![^\t ][\t ]*+:|---)`, which is rejected by Onigmo / GitHub-Linguist) lets the
-      // inner dash open right after the outer `- `. The `while` STAYS on (arm 1) a dash-bearing line at the
-      // sequence column — a sibling item — or (arm 2) a strictly-deeper non-dash line folded into the
-      // current item's value, or a blank line; and RELEASES on a dedent OR a non-dash line at the column
-      // (a sibling mapping/scalar), so a column-0 `key:` after the sequence is NOT swallowed.
+      // rule stack carries the indent depth, RE-OPENED per compact level (its body self-includes
+      // #block-sequence, so `- - - a` nests three deep). The meta.stream wrapper re-anchors `\G` at every
+      // line, so each level's captures pin ITS OWN inner indicator column and reclaim only siblings AT that
+      // column. We emit it ONLY for the COMPACT case (a dash followed by ANOTHER dash on the same line) —
+      // `begin … (?=([\t ]+)${dash}[\t ])` — so a single `- a`, a `- key: v` mapping item, a `- {…}`/`- "…"`/
+      // `- |` value, etc. are UNTOUCHED (still handled by the top-level token includes + the §2a′ fold),
+      // confining this region to exactly the bug's shape. The compact re-anchor `(?=((?<=${reanchor}) )?+)`
+      // (a FIXED-width lookbehind — portable, unlike RedCMD's variable-length `(?<![^\t ][\t ]*+:|---)`,
+      // which is rejected by Onigmo / GitHub-Linguist) lets the inner dash open right after the outer `- `.
       //
-      // BOUND (deferred root cause): this confines the region to the COMPACT bug's shape — it does NOT
-      // re-implement YAML's full block-node nesting. So one rare residual stays: a `-`-LED continuation
-      // indented STRICTLY DEEPER than the inner indicator (`- - a\n   - b`, an irregular-indent fold where
-      // YAML reads `[["a - b"]]` — the deeper `-` is plain content, not an item) keeps its `-` scoped
-      // `punctuation` instead of folding into the scalar (the value `b` is still correct `string`). The
-      // line-relative `\1\2` cannot tell that deeper `-` from a same-column sibling without the full
-      // node-relative rule-stack RedCMD threads through every collection level (a flat-grammar-wide rework,
-      // not #24); such irregular-indent compact folds are absent from the yaml-test-suite conformance
-      // corpus, and the common column-aligned compact sibling (the actual #24 report) is now correct.
+      // The inner indicator's column is reconstructed PORTABLY as `\1\2 \4`: the outer indent (`\1\2`) +
+      // one literal space for the dash's own column + the captured indicator run `\4` (the run of spaces
+      // between the outer dash and the inner one — group 4 in the begin's lookahead, so a multi-space
+      // compact `-  - x` pins correctly too). The `while` then STAYS on: (arm 1) a dash AT EXACTLY that
+      // column `(\1\2 \4)(?=${dash}[\t ]|${dash}$)` — a sibling item, reclaimed as `punctuation`; (arm 2) a
+      // line STRICTLY DEEPER than the column `(?=\1\2 \4[\t ])` — a zero-width lookahead that keeps the
+      // region alive WITHOUT consuming (so a nested deeper #block-sequence, if its own begin matched on the
+      // header line, gets first claim on its own sibling before the fold), with the deeper line scoped by
+      // the body's #block-fold rule; or (arm 3) a blank line. It RELEASES on a dedent OR a non-dash line at
+      // the column (a sibling mapping/scalar), so a column-0 `key:` after the sequence is NOT swallowed.
+      //
+      // A deeper line that is NOT a nested sibling folds into the item's plain scalar: the body's
+      // #block-fold rule (`^([\t ]+)(?=[^\t\r\n#])(plain run)`, anchored at LINE START so it never fires on
+      // the header line's inline inner item, which sits past column 0) scopes it `string.unquoted`. So
+      // `- - a\n   - b` (`[["a - b"]]` — the deeper `- b` folds) is `string`, while `- - a\n  - b` and
+      // `- - - a\n    - b` (a same-column sibling at the inner OR a deeper-nested level) stay `punctuation`.
+      // This resolves monogram#24's deeper-irregular residual without a variable-length lookbehind.
       const blockSeq = detectBlockSequence(grammar);
       if (blockSeq) {
         const dash = escapeRegex(blockSeq.indicator);
@@ -5196,12 +5202,33 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           ],
         };
         // The region SHELL (begin/while/captures); its body `patterns` is filled at the END (after the
-        // top-level dispatch is built + ordered), since the item content reuses that full dispatch.
+        // top-level dispatch is built + ordered), since the item content reuses that full dispatch. Group 4
+        // (`([\t ]+)`, in the begin's lookahead) captures the indicator run between the outer and inner
+        // dashes, so the `while` can reconstruct the inner column as `\1\2 \4` (outer indent + the dash's
+        // own column + the run). Arm 1 reclaims a same-column sibling (`punctuation`); arm 2 is a zero-width
+        // lookahead that keeps the region alive on a strictly-deeper line (deferring to a nested level's
+        // sibling-reclaim, then to the body's #block-fold rule); arm 3 is a blank line.
         repository['block-sequence'] = {
-          begin: `(?=((?<=${reanchor}) )?+)\\G( *+)(${dash})(?=[\\t ]+${dash}[\\t ])`,
+          begin: `(?=((?<=${reanchor}) )?+)\\G( *+)(${dash})(?=([\\t ]+)${dash}[\\t ])`,
           beginCaptures: { '3': { name: `punctuation.${langName}` } },
-          while: `\\G(?>(\\1\\2)(?=[\\t ]*${dash}[\\t ]|[\\t ]*${dash}$)|(?!\\1\\2)([\\t ]+)(?=[^\\t\\r\\n#])|[\\t ]*$)`,
+          while: `\\G(?>(\\1\\2 \\4)(?=${dash}[\\t ]|${dash}$)|(?=\\1\\2 \\4[\\t ])|[\\t ]*$)`,
           patterns: [],
+        };
+        // A deeper line (kept alive by the `while`'s arm 2) that is NOT a nested sibling folds into the
+        // current item's scalar. Anchored at LINE START (`^`), so it NEVER fires on the header line's inline
+        // inner item (which sits past column 0, after the outer `- `): only a continuation line begins at
+        // column 0. A leading `#` (a whitespace-preceded comment) is excluded so it falls to #comment, and
+        // `foldExclude` excludes a deeper KEY line (`<scan>: `) so a mapping ITEM VALUE's deeper entry
+        // (`- - a: 1\n    b: 2`) keeps its #key structure instead of folding — the exclusion DROPS the
+        // compact indicators from `structAhead`, since a deeper `- b` (no sequence at its column) IS a fold
+        // (`- - a\n   - b` = `[["a - b"]]`), the whole point of this rule. The body is one opaque plain run
+        // stopping before an inline ` #` (same idiom as the §2a′ continuation / §2a″ bareCont). Listed in
+        // the region body right AFTER the self-include so a deeper COMPACT line opens a nested
+        // #block-sequence instead of folding. (monogram#24 deeper residual.)
+        const foldExclude = `(?:${cmtLit}|${flowEx}*?${kvSep}(?:[\\t ]|$))`;
+        repository['block-fold'] = {
+          match: `^([\\t ]+)(?=[^\\t\\r\\n${cmtCc}])(?!${foldExclude})((?:[^${cmtCc}\\n]|${cmtLit}(?<=[^\\t\\n\\f\\r ]${cmtLit}))*)`,
+          captures: { '2': { name: plainContent } },
         };
         topPatterns.push({ include: '#block-sequence' });
       }
@@ -7899,12 +7926,17 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // column-anchored `while` + the bounded #block-plain-item handle the item-value fold node-relatively;
   // leaving them in would re-introduce the line-relative swallow this region exists to prevent), and the
   // bounded #block-plain-item is appended for a bare plain item value. The self-include (#block-sequence,
-  // already in the ordered list at rank 0.69) gives deeper compact nesting (`- - - x`).
+  // already in the ordered list at rank 0.69) gives deeper compact nesting (`- - - x`); #block-fold is
+  // spliced in right AFTER it (region-body-only — never a top-level include) so a deeper line that opens no
+  // nested sequence folds into the item's plain scalar (monogram#24 deeper residual), while a deeper
+  // COMPACT line still re-opens #block-sequence first.
   if (repository['block-sequence']) {
-    repository['block-sequence'].patterns = [
-      ...orderedPatterns.filter(p => p.include !== '#plain-continuation' && p.include !== '#plain-bare-fold'),
-      { include: '#block-plain-item' },
-    ];
+    const body = orderedPatterns.filter(p => p.include !== '#plain-continuation' && p.include !== '#plain-bare-fold');
+    if (repository['block-fold']) {
+      const selfAt = body.findIndex(p => p.include === '#block-sequence');
+      if (selfAt >= 0) body.splice(selfAt + 1, 0, { include: '#block-fold' });
+    }
+    repository['block-sequence'].patterns = [...body, { include: '#block-plain-item' }];
   }
 
   // Additive: a `#expression` sub-grammar for expression-only embeds (Vue `{{ }}`). The
