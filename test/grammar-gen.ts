@@ -33,7 +33,8 @@
 //     never the exponential full derivation tree.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { CstGrammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
-import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor } from '../src/token-pattern.ts';
+import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor, tokenPatternBlockDelimiters } from '../src/token-pattern.ts';
+import { createParser } from '../src/gen-parser.ts';
 
 // Max emissions in one derivation. A deep tree of 2-rep quantifiers grows the list multiplicatively;
 // copying huge lists (not the call count) is what makes a naive enumerator hang — cap it.
@@ -47,6 +48,11 @@ export type Emission =
   | { t: 'compact' };                                        // marks an indent that the lexer would emit INLINE (YAML compact `- - a`)
 
 // A finished input: rendered text + the real tokens it should lex back to (round-trip witnesses).
+// `tokens` also carries the COMMENT WITNESSES injected by `injectComments` — a comment is a `skip:true`
+// token the PARSER DROPS (it never becomes a CST leaf), so the scope≡role judge — which walks parser
+// leaves — can never check a comment's highlighter scope (0% coverage). The generator therefore RECORDS
+// each injected comment's span here as the GROUND TRUTH the judge grades the highlighter against; this
+// is the FIRST consumer of `tokens` (see the comment arm in generative-detect.ts / generative.ts).
 export interface GenInput {
   text: string;
   tokens: { start: number; end: number; name: string; text: string }[];
@@ -926,6 +932,104 @@ class Walker {
   }
 }
 
+// ─── COMMENT INJECTION + WITNESSES (the LAST coverage hole: comment scopes) ─────────────────────────
+// A comment is a `skip:true` token: the parser DROPS it (it never becomes a CST leaf), so the scope≡role
+// judge — which walks the parser's leaves — can NEVER reach a comment's highlighter scope. Injecting a
+// comment into the text does not, by itself, close that hole; the JUDGE must compare the highlighter
+// against a WITNESS the GENERATOR records (not against a parser leaf). This block is the generator side:
+// it discovers the comment delimiters from the grammar's OWN config (no `//`/`#`/`<!--` hardcoded),
+// injects a comment at a SAFE, DETERMINISTIC position per materialization mode, and records the comment's
+// span as a witness in `GenInput.tokens`. A re-parse-and-drop net keeps only injections that still parse.
+
+// The comment delimiters + the witness expectation, discovered GENERICALLY from the grammar config — the
+// SAME comment-classification gen-tm uses (`flags.includes('skip')` OR a `comment.`-prefixed scope), so
+// the set of `names` is exactly the tokens the highlighter paints with a `comment.*` scope. `mode` selects
+// the injection geometry (block delimiters sit mid-line; a line comment is end-of-line only). `names` lets
+// the judge filter the witnesses back out of `tokens`. Returns null when the grammar declares no comment.
+export interface CommentSpec {
+  open: string;          // the opening delimiter / line introducer (`/*`, `<!--`, `#`)
+  close: string;         // the closing delimiter (`*/`, `-->`); '' for a line comment
+  witnessName: string;   // the comment token's name, recorded on each witness
+  names: Set<string>;    // every comment-token name (so the judge can filter `tokens` to comment witnesses)
+  mode: 'token-stream' | 'indent' | 'markup';
+}
+export function commentSpec(grammar: CstGrammar): CommentSpec | null {
+  // every token the highlighter scopes as a comment (gen-tm's exact rule: a skip token, or an explicit
+  // comment.* scope). A skip token with NO `.scope` (TS/JS `BlockComment`/`LineComment`) is INCLUDED —
+  // gen-tm classifies it `comment.block`/`comment.line` from its flags, so the highlighter paints it.
+  const isCommentTok = (t: TokenDecl) => t.flags.includes('skip') || (t.scope?.startsWith('comment.') ?? false);
+  const names = new Set(grammar.tokens.filter(isCommentTok).map((t) => t.name));
+  if (!names.size) return null;
+
+  const mode: CommentSpec['mode'] = grammar.indent ? 'indent' : grammar.markup ? 'markup' : 'token-stream';
+  if (mode === 'markup') {
+    const c = grammar.markup!.comment; if (!c) return null;
+    return { open: c.open, close: c.close, witnessName: c.token, names, mode };
+  }
+  if (mode === 'indent') {
+    const intro = grammar.indent!.comment; if (!intro) return null;
+    // the comment TOKEN whose pattern starts with the introducer (YAML `#…`) — its `.scope` is the one
+    // the highlighter paints; a line comment (no closing delimiter) is EOL-only.
+    const tok = grammar.tokens.find((t) => isCommentTok(t) && (t.scope?.startsWith('comment.') ?? false));
+    return { open: intro, close: '', witnessName: tok?.name ?? [...names][0], names, mode };
+  }
+  // token-stream: a skip comment token DELIMITED on both sides (a block comment) — the only form safe to
+  // splice at an inter-token space in whitespace-insensitive text (a line comment would swallow the rest
+  // of the line; the generated text has no newlines, so it would eat the whole document). Prefer the
+  // SHORTEST opener (a plain `/*` over a doc `/**`), so the witness is an ordinary block comment. Returns
+  // null when the language has only line comments (no block form) — then no safe token-stream injection.
+  const blockToks = grammar.tokens.filter((t) => isCommentTok(t) && tokenPatternBlockDelimiters(t));
+  blockToks.sort((a, b) => tokenPatternBlockDelimiters(a)![0].length - tokenPatternBlockDelimiters(b)![0].length);
+  if (!blockToks.length) return null;
+  const [open, close] = tokenPatternBlockDelimiters(blockToks[0])!;
+  return { open, close, witnessName: blockToks[0].name, names, mode };
+}
+
+// Splice ONE comment into `text` at the first SAFE position for the mode (a FIXED rule — no randomness,
+// so the generator stays a pure function of the grammar), returning the new text + the comment's span.
+// Position rules (each measured to round-trip; the caller's re-parse net drops any that don't):
+//   • token-stream — at the first inter-token SPACE (a space with a non-space, non-newline neighbour on
+//     each side): a no-newline block comment there is 100% safe in whitespace-insensitive code.
+//   • indent (YAML) — appended at END-OF-LINE of the first non-blank line that doesn't already carry the
+//     comment introducer: a `# c` end-of-line comment is safe OUTSIDE flow / a block-scalar body, which
+//     the re-parse net rejects (a mid-line `#` is content in flow / ends a plain scalar, so never mid-line).
+//   • markup — right after the first `tagClose` (`>`): comment text BETWEEN tags / in content is safe;
+//     never inside a tag (the re-parse net rejects an in-tag splice).
+// The body is a minimal `' c '` (space-padded), legal in every comment grammar. `tagClose` (markup only)
+// is the grammar's tag-close delimiter (`>`), passed in so the function bakes in no HTML-specific literal.
+// Returns null when no safe position exists in this particular input (then no comment variant is produced).
+function injectComment(text: string, spec: CommentSpec, tagClose: string): { text: string; start: number; end: number; comment: string } | null {
+  if (spec.mode === 'token-stream') {
+    const comment = spec.open + ' c ' + spec.close;     // `/* c */`
+    for (let i = 1; i < text.length - 1; i++) {
+      if (text[i] === ' ' && text[i - 1] !== ' ' && text[i + 1] !== ' ' && text[i - 1] !== '\n' && text[i + 1] !== '\n') {
+        const start = i + 1;                            // splice the comment + a trailing space after the space
+        return { text: text.slice(0, start) + comment + ' ' + text.slice(start), start, end: start + comment.length, comment };
+      }
+    }
+    return null;
+  }
+  if (spec.mode === 'indent') {
+    const comment = spec.open + ' c';                   // `# c`
+    const lines = text.split('\n');
+    for (let li = 0; li < lines.length; li++) {
+      const ln = lines[li];
+      if (!ln.trim() || ln.includes(spec.open)) continue;        // skip blank / already-commented lines
+      const prefixLen = lines.slice(0, li).reduce((a, l) => a + l.length + 1, 0);   // chars before this line (+\n each)
+      const start = prefixLen + ln.length + 1;          // after the line text + the joining space
+      lines[li] = ln + ' ' + comment;
+      return { text: lines.join('\n'), start, end: start + comment.length, comment };
+    }
+    return null;
+  }
+  // markup — right after the first tagClose (`>`): comment text BETWEEN tags / in content is safe.
+  const comment = spec.open + ' c ' + spec.close;       // `<!-- c -->`
+  const gt = tagClose ? text.indexOf(tagClose) : -1;
+  if (gt < 0) return null;
+  const start = gt + tagClose.length;
+  return { text: text.slice(0, start) + comment + text.slice(start), start, end: start + comment.length, comment };
+}
+
 // ─── MATERIALIZE: emissions → text + token spans ──────────────────────────────────
 // The per-language structural-token materialization hook. Token-stream grammars join with a
 // space (whitespace-insensitive); indentation grammars (YAML) render struct emissions through an
@@ -1181,5 +1285,46 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
     if (bs.length) push(bs, 'nest:blockScalar', entry.name);
   }
 
-  return out.slice(0, maxInputs);
+  // 8) COMMENT INJECTION (the last coverage hole). A comment is a `skip` token the parser DROPS, so the
+  //    scope≡role judge — which walks parser LEAVES — never reaches a comment's highlighter scope (0%
+  //    coverage). Inject a comment into a SAFE, DETERMINISTIC position of each already-generated input and
+  //    record its span as a WITNESS in `tokens` (the FIRST consumer of that field) — the judge grades the
+  //    highlighter against THAT witness, not a parser leaf (see the comment arm in generative-detect.ts).
+  //    Re-parse-and-DROP: an injection that breaks parsing is discarded (the un-injected input is always
+  //    kept — these are ADDITIONAL variants). DETERMINISTIC: a fixed position rule, no randomness, and we
+  //    iterate a SNAPSHOT of the inputs generated above (in their deterministic order), so two calls match.
+  //    Collected SEPARATELY and concatenated AFTER the base `maxInputs` slice, so the comment witnesses are
+  //    never starved by the cap (closing the coverage hole is the point); bounded by the same maxInputs.
+  const base = out.slice(0, maxInputs);
+  const commentInputs: GenInput[] = [];
+  const cspec = commentSpec(grammar);
+  if (cspec) {
+    const tagClose = grammar.markup?.tagClose ?? '';
+    const { parse } = createParser(grammar);   // lazy: only built when a comment can be injected
+    for (const inp of base) {                  // a snapshot — never inject into an already-injected variant
+      if (commentInputs.length >= maxInputs) break;
+      const inj = injectComment(inp.text, cspec, tagClose);
+      if (!inj) continue;
+      if (inj.text.slice(inj.start, inj.end) !== inj.comment) continue;   // span sanity (the splice put it exactly here)
+      // re-parse-and-DROP, at the ENTRY rule: the injected text must be a FULL DOCUMENT (the highlighter
+      // tokenizes the whole text as the entry scope, and the judge grades comment witnesses only on
+      // entry-legal inputs) — this single full-document parse is the authoritative net (a fragment host
+      // whose injected form doesn't parse as a document is simply dropped here).
+      try { parse(inj.text); } catch { continue; }
+      if (!inj.text.trim() || inj.text.length > 2000 || seen.has(inj.text)) continue;
+      seen.add(inj.text);
+      // `tokens` becomes EXACTLY the injected comment WITNESS — the span-verified ground truth the judge
+      // grades the highlighter against. We do NOT carry over the host's `materialize`-recorded tokens: that
+      // list was never consumed and is unreliable for markup fragments (a degenerate `> <!--x-->` mis-spans),
+      // so the only authoritative witness is the comment we just spliced at a known offset (text === slice).
+      // The variant INHERITS the host's tier: a `fuzz`-host (exploratory, may carry a STANDING flat-TM limit
+      // like the self-close `/` #24) stays `fuzz:comment:…` so that inherited #24 remains report-only — only
+      // the COMMENT-witness check itself always gates (isGated keys `#comment` on kind, not the tier). A
+      // structured host stays `comment:…`. Either way the strategy CONTAINS `comment:`, the judge's marker.
+      const tier = inp.strategy.startsWith('fuzz') ? 'fuzz:' : '';
+      commentInputs.push({ text: inj.text, tokens: [{ start: inj.start, end: inj.end, name: cspec.witnessName, text: inj.comment }], strategy: `${tier}comment:${cspec.witnessName}`, rule: inp.rule });
+    }
+  }
+
+  return [...base, ...commentInputs];
 }

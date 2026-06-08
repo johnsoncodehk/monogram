@@ -16,7 +16,7 @@
 import { normScope } from './scope-roles.ts';
 import type { CstNode, CstChild } from '../src/gen-parser.ts';
 import type { CstGrammar, TokenPattern } from '../src/types.ts';
-import type { GenOptions } from './grammar-gen.ts';
+import { commentSpec, type GenOptions, type GenInput } from './grammar-gen.ts';
 
 // The generation knobs BOTH consumers use, so the gap ledger sees the SAME derived corpus (hence the
 // SAME divergence set) as generative.ts's check. `seed` is a no-op (the generator is a pure function
@@ -173,9 +173,59 @@ export function collectViolations(args: {
   return out;
 }
 
+// ── COMMENT-WITNESS check (the last coverage hole: comment scopes) ───────────────────────────────
+// A comment is a `skip:true` token the parser DROPS — it never becomes a CST leaf, so the leaf walk above
+// (and `checkedTokens`) can NEVER reach a comment's highlighter scope (0% coverage). The generator closes
+// that by INJECTING a comment at a safe position and recording its span as a WITNESS in `GenInput.tokens`
+// (grammar-gen.ts §8). THIS is the consumer: for each recorded comment witness, the flat highlighter must
+// paint that span with the COMMENT bucket — graded with the SAME `scopeBucket` partition the rest of the
+// check uses. The judge compares against the GENERATOR'S witness, not a parser leaf (there is none) — the
+// crux the prompt names. Leniency mirrors `collectViolations`: a comment is CONSISTENT if the highlighter
+// paints ANY part of its span `comment` (so the `<!--`/`-->` punctuation sub-scope is fine, only the body
+// needs `comment`); a span with NO `comment` anywhere (painted entirely string / text / etc.) is the gap.
+
+// The comment-token NAMES of a grammar (so a witness in `tokens` is identifiable as a comment) — the SAME
+// generic discovery the generator uses, memoised per grammar object so repeated calls are cheap.
+const commentNamesCache = new WeakMap<object, Set<string>>();
+export function commentTokenNames(grammar: CstGrammar): Set<string> {
+  let s = commentNamesCache.get(grammar);
+  if (!s) { s = commentSpec(grammar)?.names ?? new Set<string>(); commentNamesCache.set(grammar, s); }
+  return s;
+}
+
+// The comment WITNESSES of one generated input: the `tokens` entries whose name is a comment token. ONLY
+// a comment-INJECTED input (its strategy carries the `comment:` marker) has authoritative, span-verified
+// witnesses — there `tokens` is exactly the comment(s) the generator spliced at a known offset. A BASE
+// input may ALSO carry `materialize`-recorded comment tokens (the grammar can emit a native `<!-- -->`),
+// but those spans are unreliable for markup fragments (a degenerate `> <!--x-->` mis-spans, an empty
+// `<!---->` is all-punctuation) and were never meant as a ground-truth witness — so they are NOT graded.
+export function commentWitnesses(grammar: CstGrammar, input: GenInput): GenInput['tokens'] {
+  if (!input.strategy.includes('comment:')) return [];
+  const names = commentTokenNames(grammar);
+  return names.size ? input.tokens.filter((t) => names.has(t.name) && t.end > t.start) : [];
+}
+
+// Grade each comment witness: a divergence iff the highlighter painted NO part of the witness span with the
+// `comment` bucket. Returns the divergences as `Violation`s (kind `#comment uncolored`), filed like the
+// others so they flow into the same report / gate / gap-ledger plumbing.
+export function collectCommentViolations(args: { grammar: CstGrammar; input: string; strategy: string; witnesses: GenInput['tokens']; toks: TmTok[] }): Violation[] {
+  const out: Violation[] = [];
+  for (const w of args.witnesses) {
+    const got = spanBuckets(args.toks, args.input, w.start, w.end);
+    if (got.has('comment')) continue;                         // painted as a comment somewhere → consistent
+    const gotBucket = [...got][0] ?? 'none';
+    out.push({ input: args.input, strategy: args.strategy, pos: w.start, text: w.text, tokenType: w.name, expected: 'comment', got: gotBucket, gotScope: innerOf(scopeAt(args.toks, w.start)), kind: '#comment uncolored' });
+  }
+  return out;
+}
+
 // What GATES vs what is a report-only DISCOVERY (generative.ts's exact predicate):
 //  • an ANCHORED-MARKER misfire (#23) ALWAYS gates.
 //  • a STRUCTURAL-LITERAL→content divergence (#24) gates on the STRUCTURED strategies, but is
 //    report-only on FUZZ inputs (a standing flat-TM frontier limit). The gap ledger lists the
 //    DISCOVERED ones (the !isGated set) — the floor-blind divergences a corpus metric is blind to.
-export const isGated = (v: { kind: string; strategy: string }): boolean => v.kind.startsWith('#23') || !v.strategy.startsWith('fuzz');
+//  • a COMMENT-uncolored divergence ALWAYS gates: a comment (parser-dropped, highlighter-scoped
+//    `comment.*` by construction) painted as a NON-comment is unambiguous — there is no legitimate
+//    "frontier limit" where an injected comment is not a comment (its position is chosen safe + it
+//    round-trips). On today's correct grammars this finds 0; it CATCHES a future scope regression.
+export const isGated = (v: { kind: string; strategy: string }): boolean => v.kind.startsWith('#23') || v.kind.startsWith('#comment') || !v.strategy.startsWith('fuzz');

@@ -38,6 +38,7 @@ import { generateInputs, type GenInput } from './grammar-gen.ts';
 import {
   type TmTok, type Violation,
   buildRoleMap, leafRoles, anchoredScopes, collectViolations, isGated, GEN_OPTS,
+  commentWitnesses, collectCommentViolations,
 } from './generative-detect.ts';
 
 // ── language registry: every per-language fact (grammar module, scope, flat grammar file,
@@ -138,6 +139,7 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   // and a context fold (a number folded into a multi-line string) are NOT false-positives.
   const violations: Violation[] = [];
   let checkedTokens = 0;
+  let checkedComments = 0;   // comment WITNESSES graded — was structurally 0 (comments are skip→no CST leaf)
   for (const inp of entryLegal) {
     let cst: CstNode, toks: TmTok[];
     try { cst = parse(inp.text); toks = tmTokenize(tm, inp.text); } catch { continue; }
@@ -147,6 +149,13 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
     // detector — identical logic to before, now reused by the gap ledger. The 200-cap is the running
     // total across all inputs (startCount), as the inline version was.
     violations.push(...collectViolations({ input: inp.text, strategy: inp.strategy, cst, toks, leaves, anchored, cap: 200, startCount: violations.length }));
+    // COMMENT-WITNESS arm — a comment is a skip token (no CST leaf), so it is NEVER in `leaves`/`checkedTokens`
+    // and the highlighter's comment scope was previously UNCHECKED (0% coverage). Grade the spans the
+    // generator recorded as witnesses (grammar-gen §8): the highlighter must paint each `comment`. This is
+    // the first consumer of `GenInput.tokens`. ALWAYS-gating (see isGated) — but ~0 on the correct grammars.
+    const witnesses = commentWitnesses(grammar, inp);
+    checkedComments += witnesses.length;
+    violations.push(...collectCommentViolations({ grammar, input: inp.text, strategy: inp.strategy, witnesses, toks }));
   }
 
   // ── report ──
@@ -174,6 +183,9 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   const gated = violations.filter(isGated);
   const discovered = violations.filter((v) => !isGated(v));
   console.log(`  scope≡role: ${checkedTokens} declared-scope tokens checked · ${gated.length} gated inconsistenc${gated.length === 1 ? 'y' : 'ies'} · ${discovered.length} discovered (fuzz frontier-limit, report-only)`);
+  // comment-witness coverage: how many injected comment spans were graded (was structurally 0 — a comment
+  // is a skip token, dropped by the parser, so it never reached the leaf-walking scope≡role check).
+  console.log(`  comment witnesses: ${checkedComments} comment span${checkedComments === 1 ? '' : 's'} graded (highlighter must paint COMMENT) · ${violations.filter((v) => v.kind.startsWith('#comment')).length} uncolored`);
   const show = (vs: Violation[], tag: string) => {
     const grouped = new Map<string, { v: Violation; n: number }>();
     for (const v of vs) { const key = `${v.kind} ${v.tokenType}`; const e = grouped.get(key); if (e) e.n++; else grouped.set(key, { v, n: 1 }); }
