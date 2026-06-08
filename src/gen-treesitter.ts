@@ -1,6 +1,6 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
-import { tokenPatternIsNever, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
+import { tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
 // gen-treesitter — derive a tree-sitter parser package from one CstGrammar.
@@ -770,6 +770,24 @@ function flowSyntheticTokens(grammar: CstGrammar): { sym: string; char: string; 
   ];
 }
 
+/**
+ * The document-marker glyphs (`---` / `...`) of an indentation grammar, matched to
+ * `indent.blockScalar.documentMarkers` by token literal prefix — used by the external scanner's
+ * scan_scalar to claim a non-marker glyph as plain and decline a true marker (the markers stay
+ * INTERNAL tokens; see planScannerTokens). Longest glyph first (so a 3-char glyph beats a prefix of
+ * it). Empty unless the grammar declares documentMarkers.
+ */
+function documentMarkerGlyphs(grammar: CstGrammar): string[] {
+  const markers = grammar.indent?.blockScalar?.documentMarkers;
+  if (!markers || markers.length === 0) return [];
+  const out = new Set<string>();
+  for (const tok of grammar.tokens) {
+    const lit = tokenPatternLiteralPrefix(tok);
+    if (lit && markers.includes(lit)) out.add(lit);
+  }
+  return [...out].sort((a, b) => b.length - a.length);
+}
+
 /** Determine which tokens the external scanner must provide. */
 function planScannerTokens(grammar: CstGrammar): Map<string, string> {
   const map = new Map<string, string>();
@@ -803,6 +821,14 @@ function planScannerTokens(grammar: CstGrammar): Map<string, string> {
     // (a TRUE return). The synthetic name IS the snake symbol; the matching literal in the flow rules is
     // swapped for a ref to it in renderExpr. Appended last so the scalar-token positions are unchanged.
     for (const { sym } of flowSyntheticTokens(grammar)) map.set(sym, sym);
+    // Document markers (`---` / `...`) stay INTERNAL tokens (NOT added here). Their IR is
+    // `literal + a sep look-ahead`; tree-sitter's token() DFA drops the look-ahead, leaving a bare
+    // `---`/`...`. That is fine: the external scalar scanner CLAIMS a non-marker glyph (`---foo`) as a
+    // plain scalar (so it never reaches the internal token) and DECLINES a true sep-bounded marker (so
+    // the internal token lexes it — see scan_scalar's document-marker probe). Making them external
+    // instead perturbs the GLR parse tables — a marker token's valid-symbol set then shifts the lexer's
+    // scalar/indent decisions at unrelated boundaries (a same-column block sequence after a key
+    // mis-lexes) — so keeping them internal leaves the tables byte-identical to a no-marker build.
   }
   // The regex token: '/' is context-sensitive (regex vs division). The scanner
   // resolves it.
@@ -1919,6 +1945,43 @@ function buildIndentScannerC(grammar: CstGrammar, ctx: GrammarJsContext, grammar
   // agree). Built by flowSyntheticTokens(grammar) and shared with the grammar.js side.
   const flowTokens = flowSyntheticTokens(grammar); // [{ sym, char, open }]
 
+  // DOCUMENT MARKERS (`---` / `...`) — INTERNAL tokens; the external scalar scanner only CLAIMS a non-
+  // marker glyph as plain and DECLINES a true (sep-bounded) marker so the internal token lexes it.
+  const markers = documentMarkerGlyphs(grammar);
+  const hasMarkers = markers.length > 0 && SCALAR;
+  const cChar = (ch: string) => (ch === '\\' || ch === "'" ? `'\\${ch}'` : `'${ch}'`);
+  // Advance over one glyph char (counting `matched`) — DON'T push to the run or mark the token end yet.
+  // The probe commits (mark_end) only on the plain-content path; a true-marker decline marks nothing, so
+  // the probed chars roll back cleanly and tree-sitter then lexes the internal marker token.
+  const eatGlyphChar = (ch: string) => `if (lexer->lookahead == ${cChar(ch)}) { lexer->advance(lexer, false); matched++; }`;
+  // Replay the k matched glyph chars into the run as scalar content (a non-marker glyph: `---foo`,
+  // `--x`). The lexer is already positioned past them; the main loop continues the run from here.
+  const replayGlyph = (glyph: string) => [...glyph].map((ch, k) =>
+    `if (matched > ${k}) { if (blen < sizeof(buf)) buf[blen++] = ${cChar(ch)}; }`).join(' ');
+  const markerProbe = !hasMarkers ? '' : `
+  // DOCUMENT-MARKER probe (column 0). A \`---\`/\`...\` glyph that is sep-bounded (ws / EOL / EOF) is a
+  // document marker — an INTERNAL token (its IR's sep look-ahead is beyond a tree-sitter token() DFA,
+  // but this external scanner decides the boundary). The glyph is matched WITHOUT marking the token end:
+  //   • a FULL glyph + separator      → a TRUE marker: set s->marker_decline and return false; nothing
+  //     was marked, so the probed chars roll back and the internal \`---\`/\`...\` token lexes it (a non-
+  //     marker glyph never reaches that token, so its dropped look-ahead is moot).
+  //   • a LONE indicator char + sep   → a block indicator (\`- \`/\`? \`); decline so the internal \`-\`/\`?\`
+  //     token takes it.
+  //   • anything else (\`---foo\`, \`-1\`) → plain content: replay the matched glyph chars and fall through
+  //     to the scalar loop, which continues the run (so the marker glyph is CLAIMED as a plain scalar).
+  // Markers (and which lead chars are block indicators) are DERIVED from grammar.indent.
+  if (${hasCompact ? 'compact_col < 0 && ' : ''}lexer->get_column(lexer) == 0) {${markers.map(glyph => `
+    if (lexer->lookahead == ${cChar(glyph[0])}) {
+      unsigned matched = 0;
+      ${[...glyph].map(eatGlyphChar).join('\n      ')}
+      int32_t mn = lexer->lookahead;
+      bool msep = (mn == 0 || mn == ' ' || mn == '\\t' || mn == '\\n' || mn == '\\r');
+      if (matched == ${glyph.length} && msep) { s->marker_decline = true; return false; }${compactIndicators.includes(glyph[0]) ? `
+      if (matched == 1 && msep) return false; // lone \`${glyph[0]}\` + separator → block indicator, not content` : ''}
+      ${replayGlyph(glyph)} if (matched > 0) { has_content = true; lexer->mark_end(lexer); }
+    }`).join('')}
+  }`;
+
   const scannerC = `// Tree-sitter external scanner generated by monogram (indentation path).
 //
 // Mirrors the indent-stack state machine of src/gen-lexer.ts: INDENT / DEDENT / NEWLINE are emitted
@@ -1943,7 +2006,9 @@ typedef struct {
   bool pending_newline;  // a NEWLINE is still owed once dedents reach pending_col
   bool started;          // any content lexed yet (suppresses a leading NEWLINE)${hasCompact ? `
   bool at_line_lead;     // the next real content token is its line's first (compact-indicator probe)` : ''}${hasFlow ? `
-  uint16_t flow_depth;   // > 0 inside flow collections ([ ] { }) → indentation suspended, ,/[/]/{/}` : ''}
+  uint16_t flow_depth;   // > 0 inside flow collections ([ ] { }) → indentation suspended, ,/[/]/{/}` : ''}${hasMarkers ? `
+  bool marker_decline;   // transient: scan_scalar saw a true \`---\`/\`...\` → external declines so the
+                         // internal marker token lexes it. Set+consumed within one scan; not serialized.` : ''}
 } Scanner;
 
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
@@ -1961,7 +2026,8 @@ void *tree_sitter_${G}_external_scanner_create(void) {
   s->stack[0] = 0;
   s->pending_col = -1; s->pending_newline = false; s->started = false;${hasCompact ? `
   s->at_line_lead = true;` : ''}${hasFlow ? `
-  s->flow_depth = 0;` : ''}
+  s->flow_depth = 0;` : ''}${hasMarkers ? `
+  s->marker_decline = false;` : ''}
   return s;
 }
 
@@ -1990,7 +2056,8 @@ void tree_sitter_${G}_external_scanner_deserialize(void *payload, const char *bu
   Scanner *s = (Scanner *)payload;
   s->len = 1; s->stack[0] = 0; s->pending_col = -1; s->pending_newline = false; s->started = false;${hasCompact ? `
   s->at_line_lead = true;` : ''}${hasFlow ? `
-  s->flow_depth = 0;` : ''}
+  s->flow_depth = 0;` : ''}${hasMarkers ? `
+  s->marker_decline = false;` : ''}
   if (length < ${hasCompact ? 3 : 2} + sizeof(int16_t)${hasFlow ? ' + sizeof(uint16_t)' : ''} + sizeof(uint32_t)) return;
   unsigned n = 0;
   s->started = buffer[n++] != 0;
@@ -2010,8 +2077,14 @@ ${BLOCK ? `// A block scalar (\`|\` / \`>\`): the introducer + indicators + the 
 // stack top); it ends at the first non-blank line at or below the parent, or a column-0 document
 // marker, or EOF. mark_end is advanced only over lines that belong to the scalar, so the next node's
 // indentation is left for the normal boundary logic.
+//
+// A ROOT block scalar (the document's own node — stack depth 1) has an effective parent indentation of
+// -1, not 0: its body may sit at column 0 (\`--- >\\nline1\`, yaml-test-suite DK3J / FP8R). So at root,
+// only a column-0 DOCUMENT MARKER (\`---\` / \`...\`) — never plain column-0 text — ends it. The marker
+// is matched without committing the line (no mark_end), so a non-marker column-0 line stays body.${markers.length > 0 ? `` : ''}
 static bool scan_block_scalar(Scanner *s, TSLexer *lexer) {
-  int parent = s->stack[s->len - 1];
+  bool root = s->len == 1;           // a document-root block scalar: body may reach column 0
+  int parent = root ? -1 : s->stack[s->len - 1];
   advance(lexer); // the introducer (| or >)
   while (lexer->lookahead == '+' || lexer->lookahead == '-' || (lexer->lookahead >= '0' && lexer->lookahead <= '9')) advance(lexer);
   while (lexer->lookahead != 0 && lexer->lookahead != '\\n' && lexer->lookahead != '\\r') advance(lexer);
@@ -2023,7 +2096,17 @@ static bool scan_block_scalar(Scanner *s, TSLexer *lexer) {
     int col = 0;
     while (lexer->lookahead == ' ') { advance(lexer); col++; }
     int32_t c = lexer->lookahead;
-    if (c == 0 || c == '\\n' || c == '\\r') { lexer->mark_end(lexer); continue; } // blank line → body
+    if (c == 0 || c == '\\n' || c == '\\r') { lexer->mark_end(lexer); continue; } // blank line → body${markers.length > 0 ? `
+    if (root && col == 0) {                 // a column-0 document marker ends a root block scalar
+      bool is_marker = false;${markers.map(glyph => `
+      if (!is_marker && c == ${cChar(glyph[0])}) {
+        unsigned m = 0; ${[...glyph].map(ch => `if (lexer->lookahead == ${cChar(ch)}) { advance(lexer); m++; }`).join(' ')}
+        int32_t a = lexer->lookahead;
+        if (m == ${glyph.length} && (a == 0 || a == ' ' || a == '\\t' || a == '\\n' || a == '\\r')) is_marker = true;
+      }`).join('')}
+      if (is_marker) break;                 // leave the marker line for the next token (no mark_end)
+      // not a marker: the chars probed above are body; fall through to consume the rest of the line.
+    }` : ''}
     if (col <= parent) break; // dedent to/below parent ends the scalar (the line is the next node)
     while (lexer->lookahead != 0 && lexer->lookahead != '\\n' && lexer->lookahead != '\\r') advance(lexer);
     lexer->mark_end(lexer);
@@ -2105,13 +2188,15 @@ static bool compact_content_is_structural(TSLexer *lexer) {
 // next call (then compact_col is no longer deeper, so this path is skipped). A leaf scalar (no \`:\`)
 // is emitted as usual, its end marked at the run end. Mirrors compactNestsHere's mapping-key arm.` : ''}
 static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain, bool want_num, bool want_boolnull${hasFlow ? `,
-                        int flow_depth` : ''}${hasCompact ? `,
-                        Scanner *s, int16_t compact_col, int indent_sym` : ''}) {${hasCompact ? `
+                        int flow_depth` : ''}${(hasCompact || hasMarkers) ? `,
+                        Scanner *s` : ''}${hasCompact ? `,
+                        int16_t compact_col, int indent_sym` : ''}) {${hasCompact ? `
   bool cm = compact_col >= 0;   // compact-eligible: suppress per-char mark_end (zero-width INDENT on KEY)` : ''}
   char buf[64];
   unsigned blen = 0;        // run text (capped) — for the number/bool-null shape test
   bool has_content = false;
   bool stopped_at_kv = false; // ended at a \`:\`-separator → this scalar is a mapping KEY
+${markerProbe}
   for (;;) {
     int32_t c = lexer->lookahead;
     if (c == 0 || c == '\\n' || c == '\\r') break;                 // newline / EOF
@@ -2216,7 +2301,13 @@ bool tree_sitter_${G}_external_scanner_scan(void *payload, TSLexer *lexer, const
   Scanner *s = (Scanner *)payload;
   bool want_indent = valid_symbols[${INDENT}];
   bool want_dedent = valid_symbols[${DEDENT}];
-  bool want_newline = valid_symbols[${NEWLINE}];${BLOCK ? `\n  bool want_block = valid_symbols[${BLOCK}];` : ''}
+  bool want_newline = valid_symbols[${NEWLINE}];${BLOCK ? `\n  bool want_block = valid_symbols[${BLOCK}];` : ''}${hasMarkers ? `
+  // Content lies to our left whenever we are not at column 0 — including right after an INTERNAL token
+  // (e.g. a \`---\`/\`...\` document marker, whose match the scanner never sees). Mark started so the line
+  // boundary that follows emits its NEWLINE (the leading-NEWLINE suppression is only for blank lines at
+  // the very start of input, which are always at column 0). Without this, the NEWLINE after a leading
+  // \`---\` would be dropped and the document body could not attach.
+  if (lexer->get_column(lexer) > 0) s->started = true;` : ''}
 
   // Finish a line boundary already in progress: emit the remaining DEDENTs (one per call), then the
   // owed NEWLINE when the stack top reaches the boundary column. No input is consumed here.
@@ -2328,8 +2419,10 @@ ${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym
         compact_col = (int16_t)lexer->get_column(lexer);
         lexer->mark_end(lexer); // zero-width INDENT end at the content start (used iff the run is a KEY)
       }
-      if (scan_scalar(lexer, ${want(KEY)}, ${want(PLAIN)}, ${want(NUM)}, ${want(BOOLNULL)}${hasFlow ? ', s->flow_depth' : ''}, s, compact_col, ${INDENT})) { s->started = true; s->at_line_lead = (lexer->result_symbol == ${INDENT}); return true; }` : `
-      if (scan_scalar(lexer, ${want(KEY)}, ${want(PLAIN)}, ${want(NUM)}, ${want(BOOLNULL)}${hasFlow ? ', s->flow_depth' : ''})) { s->started = true; return true; }`}
+      if (scan_scalar(lexer, ${want(KEY)}, ${want(PLAIN)}, ${want(NUM)}, ${want(BOOLNULL)}${hasFlow ? ', s->flow_depth' : ''}, s, compact_col, ${INDENT})) { s->started = true; s->at_line_lead = (lexer->result_symbol == ${INDENT}); return true; }${hasMarkers ? `
+      if (s->marker_decline) { s->marker_decline = false; return false; } // a true \`---\`/\`...\` here → let the internal marker token lex it` : ''}` : `
+      if (scan_scalar(lexer, ${want(KEY)}, ${want(PLAIN)}, ${want(NUM)}, ${want(BOOLNULL)}${hasFlow ? ', s->flow_depth' : ''}${hasMarkers ? ', s' : ''})) { s->started = true; return true; }${hasMarkers ? `
+      if (s->marker_decline) { s->marker_decline = false; return false; }` : ''}`}
     }
   }
 ` : ''}

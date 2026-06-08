@@ -34,6 +34,8 @@ typedef struct {
   bool started;          // any content lexed yet (suppresses a leading NEWLINE)
   bool at_line_lead;     // the next real content token is its line's first (compact-indicator probe)
   uint16_t flow_depth;   // > 0 inside flow collections ([ ] { }) → indentation suspended, ,/[/]/{/}
+  bool marker_decline;   // transient: scan_scalar saw a true `---`/`...` → external declines so the
+                         // internal marker token lexes it. Set+consumed within one scan; not serialized.
 } Scanner;
 
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
@@ -52,6 +54,7 @@ void *tree_sitter_yaml_external_scanner_create(void) {
   s->pending_col = -1; s->pending_newline = false; s->started = false;
   s->at_line_lead = true;
   s->flow_depth = 0;
+  s->marker_decline = false;
   return s;
 }
 
@@ -81,6 +84,7 @@ void tree_sitter_yaml_external_scanner_deserialize(void *payload, const char *bu
   s->len = 1; s->stack[0] = 0; s->pending_col = -1; s->pending_newline = false; s->started = false;
   s->at_line_lead = true;
   s->flow_depth = 0;
+  s->marker_decline = false;
   if (length < 3 + sizeof(int16_t) + sizeof(uint16_t) + sizeof(uint32_t)) return;
   unsigned n = 0;
   s->started = buffer[n++] != 0;
@@ -100,8 +104,14 @@ void tree_sitter_yaml_external_scanner_deserialize(void *payload, const char *bu
 // stack top); it ends at the first non-blank line at or below the parent, or a column-0 document
 // marker, or EOF. mark_end is advanced only over lines that belong to the scalar, so the next node's
 // indentation is left for the normal boundary logic.
+//
+// A ROOT block scalar (the document's own node — stack depth 1) has an effective parent indentation of
+// -1, not 0: its body may sit at column 0 (`--- >\nline1`, yaml-test-suite DK3J / FP8R). So at root,
+// only a column-0 DOCUMENT MARKER (`---` / `...`) — never plain column-0 text — ends it. The marker
+// is matched without committing the line (no mark_end), so a non-marker column-0 line stays body.
 static bool scan_block_scalar(Scanner *s, TSLexer *lexer) {
-  int parent = s->stack[s->len - 1];
+  bool root = s->len == 1;           // a document-root block scalar: body may reach column 0
+  int parent = root ? -1 : s->stack[s->len - 1];
   advance(lexer); // the introducer (| or >)
   while (lexer->lookahead == '+' || lexer->lookahead == '-' || (lexer->lookahead >= '0' && lexer->lookahead <= '9')) advance(lexer);
   while (lexer->lookahead != 0 && lexer->lookahead != '\n' && lexer->lookahead != '\r') advance(lexer);
@@ -114,6 +124,21 @@ static bool scan_block_scalar(Scanner *s, TSLexer *lexer) {
     while (lexer->lookahead == ' ') { advance(lexer); col++; }
     int32_t c = lexer->lookahead;
     if (c == 0 || c == '\n' || c == '\r') { lexer->mark_end(lexer); continue; } // blank line → body
+    if (root && col == 0) {                 // a column-0 document marker ends a root block scalar
+      bool is_marker = false;
+      if (!is_marker && c == '-') {
+        unsigned m = 0; if (lexer->lookahead == '-') { advance(lexer); m++; } if (lexer->lookahead == '-') { advance(lexer); m++; } if (lexer->lookahead == '-') { advance(lexer); m++; }
+        int32_t a = lexer->lookahead;
+        if (m == 3 && (a == 0 || a == ' ' || a == '\t' || a == '\n' || a == '\r')) is_marker = true;
+      }
+      if (!is_marker && c == '.') {
+        unsigned m = 0; if (lexer->lookahead == '.') { advance(lexer); m++; } if (lexer->lookahead == '.') { advance(lexer); m++; } if (lexer->lookahead == '.') { advance(lexer); m++; }
+        int32_t a = lexer->lookahead;
+        if (m == 3 && (a == 0 || a == ' ' || a == '\t' || a == '\n' || a == '\r')) is_marker = true;
+      }
+      if (is_marker) break;                 // leave the marker line for the next token (no mark_end)
+      // not a marker: the chars probed above are body; fall through to consume the rest of the line.
+    }
     if (col <= parent) break; // dedent to/below parent ends the scalar (the line is the next node)
     while (lexer->lookahead != 0 && lexer->lookahead != '\n' && lexer->lookahead != '\r') advance(lexer);
     lexer->mark_end(lexer);
@@ -196,12 +221,48 @@ static bool compact_content_is_structural(TSLexer *lexer) {
 // is emitted as usual, its end marked at the run end. Mirrors compactNestsHere's mapping-key arm.
 static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain, bool want_num, bool want_boolnull,
                         int flow_depth,
-                        Scanner *s, int16_t compact_col, int indent_sym) {
+                        Scanner *s,
+                        int16_t compact_col, int indent_sym) {
   bool cm = compact_col >= 0;   // compact-eligible: suppress per-char mark_end (zero-width INDENT on KEY)
   char buf[64];
   unsigned blen = 0;        // run text (capped) — for the number/bool-null shape test
   bool has_content = false;
   bool stopped_at_kv = false; // ended at a `:`-separator → this scalar is a mapping KEY
+
+  // DOCUMENT-MARKER probe (column 0). A `---`/`...` glyph that is sep-bounded (ws / EOL / EOF) is a
+  // document marker — an INTERNAL token (its IR's sep look-ahead is beyond a tree-sitter token() DFA,
+  // but this external scanner decides the boundary). The glyph is matched WITHOUT marking the token end:
+  //   • a FULL glyph + separator      → a TRUE marker: set s->marker_decline and return false; nothing
+  //     was marked, so the probed chars roll back and the internal `---`/`...` token lexes it (a non-
+  //     marker glyph never reaches that token, so its dropped look-ahead is moot).
+  //   • a LONE indicator char + sep   → a block indicator (`- `/`? `); decline so the internal `-`/`?`
+  //     token takes it.
+  //   • anything else (`---foo`, `-1`) → plain content: replay the matched glyph chars and fall through
+  //     to the scalar loop, which continues the run (so the marker glyph is CLAIMED as a plain scalar).
+  // Markers (and which lead chars are block indicators) are DERIVED from grammar.indent.
+  if (compact_col < 0 && lexer->get_column(lexer) == 0) {
+    if (lexer->lookahead == '-') {
+      unsigned matched = 0;
+      if (lexer->lookahead == '-') { lexer->advance(lexer, false); matched++; }
+      if (lexer->lookahead == '-') { lexer->advance(lexer, false); matched++; }
+      if (lexer->lookahead == '-') { lexer->advance(lexer, false); matched++; }
+      int32_t mn = lexer->lookahead;
+      bool msep = (mn == 0 || mn == ' ' || mn == '\t' || mn == '\n' || mn == '\r');
+      if (matched == 3 && msep) { s->marker_decline = true; return false; }
+      if (matched == 1 && msep) return false; // lone `-` + separator → block indicator, not content
+      if (matched > 0) { if (blen < sizeof(buf)) buf[blen++] = '-'; } if (matched > 1) { if (blen < sizeof(buf)) buf[blen++] = '-'; } if (matched > 2) { if (blen < sizeof(buf)) buf[blen++] = '-'; } if (matched > 0) { has_content = true; lexer->mark_end(lexer); }
+    }
+    if (lexer->lookahead == '.') {
+      unsigned matched = 0;
+      if (lexer->lookahead == '.') { lexer->advance(lexer, false); matched++; }
+      if (lexer->lookahead == '.') { lexer->advance(lexer, false); matched++; }
+      if (lexer->lookahead == '.') { lexer->advance(lexer, false); matched++; }
+      int32_t mn = lexer->lookahead;
+      bool msep = (mn == 0 || mn == ' ' || mn == '\t' || mn == '\n' || mn == '\r');
+      if (matched == 3 && msep) { s->marker_decline = true; return false; }
+      if (matched > 0) { if (blen < sizeof(buf)) buf[blen++] = '.'; } if (matched > 1) { if (blen < sizeof(buf)) buf[blen++] = '.'; } if (matched > 2) { if (blen < sizeof(buf)) buf[blen++] = '.'; } if (matched > 0) { has_content = true; lexer->mark_end(lexer); }
+    }
+  }
   for (;;) {
     int32_t c = lexer->lookahead;
     if (c == 0 || c == '\n' || c == '\r') break;                 // newline / EOF
@@ -306,6 +367,12 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
   bool want_dedent = valid_symbols[DEDENT];
   bool want_newline = valid_symbols[NEWLINE];
   bool want_block = valid_symbols[BLOCK_SCALAR];
+  // Content lies to our left whenever we are not at column 0 — including right after an INTERNAL token
+  // (e.g. a `---`/`...` document marker, whose match the scanner never sees). Mark started so the line
+  // boundary that follows emits its NEWLINE (the leading-NEWLINE suppression is only for blank lines at
+  // the very start of input, which are always at column 0). Without this, the NEWLINE after a leading
+  // `---` would be dropped and the document body could not attach.
+  if (lexer->get_column(lexer) > 0) s->started = true;
 
   // Finish a line boundary already in progress: emit the remaining DEDENTs (one per call), then the
   // owed NEWLINE when the stack top reaches the boundary column. No input is consumed here.
@@ -433,6 +500,7 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
         lexer->mark_end(lexer); // zero-width INDENT end at the content start (used iff the run is a KEY)
       }
       if (scan_scalar(lexer, valid_symbols[KEY] != 0, valid_symbols[PLAIN] != 0, valid_symbols[NUM] != 0, valid_symbols[BOOL_NULL] != 0, s->flow_depth, s, compact_col, INDENT)) { s->started = true; s->at_line_lead = (lexer->result_symbol == INDENT); return true; }
+      if (s->marker_decline) { s->marker_decline = false; return false; } // a true `---`/`...` here → let the internal marker token lex it
     }
   }
 
