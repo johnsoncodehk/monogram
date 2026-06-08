@@ -81,6 +81,9 @@
           "include": "#explicit-key-continuation"
         },
         {
+          "include": "#block-sequence"
+        },
+        {
           "include": "#plain-continuation"
         },
         {
@@ -236,6 +239,9 @@
         },
         {
           "include": "#explicit-key-continuation"
+        },
+        {
+          "include": "#block-sequence"
         },
         {
           "include": "#plain-continuation"
@@ -1890,6 +1896,197 @@
         {
           "match": "(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))+",
           "name": "string.unquoted.yaml"
+        }
+      ]
+    },
+    "block-plain-item": {
+      "begin": "(?=(?:[^\\t\\n\\f\\r \\-?:,\\[\\]{}#&*!|>'\"%@`]|[\\-?:](?=[^\\t\\n\\f\\r ,\\[\\]{}]))(?:[^:#\\n,\\[\\]{}]|:(?=[^\\t\\n\\f\\r ,\\]}])|#(?<=[^\\t\\n\\f\\r ]#))*)(?!(?:#|-[\\t ]|\\?[\\t ]|[^\\n\\[{\\]}]*?:(?:[\\t ]|$)))",
+      "while": "\\G",
+      "patterns": [
+        {
+          "begin": "\\G",
+          "end": "(?=(?>[\\t ]++|\\G)#)",
+          "name": "string.unquoted.yaml",
+          "patterns": [
+            {
+              "match": "\\G[\\t ]++",
+              "name": "string.unquoted.yaml"
+            },
+            {
+              "match": "[\\t ]++$",
+              "name": "string.unquoted.yaml"
+            }
+          ]
+        },
+        {
+          "begin": "(?!\\G)",
+          "while": "\\G",
+          "patterns": [
+            {
+              "include": "#comment"
+            }
+          ]
+        }
+      ]
+    },
+    "block-sequence": {
+      "begin": "(?=((?<=[\\-?:]) )?+)\\G( *+)(-)(?=[\\t ]+-[\\t ])",
+      "beginCaptures": {
+        "3": {
+          "name": "punctuation.yaml"
+        }
+      },
+      "while": "\\G(?>(\\1\\2)(?=[\\t ]*-[\\t ]|[\\t ]*-$)|(?!\\1\\2)([\\t ]+)(?=[^\\t\\r\\n#])|[\\t ]*$)",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-1"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-2"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-3"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-4"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-5"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-6"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-7"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-8"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-9"
+        },
+        {
+          "include": "#blockscalar-seq"
+        },
+        {
+          "include": "#blockscalar-key"
+        },
+        {
+          "include": "#blockscalar-explicit-1"
+        },
+        {
+          "include": "#blockscalar-explicit-2"
+        },
+        {
+          "include": "#blockscalar-explicit-3"
+        },
+        {
+          "include": "#blockscalar-explicit-4"
+        },
+        {
+          "include": "#blockscalar-explicit-5"
+        },
+        {
+          "include": "#blockscalar-explicit-6"
+        },
+        {
+          "include": "#blockscalar-explicit-7"
+        },
+        {
+          "include": "#blockscalar-explicit-8"
+        },
+        {
+          "include": "#blockscalar-explicit-9"
+        },
+        {
+          "include": "#blockscalar-doc"
+        },
+        {
+          "include": "#blockscalar"
+        },
+        {
+          "include": "#explicit-key-continuation"
+        },
+        {
+          "include": "#block-sequence"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#flow-sequence"
+        },
+        {
+          "include": "#flow-mapping"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#dquote"
+        },
+        {
+          "include": "#squote"
+        },
+        {
+          "include": "#yamldirective"
+        },
+        {
+          "include": "#directive"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#directive-malformed"
+        },
+        {
+          "include": "#num"
+        },
+        {
+          "include": "#boolnull"
+        },
+        {
+          "include": "#plain"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#alias"
+        },
+        {
+          "include": "#indent"
+        },
+        {
+          "include": "#dedent"
+        },
+        {
+          "include": "#newline"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#block-plain-item"
         }
       ]
     },

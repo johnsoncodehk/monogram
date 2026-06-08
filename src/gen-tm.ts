@@ -3409,6 +3409,59 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
   return { indicator, keyScope, keyBody, prefixGroups };
 }
 
+// ── Block-sequence detection (YAML `- item` block sequence) ──
+//
+// A flat per-line grammar cannot tell a COMPACT nested sequence's sibling from a plain-scalar fold:
+// `- - a\n  - b` (the `  - b` is the INNER sequence's 2nd item) and `x: y\n  - b` (the `  - b` folds
+// into the plain scalar `y`) share the same continuation line but get OPPOSITE answers — the decider
+// is the ENCLOSING node column (an inner sequence at column 2 vs a mapping at column 0), which the
+// line-relative `\1` of the §2a′ fold region cannot see (both lines start at column 0). monogram#24.
+// The fix is a column-anchored region (§2c below) for the COMPACT block sequence, whose `\G`-anchored
+// `while` (re-anchored each line by the meta.stream wrapper) reclaims a sibling `- ` at the inner
+// indicator's column BEFORE the plain-scalar fold can swallow it. This detects the block-sequence rule
+// + its indicator literal from the grammar so the region is DERIVED, not hardcoded.
+//
+// Signal (all from the grammar): a rule whose body is `[item, (Newline item)*]` — an item then a
+// same-column-NEWLINE-separated run of further items — where `item` is a `ref` to a rule whose body is
+// a `seq` headed by a SINGLE-char punctuation literal (the sequence indicator `-`). Returns the
+// indicator literal, or null when the family has no such block sequence (every non-YAML grammar).
+function detectBlockSequence(grammar: CstGrammar): { indicator: string } | null {
+  if (!grammar.indent) return null;
+  const { newlineToken } = grammar.indent;
+  const ruleByName = new Map(grammar.rules.map(r => [r.name, r] as const));
+  const headSinglePunct = (e: RuleExpr): string | null =>
+    e.type === 'literal' && e.value.length === 1 && !/[\w\s]/.test(e.value) ? e.value : null;
+  // The item rule's indicator: unwrap a ref to a rule whose body's first seq element is a 1-char punct.
+  const itemIndicator = (e: RuleExpr): string | null => {
+    let body = e.type === 'ref' ? ruleByName.get(e.name)?.body : e;
+    if (!body) return null;
+    // a rule body written `[[...]]` is a single-alt seq; unwrap a lone-arm alt
+    if (body.type === 'alt' && body.items.length === 1) body = body.items[0];
+    return body.type === 'seq' ? headSinglePunct(body.items[0]) : null;
+  };
+  let indicator: string | null = null;
+  const visit = (e: RuleExpr): void => {
+    if (e.type === 'seq') {
+      // `[item, (Newline item)*]`: first element + a `*`/`+` over a `[Newline, item]` seq
+      if (e.items.length >= 2) {
+        const head = e.items[0];
+        const q = e.items[1];
+        if (q.type === 'quantifier' && (q.kind === '*' || q.kind === '+') && q.body.type === 'seq'
+          && q.body.items.length >= 2 && q.body.items[0].type === 'ref' && q.body.items[0].name === newlineToken) {
+          const ind = itemIndicator(head);
+          // the repeated element's item must share the head's indicator (a homogeneous sequence)
+          if (ind && itemIndicator(q.body.items[1]) === ind) indicator = ind;
+        }
+      }
+      e.items.forEach(visit);
+    } else if (e.type === 'alt') e.items.forEach(visit);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') visit(e.body);
+    else if (e.type === 'sep') visit(e.element);
+  };
+  for (const r of grammar.rules) visit(r.body);
+  return indicator ? { indicator } : null;
+}
+
 // ── Flow-collection detection (YAML `{ … }` mapping / `[ … ]` sequence) ──
 //
 // A flat per-token grammar cannot scope a flow MAPPING's keys: in `{ a: 1 }` the `a` is a key
@@ -5087,6 +5140,70 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           patterns: [...plainHeaderIncs, bareCont],
         });
         topPatterns.push({ include: '#plain-bare-fold' });
+      }
+
+      // ── 2c. COMPACT block-sequence — a column-anchored region for nested `- - …` (monogram#24) ──
+      // The §2a′/§2a″ plain folds are LINE-relative (their `\1` is the line's leading whitespace), but
+      // a YAML continuation is NODE-relative (more indented than the ENCLOSING dash/key). For a single
+      // sequence (`- a`) or a mapping (`x: y`) the two coincide — the dash/key sits at column 0 = the
+      // line indent — so those folds are correct. They DIVERGE only for a COMPACT nested sequence
+      // (`- - a`): the inner sequence's dash is at column 2 (after the outer `- ` prefix, which is NOT
+      // whitespace), so a sibling `- b` at column 2 reads — to a line-relative `\1=""` fold — as "indented
+      // past column 0", and is wrongly folded into the plain scalar `a`. The decider is the inner
+      // indicator's column, which no `\1`-relative backref can express (the prefix is `- `, not spaces) and
+      // no possessive `[ \t]++` can split from the deeper-fold case `x: y\n  - b` (same line, must fold).
+      //
+      // The fix mirrors the maintained RedCMD YAML grammar's block-sequence: a `\G`-anchored region whose
+      // rule stack carries the indent depth. The meta.stream wrapper re-anchors `\G` at every line, so the
+      // region's `( *+)`-captured column (`\1\2`) lets its `while` reclaim a same-column sibling `- ` while
+      // a DEEPER line stays folded into the item value. We emit it ONLY for the COMPACT case (a dash
+      // followed by ANOTHER dash on the same line) — `begin … (?=[\t ]+${dash}[\t ])` — so a single `- a`,
+      // a `- key: v` mapping item, a `- {…}`/`- "…"`/`- |` value, etc. are UNTOUCHED (still handled by the
+      // top-level token includes + the §2a′ fold), confining this region to exactly the bug's shape. The
+      // compact re-anchor `(?=((?<=${reanchor}) )?+)` (a FIXED-width lookbehind — portable, unlike RedCMD's
+      // variable-length `(?<![^\t ][\t ]*+:|---)`, which is rejected by Onigmo / GitHub-Linguist) lets the
+      // inner dash open right after the outer `- `. The `while` STAYS on (arm 1) a dash-bearing line at the
+      // sequence column — a sibling item — or (arm 2) a strictly-deeper non-dash line folded into the
+      // current item's value, or a blank line; and RELEASES on a dedent OR a non-dash line at the column
+      // (a sibling mapping/scalar), so a column-0 `key:` after the sequence is NOT swallowed.
+      //
+      // BOUND (deferred root cause): this confines the region to the COMPACT bug's shape — it does NOT
+      // re-implement YAML's full block-node nesting. So one rare residual stays: a `-`-LED continuation
+      // indented STRICTLY DEEPER than the inner indicator (`- - a\n   - b`, an irregular-indent fold where
+      // YAML reads `[["a - b"]]` — the deeper `-` is plain content, not an item) keeps its `-` scoped
+      // `punctuation` instead of folding into the scalar (the value `b` is still correct `string`). The
+      // line-relative `\1\2` cannot tell that deeper `-` from a same-column sibling without the full
+      // node-relative rule-stack RedCMD threads through every collection level (a flat-grammar-wide rework,
+      // not #24); such irregular-indent compact folds are absent from the yaml-test-suite conformance
+      // corpus, and the common column-aligned compact sibling (the actual #24 report) is now correct.
+      const blockSeq = detectBlockSequence(grammar);
+      if (blockSeq) {
+        const dash = escapeRegex(blockSeq.indicator);
+        // The compact re-anchor lookbehind class: the compact indicators (`-`/`?`) plus the key/value
+        // separator (`:`) — exactly the single chars a nested node may sit immediately after on one line.
+        const reanchor = `[${[...(ind.compactIndicators ?? []), ind.keyValueSeparator ?? ':'].map(escapeForCharClass).join('')}]`;
+        // The item's plain VALUE folds across DEEPER lines (a multi-line plain scalar) but releases at a
+        // same-column sibling (reclaimed by the sequence `while`). Opens only on a BARE plain head (not a
+        // key/indicator/comment — those are scoped by the dispatch includes), then an inner string region
+        // scopes content until an inline ` #` comment (which falls to #comment). Mirrors RedCMD #block-plain-out.
+        repository['block-plain-item'] = {
+          begin: `(?=${plainSrc})(?!${structAhead})`,
+          while: '\\G',
+          patterns: [
+            { begin: '\\G', end: '(?=(?>[\\t ]++|\\G)#)', name: plainContent, patterns: [
+              { match: '\\G[\\t ]++', name: plainContent }, { match: '[\\t ]++$', name: plainContent }] },
+            { begin: '(?!\\G)', while: '\\G', patterns: commentIncludeKeys.map(k => ({ include: `#${k}` })) },
+          ],
+        };
+        // The region SHELL (begin/while/captures); its body `patterns` is filled at the END (after the
+        // top-level dispatch is built + ordered), since the item content reuses that full dispatch.
+        repository['block-sequence'] = {
+          begin: `(?=((?<=${reanchor}) )?+)\\G( *+)(${dash})(?=[\\t ]+${dash}[\\t ])`,
+          beginCaptures: { '3': { name: `punctuation.${langName}` } },
+          while: `\\G(?>(\\1\\2)(?=[\\t ]*${dash}[\\t ]|[\\t ]*${dash}$)|(?!\\1\\2)([\\t ]+)(?=[^\\t\\r\\n#])|[\\t ]*$)`,
+          patterns: [],
+        };
+        topPatterns.push({ include: '#block-sequence' });
       }
     }
   }
@@ -7691,6 +7808,13 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // continuation as the KEY (entity.name.tag), so it must win for the `?` case; #plain-continuation
     // still handles `key:`/`- ` folds (its lookahead, unlike this one, is not pinned to the `?`).
     if (key === 'explicit-key-continuation') return 0.68;
+    // The COMPACT block-sequence region (§2c) must out-rank #plain-continuation (0.7): both open on a
+    // `- `-led header (the `-` is in compactCls, so the fold's lookahead matches a compact line too), but
+    // for `- - a` the sequence region bounds the inner sibling at the inner indicator's column while the
+    // fold would swallow it line-relative. Ranked above the fold so the compact case is claimed first;
+    // its begin requires a SECOND dash (`(?=[\t ]+-[\t ])`), so a non-compact `- a`/`- key:`/`x: y` line
+    // never matches it and still falls through to #plain-continuation. (monogram#24.)
+    if (key === 'block-sequence') return 0.69;
     if (key === 'plain-continuation') return 0.7;
     // The BARE plain-scalar same-column fold (§2a″) likewise begins AT LINE START and must out-rank the
     // scalar tokens (#key/#num/#boolnull/#plain ≥ 0.8) so it opens on a bare value scalar and claims its
@@ -7767,6 +7891,21 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   const orderedPatterns = [...new Set(topPatterns.map(p => p.include))]
     .sort((a, b) => scopeOrder(a) - scopeOrder(b))
     .map(include => ({ include }));
+
+  // Fill the COMPACT block-sequence region's body (§2c). Its item content reuses the FULL top-level
+  // dispatch (so a `- - {…}` flow value, a `- - "x"` quoted value, a `- - key: v` nested mapping, a
+  // `- - |` block scalar are all scoped correctly) — the same ordered includes meta.stream wraps — with
+  // two changes: the two LINE-relative plain folds (§2a′/§2a″) are REMOVED (the sequence's own
+  // column-anchored `while` + the bounded #block-plain-item handle the item-value fold node-relatively;
+  // leaving them in would re-introduce the line-relative swallow this region exists to prevent), and the
+  // bounded #block-plain-item is appended for a bare plain item value. The self-include (#block-sequence,
+  // already in the ordered list at rank 0.69) gives deeper compact nesting (`- - - x`).
+  if (repository['block-sequence']) {
+    repository['block-sequence'].patterns = [
+      ...orderedPatterns.filter(p => p.include !== '#plain-continuation' && p.include !== '#plain-bare-fold'),
+      { include: '#block-plain-item' },
+    ];
+  }
 
   // Additive: a `#expression` sub-grammar for expression-only embeds (Vue `{{ }}`). The
   // top-level `patterns` (orderedPatterns / $self) are left untouched, so standalone

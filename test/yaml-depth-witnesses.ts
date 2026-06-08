@@ -85,9 +85,11 @@ const cases: Case[] = [
   // ── indent STACK (monogram#24): a nested compact sequence sibling vs a plain-scalar fold. The `-` on
   //    the indented line is a sequence indicator when a sequence is established at that column, but
   //    folds into the preceding plain scalar otherwise — same surface, opposite answer, decided only by
-  //    the indent stack a flat grammar lacks. KNOWN BUG until gen-tm derives indent-tracking regions.
+  //    the indent stack a flat grammar lacks. FIXED by gen-tm §2c: a column-anchored COMPACT
+  //    block-sequence region whose `\G`-anchored `while` (re-anchored each line by meta.stream) reclaims
+  //    the inner sibling `- ` at the inner indicator's column before the §2a′ fold can swallow it.
   { state: 'indent stack (sibling vs fold)', input: '- - a\n  - b\n- c\n', find: '- b', off: 0, want: 'punctuation',
-    notWant: 'string', note: 'inner-sequence sibling `-` is punctuation, not folded into a plain scalar', knownBug: true },
+    notWant: 'string', note: 'inner-sequence sibling `-` is punctuation, not folded into a plain scalar' },
   // the counter-proof — SAME indented `- b` line, but here it MUST fold (no sequence at column 2). This
   // is asserted (not a known bug): the eventual #24 fix must keep this one folding.
   { state: 'indent stack (counter-proof)', input: 'x: hello\n  - b\n', find: '- b', want: 'string',
