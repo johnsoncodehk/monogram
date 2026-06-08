@@ -94,6 +94,14 @@ const cases: Case[] = [
   // is asserted (not a known bug): the eventual #24 fix must keep this one folding.
   { state: 'indent stack (counter-proof)', input: 'x: hello\n  - b\n', find: '- b', want: 'string',
     note: 'plain-scalar continuation — `- b` folds (no sequence established at column 2)' },
+  // honest residual of the #24 fix: a `-`-led continuation indented STRICTLY DEEPER than the inner
+  // indicator (`- - a\n   - b` = `[["a - b"]]` — the deeper `- b` folds into the scalar `a`) keeps its
+  // `-` as punctuation instead of folding it. The compact-only region reclaims a SAME-column sibling;
+  // distinguishing a deeper `-` (fold) from a same-column `-` (sibling) needs the full node-relative
+  // rule-stack RedCMD threads through every level — a flat-grammar-wide rework, not the #24 report (this
+  // irregular-indent shape is absent from yaml-test-suite). Tracked so the fix is not over-claimed.
+  { state: 'indent stack (deeper-irregular fold)', input: '- - a\n   - b\n', find: '- b', want: 'string',
+    notWant: 'punctuation', note: 'deeper-than-inner `- b` should fold into the plain scalar', knownBug: true },
 ];
 
 let pass = 0, knownBugs = 0, regressions = 0;
