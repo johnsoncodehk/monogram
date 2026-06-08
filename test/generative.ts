@@ -30,10 +30,15 @@ import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
-import { createParser, type CstNode, type CstChild } from '../src/gen-parser.ts';
-import type { CstGrammar, TokenPattern } from '../src/types.ts';
-import { normScope } from './scope-roles.ts';
+import { createParser, type CstNode } from '../src/gen-parser.ts';
+import type { CstGrammar } from '../src/types.ts';
 import { generateInputs, type GenInput } from './grammar-gen.ts';
+// The scope≡role divergence detection is factored into generative-detect.ts so the gap ledger
+// (test/gap-ledger.ts) reuses the EXACT same logic. This driver's gate behaviour is unchanged.
+import {
+  type TmTok, type Violation,
+  buildRoleMap, leafRoles, anchoredScopes, collectViolations, isGated, GEN_OPTS,
+} from './generative-detect.ts';
 
 // ── language registry: every per-language fact (grammar module, scope, flat grammar file,
 //    any multi-file sub-grammars) is DATA — the harness body is language-agnostic. ──
@@ -86,105 +91,13 @@ async function loadTm(scopeName: string, files: Record<string, string>) {
   });
   return reg.loadGrammar(scopeName);
 }
-interface TmTok { start: number; end: number; scopes: string[] }
 function tmTokenize(grammar: vsctm.IGrammar, text: string): TmTok[] {
   const toks: TmTok[] = []; let rs = INITIAL, off = 0;
   for (const line of text.split('\n')) { const r = grammar.tokenizeLine(line, rs); for (const t of r.tokens) toks.push({ start: off + t.startIndex, end: off + t.endIndex, scopes: t.scopes }); rs = r.ruleStack; off += line.length + 1; }
   return toks;
 }
-function scopeAt(toks: TmTok[], pos: number): string[] {
-  let lo = 0, hi = toks.length - 1, ans = -1;
-  while (lo <= hi) { const mid = (lo + hi) >> 1; if (toks[mid].start <= pos) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
-  return ans >= 0 && toks[ans].end > pos ? toks[ans].scopes : [];
-}
-const innerOf = (s: string[]): string => (s.length ? s[s.length - 1] : '(none)');
-
-// ── visual bucket of a scope chain — the level at which a highlight difference is actually visible.
-//    Same partition the scope-gap differential pass uses; the consistency check compares buckets so a
-//    `-` painted as string (punct≠string) is caught even though punctuation is a lexical-floor role. ──
-type Bucket = 'invalid' | 'comment' | 'string' | 'number' | 'keyword' | 'name' | 'punct' | 'none';
-const DISTINCT = new Set<Bucket>(['invalid', 'comment', 'string', 'number', 'keyword']);
-function scopeBucket(chain: string[]): Bucket {
-  for (let i = chain.length - 1; i >= 0; i--) {
-    const s = normScope(chain[i]);
-    if (/^invalid/.test(s)) return 'invalid';
-    if (/^comment/.test(s)) return 'comment';
-    if (/^constant\.numeric/.test(s)) return 'number';
-    if (/^(string|constant\.character|constant\.other\.symbol)/.test(s)) return 'string';
-    if (/^(keyword|storage|constant\.language|support\.constant|variable\.language)/.test(s)) return 'keyword';
-    if (/^(entity|variable|support|constant)/.test(s)) return 'name';
-    if (/^punctuation/.test(s)) return 'punct';
-  }
-  return 'none';
-}
-// every visual bucket a scope CHAIN spans (a YAML number is `string.unquoted constant.numeric` →
-// {string, number} — both are legitimate, since the same token folds to a multi-line string).
-function chainBuckets(scope: string): Set<Bucket> {
-  const out = new Set<Bucket>();
-  for (const seg of scope.split(/\s+/)) if (seg) out.add(scopeBucket([seg]));
-  return out;
-}
-const CONTENT = new Set<Bucket>(['string', 'comment', 'number']);   // a STRUCTURAL literal is never one of these
-
-// ── by-construction expected role of a parsed leaf, from the grammar ALONE ──────────────────────
-// A leaf's token TYPE → the bucket SET the grammar DECLARES for it: a named token → its `scope`
-// chain's buckets; a `$punct`/`$keyword` literal → any `scopes` override, else punctuation / keyword.
-// `lit` marks a STRUCTURAL literal (`$punct`/`$keyword`) — one the parser placed as grammar structure,
-// so the highlighter painting it as CONTENT (string/comment/number) is always wrong (monogram#24).
-interface LeafRole { start: number; end: number; text: string; tokenType: string; expected: Set<Bucket>; lit: boolean }
-function buildRoleMap(grammar: CstGrammar): (leaf: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null {
-  const tokScope = new Map<string, string | undefined>();
-  for (const t of grammar.tokens) tokScope.set(t.name, t.scope);
-  const skip = new Set<string>();
-  if (grammar.indent) { skip.add(grammar.indent.indentToken); skip.add(grammar.indent.dedentToken); skip.add(grammar.indent.newlineToken); }
-  if (grammar.newline) skip.add(grammar.newline.token);
-  const over = grammar.scopeOverrides;
-  return (leaf) => {
-    const ty = leaf.tokenType;
-    if (skip.has(ty)) return null;
-    if (ty === '$punct') { const o = over.get(leaf.text); return { buckets: o ? new Set(o.flatMap((s) => [...chainBuckets(s)])) : new Set<Bucket>(['punct']), lit: true }; }
-    if (ty === '$keyword') { const o = over.get(leaf.text); return { buckets: o ? new Set(o.flatMap((s) => [...chainBuckets(s)])) : new Set<Bucket>(['keyword']), lit: true }; }
-    if (ty.startsWith('$template')) return { buckets: new Set<Bucket>(['string']), lit: false };
-    if (tokScope.has(ty)) { const sc = tokScope.get(ty); return sc ? { buckets: chainBuckets(sc), lit: false } : null; }
-    return null;   // unscoped / contextual token (a bare identifier) → not checkable by-construction
-  };
-}
-function leafRoles(grammar: CstGrammar, cst: CstNode, roleOf: (l: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null): LeafRole[] {
-  const out: LeafRole[] = [];
-  const walk = (n: CstChild) => {
-    if (n.kind === 'leaf') {
-      if (n.end <= n.offset) return;
-      const r = roleOf(n);
-      if (r) out.push({ start: n.offset, end: n.end, text: n.text, tokenType: n.tokenType, expected: r.buckets, lit: r.lit });
-    } else for (const c of n.children) walk(c);
-  };
-  walk(cst);
-  return out;
-}
-
-// Scopes that belong to a POSITION-ANCHORED token — one whose pattern contains a `start()` anchor
-// (e.g. YAML's DocStart/DocEnd `^---`/`^...`). Such a scope is the parser's signal "a marker AT a
-// line/stream position"; the flat highlighter, retrying the pattern at every token boundary, may
-// paint it on a token the parser placed elsewhere (a value-leading `---`, monogram#23). Map each
-// such scope → the set of token names allowed to carry it, so a mismatch is detectable generically.
-function anchoredScopes(grammar: CstGrammar): Map<string, Set<string>> {
-  const hasStart = (p: TokenPattern): boolean => {
-    if (typeof p === 'string') return false;
-    switch (p.type) {
-      case 'anchor': return p.kind === 'start';
-      case 'seq': case 'alt': return p.items.some(hasStart);
-      case 'repeat': case 'lookahead': case 'lookbehind': return hasStart(p.body);
-      default: return false;
-    }
-  };
-  const m = new Map<string, Set<string>>();
-  for (const t of grammar.tokens) if (t.scope && hasStart(t.pattern)) { const s = m.get(t.scope) ?? new Set(); s.add(t.name); m.set(t.scope, s); }
-  return m;
-}
 
 // ── the run ──────────────────────────────────────────────────────────────────────────────────────
-interface Violation { input: string; strategy: string; pos: number; text: string; tokenType: string; expected: string; got: Bucket; gotScope: string; kind: string }
-
 async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; violations: number; reason: string }> {
   if (!existsSync(cfg.tmPath)) { console.log(`  [skip ${cfg.name}: ${cfg.tmPath} not found — run npm run gen]`); return { name: cfg.name, ok: true, violations: 0 }; }
   const grammar = (await import(cfg.module)).default as CstGrammar;
@@ -225,38 +138,15 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   // and a context fold (a number folded into a multi-line string) are NOT false-positives.
   const violations: Violation[] = [];
   let checkedTokens = 0;
-  const spanBuckets = (toks: TmTok[], text: string, start: number, end: number): Set<Bucket> => {
-    const s = new Set<Bucket>();
-    for (let p = start; p < end; p++) { const c = text.charCodeAt(p); if (c === 32 || c === 9) continue; s.add(scopeBucket(scopeAt(toks, p))); }
-    return s.size ? s : new Set<Bucket>(['none']);
-  };
   for (const inp of entryLegal) {
     let cst: CstNode, toks: TmTok[];
     try { cst = parse(inp.text); toks = tmTokenize(tm, inp.text); } catch { continue; }
     const leaves = leafRoles(grammar, cst, roleOf);
-    const leafCover = (pos: number) => leaves.find((l) => pos >= l.start && pos < l.end);
-    for (const lr of leaves) {
-      checkedTokens++;
-      const got = spanBuckets(toks, inp.text, lr.start, lr.end);
-      const overlap = [...lr.expected].some((b) => got.has(b));
-      if (overlap) continue;                                                  // highlighter painted the declared scope somewhere → consistent
-      // gate-1: a structural literal painted entirely as a content class
-      const contentGot = [...got].find((b) => CONTENT.has(b));
-      if (lr.lit && contentGot && violations.length < 200) {
-        violations.push({ input: inp.text, strategy: inp.strategy, pos: lr.start, text: lr.text, tokenType: lr.tokenType, expected: [...lr.expected].join('|') as any, got: contentGot, gotScope: innerOf(scopeAt(toks, lr.start)), kind: '#24 structural-literal→content' });
-      }
-    }
-    // gate-2: scan the highlighter's tokens for an anchored-marker scope on a leaf that is NOT that token
-    if (anchored.size) for (const t of toks) {
-      if (t.end <= t.start) continue;
-      const inner = innerOf(t.scopes);
-      const owners = anchored.get(inner.replace(/\.[a-z0-9]+$/, '')) ?? anchored.get(inner);
-      if (!owners) continue;
-      const leaf = leafCover(t.start);
-      if (leaf && !owners.has(leaf.tokenType) && violations.length < 200) {
-        violations.push({ input: inp.text, strategy: inp.strategy, pos: t.start, text: inp.text.slice(t.start, t.end), tokenType: leaf.tokenType, expected: [...owners].join('|') as any, got: 'name', gotScope: inner, kind: '#23 anchored-marker misfire' });
-      }
-    }
+    checkedTokens += leaves.length;
+    // gate-1 (#24 structural-literal→content) + gate-2 (#23 anchored-marker misfire), via the shared
+    // detector — identical logic to before, now reused by the gap ledger. The 200-cap is the running
+    // total across all inputs (startCount), as the inline version was.
+    violations.push(...collectViolations({ input: inp.text, strategy: inp.strategy, cst, toks, leaves, anchored, cap: 200, startCount: violations.length }));
   }
 
   // ── report ──
@@ -281,7 +171,6 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   //    limits (a block plain scalar containing an unclosed flow indicator `[`/`{` — block-vs-flow
   //    disambiguation that needs the indent/flow stack a flat grammar lacks). Those are not
   //    regressions of a known-fixed shape, and #25 is the testing harness, not a fix for every limit.
-  const isGated = (v: Violation) => v.kind.startsWith('#23') || !v.strategy.startsWith('fuzz');
   const gated = violations.filter(isGated);
   const discovered = violations.filter((v) => !isGated(v));
   console.log(`  scope≡role: ${checkedTokens} declared-scope tokens checked · ${gated.length} gated inconsistenc${gated.length === 1 ? 'y' : 'ies'} · ${discovered.length} discovered (fuzz frontier-limit, report-only)`);

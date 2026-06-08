@@ -58,6 +58,14 @@ jobs:
           node test/yaml-issue12-regressions.ts
           node test/yaml-depth-witnesses.ts
           node test/generative.ts
+          # The gap ledger is the deterministic, oracle-classified record of the divergences the
+          # generative check DISCOVERS. Its self-test asserts the ddmin keep-path + the oracle
+          # drop-path + determinism; --check fails if the committed KNOWN-GAPS.md is stale (the
+          # ledger is a pure function of the grammar, so it must be regenerated when a grammar
+          # changes — `npm run gap-ledger`). This is the deterministic source of truth; a later
+          # layer can turn rows into issues, but the committed artifact is gated here first.
+          node test/gap-ledger-selftest.ts
+          node test/gap-ledger.ts --check
 
   # The derived tree-sitter highlighter is the strongest thesis proof (a real GLR
   # parser from the same grammar, beating the official hand-written one). Build its
