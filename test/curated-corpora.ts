@@ -1,15 +1,7 @@
-// src-coverage-jsx.ts — JSX (.jsx, VS Code "javascriptreact") entrypoint.
-// Official parser = typescript.js with ScriptKind.JSX; Monogram grammar = javascriptreact.ts
-// (JS + JSX, NO TypeScript types). Neither the TS suite nor Test262 ships a .jsx corpus, so
-// this uses a CURATED set exercising both halves (plain JS + JSX constructs). It is small, so
-// completeness% is honestly low; a real .jsx corpus is a follow-up. Run: node test/src-coverage-jsx.ts
+// curated-corpora.ts — small hand-written corpora shared by the folded scope-gap / src-coverage drivers.
+// JSX (plain-JS + JSX halves) and realistic HTML — the languages with no public single-file corpus.
 
-import ts from 'typescript';
-import { run } from './src-coverage.ts';
-import { tsFamilyAdapter } from './src-coverage-tsfamily.ts';
-
-// No TS types — these are .jsx (JavaScript + JSX) only.
-const JSX_CASES: string[] = [
+export const JSX_CASES: string[] = [
   // --- plain JS half ---
   'const x = 1, y = 2;',
   'function f(a, b = 1, ...rest) { return a + b + rest.length; }',
@@ -49,12 +41,25 @@ const JSX_CASES: string[] = [
   'const boolAttr = <button autofocus formNoValidate>ok</button>;',
 ];
 
-const corpus = JSX_CASES.map((code, i) => ({ file: `<curated #${i}>`, code }));
-console.log(`JSX corpus: ${corpus.length} curated .jsx snippets (no .jsx corpus exists in the TS suite / Test262; partial — completeness% will be low).`);
-
-await run(tsFamilyAdapter({
-  name: 'JavaScriptReact (.jsx)',
-  scriptKind: ts.ScriptKind.JSX,
-  grammar: (await import('../javascriptreact.ts')).default,
-  corpus,
-}));
+export const HTML_GENERAL: string[] = [
+  '<div class="container" id="main"><p>Hello <a href="/x">world</a>.</p></div>',
+  '<ul><li>one</li><li>two</li><li>three</li></ul>',
+  '<img src="a.png" alt="a picture" width="100" height="80">',
+  '<input type="text" name="q" placeholder="Search" disabled>',
+  '<button type="submit" class="btn btn-primary" data-id="42">Go</button>',
+  '<section><h1>Title</h1><p>Body with <strong>bold</strong> and <em>italic</em>.</p></section>',
+  '<nav><a href="/">Home</a> | <a href="/about">About</a></nav>',
+  '<form action="/submit" method="post"><label for="n">Name</label><input id="n"></form>',
+  '<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>',
+  '<!-- a comment --><div><!-- inline --><span>x</span></div>',
+  '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
+  '<br><hr>',
+  '<select><option value="1">One</option><option value="2" selected>Two</option></select>',
+  '<video controls width="320"><source src="m.mp4" type="video/mp4"></video>',
+  '<article data-index=3 hidden><header>H</header><footer>F</footer></article>',
+  '<span class="a b c" title="x y z">text</span>',
+  '<div\n  class="multi-line"\n  id="tag"\n  data-x="1">body</div>',
+  '<a href="https://example.com?a=1&b=2" target="_blank" rel="noopener">link</a>',
+  '<label>Email <input type="email" required></label>',
+  '<figure><img src="p.jpg" alt="photo"><figcaption>cap</figcaption></figure>',
+];

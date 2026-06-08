@@ -18,27 +18,29 @@ function runAdapter(script: string, args: string[], marker: string, env?: NodeJS
   } catch { return null; }
 }
 
-// TS/JS use deterministic stride subsets for speed; the rest run their full corpus.
+// Both metrics now run through ONE data-driven driver each, parameterised by the `<lang>` code
+// (test/scope-gap-run.ts, test/src-coverage-run.ts). TS/JS use deterministic stride subsets for
+// speed; the rest run their full corpus.
 const COV = [
-  { lang: 'TypeScript', script: 'test/src-coverage-ts.ts', args: ['1500'] },
-  { lang: 'JavaScript', script: 'test/src-coverage-js.ts', args: ['800'] },
-  { lang: 'JSX', script: 'test/src-coverage-jsx.ts', args: [] },
-  { lang: 'TSX', script: 'test/src-coverage-tsx.ts', args: [] },
-  { lang: 'HTML', script: 'test/src-coverage-html.ts', args: [] },
-  { lang: 'YAML', script: 'test/src-coverage-yaml.ts', args: [] },
+  { lang: 'TypeScript', script: 'test/src-coverage-run.ts', args: ['ts', '1500'] },
+  { lang: 'JavaScript', script: 'test/src-coverage-run.ts', args: ['js', '800'] },
+  { lang: 'JSX', script: 'test/src-coverage-run.ts', args: ['jsx'] },
+  { lang: 'TSX', script: 'test/src-coverage-run.ts', args: ['tsx'] },
+  { lang: 'HTML', script: 'test/src-coverage-run.ts', args: ['html'] },
+  { lang: 'YAML', script: 'test/src-coverage-run.ts', args: ['yaml'] },
 ];
-// The 4 TS-family scope-gap adapters all read ONE shared env var (MONOGRAM_OFFICIAL_TM) for
-// the official grammar, so each needs its OWN grammar mapped in (CI sets MONOGRAM_OFFICIAL_TS/
-// TSX/JS/JSX). html/yaml read their own var (MONOGRAM_OFFICIAL_HTML/_YAML), inherited as-is;
-// vue is vendored. Absent (local, no env) → each adapter's VS Code-install fallback path.
+// The 4 TS-family scope-gap entries all read ONE shared env var (MONOGRAM_OFFICIAL_TM) for the
+// official grammar, so each needs its OWN grammar mapped in (CI sets MONOGRAM_OFFICIAL_TS/TSX/JS/JSX).
+// html/yaml read their own var (MONOGRAM_OFFICIAL_HTML/_YAML), inherited as-is; vue is vendored.
+// Absent (local, no env) → the driver's VS Code-install fallback path.
 const GAP = [
-  { lang: 'TypeScript', script: 'test/scope-gap-ts.ts', args: ['800'], officialEnv: 'MONOGRAM_OFFICIAL_TS' },
-  { lang: 'JavaScript', script: 'test/scope-gap-js.ts', args: ['800'], officialEnv: 'MONOGRAM_OFFICIAL_JS' },
-  { lang: 'JSX', script: 'test/scope-gap-jsx.ts', args: [], officialEnv: 'MONOGRAM_OFFICIAL_JSX' },
-  { lang: 'TSX', script: 'test/scope-gap-tsx.ts', args: [], officialEnv: 'MONOGRAM_OFFICIAL_TSX' },
-  { lang: 'HTML', script: 'test/scope-gap-html.ts', args: [] },
-  { lang: 'YAML', script: 'test/scope-gap-yaml.ts', args: [] },
-  { lang: 'Vue', script: 'test/scope-gap-vue.ts', args: [] },
+  { lang: 'TypeScript', script: 'test/scope-gap-run.ts', args: ['ts', '800'], officialEnv: 'MONOGRAM_OFFICIAL_TS' },
+  { lang: 'JavaScript', script: 'test/scope-gap-run.ts', args: ['js', '800'], officialEnv: 'MONOGRAM_OFFICIAL_JS' },
+  { lang: 'JSX', script: 'test/scope-gap-run.ts', args: ['jsx'], officialEnv: 'MONOGRAM_OFFICIAL_JSX' },
+  { lang: 'TSX', script: 'test/scope-gap-run.ts', args: ['tsx'], officialEnv: 'MONOGRAM_OFFICIAL_TSX' },
+  { lang: 'HTML', script: 'test/scope-gap-run.ts', args: ['html'] },
+  { lang: 'YAML', script: 'test/scope-gap-run.ts', args: ['yaml'] },
+  { lang: 'Vue', script: 'test/scope-gap-run.ts', args: ['vue'] },
 ] as { lang: string; script: string; args: string[]; officialEnv?: string }[];
 
 const pct = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(1) + '%');
