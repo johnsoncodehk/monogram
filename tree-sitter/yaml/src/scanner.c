@@ -265,7 +265,24 @@ static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain, bool wan
   }
   for (;;) {
     int32_t c = lexer->lookahead;
-    if (c == 0 || c == '\n' || c == '\r') break;                 // newline / EOF
+    if (c == 0) break;                                             // EOF
+    if (c == '\n' || c == '\r') {
+      // Inside a flow collection a plain scalar FOLDS across a line break (`{ multi\n line: v}` → the
+      // key is `multi line`): the break + surrounding whitespace (and blank/comment-only lines) collapse
+      // to one space and the run continues on the next line. Peek past that trivia run WITHOUT committing
+      // (mark_end stays at the last content char, so a decline trims it): if the next significant char
+      // ENDS the scalar — EOF, a flow indicator/terminator (`, [ ] { }`), or a line-leading `#` comment —
+      // the break is trailing trivia and the scalar stops here; otherwise fold to a space and continue.
+      if (flow_depth > 0 && has_content) {
+        while (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
+               lexer->lookahead == '\n' || lexer->lookahead == '\r') lexer->advance(lexer, false);
+        int32_t nx = lexer->lookahead;
+        if (nx == 0 || nx == '#' || (nx == '[' || nx == '{' || nx == ']' || nx == '}' || nx == ',')) break; // scalar ends — the trivia is trailing
+        if (blen < sizeof(buf)) buf[blen++] = ' ';                  // the folded break becomes one space
+        continue;                                                   // next content char marks the new token end
+      }
+      break;                                                       // block context (or no content yet): the line break ends the scalar
+    }
     if (flow_depth > 0 && (c == '[' || c == '{' || c == ']' || c == '}' || c == ',')) break; // flow indicators end a scalar — ONLY inside a flow collection
     if (!has_content && (c == '-' || c == '?')) {
       // A leading `-`/`?` is a block indicator (seq entry / explicit key) when followed by space/EOL/
