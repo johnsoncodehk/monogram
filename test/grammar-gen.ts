@@ -15,13 +15,22 @@
 //  indicators) is read from the grammar's own config (`grammar.indent` / `.markup`),
 //  never hardcoded — the same discipline the engines follow.
 //
-//  Three production strategies, all over the SAME walker:
+//  Production strategies, all over the SAME walker — ALL DETERMINISTIC (no PRNG seed; the
+//  generator is a pure function of the grammar, so a gap ledger is reproducible across commits):
 //   • bounded-exhaustive — every derivation to a small depth N (provably complete at
 //     small scope; this is what makes coverage `grammar × bound` instead of imagination).
 //   • self-recursive nesting — for each rule that can contain itself, the nested shape
 //     at depth 1..N. Deep self-embedding is exactly where a flat highlighter loses to
 //     the stack-keeping parser (monogram#24 is `BlockSequence` inside `BlockSequence`).
-//   • fuzzing — random production choices, for deeper / wider structures.
+//   • directed token coverage — the shortest legal context for every scoped token.
+//   • systematic t-wise coverage (was random "fuzzing") — for deeper / wider structures: a
+//     DETERMINISTIC mixed-radix enumeration over the grammar's CHOICE POINTS (which `alt`
+//     branch, how many `quantifier`/`sep` reps). Round i → a choice vector derived from i
+//     alone (no external seed). A FULL cartesian over the first few choice-point digits
+//     covers every t-tuple (t≤digits) of (choice-point, value) among them BY CONSTRUCTION —
+//     so it reaches INTERACTION shapes (an explicit key × a `[` in its scalar, monogram's
+//     `[`-in-key leak) deterministically, not by the luck of a seed. Polynomial (C^D rounds),
+//     never the exponential full derivation tree.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { CstGrammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
 import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor } from '../src/token-pattern.ts';
@@ -45,8 +54,13 @@ export interface GenInput {
   rule: string;        // the top rule the derivation started from (entry, or a self-recursive rule)
 }
 
-// ── deterministic PRNG (Date.now/Math.random are unavailable in workflow scripts and make
-//    a generator unreproducible anyway — seed it). xorshift32. ──
+// ── fixed-seed xorshift32. The generator has NO external randomness: every STRUCTURE choice is made
+//    by the deterministic t-wise schedule (the `cover` strategy / mixed-radix chooser), and every
+//    token-TEXT sample is indexed deterministically (`sample`/`sampleVariants` rotate on a `variant`
+//    INDEX, never on `rand`). This PRNG is retained only so any future text-sampling path that wants a
+//    tie-break has one; it is seeded from a FIXED constant so two `generateInputs(grammar)` calls are
+//    byte-identical regardless of any `opts.seed` (which is now a NO-OP, kept for back-compat). ──
+const FIXED_SEED = 0x9e3779b9 | 0;   // a constant (golden-ratio bits); NOT derived from time / opts.
 function rng(seed: number): () => number {
   let s = seed | 0 || 1;
   return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return ((s >>> 0) % 1_000_000) / 1_000_000; };
@@ -165,13 +179,74 @@ function sampleVariants(decl: TokenDecl, ctx: { rand: () => number; interesting:
   return [...out];
 }
 
+// ─── DETERMINISTIC CHOICE SCHEDULE (t-wise systematic coverage) ────────────────────────────────────
+// A `Chooser` answers each production CHOICE POINT during a `cover` walk, in WALK ORDER. Two kinds:
+//   • `next(radix)`  — a STRUCTURAL choice (which alt branch · how many quantifier/sep reps). These drive
+//      the t-wise cartesian: because the walk is deterministic given the answers, the k-th structural call
+//      is always choice point k, so a Chooser IS a choice vector `(v_0, v_1, …)` and a derivation is a
+//      function of it. The shape of the tree (key-vs-seq, explicit-vs-plain, nesting) lives here.
+//   • `variant(n)` — a token-TEXT choice (which sampled lexeme for a token: `x` vs the boundary-embed
+//      `--- x`, an int vs a float form). These do NOT change the tree SHAPE, only a leaf's bytes, so they
+//      are kept on a SEPARATE fast counter — every token position (even a DEEP value scalar) then sweeps
+//      its variants across rounds, instead of being frozen by a slow high mixed-radix digit. That is what
+//      reliably lands a boundary-embed in VALUE position (`k: --- x`, monogram#23) — a structural-context
+//      × text-variant interaction the cartesian reaches the context for and the text counter the variant.
+export interface Chooser { next: (radix: number) => number; variant: (n: number) => number }
+
+// One round's choice vector, as a MIXED-RADIX reading of a round index `i` (NO external seed):
+//   structural digit k = ( ⌊ i / B^k ⌋ + k·rot ) mod radix_k
+// `B` is the schedule BASE. Reading `i` low-digit-first means the FIRST choice points (the structurally
+// decisive ones — which Node kind, key-vs-seq, explicit-vs-plain) move SLOWEST, so a contiguous block of
+// rounds holds a fixed prefix while the deeper tail varies. Enumerating i over `B^D` (the coverSchedule
+// loop) therefore walks the FULL cartesian product of the first D structural digits → every t-tuple
+// (t ≤ D) of (choice-point, value) among the first D points appears in SOME round, BY CONSTRUCTION. That
+// is the t-wise (here t≤D≈4) interaction guarantee — it covers an explicit-key × `[`-in-its-scalar pair,
+// monogram's `[`-in-key leak, deterministically, with no luck. `rot` (a per-schedule offset) perturbs
+// the deeper tail so a second/third pass reaches different deep shapes than the first; it does NOT affect
+// the prefix cartesian (it shifts every digit by a constant, a relabelling of values, so all tuples among
+// the first D points still occur — just at permuted round indices). Polynomial: B^D rounds, never the
+// exponential whole derivation tree (a structural point past digit D simply reads its slow-moving high
+// digit). The token-TEXT counter is an INDEPENDENT per-round walk index (j-th text choice = (i+j) mod n),
+// so it cycles every position's variants fast regardless of structural depth.
+function mixedRadixChooser(i: number, base: number, rot: number): Chooser {
+  let k = 0;   // structural choice-point index (drives the mixed-radix cartesian)
+  let j = 0;   // token-text choice index (independent fast counter)
+  return {
+    next(radix: number): number {
+      if (radix <= 1) return 0;                              // a forced single option consumes a (no-op) digit slot
+      const digit = Math.floor(i / Math.pow(base, k)) + k * rot;
+      k++;
+      return ((digit % radix) + radix) % radix;
+    },
+    variant(n: number): number {
+      if (n <= 1) return 0;
+      const idx = (i + j) % n;   // fast: sweeps each token position's variants across rounds, depth-agnostic
+      j++;
+      return idx;
+    },
+  };
+}
+
+// The deterministic schedule of choice vectors the `cover` strategy enumerates: the full cartesian over
+// the first D digits (radix `base`) — `base^D` rounds — optionally repeated under a few `rot` offsets so
+// the deep tail (past digit D) also varies. `rounds` caps it (polynomial, bounded). Pure function of its
+// args: identical every call, so `generateInputs` is reproducible. Yields `Chooser`s in order.
+function* coverSchedule(base: number, digits: number, rounds: number, rotations: number[]): Generator<Chooser> {
+  const span = Math.pow(base, digits);
+  let emitted = 0;
+  for (const rot of rotations) {
+    for (let i = 0; i < span && emitted < rounds; i++, emitted++) yield mixedRadixChooser(i, base, rot);
+    if (emitted >= rounds) return;
+  }
+}
+
 // ─── THE WALKER ──────────────────────────────────────────────────────────────────
 export interface GenOptions {
   depth?: number;       // bounded-exhaustive derivation depth (rule-ref recursion)
   cap?: number;         // max alternatives kept at each combinator node (anti-explosion)
   maxInputs?: number;   // global cap on emitted inputs per rule
-  fuzzRounds?: number;  // random derivations
-  seed?: number;
+  fuzzRounds?: number;  // budget (cap) on systematic-coverage rounds — DETERMINISTIC choice vectors, not random
+  seed?: number;        // NO-OP, retained for back-compat: the generator is a pure function of the grammar
   nestDepth?: number;   // self-recursive nesting depth
   timeBudgetMs?: number; // wall-clock cap for the depth strategies (large token-stream grammars)
 }
@@ -192,9 +267,9 @@ class Walker {
   maxCalls = 60_000;
   enumTop(e: RuleExpr, budget: number): Emission[][] { this.budgetCalls = 0; return this.enum(e, budget); }
 
-  constructor(grammar: CstGrammar, seed: number, cap: number) {
+  constructor(grammar: CstGrammar, cap: number) {
     this.grammar = grammar;
-    this.rand = rng(seed);
+    this.rand = rng(FIXED_SEED);   // FIXED — the walker is a pure function of the grammar (see rng note).
     this.cap = cap;
     for (const t of grammar.tokens) this.tokenByName.set(t.name, t);
     for (const r of grammar.rules) this.ruleByName.set(r.name, r);
@@ -470,35 +545,49 @@ class Walker {
     }
   }
 
-  // ── random derivation (fuzzing): one emission sequence, forced to terminate at budget 0 ──
-  fuzz(e: RuleExpr, budget: number): Emission[] {
-    const pick = <T,>(xs: T[]): T => xs[Math.floor(this.rand() * xs.length)];
+  // ── DETERMINISTIC SYSTEMATIC derivation (replaces random fuzzing): one emission sequence whose every
+  //    production CHOICE comes from a `Chooser`, not a PRNG. The walk is otherwise identical to the old
+  //    fuzz, so the SAME structures are reachable — but reproducibly. A Chooser is consulted at each
+  //    CHOICE POINT in walk order (alt branch · quantifier reps · sep reps · token-text variant); since
+  //    the walk is deterministic given the chooser's outputs, choice point k is ALWAYS the k-th call, so
+  //    a mixed-radix counter (slow-moving early digits, fast late ones) keeps a stable choice-point
+  //    PREFIX while sweeping the tail — which is what yields t-wise coverage over the prefix (see
+  //    coverSchedule). Forced to terminate at budget 0 (the minimal expansion), like fuzz. ──
+  cover(e: RuleExpr, budget: number, ch: Chooser): Emission[] {
     // bounded `for`-push (NOT spread on a possibly-huge array → stack overflow + size blowup)
-    const fappend = (out: Emission[], add: Emission[]) => { if (out.length < MAX_EMS) for (const x of add) out.push(x); };
+    const cappend = (out: Emission[], add: Emission[]) => { if (out.length < MAX_EMS) for (const x of add) out.push(x); };
     switch (e.type) {
       case 'literal': return [{ t: 'lit', value: e.value }];
       case 'ref': {
         if (this.isStruct(e.name)) return [{ t: 'struct', kind: this.structKind.get(e.name)! }];
         if (this.isToken(e.name)) {
           const vs = sampleVariants(this.tokenByName.get(e.name)!, { rand: this.rand, interesting: this.interesting }, 4);
-          return [{ t: 'tok', name: e.name, text: vs.length ? pick(vs) : 'x' }];
+          // pick a variant on the TOKEN-TEXT counter (ch.variant, not the structural ch.next), so the
+          // token TEXT (a plain scalar `--- x` vs `x`, a number's int vs float form) is swept fast at EVERY
+          // position regardless of structural depth — see the Chooser note (this lands #23's `k: --- x`).
+          return [{ t: 'tok', name: e.name, text: vs.length ? vs[ch.variant(vs.length)] : 'x' }];
         }
         if (budget <= 0) return this.ruleMin.get(e.name) ?? [];
-        return this.fuzz(this.ruleByName.get(e.name)!.body, budget - 1);
+        return this.cover(this.ruleByName.get(e.name)!.body, budget - 1, ch);
       }
-      case 'seq': { const out: Emission[] = []; for (const it of e.items) fappend(out, this.fuzz(it, budget)); return out; }
+      case 'seq': { const out: Emission[] = []; for (const it of e.items) cappend(out, this.cover(it, budget, ch)); return out; }
       case 'alt': {
-        if (budget <= 0) { const m = this.minExpand(e); if (m) return m; }
-        return this.fuzz(pick(e.items), budget);
+        if (budget <= 0) { const m = this.minExpand(e); if (m) return m; }      // no budget → shortest, no choice consumed
+        return this.cover(e.items[ch.next(e.items.length)], budget, ch);        // CHOICE POINT: which branch
       }
       case 'quantifier': {
-        const reps = budget <= 0 ? (e.kind === '+' ? 1 : 0) : (e.kind === '?' ? Math.floor(this.rand() * 2) : Math.floor(this.rand() * 3) + (e.kind === '+' ? 1 : 0));
-        const out: Emission[] = []; for (let i = 0; i < reps; i++) fappend(out, this.fuzz(e.body, budget - 1)); return out;
+        // CHOICE POINT: how many reps. `?`→{0,1} (radix 2), `*`/`+`→{0..2}/{1..3} (radix 3). At budget 0
+        // the count is forced to the minimum (radix 1 → digit is a fixed no-op, keeping schedules aligned).
+        const lo = e.kind === '+' ? 1 : 0;
+        const radix = budget <= 0 ? 1 : (e.kind === '?' ? 2 : 3);
+        const reps = lo + ch.next(radix);
+        const out: Emission[] = []; for (let i = 0; i < reps; i++) cappend(out, this.cover(e.body, budget - 1, ch)); return out;
       }
-      case 'group': return this.fuzz(e.body, budget);
+      case 'group': return this.cover(e.body, budget, ch);
       case 'sep': {
-        const reps = budget <= 0 ? 1 : Math.floor(this.rand() * 3) + 1; const out: Emission[] = [];
-        for (let i = 0; i < reps; i++) { if (i) out.push({ t: 'lit', value: e.delimiter }); fappend(out, this.fuzz(e.element, budget - 1)); }
+        // CHOICE POINT: element count (≥1). radix 3 → 1..3 elements; forced to 1 at budget 0.
+        const reps = 1 + (budget <= 0 ? 0 : ch.next(3)); const out: Emission[] = [];
+        for (let i = 0; i < reps; i++) { if (i) out.push({ t: 'lit', value: e.delimiter }); cappend(out, this.cover(e.element, budget - 1, ch)); }
         return out;
       }
       case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
@@ -781,10 +870,12 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
   const depth = opts.depth ?? 5;
   const cap = opts.cap ?? 6;
   const maxInputs = opts.maxInputs ?? 400;
-  const fuzzRounds = opts.fuzzRounds ?? 300;
+  // `fuzzRounds` is honoured as the BUDGET (cap on systematic-coverage rounds), but the rounds are now
+  // DETERMINISTIC choice vectors, not random draws. `opts.seed` is a NO-OP (kept for back-compat): the
+  // generator is a pure function of the grammar, so two calls — with any seed or none — are identical.
+  const coverRounds = opts.fuzzRounds ?? 300;
   const nestDepth = opts.nestDepth ?? 5;
-  const seed = opts.seed ?? 12345;
-  const w = new Walker(grammar, seed, cap);
+  const w = new Walker(grammar, cap);
 
   const mode: MatOptions['mode'] = grammar.indent ? 'indent' : grammar.markup ? 'markup' : 'token-stream';
   const matOpts: MatOptions = { mode, indentStep: 2 };
@@ -837,13 +928,22 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
     for (let d = 1; d <= nestDepth; d++) push(w.nestChain(r.body, rn, d), `dirnest:${rn}@${d}`, rn);
   }
 
-  // 4) fuzzing for deeper / wider structures (random production choices), rooted at the entry AND at
-  //    each self-recursive rule so deep shapes are reached quickly.
-  for (let i = 0; i < fuzzRounds; i++) push(w.fuzz(entry.body, depth + 2), 'fuzz', entry.name);
+  // 4) SYSTEMATIC t-wise coverage for deeper / wider structures (DETERMINISTIC choice vectors, was random
+  //    fuzzing), rooted at the entry AND at each self-recursive rule. The schedule is a full mixed-radix
+  //    cartesian over the first `COVER_DIGITS` choice points at `COVER_BASE` values each (covers every
+  //    t-tuple, t≤COVER_DIGITS, of those points BY CONSTRUCTION → reaches an explicit-key × `[`-in-scalar
+  //    interaction without a seed), with a few rotation offsets perturbing the deeper tail. `coverRounds`
+  //    caps it — polynomial (COVER_BASE^COVER_DIGITS ≈ 256), never the exponential whole derivation tree.
+  // NB the emitted strategy key stays `fuzz` (the driver buckets it as the EXPLORATORY tier — deeper/wider
+  // shapes that legitimately reach STANDING flat-TM frontier limits, so #24 is report-only there; the
+  // STRUCTURED strategies remain the by-construction gate). Only the MECHANISM changed (deterministic, not
+  // random); the bucket's meaning is the same, so the driver's gating semantics are untouched.
+  const COVER_BASE = 4, COVER_DIGITS = 4, ROTS = [0, 1, 2];
+  for (const ch of coverSchedule(COVER_BASE, COVER_DIGITS, coverRounds, ROTS)) push(w.cover(entry.body, depth + 2, ch), 'fuzz', entry.name);
   for (const rn of recursive) {
     if (timeUp()) break;
     const r = w.ruleByName.get(rn)!;
-    for (let i = 0; i < Math.ceil(fuzzRounds / 8); i++) push(w.fuzz(r.body, depth + 2), `fuzz:${rn}`, rn);
+    for (const ch of coverSchedule(COVER_BASE, COVER_DIGITS, Math.ceil(coverRounds / 8), ROTS)) push(w.cover(r.body, depth + 2, ch), `fuzz:${rn}`, rn);
   }
 
   // 5) DIRECTED TOKEN COVERAGE — for each scoped token, the shortest legal context from the entry rule
