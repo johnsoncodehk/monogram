@@ -142,7 +142,10 @@ function topAltBranches(pat: TokenPattern): number {
 }
 
 // Sample several distinct, legal texts for a token (variants + interesting-literal embeds).
-function sampleVariants(decl: TokenDecl, ctx: { rand: () => number; interesting: string[] }, n: number): string[] {
+// `blockEmbed` (indent grammars) are content literals that are STRUCTURAL in flow context but
+// plain-scalar CONTENT in BLOCK context (the flow brackets `[`/`{`/`]`/`}`) — see the internal-embed
+// note below; passed from the grammar's `indent.flowOpen`/`flowClose`, empty otherwise.
+function sampleVariants(decl: TokenDecl, ctx: { rand: () => number; interesting: string[]; blockEmbed?: string[] }, n: number): string[] {
   const out = new Set<string>();
   // Cover every top-level alt branch: a token that is itself an alternation (hex/oct/bin/float
   // forms) must emit ALL its branches, not stop at branch 0 once `n` distinct samples are reached —
@@ -151,6 +154,24 @@ function sampleVariants(decl: TokenDecl, ctx: { rand: () => number; interesting:
   for (let v = 0; v < budget; v++) {
     const s = sample(decl.pattern, { ...ctx, variant: v });
     if (s !== null && s.length > 0) out.add(s);
+  }
+  // INTERNAL boundary-literal embeds (indent grammars with a block-context pattern): a flow bracket
+  // (`[`/`{`) is a flow INDICATOR inside `[ ]`/`{ }`, but ordinary plain-scalar CONTENT in block
+  // context — which is the whole reason a token carries a `blockPattern` (its body drops the flow
+  // exclusions). The default `.pattern` (flow-restricted) can NEVER sample such a char, so a block
+  // plain scalar like `k [y` — one scalar to the stack-keeping parser, but a phantom flow-open to a
+  // flat grammar — is otherwise unreachable. Sample the base from the BLOCK pattern and splice a
+  // bracket AFTER the head char (the head must stay a non-indicator, so the splice is mid-token, never
+  // leading); the parser re-lexes the result as ONE scalar (verified by the round-trip). This makes
+  // `? k [y : …` (the monogram `[`-in-key flow-leak) producible deterministically.
+  const blockBase = decl.blockPattern ? (sample(decl.blockPattern, { ...ctx, variant: 0 }) ?? '') : '';
+  if (blockBase.length >= 1 && ctx.blockEmbed?.length && !tokenPatternHasStartAnchor(decl) && !tokenPatternStartsWithDecimal(decl)) {
+    const head = blockBase[0], tail = blockBase.slice(1) || 'y';
+    for (const br of ctx.blockEmbed) {
+      if (br.length !== 1 || /[\n\r]/.test(br)) continue;
+      out.add(head + br + tail);          // glued mid-scalar (`k` + `[` + `y` → `k[y`)
+      out.add(head + ' ' + br + tail);    // space-led bracket (`k [y`) — the prompt's exact shape
+    }
   }
   // a base sample to seed interesting-literal embeds
   const base = sample(decl.pattern, { ...ctx, variant: 0 }) ?? '';
@@ -257,6 +278,7 @@ class Walker {
   interesting: string[];
   structKind = new Map<string, 'indent' | 'dedent' | 'newline'>();
   compactLits: Set<string>;
+  blockEmbed: string[];   // flow brackets (`[`/`{`/`]`/`}`) — flow indicators, but block-scalar CONTENT
   reachMap = new Map<string, Set<string>>();   // rule → every rule it can transitively reach
   tokenHostRules = new Map<string, string[]>(); // token name → rules whose body DIRECTLY references it
   ruleMin = new Map<string, Emission[] | null>();
@@ -280,6 +302,9 @@ class Walker {
       this.structKind.set(ind.newlineToken, 'newline');
     }
     this.compactLits = new Set(grammar.indent?.compactIndicators ?? []);
+    // flow brackets are flow indicators in `[ ]`/`{ }` but plain-scalar CONTENT in block context — the
+    // single-char ones seed the internal-embed that makes a `[`-in-block-scalar (`k [y`) producible.
+    this.blockEmbed = [...(ind?.flowOpen ?? []), ...(ind?.flowClose ?? [])].filter((b) => b.length === 1);
     this.interesting = this.collectInteresting();
     this.computeReach();
     this.computeTokenHosts();
@@ -493,7 +518,7 @@ class Walker {
       case 'ref': {
         if (this.isStruct(e.name)) return [[{ t: 'struct', kind: this.structKind.get(e.name)! }]];
         if (this.isToken(e.name)) {
-          const vs = sampleVariants(this.tokenByName.get(e.name)!, { rand: this.rand, interesting: this.interesting }, 3);
+          const vs = sampleVariants(this.tokenByName.get(e.name)!, { rand: this.rand, interesting: this.interesting, blockEmbed: this.blockEmbed }, 3);
           return (vs.length ? vs : ['x']).slice(0, cap).map((t) => [{ t: 'tok', name: e.name, text: t }]);
         }
         if (budget <= 0) { const m = this.ruleMin.get(e.name); return m ? [m] : [[]]; }
@@ -561,7 +586,7 @@ class Walker {
       case 'ref': {
         if (this.isStruct(e.name)) return [{ t: 'struct', kind: this.structKind.get(e.name)! }];
         if (this.isToken(e.name)) {
-          const vs = sampleVariants(this.tokenByName.get(e.name)!, { rand: this.rand, interesting: this.interesting }, 4);
+          const vs = sampleVariants(this.tokenByName.get(e.name)!, { rand: this.rand, interesting: this.interesting, blockEmbed: this.blockEmbed }, 4);
           // pick a variant on the TOKEN-TEXT counter (ch.variant, not the structural ch.next), so the
           // token TEXT (a plain scalar `--- x` vs `x`, a number's int vs float form) is swept fast at EVERY
           // position regardless of structural depth — see the Chooser note (this lands #23's `k: --- x`).
@@ -730,6 +755,136 @@ class Walker {
       tokenPatternHasStartAnchor(t));
   }
 
+  // ── DIRECTED MARKUP SELF-CLOSE-WITH-ATTRIBUTE (markup grammars only) ──────────────────────────────
+  // The minimal self-closing element carrying ONE quoted attribute: `<name attr="v"/>`. Built DIRECTLY
+  // from `grammar.markup` (tagOpen / attributeAssign / attributeQuotes / closeMarker / tagClose) plus two
+  // generically-discovered tokens — a NAME token (an `identifier` token: the tag + attribute name) and a
+  // QUOTED-VALUE token (a `string` token whose sample opens with an `attributeQuote`) — so it stays
+  // language-agnostic (no `<`/`/`/HTML hardcoded; a markup grammar with different delimiters yields its
+  // own shape). The un-biased bounded-exhaustive enumeration STARVES this combination at a small `cap`
+  // (the cross of "an attribute has a quoted value" × "the optional self-close `/` fired" is past the
+  // first few derivations), so — exactly like nestChain forces a starved nesting and coverToken a starved
+  // token — this forces it deterministically. Its tight rendering (`name="v"/>` flush) is what exposes
+  // the flat grammar mis-scoping the self-close `/` as unquoted-value content (a STANDING flat-TM limit).
+  // Returns [] when the grammar lacks the needed tokens (no string/identifier token) — then it is a no-op.
+  markupSelfCloseAttr(): Emission[] {
+    const mk = this.grammar.markup;
+    if (!mk || !mk.closeMarker) return [];
+    const nameTok = this.grammar.tokens.find((t) => t.identifier);   // the tag / attribute NAME token
+    // a string token whose conservative sample is a QUOTED value (opens with one of the attribute quotes)
+    const quotes = mk.attributeQuotes ?? ['"', "'"];
+    const valTok = this.grammar.tokens.find((t) => {
+      if (!t.string && !t.scope) return false;
+      const s = sample(t.pattern, { rand: this.rand, interesting: [], variant: 0 });
+      return s !== null && s.length >= 2 && quotes.includes(s[0]);
+    });
+    if (!nameTok || !valTok) return [];
+    const nameTxt = sample(nameTok.pattern, { rand: this.rand, interesting: [], variant: 0 }) || 'a';
+    const valTxt = sample(valTok.pattern, { rand: this.rand, interesting: [], variant: 0 })!;
+    const assign = mk.attributeAssign ?? '=';
+    return [
+      { t: 'lit', value: mk.tagOpen },
+      { t: 'tok', name: nameTok.name, text: nameTxt },     // tag name
+      { t: 'tok', name: nameTok.name, text: nameTxt },     // attribute name
+      { t: 'lit', value: assign },
+      { t: 'tok', name: valTok.name, text: valTxt },       // quoted attribute value
+      { t: 'lit', value: mk.closeMarker },                 // self-close marker
+      { t: 'lit', value: mk.tagClose },
+    ];
+  }
+
+  // The leading literal of an alt arm's seq/group spine (the indicator a `? …`/`- …` arm starts with).
+  private armLeadLiteral(e: RuleExpr): string | null {
+    if (e.type === 'literal') return e.value;
+    if (e.type === 'seq') return e.items.length ? this.armLeadLiteral(e.items[0]) : null;
+    if (e.type === 'group') return this.armLeadLiteral(e.body);
+    return null;
+  }
+  private exprContainsLiteral(e: RuleExpr, v: string): boolean {
+    switch (e.type) {
+      case 'literal': return e.value === v;
+      case 'seq': case 'alt': return e.items.some((i) => this.exprContainsLiteral(i, v));
+      case 'quantifier': case 'group': case 'not': return this.exprContainsLiteral(e.body, v);
+      case 'sep': return this.exprContainsLiteral(e.element, v);
+      default: return false;
+    }
+  }
+  // The explicit-key indicator of an indent grammar (YAML `?`), found GENERICALLY: the `compactIndicator`
+  // that heads a rule arm which ALSO carries the key/value separator (`? key : value`), distinguishing it
+  // from the block-SEQUENCE indicator (`-`, whose arm leads to an item, not a `:` pair). Config-derived
+  // (compactIndicators × keyValueSeparator), so no token/rule name is hardcoded; null if none qualifies.
+  explicitKeyIndicator(): string | null {
+    const ind = this.grammar.indent; if (!ind?.compactIndicators) return null;
+    const kv = ind.keyValueSeparator ?? ':';
+    const ci = new Set(ind.compactIndicators);
+    for (const r of this.grammar.rules) {
+      const arms = r.body.type === 'alt' ? r.body.items : [r.body];
+      for (const arm of arms) { const lead = this.armLeadLiteral(arm); if (lead && ci.has(lead) && this.exprContainsLiteral(arm, kv)) return lead; }
+    }
+    return null;
+  }
+
+  // ── DIRECTED INDENT EXPLICIT-KEY WITH A FLOW-BRACKET PLAIN SCALAR (indent grammars only) ───────────
+  // The shape `? k [y :\n  - p\n  - q`: an EXPLICIT-key entry whose KEY is a plain scalar containing a flow
+  // bracket, with a block-SEQUENCE value. To the stack-keeping parser the key is ONE plain scalar (its
+  // `blockPattern` admits `[`/`{` outside flow) and the `-` items are sequence indicators; a flat grammar
+  // instead opens a phantom flow at the `[` that never closes, so the value `-`s leak to the key scope.
+  // Two structural facts STARVE this in the un-biased strategies: a plain-scalar key in EXPLICIT position
+  // is itself rare (the cover walk reaches `? *alias :`/`? {flow} :`/`?\n indented`, but not `? plain :`),
+  // and the bracket must additionally land in THAT key — so it is forced here, deterministically, the
+  // indent analogue of markupSelfCloseAttr. All pieces are config-derived (the explicit-key indicator, the
+  // key/value separator, the flow brackets, the seq indicator = the OTHER compactIndicator, and the indent
+  // struct tokens), with the scalar drawn from a `blockPattern` token — no YAML token/rule name hardcoded.
+  // Returns [] when the grammar lacks the config (no explicit-key indicator / flow brackets / block scalar).
+  indentExplicitKeyBracket(): Emission[] {
+    const ind = this.grammar.indent; if (!ind) return [];
+    const qmark = this.explicitKeyIndicator(); if (!qmark) return [];
+    const bracket = this.blockEmbed[0]; if (!bracket) return [];                  // a flow-bracket content char
+    const kv = ind.keyValueSeparator ?? ':';
+    const seqInd = (ind.compactIndicators ?? []).find((c) => c !== qmark);        // the block-sequence indicator
+    if (!seqInd) return [];
+    // a block plain-scalar token whose blockPattern admits the bracket (the KEY), and one for the items.
+    const scalarTok = this.grammar.tokens.find((t) => t.blockPattern && t.scope); if (!scalarTok) return [];
+    const head = sample(scalarTok.blockPattern!, { rand: this.rand, interesting: [], variant: 0 }) || 'k';
+    const keyTxt = head[0] + ' ' + bracket + (head.slice(1) || 'y');             // `k [y` — bracket mid-scalar
+    const itemTxt = (sample(scalarTok.blockPattern!, { rand: this.rand, interesting: [], variant: 0 }) || 'p');
+    return [
+      { t: 'lit', value: qmark },                                                // `?`
+      { t: 'tok', name: scalarTok.name, text: keyTxt },                          // `k [y`
+      { t: 'lit', value: kv },                                                   // `:`
+      { t: 'struct', kind: 'indent' },                                          // block value, more-indented
+      { t: 'lit', value: seqInd }, { t: 'tok', name: scalarTok.name, text: itemTxt },        // `- p`
+      { t: 'struct', kind: 'newline' },                                         // sibling item
+      { t: 'lit', value: seqInd }, { t: 'tok', name: scalarTok.name, text: itemTxt },        // `- p`
+      { t: 'struct', kind: 'dedent' },
+    ];
+  }
+
+  // ── DIRECTED BLOCK SCALAR (indent grammars with a block-scalar config) ─────────────────────────────
+  // A YAML block scalar `|\n  body\n  more`: an introducer (`|`/`>`, +optional chomping/indent indicators)
+  // then verbatim more-indented lines emitted as ONE token (like raw text, but bounded by indentation, not
+  // a close tag). Its token is `never()` (the LEXER emits it from indentation state), so `sample()` yields
+  // null and the ordinary strategies NEVER produce it — leaving its scope (`string.unquoted.block`) at 0%
+  // coverage. This synthesizes it directly from `indent.blockScalar` (the introducers + token name) as a
+  // single multi-line tok at the document root (the minimal legal frame — a bare block scalar parses as a
+  // one-token document). Body lines are STRICTLY more-indented (the `indentWidth` columns) and plain words,
+  // never a col-0 `documentMarker` (`---`/`...`), which would terminate the scalar early (a doc boundary
+  // outranks indentation). Emitted as one tok (not a `lit`+struct), so `compactify` — which only rewrites a
+  // compact-indicator literal followed by a struct indent — leaves it untouched. Returns [] without config.
+  indentBlockScalar(indentWidth: number): Emission[] {
+    const bs = this.grammar.indent?.blockScalar; if (!bs || !bs.introducers.length) return [];
+    const tok = this.grammar.tokens.find((t) => t.name === bs.token); if (!tok) return [];
+    const pad = ' '.repeat(Math.max(1, indentWidth));
+    const markers = new Set(bs.documentMarkers ?? []);
+    // a plain body word that is NOT a document marker (so it can't terminate the scalar at col-0; here it is
+    // indented anyway, but keep it marker-free for safety) — derived from a block plain-scalar token sample.
+    const scalarTok = this.grammar.tokens.find((t) => t.blockPattern && t.scope);
+    let body = (scalarTok && sample(scalarTok.blockPattern!, { rand: this.rand, interesting: [], variant: 0 })) || 'body';
+    if (markers.has(body)) body = body + 'x';
+    const intro = bs.introducers[0];                                            // `|`
+    return [{ t: 'tok', name: bs.token, text: `${intro}\n${pad}${body}\n${pad}${body}` }];
+  }
+
   // Build the minimal legal context from `entry` down to `tokenName`, with the token rendered as
   // `sampleText` at its position. Descends the SHORTEST branch toward the token at each node and
   // minimal-fills everything else — the directed, deterministic analogue of nestChain for a token.
@@ -776,7 +931,13 @@ class Walker {
 // space (whitespace-insensitive); indentation grammars (YAML) render struct emissions through an
 // indent STACK that mirrors the lexer (newline = same-column sibling, indent = deeper block,
 // compact = an inline indent for `- - a`); markup grammars keep tag punctuation adjacent.
-interface MatOptions { mode: 'token-stream' | 'indent' | 'markup'; indentStep: number }
+// `tight` (markup only) ALSO glues the attribute-internal punctuation — `name="value"` with no
+// spaces around the `attributeAssign`/quotes — so a quoted value sits FLUSH against the self-close
+// `/>` (the WHATWG-canonical `<img src="a"/>`). That adjacency is what the spaced rendering never
+// forms, and it is exactly where a flat TextMate grammar mis-scopes the `/` (it reads the closing
+// quote then the `/` as an unquoted-value char, not tag punctuation). A SECOND, legal rendering of
+// the same emission list — the markup analogue of indent's compactify — in the exploratory tier.
+interface MatOptions { mode: 'token-stream' | 'indent' | 'markup'; indentStep: number; tight?: boolean }
 
 function materialize(grammar: CstGrammar, ems: Emission[], opts: MatOptions): { text: string; tokens: GenInput['tokens'] } {
   let text = '';
@@ -822,12 +983,18 @@ function materialize(grammar: CstGrammar, ems: Emission[], opts: MatOptions): { 
 
   if (opts.mode === 'markup') {
     const noSpaceBefore = new Set([grammar.markup?.tagClose, grammar.markup?.closeMarker].filter(Boolean) as string[]);
+    const assign = grammar.markup?.attributeAssign;   // `=`; in tight mode it glues `name=value`
     let prev = '';
     for (const e of ems) {
       if (e.t === 'struct' || e.t === 'compact') continue;
       const s = e.t === 'lit' ? e.value : e.text;
       if (s.length === 0) continue;
-      const adjacent = prev === grammar.markup?.tagOpen || prev === grammar.markup?.closeMarker || noSpaceBefore.has(s) || prev === '';
+      // TIGHT also glues the attribute `=` to its name and value: `name=` (cur is the assign) and
+      // `=value` (prev was the assign). Combined with `noSpaceBefore` already gluing the value→`/>`,
+      // this renders `<img src="a"/>`. The inter-attribute / name boundary still takes a space (the
+      // value isn't an assign, the next name isn't), so `a="x" b="y"` stays well-formed.
+      const tightGlue = !!opts.tight && !!assign && (s === assign || prev === assign);
+      const adjacent = prev === grammar.markup?.tagOpen || prev === grammar.markup?.closeMarker || noSpaceBefore.has(s) || tightGlue || prev === '';
       if (!adjacent) emit(' ');
       if (e.t === 'tok') emitTok(e.name, s); else emit(s);
       prev = s;
@@ -891,13 +1058,30 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
 
   const seen = new Set<string>();
   const out: GenInput[] = [];
+  // The render JOBS for one emission list: each pairs an emission-variant with materialize options and
+  // the strategy label to file the resulting input under. Most modes have ONE job (the canonical
+  // rendering, same strategy). Two modes add a SECOND, equally-legal rendering of the same emissions:
+  //  • indent → a compactified copy (`- - a` inline), SAME strategy (a correct shape, still a gate).
+  //  • markup → a TIGHT copy (`name="value"/>` flush), filed in the EXPLORATORY (`fuzz`) tier. The
+  //    tight adjacency is where a flat grammar mis-scopes the self-close `/` — a STANDING flat-TM
+  //    limit in the unfixed grammar, not a regression of a structured shape — so, like a gnarly fuzz
+  //    derivation, it is report-only (`isGated` keys off the `fuzz` prefix). The spaced rendering keeps
+  //    the original strategy, so the structured round-trip guarantee is untouched.
+  const renderJobs = (ems: Emission[], strategy: string): { variant: Emission[]; mat: MatOptions; strat: string }[] => {
+    if (mode === 'indent') return [ems, compactify(ems, w.compactLits)].map((variant) => ({ variant, mat: matOpts, strat: strategy }));
+    if (mode === 'markup') return [
+      { variant: ems, mat: matOpts, strat: strategy },
+      { variant: ems, mat: { ...matOpts, tight: true }, strat: `fuzz:tight:${strategy}` },
+    ];
+    return [{ variant: ems, mat: matOpts, strat: strategy }];
+  };
   const push = (ems: Emission[], strategy: string, rule: string) => {
     if (out.length >= maxInputs * 4) return;
-    for (const variant of mode === 'indent' ? [ems, compactify(ems, w.compactLits)] : [ems]) {
-      const { text, tokens } = materialize(grammar, variant, matOpts);
+    for (const job of renderJobs(ems, strategy)) {
+      const { text, tokens } = materialize(grammar, job.variant, job.mat);
       if (!text.trim() || text.length > 2000 || seen.has(text)) continue;   // skip blank / over-long / duplicate
       seen.add(text);
-      out.push({ text, tokens, strategy, rule });
+      out.push({ text, tokens, strategy: job.strat, rule });
     }
   };
 
@@ -968,6 +1152,33 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
     for (const text of sampleVariants(tok, { rand: w.rand, interesting: [] }, 3)) {
       if (!/[\n\r]/.test(text)) push([{ t: 'tok', name: tok.name, text }], `tokenCover:${tok.name}`, entry.name);
     }
+  }
+
+  // 6) DIRECTED MARKUP SELF-CLOSE-WITH-ATTRIBUTE (markup grammars) — `<name attr="v"/>`. The un-biased
+  //    enumeration starves the quoted-attribute × self-close cross at a small cap, so this forces it (the
+  //    markup analogue of nestChain/tokenCover). Filed in the EXPLORATORY (`fuzz`) tier: even the SPACED
+  //    rendering puts the quoted value FLUSH against the self-close `/` (the `/` is structural punctuation,
+  //    always glued), and that flush value→`/` adjacency is exactly the STANDING flat-TM limit (the grammar
+  //    reads the `/` as unquoted-value content) — a real highlighter bug in the unfixed grammar, not a
+  //    regression of a by-construction shape, so it is report-only like a gnarly fuzz derivation, not a gate.
+  if (mode === 'markup') {
+    const sc = w.markupSelfCloseAttr();
+    if (sc.length) push(sc, 'fuzz:markupSelfClose', entry.name);
+  }
+
+  // 7) DIRECTED INDENT EXPLICIT-KEY-WITH-BRACKET-SCALAR (indent grammars) — `? k [y :\n  - p\n  - q`. The
+  //    un-biased strategies starve a plain-scalar explicit key (let alone one carrying a `[`), so this forces
+  //    it — the indent analogue of markupSelfCloseAttr. Filed EXPLORATORY (`fuzz:`): it deliberately stresses
+  //    the block-vs-flow-stack limit a flat grammar lacks (the phantom flow a `[`-in-key opens), so any
+  //    divergence is a STANDING limit of the unfixed grammar, report-only, not a by-construction gate.
+  if (mode === 'indent') {
+    const ek = w.indentExplicitKeyBracket();
+    if (ek.length) push(ek, 'fuzz:explicitKeyBracket', entry.name);
+    // a block scalar (`|\n  body`): its token is lexer-emitted (never() pattern), so no ordinary strategy
+    // produces it — synthesize one so its `string.unquoted.block` scope is covered. A clean structured
+    // shape that round-trips (a one-token document), so it is a normal `nest`-tier input (no flat-TM limit).
+    const bs = w.indentBlockScalar(matOpts.indentStep);
+    if (bs.length) push(bs, 'nest:blockScalar', entry.name);
   }
 
   return out.slice(0, maxInputs);
