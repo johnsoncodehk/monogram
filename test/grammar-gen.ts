@@ -24,6 +24,7 @@
 //   • fuzzing — random production choices, for deeper / wider structures.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { CstGrammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
+import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor } from '../src/token-pattern.ts';
 
 // Max emissions in one derivation. A deep tree of 2-rep quantifiers grows the list multiplicatively;
 // copying huge lists (not the call count) is what makes a naive enumerator hang — cap it.
@@ -110,10 +111,30 @@ function sample(pat: TokenPattern, ctx: SampleCtx): string | null {
   }
 }
 
+// The number of branches in the SHALLOWEST `alt` reachable through the pattern's
+// leading seq/group/repeat spine — the branches that a different `variant` index makes
+// `sample` rotate through (it picks `variant % items.length` at each alt). A token whose
+// value is an alternation of forms (a Number's int / float branches, a string's escape
+// alternatives) needs at least this many variant indices for EVERY branch to be emitted,
+// not just branch 0 — otherwise the budget caps it at the first form (`0`, never `1.5`).
+function topAltBranches(pat: TokenPattern): number {
+  if (typeof pat === 'string') return 1;
+  switch (pat.type) {
+    case 'alt': return pat.items.length;
+    case 'seq': return Math.max(1, ...pat.items.map(topAltBranches));
+    case 'repeat': return topAltBranches(pat.body);
+    default: return 1;
+  }
+}
+
 // Sample several distinct, legal texts for a token (variants + interesting-literal embeds).
 function sampleVariants(decl: TokenDecl, ctx: { rand: () => number; interesting: string[] }, n: number): string[] {
   const out = new Set<string>();
-  for (let v = 0; v < n + 2 && out.size < n; v++) {
+  // Cover every top-level alt branch: a token that is itself an alternation (hex/oct/bin/float
+  // forms) must emit ALL its branches, not stop at branch 0 once `n` distinct samples are reached —
+  // so the budget is at least the branch count, and the all-branch sweep is NOT capped by `out.size`.
+  const budget = Math.max(n + 2, topAltBranches(decl.pattern) + 2);
+  for (let v = 0; v < budget; v++) {
     const s = sample(decl.pattern, { ...ctx, variant: v });
     if (s !== null && s.length > 0) out.add(s);
   }
@@ -123,7 +144,13 @@ function sampleVariants(decl: TokenDecl, ctx: { rand: () => number; interesting:
   // the result is still a single legal instance of the token — this is what produces the
   // monogram#23 shape (a plain scalar whose text is `--- x`). Verified per-token by re-lexing
   // in the driver; an embed that doesn't re-lex to this token is simply dropped there.
-  if (base.length >= 1) {
+  // GUARD: a token whose pattern starts with a DECIMAL digit (`0x1F`, `1.5`) or carries a
+  // `start()` line/stream anchor (a shebang `^#!…`) must NOT get a leading-literal embed: gluing
+  // `-`/`#`/`---` on front re-lexes as a different token (`-0x1` = minus + number, `#0x1` ≠ hex)
+  // or breaks the column-0 anchor — so the embed would never round-trip back to THIS token. The
+  // pure-variant samples above already cover such tokens; only free-form tokens take the embeds.
+  const anchored = tokenPatternStartsWithDecimal(decl) || tokenPatternHasStartAnchor(decl);
+  if (base.length >= 1 && !anchored) {
     for (const lit of ctx.interesting) {
       if (lit.length === 0 || /[\n\r]/.test(lit)) continue;
       out.add(lit + base);            // glued leading boundary (`---` + `x` → `---x`)
@@ -156,6 +183,7 @@ class Walker {
   structKind = new Map<string, 'indent' | 'dedent' | 'newline'>();
   compactLits: Set<string>;
   reachMap = new Map<string, Set<string>>();   // rule → every rule it can transitively reach
+  tokenHostRules = new Map<string, string[]>(); // token name → rules whose body DIRECTLY references it
   ruleMin = new Map<string, Emission[] | null>();
   rand: () => number;
   cap: number;
@@ -179,7 +207,27 @@ class Walker {
     this.compactLits = new Set(grammar.indent?.compactIndicators ?? []);
     this.interesting = this.collectInteresting();
     this.computeReach();
+    this.computeTokenHosts();
     this.computeMins();
+  }
+
+  // For each token, the rules whose body DIRECTLY references it (`ref` to a token name). This is the
+  // entry point of tokenCover's directed descent: a scoped token only ever appears at these rules, so
+  // building the shortest legal path to one of them and substituting the token covers it. A token with
+  // NO host rule (a lexer-trivia token the parser never consumes — a shebang / JSDoc comment, skipped
+  // before the token stream) is unreachable by ANY derivation and is left out (it is not a CST leaf).
+  computeTokenHosts(): void {
+    for (const r of this.grammar.rules) {
+      const toks = new Set<string>();
+      const go = (e: RuleExpr) => { switch (e.type) {
+        case 'ref': if (this.isToken(e.name)) toks.add(e.name); break;
+        case 'seq': case 'alt': e.items.forEach(go); break;
+        case 'quantifier': case 'group': case 'not': go(e.body); break;
+        case 'sep': go(e.element); break;
+      } };
+      go(r.body);
+      for (const tn of toks) (this.tokenHostRules.get(tn) ?? this.tokenHostRules.set(tn, []).get(tn)!).push(r.name);
+    }
   }
 
   computeReach(): void {
@@ -524,6 +572,114 @@ class Walker {
       case 'op': case 'prefix': case 'postfix': return [];
     }
   }
+
+  // ── DIRECTED TOKEN COVERAGE ──────────────────────────────────────────────────────────────────────
+  // The same directed-descent idea as nestChain, but the target is a scoped TOKEN, not a self-recursive
+  // RULE. A grammar-derived LEGAL corpus is shallow/structural and never reaches an expression-position
+  // literal: every numeric, every private field — the scoped leaves the scope≡role judge checks — appears
+  // ZERO times. tokenCover fixes that by, for each scoped token, building the SHORTEST legal path from the
+  // entry rule to a rule that references it (the SAME reversed-BFS the nesting strategies use, retargeted
+  // at a token via its host rules) and substituting real samples of the token there. Minimal context only
+  // (shortest path + minExpand filler), so it stays cheap on a 50-rule grammar.
+
+  // shortest rule-ref distance FROM each rule TO any rule that references `tokenName` (reversed-BFS, like
+  // distTo but seeded at the token's host rules). Memoised. Infinity-absent ⇒ the rule can't reach the token.
+  // A host rule starts at distance 1 (entering its body costs one ref step to reach the direct token use);
+  // a DIRECT `ref:token` in an expression is 0. The gap is what makes the descent STOP at the first direct
+  // token use instead of recursing into a self-recursive host (`Type` → `aa is Type → …` never terminating):
+  // `ref:token` (0) strictly beats `ref:host` (≥1), so a `seq`/`alt`'s shortest branch is the one that
+  // actually places the token here, not the one that re-enters a host rule that also eventually reaches it.
+  tokenDistCache = new Map<string, Map<string, number>>();
+  tokenDistTo(tokenName: string): Map<string, number> {
+    let m = this.tokenDistCache.get(tokenName); if (m) return m;
+    m = new Map<string, number>();
+    const back = new Map<string, string[]>();
+    for (const r of this.grammar.rules) for (const ref of this.directRuleRefs(r.body)) (back.get(ref) ?? back.set(ref, []).get(ref)!).push(r.name);
+    const queue: string[] = [];
+    for (const host of this.tokenHostRules.get(tokenName) ?? []) if (!m.has(host)) { m.set(host, 1); queue.push(host); }   // host rule body = 1 step from the direct token use
+    while (queue.length) { const cur = queue.shift()!; const d = m.get(cur)!; for (const pre of back.get(cur) ?? []) if (!m.has(pre)) { m.set(pre, d + 1); queue.push(pre); } }
+    this.tokenDistCache.set(tokenName, m); return m;
+  }
+  // min rule-ref distance from an expression to `tokenName` — 0 if it DIRECTLY refs the token (a direct
+  // use strictly beats re-entering a host rule, so the descent terminates at the token, see tokenDistTo).
+  exprDistToToken(e: RuleExpr, tokenName: string): number {
+    const dm = this.tokenDistTo(tokenName);
+    switch (e.type) {
+      case 'ref': return e.name === tokenName ? 0 : (dm.has(e.name) ? dm.get(e.name)! : Infinity);
+      case 'seq': case 'alt': return Math.min(Infinity, ...e.items.map((i) => this.exprDistToToken(i, tokenName)));
+      case 'quantifier': case 'group': case 'not': return this.exprDistToToken(e.body, tokenName);
+      case 'sep': return this.exprDistToToken(e.element, tokenName);
+      default: return Infinity;
+    }
+  }
+  exprReachesToken(e: RuleExpr, tokenName: string): boolean { return this.exprDistToToken(e, tokenName) < Infinity; }
+
+  // Scoped tokens that tokenCover CAN reach: a declared `.scope`, a samplable pattern (not a `never()`
+  // structural placeholder), and at least one host rule reachable from the entry. A trivia token the
+  // parser never consumes (no host rule — a shebang / doc comment) is excluded HERE: no rule path reaches
+  // it (it is handled, where it can be at all, by `prefixOnlyTokens`).
+  coverableTokens(entryName: string): TokenDecl[] {
+    return this.grammar.tokens.filter((t) => {
+      if (!t.scope) return false;
+      if (typeof t.pattern !== 'string' && t.pattern.type === 'never') return false;   // structural placeholder
+      const dm = this.tokenDistTo(t.name);
+      return dm.has(entryName) || (this.tokenHostRules.get(t.name) ?? []).includes(entryName);
+    });
+  }
+
+  // Scoped tokens NO rule references but that carry a `start()` line/stream anchor (a shebang `^#!…`) —
+  // the parser treats them as leading trivia (skipped, never a CST leaf), so coverableTokens can't reach
+  // them, yet they ARE a legal document PREFIX the highlighter scopes. We emit each as a stand-alone line
+  // so the generated corpus contains it; it can only be the first emission (the anchor), which a one-token
+  // input trivially satisfies. (Such a token is not a CST leaf, so the scope≡role gate does not grade it —
+  // this widens the round-trip corpus, not the leaf check.)
+  prefixOnlyTokens(): TokenDecl[] {
+    return this.grammar.tokens.filter((t) =>
+      !!t.scope &&
+      !(typeof t.pattern !== 'string' && t.pattern.type === 'never') &&
+      !this.tokenHostRules.has(t.name) &&
+      tokenPatternHasStartAnchor(t));
+  }
+
+  // Build the minimal legal context from `entry` down to `tokenName`, with the token rendered as
+  // `sampleText` at its position. Descends the SHORTEST branch toward the token at each node and
+  // minimal-fills everything else — the directed, deterministic analogue of nestChain for a token.
+  coverToken(entryBody: RuleExpr, tokenName: string, sampleText: string): Emission[] {
+    this.coverFuel = 400;
+    return this.coverRec(entryBody, tokenName, sampleText);
+  }
+  coverFuel = 0;
+  coverRec(e: RuleExpr, tokenName: string, sampleText: string): Emission[] {
+    if (--this.coverFuel <= 0 || !this.exprReachesToken(e, tokenName)) return this.minExpand(e) ?? [];
+    switch (e.type) {
+      case 'literal': return [{ t: 'lit', value: e.value }];
+      case 'ref': {
+        if (e.name === tokenName) return [{ t: 'tok', name: e.name, text: sampleText }];               // THE target token → the sample
+        if (this.isStruct(e.name)) return [{ t: 'struct', kind: this.structKind.get(e.name)! }];
+        if (this.isToken(e.name)) { const v = sample(this.tokenByName.get(e.name)!.pattern, { rand: this.rand, interesting: [], variant: 0 }); return [{ t: 'tok', name: e.name, text: v || 'x' }]; }
+        return this.coverRec(this.ruleByName.get(e.name)!.body, tokenName, sampleText);                // descend into the rule
+      }
+      case 'seq': {
+        // descend the ONE item closest to the token; minimal-fill the rest → the shortest legal frame.
+        let idx = -1, best = Infinity;
+        e.items.forEach((it, i) => { const d = this.exprDistToToken(it, tokenName); if (d < best) { best = d; idx = i; } });
+        const out: Emission[] = [];
+        e.items.forEach((it, i) => { for (const x of (i === idx ? this.coverRec(it, tokenName, sampleText) : this.minExpand(it) ?? [])) out.push(x); });
+        return out;
+      }
+      case 'alt': {
+        // the branch that reaches the token soonest (so the frame actually contains it).
+        let pick = e.items[0], best = Infinity;
+        for (const it of e.items) { const d = this.exprDistToToken(it, tokenName); if (d < best) { best = d; pick = it; } }
+        return this.coverRec(pick, tokenName, sampleText);
+      }
+      case 'quantifier': return this.coverRec(e.body, tokenName, sampleText);   // fire exactly one rep (it carries the token)
+      case 'group': return this.coverRec(e.body, tokenName, sampleText);
+      case 'sep': return this.coverRec(e.element, tokenName, sampleText);       // one element (it carries the token)
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+      case 'op': case 'prefix': case 'postfix': return [];
+    }
+  }
 }
 
 // ─── MATERIALIZE: emissions → text + token spans ──────────────────────────────────
@@ -688,6 +844,30 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
     if (timeUp()) break;
     const r = w.ruleByName.get(rn)!;
     for (let i = 0; i < Math.ceil(fuzzRounds / 8); i++) push(w.fuzz(r.body, depth + 2), `fuzz:${rn}`, rn);
+  }
+
+  // 5) DIRECTED TOKEN COVERAGE — for each scoped token, the shortest legal context from the entry rule
+  //    with several real samples of the token at its position. The bounded-exhaustive / fuzz strategies
+  //    only reach a shallow structural skeleton, so an expression-position literal (every numeric, the
+  //    private field) — exactly the scoped leaves the scope≡role judge checks — is otherwise NEVER
+  //    generated. Each context is minimal (shortest path + minExpand filler), so this stays cheap even
+  //    on the 50-rule TS grammar and needs no depth budget. The samples are guard-filtered (sampleVariants
+  //    skips the leading-literal embeds for decimal-/anchor-led tokens, so `0x1F` is never mangled to `-0x1F`).
+  for (const tok of w.coverableTokens(entry.name)) {
+    if (timeUp()) break;
+    // CLEAN samples only (no interesting-literal embeds): tokenCover's job is to make the token APPEAR in
+    // a legal context, not to stress boundary collisions — that is the enum/fuzz strategies' role, where
+    // the embed belongs. Prepending a boundary sigil to a sigil-led token (`<` + `#name`, `>` + `@name`)
+    // just produces non-parsing junk here, so the directed contexts stay clean and ~100% legal.
+    for (const text of sampleVariants(tok, { rand: w.rand, interesting: [] }, 6)) {
+      push(w.coverToken(entry.body, tok.name, text), `tokenCover:${tok.name}`, entry.name);
+    }
+  }
+  // a position-anchored leading-trivia token (a shebang) as a stand-alone first line — see prefixOnlyTokens.
+  for (const tok of w.prefixOnlyTokens()) {
+    for (const text of sampleVariants(tok, { rand: w.rand, interesting: [] }, 3)) {
+      if (!/[\n\r]/.test(text)) push([{ t: 'tok', name: tok.name, text }], `tokenCover:${tok.name}`, entry.name);
+    }
   }
 
   return out.slice(0, maxInputs);
