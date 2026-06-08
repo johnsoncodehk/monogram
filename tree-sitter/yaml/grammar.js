@@ -16,14 +16,69 @@ module.exports = grammar({
     $.comment
   ],
 
+  externals: $ => [
+    $.indent,
+    $.dedent,
+    $.newline,
+    $.block_scalar,
+    $.plain,
+    $.key,
+    $.num,
+    $.bool_null,
+    $._flow_lbracket,
+    $._flow_lbrace,
+    $._flow_rbracket,
+    $._flow_rbrace
+  ],
+
+  conflicts: $ => [
+    [$.stream, $.node],
+    [$.empty_key_mapping],
+    [$.explicit_entry],
+    [$.next_doc],
+    [$.stream, $.next_doc],
+    [$.node],
+    [$.key, $.plain],
+    [$.scalar, $.doc_fold],
+    [$.explicit_mapping],
+    [$.block_sequence],
+    [$.map_value_scalar, $.map_value_node_scalar],
+    [$.scalar, $.block_key_scalar],
+    [$.map_value, $.map_value_node],
+    [$.flow_explicit],
+    [$.flow_mapping],
+    [$.flow_sequence],
+    [$.explicit_doc_body],
+    [$.inline_doc_node],
+    [$.alias_or_keyed],
+    [$.doc_fold],
+    [$.mapping_from_flow],
+    [$.mapping_or_scalar],
+    [$.property, $.node],
+    [$.seq_item],
+    [$.property],
+    [$.flow_node],
+    [$.node, $.explicit_doc_body],
+    [$.node, $.after_doc_end],
+    [$.after_doc_end],
+    [$.map_entry],
+    [$.stream, $.explicit_doc_body],
+    [$.map_entry_no_empty],
+    [$.seq_value_node],
+    [$.mapping_or_scalar, $.doc_fold],
+    [$.map_value_scalar, $.map_inline_scalar],
+    [$.content_node, $.mapping_from_flow],
+    [$.mapping_or_scalar, $.map_value],
+  ],
+
   rules: {
-    stream: $ => choice(seq(repeat1(seq(choice($.yaml_directive, $.directive), optional($.newline))), optional(seq($.doc_start, optional($.explicit_doc_body), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline)))), seq(optional($.indent), optional(choice($.doc_fold, $.node)), optional($.dedent), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline))),
+    stream: $ => choice(seq(repeat1(seq(choice($.yaml_directive, $.directive), optional($.newline))), optional(seq($.doc_start, optional($.explicit_doc_body), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline)))), seq(optional($.indent), optional(choice($.doc_fold, optional($.node))), optional($.dedent), repeat(seq(optional($.newline), $.next_doc)), optional($.newline), optional($.doc_end), optional($.newline))),
 
     property: $ => choice(seq($.anchor, optional($.tag)), seq($.tag, optional($.anchor))),
 
     content_node: $ => choice($.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.flow_mapping, $.flow_sequence, $.mapping_from_flow, $.alias_or_keyed, $.mapping_or_scalar),
 
-    node: $ => choice(seq(optional($.anchor), optional($.tag), optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.mapping_from_flow, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), seq($.tag, $.anchor, optional(choice(seq($.indent, $.node, $.dedent), seq($.newline, $.node), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.mapping_from_flow, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), $.block_sequence),
+    node: $ => choice(choice(seq($.anchor, optional($.tag), optional(choice(seq($.indent, optional($.node), $.dedent), seq($.newline, optional($.node)), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.mapping_from_flow, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), seq($.tag, optional(choice(seq($.indent, optional($.node), $.dedent), seq($.newline, optional($.node)), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.mapping_from_flow, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), choice(seq($.indent, optional($.node), $.dedent), seq($.newline, optional($.node)), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.mapping_from_flow, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar)), seq($.tag, $.anchor, optional(choice(seq($.indent, optional($.node), $.dedent), seq($.newline, optional($.node)), $.block_sequence, $.explicit_mapping, $.empty_key_mapping, $.mapping_from_flow, $.flow_mapping, $.flow_sequence, $.alias_or_keyed, $.mapping_or_scalar))), $.block_sequence),
 
     mapping_or_scalar: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, choice($.num, $.bool_null, $.plain), repeat(seq($.newline, choice($.num, $.bool_null, $.plain))), $.dedent), seq($.block_key_scalar, ":", optional($.map_value_scalar), repeat(seq($.newline, $.map_entry))), $.scalar),
 
@@ -41,11 +96,11 @@ module.exports = grammar({
 
     empty_key_mapping: $ => seq(":", optional($.map_value_scalar), repeat(seq($.newline, $.map_entry_no_empty))),
 
-    value: $ => choice(seq($.indent, choice($.num, $.bool_null, $.plain), repeat1(seq($.newline, $.plain)), $.dedent), seq($.indent, $.node, $.dedent), $.seq_value_node),
+    value: $ => choice(seq($.indent, choice($.num, $.bool_null, $.plain), repeat1(seq($.newline, $.plain)), $.dedent), seq($.indent, optional($.node), $.dedent), $.seq_value_node),
 
-    map_value: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, choice($.num, $.bool_null, $.plain), repeat(seq($.newline, choice($.num, $.bool_null, $.plain))), $.dedent), seq($.indent, choice($.num, $.bool_null, $.plain), repeat1(seq($.newline, $.plain)), $.dedent), seq($.indent, $.node, $.dedent), seq($.indent, $.property, $.dedent, $.content_node), seq($.indent, $.property, $.dedent, $.newline, $.block_sequence), seq($.property, $.newline, $.block_sequence), seq($.newline, $.block_sequence), $.map_value_node),
+    map_value: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, choice($.num, $.bool_null, $.plain), repeat(seq($.newline, choice($.num, $.bool_null, $.plain))), $.dedent), seq($.indent, choice($.num, $.bool_null, $.plain), repeat1(seq($.newline, $.plain)), $.dedent), seq($.indent, optional($.node), $.dedent), seq($.indent, $.property, $.dedent, $.content_node), seq($.indent, $.property, $.dedent, $.newline, $.block_sequence), seq($.property, $.newline, $.block_sequence), seq($.newline, $.block_sequence), $.map_value_node),
 
-    map_value_scalar: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, choice($.num, $.bool_null, $.plain), repeat(seq($.newline, choice($.num, $.bool_null, $.plain))), $.dedent), seq($.indent, choice($.num, $.bool_null, $.plain), repeat1(seq($.newline, $.plain)), $.dedent), seq($.indent, $.node, $.dedent), seq($.indent, $.property, $.dedent, $.content_node), seq($.indent, $.property, $.dedent, $.newline, $.block_sequence), seq($.property, $.newline, $.block_sequence), seq($.newline, $.block_sequence), $.map_value_node_scalar),
+    map_value_scalar: $ => choice(seq(choice($.num, $.bool_null, $.plain), $.indent, choice($.num, $.bool_null, $.plain), repeat(seq($.newline, choice($.num, $.bool_null, $.plain))), $.dedent), seq($.indent, choice($.num, $.bool_null, $.plain), repeat1(seq($.newline, $.plain)), $.dedent), seq($.indent, optional($.node), $.dedent), seq($.indent, $.property, $.dedent, $.content_node), seq($.indent, $.property, $.dedent, $.newline, $.block_sequence), seq($.property, $.newline, $.block_sequence), seq($.newline, $.block_sequence), $.map_value_node_scalar),
 
     indented_value_node: $ => choice(seq($.property, choice(seq($.indent, $.indented_value_node, $.dedent), $.collection_content)), $.content_node),
 
@@ -71,19 +126,19 @@ module.exports = grammar({
 
     seq_item: $ => seq("-", optional($.value)),
 
-    flow_node: $ => seq(optional($.property), optional(choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar))),
+    flow_node: $ => choice(seq($.property, optional(choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar))), choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar)),
 
-    flow_explicit: $ => seq("?", optional($.flow_node)),
+    flow_explicit: $ => seq("?", optional(optional($.flow_node))),
 
-    flow_map_entry: $ => seq(optional($.flow_explicit), optional($.flow_node), optional(seq(":", optional($.flow_node)))),
+    flow_map_entry: $ => choice(seq($.flow_explicit, optional(optional($.flow_node)), optional(seq(":", optional(optional($.flow_node))))), seq($.flow_node, optional(seq(":", optional(optional($.flow_node))))), seq(":", optional(optional($.flow_node)))),
 
-    flow_mapping: $ => seq("{", optional(seq($.flow_map_entry, repeat(seq(",", $.flow_map_entry)))), optional(","), "}"),
+    flow_mapping: $ => seq($._flow_lbrace, optional(seq(optional($.flow_map_entry), repeat(seq(",", optional($.flow_map_entry))))), optional(","), $._flow_rbrace),
 
-    flow_seq_entry: $ => choice(seq($.flow_seq_key, ":", optional($.flow_node)), seq("?", optional($.flow_node), optional(seq(":", optional($.flow_node)))), seq(":", optional($.flow_node)), $.flow_node),
+    flow_seq_entry: $ => choice(seq($.flow_seq_key, ":", optional(optional($.flow_node))), seq("?", optional(optional($.flow_node)), optional(seq(":", optional(optional($.flow_node))))), seq(":", optional(optional($.flow_node))), $.flow_node),
 
     flow_seq_key: $ => choice(seq(optional($.property), choice($.flow_mapping, $.flow_sequence, $.dquote_key, $.squote_key, $.key)), $.alias),
 
-    flow_sequence: $ => seq("[", optional(seq($.flow_seq_entry, repeat(seq(",", $.flow_seq_entry)))), optional(","), "]"),
+    flow_sequence: $ => seq($._flow_lbracket, optional(seq(optional($.flow_seq_entry), repeat(seq(",", optional($.flow_seq_entry))))), optional(","), $._flow_rbracket),
 
     scalar: $ => choice($.dquote_key, $.squote_key, $.dquote, $.squote, $.block_scalar, $.key, $.num, $.bool_null, $.plain),
 
@@ -91,13 +146,13 @@ module.exports = grammar({
 
     doc_fold: $ => seq(choice($.num, $.bool_null, $.plain), repeat1(choice(seq($.newline, choice($.plain, $.yaml_directive, $.directive)), seq($.indent, choice($.plain, $.yaml_directive, $.directive), repeat(seq($.newline, choice($.plain, $.yaml_directive, $.directive))), $.dedent)))),
 
-    inline_doc_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.doc_fold, $.dedent), seq($.indent, $.node, $.dedent), seq($.newline, $.doc_fold), seq($.newline, $.node), $.flow_mapping, $.flow_sequence, $.alias, $.scalar))), $.doc_fold, choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar)),
+    inline_doc_node: $ => choice(seq($.property, optional(choice(seq($.indent, $.doc_fold, $.dedent), seq($.indent, optional($.node), $.dedent), seq($.newline, $.doc_fold), seq($.newline, optional($.node)), $.flow_mapping, $.flow_sequence, $.alias, $.scalar))), $.doc_fold, choice($.flow_mapping, $.flow_sequence, $.alias, $.scalar)),
 
-    explicit_doc_body: $ => choice(seq($.newline, optional($.indent), optional(choice($.doc_fold, $.node)), optional($.dedent)), $.inline_doc_node),
+    explicit_doc_body: $ => choice(seq($.newline, optional($.indent), optional(choice($.doc_fold, optional($.node))), optional($.dedent)), $.inline_doc_node),
 
-    after_doc_end: $ => choice(seq(repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), $.doc_start, optional($.explicit_doc_body)), seq(optional($.indent), choice($.doc_fold, $.node), optional($.dedent))),
+    after_doc_end: $ => choice(seq(repeat(seq(choice($.yaml_directive, $.directive), optional($.newline))), $.doc_start, optional($.explicit_doc_body)), choice(seq($.indent, choice($.doc_fold, optional($.node)), optional($.dedent)), seq(choice($.doc_fold, $.node), optional($.dedent)), $.dedent)),
 
-    next_doc: $ => choice(seq($.doc_start, optional($.explicit_doc_body)), seq($.doc_end, optional(seq($.newline, optional($.after_doc_end))))),
+    next_doc: $ => choice(seq($.doc_start, optional($.explicit_doc_body)), seq($.doc_end, optional(seq($.newline, optional(optional($.after_doc_end)))))),
 
     doc_start: $ => token(/---/),
 
@@ -121,23 +176,7 @@ module.exports = grammar({
 
     alias: $ => token(/\*[^\t\n\f\r \[\]{},]+/),
 
-    tag: $ => token(/!(?:<[^>]*>|[^\t\n\f\r \[\]{},]*)/),
-
-    block_scalar: $ => token(/[^\s\S]/),
-
-    key: $ => token(/(?:[^\t\n\f\r \-?:,\[\]{}#&*!|>'"%@`]|[\-?:])(?:[^:#\n,\[\]{}]|:|#)*/),
-
-    num: $ => token(/(?:[+\-]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)|0x[0-9A-Fa-f]+|0o[0-7]+|[+\-]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][+\-]?[0-9]+)?)/),
-
-    bool_null: $ => token(/(?:true|True|TRUE|false|False|FALSE|null|Null|NULL|~)/),
-
-    plain: $ => token(/(?:[^\t\n\f\r \-?:,\[\]{}#&*!|>'"%@`]|[\-?:])(?:[^:#\n,\[\]{}]|:|#)*/),
-
-    indent: $ => token(/[^\s\S]/),
-
-    dedent: $ => token(/[^\s\S]/),
-
-    newline: $ => token(/[^\s\S]/)
+    tag: $ => token(/!(?:<[^>]*>|[^\t\n\f\r \[\]{},]*)/)
   }
 });
 

@@ -1,6 +1,6 @@
-import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
+import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
-import { tokenPatternIsNever, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
+import { tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
 // gen-treesitter — derive a tree-sitter parser package from one CstGrammar.
@@ -143,6 +143,14 @@ interface GrammarJsContext {
   externalSnake: Set<string>;
   /** original token name → external scanner token name (snake) if scanner-provided */
   scannerTokenFor: Map<string, string>;
+  /** flow-delimiter LITERAL char (`[` `]` `{` `}`) → synthetic external scanner token (snake). These
+   *  bare literals in the flow rules are swapped for refs to the scanner token (renderExpr). Empty for
+   *  non-flow grammars. See flowSyntheticTokens. */
+  flowLiteralTokens: Map<string, string>;
+  /** Non-start rules whose body can derive the empty string. tree-sitter rejects these, so their
+   *  bodies are made non-empty and every reference to them is wrapped in optional() (ε-elimination,
+   *  see makeNonEmpty / wrapNullableRefs). Empty for grammars with no nullable non-start rules. */
+  nullableNonStart: Set<string>;
   /**
    * If the grammar declares an interpolated-template token, the plan for turning it
    * into a `template` RULE (delimiters + the `${ … }` hole) backed by an external
@@ -177,8 +185,13 @@ function hasMarker(expr: RuleExpr): boolean {
  */
 function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
   switch (expr.type) {
-    case 'literal':
+    case 'literal': {
+      // A flow-collection delimiter literal (`[` `]` `{` `}`) is emitted by the external scanner (so
+      // flow_depth persists), so reference its synthetic scanner token instead of the bare string.
+      const flowSym = ctx.flowLiteralTokens.get(expr.value);
+      if (flowSym) return `$.${flowSym}`;
       return jsString(expr.value);
+    }
     case 'ref': {
       // A token provided by the external scanner is referenced by its scanner
       // symbol name (e.g. `regex` → `regex_literal`), not its plain token snake.
@@ -342,9 +355,116 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
   return `choice(\n      ${branches.join(',\n      ')}\n    )`;
 }
 
+// ── Nullable-rule elimination (ε-elimination) ────────────────────────────────
+// tree-sitter rejects a NON-START rule that can match the empty string. An indentation grammar like
+// YAML has several (a YAML node/entry may be NULL: `key:` with no value, `{a: }`, an empty doc), so
+// `node`/`flow_node`/`flow_map_entry`/… are nullable. We push the emptiness to the CALL SITES: make
+// each such rule's body NON-EMPTY (`makeNonEmpty`) and wrap every reference to it in `optional(...)`
+// (`wrapNullableRefs`). The accepted language is identical (rule-or-empty at each use), and ONLY the
+// tree-sitter target is touched — the parser and the other generators never see this. Computed once
+// and gated on the grammar actually having nullable non-start rules, so every grammar that already
+// `generate`s (no such rules) is byte-identical.
+
+/** Non-start rules whose body can derive ε. `isTerminal` flags tokens / external symbols (never nullable). */
+function computeNullableNonStart(grammar: CstGrammar, startName: string, isTerminal: (name: string) => boolean): Set<string> {
+  const ruleNames = new Set(grammar.rules.map(r => r.name));
+  const nullable = new Set<string>();
+  const exprNullable = (e: RuleExpr): boolean => {
+    switch (e.type) {
+      case 'literal': return e.value === '';
+      case 'ref': return ruleNames.has(e.name) && !isTerminal(e.name) && nullable.has(e.name);
+      case 'seq': return e.items.every(exprNullable);
+      case 'alt': return e.items.some(exprNullable);
+      case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true; // ?,* match empty
+      case 'group': return exprNullable(e.body);
+      case 'sep': return true;  // renders to optional(seq(...))
+      default: return true;     // not/sameLine/noCommentBefore/noMultilineFlowBefore/op/prefix/postfix → blank()
+    }
+  };
+  let changed = true;
+  while (changed) { changed = false; for (const r of grammar.rules) if (!nullable.has(r.name) && exprNullable(r.body)) { nullable.add(r.name); changed = true; } }
+  nullable.delete(startName); // the start rule MAY be nullable in tree-sitter
+  return nullable;
+}
+
+/** Wrap every reference to a made-non-empty (`nn`) rule in optional() — the may-be-empty form. */
+function wrapNullableRefs(e: RuleExpr, nn: Set<string>): RuleExpr {
+  switch (e.type) {
+    case 'ref': return nn.has(e.name) ? { type: 'quantifier', kind: '?', body: e } : e;
+    case 'seq': return { type: 'seq', items: e.items.map(i => wrapNullableRefs(i, nn)) };
+    case 'alt': return { type: 'alt', items: e.items.map(i => wrapNullableRefs(i, nn)) };
+    case 'quantifier': return { ...e, body: wrapNullableRefs(e.body, nn) };
+    case 'group': return { ...e, body: wrapNullableRefs(e.body, nn) };
+    case 'sep': return { ...e, element: wrapNullableRefs(e.element, nn) };
+    default: return e;
+  }
+}
+
+/** Whether e is nullable AFTER the transform (a ref to an `nn` rule is now wrapped optional → nullable;
+ *  every other ref is non-nullable, since `nn` is exactly the made-non-empty set). */
+function exprNullableAfter(e: RuleExpr, nn: Set<string>): boolean {
+  switch (e.type) {
+    case 'literal': return e.value === '';
+    case 'ref': return nn.has(e.name);
+    case 'seq': return e.items.every(i => exprNullableAfter(i, nn));
+    case 'alt': return e.items.some(i => exprNullableAfter(i, nn));
+    case 'quantifier': return e.kind === '+' ? exprNullableAfter(e.body, nn) : true;
+    case 'group': return exprNullableAfter(e.body, nn);
+    case 'sep': return true;
+    default: return true;
+  }
+}
+
+/** The non-empty form of a (nullable) expr — its language minus ε. `null` if that language is empty
+ *  (a purely zero-width expr). The chosen non-empty position is rendered UNWRAPPED; the rest get the
+ *  may-be-empty form `wrapNullableRefs`. */
+function makeNonEmpty(e: RuleExpr, nn: Set<string>): RuleExpr | null {
+  const T = (x: RuleExpr) => wrapNullableRefs(x, nn);
+  const NE = (x: RuleExpr) => makeNonEmpty(x, nn);
+  const nul = (x: RuleExpr) => exprNullableAfter(x, nn);
+  switch (e.type) {
+    case 'literal': return e.value === '' ? null : e;
+    case 'ref': return e;                                   // an nn rule (now non-empty) or a non-nullable rule/terminal
+    case 'group': { const b = NE(e.body); return b ? { ...e, body: b } : null; }
+    case 'alt': {
+      const parts: RuleExpr[] = [];
+      for (const m of e.items) { const r = nul(m) ? NE(m) : T(m); if (r) parts.push(r); }
+      return parts.length === 0 ? null : parts.length === 1 ? parts[0] : { type: 'alt', items: parts };
+    }
+    case 'seq': {
+      if (e.items.some(i => !nul(i))) return T(e);          // a non-nullable element already forces non-empty
+      const branches: RuleExpr[] = [];                       // all nullable → "first non-empty element is at i"
+      for (let i = 0; i < e.items.length; i++) {
+        const head = NE(e.items[i]);
+        if (!head) continue;
+        const tail = e.items.slice(i + 1).map(T);
+        branches.push(tail.length ? { type: 'seq', items: [head, ...tail] } : head);
+      }
+      return branches.length === 0 ? null : branches.length === 1 ? branches[0] : { type: 'alt', items: branches };
+    }
+    case 'quantifier': {
+      if (e.kind === '?') return nul(e.body) ? NE(e.body) : T(e.body);   // optional(x) non-empty = x non-empty
+      const head = nul(e.body) ? NE(e.body) : T(e.body);                 // *,+ non-empty = one non-empty iter, then repeat
+      return head ? { type: 'seq', items: [head, { type: 'quantifier', kind: '*', body: T(e.body) }] } : null;
+    }
+    case 'sep': {
+      const head = nul(e.element) ? NE(e.element) : T(e.element);
+      if (!head) return null;
+      const d: RuleExpr = { type: 'literal', value: e.delimiter };
+      return { type: 'seq', items: [head, { type: 'quantifier', kind: '*', body: { type: 'seq', items: [d, T(e.element)] } }, { type: 'quantifier', kind: '?', body: d }] };
+    }
+    default: return null;                                   // not/sameLine/…: zero-width, no non-empty form
+  }
+}
+
 /** Build a single rule's body string (Pratt or plain). */
 function buildRuleBody(rule: RuleDecl, ctx: GrammarJsContext): string {
   if (ctx.prattRules.has(rule.name)) return buildPrattRule(rule, ctx);
+  const nn = ctx.nullableNonStart;
+  if (nn.size > 0) {
+    const body = nn.has(rule.name) ? (makeNonEmpty(rule.body, nn) ?? rule.body) : wrapNullableRefs(rule.body, nn);
+    return renderExpr(body, ctx);
+  }
   return renderExpr(rule.body, ctx);
 }
 
@@ -367,7 +487,13 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
   // rule reference — but we still emit them so highlights can capture comments.
   // tree-sitter's token() DFA rejects zero-width assertions, so strip them first.
   if (tokenPatternIsNever(tok)) return 'token(/[^\\s\\S]/)';
-  return `token(${jsRegexLiteral(sanitizeTreeSitterRegex(tokenPatternSource(tok)))})`;
+  // A token with a BLOCK-context variant (YAML's scalar tokens: a block plain/key stops at a `: `
+  // separator and a value end, where the flow variant runs through them) — emit the block pattern.
+  // The tree-sitter grammar is block-context at the top level; flow collections are their own rules.
+  // Block-only (no `pattern`) and dual tokens both resolve here; YAML is the only grammar with a
+  // blockPattern, so every other language is unaffected (byte-identical).
+  const src = tok.blockPattern ? tokenPatternSource({ pattern: tok.blockPattern }) : tokenPatternSource(tok);
+  return `token(${jsRegexLiteral(sanitizeTreeSitterRegex(src))})`;
 }
 
 // ── conflicts ────────────────────────────────────────────────────────────────
@@ -423,6 +549,22 @@ const LR_CONFLICT_CLOSURE: string[][] = [
   // while completing the closure (CI builds only the typescript + html tree-sitters, so
   // tsx/jsx generate was never exercised). Each is inert for languages lacking the rule.
   ['type', 'class_heritage'], ['type_param', 'jsxtag_name'], ['expr', 'jsxcontainer'],
+  // YAML (issue #3): an indentation grammar is massively ambiguous — a newline may continue a node or
+  // start the next document, a `:` may open a value or be an empty-key map, a scalar may be a key or a
+  // leaf, a flow collection may be a value or an implicit block key. tree-sitter's GLR absorbs all of
+  // this once the states are declared. These 37 tuples are the fixpoint of its own analysis (collected
+  // via test/collect-conflicts.ts); every name is YAML-specific, so each is inert for the other
+  // languages (verified: zero rule-name overlap with the TS/JS/TSX/JSX grammars).
+  ['stream', 'node'], ['empty_key_mapping'], ['explicit_entry'], ['next_doc'], ['stream', 'next_doc'],
+  ['node'], ['key', 'plain'], ['scalar', 'doc_fold'], ['explicit_mapping'], ['block_sequence'],
+  ['map_value_scalar', 'map_value_node_scalar'], ['scalar', 'block_key_scalar'],
+  ['map_value', 'map_value_node'], ['flow_explicit'], ['flow_mapping'], ['flow_sequence'],
+  ['explicit_doc_body'], ['inline_doc_node'], ['alias_or_keyed'], ['doc_fold'], ['mapping_from_flow'],
+  ['mapping_or_scalar'], ['property', 'node'], ['seq_item'], ['property'], ['flow_node'],
+  ['node', 'explicit_doc_body'], ['node', 'after_doc_end'], ['after_doc_end'], ['map_entry'],
+  ['stream', 'explicit_doc_body'], ['map_entry_no_empty'], ['seq_value_node'],
+  ['mapping_or_scalar', 'doc_fold'], ['map_value_scalar', 'map_inline_scalar'],
+  ['content_node', 'mapping_from_flow'], ['mapping_or_scalar', 'map_value'],
 ];
 
 /**
@@ -475,9 +617,12 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
   }
 
   // 3. The LR(1) closure tree-sitter's own analysis reports for this grammar.
-  //    Applied only for tuples whose rules all exist here (inert otherwise).
+  //    Applied only for tuples whose symbols ALL exist here (inert otherwise). A conflict symbol may
+  //    be a RULE or a TOKEN (e.g. YAML's `key`/`plain` are tokens that conflict on a trailing `:`), so
+  //    both name sets count — `$.key` is a valid conflict symbol whether key is a rule or a token.
+  const tokenSnakes = new Set(ctx.tokenSnake.values());
   for (const tuple of LR_CONFLICT_CLOSURE) {
-    if (tuple.every(r => ruleSnakes.has(r))) push(tuple);
+    if (tuple.every(r => ruleSnakes.has(r) || tokenSnakes.has(r))) push(tuple);
   }
 
   return conflicts;
@@ -580,6 +725,69 @@ function planInterpolations(grammar: CstGrammar): InterpolationPlan[] {
   return plans;
 }
 
+/** The block-context SCALAR tokens of an indentation grammar (those carrying a `blockPattern`), split
+ *  by their scope leaf: PLAIN `string.unquoted…`, KEY `entity.name.tag…`, NUM `constant.numeric…`,
+ *  bool/null `constant.language…`. All are scanned in C (see scan_scalar) — a YAML plain/key boundary
+ *  (`:(?=\S)`, `#`-after-space) is a look-around a tree-sitter token DFA can't honour, and a typed
+ *  value emitted by the regex lexer would not carry the key-vs-value decision the GLR parser needs to
+ *  chain top-level mapping entries. Any field may be absent. */
+function planPlainScalarTokens(grammar: CstGrammar): { plain?: string; key?: string; num?: string; boolnull?: string } {
+  if (!grammar.indent) return {};
+  // Every token carrying a `blockPattern` is a block-context scalar; emitting num/bool-null from the
+  // scanner too (classified by shape) — not via a regex token + decline — keeps every scalar an
+  // external token, so the key-vs-value decision is carried and `x: 1\ny: 2` chains correctly.
+  // Split by the scope leaf (the convention is data in the grammar): plain `string.unquoted`, key
+  // `entity.name.tag`, num `constant.numeric`, bool/null `constant.language`.
+  const fam = grammar.tokens.filter(t => t.blockPattern !== undefined && typeof t.blockPattern !== 'string');
+  const num = fam.find(t => (t.scope ?? '').includes('constant.numeric'))?.name;
+  const boolnull = fam.find(t => (t.scope ?? '').includes('constant.language'))?.name;
+  const key = fam.find(t => (t.scope ?? '').startsWith('entity.name.tag'))?.name;
+  const plain = fam.find(t => (t.scope ?? '').startsWith('string.unquoted') && !(t.scope ?? '').includes('constant.'))?.name;
+  return { plain, key, num, boolnull };
+}
+
+/**
+ * Synthetic external tokens for the flow-collection delimiters (`[` `]` `{` `}`). YAML's flow brackets
+ * suspend indentation and turn `,`/brackets into structural separators; a tree-sitter external scanner
+ * can only KEEP that state (flow_depth) across a token if it RETURNS that token (mutations during a
+ * `false` return are discarded — the pre-scan state is restored before the internal bracket is lexed).
+ * So the brackets are emitted by the scanner as external tokens. They have no token name in the source
+ * grammar (they are bare literals in the flow rules), so we synthesize a stable name per delimiter char
+ * and (a) register them as externals here and (b) substitute the matching literal in the rendered rules
+ * (renderExpr). Returns [] for non-flow grammars. Order: every opener (in flowOpen order) then every
+ * closer (flowClose order) — the enum / grammar.js externals follow this order.
+ */
+const FLOW_CHAR_NAMES: Record<string, string> = {
+  '[': 'lbracket', ']': 'rbracket', '{': 'lbrace', '}': 'rbrace', '(': 'lparen', ')': 'rparen',
+};
+function flowSyntheticTokens(grammar: CstGrammar): { sym: string; char: string; open: boolean }[] {
+  const ind = grammar.indent;
+  if (!ind || !(ind.flowOpen?.length || ind.flowClose?.length)) return [];
+  const name = (c: string) => `_flow_${FLOW_CHAR_NAMES[c] ?? `u${c.charCodeAt(0)}`}`;
+  return [
+    ...(ind.flowOpen ?? []).map(c => ({ sym: name(c), char: c, open: true })),
+    ...(ind.flowClose ?? []).map(c => ({ sym: name(c), char: c, open: false })),
+  ];
+}
+
+/**
+ * The document-marker glyphs (`---` / `...`) of an indentation grammar, matched to
+ * `indent.blockScalar.documentMarkers` by token literal prefix — used by the external scanner's
+ * scan_scalar to claim a non-marker glyph as plain and decline a true marker (the markers stay
+ * INTERNAL tokens; see planScannerTokens). Longest glyph first (so a 3-char glyph beats a prefix of
+ * it). Empty unless the grammar declares documentMarkers.
+ */
+function documentMarkerGlyphs(grammar: CstGrammar): string[] {
+  const markers = grammar.indent?.blockScalar?.documentMarkers;
+  if (!markers || markers.length === 0) return [];
+  const out = new Set<string>();
+  for (const tok of grammar.tokens) {
+    const lit = tokenPatternLiteralPrefix(tok);
+    if (lit && markers.includes(lit)) out.add(lit);
+  }
+  return [...out].sort((a, b) => b.length - a.length);
+}
+
 /** Determine which tokens the external scanner must provide. */
 function planScannerTokens(grammar: CstGrammar): Map<string, string> {
   const map = new Map<string, string>();
@@ -587,6 +795,41 @@ function planScannerTokens(grammar: CstGrammar): Map<string, string> {
   // stateless external token (the scanner emits it at each significant line boundary). Listed
   // FIRST so it heads the enum / externals order.
   if (grammar.newline) map.set(grammar.newline.token, toSnake(grammar.newline.token));
+  // An indentation-sensitive grammar (YAML): INDENT / DEDENT / NEWLINE and the block-scalar body are
+  // engine-emitted — the lexer's indent stack (src/gen-lexer.ts) decides them, not a regex — so their
+  // token IR is `never()`. In tree-sitter they become EXTERNAL tokens the C scanner (src/scanner.c)
+  // provides; without this they would serialize as never-match token rules (`token(/[^\s\S]/)`) that
+  // the parser can never match (and the block-scalar body would orphan the scalar). Ordered
+  // indent/dedent/newline/body so grammar.js's `externals` and scanner.c's enum agree positionally.
+  if (grammar.indent) {
+    const ind = grammar.indent;
+    map.set(ind.indentToken, toSnake(ind.indentToken));
+    map.set(ind.dedentToken, toSnake(ind.dedentToken));
+    map.set(ind.newlineToken, toSnake(ind.newlineToken));
+    if (ind.blockScalar) map.set(ind.blockScalar.token, toSnake(ind.blockScalar.token));
+    // The PLAIN and KEY scalars (a `:` is content unless followed by space/EOL; a `#` starts a
+    // comment only after a space) need look-ahead at their boundary, which a tree-sitter `token()`
+    // DFA lacks — so they too become external tokens, scanned by `scan_scalar` in C. Appended AFTER
+    // the block scalar so the enum stays INDENT,DEDENT,NEWLINE,BLOCK_SCALAR,PLAIN,KEY. (Num/BoolNull
+    // are NOT plain-family — their boundary is DFA-expressible — so they stay regex token rules.)
+    const { plain, key, num, boolnull } = planPlainScalarTokens(grammar);
+    if (plain) map.set(plain, toSnake(plain));
+    if (key) map.set(key, toSnake(key));
+    if (num) map.set(num, toSnake(num));
+    if (boolnull) map.set(boolnull, toSnake(boolnull));
+    // The flow-collection delimiter tokens (`[ ] { }`) — emitted by the scanner so flow_depth persists
+    // (a TRUE return). The synthetic name IS the snake symbol; the matching literal in the flow rules is
+    // swapped for a ref to it in renderExpr. Appended last so the scalar-token positions are unchanged.
+    for (const { sym } of flowSyntheticTokens(grammar)) map.set(sym, sym);
+    // Document markers (`---` / `...`) stay INTERNAL tokens (NOT added here). Their IR is
+    // `literal + a sep look-ahead`; tree-sitter's token() DFA drops the look-ahead, leaving a bare
+    // `---`/`...`. That is fine: the external scalar scanner CLAIMS a non-marker glyph (`---foo`) as a
+    // plain scalar (so it never reaches the internal token) and DECLINES a true sep-bounded marker (so
+    // the internal token lexes it — see scan_scalar's document-marker probe). Making them external
+    // instead perturbs the GLR parse tables — a marker token's valid-symbol set then shifts the lexer's
+    // scalar/indent decisions at unrelated boundaries (a same-column block sequence after a key
+    // mis-lexes) — so keeping them internal leaves the tables byte-identical to a no-marker build.
+  }
   // The regex token: '/' is context-sensitive (regex vs division). The scanner
   // resolves it.
   const regexTok = grammar.tokens.find(t => t.flags.includes('regex'));
@@ -778,8 +1021,18 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
   // queries for them. Same shape rule gen-tm.ts uses (inferIdentScope).
   const nameFields = collectNameFields(grammar);
 
+  // ε-elimination set (see makeNonEmpty): the start rule is the entry rule, emitted FIRST below.
+  const entryName = grammar.rules[grammar.rules.length - 1].name;
+  const isTerminalName = (n: string) => tokenNames.has(n) || scannerTokenFor.has(n);
+  const nullableNonStart = computeNullableNonStart(grammar, entryName, isTerminalName);
+
+  const flowLiteralTokens = new Map<string, string>();
+  for (const { sym, char } of flowSyntheticTokens(grammar)) flowLiteralTokens.set(char, sym);
+
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
+    flowLiteralTokens,
+    nullableNonStart,
     templatePlan,
     interpolationPlans,
     nameFieldNodes: nameFields.nodes,
@@ -1627,11 +1880,657 @@ function cCharList(s: string): string {
   return [...s].map(c => `'${c === '\\' || c === "'" ? '\\' + c : c}'`).join(', ');
 }
 
+// ── Indentation external scanner (YAML) ──────────────────────────────────────
+// An indentation-sensitive grammar emits INDENT / DEDENT / NEWLINE from a line-leading-column state
+// machine that a regex lexer cannot express, so they become external tokens scanned here. This C
+// scanner mirrors the indent-stack logic of src/gen-lexer.ts: at each line boundary it measures the
+// next content line's column and emits INDENT (deeper → push), DEDENT (shallower → pop, one per call
+// until the stack top is reached), or NEWLINE (same column → a sibling separator). Flow context needs
+// no special handling: inside `[`/`{` the grammar never references these tokens, so valid_symbols is
+// false there and the line break falls through to `extras`. The indent stack lives in the Scanner
+// struct and is (de)serialized for incremental re-parsing. Block-scalar bodies are scanned verbatim
+// up to the first line at or below the parent indentation. All language data (the comment introducer,
+// the block-scalar introducer chars, the document markers) is DERIVED from `grammar.indent`.
+function buildIndentScannerC(grammar: CstGrammar, ctx: GrammarJsContext, grammarName: string): { scannerC: string; externalTokens: string[] } {
+  const ind = grammar.indent!;
+  const externalTokens = externalSymbols(ctx); // order MUST match grammar.js externals
+  const sym = (tokenName: string) => ctx.scannerTokenFor.get(tokenName)!.toUpperCase();
+  const INDENT = sym(ind.indentToken), DEDENT = sym(ind.dedentToken), NEWLINE = sym(ind.newlineToken);
+  const BLOCK = ind.blockScalar ? sym(ind.blockScalar.token) : null;
+  // The block-context SCALAR externals — plain, key, and the typed num / bool-null — all scanned by
+  // scan_scalar (a `:` is a separator only before space/EOL/flow-indicator; a `#` a comment only after
+  // a space; a typed run is classified by shape). Emitting num/bool-null from the scanner (not via a
+  // regex token + decline) makes EVERY scalar an external token that carries the key-vs-value decision,
+  // which the GLR parser needs to chain top-level mapping entries.
+  const { plain: plainTok, key: keyTok, num: numTok, boolnull: boolnullTok } = planPlainScalarTokens(grammar);
+  const PLAIN = plainTok ? sym(plainTok) : null;
+  const KEY = keyTok ? sym(keyTok) : null;
+  const NUM = numTok ? sym(numTok) : null;
+  const BOOLNULL = boolnullTok ? sym(boolnullTok) : null;
+  const SCALAR = PLAIN || KEY || NUM || BOOLNULL; // scan_scalar is emitted when at least one exists
+  const scalarGate = [PLAIN, KEY, NUM, BOOLNULL].filter(Boolean).map(s => `valid_symbols[${s}]`).join(' || ') || '0';
+  const want = (s: string | null) => (s ? `valid_symbols[${s}] != 0` : 'false');
+  const cmt = ind.comment ?? '#';
+  const cmtC = cmt.length === 1 ? (cmt === '\\' || cmt === "'" ? `'\\${cmt}'` : `'${cmt}'`) : null;
+  const introCond = (ind.blockScalar?.introducers ?? []).map(c => `lexer->lookahead == '${c}'`).join(' || ') || '0';
+  const enumBody = externalTokens.map(s => `  ${s.toUpperCase()},`).join('\n');
+  const G = grammarName;
+  // Compact-notation entry indicators (YAML `-` / `?`) — DERIVED from grammar.indent.compactIndicators
+  // (nothing hardcoded). A `lexer->lookahead == 'c'` disjunction reused by the scanner's compact logic.
+  // (The other inline-content leads — node-property `&`/`!`, flow `[`/`{`, alias `*` — are mirrored as
+  //  literals from gen-lexer's startsBlockStructuralNode, which itself treats them as fixed YAML
+  //  syntax; only the entry indicators are config-driven, matching IndentConfig.compactIndicators.)
+  const compactIndicators = ind.compactIndicators ?? [];
+  const compactIndicatorCond = (v: string) => compactIndicators.map(c => `${v} == '${c}'`).join(' || ') || '0';
+  const hasCompact = compactIndicators.length > 0 && SCALAR;
+  // Flow-collection delimiters (`[ ] { }`) — DERIVED from grammar.indent.flowOpen / flowClose. Inside a
+  // flow collection (flow_depth > 0) indentation is SUSPENDED and `,`/`[`/`]`/`{`/`}` are item/collection
+  // boundaries; in block context (flow_depth == 0) those same chars are ordinary plain-scalar content
+  // (mirrors the flowDepth counter in src/gen-lexer.ts, the parser's lexer). tree-sitter discards an
+  // external scanner's struct mutations on a `false` return (it restores the pre-scan serialized state
+  // before lexing the internal bracket), so a counter cannot be maintained by peeking-then-returning-
+  // false at the bracket; instead the flow OPEN/CLOSE brackets are emitted as EXTERNAL tokens by the
+  // scanner (a TRUE return DOES persist), and flow_depth is bumped there. The brackets are synthesized
+  // external tokens (no token name in yaml.ts) — see flowSyntheticTokens / the literal substitution in
+  // renderExpr. flow_depth is then carried in the Scanner struct (serialize/deserialize).
+  const flowOpen = ind.flowOpen ?? [];
+  const flowClose = ind.flowClose ?? [];
+  const charLit = (c: string) => (c === '\\' || c === "'" ? `'\\${c}'` : `'${c}'`);
+  // Run-boundary chars inside a flow collection: the closers/openers + the entry separator `,`. A plain
+  // scalar still cannot START with one of these (only contain them in block context).
+  const hasFlow = flowOpen.length > 0 || flowClose.length > 0;
+  const flowBreakCond = (v: string) => [...flowOpen, ...flowClose].map(c => `${v} == ${charLit(c)}`).concat(`${v} == ','`).join(' || ');
+  // The synthetic external token name + char for each flow delimiter (open then close), in the SAME
+  // order they were registered in ctx.scannerTokenFor (so the enum / grammar.js externals positions
+  // agree). Built by flowSyntheticTokens(grammar) and shared with the grammar.js side.
+  const flowTokens = flowSyntheticTokens(grammar); // [{ sym, char, open }]
+
+  // DOCUMENT MARKERS (`---` / `...`) — INTERNAL tokens; the external scalar scanner only CLAIMS a non-
+  // marker glyph as plain and DECLINES a true (sep-bounded) marker so the internal token lexes it.
+  const markers = documentMarkerGlyphs(grammar);
+  const hasMarkers = markers.length > 0 && SCALAR;
+  const cChar = (ch: string) => (ch === '\\' || ch === "'" ? `'\\${ch}'` : `'${ch}'`);
+  // Advance over one glyph char (counting `matched`) — DON'T push to the run or mark the token end yet.
+  // The probe commits (mark_end) only on the plain-content path; a true-marker decline marks nothing, so
+  // the probed chars roll back cleanly and tree-sitter then lexes the internal marker token.
+  const eatGlyphChar = (ch: string) => `if (lexer->lookahead == ${cChar(ch)}) { lexer->advance(lexer, false); matched++; }`;
+  // Replay the k matched glyph chars into the run as scalar content (a non-marker glyph: `---foo`,
+  // `--x`). The lexer is already positioned past them; the main loop continues the run from here.
+  const replayGlyph = (glyph: string) => [...glyph].map((ch, k) =>
+    `if (matched > ${k}) { if (blen < sizeof(buf)) buf[blen++] = ${cChar(ch)}; }`).join(' ');
+  const markerProbe = !hasMarkers ? '' : `
+  // DOCUMENT-MARKER probe (column 0). A \`---\`/\`...\` glyph that is sep-bounded (ws / EOL / EOF) is a
+  // document marker — an INTERNAL token (its IR's sep look-ahead is beyond a tree-sitter token() DFA,
+  // but this external scanner decides the boundary). The glyph is matched WITHOUT marking the token end:
+  //   • a FULL glyph + separator      → a TRUE marker: set s->marker_decline and return false; nothing
+  //     was marked, so the probed chars roll back and the internal \`---\`/\`...\` token lexes it (a non-
+  //     marker glyph never reaches that token, so its dropped look-ahead is moot).
+  //   • a LONE indicator char + sep   → a block indicator (\`- \`/\`? \`); decline so the internal \`-\`/\`?\`
+  //     token takes it.
+  //   • anything else (\`---foo\`, \`-1\`) → plain content: replay the matched glyph chars and fall through
+  //     to the scalar loop, which continues the run (so the marker glyph is CLAIMED as a plain scalar).
+  // Markers (and which lead chars are block indicators) are DERIVED from grammar.indent.
+  if (${hasCompact ? 'compact_col < 0 && ' : ''}lexer->get_column(lexer) == 0) {${markers.map(glyph => `
+    if (lexer->lookahead == ${cChar(glyph[0])}) {
+      unsigned matched = 0;
+      ${[...glyph].map(eatGlyphChar).join('\n      ')}
+      int32_t mn = lexer->lookahead;
+      bool msep = (mn == 0 || mn == ' ' || mn == '\\t' || mn == '\\n' || mn == '\\r');
+      if (matched == ${glyph.length} && msep) { s->marker_decline = true; return false; }${compactIndicators.includes(glyph[0]) ? `
+      if (matched == 1 && msep) return false; // lone \`${glyph[0]}\` + separator → block indicator, not content` : ''}
+      ${replayGlyph(glyph)} if (matched > 0) { has_content = true; lexer->mark_end(lexer); }
+    }`).join('')}
+  }`;
+
+  const scannerC = `// Tree-sitter external scanner generated by monogram (indentation path).
+//
+// Mirrors the indent-stack state machine of src/gen-lexer.ts: INDENT / DEDENT / NEWLINE are emitted
+// from the line-leading column relative to an indent stack; a block-scalar body is scanned verbatim.
+// All language data (comment introducer, block-scalar introducers, document markers) is DERIVED from
+// the grammar's \`indent\` config — nothing below is hand-tuned for a specific language.
+
+#include "tree_sitter/parser.h"
+#include "tree_sitter/alloc.h"
+#include <string.h>
+#include <stdint.h>
+
+enum TokenType {
+${enumBody}
+};
+
+typedef struct {
+  uint32_t len;          // indent-stack depth (>= 1; stack[0] == 0, the document level)
+  uint32_t cap;
+  int16_t *stack;        // indentation columns
+  int16_t pending_col;   // column of the line boundary mid-processing (-1 = none)
+  bool pending_newline;  // a NEWLINE is still owed once dedents reach pending_col
+  bool started;          // any content lexed yet (suppresses a leading NEWLINE)${hasCompact ? `
+  bool at_line_lead;     // the next real content token is its line's first (compact-indicator probe)
+  bool property_lead;    // the line's FIRST token is a node property (\`&\`/\`!\`) — its inline content sits
+                         // at the SAME node level, so it must NOT take the compact mapping-key push (\`&a
+                         // a: b\` is the key \`a\` carrying anchor \`&a\`, not \`&a\`-then-INDENTED-\`a: b\`).
+                         // gen-lexer clears atLineLead on the property token (it sees every token); the
+                         // scanner does not lex the property, so it LATCHES this at the line lead and reads
+                         // it at the push. It must survive the property's INTERNAL lex (which the scanner
+                         // declines via a FALSE return) — tree-sitter deserializes the serialized fields on
+                         // a false return, so a SERIALIZED flag would be rolled back; this one is therefore
+                         // NOT serialized and NOT reset in deserialize (it keeps its in-memory value across
+                         // the decline). It is RE-DERIVED from the lead char at every line boundary, so it
+                         // is always correct at the only points it is read (a line lead).` : ''}${hasFlow ? `
+  uint16_t flow_depth;   // > 0 inside flow collections ([ ] { }) → indentation suspended, ,/[/]/{/}` : ''}${hasMarkers ? `
+  bool marker_decline;   // transient: scan_scalar saw a true \`---\`/\`...\` → external declines so the
+                         // internal marker token lexes it. Set+consumed within one scan; not serialized.` : ''}
+} Scanner;
+
+static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
+static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
+
+static void push_indent(Scanner *s, int16_t col) {
+  if (s->len == s->cap) { s->cap *= 2; s->stack = ts_realloc(s->stack, s->cap * sizeof(int16_t)); }
+  s->stack[s->len++] = col;
+}
+
+void *tree_sitter_${G}_external_scanner_create(void) {
+  Scanner *s = ts_malloc(sizeof(Scanner));
+  s->cap = 16; s->len = 1;
+  s->stack = ts_malloc(s->cap * sizeof(int16_t));
+  s->stack[0] = 0;
+  s->pending_col = -1; s->pending_newline = false; s->started = false;${hasCompact ? `
+  s->at_line_lead = true; s->property_lead = false;` : ''}${hasFlow ? `
+  s->flow_depth = 0;` : ''}${hasMarkers ? `
+  s->marker_decline = false;` : ''}
+  return s;
+}
+
+void tree_sitter_${G}_external_scanner_destroy(void *payload) {
+  Scanner *s = (Scanner *)payload;
+  ts_free(s->stack);
+  ts_free(s);
+}
+
+unsigned tree_sitter_${G}_external_scanner_serialize(void *payload, char *buffer) {
+  Scanner *s = (Scanner *)payload;
+  unsigned n = 0;
+  buffer[n++] = s->started ? 1 : 0;
+  buffer[n++] = s->pending_newline ? 1 : 0;${hasCompact ? `
+  buffer[n++] = s->at_line_lead ? 1 : 0;` : ''}
+  memcpy(&buffer[n], &s->pending_col, sizeof(int16_t)); n += sizeof(int16_t);${hasFlow ? `
+  memcpy(&buffer[n], &s->flow_depth, sizeof(uint16_t)); n += sizeof(uint16_t);` : ''}
+  uint32_t count = s->len;
+  while (n + sizeof(uint32_t) + count * sizeof(int16_t) > TREE_SITTER_SERIALIZATION_BUFFER_SIZE && count > 0) count--;
+  memcpy(&buffer[n], &count, sizeof(uint32_t)); n += sizeof(uint32_t);
+  memcpy(&buffer[n], s->stack, count * sizeof(int16_t)); n += count * sizeof(int16_t);
+  return n;
+}
+
+void tree_sitter_${G}_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
+  Scanner *s = (Scanner *)payload;
+  s->len = 1; s->stack[0] = 0; s->pending_col = -1; s->pending_newline = false; s->started = false;${hasCompact ? `
+  s->at_line_lead = true;` : ''}${hasFlow ? `
+  s->flow_depth = 0;` : ''}${hasMarkers ? `
+  s->marker_decline = false;` : ''}
+  if (length < ${hasCompact ? 3 : 2} + sizeof(int16_t)${hasFlow ? ' + sizeof(uint16_t)' : ''} + sizeof(uint32_t)) return;
+  unsigned n = 0;
+  s->started = buffer[n++] != 0;
+  s->pending_newline = buffer[n++] != 0;${hasCompact ? `
+  s->at_line_lead = buffer[n++] != 0;` : ''}
+  memcpy(&s->pending_col, &buffer[n], sizeof(int16_t)); n += sizeof(int16_t);${hasFlow ? `
+  memcpy(&s->flow_depth, &buffer[n], sizeof(uint16_t)); n += sizeof(uint16_t);` : ''}
+  uint32_t count; memcpy(&count, &buffer[n], sizeof(uint32_t)); n += sizeof(uint32_t);
+  if (count == 0) return; // keep stack[0] = 0
+  while (s->cap < count) { s->cap *= 2; s->stack = ts_realloc(s->stack, s->cap * sizeof(int16_t)); }
+  memcpy(s->stack, &buffer[n], count * sizeof(int16_t));
+  s->len = count;
+}
+
+${BLOCK ? `// A block scalar (\`|\` / \`>\`): the introducer + indicators + the verbatim more-indented body, as
+// one token. The body runs while a line is blank or indented MORE than the parent block level (the
+// stack top); it ends at the first non-blank line at or below the parent, or a column-0 document
+// marker, or EOF. mark_end is advanced only over lines that belong to the scalar, so the next node's
+// indentation is left for the normal boundary logic.
+//
+// A ROOT block scalar (the document's own node — stack depth 1) has an effective parent indentation of
+// -1, not 0: its body may sit at column 0 (\`--- >\\nline1\`, yaml-test-suite DK3J / FP8R). So at root,
+// only a column-0 DOCUMENT MARKER (\`---\` / \`...\`) — never plain column-0 text — ends it. The marker
+// is matched without committing the line (no mark_end), so a non-marker column-0 line stays body.${markers.length > 0 ? `` : ''}
+static bool scan_block_scalar(Scanner *s, TSLexer *lexer) {
+  bool root = s->len == 1;           // a document-root block scalar: body may reach column 0
+  int parent = root ? -1 : s->stack[s->len - 1];
+  advance(lexer); // the introducer (| or >)
+  while (lexer->lookahead == '+' || lexer->lookahead == '-' || (lexer->lookahead >= '0' && lexer->lookahead <= '9')) advance(lexer);
+  while (lexer->lookahead != 0 && lexer->lookahead != '\\n' && lexer->lookahead != '\\r') advance(lexer);
+  lexer->mark_end(lexer); // the header line belongs to the scalar
+  for (;;) {
+    if (lexer->lookahead == '\\r') { advance(lexer); if (lexer->lookahead == '\\n') advance(lexer); }
+    else if (lexer->lookahead == '\\n') advance(lexer);
+    else break; // EOF
+    int col = 0;
+    while (lexer->lookahead == ' ') { advance(lexer); col++; }
+    int32_t c = lexer->lookahead;
+    if (c == 0 || c == '\\n' || c == '\\r') { lexer->mark_end(lexer); continue; } // blank line → body${markers.length > 0 ? `
+    if (root && col == 0) {                 // a column-0 document marker ends a root block scalar
+      bool is_marker = false;${markers.map(glyph => `
+      if (!is_marker && c == ${cChar(glyph[0])}) {
+        unsigned m = 0; ${[...glyph].map(ch => `if (lexer->lookahead == ${cChar(ch)}) { advance(lexer); m++; }`).join(' ')}
+        int32_t a = lexer->lookahead;
+        if (m == ${glyph.length} && (a == 0 || a == ' ' || a == '\\t' || a == '\\n' || a == '\\r')) is_marker = true;
+      }`).join('')}
+      if (is_marker) break;                 // leave the marker line for the next token (no mark_end)
+      // not a marker: the chars probed above are body; fall through to consume the rest of the line.
+    }` : ''}
+    if (col <= parent) break; // dedent to/below parent ends the scalar (the line is the next node)
+    while (lexer->lookahead != 0 && lexer->lookahead != '\\n' && lexer->lookahead != '\\r') advance(lexer);
+    lexer->mark_end(lexer);
+  }
+  lexer->result_symbol = ${BLOCK};
+  return true;
+}
+` : ''}${hasCompact ? `
+// Compact block notation (\`- a: 1\` / \`- - x\` / \`- &a k: v\` / \`? key\`): a sequence/explicit-key
+// indicator whose inline content itself begins a block node nests at the content's column, not the
+// indicator's. The indicator chars are DERIVED from grammar.indent.compactIndicators. Mirrors
+// compactNestsHere / startsBlockStructuralNode in src/gen-lexer.ts: the inline content is
+// block-structural when, after an optional node-property prefix (\`&anchor\` / \`!tag\`, 0-2
+// space-separated), it is a further indicator, or a mapping KEY (an unquoted \`:\` then ws/EOL/
+// flow-indicator before a \` #\` comment / EOL, scanned quote-aware). A bare scalar / flow / alias does
+// NOT nest. The property / flow / alias glyphs are fixed YAML syntax (as in gen-lexer); only the entry
+// indicators are config-driven.
+static inline bool compact_is_indicator(int32_t c) { return ${compactIndicatorCond('c')}; }
+static inline bool compact_sep_after(int32_t c) {
+  return c == 0 || c == ' ' || c == '\\t' || c == '\\n' || c == '\\r';
+}
+// The inline content (lookahead is positioned at it) begins a block-structural node. Advances; the
+// caller has frozen a zero-width token end before it and discards the advances (returning the INDENT
+// zero-width on a hit, or rewinding on a miss).
+static bool compact_content_is_structural(TSLexer *lexer) {
+  for (int n = 0; n < 2; n++) {                       // skip 0-2 node-property prefixes (\`&anchor\` / \`!tag\`)
+    int32_t c = lexer->lookahead;
+    if (c == '&' || c == '!') {
+      advance(lexer);
+      while (lexer->lookahead != 0 && !compact_sep_after(lexer->lookahead) && lexer->lookahead != ',') advance(lexer);
+      while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') advance(lexer);
+    } else break;
+  }
+  int32_t c0 = lexer->lookahead;
+  if (c0 == 0 || c0 == '\\n' || c0 == '\\r') return false;            // property alone on the line → no nest
+  if (compact_is_indicator(c0)) { advance(lexer); return compact_sep_after(lexer->lookahead); } // nested indicator
+  if (c0 == '[' || c0 == '{' || c0 == '*') return false;            // flow collection / alias → not a key
+  for (;;) {                                          // scalar KEY sniff (quote-aware), like startsBlockStructuralNode
+    int32_t ch = lexer->lookahead;
+    if (ch == 0 || ch == '\\n' || ch == '\\r') break;
+    if (ch == '"') {
+      advance(lexer);
+      while (lexer->lookahead != 0 && lexer->lookahead != '"' && lexer->lookahead != '\\n') { if (lexer->lookahead == '\\\\') advance(lexer); advance(lexer); }
+      if (lexer->lookahead == '"') advance(lexer);
+      continue;
+    }
+    if (ch == '\\'') {
+      advance(lexer);
+      while (lexer->lookahead != 0 && lexer->lookahead != '\\n') { if (lexer->lookahead == '\\'') { advance(lexer); if (lexer->lookahead != '\\'') break; } advance(lexer); }
+      continue;
+    }
+    if (ch == ' ' || ch == '\\t') { advance(lexer); if (lexer->lookahead == '#') break; continue; } // trailing comment
+    if (ch == ':') {
+      advance(lexer);
+      int32_t n = lexer->lookahead;
+      if (n == 0 || n == ' ' || n == '\\t' || n == '\\n' || n == '\\r' || n == ',' || n == '[' || n == ']' || n == '{' || n == '}') return true;
+      continue;
+    }
+    advance(lexer);
+  }
+  return false;
+}
+` : ''}${SCALAR ? `
+// A PLAIN / KEY scalar. A tree-sitter token() DFA can't decide a plain scalar's boundary (a \`:\` is
+// content unless followed by space/EOL/flow-indicator; a \`#\` starts a comment only after a space),
+// so we scan it here where look-ahead IS available. The run starts at the current column and ends
+// BEFORE the first key/value \`:\`-separator, comment, flow indicator, newline, or EOF; trailing
+// whitespace is trimmed. KEY vs PLAIN is decided by whether a \`:\`-separator immediately follows.
+//
+// A number- or bool/null-SHAPED run is left to the regex \`num\`/\`bool_null\` tokens (return false →
+// tree-sitter rolls back our advances and the typed token matches) — but ONLY where such a token is
+// valid. A multi-line plain fold's continuation line is plain-ONLY (its KEY symbol is not valid), so
+// a numeric-looking continuation ("123" under a plain scalar) must stay PLAIN, not be handed to num.
+//${hasCompact ? `
+// COMPACT mapping-KEY support: when \`compact_col >= 0\` (a line-lead indicator's scalar-led inline
+// content, deeper than the stack top — see the caller), the run is scanned WITHOUT marking the token
+// end (the caller pre-marked a zero-width end at the content start). A KEY run pushes \`compact_col\`
+// and emits a zero-width INDENT — the nested mapping's real indent — and the key is re-lexed on the
+// next call (then compact_col is no longer deeper, so this path is skipped). A leaf scalar (no \`:\`)
+// is emitted as usual, its end marked at the run end. Mirrors compactNestsHere's mapping-key arm.` : ''}
+static bool scan_scalar(TSLexer *lexer, bool want_key, bool want_plain, bool want_num, bool want_boolnull${hasFlow ? `,
+                        int flow_depth` : ''}${(hasCompact || hasMarkers) ? `,
+                        Scanner *s` : ''}${hasCompact ? `,
+                        int16_t compact_col, int indent_sym` : ''}) {${hasCompact ? `
+  bool cm = compact_col >= 0;   // compact-eligible: suppress per-char mark_end (zero-width INDENT on KEY)` : ''}
+  char buf[64];
+  unsigned blen = 0;        // run text (capped) — for the number/bool-null shape test
+  bool has_content = false;
+  bool stopped_at_kv = false; // ended at a \`:\`-separator → this scalar is a mapping KEY
+${markerProbe}
+  for (;;) {
+    int32_t c = lexer->lookahead;
+    if (c == 0) break;                                             // EOF
+    if (c == '\\n' || c == '\\r') {${hasFlow ? `
+      // Inside a flow collection a plain scalar FOLDS across a line break (\`{ multi\\n line: v}\` → the
+      // key is \`multi line\`): the break + surrounding whitespace (and blank/comment-only lines) collapse
+      // to one space and the run continues on the next line. Peek past that trivia run WITHOUT committing
+      // (mark_end stays at the last content char, so a decline trims it): if the next significant char
+      // ENDS the scalar — EOF, a flow indicator/terminator (\`, [ ] { }\`), or a line-leading \`#\` comment —
+      // the break is trailing trivia and the scalar stops here; otherwise fold to a space and continue.
+      if (flow_depth > 0 && has_content) {
+        while (lexer->lookahead == ' ' || lexer->lookahead == '\\t' ||
+               lexer->lookahead == '\\n' || lexer->lookahead == '\\r') lexer->advance(lexer, false);
+        int32_t nx = lexer->lookahead;
+        if (nx == 0 || nx == '#' || (${flowBreakCond('nx')})) break; // scalar ends — the trivia is trailing
+        if (blen < sizeof(buf)) buf[blen++] = ' ';                  // the folded break becomes one space
+        continue;                                                   // next content char marks the new token end
+      }` : ''}
+      break;                                                       // block context (or no content yet): the line break ends the scalar
+    }
+    ${hasFlow ? `if (flow_depth > 0 && (${flowBreakCond('c')})) break; // flow indicators end a scalar — ONLY inside a flow collection` : `if (c == ',' || c == '[' || c == ']' || c == '{' || c == '}') break; // flow indicators end a scalar`}
+    if (!has_content && (c == '-' || c == '?')) {
+      // A leading \`-\`/\`?\` is a block indicator (seq entry / explicit key) when followed by space/EOL/
+      // flow-indicator, and scalar content otherwise (\`-1\`, \`?x\`). Peek the next char to decide.
+      lexer->advance(lexer, false);
+      int32_t n = lexer->lookahead;
+      if (n == 0 || n == ' ' || n == '\\t' || n == '\\n' || n == '\\r'${hasFlow ? ` ||
+          (flow_depth > 0 && (${flowBreakCond('n')}))` : ` ||
+          n == ',' || n == '[' || n == ']' || n == '{' || n == '}'`}) return false; // indicator, not a scalar
+      if (blen < sizeof(buf)) buf[blen++] = (char)c;               // \`-\`/\`?\` glued to non-space is content
+      has_content = true;
+      ${hasCompact ? 'if (!cm) ' : ''}lexer->mark_end(lexer);
+      continue;
+    }
+    if (c == ':') {
+      lexer->advance(lexer, false);                               // past the ':' to peek the next char
+      int32_t n = lexer->lookahead;
+      if (n == 0 || n == ' ' || n == '\\t' || n == '\\n' || n == '\\r'${hasFlow ? ` ||
+          (flow_depth > 0 && (${flowBreakCond('n')}))` : ` ||
+          n == ',' || n == '[' || n == ']' || n == '{' || n == '}'`}) {
+        stopped_at_kv = true; break;                              // ':' is a key/value separator → end before it
+      }
+      if (blen < sizeof(buf)) buf[blen++] = ':';                  // ':' glued to non-space is content
+      has_content = true;
+      ${hasCompact ? 'if (!cm) ' : ''}lexer->mark_end(lexer);
+      continue;
+    }
+    if (c == ' ' || c == '\\t') {
+      lexer->advance(lexer, false);                               // past the space to peek the next char
+      if (lexer->lookahead == '#') break;                        // " #" begins a comment → end before the space
+      if (blen < sizeof(buf)) buf[blen++] = ' ';                  // interior space (e.g. "hello world")
+      continue;                                                   // do NOT mark_end → trailing spaces are trimmed
+    }
+    if (blen < sizeof(buf)) buf[blen++] = (char)c;
+    has_content = true;
+    lexer->advance(lexer, false);
+    ${hasCompact ? 'if (!cm) ' : ''}lexer->mark_end(lexer);                                       // token end follows the last content char
+  }
+  if (!has_content) return false;
+${hasCompact ? `
+  // COMPACT mapping KEY: the inline content after a line-lead indicator is a mapping key → its column
+  // is the nested mapping's indent. Push it and emit the zero-width INDENT (the caller pre-marked the
+  // end at the content start); the key is re-lexed on the next call. A leaf falls through to normal
+  // classification, with its end marked here (run end) since per-char marking was suppressed.
+  if (cm) {
+    if (stopped_at_kv) {
+      push_indent(s, compact_col);
+      s->at_line_lead = true;     // the key is itself this line's fresh lead (re-lexed next call)
+      lexer->result_symbol = indent_sym;
+      return true;                // zero-width INDENT at the content start (advances discarded)
+    }
+    lexer->mark_end(lexer);       // leaf: take the whole run (trailing-space trim is skipped in compact mode)
+  }
+` : ''}
+  // Number / bool-null SHAPE test (so the typed regex tokens still classify \`1\`/\`true\`). Decide KEY
+  // vs PLAIN first, because a typed-looking run is only deferred where a typed token is valid: a KEY
+  // position admits num/bool_null (block_key_scalar), and a non-KEY value position likewise — but a
+  // plain-ONLY fold continuation (neither KEY here, and the run is not a key) must stay PLAIN.
+  // numeric / bool-null SHAPE test — a loose superset is fine for classification (only a typed-shaped
+  // run is emitted as NUM/BOOL_NULL; a run with any other char is PLAIN), at the cost of mis-typing a
+  // rare plain like \`1abc\` as numeric (the documented imprecise edge).
+  bool numeric = blen > 0;
+  for (unsigned i = 0; i < blen; i++) {
+    char ch = buf[i];
+    bool ok = (ch >= '0' && ch <= '9') || ch == '.' || ch == '+' || ch == '-' || ch == 'e' || ch == 'E' ||
+              ch == 'x' || ch == 'o' || ch == 'n' /* inf/nan */ || ch == 'a' || ch == 'f' || ch == 'i' ||
+              ch == 'I' || ch == 'N' || ch == 'F' || (ch >= 'A' && ch <= 'F');
+    if (!ok) { numeric = false; break; }
+  }
+  // also require at least one digit OR a .inf/.nan/~ shape so a bare "e"/"a" word isn't called numeric
+  if (numeric) {
+    bool any_digit = false;
+    for (unsigned i = 0; i < blen; i++) if (buf[i] >= '0' && buf[i] <= '9') { any_digit = true; break; }
+    if (!any_digit) numeric = false;
+  }
+  bool boolnull = false;
+  {
+    static const char *WORDS[] = { "true","True","TRUE","false","False","FALSE","null","Null","NULL","~" };
+    for (unsigned w = 0; w < sizeof(WORDS)/sizeof(WORDS[0]); w++) {
+      const char *p = WORDS[w]; unsigned i = 0;
+      while (i < blen && p[i] && buf[i] == p[i]) i++;
+      if (i == blen && p[i] == 0) { boolnull = true; break; }
+    }
+  }
+  // Classify + emit. The external scalar token CARRIES the key-vs-value decision (a trailing \`: \`
+  // means KEY), which the GLR parser needs to chain mapping entries — so a typed value is emitted as
+  // NUM/BOOL_NULL here, NOT deferred to a regex token (deferring drops the disambiguation and
+  // mis-parses a top-level \`x: 1\\ny: 2\`). A key wins first; then the typed shapes; then PLAIN. Each
+  // is gated on its token being admissible here (valid_symbols), falling through otherwise.
+  if (stopped_at_kv && want_key) { lexer->result_symbol = ${KEY ?? PLAIN}; return true; }
+  if (numeric && want_num) { lexer->result_symbol = ${NUM ?? PLAIN}; return true; }
+  if (boolnull && want_boolnull) { lexer->result_symbol = ${BOOLNULL ?? PLAIN}; return true; }
+  if (want_plain) { lexer->result_symbol = ${PLAIN ?? KEY}; return true; }
+  if (want_key) { lexer->result_symbol = ${KEY ?? PLAIN}; return true; }
+  return false;
+}
+` : ''}
+bool tree_sitter_${G}_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
+  Scanner *s = (Scanner *)payload;
+  bool want_indent = valid_symbols[${INDENT}];
+  bool want_dedent = valid_symbols[${DEDENT}];
+  bool want_newline = valid_symbols[${NEWLINE}];${BLOCK ? `\n  bool want_block = valid_symbols[${BLOCK}];` : ''}${hasMarkers ? `
+  // Content lies to our left whenever we are not at column 0 — including right after an INTERNAL token
+  // (e.g. a \`---\`/\`...\` document marker, whose match the scanner never sees). Mark started so the line
+  // boundary that follows emits its NEWLINE (the leading-NEWLINE suppression is only for blank lines at
+  // the very start of input, which are always at column 0). Without this, the NEWLINE after a leading
+  // \`---\` would be dropped and the document body could not attach.
+  if (lexer->get_column(lexer) > 0) s->started = true;` : ''}
+
+  // Finish a line boundary already in progress: emit the remaining DEDENTs (one per call), then the
+  // owed NEWLINE when the stack top reaches the boundary column. No input is consumed here.
+  if (s->pending_col >= 0) {
+    int top = s->stack[s->len - 1];
+    if (s->pending_col < top) {
+      if (want_dedent) { s->len--; lexer->result_symbol = ${DEDENT}; return true; }
+      s->pending_col = -1; s->pending_newline = false; return false;
+    }
+    bool owed = s->pending_newline;
+    int16_t col = s->pending_col;
+    s->pending_col = -1; s->pending_newline = false;
+    if (col == top && owed && want_newline && s->started) { lexer->result_symbol = ${NEWLINE}; return true; }
+    return false;
+  }
+${hasFlow ? `
+  // Inside a flow collection (flow_depth > 0) a line break is INSIGNIFICANT — indentation is suspended,
+  // so a flow scalar / nested bracket may sit on a following line (\`[a,\\n b]\`). tree-sitter's \`/\\s/\`
+  // extra cannot skip the newline here: the external scanner is consulted first, and a \`false\` return
+  // (the only way to "decline") rolls back any advance, so the newline is never consumed and the parser
+  // stalls into error recovery. So when in flow, the scanner itself eats the flow-insignificant run
+  // (spaces, tabs, newlines, comments) as the LEADING trivia of the next token it returns — the bracket
+  // emission and scalar scan below both return TRUE, which makes the skip stick. (In block context this
+  // is skipped: a newline IS significant and drives the INDENT/DEDENT/NEWLINE boundary logic.)
+  if (s->flow_depth > 0) {
+    for (;;) {
+      int32_t c = lexer->lookahead;
+      if (c == ' ' || c == '\\t' || c == '\\n' || c == '\\r') skip(lexer);
+      ${cmtC ? `else if (c == ${cmtC}) { while (lexer->lookahead != 0 && lexer->lookahead != '\\n' && lexer->lookahead != '\\r') skip(lexer); }` : ''}
+      else break;
+    }
+  }
+  // Flow-collection delimiters ([ ] { }). These are emitted as EXTERNAL tokens (not the internal DFA) so
+  // flow_depth — the open-bracket nesting that suspends indentation — PERSISTS: tree-sitter keeps an
+  // external scanner's struct mutations only across a token it RETURNS (on a \`false\` return it restores
+  // the pre-scan serialized state, so a peek-then-false counter is silently rolled back before the
+  // internal bracket is lexed). Each is gated on its own valid_symbols, so a \`[\`/\`{\` that is plain
+  // content (a scalar contains but never STARTS with one — handled in scan_scalar) is NOT consumed here:
+  // at those positions the flow token isn't valid and we fall through. Skip inline space/tab first (the
+  // flow newline skip above already ran when in flow; in block a newline still drives the indent logic).
+  {
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') skip(lexer);
+    int32_t fc = lexer->lookahead;
+${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym.toUpperCase()}]) {
+      advance(lexer); lexer->mark_end(lexer); lexer->result_symbol = ${t.sym.toUpperCase()};
+      ${t.open ? 'if (s->flow_depth < UINT16_MAX) s->flow_depth++;' : 'if (s->flow_depth > 0) s->flow_depth--;'}
+      s->started = true;${hasCompact ? ' s->at_line_lead = false;' : ''} return true;
+    }`).join('\n')}
+  }
+` : ''}${hasCompact ? `
+  // Compact block notation (\`- a: 1\` / \`- - x\` / \`- &a k: v\` / \`? key\`). The line-lead indicator was
+  // just lexed by tree-sitter's internal DFA, so at_line_lead is still set (the scanner emits no
+  // indicator token to clear it) and tree-sitter now wants the nested node's INDENT on the SAME line.
+  // When the inline content begins a block node, its column — not the indicator's — is the node's
+  // indentation: emit a zero-width INDENT there and push it (the DEDENT logic closes it when a
+  // shallower line arrives). The work splits by what leads the inline content, because the sniff
+  // ADVANCES (irrecoverably) and external-scanner state changes are reverted on a false return:
+  //   • a node-property / flow / alias / nested-indicator lead — sniff it here; a structural hit pushes
+  //     INDENT, a miss returns false so tree-sitter rewinds and the leading char (all INTERNAL-lexable,
+  //     or the scalar handled on the next call) is re-lexed.
+  //   • a plain/quoted SCALAR lead — fall through to scan_scalar (below), which pushes the compact
+  //     INDENT itself when the run is a mapping KEY. (A bare scalar must NOT be sniffed-then-rewound: a
+  //     plain scalar is external-only, so a false return here would loop.)
+  if (want_indent && s->at_line_lead${hasFlow ? ' && s->flow_depth == 0' : ''}) {
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') skip(lexer);
+    int32_t c = lexer->lookahead;
+    // GENUINE line lead: the line's first token is not yet lexed, so its column == the stack top (a
+    // line boundary set top to the lead column; at stream start both are the document level). Once a
+    // token has been lexed on this line the next content is DEEPER than top. Record whether that first
+    // token is a node PROPERTY (\`&\`/\`!\`): a property leads a node, so its inline content is at the
+    // SAME level (no compact push), whereas a compact indicator (\`-\`/\`?\`) DOES open a nested level
+    // for its content. This is the one fact lost when the property is lexed internally (the scanner
+    // never sees it), so it is latched here and checked at the two compact-push sites below.
+    if ((int16_t)lexer->get_column(lexer) == s->stack[s->len - 1]) s->property_lead = (c == '&' || c == '!');
+    bool nonscalar_lead = c == '&' || c == '!' || c == '[' || c == '{' || c == '*' || compact_is_indicator(c);
+    // A property that LEADS the line (property_lead) does not nest — skip the compact push so its key
+    // stays at the node's level (\`&a a: b\` / \`!!str &a1 "foo":\`). A property that follows a compact
+    // indicator (\`- &a k: v\`) is NOT a line lead (property_lead was set false at the \`-\`), so it still
+    // pushes via compact_content_is_structural's property-skip.
+    if (nonscalar_lead && !s->property_lead && (int16_t)lexer->get_column(lexer) > s->stack[s->len - 1]) {
+      int16_t col = (int16_t)lexer->get_column(lexer);
+      lexer->mark_end(lexer); // freeze the zero-width INDENT end at the content column before the sniff advances
+      if (compact_content_is_structural(lexer)) {
+        push_indent(s, col);
+        // A NESTED indicator's content is itself a fresh line-lead (so \`- - x\` nests once more); but a
+        // node-property prefix (\`- &a k: v\`) is followed INLINE by its own mapping KEY at the SAME level
+        // — that key must NOT push again, so clear the lead for the property / direct-key case.
+        s->at_line_lead = compact_is_indicator(c);
+        lexer->result_symbol = ${INDENT};
+        return true;
+      }
+      return false; // not block-structural → rewind; the internal-lexable lead (or next-call scalar) re-lexes
+    }
+  }
+` : ''}${BLOCK ? `
+  // A block scalar value (\`key: |\`): scan its body before the indent logic — its more-indented
+  // lines are content, not nested structure. Skip the inline space after the \`:\`/\`-\` first. Block
+  // scalars are a block-context construct — inside a flow collection \`|\`/\`>\` are plain content.
+  if (want_block${hasFlow ? ' && s->flow_depth == 0' : ''}) {
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') skip(lexer);
+    if (${introCond}) { if (scan_block_scalar(s, lexer)) {${hasCompact ? ' s->at_line_lead = false;' : ''} return true; } }
+  }
+` : ''}${SCALAR ? `
+  // A SCALAR (plain / key / num / bool-null) on the CURRENT line — NOT at a line boundary (a leading
+  // newline falls through to the indent logic so INDENT/DEDENT/NEWLINE are emitted first). Skip inline
+  // spaces/tabs, then if the next char could begin a plain scalar (not a newline/EOF and not a YAML
+  // indicator — a leading \`-\`/\`?\`/\`:\` is resolved inside scan_scalar), scan it where look-ahead is
+  // available. scan_scalar classifies the run and emits the admissible token.
+  if (${scalarGate}) {
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') skip(lexer);
+    int32_t h = lexer->lookahead;
+    bool indicator = h == 0 || h == '\\n' || h == '\\r' || h == ',' || h == '[' || h == ']' || h == '{' ||
+                     h == '}' || h == '#' || h == '&' || h == '*' || h == '!' || h == '|' || h == '>' ||
+                     h == '\\'' || h == '"' || h == '%' || h == '@' || h == '\`';
+    if (!indicator) {${hasCompact ? `
+      // Compact mapping-KEY (part B): a line-lead indicator's scalar-led inline content, deeper than the
+      // stack top. scan_scalar then pushes the nested mapping's INDENT (zero-width, pre-marked here) if
+      // the run is a KEY, or emits the leaf scalar otherwise (so \`- x\` stays a plain item, no push).
+      // \`!s->property_lead\`: a key after a LINE-LEAD node property (\`&a a: b\`) sits at the node's level,
+      // not a compact-nested one — so do NOT pre-mark a compact INDENT; scan_scalar then emits the key as
+      // an ordinary value-position scalar (the enclosing Node carries the property). A key after a compact
+      // indicator (\`- a: 1\`) has property_lead == false and still nests.
+      int16_t compact_col = -1;
+      if (want_indent && s->at_line_lead && !s->property_lead && (int16_t)lexer->get_column(lexer) > s->stack[s->len - 1]) {
+        compact_col = (int16_t)lexer->get_column(lexer);
+        lexer->mark_end(lexer); // zero-width INDENT end at the content start (used iff the run is a KEY)
+      }
+      if (scan_scalar(lexer, ${want(KEY)}, ${want(PLAIN)}, ${want(NUM)}, ${want(BOOLNULL)}${hasFlow ? ', s->flow_depth' : ''}, s, compact_col, ${INDENT})) { s->started = true; s->at_line_lead = (lexer->result_symbol == ${INDENT}); return true; }${hasMarkers ? `
+      if (s->marker_decline) { s->marker_decline = false; return false; } // a true \`---\`/\`...\` here → let the internal marker token lex it` : ''}` : `
+      if (scan_scalar(lexer, ${want(KEY)}, ${want(PLAIN)}, ${want(NUM)}, ${want(BOOLNULL)}${hasFlow ? ', s->flow_depth' : ''}${hasMarkers ? ', s' : ''})) { s->started = true; return true; }${hasMarkers ? `
+      if (s->marker_decline) { s->marker_decline = false; return false; }` : ''}`}
+    }
+  }
+` : ''}
+  if (!want_indent && !want_dedent && !want_newline) return false; // no indent tokens valid${hasFlow ? `
+  // Inside a flow collection a newline is INSIGNIFICANT (indentation suspended): emit NO INDENT/DEDENT/
+  // NEWLINE so the line break is consumed by tree-sitter's \`/\\s/\` extra and the flow spans the line.
+  if (s->flow_depth > 0) return false;` : ''}
+
+  // Skip blank lines, comment-only lines, and leading whitespace, noting whether a line break was
+  // crossed (only a real boundary drives the indent logic).
+  bool found_eol = false;
+  for (;;) {
+    int32_t c = lexer->lookahead;
+    if (c == '\\n') { skip(lexer); found_eol = true; }
+    else if (c == '\\r') { skip(lexer); if (lexer->lookahead == '\\n') skip(lexer); found_eol = true; }
+    else if (c == ' ' || c == '\\t') { skip(lexer); }
+    ${cmtC ? `else if (c == ${cmtC}) { while (lexer->lookahead != 0 && lexer->lookahead != '\\n' && lexer->lookahead != '\\r') skip(lexer); }` : ''}
+    else break; // content or EOF
+  }
+
+  if (lexer->eof(lexer)) {
+    if (s->len > 1 && want_dedent) { s->len--; lexer->result_symbol = ${DEDENT}; return true; } // close open blocks at EOF
+    return false;
+  }
+  bool was_started = s->started;
+  s->started = true; // content lies ahead — mark started even on a mid-line return
+  if (!found_eol) return false; // not at a line boundary
+
+  int16_t col = (int16_t)lexer->get_column(lexer);
+  lexer->mark_end(lexer); // INDENT/DEDENT/NEWLINE are zero-width at the content column
+  int top = s->stack[s->len - 1];${hasCompact ? `
+  s->at_line_lead = true; // a real line boundary — the next real token leads its line
+  // Latch whether THIS new line is led by a node property (\`&\`/\`!\`) — the lookahead is the line's
+  // first content char (blanks/comments already skipped). A property leads a node, so its inline content
+  // is at the same level and must NOT take a compact push (the gates below check property_lead). This is
+  // a TRUE-return site so the latch persists through the property's internal lex; it is also re-derived
+  // for the FIRST line (which reaches no boundary) by the compact block's genuine-line-lead detection.
+  s->property_lead = (lexer->lookahead == '&' || lexer->lookahead == '!');` : ''}
+
+  if (col > top) {
+    if (want_indent) { push_indent(s, col); lexer->result_symbol = ${INDENT}; return true; }
+    return false;
+  }
+  if (col == top) {
+    if (want_newline && was_started) { lexer->result_symbol = ${NEWLINE}; return true; }
+    return false;
+  }
+  // col < top: a dedent. Emit one DEDENT now; queue the rest + the trailing NEWLINE for re-entry.
+  if (want_dedent) {
+    s->pending_col = col; s->pending_newline = true;
+    s->len--; lexer->result_symbol = ${DEDENT}; return true;
+  }
+  return false;
+}
+`;
+  return { scannerC, externalTokens };
+}
+
 function buildScannerC(
   grammar: CstGrammar,
   ctx: GrammarJsContext,
   grammarName: string,
 ): { scannerC: string; externalTokens: string[] } {
+  if (grammar.indent) return buildIndentScannerC(grammar, ctx, grammarName);
   const regexTok = grammar.tokens.find(t => t.flags.includes('regex'));
   const tp = ctx.templatePlan;
 
