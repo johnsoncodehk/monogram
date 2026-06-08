@@ -321,11 +321,11 @@
   "repository": {
     "docstart": {
       "name": "entity.other.document.begin.yaml",
-      "match": "---(?=[\\t ]|\\r|\\n|$)"
+      "match": "^---(?=[\\t ]|\\r|\\n|$)"
     },
     "docend": {
       "name": "entity.other.document.end.yaml",
-      "match": "\\.\\.\\.(?=[\\t ]|\\r|\\n|$)"
+      "match": "^\\.\\.\\.(?=[\\t ]|\\r|\\n|$)"
     },
     "yamldirective": {
       "name": "keyword.other.directive.yaml",

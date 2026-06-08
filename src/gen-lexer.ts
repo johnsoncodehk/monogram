@@ -1,6 +1,6 @@
 import type { CstGrammar } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
-import { tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternFirstCharSet, tokenPatternSource } from './token-pattern.ts';
+import { tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource } from './token-pattern.ts';
 
 // A lexer token: a declared token (type = its name) or a punctuation literal (type = '').
 // `$templateHead/$templateMiddle/$templateTail` are synthetic types the lexer emits for
@@ -45,10 +45,16 @@ export function createLexer(grammar: CstGrammar) {
   const tokenMatchers = grammar.tokens.map(t => {
     const pattern = tokenPatternSource(t);
     const blockPattern = tokenBlockPatternSource(t);
+    // A token whose pattern carries a line-START anchor (`start()` → `^`, e.g. YAML's `---`/`...`
+    // document markers, a shebang) needs the `m` flag: under the sticky `y` matcher a bare `^`
+    // matches only at index 0 (file start), so a marker at the start of a LATER line (`# c\n---\n…`,
+    // `%TAG …\n---\n…`) would fail to lex. With `m`, `^` matches at every line start, so a sticky
+    // match at `lastIndex = pos` succeeds iff `pos` is a line start — exactly `start()`'s meaning.
+    const flags = tokenPatternHasStartAnchor(t) ? 'ym' : 'y';
     return {
       name: t.name,
-      regex: new RegExp(`(?:${pattern})`, 'y'),
-      blockRegex: blockPattern ? new RegExp(`(?:${blockPattern})`, 'y') : null,
+      regex: new RegExp(`(?:${pattern})`, flags),
+      blockRegex: blockPattern ? new RegExp(`(?:${blockPattern})`, flags) : null,
       skip: t.flags.includes('skip'),
       isRegex: t.flags.includes('regex'),
       isString: !!t.string,
