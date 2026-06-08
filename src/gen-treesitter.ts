@@ -2005,7 +2005,18 @@ typedef struct {
   int16_t pending_col;   // column of the line boundary mid-processing (-1 = none)
   bool pending_newline;  // a NEWLINE is still owed once dedents reach pending_col
   bool started;          // any content lexed yet (suppresses a leading NEWLINE)${hasCompact ? `
-  bool at_line_lead;     // the next real content token is its line's first (compact-indicator probe)` : ''}${hasFlow ? `
+  bool at_line_lead;     // the next real content token is its line's first (compact-indicator probe)
+  bool property_lead;    // the line's FIRST token is a node property (\`&\`/\`!\`) — its inline content sits
+                         // at the SAME node level, so it must NOT take the compact mapping-key push (\`&a
+                         // a: b\` is the key \`a\` carrying anchor \`&a\`, not \`&a\`-then-INDENTED-\`a: b\`).
+                         // gen-lexer clears atLineLead on the property token (it sees every token); the
+                         // scanner does not lex the property, so it LATCHES this at the line lead and reads
+                         // it at the push. It must survive the property's INTERNAL lex (which the scanner
+                         // declines via a FALSE return) — tree-sitter deserializes the serialized fields on
+                         // a false return, so a SERIALIZED flag would be rolled back; this one is therefore
+                         // NOT serialized and NOT reset in deserialize (it keeps its in-memory value across
+                         // the decline). It is RE-DERIVED from the lead char at every line boundary, so it
+                         // is always correct at the only points it is read (a line lead).` : ''}${hasFlow ? `
   uint16_t flow_depth;   // > 0 inside flow collections ([ ] { }) → indentation suspended, ,/[/]/{/}` : ''}${hasMarkers ? `
   bool marker_decline;   // transient: scan_scalar saw a true \`---\`/\`...\` → external declines so the
                          // internal marker token lexes it. Set+consumed within one scan; not serialized.` : ''}
@@ -2025,7 +2036,7 @@ void *tree_sitter_${G}_external_scanner_create(void) {
   s->stack = ts_malloc(s->cap * sizeof(int16_t));
   s->stack[0] = 0;
   s->pending_col = -1; s->pending_newline = false; s->started = false;${hasCompact ? `
-  s->at_line_lead = true;` : ''}${hasFlow ? `
+  s->at_line_lead = true; s->property_lead = false;` : ''}${hasFlow ? `
   s->flow_depth = 0;` : ''}${hasMarkers ? `
   s->marker_decline = false;` : ''}
   return s;
@@ -2391,8 +2402,20 @@ ${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym
   if (want_indent && s->at_line_lead${hasFlow ? ' && s->flow_depth == 0' : ''}) {
     while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') skip(lexer);
     int32_t c = lexer->lookahead;
+    // GENUINE line lead: the line's first token is not yet lexed, so its column == the stack top (a
+    // line boundary set top to the lead column; at stream start both are the document level). Once a
+    // token has been lexed on this line the next content is DEEPER than top. Record whether that first
+    // token is a node PROPERTY (\`&\`/\`!\`): a property leads a node, so its inline content is at the
+    // SAME level (no compact push), whereas a compact indicator (\`-\`/\`?\`) DOES open a nested level
+    // for its content. This is the one fact lost when the property is lexed internally (the scanner
+    // never sees it), so it is latched here and checked at the two compact-push sites below.
+    if ((int16_t)lexer->get_column(lexer) == s->stack[s->len - 1]) s->property_lead = (c == '&' || c == '!');
     bool nonscalar_lead = c == '&' || c == '!' || c == '[' || c == '{' || c == '*' || compact_is_indicator(c);
-    if (nonscalar_lead && (int16_t)lexer->get_column(lexer) > s->stack[s->len - 1]) {
+    // A property that LEADS the line (property_lead) does not nest — skip the compact push so its key
+    // stays at the node's level (\`&a a: b\` / \`!!str &a1 "foo":\`). A property that follows a compact
+    // indicator (\`- &a k: v\`) is NOT a line lead (property_lead was set false at the \`-\`), so it still
+    // pushes via compact_content_is_structural's property-skip.
+    if (nonscalar_lead && !s->property_lead && (int16_t)lexer->get_column(lexer) > s->stack[s->len - 1]) {
       int16_t col = (int16_t)lexer->get_column(lexer);
       lexer->mark_end(lexer); // freeze the zero-width INDENT end at the content column before the sniff advances
       if (compact_content_is_structural(lexer)) {
@@ -2431,8 +2454,12 @@ ${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym
       // Compact mapping-KEY (part B): a line-lead indicator's scalar-led inline content, deeper than the
       // stack top. scan_scalar then pushes the nested mapping's INDENT (zero-width, pre-marked here) if
       // the run is a KEY, or emits the leaf scalar otherwise (so \`- x\` stays a plain item, no push).
+      // \`!s->property_lead\`: a key after a LINE-LEAD node property (\`&a a: b\`) sits at the node's level,
+      // not a compact-nested one — so do NOT pre-mark a compact INDENT; scan_scalar then emits the key as
+      // an ordinary value-position scalar (the enclosing Node carries the property). A key after a compact
+      // indicator (\`- a: 1\`) has property_lead == false and still nests.
       int16_t compact_col = -1;
-      if (want_indent && s->at_line_lead && (int16_t)lexer->get_column(lexer) > s->stack[s->len - 1]) {
+      if (want_indent && s->at_line_lead && !s->property_lead && (int16_t)lexer->get_column(lexer) > s->stack[s->len - 1]) {
         compact_col = (int16_t)lexer->get_column(lexer);
         lexer->mark_end(lexer); // zero-width INDENT end at the content start (used iff the run is a KEY)
       }
@@ -2471,7 +2498,13 @@ ${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym
   int16_t col = (int16_t)lexer->get_column(lexer);
   lexer->mark_end(lexer); // INDENT/DEDENT/NEWLINE are zero-width at the content column
   int top = s->stack[s->len - 1];${hasCompact ? `
-  s->at_line_lead = true; // a real line boundary — the next real token leads its line` : ''}
+  s->at_line_lead = true; // a real line boundary — the next real token leads its line
+  // Latch whether THIS new line is led by a node property (\`&\`/\`!\`) — the lookahead is the line's
+  // first content char (blanks/comments already skipped). A property leads a node, so its inline content
+  // is at the same level and must NOT take a compact push (the gates below check property_lead). This is
+  // a TRUE-return site so the latch persists through the property's internal lex; it is also re-derived
+  // for the FIRST line (which reaches no boundary) by the compact block's genuine-line-lead detection.
+  s->property_lead = (lexer->lookahead == '&' || lexer->lookahead == '!');` : ''}
 
   if (col > top) {
     if (want_indent) { push_indent(s, col); lexer->result_symbol = ${INDENT}; return true; }
