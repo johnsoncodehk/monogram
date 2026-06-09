@@ -843,6 +843,27 @@ function tokenize(source) {
   // Baked maps. Emit as object literals → Map.
   e.emit(`const opTable = new Map(${J([...a.opTable])});`);
   e.emit(`const prefixOps = new Map(${J([...a.prefixOps])});`);
+  // The same op tables re-keyed by the literal int (tok.t): the Pratt loops look an
+  // operator up for EVERY token they reach, and tok.t is already interned — an array
+  // load replaces the string-keyed Map.get. Equivalent because a token's text can equal
+  // an operator value only for punct tokens and keyword-shaped idents, exactly the
+  // classes tok.t indexes (operator values are in the literal vocabulary by construction).
+  {
+    let tSize = 1;
+    for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
+    for (const v of st.puLitKind.values()) tSize = Math.max(tSize, v + 1);
+    const byT = (m: Map<string, unknown>) => {
+      const arr: unknown[] = new Array(tSize).fill(null);
+      for (const [value, info] of m) {
+        const d = st.classifyKey(value);
+        if (d.kind === 'tok' || d.t === 0) throw new Error(`emit: operator ${J(value)} missing from the literal vocabulary`);
+        arr[d.t] = info;
+      }
+      return arr;
+    };
+    e.emit(`const OP_BY_T = ${J(byT(a.opTable))};`);
+    e.emit(`const PREFIX_BY_T = ${J(byT(a.prefixOps))};`);
+  }
   e.emit(`const noUnaryLhsOps = new Set(${J([...a.noUnaryLhsOps])});`);
   e.emit(`const postfixOpValues = new Set(${J([...a.postfixOpValues])});`);
   e.emit(`const tokenNames = new Set(${J([...a.tokenNames])});`);
@@ -1129,7 +1150,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       // prefix $ pattern: identical to parsePratt's prefix branch.
       e.emit(`    { const tok = peek();`);
       e.emit(`      if (tok) {`);
-      e.emit(`        const info = prefixOps.get(tok.text);`);
+      e.emit(`        const info = PREFIX_BY_T[tok.t];`);
       e.emit(`        if (info) {`);
       e.emit(`          pos++;`);
       e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };`);
@@ -1184,8 +1205,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   });
   e.emit(`    if (matched) continue;`);
   // Operator LED ($ op $ / postfix), copied verbatim.
-  e.emit(`    const tokKey = tok.text;`);
-  e.emit(`    const info = opTable.get(tokKey);`);
+  e.emit(`    const info = OP_BY_T[tok.t];`);
   e.emit(`    if (info && info.lbp > minBp) {`);
   e.emit(`      if (info.position === 'postfix') {`);
   e.emit(`        if (!tailClosed) {`);
@@ -1195,7 +1215,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`          tailClosed = true; matched = true;`);
   e.emit(`        }`);
   e.emit(`      } else {`);
-  e.emit(`        if (noUnaryLhsOps.has(tokKey) && lhs.kind === 'node') {`);
+  e.emit(`        if (noUnaryLhsOps.has(tok.text) && lhs.kind === 'node') {`);
   e.emit(`          const head = lhs.children[0];`);
   e.emit(`          if (head && head.kind === 'leaf' && head.tokenType === '$operator' && prefixOps.has(head.text) && !postfixOpValues.has(head.text)) { return null; }`);
   e.emit(`        }`);
