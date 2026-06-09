@@ -178,13 +178,6 @@ function analyze(grammar: CstGrammar) {
     contMeta.set(ruleName, continuations.map(c => mixfixOf(c, ruleName)));
   }
 
-  // Per-alt first-token (non-recursive + left-rec atoms + pratt nuds use these).
-  const altFirst = new Map<RuleExpr, FirstTok>();
-  for (const rule of grammar.rules) {
-    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-    for (const alt of alts) altFirst.set(alt, firstTokenOf(alt));
-  }
-
   // Nullability.
   const nullableRules = new Set<string>();
   function exprNullable(e: RuleExpr): boolean {
@@ -255,6 +248,19 @@ function analyze(grammar: CstGrammar) {
       for (const k of next) if (!merged.has(k)) { merged.add(k); grew = true; }
       if (grew || prev === undefined) { firstSets.set(rule.name, merged); changed = true; }
     }
+  }
+
+  // Deep per-alternative FIRST set + nullability for the longest-match dispatch — the
+  // emitted mirror of gen-parser.ts's altMightStart. An alternative whose FIRST element
+  // is a rule ref (`Decl …`, `Expr …`) is pruned when the lookahead can't begin that
+  // rule (resolved through the transitive firstSets), not only when it begins with a
+  // known literal/token. Sound: exprFirst over-approximates (never omits a startable
+  // token) and a nullable alt is always tried (its empty match never wins longest-match).
+  const altDeepFirst = new Map<RuleExpr, Set<string> | null>();
+  const altNullable = new Map<RuleExpr, boolean>();
+  for (const rule of grammar.rules) {
+    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
+    for (const alt of alts) { altDeepFirst.set(alt, exprFirst(alt)); altNullable.set(alt, exprNullable(alt)); }
   }
 
   // ── Lever 1: integer token kinds ──
@@ -350,7 +356,7 @@ function analyze(grammar: CstGrammar) {
   return {
     grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
-    maxBp, templateTokenName, templateTokenNames, firstTokenOf, altFirst,
+    maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     ledMeta, contMeta, nullableRules, firstSets, symtab,
   };
 }
@@ -382,6 +388,12 @@ class Emitter {
   // loops (quantifier/sep) never clash with an enclosing construct's loop.
   private helpers = new Map<string, string>();   // structural key → fn name
   private helperDefs: string[] = [];
+  // Deduped FIRST-set descriptor arrays hoisted to module-level consts (keyed by the
+  // baked literal text). The longest-match alt guards and the rule-ref guards sit on the
+  // hottest dispatch paths; referencing a shared frozen array avoids allocating a fresh
+  // [{…},…] on every call. Spliced at the same `//${HELPERS}` sentinel (top-level, above
+  // the rule fns); only read at runtime inside those fns, so const TDZ is a non-issue.
+  private descConsts = new Map<string, string>();   // baked array literal → const name
   private a: ReturnType<typeof analyze>;
   constructor(a: ReturnType<typeof analyze>) { this.a = a; }
   private id() { return `_t${this.tmp++}`; }
@@ -573,12 +585,35 @@ class Emitter {
     const a = this.a;
     if (a.nullableRules.has(name)) return '';
     const fs = a.firstSets.get(name);
-    if (!fs) return '';
-    // ruleMightStart: true iff some key in fs matches peek(); guard = NOT that.
-    // Pre-classify each FIRST key into an int descriptor (same split keyMatchesTok
-    // does) and bake the descriptor array; the runtime uses integer compares.
-    const descs = [...fs].map(k => this.keyDescLiteral(k));
-    return `!ruleMightStartDescs([${descs.join(', ')}], peek())`;
+    if (!fs || fs.size === 0) return '';
+    // ruleMightStart: true iff some key in fs matches peek(); guard = NOT that. Each FIRST
+    // key is pre-classified into an int descriptor (same split keyMatchesTok does); the
+    // hoisted shared array means the runtime does integer compares with no allocation.
+    return `!ruleMightStartDescs(${this.descArrayConst(fs)}, peek())`;
+  }
+
+  // Deep per-alternative dispatch condition (mirrors gen-parser.ts altMightStart): the
+  // POSITIVE "this alt might start at startTok" test for the longest-match loops. `true`
+  // when the alt is nullable or its FIRST set is unknown/empty (always tried — an empty
+  // match never wins longest-match); else a membership test over the alt's transitive
+  // FIRST set, baked as a hoisted int-descriptor array (same encoding firstGuard uses).
+  altGuard(alt: RuleExpr): string {
+    const a = this.a;
+    if (a.altNullable.get(alt)) return 'true';
+    const fs = a.altDeepFirst.get(alt);
+    if (!fs || fs.size === 0) return 'true';
+    return `ruleMightStartDescs(${this.descArrayConst(fs)}, startTok)`;
+  }
+
+  // Register (deduped) a FIRST-set's baked int-descriptor array as a module-level const
+  // and return its NAME. Keys are sorted so two FIRST sets with the same members share
+  // one const regardless of traversal order (dedup is best-effort; the boolean membership
+  // result `ruleMightStartDescs` computes is order-independent either way).
+  descArrayConst(fs: Set<string>): string {
+    const lit = `[${[...fs].sort().map(k => this.keyDescLiteral(k)).join(', ')}]`;
+    let nm = this.descConsts.get(lit);
+    if (!nm) { nm = `_fs${this.descConsts.size}`; this.descConsts.set(lit, nm); this.helperDefs.push(`const ${nm} = ${lit};`); }
+    return nm;
   }
 
   // ── Lever 1 emit helpers ──
@@ -896,9 +931,8 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
   e.emit(`  let bestNode = null; let bestPos = saved;`);
   e.emit(`  const startTok = tokens[saved] ?? null;`);
   alts.forEach((alt, i) => {
-    const ft = a.altFirst.get(alt) ?? null;
     e.emit(`  // alt ${i}`);
-    e.emit(`  if (canStartFT(${e.firstTokDescLiteral(ft)}, startTok)) {`);
+    e.emit(`  if (${e.altGuard(alt)}) {`);
     e.emit(`    pos = saved;`);
     e.emit(`    const children = arm_${sanitize(rule.name)}_${i}();`);
     e.emit(`    if (children !== null && pos > bestPos) {`);
@@ -931,8 +965,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   e.emit(`  let node = null; let bestAtomPos = saved;`);
   e.emit(`  const startTok = tokens[saved] ?? null;`);
   atoms.forEach((atom, i) => {
-    const ft = a.altFirst.get(atom) ?? null;
-    e.emit(`  if (canStartFT(${e.firstTokDescLiteral(ft)}, startTok)) {`);
+    e.emit(`  if (${e.altGuard(atom)}) {`);
     e.emit(`    pos = saved;`);
     e.emit(`    const children = atom_${sanitize(rule.name)}_${i}();`);
     e.emit(`    if (children !== null && pos > bestAtomPos) {`);
@@ -987,9 +1020,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // NUD loop.
   nuds.forEach((nud, i) => {
     const items = nud.type === 'seq' ? nud.items : [nud];
-    const ft = a.altFirst.get(nud) ?? null;
     e.emit(`  // nud ${i}`);
-    e.emit(`  if (canStartFT(${e.firstTokDescLiteral(ft)}, startTok)) {`);
+    e.emit(`  if (${e.altGuard(nud)}) {`);
     e.emit(`    pos = saved;`);
     if (items[0]?.type === 'prefix') {
       // prefix $ pattern: identical to parsePratt's prefix branch.
