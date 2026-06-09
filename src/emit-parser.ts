@@ -1001,14 +1001,18 @@ let pos = 0;
 let maxPos = 0;
 let memo = [];
 let parseLimit = -1;
+// cap = the exclusive peek bound: min(parseLimit-or-∞, tokens.length), maintained at the
+// parseLimit set/restore sites and the one tokens mutation (the '>' splice) — so peek is
+// a single compare and tokens[pos] below it is always a real token.
+let cap = 0;
 let currentPrattContext = null;
 let suppressNext = null;
 let suppressCur = null;
 
 function peek() {
   if (pos > maxPos) maxPos = pos;
-  if (parseLimit >= 0 && pos >= parseLimit) return null;
-  return tokens[pos] ?? null;
+  if (pos >= cap) return null;
+  return tokens[pos];
 }
 function offset() {
   const t = peek();
@@ -1055,6 +1059,7 @@ function matchPuLitGT(pu) {
     const a = mkPunct('>', tok.offset);
     const b = mkPunct(rest, tok.offset + 1);
     tokens.splice(pos, 1, a, b);
+    if (parseLimit < 0) cap = tokens.length;
     memo.fill(undefined);
     pos++;
     return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + 1 };
@@ -1398,9 +1403,9 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
   e.emit(`  }`);
   e.emit(`  for (const sepIdx of candidates) {`);
   e.emit(`    pos = afterOpen;`);
-  e.emit(`    const prevLimit = parseLimit; parseLimit = sepIdx;`);
+  e.emit(`    const prevLimit = parseLimit; parseLimit = sepIdx; cap = sepIdx;`);
   e.emit(`    const reOperand = ${ruleFn}();`);
-  e.emit(`    parseLimit = prevLimit;`);
+  e.emit(`    parseLimit = prevLimit; cap = prevLimit >= 0 ? prevLimit : tokens.length;`);
   e.emit(`    if (!reOperand || pos !== sepIdx) continue;`);
   e.emit(`    const sepLeaf = ${e.matchLiteralCall(info.sepLit)};`);
   e.emit(`    if (!sepLeaf) continue;`);
@@ -1454,6 +1459,7 @@ export function parse(source, entryRule) {
   maxPos = 0;
   memo = new Array(MEMO_RULES);
   parseLimit = -1;
+  cap = tokens.length;
   currentPrattContext = null;
   suppressNext = null;
   suppressCur = null;
