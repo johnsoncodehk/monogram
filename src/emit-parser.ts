@@ -779,6 +779,27 @@ class Emitter {
     };
   }
 
+  // Bitmask dispatch over a list of first-TOKEN gates (the LED chain): the same mask
+  // tables as altMaskDispatch, built from per-LED FirstTok keys (null ft = always
+  // admitted); the lookahead is known non-null at the LED loop head.
+  ftMaskDispatch(fts: FirstTok[], maskVar: string, tokVar: string): { maskInit: string; bit: (i: number) => string } | null {
+    if (fts.length < 3 || fts.length > 32) return null;
+    const kMask = new Array<number>(this.kSize()).fill(0);
+    const tMask = new Array<number>(this.tSize()).fill(0);
+    fts.forEach((ft, i) => {
+      const bit = (1 << i) | 0;
+      if (!ft) { for (let k = 0; k < kMask.length; k++) kMask[k] |= bit; return; }
+      const key = 'tok' in ft ? ft.tok : ft.lit;
+      const { kOnes, tOnes } = this.firstSetOnes(new Set([key]));
+      for (const k of kOnes) kMask[k] |= bit;
+      for (const t of tOnes) tMask[t] |= bit;
+    });
+    return {
+      maskInit: `const ${maskVar} = ${this.u32Const(kMask)}[${tokVar}.k] | ${this.u32Const(tMask)}[${tokVar}.t];`,
+      bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
+    };
+  }
+
   // A deduped Int32Array const (the per-rule alt-dispatch mask tables).
   private u32Const(values: number[]): string {
     const key = values.join(',');
@@ -813,7 +834,7 @@ class Emitter {
   matchLiteralCall(value: string): string {
     const d = this.a.symtab.classifyKey(value);
     if (d.kind === 'kw') return `matchKwLit(${J(value)}, ${d.t})`;
-    if (d.kind === 'punct') return `matchPuLit(${J(value)}, ${d.t})`;
+    if (d.kind === 'punct') return value === '>' ? `matchPuLitGT(${d.t})` : `matchPuLit(${J(value)}, ${d.t})`;
     // A literal key that classifies as a token-name (a token name used as a literal):
     // unreachable for real grammars, but stay safe via the generic matchLiteral.
     return `matchLiteral(${J(value)})`;
@@ -992,25 +1013,33 @@ function childEnd(c) { return c.end; }
 // token name; '' is PUNCT, templates are below NAMED_MIN) && tok.t === KW(value).
 // Returns the SAME $keyword leaf as before. value/kw are baked by the caller.
 function matchKwLit(value, kw) {
+  // A kw-range t can only come from a named token (template spans never intern to a
+  // keyword), so the old k >= K_NAMED_MIN guard was redundant — one int compare.
   const tok = peek();
-  if (!tok) return null;
-  if (tok.k >= K_NAMED_MIN && tok.t === kw) {
-    pos++;
-    return { kind: 'leaf', tokenType: '$keyword', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
-  }
-  return null;
+  if (tok === null || tok.t !== kw) return null;
+  pos++;
+  return { kind: 'leaf', tokenType: '$keyword', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
 }
 // Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
 // tok.t === PU(value) is the exact-text fast path; the splice handles a longer
 // gt-led token matching the gt key. value/pu are baked by the caller.
 function matchPuLit(value, pu) {
+  // A pu-range t can only come from a punct token, so the old k === K_PUNCT guard was
+  // redundant — one int compare. The '>'-split lives only in matchPuLitGT ('>' sites).
   const tok = peek();
-  if (!tok) return null;
-  if (tok.k === K_PUNCT && tok.t === pu) {
+  if (tok === null || tok.t !== pu) return null;
+  pos++;
+  return { kind: 'leaf', tokenType: '$punct', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
+}
+function matchPuLitGT(pu) {
+  const tok = peek();
+  if (tok === null) return null;
+  if (tok.t === pu) {
     pos++;
-    return { kind: 'leaf', tokenType: '$punct', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
+    return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + tok.text.length };
   }
-  if (value === '>' && tok.k === K_PUNCT && tok.text.length > 1 && tok.text[0] === '>') {
+  // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>'.
+  if (tok.k === K_PUNCT && tok.text.length > 1 && tok.text[0] === '>') {
     const rest = tok.text.slice(1);
     const a = mkPunct('>', tok.offset);
     const b = mkPunct(rest, tok.offset + 1);
@@ -1024,9 +1053,10 @@ function matchPuLit(value, pu) {
 // Generic matchLiteral kept for any unspecialized site: classify value via the baked
 // tables (no per-call isKeywordLiteral / string compares) and delegate.
 function matchLiteral(value) {
-  const kw = LIT_KW[value];
+  const kw = LIT_KW.get(value);
   if (kw !== undefined) return matchKwLit(value, kw);
-  return matchPuLit(value, LIT_PU[value] | 0);
+  if (value === '>') return matchPuLitGT(LIT_PU.get(value) ?? 0);
+  return matchPuLit(value, LIT_PU.get(value) ?? 0);
 }
 
 // Match a token ref by its baked TYPE kind: tok.type === name  ⟺  tok.k === nameKind.
@@ -1234,32 +1264,41 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`    if (!tok) break;`);
   e.emit(`    const ledSaved = pos;`);
   e.emit(`    let matched = false;`);
-  // Non-op LED loop.
-  leds.forEach((led, i) => {
-    if (led.items[0]?.type === 'op' || led.items[0]?.type === 'postfix') return; // operator LEDs handled below
-    const ft = meta.first[i];
-    const conds: string[] = [];
-    conds.push(`maxBp > minBp`);
-    if (meta.accessTail[i]) conds.push(`!(tailClosed)`);
-    // suppress: skip a LED whose first literal connector is in suppressCur.
-    const firstLit = (led.items[0]?.type === 'literal') ? led.items[0].value : null;
-    if (firstLit !== null) conds.push(`!(suppressCur && suppressCur.has(${J(firstLit)}))`);
-    const ftc = e.ftCond(ft, 'tok');   // tok is non-null here (the loop breaks on !tok above)
-    if (ftc) conds.push(ftc);
-    e.emit(`    // led ${i}`);
-    e.emit(`    if (!matched && ${conds.join(' && ')}) {`);
-    e.emit(`      pos = ledSaved;`);
-    e.emit(`      let children = led_${sn}_${i}();`);
-    if (meta.mixfix[i]) {
-      e.emit(`      if (children === null) { pos = ledSaved; children = matchMixfixLed_${sn}_led_${i}(); }`);
-    }
-    e.emit(`      if (children !== null) {`);
-    e.emit(`        lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, ...children], offset: lhs.offset, end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end };`);
-    if (meta.tailClosing[i]) e.emit(`        tailClosed = true;`);
-    e.emit(`        matched = true;`);
-    e.emit(`      }`);
+  // Non-op LED loop. The shared `maxBp > minBp` is hoisted out of the per-led conds,
+  // and the per-led first-token gates collapse into one bitmask pair of loads.
+  const realLeds = leds.map((led, i) => ({ led, i }))
+    .filter(({ led }) => led.items[0]?.type !== 'op' && led.items[0]?.type !== 'postfix');
+  if (realLeds.length > 0) {
+    const ledMask = e.ftMaskDispatch(realLeds.map(({ i }) => meta.first[i]), '_lm', 'tok');
+    e.emit(`    if (maxBp > minBp) {`);
+    if (ledMask) e.emit(`    ${ledMask.maskInit}`);
+    realLeds.forEach(({ led, i }, j) => {
+      const conds: string[] = [];
+      if (meta.accessTail[i]) conds.push(`!(tailClosed)`);
+      // suppress: skip a LED whose first literal connector is in suppressCur.
+      const firstLit = (led.items[0]?.type === 'literal') ? led.items[0].value : null;
+      if (firstLit !== null) conds.push(`!(suppressCur && suppressCur.has(${J(firstLit)}))`);
+      if (ledMask) conds.push(ledMask.bit(j));
+      else {
+        const ftc = e.ftCond(meta.first[i], 'tok');   // tok is non-null here (the loop breaks on !tok above)
+        if (ftc) conds.push(ftc);
+      }
+      e.emit(`    // led ${i}`);
+      e.emit(`    if (${['!matched', ...conds].join(' && ')}) {`);
+      e.emit(`      pos = ledSaved;`);
+      e.emit(`      let children = led_${sn}_${i}();`);
+      if (meta.mixfix[i]) {
+        e.emit(`      if (children === null) { pos = ledSaved; children = matchMixfixLed_${sn}_led_${i}(); }`);
+      }
+      e.emit(`      if (children !== null) {`);
+      e.emit(`        lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, ...children], offset: lhs.offset, end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end };`);
+      if (meta.tailClosing[i]) e.emit(`        tailClosed = true;`);
+      e.emit(`        matched = true;`);
+      e.emit(`      }`);
+      e.emit(`    }`);
+    });
     e.emit(`    }`);
-  });
+  }
   e.emit(`    if (matched) continue;`);
   // Operator LED ($ op $ / postfix), copied verbatim.
   e.emit(`    const info = OP_BY_T[tok.t];`);
