@@ -408,8 +408,19 @@ class Emitter {
   // BELOW the module's import statements. The header emits a `${HELPERS}` sentinel right
   // after the imports/tables; we splice the collected helpers there.
   toString() {
+    // MEMO_RULES is known only after every memoized rule allocated its slot.
+    this.helperDefs.push(`const MEMO_RULES = ${this.memoIdx.size};`);
     const src = this.buf.join('\n');
     return src.replace('//${HELPERS}', this.helperDefs.join('\n\n'));
+  }
+
+  // Per-memoized-rule slot in the parse-wide memo array (replaces the string-keyed
+  // outer Map: parseRuleEntry runs per rule entry, so the name hash was on a hot path).
+  private memoIdx = new Map<string, number>();
+  memoIndex(name: string): number {
+    let i = this.memoIdx.get(name);
+    if (i === undefined) { i = this.memoIdx.size; this.memoIdx.set(name, i); }
+    return i;
   }
 
   // Reference to a rule's parse function (token refs are inlined where used).
@@ -988,7 +999,7 @@ function emitRuntime(e: Emitter) {
 let tokens = [];
 let pos = 0;
 let maxPos = 0;
-let memo = new Map();
+let memo = [];
 let parseLimit = -1;
 let currentPrattContext = null;
 let suppressNext = null;
@@ -1044,7 +1055,7 @@ function matchPuLitGT(pu) {
     const a = mkPunct('>', tok.offset);
     const b = mkPunct(rest, tok.offset + 1);
     tokens.splice(pos, 1, a, b);
-    memo.clear();
+    memo.fill(undefined);
     pos++;
     return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + 1 };
   }
@@ -1165,7 +1176,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   // suppress wrapper in the interpreter — so currentPrattContext is set to this rule
   // (the template-interpolation rule resolution depends on it: a `${…}` hole inside a
   // template-literal TYPE must parse as Type, not the default expression rule).
-  e.emit(`function ${ruleFn}() { return parseRuleEntry(${J(rule.name)}, ${ruleFn}_lr); }`);
+  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${J(rule.name)}, ${ruleFn}_lr); }`);
   e.emit(`function ${ruleFn}_lr(_minBp) {`);
   e.emit(`  const saved = pos;`);
   e.emit(`  let node = null; let bestAtomPos = saved;`);
@@ -1220,7 +1231,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   const meta = a.ledMeta.get(rule.name)!;
 
   // R_<rule>() wraps parseRule's memo/context handling, then calls the bp-taking core.
-  e.emit(`function ${ruleFn}() { return parseRuleEntry(${J(rule.name)}, ${ruleFn}_pratt); }`);
+  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${J(rule.name)}, ${ruleFn}_pratt); }`);
   e.emit(`function ${ruleFn}_pratt(minBp) {`);
   e.emit(`  const saved = pos;`);
   e.emit(`  let lhs = null; let bestNudPos = saved;`);
@@ -1409,12 +1420,12 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
 function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
   e.emit(String.raw`
 // parseRule for a pratt/left-rec rule: memo + context + suppress, then the core.
-function parseRuleEntry(name, core) {
+function parseRuleEntry(idx, name, core) {
   const mySup = suppressNext;
   suppressNext = null;
   const capped = parseLimit >= 0;
   const start = pos;
-  let m = memo.get(name);
+  let m = memo[idx];
   if (!mySup && !capped) {
     const hit = m && m.get(start);
     if (hit !== undefined) { pos = hit.end; return hit.node; }
@@ -1431,7 +1442,7 @@ function parseRuleEntry(name, core) {
     suppressCur = prevSup;
   }
   if (!mySup && !capped) {
-    if (!m) { m = new Map(); memo.set(name, m); }
+    if (!m) { m = new Map(); memo[idx] = m; }
     m.set(start, { node: result, end: pos });
   }
   return result;
@@ -1441,7 +1452,7 @@ export function parse(source, entryRule) {
   tokens = tokenize(source);
   pos = 0;
   maxPos = 0;
-  memo = new Map();
+  memo = new Array(MEMO_RULES);
   parseLimit = -1;
   currentPrattContext = null;
   suppressNext = null;

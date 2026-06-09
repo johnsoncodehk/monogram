@@ -114,11 +114,19 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   typeTable(`LX_DIVK`, [...(regexCtx?.divisionAfterTypes ?? []), '$templateTail']);
   litTable(`LX_PARENKW`, regexCtx?.regexAfterParenKeywords ?? []);
   litTable(`LX_MEMBER`, regexCtx?.memberAccessTexts ?? []);
+  const kwFirstCcs = new Set([...st.kwLitKind.keys()].map(k => k.charCodeAt(0)));
+  const canBeKw = (first: { ascii: Set<number>; nonAscii: boolean } | null) =>
+    !first || [...first.ascii].some(cc => kwFirstCcs.has(cc));   // keywords are ASCII-initial
   const kIdent = identTokenName ? kOf(identTokenName) : 0;
   const tRParen = tOf(')');
   emit(``);
   emit(`function lexMk(type, text, offset, k) {`);
   emit(`  return { type, text, offset, k, t: LIT_KW.get(text) ?? 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false };`);
+  emit(`}`);
+  // For tokens whose text provably can't be a keyword (first char outside every
+  // keyword's first char): the kw int is 0 by construction — no lookup.
+  emit(`function lexMk0(type, text, offset, k) {`);
+  emit(`  return { type, text, offset, k, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false };`);
   emit(`}`);
   emit(`function lexMkPu(text, offset, t) {`);
   emit(`  return { type: '', text, offset, k: K_PUNCT, t, newlineBefore: false, commentBefore: false, multilineFlowBefore: false };`);
@@ -206,6 +214,8 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`      if (m !== null) { if (m[0].includes('\\n')) pendingNl = true; pos += m[0].length; continue; }`);
   emit(`    }`);
   if (templateToken) {
+    const mkClose = kwFirstCcs.has(tplInterpClose.charCodeAt(0)) ? 'lexMk' : 'lexMk0';
+    const mkOpen = kwFirstCcs.has(tplOpen.charCodeAt(0)) ? 'lexMk' : 'lexMk0';
     emit(`    if (templateStack.length > 0) {`);
     emit(`      if (${startsWithExpr('source', 'pos', tplInterpClose, 'cc')}) {`);
     emit(`        const depth = templateStack[templateStack.length - 1];`);
@@ -214,10 +224,10 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`          const startPos = pos;`);
     emit(`          const r = lexTplSpan(source, pos + ${tplInterpClose.length}, false);`);
     emit(`          if (r.endsWithInterp) {`);
-    emit(`            push(lexMk('$templateMiddle', source.slice(startPos, r.end), startPos, ${kOf('$templateMiddle')}));`);
+    emit(`            push(${mkClose}('$templateMiddle', source.slice(startPos, r.end), startPos, ${kOf('$templateMiddle')}));`);
     emit(`            templateStack.push(0);`);
     emit(`          } else {`);
-    emit(`            push(lexMk('$templateTail', source.slice(startPos, r.end), startPos, ${kOf('$templateTail')}));`);
+    emit(`            push(${mkClose}('$templateTail', source.slice(startPos, r.end), startPos, ${kOf('$templateTail')}));`);
     emit(`          }`);
     emit(`          pos = r.end;`);
     emit(`          continue;`);
@@ -232,10 +242,10 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`      const startPos = pos;`);
     emit(`      const r = lexTplSpan(source, pos + ${tplOpen.length}, !tagged);`);
     emit(`      if (r.endsWithInterp) {`);
-    emit(`        push(lexMk('$templateHead', source.slice(startPos, r.end), startPos, ${kOf('$templateHead')}));`);
+    emit(`        push(${mkOpen}('$templateHead', source.slice(startPos, r.end), startPos, ${kOf('$templateHead')}));`);
     emit(`        templateStack.push(0);`);
     emit(`      } else {`);
-    emit(`        push(lexMk(${J(templateToken.name)}, source.slice(startPos, r.end), startPos, ${kOf(templateToken.name)}));`);
+    emit(`        push(${mkOpen}(${J(templateToken.name)}, source.slice(startPos, r.end), startPos, ${kOf(templateToken.name)}));`);
     emit(`      }`);
     emit(`      pos = r.end;`);
     emit(`      continue;`);
@@ -272,7 +282,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     if (m.skip) {
       emit(`${ind}    if (m[0].includes('\\n')) pendingNl = true;`);
     } else {
-      emit(`${ind}    push(lexMk(${J(m.name)}, m[0], pos, ${m.k}));`);
+      emit(`${ind}    push(${canBeKw(m.first) ? 'lexMk' : 'lexMk0'}(${J(m.name)}, m[0], pos, ${m.k}));`);
     }
     emit(`${ind}    pos += m[0].length;`);
     emit(`${ind}    continue;`);
@@ -375,7 +385,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`      const pm = LX_UNI_IDENT.exec(source);`);
     emit(`      if (pm !== null) {`);
     emit(`        const text = ${J(pt.prefix)} + pm[0];`);
-    emit(`        push(lexMk(${J(pt.name)}, text, pos, ${kOf(pt.name)}));`);
+    emit(`        push(${kwFirstCcs.has(pt.prefix.charCodeAt(0)) ? 'lexMk' : 'lexMk0'}(${J(pt.name)}, text, pos, ${kOf(pt.name)}));`);
     emit(`        pos += text.length;`);
     emit(`        continue;`);
     emit(`      }`);
