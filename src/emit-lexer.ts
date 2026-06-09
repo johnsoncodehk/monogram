@@ -14,8 +14,8 @@
 import type { CstGrammar, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import {
-  tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternFirstCharSet,
-  tokenPatternHasStartAnchor, tokenPatternSource,
+  tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
+  tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
 } from './token-pattern.ts';
 
 export interface LexerSymtab {
@@ -97,6 +97,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       first: tokenPatternFirstCharSet(t),
       k: kOf(t.name),
       identLike: identLike.has(t.name),
+      loop: tokenPatternCharLoop(t),
     }));
 
   emit(`// ── Emitted lexer (emit-lexer.ts): specialized tokenize for this grammar ──`);
@@ -259,12 +260,19 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     ms: matchers.filter(m => admits(m, cc)),
     ps: punctByFirstCc.get(cc) ?? [],
   });
-  const groups = new Map<string, { ccs: number[]; ms: (typeof matchers)[number][]; ps: string[] }>();
+  // The char-loop fast path may replace the regex try only when the loop-shaped matcher
+  // is FIRST in declaration order for this cc (so no earlier matcher is skipped) and the
+  // cc enters via the plain head class. skip/isRegex keep the regex path (pendingNl scan
+  // / prevIsValue guard live there).
+  const fastOf = (cc: number, ms: (typeof matchers)[number][]) =>
+    ms.length > 0 && ms[0].loop !== null && !ms[0].skip && !ms[0].isRegex && ms[0].loop.first.includes(cc);
+  const groups = new Map<string, { ccs: number[]; ms: (typeof matchers)[number][]; ps: string[]; fast: boolean }>();
   for (let cc = 0; cc < 128; cc++) {
     const { ms, ps } = actionsOf(cc);
     if (ms.length === 0 && ps.length === 0) continue;
-    const sig = ms.map(m => m.name).join(',') + '|' + ps.join(',');
-    if (!groups.has(sig)) groups.set(sig, { ccs: [], ms, ps });
+    const fast = fastOf(cc, ms);
+    const sig = ms.map(m => m.name).join(',') + '|' + ps.join(',') + (fast ? '|F' : '');
+    if (!groups.has(sig)) groups.set(sig, { ccs: [], ms, ps, fast });
     groups.get(sig)!.ccs.push(cc);
   }
   // Matchers with NO provable first-char set must also run for cc > 127 / unlisted cc.
@@ -321,9 +329,36 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     }
   };
 
+  // Range-condensed charCode condition over a sorted ASCII code list, hottest-first
+  // (descending range start puts lowercase before uppercase before digits).
+  const ccCond = (v: string, codes: number[]) => {
+    const rs: Array<[number, number]> = [];
+    for (const c of codes) {
+      if (rs.length > 0 && rs[rs.length - 1][1] === c - 1) rs[rs.length - 1][1] = c;
+      else rs.push([c, c]);
+    }
+    rs.sort((a, b) => b[0] - a[0]);
+    return rs.map(([a, b]) => (a === b ? `${v} === ${a}` : `(${v} >= ${a} && ${v} <= ${b})`)).join(' || ');
+  };
+
   emit(`    switch (cc) {`);
   for (const g of groups.values()) {
     emit(`      ${g.ccs.map(c => `case ${c}:`).join(' ')} {`);
+    if (g.fast) {
+      // Char-loop fast path: consume the plain continuation class; a bail stop char
+      // (escape opener) falls through to the regex try below, which re-scans from pos.
+      const lp = g.ms[0].loop!;
+      const bails = lp.bail.map(c => `c === ${c}`);
+      if (lp.bailNonAscii) bails.push(`c > 127`);
+      emit(`        let p = pos + 1;`);
+      emit(`        let c = source.charCodeAt(p);`);
+      emit(`        while (${ccCond('c', lp.cont)}) { p++; c = source.charCodeAt(p); }`);
+      emit(`        if (${bails.length > 0 ? `!(${bails.join(' || ')})` : 'true'}) {`);
+      emit(`          push(${canBeKw(g.ms[0].first) ? 'lexMk' : 'lexMk0'}(${J(g.ms[0].name)}, source.slice(pos, p), pos, ${g.ms[0].k}));`);
+      emit(`          pos = p;`);
+      emit(`          continue;`);
+      emit(`        }`);
+    }
     for (const m of g.ms) {
       if (m.isRegex) {
         emit(`        if (!prevIsValue(tokens[tokens.length - 1])) {`);

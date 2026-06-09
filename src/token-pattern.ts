@@ -188,6 +188,90 @@ export function tokenPatternTrailingCharClass(token: Pick<TokenDecl, 'pattern'>)
   return charClassChars(last.body);
 }
 
+// A char-loop plan for `seq(first, star(cont))`-shaped patterns (identifiers): scan the
+// plain continuation class with charCode compares, fall back to the full regex only when
+// the stop char could begin a complex alternative (an escape). Exactness argument:
+// plain-class chars and every complex alternative's first chars are required DISJOINT, so
+// at any position at most one alternative can match — the greedy star is deterministic,
+// and a stop char outside `bail` provably ends the regex match too.
+export type TokenPatternLoop = {
+  first: number[];      // ASCII codes that may enter the fast loop (plain head chars not claimed by a complex head alternative)
+  cont: number[];       // ASCII codes the loop consumes
+  bail: number[];       // ASCII stop codes that require the full regex (a complex alternative may continue)
+  bailNonAscii: boolean; // a complex alternative may continue on a non-ASCII char
+};
+
+export function tokenPatternCharLoop(token: Pick<TokenDecl, 'pattern'>): TokenPatternLoop | null {
+  const parts = seqParts(token.pattern);
+  if (parts.length !== 2) return null;
+  const [head, rep] = parts;
+  if (typeof rep === 'string' || rep.type !== 'repeat' || rep.min !== 0 || rep.max !== undefined || !rep.greedy) return null;
+  const headSplit = splitPlainAlt(head);
+  const contSplit = splitPlainAlt(rep.body);
+  if (!headSplit || !contSplit || headSplit.plain.length === 0 || contSplit.plain.length === 0) return null;
+  const bail = new Set<number>();
+  let bailNonAscii = false;
+  for (const item of contSplit.complex) {
+    if (patternCanMatchEmpty(item)) return null;
+    const fs = firstCharSetFromPattern(item);
+    if (!fs) return null;
+    for (const c of fs.ascii) {
+      if (contSplit.plain.includes(c)) return null;
+      bail.add(c);
+    }
+    if (fs.nonAscii) bailNonAscii = true;
+  }
+  const headComplexFirst = new Set<number>();
+  for (const item of headSplit.complex) {
+    if (patternCanMatchEmpty(item)) return null;
+    const fs = firstCharSetFromPattern(item);
+    if (!fs) return null;
+    for (const c of fs.ascii) headComplexFirst.add(c);
+  }
+  const first = headSplit.plain.filter(c => !headComplexFirst.has(c));
+  if (first.length === 0) return null;
+  return { first, cont: contSplit.plain, bail: [...bail].sort((a, b) => a - b), bailNonAscii };
+}
+
+// Split an alternation (or single node) into plain ASCII charClass codes vs complex alternatives.
+function splitPlainAlt(pattern: TokenPattern): { plain: number[]; complex: TokenPattern[] } | null {
+  const alts = typeof pattern !== 'string' && pattern.type === 'alt' ? pattern.items : [pattern];
+  const plain = new Set<number>();
+  const complex: TokenPattern[] = [];
+  for (const item of alts) {
+    const codes = plainClassCodes(item);
+    if (codes) for (const c of codes) plain.add(c);
+    else complex.push(item);
+  }
+  return { plain: [...plain].sort((a, b) => a - b), complex };
+}
+
+// All ASCII codes of a non-negated charClass or single-char literal; null for any other
+// shape or any non-ASCII member (the loop compares ASCII charCodes only).
+function plainClassCodes(pattern: TokenPattern): number[] | null {
+  if (typeof pattern === 'string') {
+    if ([...pattern].length !== 1) return null;
+    const c = pattern.charCodeAt(0);
+    return c <= 127 ? [c] : null;
+  }
+  if (pattern.type !== 'charClass' || pattern.negate) return null;
+  const out: number[] = [];
+  for (const item of pattern.items) {
+    if (item.type === 'char') {
+      if ([...item.value].length !== 1) return null;
+      const c = item.value.charCodeAt(0);
+      if (c > 127) return null;
+      out.push(c);
+    } else {
+      const a = item.from.charCodeAt(0);
+      const b = item.to.charCodeAt(0);
+      if (Number.isNaN(a) || Number.isNaN(b) || Math.max(a, b) > 127) return null;
+      for (let c = Math.min(a, b); c <= Math.max(a, b); c++) out.push(c);
+    }
+  }
+  return out;
+}
+
 export type TokenPatternFirstSet = { ascii: Set<number>; nonAscii: boolean };
 
 export function tokenPatternFirstCharSet(token: Pick<TokenDecl, 'pattern'>): TokenPatternFirstSet | null {
