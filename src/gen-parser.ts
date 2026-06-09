@@ -552,6 +552,148 @@ export function createParser(grammar: CstGrammar) {
     return false;
   }
 
+  // ── SECOND-token dispatch refinement ──
+  // The keys admissible as a match's SECOND token, plus whether a one-token match
+  // exists (len1). An admitted alternative whose SECOND set excludes the actual second
+  // token — and that cannot end after one token — provably fails, so its arm is
+  // skipped before it runs (a labeled-statement arm without a ':' second token, an
+  // arrow head without '=>', …). Over-approximated everywhere: unknown shapes → top,
+  // op/prefix/postfix pratt items are one-op-token consumers with known literal sets.
+  // MUST stay algorithm-identical to emit-parser.ts's copy (same plain FIRST inputs):
+  // the prune decisions are engine-identical by construction, which the
+  // emit-reject-messages gate depends on (an arm skipped by only one engine would
+  // advance the farthest-position error state in the other).
+  type Sec = { s: Set<string> | null; len1: boolean };
+  const SEC_TOP: Sec = { s: null, len1: true };
+  const ruleSecond = new Map<string, Sec>();
+  const secOpKeys = new Set<string>([...opTable.keys(), ...postfixOpValues]);
+  function suffixFirst(items: RuleExpr[], j: number): Set<string> | null {
+    const acc = new Set<string>();
+    for (let i = j; i < items.length; i++) {
+      const item = items[i];
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'op' || item.type === 'postfix') { for (const k of secOpKeys) acc.add(k); return acc; }
+      if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
+      const f = exprFirst(item);
+      if (f === null) return null;
+      for (const k of f) acc.add(k);
+      if (!exprNullable(item)) return acc;
+    }
+    return acc;
+  }
+  function suffixNullable(items: RuleExpr[], j: number): boolean {
+    for (let i = j; i < items.length; i++) {
+      const item = items[i];
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
+      if (!exprNullable(item)) return false;
+    }
+    return true;
+  }
+  function exprSecond(e: RuleExpr): Sec {
+    switch (e.type) {
+      case 'literal': return { s: new Set(), len1: true };
+      case 'ref':
+        if (tokenNames.has(e.name)) return { s: new Set(), len1: true };
+        return ruleSecond.get(e.name) ?? { s: new Set(), len1: false };
+      case 'seq': {
+        const acc = new Set<string>();
+        let len1 = false;
+        const items = e.items;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          let isec: Sec;
+          let itemNullable: boolean;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
+            isec = { s: new Set(), len1: true };
+            itemNullable = false;
+          } else {
+            isec = exprSecond(item);
+            itemNullable = exprNullable(item);
+          }
+          if (isec.s === null) return SEC_TOP;
+          for (const k of isec.s) acc.add(k);
+          if (isec.len1) {
+            const rf = suffixFirst(items, i + 1);
+            if (rf === null) return SEC_TOP;
+            for (const k of rf) acc.add(k);
+            if (suffixNullable(items, i + 1)) len1 = true;
+          }
+          if (!itemNullable) return { s: acc, len1 };
+        }
+        return { s: acc, len1 };
+      }
+      case 'alt': {
+        const acc = new Set<string>();
+        let len1 = false;
+        for (const item of e.items) {
+          const sec = exprSecond(item);
+          if (sec.s === null) return SEC_TOP;
+          for (const k of sec.s) acc.add(k);
+          len1 ||= sec.len1;
+        }
+        return { s: acc, len1 };
+      }
+      case 'quantifier': {
+        const sec = exprSecond(e.body);
+        if (sec.s === null) return SEC_TOP;
+        const acc = new Set(sec.s);
+        if (e.kind !== '?' && sec.len1) {
+          const bf = exprFirst(e.body);
+          if (bf === null) return SEC_TOP;
+          for (const k of bf) acc.add(k);
+        }
+        return { s: acc, len1: sec.len1 };
+      }
+      case 'group': return exprSecond(e.body);
+      case 'sep': {
+        const sec = exprSecond(e.element);
+        if (sec.s === null) return SEC_TOP;
+        const acc = new Set(sec.s);
+        if (sec.len1) acc.add(e.delimiter);
+        return { s: acc, len1: sec.len1 };
+      }
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+        return { s: new Set(), len1: false };
+      case 'op': case 'prefix': case 'postfix':
+        return { s: new Set(), len1: true };
+      default: return SEC_TOP;
+    }
+  }
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const rule of grammar.rules) {
+      const prev = ruleSecond.get(rule.name);
+      if (prev && prev.s === null && prev.len1) continue;
+      const next = exprSecond(rule.body);
+      let nv: Sec;
+      if (!prev) nv = next;
+      else if (next.s === null || prev.s === null) nv = { s: null, len1: prev.len1 || next.len1 };
+      else nv = { s: new Set([...prev.s, ...next.s]), len1: prev.len1 || next.len1 };
+      const grew = !prev || (nv.s === null) !== (prev.s === null) || nv.len1 !== prev.len1
+        || (nv.s !== null && prev.s !== null && nv.s.size > prev.s.size);
+      if (grew) { ruleSecond.set(rule.name, nv); changed = true; }
+    }
+  }
+  // null = always try (nullable / top / len1 / empty — the emit tables' always rows).
+  const altSecondDispatch = new Map<RuleExpr, string[] | null>();
+  for (const rule of grammar.rules) {
+    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
+    for (const alt of alts) {
+      const sec = exprSecond(alt);
+      const always = exprNullable(alt) || sec.s === null || sec.len1 || sec.s.size === 0;
+      altSecondDispatch.set(alt, always ? null : [...sec.s!]);
+    }
+  }
+  function altMightSecond(alt: RuleExpr, tok2: Token | null): boolean {
+    const keys = altSecondDispatch.get(alt);
+    if (!keys) return true;
+    if (!tok2) return false;                                     // needs a second token; none exists
+    for (let i = 0; i < keys.length; i++) if (keyMatchesTok(keys[i], tok2)) return true;
+    return false;
+  }
+
   // ── Fast `not(alt-of-keywords)` ──
   // A negative lookahead over a literal / alternation of KEYWORD literals (e.g. an
   // identifier that isn't a reserved word, `not('catch'|'delete'|…)`) is matched by trying
@@ -758,9 +900,11 @@ export function createParser(grammar: CstGrammar) {
       let bestNode: CstNode | null = null;
       let bestPos = saved;
       const startTok = tokens[saved] ?? null;
+      const startTok2 = (parseLimit >= 0 && saved + 1 >= parseLimit) ? null : (tokens[saved + 1] ?? null);
 
       for (const alt of alts) {
         if (!altMightStart(alt, startTok)) continue;
+        if (!altMightSecond(alt, startTok2)) continue;
         pos = saved;
         // The markup container arm (HTML element with children) is matched by a
         // dedicated path that honours optional end tags — content stops at a trigger
@@ -791,8 +935,10 @@ export function createParser(grammar: CstGrammar) {
       let node: CstNode | null = null;
       let bestAtomPos = saved;
       const startTok = tokens[saved] ?? null;
+      const startTok2 = (parseLimit >= 0 && saved + 1 >= parseLimit) ? null : (tokens[saved + 1] ?? null);
       for (const atom of atoms) {
         if (!altMightStart(atom, startTok)) continue;
+        if (!altMightSecond(atom, startTok2)) continue;
         pos = saved;
         const children = matchExpr(atom);
         if (children !== null && pos > bestAtomPos) {
@@ -847,8 +993,10 @@ export function createParser(grammar: CstGrammar) {
       let lhs: CstNode | null = null;
       let bestNudPos = saved;
       const startTok = tokens[saved] ?? null;
+      const startTok2 = (parseLimit >= 0 && saved + 1 >= parseLimit) ? null : (tokens[saved + 1] ?? null);
       for (const nud of nuds) {
         if (!altMightStart(nud, startTok)) continue;
+        if (!altMightSecond(nud, startTok2)) continue;
         pos = saved;
         const items = nud.type === 'seq' ? nud.items : [nud];
 

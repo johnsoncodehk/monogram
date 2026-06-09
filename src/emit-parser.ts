@@ -316,6 +316,186 @@ function analyze(grammar: CstGrammar) {
     for (const alt of alts) { altDeepFirst.set(alt, exprFirst(alt)); altNullable.set(alt, exprNullable(alt)); }
   }
 
+  // SECOND sets: the keys admissible as a match's SECOND token, plus whether a
+  // one-token match exists (len1). Refines the longest-match dispatch: an admitted
+  // alternative whose SECOND set excludes the actual second token — and that cannot
+  // end after one token — provably fails, so its arm can be skipped. Over-approximated
+  // everywhere (unknown shapes → TOP, no guard exclusions applied at depth 2), and
+  // op/prefix/postfix pratt items are one-op-token consumers with known literal sets.
+  type Sec = { s: Set<string> | null; len1: boolean };
+  const SEC_TOP: Sec = { s: null, len1: true };
+  const ruleSecond = new Map<string, Sec>();
+  const opKeys = new Set<string>([...opTable.keys(), ...postfixOpValues]);
+  // SECOND inputs use PLAIN FIRST semantics (no reserved-qualified keys, prefix → top),
+  // an exact mirror of gen-parser's exprFirst: the interpreter computes the same SECOND
+  // sets, and the prune decisions must be ENGINE-IDENTICAL — an arm skipped by only one
+  // engine would consume a token in the other and skew the farthest-position error state
+  // (the emit-reject-messages gate caught exactly this).
+  const firstSetsPlain = new Map<string, Set<string> | null>();
+  function exprFirstPlain(e: RuleExpr): Set<string> | null {
+    switch (e.type) {
+      case 'literal': return new Set([e.value]);
+      case 'ref': {
+        if (tokenNames.has(e.name)) return new Set([e.name]);
+        return firstSetsPlain.has(e.name) ? firstSetsPlain.get(e.name)! : new Set();
+      }
+      case 'seq': {
+        const acc = new Set<string>();
+        for (const item of e.items) {
+          if (item.type === 'prefix') return null;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          const f = exprFirstPlain(item);
+          if (f === null) return null;
+          for (const k of f) acc.add(k);
+          if (!exprNullable(item)) return acc;
+        }
+        return acc;
+      }
+      case 'alt': {
+        const acc = new Set<string>();
+        for (const item of e.items) {
+          const f = exprFirstPlain(item);
+          if (f === null) return null;
+          for (const k of f) acc.add(k);
+        }
+        return acc;
+      }
+      case 'quantifier': case 'group': return exprFirstPlain(e.body);
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();
+      case 'sep': return exprFirstPlain(e.element);
+      default: return null;
+    }
+  }
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const rule of grammar.rules) {
+      const prev = firstSetsPlain.get(rule.name);
+      if (prev === null) continue;
+      const next = exprFirstPlain(rule.body);
+      if (next === null) { firstSetsPlain.set(rule.name, null); changed = true; continue; }
+      const merged = prev ? new Set(prev) : new Set<string>();
+      let grew = false;
+      for (const k of next) if (!merged.has(k)) { merged.add(k); grew = true; }
+      if (grew || prev === undefined) { firstSetsPlain.set(rule.name, merged); changed = true; }
+    }
+  }
+  // FIRST of a seq suffix for second-token purposes (op items consume an op literal;
+  // zero-width skipped; nullable items scanned through), and its nullability.
+  function suffixFirst(items: RuleExpr[], j: number): Set<string> | null {
+    const acc = new Set<string>();
+    for (let i = j; i < items.length; i++) {
+      const item = items[i];
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'op' || item.type === 'postfix') { for (const k of opKeys) acc.add(k); return acc; }
+      if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
+      const f = exprFirstPlain(item);
+      if (f === null) return null;
+      for (const k of f) acc.add(k);
+      if (!exprNullable(item)) return acc;
+    }
+    return acc;
+  }
+  function suffixNullable(items: RuleExpr[], j: number): boolean {
+    for (let i = j; i < items.length; i++) {
+      const item = items[i];
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
+      if (!exprNullable(item)) return false;
+    }
+    return true;
+  }
+  function exprSecond(e: RuleExpr): Sec {
+    switch (e.type) {
+      case 'literal': return { s: new Set(), len1: true };
+      case 'ref':
+        if (tokenNames.has(e.name)) return { s: new Set(), len1: true };
+        return ruleSecond.get(e.name) ?? { s: new Set(), len1: false };
+      case 'seq': {
+        const acc = new Set<string>();
+        let len1 = false;
+        const items = e.items;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          let isec: Sec;
+          let itemNullable: boolean;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
+            isec = { s: new Set(), len1: true };
+            itemNullable = false;
+          } else {
+            isec = exprSecond(item);
+            itemNullable = exprNullable(item);
+          }
+          if (isec.s === null) return SEC_TOP;
+          for (const k of isec.s) acc.add(k);
+          if (isec.len1) {
+            const rf = suffixFirst(items, i + 1);
+            if (rf === null) return SEC_TOP;
+            for (const k of rf) acc.add(k);
+            if (suffixNullable(items, i + 1)) len1 = true;
+          }
+          if (!itemNullable) return { s: acc, len1 };
+        }
+        return { s: acc, len1 };
+      }
+      case 'alt': {
+        const acc = new Set<string>();
+        let len1 = false;
+        for (const item of e.items) {
+          const sec = exprSecond(item);
+          if (sec.s === null) return SEC_TOP;
+          for (const k of sec.s) acc.add(k);
+          len1 ||= sec.len1;
+        }
+        return { s: acc, len1 };
+      }
+      case 'quantifier': {
+        const sec = exprSecond(e.body);
+        if (sec.s === null) return SEC_TOP;
+        const acc = new Set(sec.s);
+        if (e.kind !== '?' && sec.len1) {
+          const bf = exprFirstPlain(e.body);
+          if (bf === null) return SEC_TOP;
+          for (const k of bf) acc.add(k);
+        }
+        return { s: acc, len1: sec.len1 };
+      }
+      case 'group': return exprSecond(e.body);
+      case 'sep': {
+        const sec = exprSecond(e.element);
+        if (sec.s === null) return SEC_TOP;
+        const acc = new Set(sec.s);
+        if (sec.len1) acc.add(e.delimiter);
+        return { s: acc, len1: sec.len1 };
+      }
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+        return { s: new Set(), len1: false };
+      case 'op': case 'prefix': case 'postfix':
+        return { s: new Set(), len1: true };
+      default: return SEC_TOP;
+    }
+  }
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const rule of grammar.rules) {
+      const prev = ruleSecond.get(rule.name);
+      if (prev && prev.s === null && prev.len1) continue;
+      const next = exprSecond(rule.body);
+      let nv: Sec;
+      if (!prev) nv = next;
+      else if (next.s === null || prev.s === null) nv = { s: null, len1: prev.len1 || next.len1 };
+      else nv = { s: new Set([...prev.s, ...next.s]), len1: prev.len1 || next.len1 };
+      const grew = !prev || (nv.s === null) !== (prev.s === null) || nv.len1 !== prev.len1
+        || (nv.s !== null && prev.s !== null && nv.s.size > prev.s.size);
+      if (grew) { ruleSecond.set(rule.name, nv); changed = true; }
+    }
+  }
+  const altSecond = new Map<RuleExpr, Sec>();
+  for (const rule of grammar.rules) {
+    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
+    for (const alt of alts) altSecond.set(alt, exprSecond(alt));
+  }
+
   // ── Lever 1: integer token kinds ──
   // Replace the per-call string dispatch in literal/token matching and FIRST gating
   // (matchLiteral / matchToken / the membershipFn byte tables) with integer compares.
@@ -411,7 +591,7 @@ function analyze(grammar: CstGrammar) {
     grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
-    ledMeta, contMeta, nullableRules, firstSets, symtab, qualKeys,
+    altSecond, ledMeta, contMeta, nullableRules, firstSets, symtab, qualKeys,
   };
 }
 
@@ -845,8 +1025,42 @@ class Emitter {
     });
     const kArr = this.u32Const(kMask);
     const tArr = this.u32Const(tMask);
+    // SECOND-token refinement: drop an admitted alt when the actual second token can't
+    // be its second token and it can't end after one. An alt with unknown/len1/nullable
+    // SECOND keeps its bit everywhere (and in the EOF-after-one mask `alw2`). Sound:
+    // a pruned arm needs a second token it provably can't accept — it would fail.
+    // (The '>'-split is covered: a '>' SECOND key sets every '>'-led punct bit via
+    // firstSetOnes' startsWith expansion, so post-splice second tokens stay admitted.)
+    const k2Mask = new Array<number>(this.kSize()).fill(0);
+    const t2Mask = new Array<number>(this.tSize()).fill(0);
+    let alw2 = 0;
+    let refines = false;
+    alts.forEach((alt, i) => {
+      const bit = (1 << i) | 0;
+      const sec = a.altSecond.get(alt);
+      // The always conditions MIRROR gen-parser's altMightSecond null-keys cases
+      // exactly (incl. empty-set → always) — engine-identical prune decisions.
+      if (a.altNullable.get(alt) || !sec || sec.s === null || sec.len1 || sec.s.size === 0) {
+        for (let k = 0; k < k2Mask.length; k++) k2Mask[k] |= bit;
+        alw2 |= bit;
+        return;
+      }
+      refines = true;
+      const { kOnes, tOnes } = this.firstSetOnes(sec.s);
+      for (const k of kOnes) k2Mask[k] |= bit;
+      for (const t of tOnes) t2Mask[t] |= bit;
+    });
+    if (!refines) {
+      return {
+        maskInit: `const ${maskVar} = startTok ? (${kArr}[startTok.k] | ${tArr}[startTok.t]) : ${all};`,
+        bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
+      };
+    }
+    const k2Arr = this.u32Const(k2Mask);
+    const t2Arr = this.u32Const(t2Mask);
     return {
-      maskInit: `const ${maskVar} = startTok ? (${kArr}[startTok.k] | ${tArr}[startTok.t]) : ${all};`,
+      maskInit: `const ${maskVar}t1 = saved + 1 < cap ? tokens[saved + 1] : null;\n` +
+        `  const ${maskVar} = startTok ? (${kArr}[startTok.k] | ${tArr}[startTok.t]) & (${maskVar}t1 !== null ? (${k2Arr}[${maskVar}t1.k] | ${t2Arr}[${maskVar}t1.t]) : ${alw2}) : ${all};`,
       bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
     };
   }
