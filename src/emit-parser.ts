@@ -502,6 +502,12 @@ class Emitter {
       }
       case 'not': {
         // Zero-width negative lookahead: succeed (no children) iff body does NOT match.
+        const kinds = this.notKwKinds(expr.body);
+        if (kinds) {
+          // Fast: one keyword-kind membership test (no body matcher / no `out` alloc per arm).
+          const cond = kinds.map(k => `_tk.t === ${k}`).join(' || ');
+          return `{ const _tk = peek(); if (_tk && _tk.k >= K_NAMED_MIN && (${cond})) { ${onFail} } }`;
+        }
         const save = this.id(), fn = this.matchFn(expr.body), m = this.id();
         return [
           `{ const ${save} = pos; const ${m} = ${fn}(); pos = ${save};`,
@@ -603,6 +609,18 @@ class Emitter {
     const fs = a.altDeepFirst.get(alt);
     if (!fs || fs.size === 0) return 'true';
     return `ruleMightStartDescs(${this.descArrayConst(fs)}, startTok)`;
+  }
+
+  // A `not(...)` over a literal / alternation of KEYWORD literals → the int keyword-kinds,
+  // else null. Lets the not be one membership test instead of matching each keyword arm
+  // (mirrors gen-parser.ts notKwSet; emits the same check matchKwLit uses, so byte-identical).
+  notKwKinds(body: RuleExpr): number[] | null {
+    const kinds: number[] = [];
+    const collect = (e: RuleExpr): boolean =>
+      e.type === 'literal' ? (isKeywordLiteral(e.value) ? (kinds.push(this.a.symtab.kwLitKind.get(e.value)!), true) : false)
+        : e.type === 'alt' ? e.items.every(collect)
+        : false;
+    return collect(body) && kinds.length > 0 ? kinds : null;
   }
 
   // Register (deduped) a FIRST-set's baked int-descriptor array as a module-level const

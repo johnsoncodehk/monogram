@@ -552,6 +552,31 @@ export function createParser(grammar: CstGrammar) {
     return false;
   }
 
+  // ── Fast `not(alt-of-keywords)` ──
+  // A negative lookahead over a literal / alternation of KEYWORD literals (e.g. an
+  // identifier that isn't a reserved word, `not('catch'|'delete'|…)`) is matched by trying
+  // each literal in turn — O(N) matchLiteral calls (+ an `out` alloc each) at every position
+  // the construct sits on, which on the identifier path is the hottest in the grammar. The
+  // set of keywords is static, so collapse it to ONE membership test. Byte-identical: the
+  // `not` fails iff some literal matches the token, and a keyword literal matches iff the
+  // token is an ident-kind whose text equals it — exactly `kwSet.has(tok.text)`. Pure-keyword
+  // bodies only (a punctuation literal would need matchLiteral's split-`>` semantics) → else
+  // the recursive path stands. `null` cached = no fast form for this node.
+  const notKwCache = new Map<RuleExpr, Set<string> | null>();
+  function notKwSet(notNode: RuleExpr): Set<string> | null {
+    const cached = notKwCache.get(notNode);
+    if (cached !== undefined) return cached;
+    const set = new Set<string>();
+    const collect = (e: RuleExpr): boolean =>
+      e.type === 'literal' ? (isKeywordLiteral(e.value) && (set.add(e.value), true))
+        : e.type === 'alt' ? e.items.every(collect)
+        : false;
+    const body = (notNode as Extract<RuleExpr, { type: 'not' }>).body;
+    const result = collect(body) && set.size > 0 ? set : null;
+    notKwCache.set(notNode, result);
+    return result;
+  }
+
   // ── Parser core ──
 
   const profCounts = new Map<string, number>();
@@ -998,6 +1023,12 @@ export function createParser(grammar: CstGrammar) {
         case 'not': {
           // Zero-width negative lookahead: succeed (no children) iff the body
           // does NOT match here; never consume input either way.
+          const kw = notKwSet(expr);
+          if (kw) {                                              // fast path: one membership test
+            const tok = peek();
+            const hit = !!tok && tok.type !== '' && tokenNames.has(tok.type) && kw.has(tok.text);
+            return hit ? null : [];
+          }
           const saved = pos;
           const m = matchExpr(expr.body);
           pos = saved;
