@@ -14,7 +14,7 @@ import {
   Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr, ecmaPrec, jsScopes, jsBaseCanonical,
+  notReserved, notReservedExpr, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -494,6 +494,9 @@ export default defineGrammar({
 
   // The ECMAScript operator-precedence ladder is shared, owned by javascript.ts.
   prec: ecmaPrec,
+  // TS adds the type-rhs LEDs at the relational level (mirrors tsc: `as`/`satisfies`
+  // participate in the binary-operator chain at relational precedence).
+  ledPrec: [...jsLedPrecs, { connector: 'as', sameAs: '<' }, { connector: 'satisfies', sameAs: '<' }],
 
   rules: {
     Type, TypeMember, DecoratorExpr, TypeofRef,

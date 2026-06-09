@@ -137,6 +137,19 @@ export function createParser(grammar: CstGrammar) {
     }
   }
 
+  // Alternative-form LED binding powers (see LedPrec in types.ts): resolve the ladder
+  // anchors to concrete lbp numbers. Levels are spaced 2 apart, so `below` (lbp-1) sits
+  // BETWEEN two ladder levels without colliding with any op's lbp/rbp.
+  const ledPrecByConnector = new Map<string, { lbp: number; rhsBp: number | null }>();
+  for (const lp of grammar.ledPrecs ?? []) {
+    const anchorOp = lp.sameAs ?? lp.below;
+    if (!anchorOp) throw new Error(`ledPrec ${lp.connector}: needs sameAs or below`);
+    const op = opTable.get(anchorOp);
+    if (!op) throw new Error(`ledPrec ${lp.connector}: anchor ${JSON.stringify(anchorOp)} is not a ladder operator`);
+    const lbp = lp.sameAs !== undefined ? op.lbp : op.lbp - 1;
+    ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
+  }
+
   // Classify rules: which use Pratt parsing
   const prattRules = new Set<string>();
   for (const rule of grammar.rules) {
@@ -333,6 +346,26 @@ export function createParser(grammar: CstGrammar) {
     if (prattRules.has(rule.name)) prattClassified.set(rule.name, classifyAlts(rule));
     else if (leftRecSet.has(rule.name)) leftRecClassified.set(rule.name, classifyLeftRec(rule));
   }
+  // Per-LED binding-power lookup (object-keyed like ledFirst): a led whose first
+  // connector literal has a declared LedPrec is precedence-gated; chainRhs leds must
+  // end in a self-operand (the trailing ref the chain re-parses at the level's bp).
+  const ledPrecOf = new Map<object, { lbp: number; rhsBp: number | null }>();
+  for (const [ruleName, { leds }] of prattClassified.entries()) {
+    for (const led of leds) {
+      const first = led.items[0];
+      if (first?.type !== 'literal') continue;
+      const lp = ledPrecByConnector.get(first.value);
+      if (!lp) continue;
+      if (lp.rhsBp !== null) {
+        const last = led.items[led.items.length - 1];
+        if (!(last?.type === 'ref' && last.name === ruleName)) {
+          throw new Error(`ledPrec ${first.value}: chainRhs requires a trailing self-operand`);
+        }
+      }
+      ledPrecOf.set(led, lp);
+    }
+  }
+
   // The template token(s): the parser routes their tokens to the interpolation-aware
   // parseTemplateExpr path (the lexer owns producing them — see gen-lexer.ts).
   const templateTokenName = grammar.tokens.find(t => t.template)?.name;
@@ -1052,10 +1085,28 @@ export function createParser(grammar: CstGrammar) {
           // Skip a LED whose connector is excluded in this context (e.g. `in` under
           // a no-`in` for-head) — it rebinds to the enclosing rule instead.
           if (suppressCur && led.items[0]?.type === 'literal' && suppressCur.has(led.items[0].value)) continue;
+          // Precedence gate for alternative-form LEDs: without it they bind maximally
+          // tight (`a == b ? c : d` mis-grouped as `a == (b ? c : d)`).
+          const lp = ledPrecOf.get(led);
+          if (lp !== undefined && lp.lbp <= minBp) continue;
           if (!canStart(ledFirst.get(led), tok)) continue;   // first-token dispatch for LED continuations
 
           pos = ledSaved;
-          let children = matchSeq(led.items);
+          let children: CstChild[] | null;
+          if (lp !== undefined && lp.rhsBp !== null) {
+            // Chain-rhs led ('in'/'instanceof'): the trailing self-operand parses at the
+            // level's bp (left-chaining like a ladder op), not as a full expression.
+            const head = matchSeq(led.items.slice(0, -1));
+            if (head !== null) {
+              const rhs = parsePratt(rule, lp.rhsBp);
+              children = rhs !== null ? [...head, rhs] : null;
+            } else {
+              children = null;
+            }
+            if (children === null) pos = ledSaved;
+          } else {
+            children = matchSeq(led.items);
+          }
           // Mixfix operand re-bound: if a `<L1> $ <L2> …` LED failed, the inner
           // operand may have over-consumed the L2 it needs — retry it capped.
           if (children === null && ledMixfix.has(led)) {

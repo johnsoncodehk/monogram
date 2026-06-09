@@ -1,12 +1,14 @@
 // Compare the Monogram-CST-lowered AST (test/ts-ast-lowering.ts) against the REAL tsc
 // AST, pre-order, node by node: kind (compared as ts.SyntaxKind NUMBERS — names are
 // looked up forward, dodging enum aliases), start (getStart, trivia-excluded) and end.
-// On a mismatch the subtree is skipped and counted — the report is a pain/coverage map,
-// not a pass/fail gate (the lowering is deliberately partial).
+// On a mismatch the subtree is skipped and counted. GATE semantics: the snippet battery
+// (plus parserindenter.ts when the corpus is present) must be divergence-free — this is
+// the parser↔tsc STRUCTURE conformance gate (it caught the mixfix-LED precedence bug
+// that accept/reject and token-scope gates were blind to).
 //
 //   node test/ts-ast-verify.ts                  # snippet battery
 //   node test/ts-ast-verify.ts <file.ts> [...]  # real files
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createParser } from '../src/gen-parser.ts';
 import { lowerProgram, Unlowered, type Ast } from './ts-ast-lowering.ts';
@@ -111,6 +113,7 @@ const SNIPPETS: [string, string][] = [
   ['comma-empty', ';;'],
 ];
 
+const CORPUS_FILE = '/tmp/ts-repo/tests/cases/conformance/parser/ecmascript5/RealWorld/parserindenter.ts';
 const files = process.argv.slice(2);
 let pass = 0, fail = 0;
 if (files.length > 0) {
@@ -128,5 +131,16 @@ if (files.length > 0) {
     for (const s of r.samples) console.log('    ', s);
     r.ok ? pass++ : fail++;
   }
+  if (existsSync(CORPUS_FILE)) {
+    const r = run('parserindenter.ts', readFileSync(CORPUS_FILE, 'utf-8'));
+    console.log((r.ok ? '✓ ' : '✗ ') + r.line);
+    for (const s of r.samples) console.log('    ', s);
+    r.ok ? pass++ : fail++;
+  }
 }
 console.log(`\n${pass} clean, ${fail} with divergences`);
+if (fail > 0) {
+  console.error('✗ lowered AST diverges from tsc');
+  process.exit(1);
+}
+console.log('✓ lowered AST ≡ tsc node-by-node');

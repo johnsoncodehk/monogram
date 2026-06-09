@@ -188,6 +188,16 @@ export const notReservedExpr = not(alt(
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
 
+// Binding powers for the ALTERNATIVE-form LEDs (rule alternatives `[$, connector, …]`).
+// The conditional sits between the assignment levels and `??` (its branches stay full
+// assignment expressions); `in`/`instanceof` sit AT the relational level and left-chain
+// their right operand like the ladder relationals they are.
+export const jsLedPrecs = [
+  { connector: '?', below: '??' },
+  { connector: 'in', sameAs: '<', chainRhs: true },
+  { connector: 'instanceof', sameAs: '<', chainRhs: true },
+];
+
 export const ecmaPrec = [
   right('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^='),
   right('??=', '||=', '&&='),
@@ -590,6 +600,7 @@ export default defineGrammar({
   },
 
   prec: ecmaPrec,
+  ledPrec: jsLedPrecs,
 
   rules: {
     DecoratorExpr,

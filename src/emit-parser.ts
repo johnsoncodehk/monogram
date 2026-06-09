@@ -79,6 +79,18 @@ function analyze(grammar: CstGrammar) {
     }
   }
 
+  // Alternative-form LED binding powers (mirrors gen-parser.ts — the two engines must
+  // resolve IDENTICAL lbp numbers or their CSTs diverge).
+  const ledPrecByConnector = new Map<string, { lbp: number; rhsBp: number | null }>();
+  for (const lp of grammar.ledPrecs ?? []) {
+    const anchorOp = lp.sameAs ?? lp.below;
+    if (!anchorOp) throw new Error(`ledPrec ${lp.connector}: needs sameAs or below`);
+    const op = opTable.get(anchorOp);
+    if (!op) throw new Error(`ledPrec ${lp.connector}: anchor ${JSON.stringify(anchorOp)} is not a ladder operator`);
+    const lbp = lp.sameAs !== undefined ? op.lbp : op.lbp - 1;
+    ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
+  }
+
   // Pratt rules.
   const prattRules = new Set<string>();
   for (const rule of grammar.rules) if (hasMarker(rule.body)) prattRules.add(rule.name);
@@ -149,12 +161,13 @@ function analyze(grammar: CstGrammar) {
 
   // Access-tail + tail-closing LED classification (Pratt).
   // Returns, per Pratt rule, parallel arrays of flags aligned to the leds array.
-  const ledMeta = new Map<string, { accessTail: boolean[]; tailClosing: boolean[]; mixfix: (MixfixInfo | null)[]; first: FirstTok[] }>();
+  const ledMeta = new Map<string, { accessTail: boolean[]; tailClosing: boolean[]; mixfix: (MixfixInfo | null)[]; first: FirstTok[]; prec: ({ lbp: number; rhsBp: number | null } | null)[] }>();
   for (const [ruleName, { leds }] of prattClassified.entries()) {
     const accessTail: boolean[] = [];
     const tailClosing: boolean[] = [];
     const mixfix: (MixfixInfo | null)[] = [];
     const first: FirstTok[] = [];
+    const prec: ({ lbp: number; rhsBp: number | null } | null)[] = [];
     for (const led of leds) {
       const it = led.items;
       let isAccessTail = false, isTailClosing = false;
@@ -169,8 +182,17 @@ function analyze(grammar: CstGrammar) {
       tailClosing.push(isTailClosing);
       mixfix.push(mixfixOf(led.items, ruleName));
       first.push(firstTokenOf({ type: 'seq', items: led.items } as RuleExpr));
+      const firstItem = led.items[0];
+      const lp = firstItem?.type === 'literal' ? ledPrecByConnector.get(firstItem.value) ?? null : null;
+      if (lp !== null && lp.rhsBp !== null) {
+        const last = led.items[led.items.length - 1];
+        if (!(last?.type === 'ref' && last.name === ruleName)) {
+          throw new Error(`ledPrec ${firstItem.type === 'literal' ? firstItem.value : '?'}: chainRhs requires a trailing self-operand`);
+        }
+      }
+      prec.push(lp);
     }
-    ledMeta.set(ruleName, { accessTail, tailClosing, mixfix, first });
+    ledMeta.set(ruleName, { accessTail, tailClosing, mixfix, first, prec });
   }
 
   // Left-rec continuation mixfix.
@@ -1622,6 +1644,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     realLeds.forEach(({ led, i }, j) => {
       const conds: string[] = [];
       if (meta.accessTail[i]) conds.push(`!(tailClosed)`);
+      // Precedence gate for alternative-form LEDs (see LedPrec): without it they bind
+      // maximally tight (`a == b ? c : d` mis-grouped as `a == (b ? c : d)`).
+      if (meta.prec[i]) conds.push(`${meta.prec[i]!.lbp} > minBp`);
       // suppress: skip a LED whose first literal connector is in suppressCur.
       const firstLit = (led.items[0]?.type === 'literal') ? led.items[0].value : null;
       if (firstLit !== null) conds.push(`!(suppressCur && suppressCur.has(${J(firstLit)}))`);
@@ -1687,7 +1712,21 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // LED arm matchers (skip operator leds).
   leds.forEach((led, i) => {
     if (led.items[0]?.type === 'op' || led.items[0]?.type === 'postfix') return;
-    emitArmNamed(e, a, `led_${sn}_${i}`, { type: 'seq', items: led.items } as RuleExpr);
+    const lp = meta.prec[i];
+    if (lp && lp.rhsBp !== null) {
+      // Chain-rhs led ('in'/'instanceof'): trailing self-operand at the level's bp
+      // (left-chaining like a ladder op's rhs), bypassing the bp-0 rule entry.
+      e.emit(`function led_${sn}_${i}() {`);
+      e.emit(`  const _save = pos; const out = [];`);
+      e.emit(e.matchInto({ type: 'seq', items: led.items.slice(0, -1) } as RuleExpr, 'out', 'pos = _save; return null;'));
+      e.emit(`  const _rhs = ${ruleFn}_pratt(${lp.rhsBp});`);
+      e.emit(`  if (_rhs === null) { pos = _save; return null; }`);
+      e.emit(`  out.push(_rhs);`);
+      e.emit(`  return out;`);
+      e.emit(`}`);
+    } else {
+      emitArmNamed(e, a, `led_${sn}_${i}`, { type: 'seq', items: led.items } as RuleExpr);
+    }
     if (meta.mixfix[i]) emitMixfixLed(e, a, `matchMixfixLed_${sn}_led_${i}`, rule.name, led.items, meta.mixfix[i]!);
   });
 }
