@@ -631,8 +631,8 @@ export function createParser(grammar: CstGrammar) {
       if (value === '>' && tok.type === '' && tok.text.length > 1 && tok.text[0] === '>') {
         const rest = tok.text.slice(1);
         tokens.splice(pos, 1,
-          { type: '', text: '>', offset: tok.offset },
-          { type: '', text: rest, offset: tok.offset + 1 },
+          { type: '', text: '>', offset: tok.offset, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
+          { type: '', text: rest, offset: tok.offset + 1, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
         );
         memo.clear();   // splice shifts later token indices → memo entries are stale
         pos++;

@@ -855,48 +855,29 @@ export function emitParser(grammar: CstGrammar): string {
   e.emit(`import { isKeywordLiteral } from ${J(resolveUtilsImport())};`);
   e.emit(``);
   e.emit(`const LEX_GRAMMAR = ${J(lexGrammar)};`);
-  e.emit(`const { tokenize: _lexTokenize } = createLexer(LEX_GRAMMAR);`);
   e.emit(``);
   // ── Lever 1: integer token-kind tables (see analyze()'s symtab) ──
   // TYPE_KIND: tok.type → int. LIT_KW / LIT_PU: tok.text → keyword / punct literal int.
-  // The interning wrapper below sets tok.k (type kind) + tok.t (literal kind) once per
-  // token, so the per-call string dispatch becomes integer compares.
+  // Passed to createLexer as its intern config: every token is BORN with tok.k (type
+  // kind) + tok.t (literal kind) and the stamp flags — one monomorphic shape, one
+  // allocation, no post-pass (the old rebuild loop dominated the parse() profile).
   const st = a.symtab;
-  e.emit(`const TYPE_KIND = ${J(Object.fromEntries(st.typeKind))};`);
-  e.emit(`const LIT_KW = ${J(Object.fromEntries(st.kwLitKind))};`);
-  e.emit(`const LIT_PU = ${J(Object.fromEntries(st.puLitKind))};`);
+  e.emit(`const TYPE_KIND = new Map(${J([...st.typeKind])});`);
+  e.emit(`const LIT_KW = new Map(${J([...st.kwLitKind])});`);
+  e.emit(`const LIT_PU = new Map(${J([...st.puLitKind])});`);
   e.emit(`const K_PUNCT = ${st.KIND_PUNCT};`);
   e.emit(`const K_TEMPLATE_HEAD = ${st.KIND_TEMPLATE_HEAD};`);
   e.emit(`const K_NAMED_MIN = ${st.KIND_NAMED_MIN};`);
   e.emit(`const K_NAMED_FALLBACK = ${st.KIND_NAMED_FALLBACK};`);
   e.emit(``);
-  // Rebuild each lexer token as ONE object literal carrying every field the parser
-  // reads — type/text/offset, the int kinds k (TYPE kind: PUNCT for '' tokens, else the
-  // declared/template kind, NAMED_FALLBACK for an unforeseen type) and t (LITERAL kind:
-  // a '' token's text in the punct table, a named token's text in the keyword table),
-  // and the three stamp flags normalized to booleans (absent ≡ false for the parser's
-  // truthiness reads). One monomorphic shape from birth: the old in-place interning
-  // added k/t to already-shaped tokens — two hidden-class transitions per token, and
-  // that loop dominated the parse() profile.
-  e.emit(String.raw`function mkTok(type, text, offset, k, t, nl, cb, mf) {
-  return { type, text, offset, k, t, newlineBefore: nl, commentBefore: cb, multilineFlowBefore: mf };
-}
-function mkPunct(text, offset) {
-  return mkTok('', text, offset, K_PUNCT, LIT_PU[text] | 0, false, false, false);
-}
-function tokenize(source) {
-  const raw = _lexTokenize(source);
-  const out = new Array(raw.length);
-  for (let i = 0; i < raw.length; i++) {
-    const r = raw[i];
-    const ty = r.type;
-    let k, t;
-    if (ty === '') { k = K_PUNCT; t = LIT_PU[r.text] | 0; }
-    else { k = TYPE_KIND[ty]; if (k === undefined) k = K_NAMED_FALLBACK; t = LIT_KW[r.text] | 0; }
-    out[i] = mkTok(ty, r.text, r.offset, k, t,
-      r.newlineBefore === true, r.commentBefore === true, r.multilineFlowBefore === true);
-  }
-  return out;
+  e.emit(`const { tokenize } = createLexer(LEX_GRAMMAR, {`);
+  e.emit(`  typeKind: TYPE_KIND, kwLit: LIT_KW, puLit: LIT_PU,`);
+  e.emit(`  punctKind: K_PUNCT, namedFallback: K_NAMED_FALLBACK,`);
+  e.emit(`});`);
+  e.emit(``);
+  // The matchPuLit '>'-split tokens are created parser-side with the same born-final shape.
+  e.emit(String.raw`function mkPunct(text, offset) {
+  return { type: '', text, offset, k: K_PUNCT, t: LIT_PU.get(text) ?? 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false };
 }`);
   e.emit(``);
   // Baked maps. Emit as object literals → Map.
