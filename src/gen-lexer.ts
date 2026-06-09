@@ -29,6 +29,17 @@ export function createLexer(grammar: CstGrammar) {
   const punctLiterals = [...allLiterals]
     .filter(l => !isKeywordLiteral(l))
     .sort((a, b) => b.length - a.length);
+  // First-char index over the punct literals: only literals sharing the position's first
+  // char can startsWith-match there, so the scan loop tries just that group (longest-first
+  // order is preserved within a group — same-first-char literals are the only competitors,
+  // so the group scan picks exactly the literal the full scan picked).
+  const punctByFirstCc = new Map<number, string[]>();
+  for (const lit of punctLiterals) {
+    const cc = lit.charCodeAt(0);
+    let group = punctByFirstCc.get(cc);
+    if (!group) punctByFirstCc.set(cc, group = []);
+    group.push(lit);
+  }
 
   // Token matchers (order matters: earlier declarations win). `blockRegex` is the optional
   // block-context (flowDepth===0) variant for indentation grammars — see TokenDecl.blockPattern;
@@ -209,6 +220,11 @@ export function createLexer(grammar: CstGrammar) {
   );
   const flowOpenSet = new Set((indent ?? newline)?.flowOpen ?? []);
   const flowCloseSet = new Set((indent ?? newline)?.flowClose ?? []);
+  // The matchers the per-position scan loop actually tries: the template token is handled by
+  // the template state machine, markup/indent tokens by theirs — all position-independent
+  // exclusions, filtered ONCE here instead of re-tested per matcher per position.
+  const scanMatchers = tokenMatchers.filter(tm =>
+    tm.name !== templateTokenName && !markupTokenNames.has(tm.name) && !indentTokenNames.has(tm.name));
   // String-literal token names (the `string`-flagged tokens — quoted scalars in YAML). Used by the
   // flow mapping-separator guard below: a quoted scalar can never run past its closing quote, so a
   // `:` immediately after one (inside flow) is ALWAYS the mapping `key: value` separator, never the
@@ -738,9 +754,28 @@ export function createLexer(grammar: CstGrammar) {
           continue;
         }
       } else {
-        wsReY.lastIndex = pos;
-        const wsMatch = wsReY.exec(source);
-        if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
+        // ASCII fast path: consume the \s run char-by-char (the per-position regex call
+        // dominated this step); only a non-ASCII candidate falls back to the \s regex
+        // (Unicode spaces). ASCII ∩ \s = {9..13, 32} exactly.
+        let wc = source.charCodeAt(pos);
+        if (wc === 32 || (wc >= 9 && wc <= 13)) {
+          do {
+            if (wc === 10) pendingNl = true;
+            pos++;
+            wc = source.charCodeAt(pos);
+          } while (wc === 32 || (wc >= 9 && wc <= 13));
+          if (wc > 127) {   // a Unicode space may continue the run — absorb it like the old regex did
+            wsReY.lastIndex = pos;
+            const wsMatch = wsReY.exec(source);
+            if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; }
+          }
+          continue;
+        }
+        if (wc > 127) {
+          wsReY.lastIndex = pos;
+          const wsMatch = wsReY.exec(source);
+          if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
+        }
       }
 
       // ── Block scalar (YAML | / >): from the introducer line, take all following lines more
@@ -919,10 +954,7 @@ export function createLexer(grammar: CstGrammar) {
       // filter (Win B): a matcher whose proven first-char set excludes it is skipped without running
       // the regex (so a `(` skips all 16 word/number/string/comment regexes before the punct loop).
       const cc = source.charCodeAt(pos);
-      for (const tm of tokenMatchers) {
-        if (tm.name === templateTokenName) continue;
-        if (markupTokenNames.has(tm.name)) continue;   // scanned by the markup state machine
-        if (indentTokenNames.has(tm.name)) continue;    // emitted by the indentation state machine
+      for (const tm of scanMatchers) {
         if (tm.blockOnly && flowDepth > 0) continue;    // line-structural token (YAML directive) — content in flow
         if (tm.isRegex) {
           // prev is a completed value → `/` is division, not a regex literal → skip.
@@ -1019,8 +1051,9 @@ export function createLexer(grammar: CstGrammar) {
       }
 
       if (!matched) {
-        // Try punctuation literals (longest first)
-        for (const lit of punctLiterals) {
+        // Try punctuation literals (longest first, within the position's first-char group)
+        const punctGroup = punctByFirstCc.get(cc);
+        if (punctGroup) for (const lit of punctGroup) {
           if (source.startsWith(lit, pos)) {
             // Track control-head parens so a `/` after `if (…)`/`while (…)` is a regex.
             // The keyword must be a real keyword head, not a member name: `obj.for(x) / y`
