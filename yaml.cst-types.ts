@@ -43,13 +43,11 @@ export type TokenType =
 
 /** A terminal: one lexer token (or synthetic keyword/punct/operator leaf). */
 export interface CstLeaf extends CstPos {
-  kind: 'leaf';
   tokenType: TokenType;
 }
 
 /** `Property` node. Children (flattened, in source order) are drawn from: */
 export interface PropertyNode extends CstPos {
-  kind: 'node';
   rule: 'Property';
   children: Array<
     | (CstLeaf & { tokenType: 'Anchor' })
@@ -59,7 +57,6 @@ export interface PropertyNode extends CstPos {
 
 /** `ContentNode` node. Children (flattened, in source order) are drawn from: */
 export interface ContentNodeNode extends CstPos {
-  kind: 'node';
   rule: 'ContentNode';
   children: Array<
     | AliasOrKeyedNode
@@ -75,7 +72,6 @@ export interface ContentNodeNode extends CstPos {
 
 /** `Node` node. Children (flattened, in source order) are drawn from: */
 export interface NodeNode extends CstPos {
-  kind: 'node';
   rule: 'Node';
   children: Array<
     | (CstLeaf & { tokenType: 'Anchor' })
@@ -97,7 +93,6 @@ export interface NodeNode extends CstPos {
 
 /** `MappingOrScalar` node. Children (flattened, in source order) are drawn from: */
 export interface MappingOrScalarNode extends CstPos {
-  kind: 'node';
   rule: 'MappingOrScalar';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -116,7 +111,6 @@ export interface MappingOrScalarNode extends CstPos {
 
 /** `AliasOrKeyed` node. Children (flattened, in source order) are drawn from: */
 export interface AliasOrKeyedNode extends CstPos {
-  kind: 'node';
   rule: 'AliasOrKeyed';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -129,7 +123,6 @@ export interface AliasOrKeyedNode extends CstPos {
 
 /** `BlockKey` node. Children (flattened, in source order) are drawn from: */
 export interface BlockKeyNode extends CstPos {
-  kind: 'node';
   rule: 'BlockKey';
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
@@ -142,7 +135,6 @@ export interface BlockKeyNode extends CstPos {
 
 /** `ExplicitEntry` node. Children (flattened, in source order) are drawn from: */
 export interface ExplicitEntryNode extends CstPos {
-  kind: 'node';
   rule: 'ExplicitEntry';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -153,7 +145,6 @@ export interface ExplicitEntryNode extends CstPos {
 
 /** `MapEntry` node. Children (flattened, in source order) are drawn from: */
 export interface MapEntryNode extends CstPos {
-  kind: 'node';
   rule: 'MapEntry';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -165,7 +156,6 @@ export interface MapEntryNode extends CstPos {
 
 /** `MapEntryNoEmpty` node. Children (flattened, in source order) are drawn from: */
 export interface MapEntryNoEmptyNode extends CstPos {
-  kind: 'node';
   rule: 'MapEntryNoEmpty';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -177,7 +167,6 @@ export interface MapEntryNoEmptyNode extends CstPos {
 
 /** `ExplicitMapping` node. Children (flattened, in source order) are drawn from: */
 export interface ExplicitMappingNode extends CstPos {
-  kind: 'node';
   rule: 'ExplicitMapping';
   children: Array<
     | (CstLeaf & { tokenType: 'Newline' })
@@ -188,7 +177,6 @@ export interface ExplicitMappingNode extends CstPos {
 
 /** `EmptyKeyMapping` node. Children (flattened, in source order) are drawn from: */
 export interface EmptyKeyMappingNode extends CstPos {
-  kind: 'node';
   rule: 'EmptyKeyMapping';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -200,7 +188,6 @@ export interface EmptyKeyMappingNode extends CstPos {
 
 /** `Value` node. Children (flattened, in source order) are drawn from: */
 export interface ValueNode extends CstPos {
-  kind: 'node';
   rule: 'Value';
   children: Array<
     | (CstLeaf & { tokenType: 'BoolNull' })
@@ -216,7 +203,6 @@ export interface ValueNode extends CstPos {
 
 /** `MapValue` node. Children (flattened, in source order) are drawn from: */
 export interface MapValueNode extends CstPos {
-  kind: 'node';
   rule: 'MapValue';
   children: Array<
     | (CstLeaf & { tokenType: 'BoolNull' })
@@ -235,7 +221,6 @@ export interface MapValueNode extends CstPos {
 
 /** `MapValueScalar` node. Children (flattened, in source order) are drawn from: */
 export interface MapValueScalarNode extends CstPos {
-  kind: 'node';
   rule: 'MapValueScalar';
   children: Array<
     | (CstLeaf & { tokenType: 'BoolNull' })
@@ -254,7 +239,6 @@ export interface MapValueScalarNode extends CstPos {
 
 /** `IndentedValueNode` node. Children (flattened, in source order) are drawn from: */
 export interface IndentedValueNodeNode extends CstPos {
-  kind: 'node';
   rule: 'IndentedValueNode';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })
@@ -268,7 +252,6 @@ export interface IndentedValueNodeNode extends CstPos {
 
 /** `CollectionContent` node. Children (flattened, in source order) are drawn from: */
 export interface CollectionContentNode extends CstPos {
-  kind: 'node';
   rule: 'CollectionContent';
   children: Array<
     | BlockSequenceNode
@@ -282,7 +265,6 @@ export interface CollectionContentNode extends CstPos {
 
 /** `MappingFromScalar` node. Children (flattened, in source order) are drawn from: */
 export interface MappingFromScalarNode extends CstPos {
-  kind: 'node';
   rule: 'MappingFromScalar';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -295,7 +277,6 @@ export interface MappingFromScalarNode extends CstPos {
 
 /** `MappingFromFlow` node. Children (flattened, in source order) are drawn from: */
 export interface MappingFromFlowNode extends CstPos {
-  kind: 'node';
   rule: 'MappingFromFlow';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -309,7 +290,6 @@ export interface MappingFromFlowNode extends CstPos {
 
 /** `MapValueNode` node. Children (flattened, in source order) are drawn from: */
 export interface MapValueNodeNode extends CstPos {
-  kind: 'node';
   rule: 'MapValueNode';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })
@@ -322,7 +302,6 @@ export interface MapValueNodeNode extends CstPos {
 
 /** `MapInlineContent` node. Children (flattened, in source order) are drawn from: */
 export interface MapInlineContentNode extends CstPos {
-  kind: 'node';
   rule: 'MapInlineContent';
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
@@ -334,7 +313,6 @@ export interface MapInlineContentNode extends CstPos {
 
 /** `MapValueNodeScalar` node. Children (flattened, in source order) are drawn from: */
 export interface MapValueNodeScalarNode extends CstPos {
-  kind: 'node';
   rule: 'MapValueNodeScalar';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })
@@ -347,7 +325,6 @@ export interface MapValueNodeScalarNode extends CstPos {
 
 /** `MapInlineScalar` node. Children (flattened, in source order) are drawn from: */
 export interface MapInlineScalarNode extends CstPos {
-  kind: 'node';
   rule: 'MapInlineScalar';
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
@@ -365,7 +342,6 @@ export interface MapInlineScalarNode extends CstPos {
 
 /** `SeqValueNode` node. Children (flattened, in source order) are drawn from: */
 export interface SeqValueNodeNode extends CstPos {
-  kind: 'node';
   rule: 'SeqValueNode';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })
@@ -378,7 +354,6 @@ export interface SeqValueNodeNode extends CstPos {
 
 /** `SeqInlineContent` node. Children (flattened, in source order) are drawn from: */
 export interface SeqInlineContentNode extends CstPos {
-  kind: 'node';
   rule: 'SeqInlineContent';
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
@@ -392,7 +367,6 @@ export interface SeqInlineContentNode extends CstPos {
 
 /** `BlockSequence` node. Children (flattened, in source order) are drawn from: */
 export interface BlockSequenceNode extends CstPos {
-  kind: 'node';
   rule: 'BlockSequence';
   children: Array<
     | (CstLeaf & { tokenType: 'Newline' })
@@ -402,7 +376,6 @@ export interface BlockSequenceNode extends CstPos {
 
 /** `SeqItem` node. Children (flattened, in source order) are drawn from: */
 export interface SeqItemNode extends CstPos {
-  kind: 'node';
   rule: 'SeqItem';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -412,7 +385,6 @@ export interface SeqItemNode extends CstPos {
 
 /** `FlowNode` node. Children (flattened, in source order) are drawn from: */
 export interface FlowNodeNode extends CstPos {
-  kind: 'node';
   rule: 'FlowNode';
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
@@ -425,7 +397,6 @@ export interface FlowNodeNode extends CstPos {
 
 /** `FlowExplicit` node. Children (flattened, in source order) are drawn from: */
 export interface FlowExplicitNode extends CstPos {
-  kind: 'node';
   rule: 'FlowExplicit';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -435,7 +406,6 @@ export interface FlowExplicitNode extends CstPos {
 
 /** `FlowMapEntry` node. Children (flattened, in source order) are drawn from: */
 export interface FlowMapEntryNode extends CstPos {
-  kind: 'node';
   rule: 'FlowMapEntry';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -446,7 +416,6 @@ export interface FlowMapEntryNode extends CstPos {
 
 /** `FlowMapping` node. Children (flattened, in source order) are drawn from: */
 export interface FlowMappingNode extends CstPos {
-  kind: 'node';
   rule: 'FlowMapping';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -456,7 +425,6 @@ export interface FlowMappingNode extends CstPos {
 
 /** `FlowSeqEntry` node. Children (flattened, in source order) are drawn from: */
 export interface FlowSeqEntryNode extends CstPos {
-  kind: 'node';
   rule: 'FlowSeqEntry';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -467,7 +435,6 @@ export interface FlowSeqEntryNode extends CstPos {
 
 /** `FlowSeqKey` node. Children (flattened, in source order) are drawn from: */
 export interface FlowSeqKeyNode extends CstPos {
-  kind: 'node';
   rule: 'FlowSeqKey';
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
@@ -482,7 +449,6 @@ export interface FlowSeqKeyNode extends CstPos {
 
 /** `FlowSequence` node. Children (flattened, in source order) are drawn from: */
 export interface FlowSequenceNode extends CstPos {
-  kind: 'node';
   rule: 'FlowSequence';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -492,7 +458,6 @@ export interface FlowSequenceNode extends CstPos {
 
 /** `Scalar` node. Children (flattened, in source order) are drawn from: */
 export interface ScalarNode extends CstPos {
-  kind: 'node';
   rule: 'Scalar';
   children: Array<
     | (CstLeaf & { tokenType: 'BlockScalar' })
@@ -509,7 +474,6 @@ export interface ScalarNode extends CstPos {
 
 /** `BlockKeyScalar` node. Children (flattened, in source order) are drawn from: */
 export interface BlockKeyScalarNode extends CstPos {
-  kind: 'node';
   rule: 'BlockKeyScalar';
   children: Array<
     | (CstLeaf & { tokenType: 'BoolNull' })
@@ -523,7 +487,6 @@ export interface BlockKeyScalarNode extends CstPos {
 
 /** `DocFold` node. Children (flattened, in source order) are drawn from: */
 export interface DocFoldNode extends CstPos {
-  kind: 'node';
   rule: 'DocFold';
   children: Array<
     | (CstLeaf & { tokenType: 'BoolNull' })
@@ -539,7 +502,6 @@ export interface DocFoldNode extends CstPos {
 
 /** `InlineDocNode` node. Children (flattened, in source order) are drawn from: */
 export interface InlineDocNodeNode extends CstPos {
-  kind: 'node';
   rule: 'InlineDocNode';
   children: Array<
     | (CstLeaf & { tokenType: 'Alias' })
@@ -557,7 +519,6 @@ export interface InlineDocNodeNode extends CstPos {
 
 /** `ExplicitDocBody` node. Children (flattened, in source order) are drawn from: */
 export interface ExplicitDocBodyNode extends CstPos {
-  kind: 'node';
   rule: 'ExplicitDocBody';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })
@@ -571,7 +532,6 @@ export interface ExplicitDocBodyNode extends CstPos {
 
 /** `AfterDocEnd` node. Children (flattened, in source order) are drawn from: */
 export interface AfterDocEndNode extends CstPos {
-  kind: 'node';
   rule: 'AfterDocEnd';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })
@@ -588,7 +548,6 @@ export interface AfterDocEndNode extends CstPos {
 
 /** `NextDoc` node. Children (flattened, in source order) are drawn from: */
 export interface NextDocNode extends CstPos {
-  kind: 'node';
   rule: 'NextDoc';
   children: Array<
     | (CstLeaf & { tokenType: 'DocEnd' })
@@ -601,7 +560,6 @@ export interface NextDocNode extends CstPos {
 
 /** `Stream` node. Children (flattened, in source order) are drawn from: */
 export interface StreamNode extends CstPos {
-  kind: 'node';
   rule: 'Stream';
   children: Array<
     | (CstLeaf & { tokenType: 'Dedent' })

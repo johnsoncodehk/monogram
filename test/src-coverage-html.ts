@@ -27,10 +27,10 @@ function monoTree(node: any): El[] {
   return out;
 }
 function collect(node: any, out: El[]): void {
-  if (node.kind === 'leaf') return;
+  if (node.tokenType !== undefined) return;
   if (node.rule === 'Element') {
     const name = (node.children ?? []).find(
-      (c: any) => c.kind === 'leaf' && (c.tokenType === 'Name' || c.tokenType === 'VoidName'),
+      (c: any) => c.tokenType === 'Name' || c.tokenType === 'VoidName',
     );
     out.push({ tag: (name?.text ?? '').toLowerCase(), children: monoTree(node) });
     return;

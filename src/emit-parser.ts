@@ -1351,7 +1351,7 @@ function matchKwLit(kw) {
   const off = tkOff[pos];
   const end = tkEnd[pos];
   if (++pos > maxPos) maxPos = pos;
-  return { kind: 'leaf', tokenType: '$keyword', offset: off, end };
+  return { tokenType: '$keyword', offset: off, end };
 }
 // Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
 // tok.t === PU(value) is the exact-text fast path; the splice handles a longer
@@ -1363,7 +1363,7 @@ function matchPuLit(pu) {
   const off = tkOff[pos];
   const end = tkEnd[pos];
   if (++pos > maxPos) maxPos = pos;
-  return { kind: 'leaf', tokenType: '$punct', offset: off, end };
+  return { tokenType: '$punct', offset: off, end };
 }
 function matchPuLitGT(pu) {
   if (pos >= cap) return null;
@@ -1371,7 +1371,7 @@ function matchPuLitGT(pu) {
   if (tkT[pos] === pu) {
     const end = tkEnd[pos];
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: '$punct', offset: off, end };
+    return { tokenType: '$punct', offset: off, end };
   }
   // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>': shift the
   // columns up one slot and write the '>' + rest pair in place (both born flag-less,
@@ -1395,7 +1395,7 @@ function matchPuLitGT(pu) {
     memoNode.fill(undefined);
     memoEnd.fill(undefined);
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: '$punct', offset: off, end: off + 1 };
+    return { tokenType: '$punct', offset: off, end: off + 1 };
   }
   return null;
 }
@@ -1415,7 +1415,7 @@ function matchTokK(name, nameKind) {
   const off = tkOff[pos];
   const end = tkEnd[pos];
   if (++pos > maxPos) maxPos = pos;
-  return { kind: 'leaf', tokenType: name, offset: off, end };
+  return { tokenType: name, offset: off, end };
 }
 
 // (First-token / FIRST-set gating is baked at emit time: per-set _qN byte-table fns
@@ -1427,13 +1427,13 @@ function parseTemplateExpr() {
   if (k === K_TPL_TOKEN) {
     const off = tkOff[pos]; const end = tkEnd[pos];
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: templateTokenName, offset: off, end };
+    return { tokenType: templateTokenName, offset: off, end };
   }
   if (k === K_TEMPLATE_HEAD) {
     const children = [];
     { const off = tkOff[pos]; const end = tkEnd[pos];
       if (++pos > maxPos) maxPos = pos;
-      children.push({ kind: 'leaf', tokenType: '$templateHead', offset: off, end }); }
+      children.push({ tokenType: '$templateHead', offset: off, end }); }
     const interpRule = currentPrattContext ?? EXPR_RULE;
     while (true) {
       const exprNode = RULES[interpRule]();
@@ -1443,20 +1443,20 @@ function parseTemplateExpr() {
       if (nk === K_TEMPLATE_MIDDLE) {
         const off = tkOff[pos]; const end = tkEnd[pos];
         if (++pos > maxPos) maxPos = pos;
-        children.push({ kind: 'leaf', tokenType: '$templateMiddle', offset: off, end });
+        children.push({ tokenType: '$templateMiddle', offset: off, end });
         continue;
       }
       if (nk === K_TEMPLATE_TAIL) {
         const off = tkOff[pos]; const end = tkEnd[pos];
         if (++pos > maxPos) maxPos = pos;
-        children.push({ kind: 'leaf', tokenType: '$templateTail', offset: off, end });
+        children.push({ tokenType: '$templateTail', offset: off, end });
         break;
       }
       break;
     }
     const startOff = children.length > 0 ? childOffset(children[0]) : offset();
     const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-    return { kind: 'node', rule: '$template', children, offset: startOff, end: endOff };
+    return { rule: '$template', children, offset: startOff, end: endOff };
   }
   return null;
 }
@@ -1494,7 +1494,7 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
     e.emit(`    if (children !== null && pos > bestPos) {`);
     e.emit(`      const startOff = children.length > 0 ? childOffset(children[0]) : offset();`);
     e.emit(`      const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();`);
-    e.emit(`      bestNode = { kind: 'node', rule: ${J(rule.name)}, children, offset: startOff, end: endOff };`);
+    e.emit(`      bestNode = { rule: ${J(rule.name)}, children, offset: startOff, end: endOff };`);
     e.emit(`      bestPos = pos;`);
     e.emit(`    }`);
     e.emit(`  }`);
@@ -1528,7 +1528,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     e.emit(`    if (children !== null && pos > bestAtomPos) {`);
     e.emit(`      const startOff = children.length > 0 ? childOffset(children[0]) : offset();`);
     e.emit(`      const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();`);
-    e.emit(`      node = { kind: 'node', rule: ${J(rule.name)}, children, offset: startOff, end: endOff };`);
+    e.emit(`      node = { rule: ${J(rule.name)}, children, offset: startOff, end: endOff };`);
     e.emit(`      bestAtomPos = pos;`);
     e.emit(`    }`);
     e.emit(`  }`);
@@ -1544,7 +1544,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
       e.emit(`      if (children === null) { pos = contSaved; children = matchMixfixLed_${sanitize(rule.name)}_cont_${i}(); }`);
     }
     e.emit(`      if (children !== null) {`);
-    e.emit(`        node = { kind: 'node', rule: ${J(rule.name)}, children: [node, ...children], offset: node.offset, end: children.length > 0 ? childEnd(children[children.length - 1]) : node.end };`);
+    e.emit(`        node = { rule: ${J(rule.name)}, children: [node, ...children], offset: node.offset, end: children.length > 0 ? childEnd(children[children.length - 1]) : node.end };`);
     e.emit(`        continue outer;`);
     e.emit(`      } }`);
   });
@@ -1588,9 +1588,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`      if (info) {`);
       e.emit(`        const _o = tkOff[pos]; const _e = tkEnd[pos];`);
       e.emit(`        if (++pos > maxPos) maxPos = pos;`);
-      e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', offset: _o, end: _e };`);
+      e.emit(`        const opLeaf = { tokenType: '$operator', offset: _o, end: _e };`);
       e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
-      e.emit(`        if (rhs && pos > bestNudPos) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end }; bestNudPos = pos; }`);
+      e.emit(`        if (rhs && pos > bestNudPos) { lhs = { rule: ${J(rule.name)}, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end }; bestNudPos = pos; }`);
       e.emit(`      }`);
       e.emit(`    }`);
     } else {
@@ -1598,7 +1598,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`    if (children !== null && pos > bestNudPos) {`);
       e.emit(`      const startOff = children.length > 0 ? childOffset(children[0]) : offset();`);
       e.emit(`      const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();`);
-      e.emit(`      lhs = { kind: 'node', rule: ${J(rule.name)}, children, offset: startOff, end: endOff };`);
+      e.emit(`      lhs = { rule: ${J(rule.name)}, children, offset: startOff, end: endOff };`);
       e.emit(`      bestNudPos = pos;`);
       e.emit(`    }`);
     }
@@ -1638,7 +1638,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
         e.emit(`      if (children === null) { pos = ledSaved; children = matchMixfixLed_${sn}_led_${i}(); }`);
       }
       e.emit(`      if (children !== null) {`);
-      e.emit(`        lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, ...children], offset: lhs.offset, end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end };`);
+      e.emit(`        lhs = { rule: ${J(rule.name)}, children: [lhs, ...children], offset: lhs.offset, end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end };`);
       if (meta.tailClosing[i]) e.emit(`        tailClosed = true;`);
       e.emit(`        matched = true;`);
       e.emit(`      }`);
@@ -1655,20 +1655,20 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`        if (!tailClosed) {`);
   e.emit(`          const _o = tkOff[pos]; const _e = tkEnd[pos];`);
   e.emit(`          if (++pos > maxPos) maxPos = pos;`);
-  e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', offset: _o, end: _e };`);
-  e.emit(`          lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };`);
+  e.emit(`          const opLeaf = { tokenType: '$operator', offset: _o, end: _e };`);
+  e.emit(`          lhs = { rule: ${J(rule.name)}, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };`);
   e.emit(`          tailClosed = true; matched = true;`);
   e.emit(`        }`);
   e.emit(`      } else {`);
-  e.emit(`        if (NOUNARY_T[tkT[pos]] !== 0 && lhs.kind === 'node') {`);
+  e.emit(`        if (NOUNARY_T[tkT[pos]] !== 0 && lhs.children !== undefined) {`);
   e.emit(`          const head = lhs.children[0];`);
-  e.emit(`          if (head && head.kind === 'leaf' && head.tokenType === '$operator' && prefixOps.has(src.slice(head.offset, head.end)) && !postfixOpValues.has(src.slice(head.offset, head.end))) { return null; }`);
+  e.emit(`          if (head && head.tokenType === '$operator' && prefixOps.has(src.slice(head.offset, head.end)) && !postfixOpValues.has(src.slice(head.offset, head.end))) { return null; }`);
   e.emit(`        }`);
   e.emit(`        const _o = tkOff[pos]; const _e = tkEnd[pos];`);
   e.emit(`        if (++pos > maxPos) maxPos = pos;`);
-  e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', offset: _o, end: _e };`);
+  e.emit(`        const opLeaf = { tokenType: '$operator', offset: _o, end: _e };`);
   e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
-  e.emit(`        if (rhs) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end }; matched = true; }`);
+  e.emit(`        if (rhs) { lhs = { rule: ${J(rule.name)}, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end }; matched = true; }`);
   e.emit(`        else { pos = ledSaved; }`);
   e.emit(`      }`);
   e.emit(`      if (matched) continue;`);
@@ -1856,7 +1856,7 @@ ${e.soa ? `  tokenize(source);` : String.raw`  src = source;
 
   const entry = entryRule ?? ENTRY;
   if (tokN === 0) {
-    return { kind: 'node', rule: entry, children: [], offset: 0, end: 0 };
+    return { rule: entry, children: [], offset: 0, end: 0 };
   }
   const result = RULES[entry]();
   if (!result) {

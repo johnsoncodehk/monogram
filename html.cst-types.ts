@@ -30,13 +30,11 @@ export type TokenType =
 
 /** A terminal: one lexer token (or synthetic keyword/punct/operator leaf). */
 export interface CstLeaf extends CstPos {
-  kind: 'leaf';
   tokenType: TokenType;
 }
 
 /** `Element` node. Children (flattened, in source order) are drawn from: */
 export interface ElementNode extends CstPos {
-  kind: 'node';
   rule: 'Element';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -50,7 +48,6 @@ export interface ElementNode extends CstPos {
 
 /** `Attr` node. Children (flattened, in source order) are drawn from: */
 export interface AttrNode extends CstPos {
-  kind: 'node';
   rule: 'Attr';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -62,7 +59,6 @@ export interface AttrNode extends CstPos {
 
 /** `Node` node. Children (flattened, in source order) are drawn from: */
 export interface NodeNode extends CstPos {
-  kind: 'node';
   rule: 'Node';
   children: Array<
     | (CstLeaf & { tokenType: 'Comment' })
@@ -74,7 +70,6 @@ export interface NodeNode extends CstPos {
 
 /** `Document` node. Children (flattened, in source order) are drawn from: */
 export interface DocumentNode extends CstPos {
-  kind: 'node';
   rule: 'Document';
   children: Array<
     | (CstLeaf & { tokenType: 'Comment' })

@@ -1,8 +1,7 @@
-// Gate: the CST leaf contract is span-only — a leaf is exactly {kind, tokenType, offset,
-// end}: NO text field (text is derivable: source.slice(offset, end) — the invariant that
-// licensed dropping it covered every grammar incl. yaml's synthetic indentation tokens,
-// merged flow plain-scalar runs, html raw-text/entities and template spans), and spans
-// are sane (0 ≤ offset ≤ end ≤ source.length, leaf spans non-decreasing in tree order).
+// Gate: the CST contract — a leaf is exactly {tokenType, offset, end}, a node exactly
+// {rule, children, offset, end}. No `text` (derivable: source.slice(offset, end)) and no
+// `kind` (derivable: a leaf has tokenType, a node has children — disjoint by construction)
+// on either shape, and spans are sane (0 ≤ offset ≤ end ≤ source.length).
 //
 // Inputs: the generative corpus (grammar-gen, deterministic) for every grammar, plus a
 // stride sample of the real-world TS conformance corpus when present (skipped silently
@@ -19,20 +18,25 @@ let leaves = 0;
 let bad = 0;
 const samples: { tag: string; tokenType: string; text: string; span: string }[] = [];
 
-type CstNode = { kind: string; tokenType?: string; text?: string; offset: number; end: number; children?: CstNode[] };
-function check(n: CstNode, src: string, tag: string): void {
-  if (n.kind === 'leaf') {
+type AnyCst = { kind?: string; tokenType?: string; rule?: string; text?: string; offset: number; end: number; children?: AnyCst[] };
+function check(n: AnyCst, src: string, tag: string): void {
+  if (n.children === undefined) {
     leaves++;
-    const ok = !('text' in n)
+    const ok = !('text' in n) && !('kind' in n)
+      && typeof n.tokenType === 'string' && !('rule' in n)
       && typeof n.offset === 'number' && typeof n.end === 'number'
       && n.offset >= 0 && n.offset <= n.end && n.end <= src.length;
     if (!ok) {
       bad++;
-      if (samples.length < 8) samples.push({ tag, tokenType: n.tokenType ?? '', text: String('text' in n ? n.text : '<span bad>'), span: src.slice(n.offset, n.end) });
+      if (samples.length < 8) samples.push({ tag, tokenType: n.tokenType ?? '', text: String('text' in n ? n.text : '<shape bad>'), span: src.slice(n.offset, n.end) });
     }
     return;
   }
-  for (const c of n.children ?? []) check(c, src, tag);
+  if ('kind' in n || 'tokenType' in n || typeof n.rule !== 'string') {
+    bad++;
+    if (samples.length < 8) samples.push({ tag, tokenType: '<node shape bad>', text: String(n.rule), span: '' });
+  }
+  for (const c of n.children) check(c, src, tag);
 }
 
 for (const name of GRAMMARS) {
@@ -77,7 +81,7 @@ if (existsSync(corpus)) {
 console.log(`leaves checked: ${leaves}, contract violations: ${bad}`);
 for (const s of samples) console.log('  ', JSON.stringify(s).slice(0, 160));
 if (bad > 0) {
-  console.error('✗ leaf shape violates the span-only contract');
+  console.error('✗ CST shape violates the contract');
   process.exit(1);
 }
-console.log('✓ every leaf is span-only ({kind, tokenType, offset, end}) with a sane span');
+console.log('✓ every leaf is {tokenType, offset, end} and every node {rule, children, offset, end}');

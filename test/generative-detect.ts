@@ -92,7 +92,7 @@ export function buildRoleMap(grammar: CstGrammar): (leaf: { tokenType: string; t
 export function leafRoles(grammar: CstGrammar, cst: CstNode, input: string, roleOf: (l: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null): LeafRole[] {
   const out: LeafRole[] = [];
   const walk = (n: CstChild) => {
-    if (n.kind === 'leaf') {
+    if ('tokenType' in n) {
       if (n.end <= n.offset) return;
       const text = input.slice(n.offset, n.end);   // leaves are span-only; text is derived
       const r = roleOf({ tokenType: n.tokenType, text });

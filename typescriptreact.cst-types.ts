@@ -41,20 +41,17 @@ export type TokenType =
 
 /** A terminal: one lexer token (or synthetic keyword/punct/operator leaf). */
 export interface CstLeaf extends CstPos {
-  kind: 'leaf';
   tokenType: TokenType;
 }
 
 /** Synthetic node the parser builds for an interpolated template literal. */
 export interface $templateNode extends CstPos {
-  kind: 'node';
   rule: '$template';
   children: CstChild[];
 }
 
 /** `Type` node. Children (flattened, in source order) are drawn from: */
 export interface TypeNode extends CstPos {
-  kind: 'node';
   rule: 'Type';
   children: Array<
     | $templateNode
@@ -79,7 +76,6 @@ export interface TypeNode extends CstPos {
 
 /** `TypeMember` node. Children (flattened, in source order) are drawn from: */
 export interface TypeMemberNode extends CstPos {
-  kind: 'node';
   rule: 'TypeMember';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -97,7 +93,6 @@ export interface TypeMemberNode extends CstPos {
 
 /** `DecoratorExpr` node. Children (flattened, in source order) are drawn from: */
 export interface DecoratorExprNode extends CstPos {
-  kind: 'node';
   rule: 'DecoratorExpr';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -111,7 +106,6 @@ export interface DecoratorExprNode extends CstPos {
 
 /** `TypeofRef` node. Children (flattened, in source order) are drawn from: */
 export interface TypeofRefNode extends CstPos {
-  kind: 'node';
   rule: 'TypeofRef';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -122,7 +116,6 @@ export interface TypeofRefNode extends CstPos {
 
 /** `Expr` node. Children (flattened, in source order) are drawn from: */
 export interface ExprNode extends CstPos {
-  kind: 'node';
   rule: 'Expr';
   children: Array<
     | $templateNode
@@ -156,7 +149,6 @@ export interface ExprNode extends CstPos {
 
 /** `Prop` node. Children (flattened, in source order) are drawn from: */
 export interface PropNode extends CstPos {
-  kind: 'node';
   rule: 'Prop';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -173,7 +165,6 @@ export interface PropNode extends CstPos {
 
 /** `MemberName` node. Children (flattened, in source order) are drawn from: */
 export interface MemberNameNode extends CstPos {
-  kind: 'node';
   rule: 'MemberName';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -191,7 +182,6 @@ export interface MemberNameNode extends CstPos {
 
 /** `NewTarget` node. Children (flattened, in source order) are drawn from: */
 export interface NewTargetNode extends CstPos {
-  kind: 'node';
   rule: 'NewTarget';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -203,7 +193,6 @@ export interface NewTargetNode extends CstPos {
 
 /** `ClassHeritage` node. Children (flattened, in source order) are drawn from: */
 export interface ClassHeritageNode extends CstPos {
-  kind: 'node';
   rule: 'ClassHeritage';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -219,7 +208,6 @@ export interface ClassHeritageNode extends CstPos {
 
 /** `Stmt` node. Children (flattened, in source order) are drawn from: */
 export interface StmtNode extends CstPos {
-  kind: 'node';
   rule: 'Stmt';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -239,7 +227,6 @@ export interface StmtNode extends CstPos {
 
 /** `Block` node. Children (flattened, in source order) are drawn from: */
 export interface BlockNode extends CstPos {
-  kind: 'node';
   rule: 'Block';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -249,7 +236,6 @@ export interface BlockNode extends CstPos {
 
 /** `BindingProperty` node. Children (flattened, in source order) are drawn from: */
 export interface BindingPropertyNode extends CstPos {
-  kind: 'node';
   rule: 'BindingProperty';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -264,7 +250,6 @@ export interface BindingPropertyNode extends CstPos {
 
 /** `BindingElement` node. Children (flattened, in source order) are drawn from: */
 export interface BindingElementNode extends CstPos {
-  kind: 'node';
   rule: 'BindingElement';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -276,7 +261,6 @@ export interface BindingElementNode extends CstPos {
 
 /** `ArrayBindingElement` node. Children (flattened, in source order) are drawn from: */
 export interface ArrayBindingElementNode extends CstPos {
-  kind: 'node';
   rule: 'ArrayBindingElement';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -288,7 +272,6 @@ export interface ArrayBindingElementNode extends CstPos {
 
 /** `BindingPattern` node. Children (flattened, in source order) are drawn from: */
 export interface BindingPatternNode extends CstPos {
-  kind: 'node';
   rule: 'BindingPattern';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -299,7 +282,6 @@ export interface BindingPatternNode extends CstPos {
 
 /** `Binding` node. Children (flattened, in source order) are drawn from: */
 export interface BindingNode extends CstPos {
-  kind: 'node';
   rule: 'Binding';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -312,7 +294,6 @@ export interface BindingNode extends CstPos {
 
 /** `ForBinding` node. Children (flattened, in source order) are drawn from: */
 export interface ForBindingNode extends CstPos {
-  kind: 'node';
   rule: 'ForBinding';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -325,7 +306,6 @@ export interface ForBindingNode extends CstPos {
 
 /** `Param` node. Children (flattened, in source order) are drawn from: */
 export interface ParamNode extends CstPos {
-  kind: 'node';
   rule: 'Param';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -340,7 +320,6 @@ export interface ParamNode extends CstPos {
 
 /** `ForHead` node. Children (flattened, in source order) are drawn from: */
 export interface ForHeadNode extends CstPos {
-  kind: 'node';
   rule: 'ForHead';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -352,7 +331,6 @@ export interface ForHeadNode extends CstPos {
 
 /** `SwitchCase` node. Children (flattened, in source order) are drawn from: */
 export interface SwitchCaseNode extends CstPos {
-  kind: 'node';
   rule: 'SwitchCase';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -364,7 +342,6 @@ export interface SwitchCaseNode extends CstPos {
 
 /** `TypeParams` node. Children (flattened, in source order) are drawn from: */
 export interface TypeParamsNode extends CstPos {
-  kind: 'node';
   rule: 'TypeParams';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -374,7 +351,6 @@ export interface TypeParamsNode extends CstPos {
 
 /** `TypeParam` node. Children (flattened, in source order) are drawn from: */
 export interface TypeParamNode extends CstPos {
-  kind: 'node';
   rule: 'TypeParam';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -386,7 +362,6 @@ export interface TypeParamNode extends CstPos {
 
 /** `Decl` node. Children (flattened, in source order) are drawn from: */
 export interface DeclNode extends CstPos {
-  kind: 'node';
   rule: 'Decl';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -412,7 +387,6 @@ export interface DeclNode extends CstPos {
 
 /** `InterfaceMember` node. Children (flattened, in source order) are drawn from: */
 export interface InterfaceMemberNode extends CstPos {
-  kind: 'node';
   rule: 'InterfaceMember';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -427,7 +401,6 @@ export interface InterfaceMemberNode extends CstPos {
 
 /** `ClassMember` node. Children (flattened, in source order) are drawn from: */
 export interface ClassMemberNode extends CstPos {
-  kind: 'node';
   rule: 'ClassMember';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -445,7 +418,6 @@ export interface ClassMemberNode extends CstPos {
 
 /** `EnumMember` node. Children (flattened, in source order) are drawn from: */
 export interface EnumMemberNode extends CstPos {
-  kind: 'node';
   rule: 'EnumMember';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -456,7 +428,6 @@ export interface EnumMemberNode extends CstPos {
 
 /** `ImportClause` node. Children (flattened, in source order) are drawn from: */
 export interface ImportClauseNode extends CstPos {
-  kind: 'node';
   rule: 'ImportClause';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -468,7 +439,6 @@ export interface ImportClauseNode extends CstPos {
 
 /** `ImportSpecifier` node. Children (flattened, in source order) are drawn from: */
 export interface ImportSpecifierNode extends CstPos {
-  kind: 'node';
   rule: 'ImportSpecifier';
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
@@ -478,7 +448,6 @@ export interface ImportSpecifierNode extends CstPos {
 
 /** `JSXTagName` node. Children (flattened, in source order) are drawn from: */
 export interface JSXTagNameNode extends CstPos {
-  kind: 'node';
   rule: 'JSXTagName';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -488,7 +457,6 @@ export interface JSXTagNameNode extends CstPos {
 
 /** `JSXAttrValue` node. Children (flattened, in source order) are drawn from: */
 export interface JSXAttrValueNode extends CstPos {
-  kind: 'node';
   rule: 'JSXAttrValue';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -499,7 +467,6 @@ export interface JSXAttrValueNode extends CstPos {
 
 /** `JSXAttr` node. Children (flattened, in source order) are drawn from: */
 export interface JSXAttrNode extends CstPos {
-  kind: 'node';
   rule: 'JSXAttr';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -511,7 +478,6 @@ export interface JSXAttrNode extends CstPos {
 
 /** `JSXContainer` node. Children (flattened, in source order) are drawn from: */
 export interface JSXContainerNode extends CstPos {
-  kind: 'node';
   rule: 'JSXContainer';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -521,7 +487,6 @@ export interface JSXContainerNode extends CstPos {
 
 /** `JSXChild` node. Children (flattened, in source order) are drawn from: */
 export interface JSXChildNode extends CstPos {
-  kind: 'node';
   rule: 'JSXChild';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -535,7 +500,6 @@ export interface JSXChildNode extends CstPos {
 
 /** `JSXElement` node. Children (flattened, in source order) are drawn from: */
 export interface JSXElementNode extends CstPos {
-  kind: 'node';
   rule: 'JSXElement';
   children: Array<
     | (CstLeaf & { tokenType: '$punct' })
@@ -550,7 +514,6 @@ export interface JSXElementNode extends CstPos {
 
 /** `Program` node. Children (flattened, in source order) are drawn from: */
 export interface ProgramNode extends CstPos {
-  kind: 'node';
   rule: 'Program';
   children: Array<
     | DeclNode

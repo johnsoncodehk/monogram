@@ -95,7 +95,6 @@ export function generateAstTypes(grammar: CstGrammar): string {
   // Generic leaf — narrowable on `tokenType`.
   lines.push('/** A terminal: one lexer token (or synthetic keyword/punct/operator leaf). */');
   lines.push('export interface CstLeaf extends CstPos {');
-  lines.push('  kind: \'leaf\';');
   lines.push('  tokenType: TokenType;');
   lines.push('}');
   lines.push('');
@@ -105,8 +104,7 @@ export function generateAstTypes(grammar: CstGrammar): string {
   if (hasTemplate) {
     lines.push('/** Synthetic node the parser builds for an interpolated template literal. */');
     lines.push(`export interface ${nodeIfaceName(SYNTHETIC_TEMPLATE_NODE)} extends CstPos {`);
-    lines.push('  kind: \'node\';');
-    lines.push(`  rule: ${quote(SYNTHETIC_TEMPLATE_NODE)};`);
+      lines.push(`  rule: ${quote(SYNTHETIC_TEMPLATE_NODE)};`);
     // A $template node holds template leaves plus interpolated expression nodes.
     lines.push('  children: CstChild[];');
     lines.push('}');
@@ -118,8 +116,7 @@ export function generateAstTypes(grammar: CstGrammar): string {
     const kinds = childKindsByRule.get(rule.name)!;
     lines.push(`/** \`${rule.name}\` node. Children (flattened, in source order) are drawn from: */`);
     lines.push(`export interface ${nodeIfaceName(rule.name)} extends CstPos {`);
-    lines.push('  kind: \'node\';');
-    lines.push(`  rule: ${quote(rule.name)};`);
+      lines.push(`  rule: ${quote(rule.name)};`);
     lines.push(`  children: ${childArrayType(kinds)};`);
     lines.push('}');
     lines.push('');

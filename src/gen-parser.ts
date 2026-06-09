@@ -5,7 +5,6 @@ import { createLexer, type Token } from './gen-lexer.ts';
 // ── CST output ──
 
 export interface CstNode {
-  kind: 'node';
   rule: string;
   children: CstChild[];
   offset: number;
@@ -13,7 +12,6 @@ export interface CstNode {
 }
 
 export interface CstLeaf {
-  kind: 'leaf';
   tokenType: string;
   offset: number;
   end: number;
@@ -764,14 +762,14 @@ export function createParser(grammar: CstGrammar) {
         // Keyword literal: match against Ident token with same text
         if (tok.type !== '' && tokenNames.has(tok.type) && tok.text === value) {
           pos++;
-          return { kind: 'leaf', tokenType: '$keyword', offset: tok.offset, end: tok.offset + tok.text.length };
+          return { tokenType: '$keyword', offset: tok.offset, end: tok.offset + tok.text.length };
         }
         return null;
       }
       // Punctuation literal
       if (tok.type === '' && tok.text === value) {
         pos++;
-        return { kind: 'leaf', tokenType: '$punct', offset: tok.offset, end: tok.offset + tok.text.length };
+        return { tokenType: '$punct', offset: tok.offset, end: tok.offset + tok.text.length };
       }
       // Split multi-`>` tokens: `>>`, `>>>`, `>>=`, `>>>=` can yield a single `>`
       if (value === '>' && tok.type === '' && tok.text.length > 1 && tok.text[0] === '>') {
@@ -782,7 +780,7 @@ export function createParser(grammar: CstGrammar) {
         );
         memo.clear();   // splice shifts later token indices → memo entries are stale
         pos++;
-        return { kind: 'leaf', tokenType: '$punct', offset: tok.offset, end: tok.offset + 1 };
+        return { tokenType: '$punct', offset: tok.offset, end: tok.offset + 1 };
       }
       return null;
     }
@@ -793,7 +791,7 @@ export function createParser(grammar: CstGrammar) {
       if (!tok) return null;
       if (tok.type === name) {
         pos++;
-        return { kind: 'leaf', tokenType: name, offset: tok.offset, end: tok.offset + tok.text.length };
+        return { tokenType: name, offset: tok.offset, end: tok.offset + tok.text.length };
       }
       return null;
     }
@@ -812,12 +810,12 @@ export function createParser(grammar: CstGrammar) {
       if (!tok) return null;
       if (tok.type === templateTokenName) {
         pos++;
-        return { kind: 'leaf', tokenType: templateTokenName, offset: tok.offset, end: tok.offset + tok.text.length };
+        return { tokenType: templateTokenName, offset: tok.offset, end: tok.offset + tok.text.length };
       }
       if (tok.type === '$templateHead') {
         const children: CstChild[] = [];
         pos++;
-        children.push({ kind: 'leaf', tokenType: '$templateHead', offset: tok.offset, end: tok.offset + tok.text.length });
+        children.push({ tokenType: '$templateHead', offset: tok.offset, end: tok.offset + tok.text.length });
         const interpRule = currentPrattContext ?? findExprRule();
         while (true) {
           const exprNode = parseRule(interpRule);
@@ -826,19 +824,19 @@ export function createParser(grammar: CstGrammar) {
           if (!next) break;
           if (next.type === '$templateMiddle') {
             pos++;
-            children.push({ kind: 'leaf', tokenType: '$templateMiddle', offset: next.offset, end: next.offset + next.text.length });
+            children.push({ tokenType: '$templateMiddle', offset: next.offset, end: next.offset + next.text.length });
             continue;
           }
           if (next.type === '$templateTail') {
             pos++;
-            children.push({ kind: 'leaf', tokenType: '$templateTail', offset: next.offset, end: next.offset + next.text.length });
+            children.push({ tokenType: '$templateTail', offset: next.offset, end: next.offset + next.text.length });
             break;
           }
           break;
         }
         const startOff = children.length > 0 ? childOffset(children[0]) : offset();
         const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-        return { kind: 'node', rule: '$template', children, offset: startOff, end: endOff };
+        return { rule: '$template', children, offset: startOff, end: endOff };
       }
       return null;
     }
@@ -920,7 +918,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          bestNode = { kind: 'node', rule: rule.name, children, offset: startOff, end: endOff };
+          bestNode = { rule: rule.name, children, offset: startOff, end: endOff };
           bestPos = pos;
         }
       }
@@ -948,7 +946,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestAtomPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          node = { kind: 'node', rule: rule.name, children, offset: startOff, end: endOff };
+          node = { rule: rule.name, children, offset: startOff, end: endOff };
           bestAtomPos = pos;
         }
       }
@@ -972,7 +970,6 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             node = {
-              kind: 'node',
               rule: rule.name,
               children: [node, ...children],
               offset: node.offset,
@@ -1012,10 +1009,10 @@ export function createParser(grammar: CstGrammar) {
             const info = prefixOps.get(key);
             if (info) {
               pos++;
-              const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
               const rhs = parsePratt(rule, info.rbp);
               if (rhs && pos > bestNudPos) {
-                lhs = { kind: 'node', rule: rule.name, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
+                lhs = { rule: rule.name, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 bestNudPos = pos;
               }
             }
@@ -1027,7 +1024,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestNudPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          lhs = { kind: 'node', rule: rule.name, children, offset: startOff, end: endOff };
+          lhs = { rule: rule.name, children, offset: startOff, end: endOff };
           bestNudPos = pos;
         }
       }
@@ -1067,7 +1064,6 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             lhs = {
-              kind: 'node',
               rule: rule.name,
               children: [lhs, ...children],
               offset: lhs.offset,
@@ -1090,8 +1086,8 @@ export function createParser(grammar: CstGrammar) {
           if (info.position === 'postfix') {
             if (!tailClosed) {                                   // can't postfix an update expr (`a++ --`)
               pos++;
-              const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
-              lhs = { kind: 'node', rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
+              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+              lhs = { rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
               tailClosed = true;
               matched = true;
             }
@@ -1103,18 +1099,18 @@ export function createParser(grammar: CstGrammar) {
             // reparse another way (left-assoc `(x ** -y) ** z`, or `typeof` as a bare
             // identifier splitting the statement). `(-x) ** y` is unaffected: lhs is then
             // a parenthesized node, not a prefix node.
-            if (noUnaryLhsOps.has(tokKey) && lhs.kind === 'node') {
+            if (noUnaryLhsOps.has(tokKey) && 'children' in lhs) {
               const head = lhs.children[0];
-              if (head?.kind === 'leaf' && head.tokenType === '$operator'
+              if (head !== undefined && 'tokenType' in head && head.tokenType === '$operator'
                   && prefixOps.has(source.slice(head.offset, head.end)) && !postfixOpValues.has(source.slice(head.offset, head.end))) {
                 return null;
               }
             }
             pos++;
-            const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+            const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
             const rhs = parsePratt(rule, info.rbp);
             if (rhs) {
-              lhs = { kind: 'node', rule: rule.name, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              lhs = { rule: rule.name, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
               matched = true;
             } else {
               pos = ledSaved;
@@ -1246,7 +1242,7 @@ export function createParser(grammar: CstGrammar) {
         const result = matchExpr(item);
         if (result === null) { pos = saved; return null; }
         // The open-tag name leaf (a name token) — drives the optional-end lookup.
-        if (item.type === 'ref' && c.nameTokens.has(item.name) && result[0]?.kind === 'leaf') {
+        if (item.type === 'ref' && c.nameTokens.has(item.name) && result[0] !== undefined && 'tokenType' in result[0]) {
           openName = source.slice(result[0].offset, result[0].end);
         }
         children.push(...result);
@@ -1278,7 +1274,7 @@ export function createParser(grammar: CstGrammar) {
       const beforeClose = pos;
       const close = matchSeq(c.items.slice(c.closeStart));
       if (close !== null) {
-        const closeName = close.find((ch, i) => i > 0 && ch.kind === 'leaf' && c.nameTokens.has((ch as CstLeaf).tokenType)) as CstLeaf | undefined;
+        const closeName = close.find((ch, i) => i > 0 && 'tokenType' in ch && c.nameTokens.has(ch.tokenType)) as CstLeaf | undefined;
         if (!closeName || source.slice(closeName.offset, closeName.end).toLowerCase() === openName.toLowerCase()) {
           children.push(...close);
           return children;
@@ -1413,7 +1409,7 @@ export function createParser(grammar: CstGrammar) {
     // Entry
     const entry = entryRule ?? findEntryRule(grammar);
     if (tokens.length === 0) {
-      return { kind: 'node', rule: entry, children: [], offset: 0, end: 0 };
+      return { rule: entry, children: [], offset: 0, end: 0 };
     }
     const result = parseRule(entry);
     if (!result) {

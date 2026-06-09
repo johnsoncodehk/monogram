@@ -28,10 +28,10 @@ function monoTree(node: any, src: string): El[] {
   return out;
 }
 function collect(node: any, out: El[], src: string): void {
-  if (node.kind === 'leaf') return;
+  if (node.tokenType !== undefined) return;
   if (node.rule === 'Element') {
     const name = (node.children ?? []).find(
-      (c: any) => c.kind === 'leaf' && (c.tokenType === 'Name' || c.tokenType === 'VoidName'),
+      (c: any) => c.tokenType === 'Name' || c.tokenType === 'VoidName',
     );
     out.push({ tag: (name ? src.slice(name.offset, name.end) : '').toLowerCase(), children: monoTree(node, src) });
     return; // its element children are handled by the recursive monoTree above

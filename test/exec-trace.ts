@@ -148,8 +148,8 @@ function fmt(v: unknown): string {
   if (v instanceof Set) return `Set(${v.size})`;
   if (typeof v === 'object') {
     const o = v as Record<string, unknown>;
-    if (o.kind === 'leaf') return `${o.tokenType}'${o.text}'`;
-    if (o.kind === 'node') return `node(${o.rule})`;
+    if (o.tokenType !== undefined) return `${o.tokenType}@${o.offset}..${o.end}`;
+    if (o.rule !== undefined) return `node(${o.rule})`;
     if ('type' in o && 'text' in o) return `${o.type || 'punct'}'${o.text}'`;
     return `{${Object.keys(o).slice(0, 4).join(',')}}`;
   }
