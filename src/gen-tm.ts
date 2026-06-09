@@ -3450,7 +3450,18 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
   const sep: string = separator;
 
   // KEY token = a plain-scalar token PLUS a trailing key-separator lookahead. The key token
-  // supplies the scope; the body before its final lookahead supplies the emitted key body.
+  // supplies the scope; the body before its final lookahead supplies the emitted key body. The
+  // emitted body comes from the key token's BLOCK-context variant (`blockPattern`) when it has one:
+  // the explicit key (`? key`) lives in BLOCK context, where a flow indicator (`[`/`{`) AFTER the
+  // node's first char is plain CONTENT, not a flow open (`? a[ b` is the one key "a[ b"). The FLOW
+  // body (the default `pattern`) excludes `,[]{}`, so it would stop the key at a mid-key `[`/`{`,
+  // leaving the rest for #flow-sequence/#flow-mapping to wrongly claim — the explicit-key analogue
+  // of the fold-region distinction at the `keyColonGuard` site below. The BLOCK body (`[^:#\n]`) is
+  // the SAME one the `#key` rule and the other block node contexts (root/map-value/seq-item) use, so
+  // the explicit key absorbs the flow char exactly like them. A leading `[`/`{` still opens a flow
+  // collection: the block body's HEAD (`PLAIN_HEAD_BLOCK`) excludes `[`/`{` as scalar STARTS, so the
+  // match never begins on one (`? [a, b]:` stays a flow sequence). A token without a blockPattern
+  // (every non-indentation grammar) falls back to the flow body — byte-identical.
   let keyScope: string | null = null;
   let keyBody: string | null = null;
   for (const k of grammar.tokens) {
@@ -3458,7 +3469,9 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
     const keyShape = tokenPatternPrefixBeforeTrailingLookahead(k);
     if (!keyShape || !tokenPatternNodeContainsLiteral(keyShape.lookahead, sep)) continue;
     const plain = grammar.tokens.find(t => t !== k && tokenPatternEqualsPattern(t, keyShape.body));
-    if (plain) { keyScope = k.scope; keyBody = keyShape.bodySource; break; }
+    if (!plain) continue;
+    const blockShape = k.blockPattern ? tokenPatternPrefixBeforeTrailingLookahead({ pattern: k.blockPattern }) : null;
+    keyScope = k.scope; keyBody = (blockShape ?? keyShape).bodySource; break;
   }
   if (!keyScope || !keyBody) return null;
 

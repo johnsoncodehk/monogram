@@ -14,29 +14,7 @@ commits) so the ledger is deterministic and commit-trackable.
 
 Regenerate: `node test/gap-ledger.ts --write` · verify up-to-date: `node test/gap-ledger.ts --check`.
 
-**3 gaps** across 7 grammars · 0 dropped.
-
-## `3e7e4f47894f` — yaml: #24 structural-literal→content
-
-- **Language:** yaml
-- **Minimal repro:** `? a[:\n  - a\n  -`
-- **Divergent token:** `-` (parser token `$punct`)
-- **Role vs scope:** want **punct**, got **string** (highlighter scope `string.unquoted.yaml`)
-- **Fingerprint:** `3e7e4f47894f`
-
-```json
-{
-  "id": "3e7e4f47894f",
-  "language": "yaml",
-  "kind": "#24 structural-literal→content",
-  "repro": "? a[:\n  - a\n  -",
-  "tokenType": "$punct",
-  "tokenText": "-",
-  "want": "punct",
-  "got": "string",
-  "gotScope": "string.unquoted.yaml"
-}
-```
+**2 gaps** across 7 grammars · 0 dropped.
 
 ## `525e867dc205` — html: #24 structural-literal→content
 

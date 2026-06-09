@@ -34,6 +34,7 @@ const GATES: Gate[] = [
   { group: 'yaml', name: 'issue12-regressions', args: ['test/yaml-issue12-regressions.ts'] },
   { group: 'yaml', name: 'depth-witnesses', args: ['test/yaml-depth-witnesses.ts'] },
   { group: 'yaml', name: 'depth-sites', args: ['test/depth-sites.ts'] },
+  { group: 'yaml', name: 'flow-sites', args: ['test/flow-sites.ts'] },
   { group: 'generative', name: 'scope≡role', args: ['test/generative.ts'] },
   { group: 'generative', name: 'gap-ledger-selftest', args: ['test/gap-ledger-selftest.ts'] },
   { group: 'generative', name: 'gap-ledger-check', args: ['test/gap-ledger.ts', '--check'] },
