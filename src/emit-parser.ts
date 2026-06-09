@@ -264,9 +264,10 @@ function analyze(grammar: CstGrammar) {
   }
 
   // ── Lever 1: integer token kinds ──
-  // Replace the per-call string dispatch in keyMatchesTok / canStartFT /
-  // ruleMightStart / matchLiteral / matchToken with integer compares. Two int fields
-  // are interned onto each token at parse time (see the emitted tokenize wiring):
+  // Replace the per-call string dispatch in literal/token matching and FIRST gating
+  // (matchLiteral / matchToken / the membershipFn byte tables) with integer compares.
+  // Two int fields are interned onto each token at parse time (see the emitted tokenize
+  // wiring):
   //   tok.k = TYPE kind   — an int for tok.type ('' punctuation → PUNCT sentinel;
   //                         each declared token name → its own int; the three
   //                         template-token-kinds $templateHead/$templateMiddle/
@@ -684,6 +685,28 @@ class Emitter {
   // (the lexer scans only vocabulary puncts; `>`-split rests stay in-vocabulary),
   // and the full-corpus byte-identical gate covers it empirically.
   membershipFn(fs: Set<string>): string {
+    const { kArr, tArr } = this.membershipTables(fs);
+    const fnKey = `${kArr}|${tArr}`;
+    let nm = this.memberFns.get(fnKey);
+    if (!nm) {
+      nm = `_q${this.memberFns.size}`;
+      this.memberFns.set(fnKey, nm);
+      this.helperDefs.push(`function ${nm}(tok) { return !tok || (${kArr}[tok.k] | ${tArr}[tok.t]) !== 0; }`);
+    }
+    return nm;
+  }
+
+  // The first-token gate for an alt/LED whose tok is already known non-null: the same
+  // two-table membership as membershipFn, open-coded (no call). null FirstTok → no gate.
+  ftCond(ft: FirstTok, tokVar: string): string | null {
+    if (!ft) return null;
+    const key = 'tok' in ft ? ft.tok : ft.lit;
+    const { kArr, tArr } = this.membershipTables(new Set([key]));
+    return `(${kArr}[${tokVar}.k] | ${tArr}[${tokVar}.t]) !== 0`;
+  }
+
+  // Build (deduped) the two byte tables for a FIRST set's membership test.
+  private membershipTables(fs: Set<string>): { kArr: string; tArr: string } {
     const st = this.a.symtab;
     const kOnes = new Set<number>(), tOnes = new Set<number>();
     for (const key of [...fs].sort()) {
@@ -702,16 +725,10 @@ class Emitter {
     let tSize = 1;
     for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
     for (const v of st.puLitKind.values()) tSize = Math.max(tSize, v + 1);
-    const kArr = this.u8Const(st.KIND_NAMED_FALLBACK + 1, [...kOnes].sort((a, b) => a - b));
-    const tArr = this.u8Const(tSize, [...tOnes].sort((a, b) => a - b));
-    const fnKey = `${kArr}|${tArr}`;
-    let nm = this.memberFns.get(fnKey);
-    if (!nm) {
-      nm = `_q${this.memberFns.size}`;
-      this.memberFns.set(fnKey, nm);
-      this.helperDefs.push(`function ${nm}(tok) { return !tok || (${kArr}[tok.k] | ${tArr}[tok.t]) !== 0; }`);
-    }
-    return nm;
+    return {
+      kArr: this.u8Const(st.KIND_NAMED_FALLBACK + 1, [...kOnes].sort((a, b) => a - b)),
+      tArr: this.u8Const(tSize, [...tOnes].sort((a, b) => a - b)),
+    };
   }
 
   // A deduped Uint8Array const with 1s at `ones` (the byte tables behind membershipFn).
@@ -731,21 +748,6 @@ class Emitter {
   }
 
   // ── Lever 1 emit helpers ──
-  // A baked int descriptor literal for a FIRST-set KEY (matches keyMatchesTok's split):
-  //   {m:0,k,h} token-name (h=1 if a template token name) · {m:1,t} keyword · {m:2,t,v} punct.
-  keyDescLiteral(key: string): string {
-    const d = this.a.symtab.classifyKey(key);
-    if (d.kind === 'tok') return `{m:0,k:${d.k},h:${d.template ? 1 : 0}}`;
-    if (d.kind === 'kw') return `{m:1,t:${d.t}}`;
-    return `{m:2,t:${d.t},v:${J(d.v)}}`;
-  }
-  // A baked int descriptor literal for a first-TOKEN ({lit}/{tok}/null) — the alt/led
-  // canStartFT key. null FirstTok → `null` (canStartFT short-circuits to true).
-  firstTokDescLiteral(ft: FirstTok): string {
-    if (!ft) return 'null';
-    const key = 'tok' in ft ? ft.tok : ft.lit;
-    return this.keyDescLiteral(key);
-  }
   // Specialized literal matcher call: keyword → matchKwLit, punct → matchPuLit, each
   // with the value's baked int (so the runtime does int compares, not string work).
   matchLiteralCall(value: string): string {
@@ -961,24 +963,9 @@ function matchTokK(name, nameKind) {
   return null;
 }
 
-// canStart for a baked first-token int descriptor (one of):
-//   {m:0,k,h} token-name → tok.k === k  (h=1: also $templateHead, mirroring the
-//                          templateTokenNames.has(key) && tok.type==='$templateHead' arm)
-//   {m:1,t}   keyword     → tok.k !== K_PUNCT && tok.t === t   (tok.type !== '')
-//   {m:2,t,v} punct       → tok.k === K_PUNCT && (tok.t === t || tok.text.startsWith(v))
-// (FIRST-SET membership — the multi-key case — is baked per set as a _qN byte-table
-// fn by membershipFn; this single-desc switch sits in the per-token LED-dispatch loop.)
-function canStartFT(d, tok) {
-  if (!d || !tok) return true;
-  // Inlined descMatchesTok: this sits in the per-token LED-dispatch loop.
-  const k = tok.k;
-  switch (d.m) {
-    case 0: return k === d.k || (d.h === 1 && k === K_TEMPLATE_HEAD);
-    case 1: return k !== K_PUNCT && tok.t === d.t;
-    default: return k === K_PUNCT && (tok.t === d.t || tok.text.startsWith(d.v));
-  }
-}
-
+// (First-token / FIRST-set gating is baked at emit time: per-set _qN byte-table fns
+// for rule/alt guards, and open-coded two-table loads for the LED dispatch — see
+// membershipFn / ftCond in the emitter.)
 function parseTemplateExpr() {
   const tok = peek();
   if (!tok) return null;
@@ -1173,7 +1160,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     // suppress: skip a LED whose first literal connector is in suppressCur.
     const firstLit = (led.items[0]?.type === 'literal') ? led.items[0].value : null;
     if (firstLit !== null) conds.push(`!(suppressCur && suppressCur.has(${J(firstLit)}))`);
-    conds.push(`canStartFT(${e.firstTokDescLiteral(ft)}, tok)`);
+    const ftc = e.ftCond(ft, 'tok');   // tok is non-null here (the loop breaks on !tok above)
+    if (ftc) conds.push(ftc);
     e.emit(`    // led ${i}`);
     e.emit(`    if (!matched && ${conds.join(' && ')}) {`);
     e.emit(`      pos = ledSaved;`);
