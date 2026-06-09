@@ -396,6 +396,7 @@ class Emitter {
   // `//${HELPERS}` sentinel (top-level, above the rule fns).
   private u8Consts = new Map<string, string>();     // `${size}:${ones}` → const name
   private memberFns = new Map<string, string>();    // `${kConst}|${tConst}` → fn name
+  private u32Consts = new Map<string, string>();    // mask-table values → const name
   private u8Emitted = false;
   private a: ReturnType<typeof analyze>;
   constructor(a: ReturnType<typeof analyze>) { this.a = a; }
@@ -705,8 +706,9 @@ class Emitter {
     return `(${kArr}[${tokVar}.k] | ${tArr}[${tokVar}.t]) !== 0`;
   }
 
-  // Build (deduped) the two byte tables for a FIRST set's membership test.
-  private membershipTables(fs: Set<string>): { kArr: string; tArr: string } {
+  // A FIRST set's admitted (tok.k, tok.t) index sets — the shared classification behind
+  // the byte tables and the alt-dispatch masks (same split keyMatchesTok used).
+  private firstSetOnes(fs: Set<string>): { kOnes: Set<number>; tOnes: Set<number> } {
     const st = this.a.symtab;
     const kOnes = new Set<number>(), tOnes = new Set<number>();
     for (const key of [...fs].sort()) {
@@ -722,13 +724,70 @@ class Emitter {
         for (const [text, id] of st.puLitKind) if (text.startsWith(d.v)) tOnes.add(id);
       }
     }
-    let tSize = 1;
-    for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
-    for (const v of st.puLitKind.values()) tSize = Math.max(tSize, v + 1);
+    return { kOnes, tOnes };
+  }
+
+  private kSize(): number { return this.a.symtab.KIND_NAMED_FALLBACK + 1; }
+  private tSize(): number {
+    const st = this.a.symtab;
+    let n = 1;
+    for (const v of st.kwLitKind.values()) n = Math.max(n, v + 1);
+    for (const v of st.puLitKind.values()) n = Math.max(n, v + 1);
+    return n;
+  }
+
+  // Build (deduped) the two byte tables for a FIRST set's membership test.
+  private membershipTables(fs: Set<string>): { kArr: string; tArr: string } {
+    const { kOnes, tOnes } = this.firstSetOnes(fs);
     return {
-      kArr: this.u8Const(st.KIND_NAMED_FALLBACK + 1, [...kOnes].sort((a, b) => a - b)),
-      tArr: this.u8Const(tSize, [...tOnes].sort((a, b) => a - b)),
+      kArr: this.u8Const(this.kSize(), [...kOnes].sort((a, b) => a - b)),
+      tArr: this.u8Const(this.tSize(), [...tOnes].sort((a, b) => a - b)),
     };
+  }
+
+  // Per-alternative dispatch masks for a longest-match alt list (one bit per alt):
+  //   mask = startTok ? KM[startTok.k] | TM[startTok.t] : ALL
+  // and each alt's guard is one bit test — replacing a per-alt membership call with a
+  // shared pair of loads. Bit i is set exactly where altGuard(alt_i) is true: an
+  // always-tried alt (nullable / unknown-FIRST) has its bit in every k slot, and a null
+  // lookahead (EOF) admits every alt, mirroring the per-alt guards' !tok → true.
+  // null when the list is too small to pay for the tables or exceeds 32 bits.
+  altMaskDispatch(alts: RuleExpr[], maskVar: string): { maskInit: string; bit: (i: number) => string } | null {
+    if (alts.length < 3 || alts.length > 32) return null;
+    const a = this.a;
+    const kMask = new Array<number>(this.kSize()).fill(0);
+    const tMask = new Array<number>(this.tSize()).fill(0);
+    let all = 0;
+    alts.forEach((alt, i) => {
+      const bit = (1 << i) | 0;
+      all |= bit;
+      const fs = a.altDeepFirst.get(alt);
+      if (a.altNullable.get(alt) || !fs || fs.size === 0) {
+        for (let k = 0; k < kMask.length; k++) kMask[k] |= bit;
+        return;
+      }
+      const { kOnes, tOnes } = this.firstSetOnes(fs);
+      for (const k of kOnes) kMask[k] |= bit;
+      for (const t of tOnes) tMask[t] |= bit;
+    });
+    const kArr = this.u32Const(kMask);
+    const tArr = this.u32Const(tMask);
+    return {
+      maskInit: `const ${maskVar} = startTok ? (${kArr}[startTok.k] | ${tArr}[startTok.t]) : ${all};`,
+      bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
+    };
+  }
+
+  // A deduped Int32Array const (the per-rule alt-dispatch mask tables).
+  private u32Const(values: number[]): string {
+    const key = values.join(',');
+    let nm = this.u32Consts.get(key);
+    if (!nm) {
+      nm = `_am${this.u32Consts.size}`;
+      this.u32Consts.set(key, nm);
+      this.helperDefs.push(`const ${nm} = Int32Array.from([${key}]);`);
+    }
+    return nm;
   }
 
   // A deduped Uint8Array const with 1s at `ones` (the byte tables behind membershipFn).
@@ -1053,9 +1112,11 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
   e.emit(`  const saved = pos;`);
   e.emit(`  let bestNode = null; let bestPos = saved;`);
   e.emit(`  const startTok = tokens[saved] ?? null;`);
+  const dispatch = e.altMaskDispatch(alts, '_am');
+  if (dispatch) e.emit(`  ${dispatch.maskInit}`);
   alts.forEach((alt, i) => {
     e.emit(`  // alt ${i}`);
-    e.emit(`  if (${e.altGuard(alt)}) {`);
+    e.emit(`  if (${dispatch ? dispatch.bit(i) : e.altGuard(alt)}) {`);
     e.emit(`    pos = saved;`);
     e.emit(`    const children = arm_${sanitize(rule.name)}_${i}();`);
     e.emit(`    if (children !== null && pos > bestPos) {`);
@@ -1087,8 +1148,10 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   e.emit(`  const saved = pos;`);
   e.emit(`  let node = null; let bestAtomPos = saved;`);
   e.emit(`  const startTok = tokens[saved] ?? null;`);
+  const atomDispatch = e.altMaskDispatch(atoms, '_am');
+  if (atomDispatch) e.emit(`  ${atomDispatch.maskInit}`);
   atoms.forEach((atom, i) => {
-    e.emit(`  if (${e.altGuard(atom)}) {`);
+    e.emit(`  if (${atomDispatch ? atomDispatch.bit(i) : e.altGuard(atom)}) {`);
     e.emit(`    pos = saved;`);
     e.emit(`    const children = atom_${sanitize(rule.name)}_${i}();`);
     e.emit(`    if (children !== null && pos > bestAtomPos) {`);
@@ -1141,10 +1204,12 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`  let lhs = null; let bestNudPos = saved;`);
   e.emit(`  const startTok = tokens[saved] ?? null;`);
   // NUD loop.
+  const nudDispatch = e.altMaskDispatch(nuds, '_am');
+  if (nudDispatch) e.emit(`  ${nudDispatch.maskInit}`);
   nuds.forEach((nud, i) => {
     const items = nud.type === 'seq' ? nud.items : [nud];
     e.emit(`  // nud ${i}`);
-    e.emit(`  if (${e.altGuard(nud)}) {`);
+    e.emit(`  if (${nudDispatch ? nudDispatch.bit(i) : e.altGuard(nud)}) {`);
     e.emit(`    pos = saved;`);
     if (items[0]?.type === 'prefix') {
       // prefix $ pattern: identical to parsePratt's prefix branch.
