@@ -999,7 +999,8 @@ function emitRuntime(e: Emitter) {
 let tokens = [];
 let pos = 0;
 let maxPos = 0;
-let memo = [];
+let memoNode = [];
+let memoEnd = [];
 let parseLimit = -1;
 // cap = the exclusive peek bound: min(parseLimit-or-∞, tokens.length), maintained at the
 // parseLimit set/restore sites and the one tokens mutation (the '>' splice) — so peek is
@@ -1060,7 +1061,9 @@ function matchPuLitGT(pu) {
     const b = mkPunct(rest, tok.offset + 1);
     tokens.splice(pos, 1, a, b);
     if (parseLimit < 0) cap = tokens.length;
-    memo.fill(undefined);
+    // Token indices shifted: drop the per-rule memo arrays (recreated lazily at the new size).
+    memoNode.fill(undefined);
+    memoEnd.fill(undefined);
     pos++;
     return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + 1 };
   }
@@ -1425,15 +1428,22 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
 function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
   e.emit(String.raw`
 // parseRule for a pratt/left-rec rule: memo + context + suppress, then the core.
+// The memo is a pair of per-rule arrays indexed by start pos (lazily sized to the token
+// count, undefined-holed): a lookup is two array loads, a store allocates nothing — no
+// Map hashing and no {node, end} wrapper per store.
 function parseRuleEntry(idx, name, core) {
   const mySup = suppressNext;
   suppressNext = null;
   const capped = parseLimit >= 0;
   const start = pos;
-  let m = memo[idx];
-  if (!mySup && !capped) {
-    const hit = m && m.get(start);
-    if (hit !== undefined) { pos = hit.end; return hit.node; }
+  // Capture the pair together: a '>'-splice inside core() detaches both via fill(undefined),
+  // and the store below must then write into the DETACHED pair (i.e. be discarded), exactly
+  // like the old per-rule Map did.
+  let me = memoEnd[idx];
+  let mn = memoNode[idx];
+  if (!mySup && !capped && me !== undefined) {
+    const e = me[start];
+    if (e !== undefined) { pos = e; return mn[start]; }
   }
   const prevContext = currentPrattContext;
   currentPrattContext = name;
@@ -1447,8 +1457,14 @@ function parseRuleEntry(idx, name, core) {
     suppressCur = prevSup;
   }
   if (!mySup && !capped) {
-    if (!m) { m = new Map(); memo[idx] = m; }
-    m.set(start, { node: result, end: pos });
+    if (me === undefined) {
+      me = new Array(tokens.length + 1);
+      mn = new Array(tokens.length + 1);
+      memoEnd[idx] = me;
+      memoNode[idx] = mn;
+    }
+    me[start] = pos;
+    mn[start] = result;
   }
   return result;
 }
@@ -1457,7 +1473,8 @@ export function parse(source, entryRule) {
   tokens = tokenize(source);
   pos = 0;
   maxPos = 0;
-  memo = new Array(MEMO_RULES);
+  memoNode = new Array(MEMO_RULES);
+  memoEnd = new Array(MEMO_RULES);
   parseLimit = -1;
   cap = tokens.length;
   currentPrattContext = null;
