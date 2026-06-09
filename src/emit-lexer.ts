@@ -121,8 +121,40 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   const kIdent = identTokenName ? kOf(identTokenName) : 0;
   const tRParen = tOf(')');
   emit(``);
+  // ── Baked keyword recognizer: t-intern without hashing a fresh slice per token.
+  // Length window → first-charCode switch → per-keyword compare chains (shortest first);
+  // returns exactly LIT_KW.get(text) ?? 0 — the keyword set is enumerated completely.
+  emit(`function lexKwT(text) {`);
+  const kwEntries = [...st.kwLitKind.entries()];
+  if (kwEntries.length === 0) {
+    emit(`  return 0;`);
+  } else {
+    const minKw = Math.min(...kwEntries.map(([k]) => k.length));
+    const maxKw = Math.max(...kwEntries.map(([k]) => k.length));
+    emit(`  const n = text.length;`);
+    emit(`  if (n < ${minKw} || n > ${maxKw}) return 0;`);
+    emit(`  switch (text.charCodeAt(0)) {`);
+    const byC0 = new Map<number, Array<[string, number]>>();
+    for (const e of kwEntries) {
+      const c0 = e[0].charCodeAt(0);
+      if (!byC0.has(c0)) byC0.set(c0, []);
+      byC0.get(c0)!.push(e);
+    }
+    for (const [c0, entries] of [...byC0.entries()].sort((a, b) => a[0] - b[0])) {
+      emit(`    case ${c0}: // ${entries.map(([k]) => k).join(' ')}`);
+      for (const [text, t] of entries.sort((a, b) => a[0].length - b[0].length)) {
+        const conds = [`n === ${text.length}`];
+        for (let i = 1; i < text.length; i++) conds.push(`text.charCodeAt(${i}) === ${text.charCodeAt(i)}`);
+        emit(`      if (${conds.join(' && ')}) return ${t};`);
+      }
+      emit(`      return 0;`);
+    }
+    emit(`    default: return 0;`);
+    emit(`  }`);
+  }
+  emit(`}`);
   emit(`function lexMk(type, text, offset, k) {`);
-  emit(`  return { type, text, offset, k, t: LIT_KW.get(text) ?? 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false };`);
+  emit(`  return { type, text, offset, k, t: lexKwT(text), newlineBefore: false, commentBefore: false, multilineFlowBefore: false };`);
   emit(`}`);
   // For tokens whose text provably can't be a keyword (first char outside every
   // keyword's first char): the kw int is 0 by construction — no lookup.
@@ -398,7 +430,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`        const cont = LX_UNI_CONT.exec(source);`);
     emit(`        if (cont !== null) {`);
     emit(`          prev.text += cont[0];`);
-    emit(`          prev.t = LIT_KW.get(prev.text) ?? 0;`);
+    emit(`          prev.t = lexKwT(prev.text);`);
     emit(`          pos += cont[0].length;`);
     emit(`          continue;`);
     emit(`        }`);
