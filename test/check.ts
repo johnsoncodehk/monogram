@@ -18,6 +18,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'sanity', args: ['test/sanity-check.ts'] },
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },
   { group: 'core', name: 'refactor-guard', args: ['test/refactor-guard.ts'] },
+  { group: 'core', name: 'cst-text-invariant', args: ['test/cst-text-invariant.ts'] },
   { group: 'core', name: 'issue-cases', args: ['test/test-issues.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },

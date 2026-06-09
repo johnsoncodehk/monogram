@@ -1289,16 +1289,18 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
       }
     }
 
-    // Multi-line PLAIN-scalar FOLD inside flow (indentation grammars): a plain scalar may span several
-    // lines inside a flow collection (`{ multi\n  line: value }` → key "multi line"). The lexer breaks
-    // it at each newline (a `\n` is not plain-scalar content), so it arrives as ADJACENT plain-scalar
-    // tokens with no punctuation between (a SPACE-separated plain is already one token — only a newline
-    // splits one — so two consecutive plain tokens were necessarily newline-separated, i.e. a fold).
-    // Merge each such run into one token, taking the LAST token's TYPE (a trailing `key:` line makes the
-    // whole fold a key; an unkeyed run stays a plain value) and the first's offset/leading flags. Only
-    // inside flow (block context separates siblings with a NEWLINE token, so plains are never adjacent
-    // there). yaml-test-suite 8KB6 / NJ66 / CT4Q. A `,`/`:`/bracket between scalars is a separate token,
-    // so it naturally breaks the run (the next scalar isn't adjacent) — no over-merge across separators.
+    // Multi-line PLAIN-scalar MERGE inside flow (indentation grammars): a plain scalar may span several
+    // lines inside a flow collection (`{ multi\n  line: value }`). The lexer breaks it at each newline
+    // (a `\n` is not plain-scalar content), so it arrives as ADJACENT plain-scalar tokens with no
+    // punctuation between (a SPACE-separated plain is already one token — only a newline splits one —
+    // so two consecutive plain tokens were necessarily newline-separated). Merge each such run into one
+    // token covering the RAW source span (text ≡ source.slice(offset, end) — the CST is concrete; the
+    // YAML fold-to-one-space is the scalar's VALUE semantics and belongs to consumers that resolve
+    // values), taking the LAST token's TYPE (a trailing `key:` line makes the whole run a key; an
+    // unkeyed run stays a plain value) and the first's offset/leading flags. Only inside flow (block
+    // context separates siblings with a NEWLINE token, so plains are never adjacent there).
+    // yaml-test-suite 8KB6 / NJ66 / CT4Q. A `,`/`:`/bracket between scalars is a separate token, so it
+    // naturally breaks the run (the next scalar isn't adjacent) — no over-merge across separators.
     if (indent && plainScalarTokenNames.size) {
       const merged: Token[] = [];
       let depth = 0;
@@ -1309,9 +1311,9 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
         // `[ word1\n# c\n word2 ]`. Guarding on `t.commentBefore` keeps that a reject.
         if (depth > 0 && prev && !t.commentBefore
             && plainScalarTokenNames.has(prev.type) && plainScalarTokenNames.has(t.type)) {
-          prev.text += ' ' + t.text;   // fold: newline+indent → a single space
+          prev.text = source.slice(prev.offset, t.offset + t.text.length);  // raw span across the run
           prev.type = t.type;          // the run's type is its LAST line's (key-ness follows the trailing `:`)
-          prev.k = t.k;                // re-intern for the merged token (text now contains a space → kw int is 0)
+          prev.k = t.k;                // re-intern for the merged token (text now contains a newline → kw int is 0)
           prev.t = kwLitOf.get(prev.text) ?? 0;
         } else {
           merged.push(t);
