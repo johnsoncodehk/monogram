@@ -1011,7 +1011,6 @@ let suppressNext = null;
 let suppressCur = null;
 
 function peek() {
-  if (pos > maxPos) maxPos = pos;
   if (pos >= cap) return null;
   return tokens[pos];
 }
@@ -1033,7 +1032,7 @@ function matchKwLit(value, kw) {
   // keyword), so the old k >= K_NAMED_MIN guard was redundant — one int compare.
   const tok = peek();
   if (tok === null || tok.t !== kw) return null;
-  pos++;
+  if (++pos > maxPos) maxPos = pos;
   return { kind: 'leaf', tokenType: '$keyword', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
 }
 // Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
@@ -1044,14 +1043,14 @@ function matchPuLit(value, pu) {
   // redundant — one int compare. The '>'-split lives only in matchPuLitGT ('>' sites).
   const tok = peek();
   if (tok === null || tok.t !== pu) return null;
-  pos++;
+  if (++pos > maxPos) maxPos = pos;
   return { kind: 'leaf', tokenType: '$punct', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
 }
 function matchPuLitGT(pu) {
   const tok = peek();
   if (tok === null) return null;
   if (tok.t === pu) {
-    pos++;
+    if (++pos > maxPos) maxPos = pos;
     return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + tok.text.length };
   }
   // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>'.
@@ -1064,7 +1063,7 @@ function matchPuLitGT(pu) {
     // Token indices shifted: drop the per-rule memo arrays (recreated lazily at the new size).
     memoNode.fill(undefined);
     memoEnd.fill(undefined);
-    pos++;
+    if (++pos > maxPos) maxPos = pos;
     return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + 1 };
   }
   return null;
@@ -1084,7 +1083,7 @@ function matchTokK(name, nameKind) {
   const tok = peek();
   if (!tok) return null;
   if (tok.k === nameKind) {
-    pos++;
+    if (++pos > maxPos) maxPos = pos;
     return { kind: 'leaf', tokenType: name, text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
   }
   return null;
@@ -1097,12 +1096,12 @@ function parseTemplateExpr() {
   const tok = peek();
   if (!tok) return null;
   if (tok.type === templateTokenName) {
-    pos++;
+    if (++pos > maxPos) maxPos = pos;
     return { kind: 'leaf', tokenType: templateTokenName, text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
   }
   if (tok.type === '$templateHead') {
     const children = [];
-    pos++;
+    if (++pos > maxPos) maxPos = pos;
     children.push({ kind: 'leaf', tokenType: '$templateHead', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length });
     const interpRule = currentPrattContext ?? EXPR_RULE;
     while (true) {
@@ -1111,12 +1110,12 @@ function parseTemplateExpr() {
       const next = peek();
       if (!next) break;
       if (next.type === '$templateMiddle') {
-        pos++;
+        if (++pos > maxPos) maxPos = pos;
         children.push({ kind: 'leaf', tokenType: '$templateMiddle', text: next.text, offset: next.offset, end: next.offset + next.text.length });
         continue;
       }
       if (next.type === '$templateTail') {
-        pos++;
+        if (++pos > maxPos) maxPos = pos;
         children.push({ kind: 'leaf', tokenType: '$templateTail', text: next.text, offset: next.offset, end: next.offset + next.text.length });
         break;
       }
@@ -1258,7 +1257,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`      if (tok) {`);
       e.emit(`        const info = PREFIX_BY_T[tok.t];`);
       e.emit(`        if (info) {`);
-      e.emit(`          pos++;`);
+      e.emit(`          if (++pos > maxPos) maxPos = pos;`);
       e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };`);
       e.emit(`          const rhs = ${ruleFn}_pratt(info.rbp);`);
       e.emit(`          if (rhs && pos > bestNudPos) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end }; bestNudPos = pos; }`);
@@ -1324,7 +1323,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`    if (info && info.lbp > minBp) {`);
   e.emit(`      if (info.position === 'postfix') {`);
   e.emit(`        if (!tailClosed) {`);
-  e.emit(`          pos++;`);
+  e.emit(`          if (++pos > maxPos) maxPos = pos;`);
   e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };`);
   e.emit(`          lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };`);
   e.emit(`          tailClosed = true; matched = true;`);
@@ -1334,7 +1333,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`          const head = lhs.children[0];`);
   e.emit(`          if (head && head.kind === 'leaf' && head.tokenType === '$operator' && prefixOps.has(head.text) && !postfixOpValues.has(head.text)) { return null; }`);
   e.emit(`        }`);
-  e.emit(`        pos++;`);
+  e.emit(`        if (++pos > maxPos) maxPos = pos;`);
   e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };`);
   e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
   e.emit(`        if (rhs) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end }; matched = true; }`);
