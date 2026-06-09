@@ -41,7 +41,6 @@ export type TokenType =
 export interface CstLeaf extends CstPos {
   kind: 'leaf';
   tokenType: TokenType;
-  text: string;
 }
 
 /** Synthetic node the parser builds for an interpolated template literal. */

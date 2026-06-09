@@ -135,7 +135,7 @@ process.exit(failures ? 1 : 0);
 function probeDivergence(p: Probe, text: string): { target: string } | null {
   let cst; try { cst = p.parse(text); } catch { return null; }
   let toks; try { toks = tmTokenize(p.tm, text); } catch { return null; }
-  const leaves = leafRoles(p.grammar, cst, p.roleOf);
+  const leaves = leafRoles(p.grammar, cst, text, p.roleOf);
   const vs = collectViolations({ input: text, strategy: 'fuzz', cst, toks, leaves, anchored: p.anchored });
   // The self-close `/` divergence (a structural-literal→content #24). Found by TOKEN, not by `!isGated`:
   // the real ledger (gap-ledger.ts) classifies by the parse5 oracle, NOT the gate's isGated predicate, and

@@ -89,13 +89,14 @@ export function buildRoleMap(grammar: CstGrammar): (leaf: { tokenType: string; t
     return null;   // unscoped / contextual token (a bare identifier) → not checkable by-construction
   };
 }
-export function leafRoles(grammar: CstGrammar, cst: CstNode, roleOf: (l: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null): LeafRole[] {
+export function leafRoles(grammar: CstGrammar, cst: CstNode, input: string, roleOf: (l: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null): LeafRole[] {
   const out: LeafRole[] = [];
   const walk = (n: CstChild) => {
     if (n.kind === 'leaf') {
       if (n.end <= n.offset) return;
-      const r = roleOf(n);
-      if (r) out.push({ start: n.offset, end: n.end, text: n.text, tokenType: n.tokenType, expected: r.buckets, lit: r.lit });
+      const text = input.slice(n.offset, n.end);   // leaves are span-only; text is derived
+      const r = roleOf({ tokenType: n.tokenType, text });
+      if (r) out.push({ start: n.offset, end: n.end, text, tokenType: n.tokenType, expected: r.buckets, lit: r.lit });
     } else for (const c of n.children) walk(c);
   };
   walk(cst);

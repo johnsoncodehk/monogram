@@ -158,7 +158,7 @@ function reproStillDiverges(p: Probe, text: string, target: string): Violation |
   try { cst = p.parse(text); } catch { return null; }      // parser must accept the shrunk input
   let toks: TmTok[];
   try { toks = tmTokenize(p.tm, text); } catch { return null; }
-  const leaves = leafRoles(p.grammar, cst, p.roleOf);
+  const leaves = leafRoles(p.grammar, cst, text, p.roleOf);
   const vs = collectViolations({ input: text, strategy: 'fuzz', cst, toks, leaves, anchored: p.anchored });
   return vs.find((v) => sig(v) === target) ?? null;
 }
@@ -253,7 +253,7 @@ async function runLang(cfg: LangCfg): Promise<LangResult> {
     let cst: CstNode, toks: TmTok[];
     try { cst = parse(inp.text); } catch { continue; }       // only full-document (entry-rule) inputs
     try { toks = tmTokenize(tm, inp.text); } catch { continue; }
-    const leaves = leafRoles(grammar, cst, roleOf);
+    const leaves = leafRoles(grammar, cst, inp.text, roleOf);
     const vs = collectViolations({ input: inp.text, strategy: inp.strategy, cst, toks, leaves, anchored });
     for (const v of vs) if (!isGated(v)) discoveredVs.push(v);
   }

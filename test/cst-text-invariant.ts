@@ -1,8 +1,8 @@
-// Gate: every CST leaf's `text` is EXACTLY source.slice(offset, end), in every grammar —
-// including yaml's synthetic indentation tokens (zero-width spans), merged multi-line
-// flow plain-scalar runs, html raw-text/entities and template spans. The leaf text field
-// is therefore DERIVABLE data; this invariant is what licenses dropping it from the CST
-// contract (consumers reconstruct text from source + span).
+// Gate: the CST leaf contract is span-only — a leaf is exactly {kind, tokenType, offset,
+// end}: NO text field (text is derivable: source.slice(offset, end) — the invariant that
+// licensed dropping it covered every grammar incl. yaml's synthetic indentation tokens,
+// merged flow plain-scalar runs, html raw-text/entities and template spans), and spans
+// are sane (0 ≤ offset ≤ end ≤ source.length, leaf spans non-decreasing in tree order).
 //
 // Inputs: the generative corpus (grammar-gen, deterministic) for every grammar, plus a
 // stride sample of the real-world TS conformance corpus when present (skipped silently
@@ -23,10 +23,12 @@ type CstNode = { kind: string; tokenType?: string; text?: string; offset: number
 function check(n: CstNode, src: string, tag: string): void {
   if (n.kind === 'leaf') {
     leaves++;
-    const span = src.slice(n.offset, n.end);
-    if (n.text !== span) {
+    const ok = !('text' in n)
+      && typeof n.offset === 'number' && typeof n.end === 'number'
+      && n.offset >= 0 && n.offset <= n.end && n.end <= src.length;
+    if (!ok) {
       bad++;
-      if (samples.length < 8) samples.push({ tag, tokenType: n.tokenType ?? '', text: n.text ?? '', span });
+      if (samples.length < 8) samples.push({ tag, tokenType: n.tokenType ?? '', text: String('text' in n ? n.text : '<span bad>'), span: src.slice(n.offset, n.end) });
     }
     return;
   }
@@ -72,10 +74,10 @@ if (existsSync(corpus)) {
   console.log(`${'ts-corpus'.padEnd(18)} corpus files parsed: ${parsed}`);
 }
 
-console.log(`leaves checked: ${leaves}, text !== slice(offset, end): ${bad}`);
+console.log(`leaves checked: ${leaves}, contract violations: ${bad}`);
 for (const s of samples) console.log('  ', JSON.stringify(s).slice(0, 160));
 if (bad > 0) {
-  console.error('✗ leaf text is not derivable from its span');
+  console.error('✗ leaf shape violates the span-only contract');
   process.exit(1);
 }
-console.log('✓ every leaf text ≡ source.slice(offset, end)');
+console.log('✓ every leaf is span-only ({kind, tokenType, offset, end}) with a sane span');

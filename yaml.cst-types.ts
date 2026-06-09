@@ -45,7 +45,6 @@ export type TokenType =
 export interface CstLeaf extends CstPos {
   kind: 'leaf';
   tokenType: TokenType;
-  text: string;
 }
 
 /** `Property` node. Children (flattened, in source order) are drawn from: */

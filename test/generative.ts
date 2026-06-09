@@ -143,7 +143,7 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   for (const inp of entryLegal) {
     let cst: CstNode, toks: TmTok[];
     try { cst = parse(inp.text); toks = tmTokenize(tm, inp.text); } catch { continue; }
-    const leaves = leafRoles(grammar, cst, roleOf);
+    const leaves = leafRoles(grammar, cst, inp.text, roleOf);
     checkedTokens += leaves.length;
     // gate-1 (#24 structural-literal→content) + gate-2 (#23 anchored-marker misfire), via the shared
     // detector — identical logic to before, now reused by the gap ledger. The 200-cap is the running

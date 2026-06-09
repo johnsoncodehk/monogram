@@ -97,7 +97,6 @@ export function generateAstTypes(grammar: CstGrammar): string {
   lines.push('export interface CstLeaf extends CstPos {');
   lines.push('  kind: \'leaf\';');
   lines.push('  tokenType: TokenType;');
-  lines.push('  text: string;');
   lines.push('}');
   lines.push('');
 

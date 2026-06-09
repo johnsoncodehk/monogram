@@ -1127,8 +1127,8 @@ class Emitter {
   // with the value's baked int (so the runtime does int compares, not string work).
   matchLiteralCall(value: string): string {
     const d = this.a.symtab.classifyKey(value);
-    if (d.kind === 'kw') return `matchKwLit(${J(value)}, ${d.t})`;
-    if (d.kind === 'punct') return value === '>' ? `matchPuLitGT(${d.t})` : `matchPuLit(${J(value)}, ${d.t})`;
+    if (d.kind === 'kw') return `matchKwLit(${d.t})`;
+    if (d.kind === 'punct') return value === '>' ? `matchPuLitGT(${d.t})` : `matchPuLit(${d.t})`;
     // A literal key that classifies as a token-name (a token name used as a literal):
     // unreachable for real grammars, but stay safe via the generic matchLiteral.
     return `matchLiteral(${J(value)})`;
@@ -1288,8 +1288,6 @@ function resolveLexerImport(): string { return pathResolve(__dir, 'gen-lexer.ts'
 // ONLY change: where the interpreter called matchExpr(alt)/matchSeq(items) per arm,
 // these call the GENERATED per-arm matcher functions (installed via the rule fns).
 function emitRuntime(e: Emitter) {
-  // Per-site text materialization (soa: slice the source span; fallback: text column).
-  const TXT_OE = e.soa ? 'src.slice(off, end)' : 'tkText[pos]';
   // Column element type: Uint8 when the kind/literal id spaces fit a byte.
   const st = e.a.symtab;
   let tMax = 1;
@@ -1346,26 +1344,26 @@ function childEnd(c) { return c.end; }
 // && tok.text === value. With interned kinds that is tok.k >= K_NAMED_MIN (a declared
 // token name; '' is PUNCT, templates are below NAMED_MIN) && tok.t === KW(value).
 // Returns the SAME $keyword leaf as before. value/kw are baked by the caller.
-function matchKwLit(value, kw) {
+function matchKwLit(kw) {
   // A kw-range t can only come from a named token (template spans never intern to a
   // keyword), so the old k >= K_NAMED_MIN guard was redundant — one int compare.
   if (pos >= cap || tkT[pos] !== kw) return null;
   const off = tkOff[pos];
   const end = tkEnd[pos];
   if (++pos > maxPos) maxPos = pos;
-  return { kind: 'leaf', tokenType: '$keyword', text: value, offset: off, end };
+  return { kind: 'leaf', tokenType: '$keyword', offset: off, end };
 }
 // Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
 // tok.t === PU(value) is the exact-text fast path; the splice handles a longer
 // gt-led token matching the gt key. value/pu are baked by the caller.
-function matchPuLit(value, pu) {
+function matchPuLit(pu) {
   // A pu-range t can only come from a punct token, so the old k === K_PUNCT guard was
   // redundant — one int compare. The '>'-split lives only in matchPuLitGT ('>' sites).
   if (pos >= cap || tkT[pos] !== pu) return null;
   const off = tkOff[pos];
   const end = tkEnd[pos];
   if (++pos > maxPos) maxPos = pos;
-  return { kind: 'leaf', tokenType: '$punct', text: value, offset: off, end };
+  return { kind: 'leaf', tokenType: '$punct', offset: off, end };
 }
 function matchPuLitGT(pu) {
   if (pos >= cap) return null;
@@ -1373,7 +1371,7 @@ function matchPuLitGT(pu) {
   if (tkT[pos] === pu) {
     const end = tkEnd[pos];
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: '$punct', text: '>', offset: off, end };
+    return { kind: 'leaf', tokenType: '$punct', offset: off, end };
   }
   // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>': shift the
   // columns up one slot and write the '>' + rest pair in place (both born flag-less,
@@ -1397,7 +1395,7 @@ function matchPuLitGT(pu) {
     memoNode.fill(undefined);
     memoEnd.fill(undefined);
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: '$punct', text: '>', offset: off, end: off + 1 };
+    return { kind: 'leaf', tokenType: '$punct', offset: off, end: off + 1 };
   }
   return null;
 }
@@ -1405,9 +1403,9 @@ function matchPuLitGT(pu) {
 // tables (no per-call isKeywordLiteral / string compares) and delegate.
 function matchLiteral(value) {
   const kw = LIT_KW.get(value);
-  if (kw !== undefined) return matchKwLit(value, kw);
+  if (kw !== undefined) return matchKwLit(kw);
   if (value === '>') return matchPuLitGT(LIT_PU.get(value) ?? 0);
-  return matchPuLit(value, LIT_PU.get(value) ?? 0);
+  return matchPuLit(LIT_PU.get(value) ?? 0);
 }
 
 // Match a token ref by its baked TYPE kind: tok.type === name  ⟺  tok.k === nameKind.
@@ -1416,9 +1414,8 @@ function matchTokK(name, nameKind) {
   if (pos >= cap || tkK[pos] !== nameKind) return null;
   const off = tkOff[pos];
   const end = tkEnd[pos];
-  const text = ${TXT_OE};
   if (++pos > maxPos) maxPos = pos;
-  return { kind: 'leaf', tokenType: name, text, offset: off, end };
+  return { kind: 'leaf', tokenType: name, offset: off, end };
 }
 
 // (First-token / FIRST-set gating is baked at emit time: per-set _qN byte-table fns
@@ -1428,15 +1425,15 @@ function parseTemplateExpr() {
   if (pos >= cap) return null;
   const k = tkK[pos];
   if (k === K_TPL_TOKEN) {
-    const off = tkOff[pos]; const end = tkEnd[pos]; const text = ${TXT_OE};
+    const off = tkOff[pos]; const end = tkEnd[pos];
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: templateTokenName, text, offset: off, end };
+    return { kind: 'leaf', tokenType: templateTokenName, offset: off, end };
   }
   if (k === K_TEMPLATE_HEAD) {
     const children = [];
-    { const off = tkOff[pos]; const end = tkEnd[pos]; const text = ${TXT_OE};
+    { const off = tkOff[pos]; const end = tkEnd[pos];
       if (++pos > maxPos) maxPos = pos;
-      children.push({ kind: 'leaf', tokenType: '$templateHead', text, offset: off, end }); }
+      children.push({ kind: 'leaf', tokenType: '$templateHead', offset: off, end }); }
     const interpRule = currentPrattContext ?? EXPR_RULE;
     while (true) {
       const exprNode = RULES[interpRule]();
@@ -1444,15 +1441,15 @@ function parseTemplateExpr() {
       if (pos >= cap) break;
       const nk = tkK[pos];
       if (nk === K_TEMPLATE_MIDDLE) {
-        const off = tkOff[pos]; const end = tkEnd[pos]; const text = ${TXT_OE};
+        const off = tkOff[pos]; const end = tkEnd[pos];
         if (++pos > maxPos) maxPos = pos;
-        children.push({ kind: 'leaf', tokenType: '$templateMiddle', text, offset: off, end });
+        children.push({ kind: 'leaf', tokenType: '$templateMiddle', offset: off, end });
         continue;
       }
       if (nk === K_TEMPLATE_TAIL) {
-        const off = tkOff[pos]; const end = tkEnd[pos]; const text = ${TXT_OE};
+        const off = tkOff[pos]; const end = tkEnd[pos];
         if (++pos > maxPos) maxPos = pos;
-        children.push({ kind: 'leaf', tokenType: '$templateTail', text, offset: off, end });
+        children.push({ kind: 'leaf', tokenType: '$templateTail', offset: off, end });
         break;
       }
       break;
@@ -1589,9 +1586,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`    if (pos < cap) {`);
       e.emit(`      const info = PREFIX_BY_T[tkT[pos]];`);
       e.emit(`      if (info) {`);
-      e.emit(`        const _o = tkOff[pos]; const _e = tkEnd[pos]; const _tx = ${e.textAt('pos')};`);
+      e.emit(`        const _o = tkOff[pos]; const _e = tkEnd[pos];`);
       e.emit(`        if (++pos > maxPos) maxPos = pos;`);
-      e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', text: _tx, offset: _o, end: _e };`);
+      e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', offset: _o, end: _e };`);
       e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
       e.emit(`        if (rhs && pos > bestNudPos) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end }; bestNudPos = pos; }`);
       e.emit(`      }`);
@@ -1656,20 +1653,20 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`    if (info && info.lbp > minBp) {`);
   e.emit(`      if (info.position === 'postfix') {`);
   e.emit(`        if (!tailClosed) {`);
-  e.emit(`          const _o = tkOff[pos]; const _e = tkEnd[pos]; const _tx = ${e.textAt('pos')};`);
+  e.emit(`          const _o = tkOff[pos]; const _e = tkEnd[pos];`);
   e.emit(`          if (++pos > maxPos) maxPos = pos;`);
-  e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', text: _tx, offset: _o, end: _e };`);
+  e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', offset: _o, end: _e };`);
   e.emit(`          lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };`);
   e.emit(`          tailClosed = true; matched = true;`);
   e.emit(`        }`);
   e.emit(`      } else {`);
   e.emit(`        if (NOUNARY_T[tkT[pos]] !== 0 && lhs.kind === 'node') {`);
   e.emit(`          const head = lhs.children[0];`);
-  e.emit(`          if (head && head.kind === 'leaf' && head.tokenType === '$operator' && prefixOps.has(head.text) && !postfixOpValues.has(head.text)) { return null; }`);
+  e.emit(`          if (head && head.kind === 'leaf' && head.tokenType === '$operator' && prefixOps.has(src.slice(head.offset, head.end)) && !postfixOpValues.has(src.slice(head.offset, head.end))) { return null; }`);
   e.emit(`        }`);
-  e.emit(`        const _o = tkOff[pos]; const _e = tkEnd[pos]; const _tx = ${e.textAt('pos')};`);
+  e.emit(`        const _o = tkOff[pos]; const _e = tkEnd[pos];`);
   e.emit(`        if (++pos > maxPos) maxPos = pos;`);
-  e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', text: _tx, offset: _o, end: _e };`);
+  e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', offset: _o, end: _e };`);
   e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
   e.emit(`        if (rhs) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end }; matched = true; }`);
   e.emit(`        else { pos = ledSaved; }`);
@@ -1827,6 +1824,11 @@ export function tokenAt(i) {
     commentBefore: (tkFl[i] & 2) !== 0,
     multilineFlowBefore: (tkFl[i] & 4) !== 0,
   };
+}
+
+// The CST is span-only: a node's text is derived from the source it was parsed from.
+export function getText(node, source) {
+  return source.slice(node.offset, node.end);
 }
 
 export function parse(source, entryRule) {
