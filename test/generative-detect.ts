@@ -153,9 +153,19 @@ export function collectViolations(args: {
     const got = spanBuckets(toks, input, lr.start, lr.end);
     const overlap = [...lr.expected].some((b) => got.has(b));
     if (overlap) continue;                                                  // highlighter painted the declared scope somewhere → consistent
+    // A structural literal (`$punct`/`$keyword`) the parser placed as grammar structure painted as a
+    // CONTENT class (#24) OR as a NAME class (entity/variable/support — a `-` indicator scoped as a key
+    // name when a flat grammar leaks a flow region into a block, monogram's explicit-key `[` gap). Both
+    // are unambiguous: the overlap check above already cleared any literal the grammar DECLARES as
+    // name/content (a scopes-override), so reaching here means the highlighter invented the class.
     const contentGot = [...got].find((b) => CONTENT.has(b));
-    if (lr.lit && contentGot && count < cap) {
-      out.push({ input, strategy, pos: lr.start, text: lr.text, tokenType: lr.tokenType, expected: [...lr.expected].join('|'), got: contentGot, gotScope: innerOf(scopeAt(toks, lr.start)), kind: '#24 structural-literal→content' });
+    // the NAME check is `$punct`-only: a `-`/`[`/`:` is never a named entity, but a `$keyword` legitimately
+    // CAN be (the TS `this` parameter is painted `variable.parameter`, a name) — so keywords are excluded
+    // from the name class to avoid that false positive (content, where a keyword is never valid, stays both).
+    const nameGot = lr.tokenType === '$punct' && got.has('name') ? 'name' as const : undefined;
+    const badGot = contentGot ?? nameGot;
+    if (lr.lit && badGot && count < cap) {
+      out.push({ input, strategy, pos: lr.start, text: lr.text, tokenType: lr.tokenType, expected: [...lr.expected].join('|'), got: badGot, gotScope: innerOf(scopeAt(toks, lr.start)), kind: contentGot ? '#24 structural-literal→content' : 'structural-literal→name' });
       count++;
     }
   }

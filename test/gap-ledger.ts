@@ -52,7 +52,7 @@ import type { CstGrammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
 import {
   type TmTok, type Violation,
-  buildRoleMap, leafRoles, anchoredScopes, collectViolations, isGated,
+  buildRoleMap, leafRoles, anchoredScopes, collectViolations, isGated, GEN_OPTS,
 } from './generative-detect.ts';
 
 // ── language registry — the SAME per-language DATA shape as generative.ts's LANGS, plus an
@@ -247,7 +247,7 @@ async function runLang(cfg: LangCfg): Promise<LangResult> {
   // 1) DISCOVER — generate deterministically, then collect the DISCOVERED (report-only, !isGated)
   //    divergences over the full-document inputs. (The gated ones are generative.ts's hard failures;
   //    on this UNFIXED branch there are none. The ledger files the floor-blind DISCOVERED class.)
-  const inputs = generateInputs(grammar);
+  const inputs = generateInputs(grammar, GEN_OPTS);   // SAME corpus generative.ts checks, or the ledger misses divergences the check reports
   const discoveredVs: Violation[] = [];
   for (const inp of inputs) {
     let cst: CstNode, toks: TmTok[];
