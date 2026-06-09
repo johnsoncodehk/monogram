@@ -631,7 +631,7 @@ class Emitter {
   private memberFns = new Map<string, string>();    // `${kConst}|${tConst}` → fn name
   private u32Consts = new Map<string, string>();    // mask-table values → const name
   private u8Emitted = false;
-  private a: ReturnType<typeof analyze>;
+  readonly a: ReturnType<typeof analyze>;
   constructor(a: ReturnType<typeof analyze>) { this.a = a; }
 
   // Token-text materialization: a source-span slice for an emitted (SoA) lexer, the
@@ -1731,13 +1731,17 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
   e.emit(`  const greedyEnd = pos;`);
   e.emit(`  if (${e.matchLiteralCall(info.sepLit)}) { pos = saved; return null; }`);
   const pu = (lit: string) => a.symtab.puLitKind.get(lit) ?? -1;
+  // The separator is a literal, so it classifies as kw/punct (both carry t); a
+  // token-name key (impossible here) gets the never-matching -1.
+  const sepDesc = a.symtab.classifyKey(info.sepLit);
+  const sepT = sepDesc.kind === 'tok' ? -1 : sepDesc.t;
   e.emit(`  let depth = 0; const candidates = [];`);
   e.emit(`  for (let i = afterOpen; i < greedyEnd; i++) {`);
   e.emit(`    if (tkK[i] !== K_PUNCT) continue;`);
   e.emit(`    const t = tkT[i];`);
   e.emit(`    if (t === ${pu('(')} || t === ${pu('[')} || t === ${pu('{')}) depth++;`);
   e.emit(`    else if (t === ${pu(')')} || t === ${pu(']')} || t === ${pu('}')}) depth--;`);
-  e.emit(`    else if (depth === 0 && t === ${a.symtab.classifyKey(info.sepLit).t}) candidates.push(i);`);
+  e.emit(`    else if (depth === 0 && t === ${sepT}) candidates.push(i);`);
   e.emit(`  }`);
   e.emit(`  for (const sepIdx of candidates) {`);
   e.emit(`    pos = afterOpen;`);
