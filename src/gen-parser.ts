@@ -760,7 +760,7 @@ export function createParser(grammar: CstGrammar) {
   function parse(source: string, entryRule?: string): CstNode {
     const tokens = tokenize(source);
     let pos = 0;
-    let maxPos = 0;   // farthest token index the parser ever attempted to read (diagnostic)
+    let maxPos = 0;   // farthest token index ever ADVANCED past (diagnostic; updated at the pos++ sites, mirroring the emitted engine so reject messages stay engine-identical)
     // Packrat memo for pratt/left-recursive rules (Expr, Type, …): cache the
     // parse result + end position by start position, so backtracking doesn't
     // re-parse the same rule at the same spot. Sound because those rules reset
@@ -777,7 +777,6 @@ export function createParser(grammar: CstGrammar) {
     let parseLimit = -1;
 
     function peek(): Token | null {
-      if (pos > maxPos) maxPos = pos;
       if (parseLimit >= 0 && pos >= parseLimit) return null;
       return tokens[pos] ?? null;
     }
@@ -794,14 +793,14 @@ export function createParser(grammar: CstGrammar) {
       if (isKeywordLiteral(value)) {
         // Keyword literal: match against Ident token with same text
         if (tok.type !== '' && tokenNames.has(tok.type) && tok.text === value) {
-          pos++;
+          if (++pos > maxPos) maxPos = pos;
           return { tokenType: '$keyword', offset: tok.offset, end: tok.offset + tok.text.length };
         }
         return null;
       }
       // Punctuation literal
       if (tok.type === '' && tok.text === value) {
-        pos++;
+        if (++pos > maxPos) maxPos = pos;
         return { tokenType: '$punct', offset: tok.offset, end: tok.offset + tok.text.length };
       }
       // Split multi-`>` tokens: `>>`, `>>>`, `>>=`, `>>>=` can yield a single `>`
@@ -812,7 +811,7 @@ export function createParser(grammar: CstGrammar) {
           { type: '', text: rest, offset: tok.offset + 1, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
         );
         memo.clear();   // splice shifts later token indices → memo entries are stale
-        pos++;
+        if (++pos > maxPos) maxPos = pos;
         return { tokenType: '$punct', offset: tok.offset, end: tok.offset + 1 };
       }
       return null;
@@ -823,7 +822,7 @@ export function createParser(grammar: CstGrammar) {
       const tok = peek();
       if (!tok) return null;
       if (tok.type === name) {
-        pos++;
+        if (++pos > maxPos) maxPos = pos;
         return { tokenType: name, offset: tok.offset, end: tok.offset + tok.text.length };
       }
       return null;
@@ -842,12 +841,12 @@ export function createParser(grammar: CstGrammar) {
       const tok = peek();
       if (!tok) return null;
       if (tok.type === templateTokenName) {
-        pos++;
+        if (++pos > maxPos) maxPos = pos;
         return { tokenType: templateTokenName, offset: tok.offset, end: tok.offset + tok.text.length };
       }
       if (tok.type === '$templateHead') {
         const children: CstChild[] = [];
-        pos++;
+        if (++pos > maxPos) maxPos = pos;
         children.push({ tokenType: '$templateHead', offset: tok.offset, end: tok.offset + tok.text.length });
         const interpRule = currentPrattContext ?? findExprRule();
         while (true) {
@@ -856,12 +855,12 @@ export function createParser(grammar: CstGrammar) {
           const next = peek();
           if (!next) break;
           if (next.type === '$templateMiddle') {
-            pos++;
+            if (++pos > maxPos) maxPos = pos;
             children.push({ tokenType: '$templateMiddle', offset: next.offset, end: next.offset + next.text.length });
             continue;
           }
           if (next.type === '$templateTail') {
-            pos++;
+            if (++pos > maxPos) maxPos = pos;
             children.push({ tokenType: '$templateTail', offset: next.offset, end: next.offset + next.text.length });
             break;
           }
@@ -1041,7 +1040,7 @@ export function createParser(grammar: CstGrammar) {
             const key = tok.text;
             const info = prefixOps.get(key);
             if (info) {
-              pos++;
+              if (++pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
               const rhs = parsePratt(rule, info.rbp);
               if (rhs && pos > bestNudPos) {
@@ -1136,7 +1135,7 @@ export function createParser(grammar: CstGrammar) {
         if (info && info.lbp > minBp) {
           if (info.position === 'postfix') {
             if (!tailClosed) {                                   // can't postfix an update expr (`a++ --`)
-              pos++;
+              if (++pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
               lhs = { rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
               tailClosed = true;
@@ -1157,7 +1156,7 @@ export function createParser(grammar: CstGrammar) {
                 return null;
               }
             }
-            pos++;
+            if (++pos > maxPos) maxPos = pos;
             const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
             const rhs = parsePratt(rule, info.rbp);
             if (rhs) {

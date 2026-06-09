@@ -164,6 +164,10 @@ function lowerExpr(n: CstNode): Ast {
     if (t0 === '...' && c.length === 2 && ruleIs(c[1], 'Expr')) {
       return ast('SpreadElement', n.offset, n.end, [lowerExpr(c[1])]);
     }
+    // Old-style type assertion: ['<', Type, '>', Expr]
+    if (t0 === '<' && c.length === 4 && ruleIs(c[1], 'Type') && ruleIs(c[3], 'Expr')) {
+      return ast('TypeAssertionExpression', n.offset, n.end, [lowerType(c[1]), lowerExpr(c[3])]);
+    }
     // Parenthesized vs arrow: both arms start '('.
     // PAIN(5): two different grammar ALTERNATIVES with the same first token reach the
     // consumer as child-shape puzzles — '(' Expr ')' vs '(' Param* ')' '=>' …; the
@@ -286,6 +290,10 @@ function lowerNewTarget(n: CstNode): Ast {
   if (c.length === 1 && isLeaf(c[0])) return ast('Identifier', c[0].offset, c[0].end);
   if (ruleIs(c[0], 'NewTarget') && c.length === 3 && isLeaf(c[2])) {
     return ast('PropertyAccessExpression', n.offset, n.end, [lowerNewTarget(c[0]), ast('Identifier', c[2].offset, c[2].end)]);
+  }
+  // index form: NewTarget '[' Expr ']'  (`new benchmarks[i]()`)
+  if (ruleIs(c[0], 'NewTarget') && c.length === 4 && leafIs(c[1], '[') && ruleIs(c[2], 'Expr')) {
+    return ast('ElementAccessExpression', n.offset, n.end, [lowerNewTarget(c[0]), lowerExpr(c[2])]);
   }
   if (c.length === 1 && ruleIs(c[0], 'Expr')) return lowerExpr(c[0]);
   throw new Unlowered('NewTarget shape', n.offset);

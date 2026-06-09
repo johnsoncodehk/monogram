@@ -270,7 +270,7 @@ const Param = rule($ => {
     [BindingPattern, ...tail],
     // a rest element, by contrast, can never validly be a reserved word (`...while`),
     // and `...this` is invalid too, so guarding the rest name is FN-safe.
-    ['...', alt([notReserved, Ident], BindingPattern), opt('?'), opt(':', Type)],   // rest
+    ['...', alt([notReserved, Ident], BindingPattern), opt('?'), opt(':', Type), opt('=', Expr)],   // rest (`?`/initializer are CHECKER errors in tsc, not parse errors)
   );
   return [
     ['this', ':', Type],
@@ -292,7 +292,11 @@ const ForHead = rule($ => {
       [alt('in', 'of'), Expr],
     )],
     [opt(Expr, many(',', Expr)), ...cTail],   // C-style, no declaration: `for (i=0; …; …)` / `for (;;)`
-    [Expr, alt('in', 'of'), Expr],            // for-in/of, no declaration: `for (x of xs)`
+    // for-in/of, no declaration: `for (x of xs)`. The target Expr parses in a no-`in`
+    // context (same exclude as binding initializers): the `in` belongs to the for-head,
+    // not to an in-LED inside the target — without it `for (key in obj)` swallowed the
+    // `in`, the arm failed, and the statement fell back to a CALL parse `for(...)`.
+    [exclude('in', Expr), alt('in', 'of'), Expr],
   ];
 });
 
@@ -321,7 +325,17 @@ const Stmt = rule($ => [
   ['with', '(', Expr, ')', $],
   [opt('await'), 'using', sep(Binding, ','), opt(';')],
   Decl,
-  [Expr, many(',', Expr), opt(';')],
+  // ExpressionStatement lookahead restriction (ES2023 §14.5): a statement may not
+  // begin with `function` / `async function` — those are declarations at statement
+  // level. Without this guard, longest-match lets the expression arm win whenever a
+  // call/member tail makes it LONGER (`function f(){}\n(g)()` merged into one
+  // IIFE-style expression statement; tsc keeps them separate). `{` needs no guard
+  // (the Block alternative ties in length and wins as the first-listed alternative).
+  // `class` is NOT guarded yet: the class-DECLARATION arm is narrower than tsc's
+  // (extends-expression heritage, bare `;` class elements, decorator placements), so
+  // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
+  // declaration arm first, then guard.
+  [not(alt('function', ['async', 'function'])), Expr, many(',', Expr), opt(';')],
 ]);
 
 // ── Type Parameters ──
