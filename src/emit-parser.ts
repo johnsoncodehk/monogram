@@ -248,7 +248,16 @@ function analyze(grammar: CstGrammar) {
         const acc = new Set<string>();
         let pending: Set<string> | null = null;
         for (const item of e.items) {
-          if (item.type === 'prefix') return null;
+          if (item.type === 'prefix') {
+            // A pratt prefix form ([prefix, operand]): its first token is one of the
+            // prefix-operator literals — a real set, not unknown. Keeps FIRST(Expr)
+            // from collapsing to null/always-admit.
+            for (const op of prefixOps.keys()) {
+              const ek = pending ? excludeKey(op, pending) : op;
+              if (ek !== null) acc.add(ek);
+            }
+            return acc;
+          }
           if (item.type === 'not') {
             const kws = notKeywordClass(item.body);
             if (kws) pending = pending ? new Set([...pending, ...kws]) : kws;
