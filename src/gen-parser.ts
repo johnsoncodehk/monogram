@@ -337,11 +337,12 @@ export function createParser(grammar: CstGrammar) {
   const templateTokenNames = new Set<string>(grammar.tokens.filter(t => t.template).map(t => t.name));
 
   // ── First-token dispatch ──
-  // For each alternative, the token it MUST begin with, if that is statically
-  // knowable (a leading literal or token ref). When known, the alternative can
-  // be skipped outright if the current token can't be its first token — so the
-  // alternative loops branch on the lookahead instead of trying every arm.
-  // `null` = not statically knowable (rule ref / prefix / optional first) → always try.
+  // The single token an expression MUST begin with, if statically knowable (a leading
+  // literal or token ref); `null` = not knowable (rule ref / prefix / optional first) →
+  // always try. The alternative loops now use the deeper `altMightStart` (which resolves
+  // a leading rule ref through `firstSets`); `firstTokenOf` remains the dispatch for the
+  // Pratt LED continuations (`ledFirst`), whose connectors are operator literals for
+  // which the single-token form is already exact.
   type FirstTok = { lit: string } | { tok: string } | null;
   function firstTokenOf(alt: RuleExpr): FirstTok {
     const items = alt.type === 'seq' ? alt.items : [alt];
@@ -350,11 +351,6 @@ export function createParser(grammar: CstGrammar) {
     if (first.type === 'literal') return { lit: first.value };
     if (first.type === 'ref' && tokenNames.has(first.name)) return { tok: first.name };
     return null;
-  }
-  const firstOf = new Map<RuleExpr, FirstTok>();
-  for (const rule of grammar.rules) {
-    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-    for (const alt of alts) firstOf.set(alt, firstTokenOf(alt));
   }
   // Does a FIRST-set key (a token name, or a literal keyword/punctuation) match a token?
   function keyMatchesTok(key: string, tok: Token): boolean {
@@ -517,6 +513,42 @@ export function createParser(grammar: CstGrammar) {
     const fs = firstSets.get(name);
     if (!fs) return true;                                        // null/unknown → don't filter
     for (const k of fs) if (keyMatchesTok(k, tok)) return true;
+    return false;
+  }
+
+  // ── Deep per-alternative dispatch ──
+  // The shallow `firstTokenOf` above only prunes an alternative when its FIRST element
+  // is a literal or a *token* ref; a leading *rule* ref (e.g. an alt `Decl …` / `Expr …`)
+  // defeats it (→ null → always tried). But the longest-match loops try EVERY alt that
+  // isn't pruned, so a rule-ref-led alt is speculatively parsed (and usually fails) at
+  // every position — measured at ~57% of all alternative attempts on real TS. The full
+  // transitive `firstSets` already knows what each rule can begin with, so resolve the
+  // alt's FIRST set through it and prune the alt when the lookahead is provably outside.
+  //
+  // Sound by construction: `exprFirst` is a sound OVER-approximation (it never omits a
+  // token a non-empty match could begin with), so an alt pruned here genuinely cannot
+  // match non-empty at this token. A NULLABLE alt is always tried — its only extra match
+  // is the empty one, and an empty match never wins the longest-match comparison
+  // (`pos === saved`, never `> bestPos`), so behaviour is identical with or without it.
+  // Strictly dominates `canStart(firstOf…)`: whenever the shallow check pruned, the deep
+  // FIRST set (whose leading member is that same literal/token) prunes too.
+  // Precompute each alt's dispatch keys ONCE: `null` = always try (nullable / unknowable
+  // / empty FIRST — collapsed so the hot path is a single branch), else the flat array of
+  // FIRST-set keys to test the lookahead against. Doing the nullability + FIRST resolution
+  // here keeps `altMightStart` to a map lookup + a bounded scan — no per-call tree walk.
+  const altDispatch = new Map<RuleExpr, string[] | null>();
+  for (const rule of grammar.rules) {
+    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
+    for (const alt of alts) {
+      const fs = exprNullable(alt) ? null : exprFirst(alt);
+      altDispatch.set(alt, fs && fs.size > 0 ? [...fs] : null);
+    }
+  }
+  function altMightStart(alt: RuleExpr, tok: Token | null): boolean {
+    if (!tok) return true;
+    const keys = altDispatch.get(alt);
+    if (!keys) return true;                                      // always try (nullable / top / empty)
+    for (let i = 0; i < keys.length; i++) if (keyMatchesTok(keys[i], tok)) return true;
     return false;
   }
 
@@ -703,7 +735,7 @@ export function createParser(grammar: CstGrammar) {
       const startTok = tokens[saved] ?? null;
 
       for (const alt of alts) {
-        if (!canStart(firstOf.get(alt), startTok)) continue;
+        if (!altMightStart(alt, startTok)) continue;
         pos = saved;
         // The markup container arm (HTML element with children) is matched by a
         // dedicated path that honours optional end tags — content stops at a trigger
@@ -735,7 +767,7 @@ export function createParser(grammar: CstGrammar) {
       let bestAtomPos = saved;
       const startTok = tokens[saved] ?? null;
       for (const atom of atoms) {
-        if (!canStart(firstOf.get(atom), startTok)) continue;
+        if (!altMightStart(atom, startTok)) continue;
         pos = saved;
         const children = matchExpr(atom);
         if (children !== null && pos > bestAtomPos) {
@@ -791,7 +823,7 @@ export function createParser(grammar: CstGrammar) {
       let bestNudPos = saved;
       const startTok = tokens[saved] ?? null;
       for (const nud of nuds) {
-        if (!canStart(firstOf.get(nud), startTok)) continue;
+        if (!altMightStart(nud, startTok)) continue;
         pos = saved;
         const items = nud.type === 'seq' ? nud.items : [nud];
 
