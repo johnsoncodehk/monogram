@@ -202,6 +202,40 @@ function analyze(grammar: CstGrammar) {
   }
 
   // FIRST sets.
+  //
+  // Reserved-aware keys: a `not(alt('if', 'var', …))` guard immediately before the
+  // first consuming element proves those keyword texts can never be this position's
+  // token. A token-name key gathered under such a guard becomes a QUALIFIED key
+  // ('\0Q:'-prefixed, registered in qualKeys) and is emitted as TM[0] plus every
+  // non-excluded keyword t-bit instead of the blanket k-bit — so a reserved-keyword
+  // lookahead no longer admits identifier-led alternatives it provably cannot start
+  // (the dominant longest-match waste: expr-stmt/labeled-stmt arms on 'var'/'if'/…).
+  // Sound: every pruned (alt, token) pair fails its not-guard before consuming.
+  const qualKeys = new Map<string, { tok: string; except: Set<string> }>();
+  function qualKey(tok: string, except: Set<string>): string {
+    const sorted = [...except].sort();
+    const key = '\u0000Q:' + tok + ':' + sorted.join(',');
+    if (!qualKeys.has(key)) qualKeys.set(key, { tok, except: new Set(sorted) });
+    return key;
+  }
+  // null = the key is guarded out entirely (a keyword literal inside its own not-class).
+  function excludeKey(k: string, pending: Set<string>): string | null {
+    const q = qualKeys.get(k);
+    if (q) return qualKey(q.tok, new Set([...q.except, ...pending]));
+    if (tokenNames.has(k)) return qualKey(k, pending);
+    if (pending.has(k)) return null;
+    return k;
+  }
+  // A not() whose body is purely keyword literals (the reserved-word guard shape).
+  function notKeywordClass(body: RuleExpr): Set<string> | null {
+    const items = body.type === 'alt' ? body.items : [body];
+    const out = new Set<string>();
+    for (const it of items) {
+      if (it.type !== 'literal' || !isKeywordLiteral(it.value)) return null;
+      out.add(it.value);
+    }
+    return out.size > 0 ? out : null;
+  }
   const firstSets = new Map<string, Set<string> | null>();
   function exprFirst(e: RuleExpr): Set<string> | null {
     switch (e.type) {
@@ -212,12 +246,21 @@ function analyze(grammar: CstGrammar) {
       }
       case 'seq': {
         const acc = new Set<string>();
+        let pending: Set<string> | null = null;
         for (const item of e.items) {
           if (item.type === 'prefix') return null;
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'not') {
+            const kws = notKeywordClass(item.body);
+            if (kws) pending = pending ? new Set([...pending, ...kws]) : kws;
+            continue;
+          }
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
           const f = exprFirst(item);
           if (f === null) return null;
-          for (const k of f) acc.add(k);
+          for (const k of f) {
+            const ek = pending ? excludeKey(k, pending) : k;
+            if (ek !== null) acc.add(ek);
+          }
           if (!exprNullable(item)) return acc;
         }
         return acc;
@@ -320,7 +363,7 @@ function analyze(grammar: CstGrammar) {
   }
   for (const rule of grammar.rules) collectAllLiterals(rule.body);
   for (const level of grammar.precs) for (const op of level.operators) allLiterals.add(op.value);
-  for (const fs of firstSets.values()) if (fs) for (const k of fs) if (!tokenNames.has(k)) allLiterals.add(k);
+  for (const fs of firstSets.values()) if (fs) for (const k of fs) if (!tokenNames.has(k) && !qualKeys.has(k)) allLiterals.add(k);
   const kwLitKind = new Map<string, number>();
   const puLitKind = new Map<string, number>();
   let nextLit = 1;
@@ -359,7 +402,7 @@ function analyze(grammar: CstGrammar) {
     grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
-    ledMeta, contMeta, nullableRules, firstSets, symtab,
+    ledMeta, contMeta, nullableRules, firstSets, symtab, qualKeys,
   };
 }
 
@@ -724,6 +767,15 @@ class Emitter {
     const st = this.a.symtab;
     const kOnes = new Set<number>(), tOnes = new Set<number>();
     for (const key of [...fs].sort()) {
+      const q = this.a.qualKeys.get(key);
+      if (q) {
+        // Reserved-qualified token key: admit by t instead of the blanket k-bit —
+        // t=0 (covers plain members of the token class; over-admits other t=0 kinds
+        // harmlessly) plus every keyword t outside the guard class.
+        tOnes.add(0);
+        for (const [text, id] of st.kwLitKind) if (!q.except.has(text)) tOnes.add(id);
+        continue;
+      }
       const d = st.classifyKey(key);
       if (d.kind === 'tok') {
         kOnes.add(d.k);
