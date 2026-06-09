@@ -388,12 +388,14 @@ class Emitter {
   // loops (quantifier/sep) never clash with an enclosing construct's loop.
   private helpers = new Map<string, string>();   // structural key → fn name
   private helperDefs: string[] = [];
-  // Deduped FIRST-set descriptor arrays hoisted to module-level consts (keyed by the
-  // baked literal text). The longest-match alt guards and the rule-ref guards sit on the
-  // hottest dispatch paths; referencing a shared frozen array avoids allocating a fresh
-  // [{…},…] on every call. Spliced at the same `//${HELPERS}` sentinel (top-level, above
-  // the rule fns); only read at runtime inside those fns, so const TDZ is a non-issue.
-  private descConsts = new Map<string, string>();   // baked array literal → const name
+  // Deduped FIRST-set membership tables + their per-set test fns, hoisted to module
+  // level. The longest-match alt guards and the rule-ref guards sit on the hottest
+  // dispatch paths; each set bakes to two Uint8Array byte tables (indexed by tok.k /
+  // tok.t) so the test is two loads + an or — no per-desc loop. Spliced at the same
+  // `//${HELPERS}` sentinel (top-level, above the rule fns).
+  private u8Consts = new Map<string, string>();     // `${size}:${ones}` → const name
+  private memberFns = new Map<string, string>();    // `${kConst}|${tConst}` → fn name
+  private u8Emitted = false;
   private a: ReturnType<typeof analyze>;
   constructor(a: ReturnType<typeof analyze>) { this.a = a; }
   private id() { return `_t${this.tmp++}`; }
@@ -642,10 +644,9 @@ class Emitter {
     if (a.nullableRules.has(name)) return '';
     const fs = a.firstSets.get(name);
     if (!fs || fs.size === 0) return '';
-    // ruleMightStart: true iff some key in fs matches peek(); guard = NOT that. Each FIRST
-    // key is pre-classified into an int descriptor (same split keyMatchesTok does); the
-    // hoisted shared array means the runtime does integer compares with no allocation.
-    return `!ruleMightStartDescs(${this.descArrayConst(fs)}, peek())`;
+    // ruleMightStart: true iff some key in fs matches peek(); guard = NOT that. The set
+    // is baked as a per-set membership fn over two byte tables (see membershipFn).
+    return `!${this.membershipFn(fs)}(peek())`;
   }
 
   // Deep per-alternative dispatch condition (mirrors gen-parser.ts altMightStart): the
@@ -658,7 +659,7 @@ class Emitter {
     if (a.altNullable.get(alt)) return 'true';
     const fs = a.altDeepFirst.get(alt);
     if (!fs || fs.size === 0) return 'true';
-    return `ruleMightStartDescs(${this.descArrayConst(fs)}, startTok)`;
+    return `${this.membershipFn(fs)}(startTok)`;
   }
 
   // A `not(...)` over a literal / alternation of KEYWORD literals → the int keyword-kinds,
@@ -673,14 +674,59 @@ class Emitter {
     return collect(body) && kinds.length > 0 ? kinds : null;
   }
 
-  // Register (deduped) a FIRST-set's baked int-descriptor array as a module-level const
-  // and return its NAME. Keys are sorted so two FIRST sets with the same members share
-  // one const regardless of traversal order (dedup is best-effort; the boolean membership
-  // result `ruleMightStartDescs` computes is order-independent either way).
-  descArrayConst(fs: Set<string>): string {
-    const lit = `[${[...fs].sort().map(k => this.keyDescLiteral(k)).join(', ')}]`;
-    let nm = this.descConsts.get(lit);
-    if (!nm) { nm = `_fs${this.descConsts.size}`; this.descConsts.set(lit, nm); this.helperDefs.push(`const ${nm} = ${lit};`); }
+  // Register (deduped) a FIRST-set's membership test as a module-level fn over two
+  // byte tables and return the fn's NAME. Test: `!tok || (KT[tok.k] | TT[tok.t])` —
+  // faithful to the old per-desc loop because the kw int range and the punct int range
+  // are DISJOINT (so the loop's k!==K_PUNCT / k===K_PUNCT guards were redundant), and
+  // a punct desc's text.startsWith(v) arm is enumerated over the closed punct
+  // vocabulary at emit time. The one narrowing: a K_PUNCT token whose text is OUTSIDE
+  // the vocabulary (t=0) can't startsWith-match here — such a token is unreachable
+  // (the lexer scans only vocabulary puncts; `>`-split rests stay in-vocabulary),
+  // and the full-corpus byte-identical gate covers it empirically.
+  membershipFn(fs: Set<string>): string {
+    const st = this.a.symtab;
+    const kOnes = new Set<number>(), tOnes = new Set<number>();
+    for (const key of [...fs].sort()) {
+      const d = st.classifyKey(key);
+      if (d.kind === 'tok') {
+        kOnes.add(d.k);
+        if (d.template) kOnes.add(st.KIND_TEMPLATE_HEAD);
+      } else if (d.kind === 'kw') {
+        if (d.t === 0) throw new Error(`emit: FIRST key ${J(key)} missing from the literal vocabulary`);
+        tOnes.add(d.t);
+      } else {
+        if (d.t === 0) throw new Error(`emit: FIRST key ${J(key)} missing from the literal vocabulary`);
+        for (const [text, id] of st.puLitKind) if (text.startsWith(d.v)) tOnes.add(id);
+      }
+    }
+    let tSize = 1;
+    for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
+    for (const v of st.puLitKind.values()) tSize = Math.max(tSize, v + 1);
+    const kArr = this.u8Const(st.KIND_NAMED_FALLBACK + 1, [...kOnes].sort((a, b) => a - b));
+    const tArr = this.u8Const(tSize, [...tOnes].sort((a, b) => a - b));
+    const fnKey = `${kArr}|${tArr}`;
+    let nm = this.memberFns.get(fnKey);
+    if (!nm) {
+      nm = `_q${this.memberFns.size}`;
+      this.memberFns.set(fnKey, nm);
+      this.helperDefs.push(`function ${nm}(tok) { return !tok || (${kArr}[tok.k] | ${tArr}[tok.t]) !== 0; }`);
+    }
+    return nm;
+  }
+
+  // A deduped Uint8Array const with 1s at `ones` (the byte tables behind membershipFn).
+  private u8Const(size: number, ones: number[]): string {
+    const key = `${size}:${ones.join(',')}`;
+    let nm = this.u8Consts.get(key);
+    if (!nm) {
+      if (!this.u8Emitted) {
+        this.helperDefs.push(`function u8(n, ones) { const a = new Uint8Array(n); for (let i = 0; i < ones.length; i++) a[ones[i]] = 1; return a; }`);
+        this.u8Emitted = true;
+      }
+      nm = `_qb${this.u8Consts.size}`;
+      this.u8Consts.set(key, nm);
+      this.helperDefs.push(`const ${nm} = u8(${size}, [${ones.join(',')}]);`);
+    }
     return nm;
   }
 
@@ -915,27 +961,13 @@ function matchTokK(name, nameKind) {
   return null;
 }
 
-// FIRST-set membership against a baked INT descriptor (one of):
+// canStart for a baked first-token int descriptor (one of):
 //   {m:0,k,h} token-name → tok.k === k  (h=1: also $templateHead, mirroring the
 //                          templateTokenNames.has(key) && tok.type==='$templateHead' arm)
 //   {m:1,t}   keyword     → tok.k !== K_PUNCT && tok.t === t   (tok.type !== '')
 //   {m:2,t,v} punct       → tok.k === K_PUNCT && (tok.t === t || tok.text.startsWith(v))
-// The membership test is inlined at both call sites (ruleMightStartDescs / canStartFT),
-// which sit on the per-token dispatch loops — the function-call boundary dominated there.
-function ruleMightStartDescs(descs, tok) {
-  if (!tok) return true;
-  const k = tok.k;
-  for (let i = 0; i < descs.length; i++) {
-    const d = descs[i];
-    switch (d.m) {
-      case 0: if (k === d.k || (d.h === 1 && k === K_TEMPLATE_HEAD)) return true; break;
-      case 1: if (k !== K_PUNCT && tok.t === d.t) return true; break;
-      default: if (k === K_PUNCT && (tok.t === d.t || tok.text.startsWith(d.v))) return true;
-    }
-  }
-  return false;
-}
-// canStart for a baked first-token int descriptor (the {m:…} shape above, or null).
+// (FIRST-SET membership — the multi-key case — is baked per set as a _qN byte-table
+// fn by membershipFn; this single-desc switch sits in the per-token LED-dispatch loop.)
 function canStartFT(d, tok) {
   if (!d || !tok) return true;
   // Inlined descMatchesTok: this sits in the per-token LED-dispatch loop.
