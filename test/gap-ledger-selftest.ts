@@ -113,6 +113,15 @@ ok(dropProven, 'drop case: at least one real parser-over-accept is parser-accept
 // and the dual: the oracle-VALID minimal repro is KEPT (not dropped) — the keep/drop split is real.
 ok(classifyKeeps('<A A=""/>'), 'keep/drop split: the oracle-VALID `<A A="">`-shape repro is KEPT (not dropped)');
 
+// ── (C) the CLASSIFIER lock: a structural-literal / anchored-marker / comment divergence GATES (the
+// generative scope≡role gate fails on it), NEVER conceded as a report-only "fuzz frontier limit". This
+// is the blind-spot fix that turns a self-close like the one above into a HARD failure that forces a fix,
+// instead of a tracked known-gap. Gating is by KIND (the bug class), not by discovery STRATEGY.
+ok(isGated({ kind: '#24 structural-literal→content' }), 'classifier lock: structural-literal→content GATES (not report-only)');
+ok(isGated({ kind: 'structural-literal→name' }), 'classifier lock: structural-literal→name GATES');
+ok(isGated({ kind: '#23 anchored-marker misfire' }), 'classifier lock: #23 anchored-marker GATES');
+ok(isGated({ kind: '#comment uncolored' }), 'classifier lock: #comment GATES');
+
 // ── (A) determinism of the rendered artifact: two builds byte-identical ──
 console.log('\n  determinism (two full ledger builds)…');
 const run = () => execFileSync('node', ['test/gap-ledger.ts'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
@@ -128,6 +137,9 @@ function probeDivergence(p: Probe, text: string): { target: string } | null {
   let toks; try { toks = tmTokenize(p.tm, text); } catch { return null; }
   const leaves = leafRoles(p.grammar, cst, p.roleOf);
   const vs = collectViolations({ input: text, strategy: 'fuzz', cst, toks, leaves, anchored: p.anchored });
-  const v = vs.find((x) => !isGated(x));
+  // The self-close `/` divergence (a structural-literal→content #24). Found by TOKEN, not by `!isGated`:
+  // the real ledger (gap-ledger.ts) classifies by the parse5 oracle, NOT the gate's isGated predicate, and
+  // a structural-literal divergence now GATES (see the isGated lock below) rather than being report-only.
+  const v = vs.find((x) => x.text === '/');
   return v ? { target: sig(v) } : null;
 }

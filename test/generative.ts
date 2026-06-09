@@ -182,7 +182,7 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   //    regressions of a known-fixed shape, and #25 is the testing harness, not a fix for every limit.
   const gated = violations.filter(isGated);
   const discovered = violations.filter((v) => !isGated(v));
-  console.log(`  scope≡role: ${checkedTokens} declared-scope tokens checked · ${gated.length} gated inconsistenc${gated.length === 1 ? 'y' : 'ies'} · ${discovered.length} discovered (fuzz frontier-limit, report-only)`);
+  console.log(`  scope≡role: ${checkedTokens} declared-scope tokens checked · ${gated.length} gated inconsistenc${gated.length === 1 ? 'y' : 'ies'} · ${discovered.length} report-only (allowlisted proven-limits — 0 by default; structural divergences GATE)`);
   // comment-witness coverage: how many injected comment spans were graded (was structurally 0 — a comment
   // is a skip token, dropped by the parser, so it never reached the leaf-walking scope≡role check).
   console.log(`  comment witnesses: ${checkedComments} comment span${checkedComments === 1 ? '' : 's'} graded (highlighter must paint COMMENT) · ${violations.filter((v) => v.kind.startsWith('#comment')).length} uncolored`);

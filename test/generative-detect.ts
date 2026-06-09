@@ -231,11 +231,15 @@ export function collectCommentViolations(args: { grammar: CstGrammar; input: str
 
 // What GATES vs what is a report-only DISCOVERY (generative.ts's exact predicate):
 //  • an ANCHORED-MARKER misfire (#23) ALWAYS gates.
-//  • a STRUCTURAL-LITERAL→content divergence (#24) gates on the STRUCTURED strategies, but is
-//    report-only on FUZZ inputs (a standing flat-TM frontier limit). The gap ledger lists the
-//    DISCOVERED ones (the !isGated set) — the floor-blind divergences a corpus metric is blind to.
-//  • a COMMENT-uncolored divergence ALWAYS gates: a comment (parser-dropped, highlighter-scoped
-//    `comment.*` by construction) painted as a NON-comment is unambiguous — there is no legitimate
-//    "frontier limit" where an injected comment is not a comment (its position is chosen safe + it
-//    round-trips). On today's correct grammars this finds 0; it CATCHES a future scope regression.
-export const isGated = (v: { kind: string; strategy: string }): boolean => v.kind.startsWith('#23') || v.kind.startsWith('#comment') || !v.strategy.startsWith('fuzz');
+//  • a STRUCTURAL-LITERAL divergence (#24 →content, →name) ALWAYS gates, on EVERY strategy
+//    INCLUDING fuzz. The prior "fuzz #24 = a standing flat-TM frontier limit → report-only"
+//    concession was DISPROVEN: every such divergence found (value-position, flow-in-key, self-close,
+//    mixed-case raw-text, non-first-item compact) was a FIXABLE depth/structure bug, closed by
+//    deriving the region — never a frontier limit. A structural literal (a punctuation / keyword the
+//    parser assigns by construction) painted as content/name is a real bug regardless of HOW it was
+//    discovered, so gate it — don't concede it. (A genuinely-proven TextMate limit, if one is ever
+//    established, is excluded by an explicit fingerprint allowlist, never a blanket strategy.)
+//  • a COMMENT-uncolored divergence ALWAYS gates (same reasoning — no legitimate "frontier limit"
+//    where an injected comment is not a comment). On today's correct grammars this finds 0; it
+//    CATCHES a future scope regression. Gating is by KIND (the bug class), NOT discovery STRATEGY.
+export const isGated = (v: { kind: string }): boolean => v.kind.startsWith('#23') || v.kind.startsWith('#comment') || v.kind.includes('structural-literal');
