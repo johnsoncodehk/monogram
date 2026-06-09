@@ -811,27 +811,34 @@ export function emitParser(grammar: CstGrammar): string {
   e.emit(`const K_NAMED_MIN = ${st.KIND_NAMED_MIN};`);
   e.emit(`const K_NAMED_FALLBACK = ${st.KIND_NAMED_FALLBACK};`);
   e.emit(``);
-  // Intern tok.k / tok.t for one token (also used when matchLiteral splices a `>>`).
-  // k = TYPE kind (PUNCT for '' tokens, else the declared/template kind; an unforeseen
-  // named type → NAMED_FALLBACK, which is >= NAMED_MIN yet collides with no real
-  // token-name kind). t = LITERAL kind: a '' token's text in the punct table, a named
-  // token's text in the keyword table (keyMatchesTok's keyword branch needs tok.type !== '').
-  e.emit(String.raw`function internTok(tok) {
-  const ty = tok.type;
-  if (ty === '') {
-    tok.k = K_PUNCT;
-    tok.t = LIT_PU[tok.text] | 0;
-  } else {
-    const k = TYPE_KIND[ty];
-    tok.k = k === undefined ? K_NAMED_FALLBACK : k;
-    tok.t = LIT_KW[tok.text] | 0;
+  // Rebuild each lexer token as ONE object literal carrying every field the parser
+  // reads — type/text/offset, the int kinds k (TYPE kind: PUNCT for '' tokens, else the
+  // declared/template kind, NAMED_FALLBACK for an unforeseen type) and t (LITERAL kind:
+  // a '' token's text in the punct table, a named token's text in the keyword table),
+  // and the three stamp flags normalized to booleans (absent ≡ false for the parser's
+  // truthiness reads). One monomorphic shape from birth: the old in-place interning
+  // added k/t to already-shaped tokens — two hidden-class transitions per token, and
+  // that loop dominated the parse() profile.
+  e.emit(String.raw`function mkTok(type, text, offset, k, t, nl, cb, mf) {
+  return { type, text, offset, k, t, newlineBefore: nl, commentBefore: cb, multilineFlowBefore: mf };
+}
+function mkPunct(text, offset) {
+  return mkTok('', text, offset, K_PUNCT, LIT_PU[text] | 0, false, false, false);
+}
+function tokenize(source) {
+  const raw = _lexTokenize(source);
+  const out = new Array(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    const r = raw[i];
+    const ty = r.type;
+    let k, t;
+    if (ty === '') { k = K_PUNCT; t = LIT_PU[r.text] | 0; }
+    else { k = TYPE_KIND[ty]; if (k === undefined) k = K_NAMED_FALLBACK; t = LIT_KW[r.text] | 0; }
+    out[i] = mkTok(ty, r.text, r.offset, k, t,
+      r.newlineBefore === true, r.commentBefore === true, r.multilineFlowBefore === true);
   }
+  return out;
 }`);
-  e.emit(`function tokenize(source) {`);
-  e.emit(`  const toks = _lexTokenize(source);`);
-  e.emit(`  for (let i = 0; i < toks.length; i++) internTok(toks[i]);`);
-  e.emit(`  return toks;`);
-  e.emit(`}`);
   e.emit(``);
   // Baked maps. Emit as object literals → Map.
   e.emit(`const opTable = new Map(${J([...a.opTable])});`);
@@ -933,9 +940,8 @@ function matchPuLit(value, pu) {
   }
   if (value === '>' && tok.k === K_PUNCT && tok.text.length > 1 && tok.text[0] === '>') {
     const rest = tok.text.slice(1);
-    const a = { type: '', text: '>', offset: tok.offset };
-    const b = { type: '', text: rest, offset: tok.offset + 1 };
-    internTok(a); internTok(b);
+    const a = mkPunct('>', tok.offset);
+    const b = mkPunct(rest, tok.offset + 1);
     tokens.splice(pos, 1, a, b);
     memo.clear();
     pos++;
