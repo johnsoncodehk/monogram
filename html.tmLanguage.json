@@ -130,7 +130,7 @@
     },
     "raw-script-inline": {
       "name": "meta.script.html",
-      "match": "(<)(script)\\b([^>]*)(>)(.*?)(</)(script)\\s*(>)",
+      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -169,7 +169,7 @@
     },
     "raw-script-inline-ml": {
       "name": "meta.script.html",
-      "begin": "(<)(script)\\b([^>]*)(>)(.*?)(</)(script)(?=\\s*$)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -211,7 +211,7 @@
     },
     "raw-script": {
       "name": "meta.script.html",
-      "begin": "(<)(script)\\b([^>]*)(>)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -230,7 +230,7 @@
           "name": "punctuation.definition.tag.end.html"
         }
       },
-      "while": "^(?!.*</script(?:[\\s>]|$))",
+      "while": "^(?!.*</[Ss][Cc][Rr][Ii][Pp][Tt](?:[\\s>]|$))",
       "contentName": "source.js",
       "patterns": [
         {
@@ -240,7 +240,7 @@
     },
     "raw-script-close": {
       "name": "meta.script.html",
-      "match": "^(\\s*)((?:(?!<script\\b).)+?)(</)(script)\\s*(>)",
+      "match": "^(\\s*)((?:(?!<[Ss][Cc][Rr][Ii][Pp][Tt]\\b).)+?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
       "captures": {
         "2": {
           "name": "source.js",
@@ -263,7 +263,7 @@
     },
     "raw-script-close-ml": {
       "name": "meta.script.html",
-      "begin": "^(\\s*)((?:(?!<script\\b).)+?)(</)(script)(?=\\s*$)",
+      "begin": "^(\\s*)((?:(?!<[Ss][Cc][Rr][Ii][Pp][Tt]\\b).)+?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
       "beginCaptures": {
         "2": {
           "name": "source.js",
@@ -289,7 +289,7 @@
     },
     "raw-script-ml": {
       "name": "meta.script.html",
-      "begin": "(<)(script)\\b(?![^>]*>)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b(?![^>]*>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -298,7 +298,7 @@
           "name": "entity.name.tag.html"
         }
       },
-      "end": "(</)(script)\\s*(>)",
+      "end": "(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -327,8 +327,8 @@
           ]
         },
         {
-          "begin": "(?<=>)(?=[^\\n]*</script(?:[\\s>]|$))",
-          "end": "(?=</script(?:[\\s>]|$))",
+          "begin": "(?<=>)(?=[^\\n]*</[Ss][Cc][Rr][Ii][Pp][Tt](?:[\\s>]|$))",
+          "end": "(?=</[Ss][Cc][Rr][Ii][Pp][Tt](?:[\\s>]|$))",
           "contentName": "source.js",
           "patterns": [
             {
@@ -338,7 +338,7 @@
         },
         {
           "begin": "(?<=>)",
-          "while": "^(?!.*</script(?:[\\s>]|$))",
+          "while": "^(?!.*</[Ss][Cc][Rr][Ii][Pp][Tt](?:[\\s>]|$))",
           "contentName": "source.js",
           "patterns": [
             {
@@ -350,7 +350,7 @@
     },
     "raw-style-inline": {
       "name": "meta.style.html",
-      "match": "(<)(style)\\b([^>]*)(>)(.*?)(</)(style)\\s*(>)",
+      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -389,7 +389,7 @@
     },
     "raw-style-inline-ml": {
       "name": "meta.style.html",
-      "begin": "(<)(style)\\b([^>]*)(>)(.*?)(</)(style)(?=\\s*$)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -431,7 +431,7 @@
     },
     "raw-style": {
       "name": "meta.style.html",
-      "begin": "(<)(style)\\b([^>]*)(>)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -450,7 +450,7 @@
           "name": "punctuation.definition.tag.end.html"
         }
       },
-      "while": "^(?!.*</style(?:[\\s>]|$))",
+      "while": "^(?!.*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
       "contentName": "source.css",
       "patterns": [
         {
@@ -460,7 +460,7 @@
     },
     "raw-style-close": {
       "name": "meta.style.html",
-      "match": "^(\\s*)((?:(?!<style\\b).)+?)(</)(style)\\s*(>)",
+      "match": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
       "captures": {
         "2": {
           "name": "source.css",
@@ -483,7 +483,7 @@
     },
     "raw-style-close-ml": {
       "name": "meta.style.html",
-      "begin": "^(\\s*)((?:(?!<style\\b).)+?)(</)(style)(?=\\s*$)",
+      "begin": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "2": {
           "name": "source.css",
@@ -509,7 +509,7 @@
     },
     "raw-style-ml": {
       "name": "meta.style.html",
-      "begin": "(<)(style)\\b(?![^>]*>)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b(?![^>]*>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -518,7 +518,7 @@
           "name": "entity.name.tag.html"
         }
       },
-      "end": "(</)(style)\\s*(>)",
+      "end": "(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -547,8 +547,8 @@
           ]
         },
         {
-          "begin": "(?<=>)(?=[^\\n]*</style(?:[\\s>]|$))",
-          "end": "(?=</style(?:[\\s>]|$))",
+          "begin": "(?<=>)(?=[^\\n]*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
+          "end": "(?=</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
           "contentName": "source.css",
           "patterns": [
             {
@@ -558,7 +558,7 @@
         },
         {
           "begin": "(?<=>)",
-          "while": "^(?!.*</style(?:[\\s>]|$))",
+          "while": "^(?!.*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
           "contentName": "source.css",
           "patterns": [
             {
@@ -570,7 +570,7 @@
     },
     "raw-textarea-inline": {
       "name": "meta.textarea.html",
-      "match": "(<)(textarea)\\b([^>]*)(>)(.*?)(</)(textarea)\\s*(>)",
+      "match": "(<)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])\\b([^>]*)(>)(.*?)(</)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -609,7 +609,7 @@
     },
     "raw-textarea-inline-ml": {
       "name": "meta.textarea.html",
-      "begin": "(<)(textarea)\\b([^>]*)(>)(.*?)(</)(textarea)(?=\\s*$)",
+      "begin": "(<)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])\\b([^>]*)(>)(.*?)(</)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -651,7 +651,7 @@
     },
     "raw-textarea": {
       "name": "meta.textarea.html",
-      "begin": "(<)(textarea)\\b([^>]*)(>)",
+      "begin": "(<)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])\\b([^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -670,7 +670,7 @@
           "name": "punctuation.definition.tag.end.html"
         }
       },
-      "while": "^(?!.*</textarea(?:[\\s>]|$))",
+      "while": "^(?!.*</[Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa](?:[\\s>]|$))",
       "contentName": "source.embedded",
       "patterns": [
         {
@@ -680,7 +680,7 @@
     },
     "raw-textarea-close": {
       "name": "meta.textarea.html",
-      "match": "^(\\s*)((?:(?!<textarea\\b).)+?)(</)(textarea)\\s*(>)",
+      "match": "^(\\s*)((?:(?!<[Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa]\\b).)+?)(</)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])\\s*(>)",
       "captures": {
         "2": {
           "name": "source.embedded",
@@ -703,7 +703,7 @@
     },
     "raw-textarea-close-ml": {
       "name": "meta.textarea.html",
-      "begin": "^(\\s*)((?:(?!<textarea\\b).)+?)(</)(textarea)(?=\\s*$)",
+      "begin": "^(\\s*)((?:(?!<[Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa]\\b).)+?)(</)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])(?=\\s*$)",
       "beginCaptures": {
         "2": {
           "name": "source.embedded",
@@ -729,7 +729,7 @@
     },
     "raw-textarea-ml": {
       "name": "meta.textarea.html",
-      "begin": "(<)(textarea)\\b(?![^>]*>)",
+      "begin": "(<)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])\\b(?![^>]*>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -738,7 +738,7 @@
           "name": "entity.name.tag.html"
         }
       },
-      "end": "(</)(textarea)\\s*(>)",
+      "end": "(</)([Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa])\\s*(>)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -767,8 +767,8 @@
           ]
         },
         {
-          "begin": "(?<=>)(?=[^\\n]*</textarea(?:[\\s>]|$))",
-          "end": "(?=</textarea(?:[\\s>]|$))",
+          "begin": "(?<=>)(?=[^\\n]*</[Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa](?:[\\s>]|$))",
+          "end": "(?=</[Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa](?:[\\s>]|$))",
           "contentName": "source.embedded",
           "patterns": [
             {
@@ -778,7 +778,7 @@
         },
         {
           "begin": "(?<=>)",
-          "while": "^(?!.*</textarea(?:[\\s>]|$))",
+          "while": "^(?!.*</[Tt][Ee][Xx][Tt][Aa][Rr][Ee][Aa](?:[\\s>]|$))",
           "contentName": "source.embedded",
           "patterns": [
             {
@@ -790,7 +790,7 @@
     },
     "raw-title-inline": {
       "name": "meta.title.html",
-      "match": "(<)(title)\\b([^>]*)(>)(.*?)(</)(title)\\s*(>)",
+      "match": "(<)([Tt][Ii][Tt][Ll][Ee])\\b([^>]*)(>)(.*?)(</)([Tt][Ii][Tt][Ll][Ee])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -829,7 +829,7 @@
     },
     "raw-title-inline-ml": {
       "name": "meta.title.html",
-      "begin": "(<)(title)\\b([^>]*)(>)(.*?)(</)(title)(?=\\s*$)",
+      "begin": "(<)([Tt][Ii][Tt][Ll][Ee])\\b([^>]*)(>)(.*?)(</)([Tt][Ii][Tt][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -871,7 +871,7 @@
     },
     "raw-title": {
       "name": "meta.title.html",
-      "begin": "(<)(title)\\b([^>]*)(>)",
+      "begin": "(<)([Tt][Ii][Tt][Ll][Ee])\\b([^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -890,7 +890,7 @@
           "name": "punctuation.definition.tag.end.html"
         }
       },
-      "while": "^(?!.*</title(?:[\\s>]|$))",
+      "while": "^(?!.*</[Tt][Ii][Tt][Ll][Ee](?:[\\s>]|$))",
       "contentName": "source.embedded",
       "patterns": [
         {
@@ -900,7 +900,7 @@
     },
     "raw-title-close": {
       "name": "meta.title.html",
-      "match": "^(\\s*)((?:(?!<title\\b).)+?)(</)(title)\\s*(>)",
+      "match": "^(\\s*)((?:(?!<[Tt][Ii][Tt][Ll][Ee]\\b).)+?)(</)([Tt][Ii][Tt][Ll][Ee])\\s*(>)",
       "captures": {
         "2": {
           "name": "source.embedded",
@@ -923,7 +923,7 @@
     },
     "raw-title-close-ml": {
       "name": "meta.title.html",
-      "begin": "^(\\s*)((?:(?!<title\\b).)+?)(</)(title)(?=\\s*$)",
+      "begin": "^(\\s*)((?:(?!<[Tt][Ii][Tt][Ll][Ee]\\b).)+?)(</)([Tt][Ii][Tt][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "2": {
           "name": "source.embedded",
@@ -949,7 +949,7 @@
     },
     "raw-title-ml": {
       "name": "meta.title.html",
-      "begin": "(<)(title)\\b(?![^>]*>)",
+      "begin": "(<)([Tt][Ii][Tt][Ll][Ee])\\b(?![^>]*>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -958,7 +958,7 @@
           "name": "entity.name.tag.html"
         }
       },
-      "end": "(</)(title)\\s*(>)",
+      "end": "(</)([Tt][Ii][Tt][Ll][Ee])\\s*(>)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.html"
@@ -987,8 +987,8 @@
           ]
         },
         {
-          "begin": "(?<=>)(?=[^\\n]*</title(?:[\\s>]|$))",
-          "end": "(?=</title(?:[\\s>]|$))",
+          "begin": "(?<=>)(?=[^\\n]*</[Tt][Ii][Tt][Ll][Ee](?:[\\s>]|$))",
+          "end": "(?=</[Tt][Ii][Tt][Ll][Ee](?:[\\s>]|$))",
           "contentName": "source.embedded",
           "patterns": [
             {
@@ -998,7 +998,7 @@
         },
         {
           "begin": "(?<=>)",
-          "while": "^(?!.*</title(?:[\\s>]|$))",
+          "while": "^(?!.*</[Tt][Ii][Tt][Ll][Ee](?:[\\s>]|$))",
           "contentName": "source.embedded",
           "patterns": [
             {
@@ -1206,7 +1206,7 @@
               "name": "punctuation.separator.key-value.html"
             }
           },
-          "end": "(?=[\\s>])",
+          "end": "(?=[\\s>])|(?<=[\"'])(?=/)",
           "patterns": [
             {
               "begin": "\"",

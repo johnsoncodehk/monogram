@@ -1936,7 +1936,7 @@
           "name": "punctuation.yaml"
         }
       },
-      "while": "\\G(?>(\\1\\2 \\4)(?=-[\\t ]|-$)|(?=\\1\\2 \\4[\\t ])|[\\t ]*$)",
+      "while": "\\G(?>(?=\\1\\2 \\4-[\\t ]+-[\\t ])|(\\1\\2 \\4)(?=-[\\t ]|-$)|(?=\\1\\2 \\4[\\t ])|[\\t ]*$)",
       "patterns": [
         {
           "include": "#comment"
@@ -2014,7 +2014,174 @@
           "include": "#block-sequence"
         },
         {
+          "include": "#block-value"
+        },
+        {
           "include": "#block-fold"
+        },
+        {
+          "include": "#explicit-key"
+        },
+        {
+          "include": "#explicit-key-indicator"
+        },
+        {
+          "include": "#flow-sequence"
+        },
+        {
+          "include": "#flow-mapping"
+        },
+        {
+          "include": "#dquotekey"
+        },
+        {
+          "include": "#squotekey"
+        },
+        {
+          "include": "#key"
+        },
+        {
+          "include": "#docstart"
+        },
+        {
+          "include": "#docend"
+        },
+        {
+          "include": "#dquote"
+        },
+        {
+          "include": "#squote"
+        },
+        {
+          "include": "#yamldirective"
+        },
+        {
+          "include": "#directive"
+        },
+        {
+          "include": "#tag"
+        },
+        {
+          "include": "#directive-malformed"
+        },
+        {
+          "include": "#num"
+        },
+        {
+          "include": "#boolnull"
+        },
+        {
+          "include": "#plain"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#alias"
+        },
+        {
+          "include": "#indent"
+        },
+        {
+          "include": "#dedent"
+        },
+        {
+          "include": "#newline"
+        },
+        {
+          "include": "#anchor"
+        },
+        {
+          "include": "#block-plain-item"
+        }
+      ]
+    },
+    "block-value": {
+      "begin": ":(?=[\\t ]*$)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.yaml"
+        }
+      },
+      "while": "\\G(?>(?=[\\t ])|[\\t ]*$)",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-1"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-2"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-3"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-4"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-5"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-6"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-7"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-8"
+        },
+        {
+          "include": "#blockscalar-explicit-seq-9"
+        },
+        {
+          "include": "#blockscalar-seq"
+        },
+        {
+          "include": "#blockscalar-key"
+        },
+        {
+          "include": "#blockscalar-explicit-1"
+        },
+        {
+          "include": "#blockscalar-explicit-2"
+        },
+        {
+          "include": "#blockscalar-explicit-3"
+        },
+        {
+          "include": "#blockscalar-explicit-4"
+        },
+        {
+          "include": "#blockscalar-explicit-5"
+        },
+        {
+          "include": "#blockscalar-explicit-6"
+        },
+        {
+          "include": "#blockscalar-explicit-7"
+        },
+        {
+          "include": "#blockscalar-explicit-8"
+        },
+        {
+          "include": "#blockscalar-explicit-9"
+        },
+        {
+          "include": "#blockscalar-doc"
+        },
+        {
+          "include": "#blockscalar"
+        },
+        {
+          "include": "#explicit-key-continuation"
+        },
+        {
+          "include": "#block-sequence"
+        },
+        {
+          "include": "#block-value"
         },
         {
           "include": "#explicit-key"

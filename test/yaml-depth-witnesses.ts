@@ -103,6 +103,41 @@ const cases: Case[] = [
   { state: 'indent stack (deeper-irregular fold)', input: '- - a\n   - b\n', find: '- b', want: 'string',
     notWant: 'punctuation', note: 'deeper-than-inner `- b` should fold into the plain scalar' },
 
+  // ── indent STACK (NON-FIRST-ITEM compact nest, the monogram#24 generalization): a compact nested
+  //    sequence opened by a SECOND-or-later sibling of the outer sequence (`  - - b`, `  - k:`, `  - ? k`),
+  //    on a CONTINUATION line. The deepest sibling `-` must stay `punctuation` (the parser assigns `$punct`,
+  //    official scopes `punctuation.definition.block.sequence.item`), but the §2c fix that closed only the
+  //    FIRST-item case let a sibling-opened nest ESCAPE the region (the outer `while`'s consuming reclaim ate
+  //    the continuation line's indent before the body ran, so the nested region opened mid-line with an
+  //    empty `( *+)` and reconstructed its sibling column too shallow → the deeper sibling fell to the fold,
+  //    painted string). FIXED by the §2c `while` arm 0 (a compact sibling is reclaimed ZERO-WIDTH so the body
+  //    re-dispatches it from line start, opening a column-correct nested #block-sequence) + #block-value (a
+  //    `key:`-EOL / `? k`+`:` value block dispatches its deeper sequence instead of folding it). These are
+  //    LOCKED (asserted, not knownBug) — reverting either re-paints the deepest `-` string.
+  { state: 'indent stack (non-first-item compact nest)', input: '- - a\n  - - b\n    - c\n', find: '- c', want: 'punctuation',
+    notWant: 'string', note: 'deepest sibling `- c` of a sibling-opened compact nest is punctuation, not folded' },
+  { state: 'indent stack (non-first-item compact nest)', input: '- - a\n  - - b\n    - c\n    - d\n', find: '- d', want: 'punctuation',
+    notWant: 'string', note: 'a SECOND deep sibling `- d` is punctuation (the region reclaims every sibling, not just the first)' },
+  { state: 'indent stack (non-first-item compact nest)', input: '- - x\n  - - y\n    - z\n  - w\n', find: '- z', want: 'punctuation',
+    notWant: 'string', note: 'inner deep sibling `- z` is punctuation even when an OUTER sibling `- w` resumes after it' },
+  // the OUTER sibling that resumes after the inner nest must ALSO stay punctuation (the outer region survived
+  // the inner nest — the inner `while` released at the dedent and the outer reclaimed `- w`).
+  { state: 'indent stack (non-first-item compact nest)', input: '- - x\n  - - y\n    - z\n  - w\n', find: '- w', want: 'punctuation',
+    notWant: 'string', note: 'the outer sibling `- w` resuming after the inner nest is still punctuation' },
+  // the inner block opened by a sibling is a MAPPING-VALUE sequence (`  - k:` then `    - x`) — its deeper
+  // sequence items dispatch (via #block-value) instead of folding into a string.
+  { state: 'indent stack (non-first-item map-value nest)', input: '- - a\n  - k:\n    - x\n    - y\n', find: '- x', want: 'punctuation',
+    notWant: 'string', note: 'a sibling item `- k:` whose value is a sequence → `- x` is a sequence indicator, not folded' },
+  { state: 'indent stack (non-first-item map-value nest)', input: '- - a\n  - k:\n    - x\n    - y\n', find: '- y', want: 'punctuation',
+    notWant: 'string', note: 'every item of the mapping-value sequence stays punctuation' },
+  // the inner block opened by a sibling is an EXPLICIT-KEY value sequence (`  - ? k\n    :\n      - x`).
+  { state: 'indent stack (non-first-item explicit-key nest)', input: '- - a\n  - ? k\n    :\n      - x\n      - y\n', find: '- x', want: 'punctuation',
+    notWant: 'string', note: 'a sibling explicit-key item whose value is a sequence → `- x` is a sequence indicator, not folded' },
+  // counter-proof: the §2c #block-value must NOT fold a plain-scalar value continuation — `- k:\n    v\n    cont`
+  // = `{k: "v cont"}`, so `cont` STILL folds into the value scalar `v` (string), even inside the value block.
+  { state: 'indent stack (value-block plain continuation)', input: '- - a\n  - k:\n    v\n    cont\n', find: 'cont', want: 'string',
+    notWant: 'punctuation', note: 'a plain-scalar value continuation `cont` folds into `v`, not dispatched' },
+
   // ── indent STACK (explicit-key VALUE position): `? k:\n  - x` is `{ {k:[x]}: null }` — the EXPLICIT
   //    KEY is the mapping `{k:[x]}`, so `k:`'s value is the block sequence `[x]` and the `- ` at column 2
   //    is a sequence indicator (punctuation), the `? ` likewise a map-key indicator. This is the depth-bug

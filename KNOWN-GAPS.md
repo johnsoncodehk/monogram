@@ -14,49 +14,8 @@ commits) so the ledger is deterministic and commit-trackable.
 
 Regenerate: `node test/gap-ledger.ts --write` · verify up-to-date: `node test/gap-ledger.ts --check`.
 
-**2 gaps** across 7 grammars · 0 dropped.
+**0 gaps** across 7 grammars · 0 dropped.
 
-## `525e867dc205` — html: #24 structural-literal→content
-
-- **Language:** html
-- **Minimal repro:** `<A A=""/>`
-- **Divergent token:** `/` (parser token `$punct`)
-- **Role vs scope:** want **punct**, got **string** (highlighter scope `string.unquoted.html`)
-- **Fingerprint:** `525e867dc205`
-
-```json
-{
-  "id": "525e867dc205",
-  "language": "html",
-  "kind": "#24 structural-literal→content",
-  "repro": "<A A=\"\"/>",
-  "tokenType": "$punct",
-  "tokenText": "/",
-  "want": "punct",
-  "got": "string",
-  "gotScope": "string.unquoted.html"
-}
-```
-
-## `85c793d02a86` — vue: #24 structural-literal→content
-
-- **Language:** vue
-- **Minimal repro:** `<A A=""/>`
-- **Divergent token:** `/` (parser token `$punct`)
-- **Role vs scope:** want **punct**, got **string** (highlighter scope `string.unquoted.vue`)
-- **Fingerprint:** `85c793d02a86`
-
-```json
-{
-  "id": "85c793d02a86",
-  "language": "vue",
-  "kind": "#24 structural-literal→content",
-  "repro": "<A A=\"\"/>",
-  "tokenType": "$punct",
-  "tokenText": "/",
-  "want": "punct",
-  "got": "string",
-  "gotScope": "string.unquoted.vue"
-}
-```
+_No gaps currently surface._ The generative check reports no valid-input flat-highlighter
+divergence on the derived corpus. (This is the ledger MECHANISM; it lists what the check finds.)
 

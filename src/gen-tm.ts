@@ -69,6 +69,20 @@ function escapeForCharClass(s: string): string {
   return s.replace(/[\[\]\\^-]/g, '\\$&');
 }
 
+/** A CASE-INSENSITIVE, Onigmo-PORTABLE pattern matching `s` regardless of letter case.
+ *  Each cased letter becomes a two-char class (`s` → `[Ss]`); other chars are escaped as
+ *  usual. We do NOT use an inline `(?i)` flag — vscode-textmate/Onigmo does not honor inline
+ *  case flags reliably (the tm-diagnostics gate rejects them). Used by the markup emitter so a
+ *  raw-text element (`<SCRIPT>`/`<Script>`) matches the same set the lexer folds via `.toLowerCase()`. */
+function caseFoldLiteral(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const lo = ch.toLowerCase(), up = ch.toUpperCase();
+    out += lo !== up ? `[${escapeForCharClass(up)}${escapeForCharClass(lo)}]` : escapeRegex(ch);
+  }
+  return out;
+}
+
 // An INDENT-BOUNDED region: capture the line's leading indent into `\1`, then stay open while each
 // following line is BLANK or matches a `\1`-relative continuation condition (`cont`), releasing at a
 // sibling/dedent. This is the shared shape of every YAML block-scalar and plain-fold region — the
@@ -3876,6 +3890,12 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   // instead of being lumped; the body is re-tokenized by the embedded grammar.
   const attrCap = { patterns: [{ include: '#attribute' }] };
   const emitRaw = (key: string, tag: string, embed: string, langVal?: string) => {
+    // HTML tag names are CASE-INSENSITIVE; the lexer folds case (`.toLowerCase()`), so the
+    // raw-text open/close PATTERNS must match `<SCRIPT>`/`<Script>` too — else the body falls
+    // through to the generic #tag rule and the highlighter invents tags inside it (bug). We
+    // case-fold the tag literal per-character (`script`→`[Ss][Cc]…`, Onigmo-portable, no `(?i)`)
+    // for every MATCH; repository keys and meta `name`s stay the canonical lowercase `tag`.
+    const tagRe = caseFoldLiteral(tag);
     const attrs = langVal
       ? `([^${ccClose}]*\\blang\\s*=\\s*["']${langVal}["'][^${ccClose}]*)`   // start tag carries lang="<val>"
       : `([^${ccClose}]*)`;
@@ -3884,7 +3904,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     //     a mid-construct embed can't escape), body + attrs re-tokenized via capture-embed.
     repository[`${key}-inline`] = {
       name: `meta.${tag}.${L}`,
-      match: `(${o})(${tag})\\b${attrs}(${c})(.*?)(${o}${slash})(${tag})\\s*(${c})`,
+      match: `(${o})(${tagRe})\\b${attrs}(${c})(.*?)(${o}${slash})(${tagRe})\\s*(${c})`,
       captures: {
         '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose },
         '5': bodyCap,
@@ -3904,7 +3924,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     //     delimiters only, like every other raw-text rule.
     repository[`${key}-inline-ml`] = {
       name: `meta.${tag}.${L}`,
-      begin: `(${o})(${tag})\\b${attrs}(${c})(.*?)(${o}${slash})(${tag})(?=\\s*$)`,
+      begin: `(${o})(${tagRe})\\b${attrs}(${c})(.*?)(${o}${slash})(${tagRe})(?=\\s*$)`,
       beginCaptures: {
         '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose },
         '5': bodyCap, '6': { name: sOpen }, '7': { name: sName },
@@ -3930,9 +3950,9 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     //     re-embedded by the sibling `#<key>-close` rule below. The close tag is matched by host #tag.
     repository[key] = {
       name: `meta.${tag}.${L}`,
-      begin: `(${o})(${tag})\\b${attrs}(${c})`,
+      begin: `(${o})(${tagRe})\\b${attrs}(${c})`,
       beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose } },
-      while: `^(?!.*${o}${slash}${tag}(?:[\\s${ccClose}]|$))`,
+      while: `^(?!.*${o}${slash}${tagRe}(?:[\\s${ccClose}]|$))`,
       contentName: embed,
       patterns: [{ include: embed }],
     };
@@ -3952,7 +3972,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     //     keys only on the tag + `<`/`/`/`>` delimiters (DATA), never on the embed's syntax.
     repository[`${key}-close`] = {
       name: `meta.${tag}.${L}`,
-      match: `^(\\s*)((?:(?!${o}${tag}\\b).)+?)(${o}${slash})(${tag})\\s*(${c})`,
+      match: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})\\s*(${c})`,
       captures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName }, '5': { name: sClose } },
     };
     // (3b) ORPHAN CLOSE LINE whose `>` is DEFERRED — `BODY</tag` ending the line, the `>` on a later
@@ -3964,7 +3984,7 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     //     BODY run as (3) so it can't swallow a following block's `<tag` OPEN; agnostic to the embed.
     repository[`${key}-close-ml`] = {
       name: `meta.${tag}.${L}`,
-      begin: `^(\\s*)((?:(?!${o}${tag}\\b).)+?)(${o}${slash})(${tag})(?=\\s*$)`,
+      begin: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})(?=\\s*$)`,
       beginCaptures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName } },
       end: `(${c})`, endCaptures: { '1': { name: sClose } },
     };
@@ -3985,7 +4005,8 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   const emitRawMultiline = (tag: string, spec: string | { default: string; lang?: Record<string, string> }) => {
     const defaultEmbed = typeof spec === 'string' ? spec : spec.default;
     const langs = typeof spec === 'string' ? [] : Object.entries(spec.lang ?? {});
-    const closeAhead = `${o}${slash}${tag}(?:[\\s${ccClose}]|$)`;      // `</tag` then ws / `>` / EOL (a DEFERRED `>` on a later line, tmbundle#97)
+    const tagRe = caseFoldLiteral(tag);   // case-insensitive tag-name pattern (see emitRaw)
+    const closeAhead = `${o}${slash}${tagRe}(?:[\\s${ccClose}]|$)`;      // `</tag` then ws / `>` / EOL (a DEFERRED `>` on a later line, tmbundle#97)
     const content = (embed: string): TmPattern[] => [                 // body after `>`, bounded at `</tag>`
       { begin: `(?<=${c})(?=[^\\n]*${closeAhead})`, end: `(?=${closeAhead})`, contentName: embed, patterns: [{ include: embed }] },
       { begin: `(?<=${c})`, while: `^(?!.*${closeAhead})`, contentName: embed, patterns: [{ include: embed }] },
@@ -4006,9 +4027,9 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
     pats.push(...content(defaultEmbed));           // default (no recognised lang)
     repository[`raw-${tag}-ml`] = {
       name: `meta.${tag}.${L}`,
-      begin: `(${o})(${tag})\\b(?![^${ccClose}]*${c})`,               // `<tag` with NO `>` on this line
+      begin: `(${o})(${tagRe})\\b(?![^${ccClose}]*${c})`,               // `<tag` with NO `>` on this line
       beginCaptures: { '1': { name: sOpen }, '2': { name: sName } },
-      end: `(${o}${slash})(${tag})\\s*(${c})`,
+      end: `(${o}${slash})(${tagRe})\\s*(${c})`,
       endCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': { name: sClose } },
       patterns: pats,
     };
@@ -4084,8 +4105,15 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
       ...attrEmbed,                                                     // `on*`=…→embedded source (before the generic name)
       { match: `(${namePat})(?=\\s*${assign})`, name: sAttr },         // attribute name (followed by the assign char)
       {                                                                 // `= value`
+        // Release the value context at whitespace / `>` (normal), OR at a close-marker `/` that is
+        // GLUED right after a CLOSING QUOTE (`A=""/>`, `A="x"/>`): there the value ended at the quote,
+        // so the `/` is the tag's self-close punctuation, not value content — the `(?<=[quotes])(?=/)`
+        // arm (a FIXED-WIDTH, Onigmo-portable lookbehind) hands that `/` back to #tag. A `/` INSIDE or
+        // ENDING an UNQUOTED value (`href=x/`, `href=https://x/`) is NOT preceded by a quote, so it
+        // stays in the value (WHATWG: `/` is a legal unquoted-value char) — preserved. The quote arm
+        // is only emitted when the grammar HAS attribute quotes (else `[${quoteCc}]` would be empty).
         begin: `(${assign})\\s*`, beginCaptures: { '1': { name: sEq } },
-        end: `(?=[\\s${escapeForCharClass(m.tagClose)}])`,
+        end: `(?=[\\s${escapeForCharClass(m.tagClose)}])${quoteCc ? `|(?<=[${quoteCc}])(?=${slash})` : ''}`,
         patterns: [...strs, unquoted],
       },
       { match: `(${namePat})`, name: sAttr },                          // boolean attribute (no `=`)
@@ -5328,13 +5356,28 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // The inner indicator's column is reconstructed PORTABLY as `\1\2 \4`: the outer indent (`\1\2`) +
       // one literal space for the dash's own column + the captured indicator run `\4` (the run of spaces
       // between the outer dash and the inner one — group 4 in the begin's lookahead, so a multi-space
-      // compact `-  - x` pins correctly too). The `while` then STAYS on: (arm 1) a dash AT EXACTLY that
-      // column `(\1\2 \4)(?=${dash}[\t ]|${dash}$)` — a sibling item, reclaimed as `punctuation`; (arm 2) a
-      // line STRICTLY DEEPER than the column `(?=\1\2 \4[\t ])` — a zero-width lookahead that keeps the
-      // region alive WITHOUT consuming (so a nested deeper #block-sequence, if its own begin matched on the
-      // header line, gets first claim on its own sibling before the fold), with the deeper line scoped by
-      // the body's #block-fold rule; or (arm 3) a blank line. It RELEASES on a dedent OR a non-dash line at
-      // the column (a sibling mapping/scalar), so a column-0 `key:` after the sequence is NOT swallowed.
+      // compact `-  - x` pins correctly too). The `while` then STAYS on: (arm 0) a COMPACT sibling at the
+      // column `(?=\1\2 \4${dash}[\t ]+${dash}[\t ])` — a zero-width lookahead that keeps the region alive
+      // WITHOUT consuming, so the body RE-DISPATCHES the compact `- - …` line from line start and a nested
+      // #block-sequence opens there capturing its OWN `( *+)` indent (the non-first-item generalization of
+      // monogram#24 — see below); (arm 1) a dash AT EXACTLY that column `(\1\2 \4)(?=${dash}[\t ]|${dash}$)`
+      // — a non-compact sibling item, reclaimed as `punctuation`; (arm 2) a line STRICTLY DEEPER than the
+      // column `(?=\1\2 \4[\t ])` — a zero-width lookahead that keeps the region alive WITHOUT consuming (so
+      // a nested deeper #block-sequence, if its own begin matched on the header line, gets first claim on its
+      // own sibling before the fold), with the deeper line scoped by the body's #block-fold rule (a plain
+      // continuation) or #block-value (a structured value); or (arm 3) a blank line. It RELEASES on a dedent
+      // OR a non-dash line at the column (a sibling mapping/scalar), so a column-0 `key:` after the sequence
+      // is NOT swallowed.
+      //
+      // NON-FIRST-ITEM compact nesting (`- - a\n  - - b\n    - c` → `[["a",["b","c"]]]`): the inner compact
+      // sequence `- - b` is opened by the SECOND outer item, on a CONTINUATION line. A consuming reclaim arm
+      // (arm 1) would eat that line's leading indent before the body ran, so the nested #block-sequence would
+      // open mid-line with `( *+)=""` and reconstruct its sibling column too shallow (the `    - c` sibling
+      // would fall through to the fold → painted string). Arm 0 is the fix: a compact sibling is reclaimed
+      // ZERO-WIDTH, so the body re-dispatches from line start and the nested #block-sequence captures the
+      // FULL indent (`( *+)="  "`), pinning `    - c` at the right column. On the FIRST outer item the inner
+      // dashes are inline on the header line, so each level's begin already captures its offset — that case
+      // worked before; arm 0 extends the same column-correct open to a sibling-opened nest.
       //
       // A deeper line that is NOT a nested sibling folds into the item's plain scalar: the body's
       // #block-fold rule (`^([\t ]+)(?=[^\t\r\n#])(plain run)`, anchored at LINE START so it never fires on
@@ -5365,13 +5408,38 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // top-level dispatch is built + ordered), since the item content reuses that full dispatch. Group 4
         // (`([\t ]+)`, in the begin's lookahead) captures the indicator run between the outer and inner
         // dashes, so the `while` can reconstruct the inner column as `\1\2 \4` (outer indent + the dash's
-        // own column + the run). Arm 1 reclaims a same-column sibling (`punctuation`); arm 2 is a zero-width
-        // lookahead that keeps the region alive on a strictly-deeper line (deferring to a nested level's
-        // sibling-reclaim, then to the body's #block-fold rule); arm 3 is a blank line.
+        // own column + the run). Arm 0 keeps the region alive ZERO-WIDTH on a COMPACT sibling at the column
+        // (so the body re-dispatches it from line start, opening a column-correct nested #block-sequence);
+        // arm 1 reclaims a same-column NON-compact sibling (`punctuation`); arm 2 is a zero-width lookahead
+        // that keeps the region alive on a strictly-deeper line (deferring to a nested level's sibling-
+        // reclaim, then to the body's #block-fold / #block-value rules); arm 3 is a blank line.
         repository['block-sequence'] = {
           begin: `(?=((?<=${reanchor}) )?+)\\G( *+)(${dash})(?=([\\t ]+)${dash}[\\t ])`,
           beginCaptures: { '3': { name: `punctuation.${langName}` } },
-          while: `\\G(?>(\\1\\2 \\4)(?=${dash}[\\t ]|${dash}$)|(?=\\1\\2 \\4[\\t ])|[\\t ]*$)`,
+          while: `\\G(?>(?=\\1\\2 \\4${dash}[\\t ]+${dash}[\\t ])|(\\1\\2 \\4)(?=${dash}[\\t ]|${dash}$)|(?=\\1\\2 \\4[\\t ])|[\\t ]*$)`,
+          patterns: [],
+        };
+        // ── A block-mapping VALUE introduced by `${kvSep}`-at-EOL, INSIDE a compact item (`- key:` then an
+        // indented value block) ──
+        // A sibling sequence item whose value is a deeper block (`  - k:\n    - x`, `  - ? k\n    :\n …`) opens
+        // a value block whose nodes (`    - x`) are MORE indented than the item's `-` (column 2). #block-fold
+        // (a plain-scalar continuation) would WRONGLY fold those deeper structural lines into a string, because
+        // it can't see that the item line ended in a value-position `:` (it is `^`-anchored + stateless). This
+        // region carries exactly that state: a `${kvSep}` at end-of-line opens it, and its body RE-DISPATCHES
+        // the deeper value block through the SAME full dispatch (so a deeper `- x` sequence item is scoped
+        // `punctuation`, a deeper `k:` mapping entry keeps its #key structure, …), with #block-fold REMOVED
+        // from its body so the value block is never folded. The `while` stays on any line that begins with
+        // whitespace (a line of the value block, after the outer #block-sequence `while` ran) or is blank; it
+        // RELEASES at a sibling/dedent — the parent #block-sequence `while`'s consuming arm (arm 1) eats a
+        // same-column sibling's indent first, leaving `\G` at the dash so this `(?=[\t ])` fails and the
+        // value block releases, handing the sibling back to the sequence. So `- - a\n  - k:\n    - x` (the
+        // `- x` is the mapping value's sequence item → `punctuation`) while `- - a\n   - b` (no value-position
+        // `:`, so this never opens → the deeper `- b` folds via #block-fold → `string`). DERIVED from
+        // `indent.keyValueSeparator`; its body is filled with the same dispatch at the END.
+        repository['block-value'] = {
+          begin: `${kvSep}(?=[\\t ]*$)`,
+          beginCaptures: { '0': { name: `punctuation.${langName}` } },
+          while: '\\G(?>(?=[\\t ])|[\\t ]*$)',
           patterns: [],
         };
         // A deeper line (kept alive by the `while`'s arm 2) that is NOT a nested sibling folds into the
@@ -8096,7 +8164,19 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const selfAt = body.findIndex(p => p.include === '#block-sequence');
       if (selfAt >= 0) body.splice(selfAt + 1, 0, { include: '#block-fold' });
     }
-    repository['block-sequence'].patterns = [...body, { include: '#block-plain-item' }];
+    // #block-value (§2c, the structured-value region) is spliced right BEFORE #block-fold so a `key:`-at-EOL
+    // sibling item opens its value block before the fold can swallow its deeper structural lines. Listed only
+    // inside this region (a sibling item's value) — never a top-level include.
+    if (repository['block-value']) {
+      const foldAt = body.findIndex(p => p.include === '#block-fold');
+      if (foldAt >= 0) body.splice(foldAt, 0, { include: '#block-value' });
+    }
+    const seqBody = [...body, { include: '#block-plain-item' }];
+    repository['block-sequence'].patterns = seqBody;
+    // The value block RE-DISPATCHES its deeper nodes through the SAME body, with #block-fold REMOVED (a value
+    // block's deeper lines are structural — a sequence item / mapping entry — not a plain-scalar fold). It
+    // self-includes #block-value (a nested `key:`-EOL value) and #block-sequence (a deeper compact sequence).
+    if (repository['block-value']) repository['block-value'].patterns = seqBody.filter(p => p.include !== '#block-fold');
   }
 
   // Additive: a `#expression` sub-grammar for expression-only embeds (Vue `{{ }}`). The
