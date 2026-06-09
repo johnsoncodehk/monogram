@@ -633,6 +633,15 @@ class Emitter {
   private u8Emitted = false;
   private a: ReturnType<typeof analyze>;
   constructor(a: ReturnType<typeof analyze>) { this.a = a; }
+
+  // Token-text materialization: a source-span slice for an emitted (SoA) lexer, the
+  // converter-filled text column for createLexer-fallback grammars (synthetic tokens
+  // there — indent/dedent etc. — have text that is NOT a source span). Chosen at emit
+  // time; the runtime has a single form.
+  soa = false;
+  textAt(idx: string): string {
+    return this.soa ? `src.slice(tkOff[${idx}], tkEnd[${idx}])` : `tkText[${idx}]`;
+  }
   private id() { return `_t${this.tmp++}`; }
 
   emit(line = '') { this.buf.push(line); }
@@ -803,8 +812,8 @@ class Emitter {
         const kinds = this.notKwKinds(expr.body);
         if (kinds) {
           // Fast: one keyword-kind membership test (no body matcher / no `out` alloc per arm).
-          const cond = kinds.map(k => `_tk.t === ${k}`).join(' || ');
-          return `{ const _tk = peek(); if (_tk && _tk.k >= K_NAMED_MIN && (${cond})) { ${onFail} } }`;
+          const cond = kinds.map(k => `_tt === ${k}`).join(' || ');
+          return `if (pos < cap && tkK[pos] >= K_NAMED_MIN) { const _tt = tkT[pos]; if (${cond}) { ${onFail} } }`;
         }
         const save = this.id(), fn = this.matchFn(expr.body), m = this.id();
         return [
@@ -813,11 +822,11 @@ class Emitter {
         ].join('\n');
       }
       case 'sameLine':
-        return `{ const _tk = peek(); if (!(_tk && !_tk.newlineBefore)) { ${onFail} } }`;
+        return `if (!(pos < cap && (tkFl[pos] & 1) === 0)) { ${onFail} }`;
       case 'noCommentBefore':
-        return `{ const _tk = peek(); if (!(_tk && !_tk.commentBefore)) { ${onFail} } }`;
+        return `if (!(pos < cap && (tkFl[pos] & 2) === 0)) { ${onFail} }`;
       case 'noMultilineFlowBefore':
-        return `{ const _tk = peek(); if (!(_tk && !_tk.multilineFlowBefore)) { ${onFail} } }`;
+        return `if (!(pos < cap && (tkFl[pos] & 4) === 0)) { ${onFail} }`;
       case 'sep':
         return this.matchSepInto(expr.element, expr.delimiter, out, onFail);
       default:
@@ -892,7 +901,7 @@ class Emitter {
     if (!fs || fs.size === 0) return '';
     // ruleMightStart: true iff some key in fs matches peek(); guard = NOT that. The set
     // is baked as a per-set membership fn over two byte tables (see membershipFn).
-    return `!${this.membershipFn(fs)}(peek())`;
+    return `!${this.membershipFn(fs)}(pos)`;
   }
 
   // Deep per-alternative dispatch condition (mirrors gen-parser.ts altMightStart): the
@@ -905,7 +914,7 @@ class Emitter {
     if (a.altNullable.get(alt)) return 'true';
     const fs = a.altDeepFirst.get(alt);
     if (!fs || fs.size === 0) return 'true';
-    return `${this.membershipFn(fs)}(startTok)`;
+    return `${this.membershipFn(fs)}(saved)`;
   }
 
   // A `not(...)` over a literal / alternation of KEYWORD literals → the int keyword-kinds,
@@ -936,18 +945,18 @@ class Emitter {
     if (!nm) {
       nm = `_q${this.memberFns.size}`;
       this.memberFns.set(fnKey, nm);
-      this.helperDefs.push(`function ${nm}(tok) { return !tok || (${kArr}[tok.k] | ${tArr}[tok.t]) !== 0; }`);
+      this.helperDefs.push(`function ${nm}(i) { return i >= cap || (${kArr}[tkK[i]] | ${tArr}[tkT[i]]) !== 0; }`);
     }
     return nm;
   }
 
   // The first-token gate for an alt/LED whose tok is already known non-null: the same
   // two-table membership as membershipFn, open-coded (no call). null FirstTok → no gate.
-  ftCond(ft: FirstTok, tokVar: string): string | null {
+  ftCond(ft: FirstTok, idxVar: string): string | null {
     if (!ft) return null;
     const key = 'tok' in ft ? ft.tok : ft.lit;
     const { kArr, tArr } = this.membershipTables(new Set([key]));
-    return `(${kArr}[${tokVar}.k] | ${tArr}[${tokVar}.t]) !== 0`;
+    return `(${kArr}[tkK[${idxVar}]] | ${tArr}[tkT[${idxVar}]]) !== 0`;
   }
 
   // A FIRST set's admitted (tok.k, tok.t) index sets — the shared classification behind
@@ -1052,15 +1061,14 @@ class Emitter {
     });
     if (!refines) {
       return {
-        maskInit: `const ${maskVar} = startTok ? (${kArr}[startTok.k] | ${tArr}[startTok.t]) : ${all};`,
+        maskInit: `const ${maskVar} = saved < tokN ? (${kArr}[tkK[saved]] | ${tArr}[tkT[saved]]) : ${all};`,
         bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
       };
     }
     const k2Arr = this.u32Const(k2Mask);
     const t2Arr = this.u32Const(t2Mask);
     return {
-      maskInit: `const ${maskVar}t1 = saved + 1 < cap ? tokens[saved + 1] : null;\n` +
-        `  const ${maskVar} = startTok ? (${kArr}[startTok.k] | ${tArr}[startTok.t]) & (${maskVar}t1 !== null ? (${k2Arr}[${maskVar}t1.k] | ${t2Arr}[${maskVar}t1.t]) : ${alw2}) : ${all};`,
+      maskInit: `const ${maskVar} = saved < tokN ? ((${kArr}[tkK[saved]] | ${tArr}[tkT[saved]]) & (saved + 1 < cap ? (${k2Arr}[tkK[saved + 1]] | ${t2Arr}[tkT[saved + 1]]) : ${alw2})) : ${all};`,
       bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
     };
   }
@@ -1081,7 +1089,7 @@ class Emitter {
       for (const t of tOnes) tMask[t] |= bit;
     });
     return {
-      maskInit: `const ${maskVar} = ${this.u32Const(kMask)}[${tokVar}.k] | ${this.u32Const(tMask)}[${tokVar}.t];`,
+      maskInit: `const ${maskVar} = ${this.u32Const(kMask)}[tkK[${tokVar}]] | ${this.u32Const(tMask)}[tkT[${tokVar}]];`,
       bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
     };
   }
@@ -1167,6 +1175,7 @@ export function emitParser(grammar: CstGrammar): string {
     typeKind: st.typeKind, kwLitKind: st.kwLitKind, puLitKind: st.puLitKind,
     KIND_PUNCT: st.KIND_PUNCT, KIND_NAMED_FALLBACK: st.KIND_NAMED_FALLBACK,
   });
+  e.soa = lexSrc !== null;
   if (!lexSrc) {
     e.emit(`import { createLexer } from ${J(resolveLexerImport())};`);
     e.emit(``);
@@ -1182,8 +1191,12 @@ export function emitParser(grammar: CstGrammar): string {
   e.emit(`const LIT_PU = new Map(${J([...st.puLitKind])});`);
   e.emit(`const K_PUNCT = ${st.KIND_PUNCT};`);
   e.emit(`const K_TEMPLATE_HEAD = ${st.KIND_TEMPLATE_HEAD};`);
+  e.emit(`const K_TEMPLATE_MIDDLE = ${st.KIND_TEMPLATE_HEAD + 1};`);
+  e.emit(`const K_TEMPLATE_TAIL = ${st.KIND_TEMPLATE_HEAD + 2};`);
   e.emit(`const K_NAMED_MIN = ${st.KIND_NAMED_MIN};`);
   e.emit(`const K_NAMED_FALLBACK = ${st.KIND_NAMED_FALLBACK};`);
+  // The template token's own kind (-1 when the grammar has no template token).
+  e.emit(`const K_TPL_TOKEN = ${a.templateTokenName ? st.typeKind.get(a.templateTokenName) : -1};`);
   e.emit(``);
   if (lexSrc) {
     e.emit(lexSrc);
@@ -1193,11 +1206,6 @@ export function emitParser(grammar: CstGrammar): string {
     e.emit(`  punctKind: K_PUNCT, namedFallback: K_NAMED_FALLBACK,`);
     e.emit(`});`);
   }
-  e.emit(``);
-  // The matchPuLit '>'-split tokens are created parser-side with the same born-final shape.
-  e.emit(String.raw`function mkPunct(text, offset) {
-  return { type: '', text, offset, k: K_PUNCT, t: LIT_PU.get(text) ?? 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false };
-}`);
   e.emit(``);
   // Baked maps. Emit as object literals → Map.
   e.emit(`const opTable = new Map(${J([...a.opTable])});`);
@@ -1224,6 +1232,17 @@ export function emitParser(grammar: CstGrammar): string {
     e.emit(`const PREFIX_BY_T = ${J(byT(a.prefixOps))};`);
   }
   e.emit(`const noUnaryLhsOps = new Set(${J([...a.noUnaryLhsOps])});`);
+  {
+    let tSize = 1;
+    for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
+    for (const v of st.puLitKind.values()) tSize = Math.max(tSize, v + 1);
+    const nu = new Array<number>(tSize).fill(0);
+    for (const v of a.noUnaryLhsOps) {
+      const d = st.classifyKey(v);
+      if (d.kind !== 'tok' && d.t > 0) nu[d.t] = 1;
+    }
+    e.emit(`const NOUNARY_T = Uint8Array.from([${nu.join(',')}]);`);
+  }
   e.emit(`const postfixOpValues = new Set(${J([...a.postfixOpValues])});`);
   e.emit(`const tokenNames = new Set(${J([...a.tokenNames])});`);
   e.emit(`const templateTokenNames = new Set(${J([...a.templateTokenNames])});`);
@@ -1269,30 +1288,55 @@ function resolveLexerImport(): string { return pathResolve(__dir, 'gen-lexer.ts'
 // ONLY change: where the interpreter called matchExpr(alt)/matchSeq(items) per arm,
 // these call the GENERATED per-arm matcher functions (installed via the rule fns).
 function emitRuntime(e: Emitter) {
+  // Per-site text materialization (soa: slice the source span; fallback: text column).
+  const TXT_OE = e.soa ? 'src.slice(off, end)' : 'tkText[pos]';
+  // Column element type: Uint8 when the kind/literal id spaces fit a byte.
+  const st = e.a.symtab;
+  let tMax = 1;
+  for (const v of st.kwLitKind.values()) tMax = Math.max(tMax, v);
+  for (const v of st.puLitKind.values()) tMax = Math.max(tMax, v);
+  const K_ARR = st.KIND_NAMED_FALLBACK <= 255 ? 'Uint8Array' : 'Uint16Array';
+  const T_ARR = tMax <= 255 ? 'Uint8Array' : 'Uint16Array';
   e.emit(String.raw`
+// ── Token stream: struct-of-arrays (no per-token object, no eager text) ──
+// tkK = type kind, tkT = literal kind, tkOff/tkEnd = source span, tkFl = stamp bits
+// (1 newlineBefore, 2 commentBefore, 4 multilineFlowBefore). Token text is materialized
+// only when a CST leaf is built. The arrays persist across parses (pointer-free, no
+// write-barrier or pinning cost) and grow by doubling.
+let tkK = new ${K_ARR}(4096);
+let tkT = new ${T_ARR}(4096);
+let tkOff = new Int32Array(4096);
+let tkEnd = new Int32Array(4096);
+let tkFl = new Uint8Array(4096);
+let tkCap = 4096;
+let tokN = 0;
+let src = '';
+${e.soa ? '' : 'let tkText = [];   // fallback-lexer text column (synthetic tokens are not source spans)'}
+function growTok() {
+  tkCap *= 2;
+  const k = new ${K_ARR}(tkCap); k.set(tkK); tkK = k;
+  const t = new ${T_ARR}(tkCap); t.set(tkT); tkT = t;
+  const o = new Int32Array(tkCap); o.set(tkOff); tkOff = o;
+  const e2 = new Int32Array(tkCap); e2.set(tkEnd); tkEnd = e2;
+  const f = new Uint8Array(tkCap); f.set(tkFl); tkFl = f;
+}
+
 // ── per-parse state (module-level closures, reset by parse()) ──
-let tokens = [];
 let pos = 0;
 let maxPos = 0;
 let memoNode = [];
 let memoEnd = [];
 let parseLimit = -1;
-// cap = the exclusive peek bound: min(parseLimit-or-∞, tokens.length), maintained at the
-// parseLimit set/restore sites and the one tokens mutation (the '>' splice) — so peek is
-// a single compare and tokens[pos] below it is always a real token.
+// cap = the exclusive lookahead bound: min(parseLimit-or-∞, tokN), maintained at the
+// parseLimit set/restore sites and the one token-stream mutation (the '>' splice).
 let cap = 0;
 let currentPrattContext = null;
 let suppressNext = null;
 let suppressCur = null;
 
-function peek() {
-  if (pos >= cap) return null;
-  return tokens[pos];
-}
 function offset() {
-  const t = peek();
-  if (t) return t.offset;
-  return tokens.length > 0 ? tokens[tokens.length - 1].offset + tokens[tokens.length - 1].text.length : 0;
+  if (pos < cap) return tkOff[pos];
+  return tokN > 0 ? tkEnd[tokN - 1] : 0;
 }
 function childOffset(c) { return c.offset; }
 function childEnd(c) { return c.end; }
@@ -1305,10 +1349,11 @@ function childEnd(c) { return c.end; }
 function matchKwLit(value, kw) {
   // A kw-range t can only come from a named token (template spans never intern to a
   // keyword), so the old k >= K_NAMED_MIN guard was redundant — one int compare.
-  const tok = peek();
-  if (tok === null || tok.t !== kw) return null;
+  if (pos >= cap || tkT[pos] !== kw) return null;
+  const off = tkOff[pos];
+  const end = tkEnd[pos];
   if (++pos > maxPos) maxPos = pos;
-  return { kind: 'leaf', tokenType: '$keyword', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
+  return { kind: 'leaf', tokenType: '$keyword', text: value, offset: off, end };
 }
 // Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
 // tok.t === PU(value) is the exact-text fast path; the splice handles a longer
@@ -1316,30 +1361,43 @@ function matchKwLit(value, kw) {
 function matchPuLit(value, pu) {
   // A pu-range t can only come from a punct token, so the old k === K_PUNCT guard was
   // redundant — one int compare. The '>'-split lives only in matchPuLitGT ('>' sites).
-  const tok = peek();
-  if (tok === null || tok.t !== pu) return null;
+  if (pos >= cap || tkT[pos] !== pu) return null;
+  const off = tkOff[pos];
+  const end = tkEnd[pos];
   if (++pos > maxPos) maxPos = pos;
-  return { kind: 'leaf', tokenType: '$punct', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
+  return { kind: 'leaf', tokenType: '$punct', text: value, offset: off, end };
 }
 function matchPuLitGT(pu) {
-  const tok = peek();
-  if (tok === null) return null;
-  if (tok.t === pu) {
+  if (pos >= cap) return null;
+  const off = tkOff[pos];
+  if (tkT[pos] === pu) {
+    const end = tkEnd[pos];
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + tok.text.length };
+    return { kind: 'leaf', tokenType: '$punct', text: '>', offset: off, end };
   }
-  // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>'.
-  if (tok.k === K_PUNCT && tok.text.length > 1 && tok.text[0] === '>') {
-    const rest = tok.text.slice(1);
-    const a = mkPunct('>', tok.offset);
-    const b = mkPunct(rest, tok.offset + 1);
-    tokens.splice(pos, 1, a, b);
-    if (parseLimit < 0) cap = tokens.length;
+  // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>': shift the
+  // columns up one slot and write the '>' + rest pair in place (both born flag-less,
+  // matching the old mkPunct pair).
+  if (tkK[pos] === K_PUNCT && tkEnd[pos] - off > 1 && ${e.soa ? 'src.charCodeAt(off) === 62' : "tkText[pos].charCodeAt(0) === 62"}) {
+    const end0 = tkEnd[pos];
+    ${e.soa ? '' : 'const restText = tkText[pos].slice(1);'}
+    if (tokN === tkCap) growTok();
+    tkK.copyWithin(pos + 1, pos, tokN);
+    tkT.copyWithin(pos + 1, pos, tokN);
+    tkOff.copyWithin(pos + 1, pos, tokN);
+    tkEnd.copyWithin(pos + 1, pos, tokN);
+    tkFl.copyWithin(pos + 1, pos, tokN);
+    ${e.soa ? '' : "tkText.splice(pos, 1, '>', restText);"}
+    tkT[pos] = pu; tkEnd[pos] = off + 1; tkFl[pos] = 0;
+    tkOff[pos + 1] = off + 1; tkFl[pos + 1] = 0;
+    tkT[pos + 1] = ${e.soa ? 'LIT_PU.get(src.slice(off + 1, end0)) ?? 0' : 'LIT_PU.get(restText) ?? 0'};
+    tokN++;
+    if (parseLimit < 0) cap = tokN;
     // Token indices shifted: drop the per-rule memo arrays (recreated lazily at the new size).
     memoNode.fill(undefined);
     memoEnd.fill(undefined);
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + 1 };
+    return { kind: 'leaf', tokenType: '$punct', text: '>', offset: off, end: off + 1 };
   }
   return null;
 }
@@ -1355,43 +1413,46 @@ function matchLiteral(value) {
 // Match a token ref by its baked TYPE kind: tok.type === name  ⟺  tok.k === nameKind.
 // (No named-token kind equals K_NAMED_FALLBACK, so an unforeseen type never matches.)
 function matchTokK(name, nameKind) {
-  const tok = peek();
-  if (!tok) return null;
-  if (tok.k === nameKind) {
-    if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: name, text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
-  }
-  return null;
+  if (pos >= cap || tkK[pos] !== nameKind) return null;
+  const off = tkOff[pos];
+  const end = tkEnd[pos];
+  const text = ${TXT_OE};
+  if (++pos > maxPos) maxPos = pos;
+  return { kind: 'leaf', tokenType: name, text, offset: off, end };
 }
 
 // (First-token / FIRST-set gating is baked at emit time: per-set _qN byte-table fns
 // for rule/alt guards, and open-coded two-table loads for the LED dispatch — see
 // membershipFn / ftCond in the emitter.)
 function parseTemplateExpr() {
-  const tok = peek();
-  if (!tok) return null;
-  if (tok.type === templateTokenName) {
+  if (pos >= cap) return null;
+  const k = tkK[pos];
+  if (k === K_TPL_TOKEN) {
+    const off = tkOff[pos]; const end = tkEnd[pos]; const text = ${TXT_OE};
     if (++pos > maxPos) maxPos = pos;
-    return { kind: 'leaf', tokenType: templateTokenName, text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
+    return { kind: 'leaf', tokenType: templateTokenName, text, offset: off, end };
   }
-  if (tok.type === '$templateHead') {
+  if (k === K_TEMPLATE_HEAD) {
     const children = [];
-    if (++pos > maxPos) maxPos = pos;
-    children.push({ kind: 'leaf', tokenType: '$templateHead', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length });
+    { const off = tkOff[pos]; const end = tkEnd[pos]; const text = ${TXT_OE};
+      if (++pos > maxPos) maxPos = pos;
+      children.push({ kind: 'leaf', tokenType: '$templateHead', text, offset: off, end }); }
     const interpRule = currentPrattContext ?? EXPR_RULE;
     while (true) {
       const exprNode = RULES[interpRule]();
       if (exprNode) children.push(exprNode);
-      const next = peek();
-      if (!next) break;
-      if (next.type === '$templateMiddle') {
+      if (pos >= cap) break;
+      const nk = tkK[pos];
+      if (nk === K_TEMPLATE_MIDDLE) {
+        const off = tkOff[pos]; const end = tkEnd[pos]; const text = ${TXT_OE};
         if (++pos > maxPos) maxPos = pos;
-        children.push({ kind: 'leaf', tokenType: '$templateMiddle', text: next.text, offset: next.offset, end: next.offset + next.text.length });
+        children.push({ kind: 'leaf', tokenType: '$templateMiddle', text, offset: off, end });
         continue;
       }
-      if (next.type === '$templateTail') {
+      if (nk === K_TEMPLATE_TAIL) {
+        const off = tkOff[pos]; const end = tkEnd[pos]; const text = ${TXT_OE};
         if (++pos > maxPos) maxPos = pos;
-        children.push({ kind: 'leaf', tokenType: '$templateTail', text: next.text, offset: next.offset, end: next.offset + next.text.length });
+        children.push({ kind: 'leaf', tokenType: '$templateTail', text, offset: off, end });
         break;
       }
       break;
@@ -1426,7 +1487,6 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
   e.emit(`function ${ruleFn}() {`);
   e.emit(`  const saved = pos;`);
   e.emit(`  let bestNode = null; let bestPos = saved;`);
-  e.emit(`  const startTok = tokens[saved] ?? null;`);
   const dispatch = e.altMaskDispatch(alts, '_am');
   if (dispatch) e.emit(`  ${dispatch.maskInit}`);
   alts.forEach((alt, i) => {
@@ -1462,7 +1522,6 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   e.emit(`function ${ruleFn}_lr(_minBp) {`);
   e.emit(`  const saved = pos;`);
   e.emit(`  let node = null; let bestAtomPos = saved;`);
-  e.emit(`  const startTok = tokens[saved] ?? null;`);
   const atomDispatch = e.altMaskDispatch(atoms, '_am');
   if (atomDispatch) e.emit(`  ${atomDispatch.maskInit}`);
   atoms.forEach((atom, i) => {
@@ -1517,7 +1576,6 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`function ${ruleFn}_pratt(minBp) {`);
   e.emit(`  const saved = pos;`);
   e.emit(`  let lhs = null; let bestNudPos = saved;`);
-  e.emit(`  const startTok = tokens[saved] ?? null;`);
   // NUD loop.
   const nudDispatch = e.altMaskDispatch(nuds, '_am');
   if (nudDispatch) e.emit(`  ${nudDispatch.maskInit}`);
@@ -1528,16 +1586,16 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     e.emit(`    pos = saved;`);
     if (items[0]?.type === 'prefix') {
       // prefix $ pattern: identical to parsePratt's prefix branch.
-      e.emit(`    { const tok = peek();`);
-      e.emit(`      if (tok) {`);
-      e.emit(`        const info = PREFIX_BY_T[tok.t];`);
-      e.emit(`        if (info) {`);
-      e.emit(`          if (++pos > maxPos) maxPos = pos;`);
-      e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };`);
-      e.emit(`          const rhs = ${ruleFn}_pratt(info.rbp);`);
-      e.emit(`          if (rhs && pos > bestNudPos) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end }; bestNudPos = pos; }`);
-      e.emit(`        }`);
-      e.emit(`      } }`);
+      e.emit(`    if (pos < cap) {`);
+      e.emit(`      const info = PREFIX_BY_T[tkT[pos]];`);
+      e.emit(`      if (info) {`);
+      e.emit(`        const _o = tkOff[pos]; const _e = tkEnd[pos]; const _tx = ${e.textAt('pos')};`);
+      e.emit(`        if (++pos > maxPos) maxPos = pos;`);
+      e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', text: _tx, offset: _o, end: _e };`);
+      e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
+      e.emit(`        if (rhs && pos > bestNudPos) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end }; bestNudPos = pos; }`);
+      e.emit(`      }`);
+      e.emit(`    }`);
     } else {
       e.emit(`    const children = nud_${sn}_${i}();`);
       e.emit(`    if (children !== null && pos > bestNudPos) {`);
@@ -1553,8 +1611,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`  if (!lhs) { pos = saved; return null; }`);
   e.emit(`  let tailClosed = false;`);
   e.emit(`  while (true) {`);
-  e.emit(`    const tok = peek();`);
-  e.emit(`    if (!tok) break;`);
+  e.emit(`    if (pos >= cap) break;`);
   e.emit(`    const ledSaved = pos;`);
   e.emit(`    let matched = false;`);
   // Non-op LED loop. The shared `maxBp > minBp` is hoisted out of the per-led conds,
@@ -1562,7 +1619,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   const realLeds = leds.map((led, i) => ({ led, i }))
     .filter(({ led }) => led.items[0]?.type !== 'op' && led.items[0]?.type !== 'postfix');
   if (realLeds.length > 0) {
-    const ledMask = e.ftMaskDispatch(realLeds.map(({ i }) => meta.first[i]), '_lm', 'tok');
+    const ledMask = e.ftMaskDispatch(realLeds.map(({ i }) => meta.first[i]), '_lm', 'pos');
     e.emit(`    if (maxBp > minBp) {`);
     if (ledMask) e.emit(`    ${ledMask.maskInit}`);
     realLeds.forEach(({ led, i }, j) => {
@@ -1573,7 +1630,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       if (firstLit !== null) conds.push(`!(suppressCur && suppressCur.has(${J(firstLit)}))`);
       if (ledMask) conds.push(ledMask.bit(j));
       else {
-        const ftc = e.ftCond(meta.first[i], 'tok');   // tok is non-null here (the loop breaks on !tok above)
+        const ftc = e.ftCond(meta.first[i], 'pos');   // pos < cap here (the loop breaks above)
         if (ftc) conds.push(ftc);
       }
       e.emit(`    // led ${i}`);
@@ -1593,23 +1650,26 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     e.emit(`    }`);
   }
   e.emit(`    if (matched) continue;`);
-  // Operator LED ($ op $ / postfix), copied verbatim.
-  e.emit(`    const info = OP_BY_T[tok.t];`);
+  // Operator LED ($ op $ / postfix), copied verbatim. The no-unary-LHS check is a byte
+  // table over t (a token's text equals an op value iff its t-int matches — vocabulary).
+  e.emit(`    const info = OP_BY_T[tkT[pos]];`);
   e.emit(`    if (info && info.lbp > minBp) {`);
   e.emit(`      if (info.position === 'postfix') {`);
   e.emit(`        if (!tailClosed) {`);
+  e.emit(`          const _o = tkOff[pos]; const _e = tkEnd[pos]; const _tx = ${e.textAt('pos')};`);
   e.emit(`          if (++pos > maxPos) maxPos = pos;`);
-  e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };`);
+  e.emit(`          const opLeaf = { kind: 'leaf', tokenType: '$operator', text: _tx, offset: _o, end: _e };`);
   e.emit(`          lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };`);
   e.emit(`          tailClosed = true; matched = true;`);
   e.emit(`        }`);
   e.emit(`      } else {`);
-  e.emit(`        if (noUnaryLhsOps.has(tok.text) && lhs.kind === 'node') {`);
+  e.emit(`        if (NOUNARY_T[tkT[pos]] !== 0 && lhs.kind === 'node') {`);
   e.emit(`          const head = lhs.children[0];`);
   e.emit(`          if (head && head.kind === 'leaf' && head.tokenType === '$operator' && prefixOps.has(head.text) && !postfixOpValues.has(head.text)) { return null; }`);
   e.emit(`        }`);
+  e.emit(`        const _o = tkOff[pos]; const _e = tkEnd[pos]; const _tx = ${e.textAt('pos')};`);
   e.emit(`        if (++pos > maxPos) maxPos = pos;`);
-  e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };`);
+  e.emit(`        const opLeaf = { kind: 'leaf', tokenType: '$operator', text: _tx, offset: _o, end: _e };`);
   e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
   e.emit(`        if (rhs) { lhs = { kind: 'node', rule: ${J(rule.name)}, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end }; matched = true; }`);
   e.emit(`        else { pos = ledSaved; }`);
@@ -1670,19 +1730,20 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
   e.emit(`  if (!operand) { pos = saved; return null; }`);
   e.emit(`  const greedyEnd = pos;`);
   e.emit(`  if (${e.matchLiteralCall(info.sepLit)}) { pos = saved; return null; }`);
+  const pu = (lit: string) => a.symtab.puLitKind.get(lit) ?? -1;
   e.emit(`  let depth = 0; const candidates = [];`);
   e.emit(`  for (let i = afterOpen; i < greedyEnd; i++) {`);
-  e.emit(`    const t = tokens[i];`);
-  e.emit(`    if (t.type !== '') continue;`);
-  e.emit(`    if (t.text === '(' || t.text === '[' || t.text === '{') depth++;`);
-  e.emit(`    else if (t.text === ')' || t.text === ']' || t.text === '}') depth--;`);
-  e.emit(`    else if (depth === 0 && t.text === ${J(info.sepLit)}) candidates.push(i);`);
+  e.emit(`    if (tkK[i] !== K_PUNCT) continue;`);
+  e.emit(`    const t = tkT[i];`);
+  e.emit(`    if (t === ${pu('(')} || t === ${pu('[')} || t === ${pu('{')}) depth++;`);
+  e.emit(`    else if (t === ${pu(')')} || t === ${pu(']')} || t === ${pu('}')}) depth--;`);
+  e.emit(`    else if (depth === 0 && t === ${a.symtab.classifyKey(info.sepLit).t}) candidates.push(i);`);
   e.emit(`  }`);
   e.emit(`  for (const sepIdx of candidates) {`);
   e.emit(`    pos = afterOpen;`);
   e.emit(`    const prevLimit = parseLimit; parseLimit = sepIdx; cap = sepIdx;`);
   e.emit(`    const reOperand = ${ruleFn}();`);
-  e.emit(`    parseLimit = prevLimit; cap = prevLimit >= 0 ? prevLimit : tokens.length;`);
+  e.emit(`    parseLimit = prevLimit; cap = prevLimit >= 0 ? prevLimit : tokN;`);
   e.emit(`    if (!reOperand || pos !== sepIdx) continue;`);
   e.emit(`    const sepLeaf = ${e.matchLiteralCall(info.sepLit)};`);
   e.emit(`    if (!sepLeaf) continue;`);
@@ -1732,8 +1793,8 @@ function parseRuleEntry(idx, name, core) {
   }
   if (!mySup && !capped) {
     if (me === undefined) {
-      me = new Array(tokens.length + 1);
-      mn = new Array(tokens.length + 1);
+      me = new Array(tokN + 1);
+      mn = new Array(tokN + 1);
       memoEnd[idx] = me;
       memoNode[idx] = mn;
     }
@@ -1743,37 +1804,67 @@ function parseRuleEntry(idx, name, core) {
   return result;
 }
 
+// Token text at an arbitrary index (cold paths: errors, the tokenAt debug view).
+function tokTextAt(i) {
+  return ${e.soa ? 'src.slice(tkOff[i], tkEnd[i])' : 'tkText[i]'};
+}
+// The k → type-name inverse, for reconstructing a token object (tokenAt).
+const K_NAMES = [];
+for (const [n, k] of TYPE_KIND) K_NAMES[k] = n;
+// A per-token object view over the columns (gates / debugging — the parser never builds these).
+export function tokenAt(i) {
+  return {
+    type: K_NAMES[tkK[i]] ?? '',
+    text: tokTextAt(i),
+    offset: tkOff[i],
+    k: tkK[i],
+    t: tkT[i],
+    newlineBefore: (tkFl[i] & 1) !== 0,
+    commentBefore: (tkFl[i] & 2) !== 0,
+    multilineFlowBefore: (tkFl[i] & 4) !== 0,
+  };
+}
+
 export function parse(source, entryRule) {
-  tokens = tokenize(source);
+${e.soa ? `  tokenize(source);` : String.raw`  src = source;
+  const _toks = tokenize(source);
+  const _n = _toks.length;
+  while (tkCap < _n + 1) growTok();
+  tkText.length = 0;
+  for (let _i = 0; _i < _n; _i++) {
+    const _t = _toks[_i];
+    tkK[_i] = _t.k; tkT[_i] = _t.t; tkOff[_i] = _t.offset; tkEnd[_i] = _t.offset + _t.text.length;
+    tkFl[_i] = (_t.newlineBefore ? 1 : 0) | (_t.commentBefore ? 2 : 0) | (_t.multilineFlowBefore ? 4 : 0);
+    tkText[_i] = _t.text;
+  }
+  tokN = _n;`}
   pos = 0;
   maxPos = 0;
   memoNode = new Array(MEMO_RULES);
   memoEnd = new Array(MEMO_RULES);
   parseLimit = -1;
-  cap = tokens.length;
+  cap = tokN;
   currentPrattContext = null;
   suppressNext = null;
   suppressCur = null;
 
   const entry = entryRule ?? ENTRY;
-  if (tokens.length === 0) {
+  if (tokN === 0) {
     return { kind: 'node', rule: entry, children: [], offset: 0, end: 0 };
   }
   const result = RULES[entry]();
   if (!result) {
-    const tok = peek();
-    throw new Error('Parse error at offset ' + (tok?.offset ?? 0) + ': unexpected ' + (tok ? "'" + tok.text + "'" : 'end of input') + farthest(pos));
+    const hasTok = pos < cap;
+    throw new Error('Parse error at offset ' + (hasTok ? tkOff[pos] : 0) + ': unexpected ' + (hasTok ? "'" + tokTextAt(pos) + "'" : 'end of input') + farthest(pos));
   }
-  if (pos < tokens.length) {
-    const tok = tokens[pos];
-    throw new Error('Parse error at offset ' + tok.offset + ": unexpected '" + tok.text + "' after successful parse" + farthest(pos));
+  if (pos < tokN) {
+    throw new Error('Parse error at offset ' + tkOff[pos] + ": unexpected '" + tokTextAt(pos) + "' after successful parse" + farthest(pos));
   }
   return result;
 
   function farthest(errPos) {
-    if (maxPos <= errPos || maxPos >= tokens.length) return '';
-    const tok = tokens[maxPos];
-    return ' [farthest: offset ' + tok.offset + " near '" + tok.text.slice(0, 20) + "']";
+    if (maxPos <= errPos || maxPos >= tokN) return '';
+    return ' [farthest: offset ' + tkOff[maxPos] + " near '" + tokTextAt(maxPos).slice(0, 20) + "']";
   }
 }
 

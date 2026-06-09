@@ -121,19 +121,20 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   const kIdent = identTokenName ? kOf(identTokenName) : 0;
   const tRParen = tOf(')');
   emit(``);
-  // ── Baked keyword recognizer: t-intern without hashing a fresh slice per token.
+  // ── Baked keyword recognizer over a SOURCE SPAN: t-intern with no slice and no hash.
   // Length window → first-charCode switch → per-keyword compare chains (shortest first);
-  // returns exactly LIT_KW.get(text) ?? 0 — the keyword set is enumerated completely.
-  emit(`function lexKwT(text) {`);
+  // returns exactly what LIT_KW.get(source.slice(a, b)) ?? 0 would — the keyword set is
+  // enumerated completely and keywords are pure ASCII, so charCode compares are exact.
+  emit(`function lexKwT(source, a, b) {`);
   const kwEntries = [...st.kwLitKind.entries()];
   if (kwEntries.length === 0) {
     emit(`  return 0;`);
   } else {
     const minKw = Math.min(...kwEntries.map(([k]) => k.length));
     const maxKw = Math.max(...kwEntries.map(([k]) => k.length));
-    emit(`  const n = text.length;`);
+    emit(`  const n = b - a;`);
     emit(`  if (n < ${minKw} || n > ${maxKw}) return 0;`);
-    emit(`  switch (text.charCodeAt(0)) {`);
+    emit(`  switch (source.charCodeAt(a)) {`);
     const byC0 = new Map<number, Array<[string, number]>>();
     for (const e of kwEntries) {
       const c0 = e[0].charCodeAt(0);
@@ -144,7 +145,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       emit(`    case ${c0}: // ${entries.map(([k]) => k).join(' ')}`);
       for (const [text, t] of entries.sort((a, b) => a[0].length - b[0].length)) {
         const conds = [`n === ${text.length}`];
-        for (let i = 1; i < text.length; i++) conds.push(`text.charCodeAt(${i}) === ${text.charCodeAt(i)}`);
+        for (let i = 1; i < text.length; i++) conds.push(`source.charCodeAt(a + ${i}) === ${text.charCodeAt(i)}`);
         emit(`      if (${conds.join(' && ')}) return ${t};`);
       }
       emit(`      return 0;`);
@@ -152,17 +153,6 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`    default: return 0;`);
     emit(`  }`);
   }
-  emit(`}`);
-  emit(`function lexMk(type, text, offset, k) {`);
-  emit(`  return { type, text, offset, k, t: lexKwT(text), newlineBefore: false, commentBefore: false, multilineFlowBefore: false };`);
-  emit(`}`);
-  // For tokens whose text provably can't be a keyword (first char outside every
-  // keyword's first char): the kw int is 0 by construction — no lookup.
-  emit(`function lexMk0(type, text, offset, k) {`);
-  emit(`  return { type, text, offset, k, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false };`);
-  emit(`}`);
-  emit(`function lexMkPu(text, offset, t) {`);
-  emit(`  return { type: '', text, offset, k: K_PUNCT, t, newlineBefore: false, commentBefore: false, multilineFlowBefore: false };`);
   emit(`}`);
   // identTextValid, with the per-token prefix length baked at the call site.
   emit(`function lexIdentValid(text, prefixLen) {`);
@@ -202,8 +192,13 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`}`);
   }
   emit(``);
+  // Tokens land in the parser runtime's column arrays (tkK/tkT/tkOff/tkEnd/tkFl + tokN)
+  // — no per-token object, no text slice: text is materialized from the source span only
+  // when a CST leaf is built. Flag bits: 1 = newlineBefore (the only stamp this emitted
+  // lexer ever sets; comment/multilineFlow stamps belong to fallback-only grammars).
   emit(`function tokenize(source) {`);
-  emit(`  const tokens = [];`);
+  emit(`  src = source;`);
+  emit(`  tokN = 0;`);
   emit(`  const n = source.length;`);
   emit(`  let pos = 0;`);
   emit(`  let pendingNl = false;`);
@@ -211,18 +206,23 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  let lastCloseWasParenHead = false;`);
   emit(`  const templateStack = [];`);
   emit(`  const parenHeadStack = [];`);
-  emit(`  function push(t) {`);
-  emit(`    if (pendingNl) { t.newlineBefore = true; pendingNl = false; }`);
-  emit(`    tokens.push(t);`);
+  emit(`  function tkPush(k, t, off, end) {`);
+  emit(`    if (tokN === tkCap) growTok();`);
+  emit(`    tkK[tokN] = k; tkT[tokN] = t; tkOff[tokN] = off; tkEnd[tokN] = end;`);
+  emit(`    tkFl[tokN] = pendingNl ? 1 : 0;`);
+  emit(`    pendingNl = false;`);
+  emit(`    tokN++;`);
   emit(`  }`);
   emit(`  // prevIsValue, baked: postfix-ambiguous op → its recorded position; an expression-`);
   emit(`  // head keyword or a control-head ')' is NOT a value; else division-prev type/text.`);
-  emit(`  function prevIsValue(prev) {`);
-  emit(`    if (prev === undefined) return false;`);
-  emit(`    if (LX_PFXV[prev.t] !== 0) return lastBangWasPostfix;`);
-  emit(`    if (prev.k === ${kIdent} && LX_EXPRKW[prev.t] !== 0) return false;`);
-  emit(`    if (prev.t === ${tRParen} && lastCloseWasParenHead) return false;`);
-  emit(`    return LX_DIVK[prev.k] !== 0 || LX_DIVT[prev.t] !== 0;`);
+  emit(`  function prevIsValue() {`);
+  emit(`    if (tokN === 0) return false;`);
+  emit(`    const i = tokN - 1;`);
+  emit(`    const t = tkT[i];`);
+  emit(`    if (LX_PFXV[t] !== 0) return lastBangWasPostfix;`);
+  emit(`    if (tkK[i] === ${kIdent} && LX_EXPRKW[t] !== 0) return false;`);
+  emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
+  emit(`    return LX_DIVK[tkK[i]] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
   emit(`  while (pos < n) {`);
   emit(`    const cc = source.charCodeAt(pos);`);
@@ -247,8 +247,8 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`      if (m !== null) { if (m[0].includes('\\n')) pendingNl = true; pos += m[0].length; continue; }`);
   emit(`    }`);
   if (templateToken) {
-    const mkClose = kwFirstCcs.has(tplInterpClose.charCodeAt(0)) ? 'lexMk' : 'lexMk0';
-    const mkOpen = kwFirstCcs.has(tplOpen.charCodeAt(0)) ? 'lexMk' : 'lexMk0';
+    const tplCloseT = kwFirstCcs.has(tplInterpClose.charCodeAt(0)) ? 'lexKwT(source, startPos, r.end)' : '0';
+    const tplOpenT = kwFirstCcs.has(tplOpen.charCodeAt(0)) ? 'lexKwT(source, startPos, r.end)' : '0';
     emit(`    if (templateStack.length > 0) {`);
     emit(`      if (${startsWithExpr('source', 'pos', tplInterpClose, 'cc')}) {`);
     emit(`        const depth = templateStack[templateStack.length - 1];`);
@@ -257,10 +257,10 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`          const startPos = pos;`);
     emit(`          const r = lexTplSpan(source, pos + ${tplInterpClose.length}, false);`);
     emit(`          if (r.endsWithInterp) {`);
-    emit(`            push(${mkClose}('$templateMiddle', source.slice(startPos, r.end), startPos, ${kOf('$templateMiddle')}));`);
+    emit(`            tkPush(${kOf('$templateMiddle')}, ${tplCloseT}, startPos, r.end);`);
     emit(`            templateStack.push(0);`);
     emit(`          } else {`);
-    emit(`            push(${mkClose}('$templateTail', source.slice(startPos, r.end), startPos, ${kOf('$templateTail')}));`);
+    emit(`            tkPush(${kOf('$templateTail')}, ${tplCloseT}, startPos, r.end);`);
     emit(`          }`);
     emit(`          pos = r.end;`);
     emit(`          continue;`);
@@ -271,14 +271,14 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`      }`);
     emit(`    }`);
     emit(`    if (${startsWithExpr('source', 'pos', tplOpen, 'cc')}) {`);
-    emit(`      const tagged = prevIsValue(tokens[tokens.length - 1]);`);
+    emit(`      const tagged = prevIsValue();`);
     emit(`      const startPos = pos;`);
     emit(`      const r = lexTplSpan(source, pos + ${tplOpen.length}, !tagged);`);
     emit(`      if (r.endsWithInterp) {`);
-    emit(`        push(${mkOpen}('$templateHead', source.slice(startPos, r.end), startPos, ${kOf('$templateHead')}));`);
+    emit(`        tkPush(${kOf('$templateHead')}, ${tplOpenT}, startPos, r.end);`);
     emit(`        templateStack.push(0);`);
     emit(`      } else {`);
-    emit(`        push(${mkOpen}(${J(templateToken.name)}, source.slice(startPos, r.end), startPos, ${kOf(templateToken.name)}));`);
+    emit(`        tkPush(${kOf(templateToken.name)}, ${tplOpenT}, startPos, r.end);`);
     emit(`      }`);
     emit(`      pos = r.end;`);
     emit(`      continue;`);
@@ -321,27 +321,27 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     }
     if (m.skip) {
       emit(`${ind}    if (m[0].includes('\\n')) pendingNl = true;`);
+      emit(`${ind}    pos += m[0].length;`);
     } else {
-      emit(`${ind}    push(${canBeKw(m.first) ? 'lexMk' : 'lexMk0'}(${J(m.name)}, m[0], pos, ${m.k}));`);
+      emit(`${ind}    const _e = pos + m[0].length;`);
+      emit(`${ind}    tkPush(${m.k}, ${canBeKw(m.first) ? 'lexKwT(source, pos, _e)' : '0'}, pos, _e);`);
+      emit(`${ind}    pos = _e;`);
     }
-    emit(`${ind}    pos += m[0].length;`);
     emit(`${ind}    continue;`);
     emit(`${ind}  } }`);
   };
   const emitPunct = (lit: string, ind: string) => {
     // Chars 1..len-1 already known to match when this leaf is reached via the chain below.
     if (lit === '(') {
-      emit(`${ind}{ const prev = tokens[tokens.length - 1];`);
-      emit(`${ind}  const beforePrev = tokens[tokens.length - 2];`);
-      emit(`${ind}  const isMemberName = beforePrev !== undefined && LX_MEMBER[beforePrev.t] !== 0;`);
-      emit(`${ind}  parenHeadStack.push(!isMemberName && prev !== undefined && prev.k === ${kIdent} && LX_PARENKW[prev.t] !== 0); }`);
+      emit(`${ind}{ const isMemberName = tokN >= 2 && LX_MEMBER[tkT[tokN - 2]] !== 0;`);
+      emit(`${ind}  parenHeadStack.push(!isMemberName && tokN >= 1 && tkK[tokN - 1] === ${kIdent} && LX_PARENKW[tkT[tokN - 1]] !== 0); }`);
     } else if (lit === ')') {
       emit(`${ind}lastCloseWasParenHead = parenHeadStack.pop() ?? false;`);
     }
     if (regexCtx?.postfixAfterValueTexts?.includes(lit)) {
-      emit(`${ind}lastBangWasPostfix = prevIsValue(tokens[tokens.length - 1]);`);
+      emit(`${ind}lastBangWasPostfix = prevIsValue();`);
     }
-    emit(`${ind}push(lexMkPu(${J(lit)}, pos, ${tOf(lit)}));`);
+    emit(`${ind}tkPush(K_PUNCT, ${tOf(lit)}, pos, pos + ${lit.length});`);
     emit(`${ind}pos += ${lit.length};`);
     emit(`${ind}continue;`);
   };
@@ -386,14 +386,14 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       emit(`        let c = source.charCodeAt(p);`);
       emit(`        while (${ccCond('c', lp.cont)}) { p++; c = source.charCodeAt(p); }`);
       emit(`        if (${bails.length > 0 ? `!(${bails.join(' || ')})` : 'true'}) {`);
-      emit(`          push(${canBeKw(g.ms[0].first) ? 'lexMk' : 'lexMk0'}(${J(g.ms[0].name)}, source.slice(pos, p), pos, ${g.ms[0].k}));`);
+      emit(`          tkPush(${g.ms[0].k}, ${canBeKw(g.ms[0].first) ? 'lexKwT(source, pos, p)' : '0'}, pos, p);`);
       emit(`          pos = p;`);
       emit(`          continue;`);
       emit(`        }`);
     }
     for (const m of g.ms) {
       if (m.isRegex) {
-        emit(`        if (!prevIsValue(tokens[tokens.length - 1])) {`);
+        emit(`        if (!prevIsValue()) {`);
         emitMatcherTry(m, '        ');
         emit(`        }`);
       } else {
@@ -421,17 +421,17 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`    }`);
   // Shared tail: identifier extension → Unicode identifier fallback → prefixed → error.
   if (identLike.size > 0) {
-    emit(`    {`);
-    emit(`      const prev = tokens[tokens.length - 1];`);
+    emit(`    if (tokN > 0) {`);
+    emit(`      const _li = tokN - 1;`);
     const likeKs = [...identLike].map(kOf);
-    const likeCond = likeKs.map(k => `prev.k === ${k}`).join(' || ');
-    emit(`      if (prev !== undefined && (${likeCond}) && prev.offset + prev.text.length === pos) {`);
+    const likeCond = likeKs.map(k => `tkK[_li] === ${k}`).join(' || ');
+    emit(`      if ((${likeCond}) && tkEnd[_li] === pos) {`);
     emit(`        LX_UNI_CONT.lastIndex = pos;`);
     emit(`        const cont = LX_UNI_CONT.exec(source);`);
     emit(`        if (cont !== null) {`);
-    emit(`          prev.text += cont[0];`);
-    emit(`          prev.t = lexKwT(prev.text);`);
     emit(`          pos += cont[0].length;`);
+    emit(`          tkEnd[_li] = pos;`);
+    emit(`          tkT[_li] = lexKwT(source, tkOff[_li], pos);`);
     emit(`          continue;`);
     emit(`        }`);
     emit(`      }`);
@@ -441,8 +441,9 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`    LX_UNI_IDENT.lastIndex = pos;`);
     emit(`    { const im = LX_UNI_IDENT.exec(source);`);
     emit(`      if (im !== null) {`);
-    emit(`        push(lexMk(${J(identTokenName)}, im[0], pos, ${kOf(identTokenName)}));`);
-    emit(`        pos += im[0].length;`);
+    emit(`        const _e = pos + im[0].length;`);
+    emit(`        tkPush(${kOf(identTokenName)}, lexKwT(source, pos, _e), pos, _e);`);
+    emit(`        pos = _e;`);
     emit(`        continue;`);
     emit(`      } }`);
   }
@@ -451,16 +452,16 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`      LX_UNI_IDENT.lastIndex = pos + ${pt.prefix.length};`);
     emit(`      const pm = LX_UNI_IDENT.exec(source);`);
     emit(`      if (pm !== null) {`);
-    emit(`        const text = ${J(pt.prefix)} + pm[0];`);
-    emit(`        push(${kwFirstCcs.has(pt.prefix.charCodeAt(0)) ? 'lexMk' : 'lexMk0'}(${J(pt.name)}, text, pos, ${kOf(pt.name)}));`);
-    emit(`        pos += text.length;`);
+    emit(`        const _e = pos + ${pt.prefix.length} + pm[0].length;`);
+    emit(`        tkPush(${kOf(pt.name)}, ${kwFirstCcs.has(pt.prefix.charCodeAt(0)) ? 'lexKwT(source, pos, _e)' : '0'}, pos, _e);`);
+    emit(`        pos = _e;`);
     emit(`        continue;`);
     emit(`      }`);
     emit(`    }`);
   }
   emit(`    throw new Error("Unexpected character at offset " + pos + ": '" + source[pos] + "'");`);
   emit(`  }`);
-  emit(`  return tokens;`);
+  emit(`  return tokN;`);
   emit(`}`);
   return out.join('\n');
 }

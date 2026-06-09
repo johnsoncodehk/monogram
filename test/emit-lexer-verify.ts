@@ -44,19 +44,21 @@ const files: string[] = [];
 let same = 0, diff = 0, bothThrow = 0, throwMismatch = 0;
 for (const f of files) {
   const code = readFileSync(f, 'utf8');
-  let a: any[] | null = null, b: any[] | null = null, ea: string | null = null, eb: string | null = null;
+  // The emitted tokenize fills struct-of-arrays columns and returns the count;
+  // tokenAt(i) reconstructs the per-token object view for the comparison.
+  let a: any[] | null = null, bn: number | null = null, ea: string | null = null, eb: string | null = null;
   try { a = ref.tokenize(code); } catch (e) { ea = String(e); }
-  try { b = emitted.tokenize(code); } catch (e) { eb = String(e); }
+  try { bn = emitted.tokenize(code); } catch (e) { eb = String(e); }
   if (ea !== null || eb !== null) {
     if (ea !== null && ea === eb) { bothThrow++; continue; }
     throwMismatch++;
     console.log('THROW MISMATCH', f, '\n  ref :', ea, '\n  emit:', eb);
     continue;
   }
-  if (a!.length !== b!.length) { diff++; console.log('LEN DIFF', f, a!.length, b!.length); continue; }
+  if (a!.length !== bn!) { diff++; console.log('LEN DIFF', f, a!.length, bn); continue; }
   let ok = true;
   for (let i = 0; i < a!.length; i++) {
-    const x = a![i], y = b![i];
+    const x = a![i], y = emitted.tokenAt(i);
     if (x.type !== y.type || x.text !== y.text || x.offset !== y.offset || x.k !== y.k || x.t !== y.t
         || x.newlineBefore !== y.newlineBefore || x.commentBefore !== y.commentBefore
         || x.multilineFlowBefore !== y.multilineFlowBefore) {
