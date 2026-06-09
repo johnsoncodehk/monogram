@@ -423,11 +423,61 @@ class Emitter {
     if (existing) return existing;
     const name = `m${this.helpers.size}`;
     this.helpers.set(key, name);
-    const body: string[] = [`function ${name}() {`, `  const _save = pos; const out = [];`];
-    body.push(this.matchInto(expr, 'out', `pos = _save; return null;`));
-    body.push(`  return out;`, `}`);
+    const body: string[] = [`function ${name}() {`];
+    const single = this.singleLeafBody(expr, '_save');
+    if (single) {
+      // Matcher produces exactly one child: return the one-element array literal
+      // directly, skipping the out=[] alloc + push + intermediate (these single-token
+      // / single-ref arms are the hottest in the nud/alt dispatch).
+      body.push(`  const _save = pos;`, single);
+    } else {
+      body.push(`  const _save = pos; const out = [];`);
+      body.push(this.matchInto(expr, 'out', `pos = _save; return null;`));
+      body.push(`  return out;`);
+    }
+    body.push(`}`);
     this.helperDefs.push(body.join('\n'));
     return name;
+  }
+
+  // Public wrapper so free-function emitters (emitArmNamed) can reuse the single-leaf
+  // specialization.
+  singleLeafBodyPublic(expr: RuleExpr, saveVar: string): string | null { return this.singleLeafBody(expr, saveVar); }
+
+  // If `expr` matches exactly one child (a single literal, a single non-template token
+  // ref, or a single rule ref — possibly wrapped in a transparent group / one-item seq),
+  // return a body that yields `[leaf]` directly (matchExpr contract: pos restored on
+  // failure). Else null. Byte-identical: the produced child array is the same `[x]` the
+  // out=[]/push path built. Excludes template-token refs (two-branch) and suppress-groups.
+  private singleLeafBody(expr: RuleExpr, saveVar: string): string | null {
+    const a = this.a;
+    // Unwrap transparent wrappers that don't themselves emit/consume.
+    while (true) {
+      if (expr.type === 'group' && !(expr.suppress && expr.suppress.length)) { expr = expr.body; continue; }
+      if (expr.type === 'seq') {
+        const real = expr.items.filter(it => it.type !== 'op' && it.type !== 'prefix' && it.type !== 'postfix');
+        if (real.length === 1) { expr = real[0]; continue; }
+      }
+      break;
+    }
+    const onFail = `pos = ${saveVar}; return null;`;
+    if (expr.type === 'literal') {
+      const v = this.id();
+      return `  const ${v} = ${this.matchLiteralCall(expr.value)}; if (${v} === null) { ${onFail} } return [${v}];`;
+    }
+    if (expr.type === 'ref') {
+      if (a.tokenNames.has(expr.name)) {
+        if (a.templateTokenNames.has(expr.name)) return null;   // two-branch (template) — not single-leaf
+        const lf = this.id();
+        return `  const ${lf} = ${this.matchTokenCall(expr.name)}; if (${lf} === null) { ${onFail} } return [${lf}];`;
+      }
+      // Rule ref: keep the FIRST-set guard, then the call.
+      const nd = this.id();
+      const guard = this.firstGuard(expr.name);
+      const guardLine = guard ? `  if (${guard}) { ${onFail} }\n` : '';
+      return `${guardLine}  const ${nd} = ${this.ruleFn(expr.name)}(); if (${nd} === null) { ${onFail} } return [${nd}];`;
+    }
+    return null;
   }
 
   /**
@@ -870,22 +920,31 @@ function matchTokK(name, nameKind) {
 //                          templateTokenNames.has(key) && tok.type==='$templateHead' arm)
 //   {m:1,t}   keyword     → tok.k !== K_PUNCT && tok.t === t   (tok.type !== '')
 //   {m:2,t,v} punct       → tok.k === K_PUNCT && (tok.t === t || tok.text.startsWith(v))
-function descMatchesTok(d, tok) {
-  switch (d.m) {
-    case 0: return tok.k === d.k || (d.h === 1 && tok.k === K_TEMPLATE_HEAD);
-    case 1: return tok.k !== K_PUNCT && tok.t === d.t;
-    default: return tok.k === K_PUNCT && (tok.t === d.t || tok.text.startsWith(d.v));
-  }
-}
+// The membership test is inlined at both call sites (ruleMightStartDescs / canStartFT),
+// which sit on the per-token dispatch loops — the function-call boundary dominated there.
 function ruleMightStartDescs(descs, tok) {
   if (!tok) return true;
-  for (let i = 0; i < descs.length; i++) if (descMatchesTok(descs[i], tok)) return true;
+  const k = tok.k;
+  for (let i = 0; i < descs.length; i++) {
+    const d = descs[i];
+    switch (d.m) {
+      case 0: if (k === d.k || (d.h === 1 && k === K_TEMPLATE_HEAD)) return true; break;
+      case 1: if (k !== K_PUNCT && tok.t === d.t) return true; break;
+      default: if (k === K_PUNCT && (tok.t === d.t || tok.text.startsWith(d.v))) return true;
+    }
+  }
   return false;
 }
 // canStart for a baked first-token int descriptor (the {m:…} shape above, or null).
 function canStartFT(d, tok) {
   if (!d || !tok) return true;
-  return descMatchesTok(d, tok);
+  // Inlined descMatchesTok: this sits in the per-token LED-dispatch loop.
+  const k = tok.k;
+  switch (d.m) {
+    case 0: return k === d.k || (d.h === 1 && k === K_TEMPLATE_HEAD);
+    case 1: return k !== K_PUNCT && tok.t === d.t;
+    default: return k === K_PUNCT && (tok.t === d.t || tok.text.startsWith(d.v));
+  }
 }
 
 function parseTemplateExpr() {
@@ -1150,9 +1209,15 @@ function emitArm(e: Emitter, a: ReturnType<typeof analyze>, ruleName: string, i:
 // restoring pos on failure (the matchExpr/matchSeq contract).
 function emitArmNamed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string, expr: RuleExpr) {
   e.emit(`function ${fnName}() {`);
-  e.emit(`  const _save = pos; const out = [];`);
-  e.emit(e.matchInto(expr, 'out', 'pos = _save; return null;'));
-  e.emit(`  return out;`);
+  const single = e.singleLeafBodyPublic(expr, '_save');
+  if (single) {
+    e.emit(`  const _save = pos;`);
+    e.emit(single);
+  } else {
+    e.emit(`  const _save = pos; const out = [];`);
+    e.emit(e.matchInto(expr, 'out', 'pos = _save; return null;'));
+    e.emit(`  return out;`);
+  }
   e.emit(`}`);
 }
 
