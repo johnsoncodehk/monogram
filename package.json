@@ -47,7 +47,9 @@
     "scope-gap:html": "node test/scope-gap-run.ts html",
     "scope-gap:yaml": "node test/scope-gap-run.ts yaml",
     "scope-gap:vue": "node test/scope-gap-run.ts vue",
-    "coverage:table": "node test/coverage-table.ts --write"
+    "coverage:table": "node test/coverage-table.ts --write",
+    "gap-issues": "node test/gap-issues.ts",
+    "gap-issues:dry": "node test/gap-issues.ts --dry-run"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

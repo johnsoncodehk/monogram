@@ -1,0 +1,31 @@
+# Reconcile GitHub issues from the gap ledger (KNOWN-GAPS.md → issues), idempotently.
+# Runs when the ledger CHANGES on master (a gap appeared or was fixed) and on manual dispatch.
+# The deterministic ledger is the source of truth; this only PROJECTS it: opens an issue for a new
+# gap, auto-closes the issue when its fingerprint leaves the ledger. See test/gap-issues.ts.
+name: gap-ledger-issues
+
+on:
+  push:
+    branches: [master]
+    paths: ['KNOWN-GAPS.md']
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+# Never run two reconciles at once (they'd race on the same issues).
+concurrency:
+  group: gap-ledger-issues
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: node test/gap-issues.ts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
