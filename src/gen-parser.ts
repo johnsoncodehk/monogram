@@ -1482,7 +1482,10 @@ export function createParser(grammar: CstGrammar) {
     }
   }
 
-  return { parse, tokenize, profCounts };
+  // API parity with the emitted engine's handle surface: the interpreter builds
+  // immutable object trees, so edit() is a full re-parse (no reuse, no staleness).
+  const edit = (_cst: unknown, source: string) => parse(source);
+  return { parse, edit, tokenize, profCounts };
 }
 
 // ── Helpers ──

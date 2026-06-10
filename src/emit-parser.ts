@@ -2310,7 +2310,7 @@ export const tree = {
 // Depth-first traversal threading the RED coordinates: enter/leave receive the
 // node's absolute (charBase, tokBase); leaf receives its absolute token index.
 // Call with the root only — the bases default from the root's rel fields.
-export function visit(entry, fns, charBase, tokBase) {
+function visitCore(entry, fns, charBase, tokBase) {
   if (charBase === undefined) { charBase = rootCharBase; tokBase = rootTokBase; }
   if (entry < 0) { if (fns.leaf) fns.leaf(entry, tokBase + ((~entry) >>> 2)); return; }
   if (fns.enter && fns.enter(entry, charBase, tokBase) === false) return;
@@ -2319,20 +2319,20 @@ export function visit(entry, fns, charBase, tokBase) {
   for (let i = 0; i < n; i++) {
     const e = kids[cs + i];
     if (e < 0) { if (fns.leaf) fns.leaf(e, tokBase + ((~e) >>> 2)); }
-    else visit(e, fns, charBase + kcr(entry, cs + i), tokBase + ktr(entry, cs + i));
+    else visitCore(e, fns, charBase + kcr(entry, cs + i), tokBase + ktr(entry, cs + i));
   }
   if (fns.leave) fns.leave(entry, charBase, tokBase);
 }
 // Materialize the classic object CST from a node id — a BRIDGE for tests/debugging
 // (the byte-identical gate against the interpreter), not a parse-path product.
-export function toObject(id, charBase, tokBase) {
+function toObjectCore(id, charBase, tokBase) {
   if (charBase === undefined) { charBase = rootCharBase; tokBase = rootTokBase; }
   const n = rowCount[id];
   const cs = rowStart[id];
   const children = new Array(n);
   for (let i = 0; i < n; i++) {
     const entry = kids[cs + i];
-    children[i] = entry >= 0 ? toObject(entry, charBase + kcr(id, cs + i), tokBase + ktr(id, cs + i))
+    children[i] = entry >= 0 ? toObjectCore(entry, charBase + kcr(id, cs + i), tokBase + ktr(id, cs + i))
       : { tokenType: leafTokenType(entry, tokBase), offset: toff(tokBase + ((~entry) >>> 2)), end: tend(tokBase + ((~entry) >>> 2)) };
   }
   return { rule: RULE_NAMES[rowRule[id]], children, offset: charBase, end: charBase + rowLen[id] };
@@ -2828,6 +2828,76 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
 let altK = null, altT = null, altOff = null, altEnd = null, altFl = null, altDp = null, altPd = null;
 let altCap = 0;
 let altN = 0;   // old-stream token count while a window lex runs (lexCore's resync bound)
+
+// ── Documents: the per-document state set behind the handle API ──
+// The module-level variables above are the ACTIVE REGISTER SET — the hot paths
+// never indirect through an object. A document object stores the same 51 fields;
+// activate() lazily swaps: the active doc's object may be stale while the module
+// variables are the truth, and is written back only when another doc activates.
+// Per-PARSE transients (pos/maxPos/scratch/adopt*/surg*) reset on every entry and
+// are shared safely.
+function makeDoc() {
+  return {
+    tkK: new tkK.constructor(4096), tkT: new tkT.constructor(4096),
+    tkOff: new Int32Array(4096), tkEnd: new Int32Array(4096), tkFl: new Uint8Array(4096),
+    tkDp: new Uint8Array(4096), tkPd: new Uint16Array(4096),
+    tkCap: 4096, tokN: 0, src: '', srcLenP1: 1, negFrom: 0x7fffffff,
+    rowRule: new Uint16Array(8192), rowLen: new Int32Array(8192), rowTokLen: new Int32Array(8192),
+    rowStart: new Int32Array(8192), rowCount: new Int32Array(8192), rowExt: new Int32Array(8192),
+    rowOK: new Uint8Array(8192), rowKC: new Uint8Array(8192),
+    rowNF: new Int32Array(8192).fill(0x7fffffff),
+    absChar: new Int32Array(8192), absTok: new Int32Array(8192),
+    rowCap: 8192, nodeN: 0,
+    kids: new Int32Array(16384), kidRel: new Int32Array(16384), kidTokRel: new Int32Array(16384),
+    kidCap: 16384, kidN: 0,
+    memoNode: [], memoEnd: [], memoExt: [], memoGen: [], memoGenCur: 0,
+    lastSrc: null, rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0,
+${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : ''}
+    altK: null, altT: null, altOff: null, altEnd: null, altFl: null, altDp: null, altPd: null,
+    altCap: 0, altN: 0,
+  };
+}
+function saveDoc(d) {
+  d.tkK = tkK; d.tkT = tkT; d.tkOff = tkOff; d.tkEnd = tkEnd; d.tkFl = tkFl;
+  d.tkDp = tkDp; d.tkPd = tkPd; d.tkCap = tkCap; d.tokN = tokN; d.src = src;
+  d.srcLenP1 = srcLenP1; d.negFrom = negFrom;
+  d.rowRule = rowRule; d.rowLen = rowLen; d.rowTokLen = rowTokLen; d.rowStart = rowStart;
+  d.rowCount = rowCount; d.rowExt = rowExt; d.rowOK = rowOK; d.rowKC = rowKC; d.rowNF = rowNF;
+  d.absChar = absChar; d.absTok = absTok; d.rowCap = rowCap; d.nodeN = nodeN;
+  d.kids = kids; d.kidRel = kidRel; d.kidTokRel = kidTokRel; d.kidCap = kidCap; d.kidN = kidN;
+  d.memoNode = memoNode; d.memoEnd = memoEnd; d.memoExt = memoExt; d.memoGen = memoGen;
+  d.memoGenCur = memoGenCur;
+  d.lastSrc = lastSrc; d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
+  d.lastRoot = lastRoot; d.lastRootTok = lastRootTok;
+${e.soa ? '  d.parenCachePos = parenCachePos; d.parenCacheStack = parenCacheStack;' : ''}
+  d.altK = altK; d.altT = altT; d.altOff = altOff; d.altEnd = altEnd; d.altFl = altFl;
+  d.altDp = altDp; d.altPd = altPd; d.altCap = altCap; d.altN = altN;
+}
+function loadDoc(d) {
+  tkK = d.tkK; tkT = d.tkT; tkOff = d.tkOff; tkEnd = d.tkEnd; tkFl = d.tkFl;
+  tkDp = d.tkDp; tkPd = d.tkPd; tkCap = d.tkCap; tokN = d.tokN; src = d.src;
+  srcLenP1 = d.srcLenP1; negFrom = d.negFrom;
+  rowRule = d.rowRule; rowLen = d.rowLen; rowTokLen = d.rowTokLen; rowStart = d.rowStart;
+  rowCount = d.rowCount; rowExt = d.rowExt; rowOK = d.rowOK; rowKC = d.rowKC; rowNF = d.rowNF;
+  absChar = d.absChar; absTok = d.absTok; rowCap = d.rowCap; nodeN = d.nodeN;
+  kids = d.kids; kidRel = d.kidRel; kidTokRel = d.kidTokRel; kidCap = d.kidCap; kidN = d.kidN;
+  memoNode = d.memoNode; memoEnd = d.memoEnd; memoExt = d.memoExt; memoGen = d.memoGen;
+  memoGenCur = d.memoGenCur;
+  lastSrc = d.lastSrc; rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
+  lastRoot = d.lastRoot; lastRootTok = d.lastRootTok;
+${e.soa ? '  parenCachePos = d.parenCachePos; parenCacheStack = d.parenCacheStack;' : ''}
+  altK = d.altK; altT = d.altT; altOff = d.altOff; altEnd = d.altEnd; altFl = d.altFl;
+  altDp = d.altDp; altPd = d.altPd; altCap = d.altCap; altN = d.altN;
+}
+const docDefault = makeDoc();
+let curDoc = docDefault;
+loadDoc(docDefault);
+function activate(d) {
+  if (d === curDoc) return;
+  saveDoc(curDoc);
+  loadDoc(d);
+  curDoc = d;
+}
 function swapBuffers() {
   let x;
   x = tkK; tkK = altK; altK = x;
@@ -2841,7 +2911,7 @@ function swapBuffers() {
 }
 ${e.soa ? '' : 'let altText = [];'}
 
-export function parse(source, entryRule) {
+function parseCore(source, entryRule) {
   lastSrc = null;
   adoptRoot = -1;
   adoptRunPos = -1;
@@ -2877,8 +2947,8 @@ export function parse(source, entryRule) {
 // until then. Lexing is FULL-FILE by design: the lexer carries cross-token state
 // (template nesting, regex context, markup modes), full lexing is a small share of a
 // parse, and the diff is what localizes the damage — not the lexer.
-export function parseEdited(source, entryRule, edits) {
-  if (lastSrc === null) return parse(source, entryRule);
+function editCore(source, entryRule, edits) {
+  if (lastSrc === null) return parseCore(source, entryRule);
   const oSrc = lastSrc;
   lastSrc = null;
 ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
@@ -3044,6 +3114,48 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
 }
 
 export { tokenize };
-export function createParser() { return { parse, parseEdited, tree, visit, toObject, tokenize }; }
+// ── Module-level API: the DEFAULT document (one shared session; tokenize and the
+// raw tree/tokenAt views read the ACTIVE doc — they are gate/debug surfaces) ──
+export function parse(source, entryRule) { activate(docDefault); return parseCore(source, entryRule); }
+export function parseEdited(source, entryRule, edits) { activate(docDefault); return editCore(source, entryRule, edits); }
+export function visit(entry, fns, charBase, tokBase) { activate(docDefault); return visitCore(entry, fns, charBase, tokBase); }
+export function toObject(id, charBase, tokBase) { activate(docDefault); return toObjectCore(id, charBase, tokBase); }
+// ── Handle API: explicit trees over per-instance documents ──
+// const p = createParser(); const cst = p.parse(text); const cst2 = p.edit(cst, next[, edits]);
+// Trees are edited IN PLACE (node surgery): an edit invalidates every earlier handle
+// of this parser — using one throws instead of silently reading a mutated tree. A
+// REJECTED edit (parse error) leaves the previous handle valid; the next edit falls
+// back to a full re-parse internally.
+export function createParser() {
+  const d = makeDoc();
+  let gen = 0;
+  let entryUsed;
+  const chk = (cst) => {
+    if (cst === null || cst === undefined || cst.d !== d) throw new Error('foreign tree handle: it belongs to another parser instance');
+    if (cst.gen !== gen) throw new Error('stale tree handle: trees are edited in place - use the handle returned by the latest parse/edit');
+  };
+  const view = {};
+  for (const k of Object.keys(tree)) {
+    const f = tree[k];
+    view[k] = (a, b) => { activate(d); return f(a, b); };
+  }
+  return {
+    parse(source, entryRule) {
+      activate(d);
+      entryUsed = entryRule;
+      const root = parseCore(source, entryRule);
+      return { d, gen: ++gen, root };
+    },
+    edit(cst, source, edits) {
+      chk(cst);
+      activate(d);
+      const root = editCore(source, entryUsed, edits);
+      return { d, gen: ++gen, root };
+    },
+    visit(cst, fns) { chk(cst); activate(d); return visitCore(cst.root, fns); },
+    toObject(cst) { chk(cst); activate(d); return toObjectCore(cst.root); },
+    tree: view,
+  };
+}
 `);
 }

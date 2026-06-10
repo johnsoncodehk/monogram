@@ -516,7 +516,11 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// head (always sound, degrades to a full re-lex).`);
   emit(`function findRestart(cs) {`);
   emit(`  let lo = 0, hi = tokN;`);
-  emit(`  while (lo < hi) { const mid = (lo + hi) >> 1; if (tend(mid) <= cs) lo = mid + 1; else hi = mid; }`);
+  // STRICTLY before the damage: a token ENDING exactly at cs can be EXTENDED by
+  // the edit under maximal munch ('b' + inserted 'x' = 'bx'; '=' + '=' = '==';
+  // deleting the gap glues neighbours) and the anchor itself is never re-lexed —
+  // with < the abutting token falls inside the window and the merge is re-derived.
+  emit(`  while (lo < hi) { const mid = (lo + hi) >> 1; if (tend(mid) < cs) lo = mid + 1; else hi = mid; }`);
   emit(`  for (let b = lo - 1; b >= 0; b--) {`);
   emit(`    // template depth must be zero (interp brace counters are not reconstructable),`);
   emit(`    // and the anchor token must leave no cross-token lexer flag live: not a`);

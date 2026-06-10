@@ -13,12 +13,18 @@ const grammar = (await import('../typescript.ts')).default;
 const emPath = '/tmp/emitted-incremental.mjs';
 writeFileSync(emPath, emitParser(grammar));
 type Edit = { start: number; oldEnd: number; newEnd: number };
+type Cst = { root: number };
+type Parser = {
+  parse(s: string): Cst;
+  edit(cst: Cst, s: string, edits?: Edit[]): Cst;
+  toObject(cst: Cst): unknown;
+};
 type Em = {
   parse(s: string): number;
-  parseEdited(s: string, entryRule?: string, edits?: Edit[]): number;
   toObject(id: number): unknown;
+  createParser(): Parser;
 };
-const session = (await import(emPath + '?session=' + process.pid)) as Em;
+const session = ((await import(emPath + '?session=' + process.pid)) as Em).createParser();
 const fresh = (await import(emPath + '?fresh=' + process.pid)) as Em;
 
 // Deterministic LCG so failures replay.
@@ -71,13 +77,47 @@ const FILES = [
 ].filter(existsSync);
 const STEPS = 30;
 
+// ── Adversarial boundary edits (deterministic) ──
+// The fixed-seed random sessions MISSED the restart-anchor abutment hole (a token
+// ending exactly at the damage start can be EXTENDED under maximal munch — 'b'+'x'
+// = 'bx', '='+'=' = '==', deleting a gap glues neighbours). These cases pin the
+// strict-< restart anchor; every one must match fresh (tree or reject) exactly.
+const GLUE: Array<[string, string]> = [
+  ['const a = 1;\nconst b = 2;\n', 'const a = 1;\nconst bx = 2;\n'],
+  ['let a = b; let c = 1;\n', 'let a = b1; let c = 1;\n'],
+  ['if (a = b) { f(); }\n', 'if (a == b) { f(); }\n'],
+  ['const x = a b;\n', 'const x = ab;\n'],
+  ['const q = w / 2;\n', 'const q = w /= 2;\n'],
+  ['const t = a + b;\n', 'const t = a ++ b;\n'],
+  ['const u = x<y>(z);\n', 'const u = x<y>>(z);\n'],
+  ['f(a, b);\ng(c);\n', 'f(a, bc);\ng(c);\n'],
+];
+
 let steps = 0, equal = 0, bothReject = 0, mismatch = 0;
 let tInc = 0, tFresh = 0;
 const failures: string[] = [];
 
+for (const [base, edited] of GLUE) {
+  steps++;
+  let c0 = session.parse(base);
+  let fe: string | null = null, ie: string | null = null;
+  let fr = -1, ic: Cst | null = null;
+  try { fr = fresh.parse(edited); } catch (e) { fe = (e as Error).message; }
+  try { ic = session.edit(c0, edited); } catch (e) { ie = (e as Error).message; }
+  if (fe !== null || ie !== null) {
+    if ((fe === null) !== (ie === null)) { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: fresh ${fe ? 'reject' : 'accept'} / incremental ${ie ? 'reject' : 'accept'}`); }
+    else bothReject++;
+    continue;
+  }
+  const a = JSON.stringify(fresh.toObject(fr));
+  const b = JSON.stringify(session.toObject(ic!));
+  if (a === b) equal++;
+  else { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: tree diverges`); }
+}
+
 for (const f of FILES) {
   let text = readFileSync(f, 'utf-8');
-  session.parse(text);   // open the session
+  let cst = session.parse(text);   // open the session
   for (let k = 0; k < STEPS; k++) {
     const { next, edit } = mutate(text);
     steps++;
@@ -85,22 +125,23 @@ for (const f of FILES) {
     const tf0 = performance.now();
     try { freshRoot = fresh.parse(next); } catch (e) { freshErr = (e as Error).message; }
     const tf1 = performance.now();
-    let incRoot = -1, incErr: string | null = null;
+    let incCst: Cst | null = null, incErr: string | null = null;
     const useProtocol = k % 2 === 1;   // alternate: edits protocol / char-diff fallback
     const ti0 = performance.now();
-    try { incRoot = session.parseEdited(next, undefined, useProtocol ? [edit] : undefined); } catch (e) { incErr = (e as Error).message; }
+    try { incCst = session.edit(cst, next, useProtocol ? [edit] : undefined); } catch (e) { incErr = (e as Error).message; }
     const ti1 = performance.now();
     if (freshErr !== null || incErr !== null) {
       if ((freshErr === null) !== (incErr === null)) {
         mismatch++;
         if (failures.length < 5) failures.push(`${f.split('/').pop()} step ${k}: fresh ${freshErr ? 'reject' : 'accept'} / incremental ${incErr ? 'reject' : 'accept'}\n    fresh: ${freshErr ?? '-'}\n    inc:   ${incErr ?? '-'}`);
       } else bothReject++;
-      // rejected text: do not advance the session text (the session reset itself)
+      // rejected text: the handle stays valid; the session does not advance
       continue;
     }
+    cst = incCst!;
     tFresh += tf1 - tf0; tInc += ti1 - ti0;
     const a = JSON.stringify(fresh.toObject(freshRoot));
-    const b = JSON.stringify(session.toObject(incRoot));
+    const b = JSON.stringify(session.toObject(cst));
     if (a === b) equal++;
     else {
       mismatch++;
