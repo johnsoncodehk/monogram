@@ -1360,13 +1360,24 @@ function growTok() {
 // Rows store ABSOLUTE offsets in this phase (the green {rel,len} re-base is the
 // incremental round's move; flipping the stored form regenerates matchers only).
 let rowRule = new Uint16Array(8192);    // rule id (index into RULE_NAMES)
-let rowOff = new Int32Array(8192);      // absolute start offset
 let rowLen = new Int32Array(8192);
+let rowTokLen = new Int32Array(8192);   // subtree token count
 let rowStart = new Int32Array(8192);    // first index into kids
 let rowCount = new Int32Array(8192);
+// transient BUILD coordinates (absolute), valid for rows completed in the current
+// parse and REFRESHED at memo-hit time for reused roots — parents read them at
+// finishNode to write the children's relative fields; never part of the green tree.
+let absChar = new Int32Array(8192);
+let absTok = new Int32Array(8192);
 let rowCap = 8192;
 let nodeN = 0;
 let kids = new Int32Array(16384);
+// A node child's RELATIVE coordinates live in the PARENT's kids stream (parallel to
+// kids), not on the child row: a memo-reused subtree can be a child of several
+// longest-match CANDIDATES, and a losing candidate completing after the winner would
+// clobber child-side rel fields. The parent owns its edges; rows own only lengths.
+let kidRel = new Int32Array(16384);
+let kidTokRel = new Int32Array(16384);
 let kidCap = 16384;
 let kidN = 0;
 // Scratch: completed-but-unattached children of in-progress arms. Every
@@ -1377,21 +1388,27 @@ let scn = 0;
 function growRows() {
   rowCap *= 2;
   const r = new Uint16Array(rowCap); r.set(rowRule); rowRule = r;
-  const o = new Int32Array(rowCap); o.set(rowOff); rowOff = o;
   const l = new Int32Array(rowCap); l.set(rowLen); rowLen = l;
+  const tl = new Int32Array(rowCap); tl.set(rowTokLen); rowTokLen = tl;
   const s = new Int32Array(rowCap); s.set(rowStart); rowStart = s;
   const c = new Int32Array(rowCap); c.set(rowCount); rowCount = c;
+  const ac = new Int32Array(rowCap); ac.set(absChar); absChar = ac;
+  const at = new Int32Array(rowCap); at.set(absTok); absTok = at;
 }
 function growKids(n) {
   while (kidN + n > kidCap) kidCap *= 2;
   const k = new Int32Array(kidCap); k.set(kids.subarray(0, kidN)); kids = k;
+  const r = new Int32Array(kidCap); r.set(kidRel.subarray(0, kidN)); kidRel = r;
+  const t = new Int32Array(kidCap); t.set(kidTokRel.subarray(0, kidN)); kidTokRel = t;
 }
 function scPush(e) {
   if (scn === scCap) { scCap *= 2; const s = new Int32Array(scCap); s.set(sc); sc = s; }
   sc[scn++] = e;
 }
-function entryOff(e) { return e >= 0 ? rowOff[e] : tkOff[(~e) >>> 2]; }
-function entryEnd(e) { return e >= 0 ? rowOff[e] + rowLen[e] : tkEnd[(~e) >>> 2]; }
+function entryOff(e) { return e >= 0 ? absChar[e] : tkOff[(~e) >>> 2]; }
+function entryEnd(e) { return e >= 0 ? absChar[e] + rowLen[e] : tkEnd[(~e) >>> 2]; }
+function entryTok(e) { return e >= 0 ? absTok[e] : (~e) >>> 2; }
+function entryTokEnd(e) { return e >= 0 ? absTok[e] + rowTokLen[e] : ((~e) >>> 2) + 1; }
 // Complete a node whose children are scratch[mark..scn): copy them into kids, write
 // the row, truncate scratch, return the id. Empty children = a zero-width node
 // at the current token (the old offset() rule).
@@ -1399,20 +1416,37 @@ function finishNode(rid, mark) {
   const n = scn - mark;
   if (nodeN === rowCap) growRows();
   const id = nodeN++;
-  let myOff, myEnd;
+  let myOff, myEnd, myTok, myTokEnd;
   if (n > 0) {
     if (kidN + n > kidCap) growKids(n);
     const ks = kidN;
-    for (let i = 0; i < n; i++) kids[ks + i] = sc[mark + i];
-    kidN += n;
-    rowStart[id] = ks;
     myOff = entryOff(sc[mark]);
     myEnd = entryEnd(sc[scn - 1]);
+    myTok = entryTok(sc[mark]);
+    myTokEnd = entryTokEnd(sc[scn - 1]);
+    // GREEN conversion: scratch entries carry ABSOLUTE coordinates; the kids span is
+    // written position-independent — a leaf becomes node-relative-token-encoded, a
+    // child node gets its rel fields written here (its own row knows only lengths).
+    for (let i = 0; i < n; i++) {
+      const e = sc[mark + i];
+      if (e < 0) {
+        kids[ks + i] = ~(((((~e) >>> 2) - myTok) << 2) | ((~e) & 3));
+      } else {
+        kids[ks + i] = e;
+        kidRel[ks + i] = absChar[e] - myOff;
+        kidTokRel[ks + i] = absTok[e] - myTok;
+      }
+    }
+    kidN += n;
+    rowStart[id] = ks;
   } else {
     rowStart[id] = kidN;
     myOff = offset(); myEnd = myOff;
+    myTok = pos; myTokEnd = pos;
   }
-  rowRule[id] = rid; rowOff[id] = myOff; rowLen[id] = myEnd - myOff; rowCount[id] = n;
+  rowRule[id] = rid; rowLen[id] = myEnd - myOff; rowCount[id] = n;
+  rowTokLen[id] = myTokEnd - myTok;
+  absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
   return id;
 }
@@ -1423,13 +1457,28 @@ function finishWrap(rid, lhsId, mark) {
   const id = nodeN++;
   if (kidN + n + 1 > kidCap) growKids(n + 1);
   const ks = kidN;
+  const myOff = absChar[lhsId];
+  const myTok = absTok[lhsId];
+  const myEnd = n > 0 ? entryEnd(sc[scn - 1]) : myOff + rowLen[lhsId];
+  const myTokEnd = n > 0 ? entryTokEnd(sc[scn - 1]) : myTok + rowTokLen[lhsId];
   kids[ks] = lhsId;
-  for (let i = 0; i < n; i++) kids[ks + 1 + i] = sc[mark + i];
+  kidRel[ks] = 0;
+  kidTokRel[ks] = 0;
+  for (let i = 0; i < n; i++) {
+    const e = sc[mark + i];
+    if (e < 0) {
+      kids[ks + 1 + i] = ~(((((~e) >>> 2) - myTok) << 2) | ((~e) & 3));
+    } else {
+      kids[ks + 1 + i] = e;
+      kidRel[ks + 1 + i] = absChar[e] - myOff;
+      kidTokRel[ks + 1 + i] = absTok[e] - myTok;
+    }
+  }
   kidN += n + 1;
-  const myOff = rowOff[lhsId];
-  const myEnd = n > 0 ? entryEnd(sc[scn - 1]) : rowOff[lhsId] + rowLen[lhsId];
-  rowRule[id] = rid; rowOff[id] = myOff; rowLen[id] = myEnd - myOff;
+  rowRule[id] = rid; rowLen[id] = myEnd - myOff;
   rowStart[id] = ks; rowCount[id] = n + 1;
+  rowTokLen[id] = myTokEnd - myTok;
+  absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
   return id;
 }
@@ -1510,18 +1559,9 @@ function matchPuLitGT(pu) {
     memoNode.fill(undefined);
     memoEnd.fill(undefined);
     memoExt.fill(undefined);
-    // Leaf entries reference tokens BY INDEX, so the splice's +1 shift must be applied
-    // to every committed/scratch entry past the split point. (Object trees were immune —
-    // leaves copied their spans; the arena trades that copy for this rare O(kidN) pass.
-    // Entries AT pos can't exist: that token is being consumed right now.)
-    for (let i = 0; i < kidN; i++) {
-      const ke = kids[i];
-      if (ke < 0 && ((~ke) >>> 2) > pos) kids[i] = ke - 4;
-    }
-    for (let i = 0; i < scn; i++) {
-      const se = sc[i];
-      if (se < 0 && ((~se) >>> 2) > pos) sc[i] = se - 4;
-    }
+    // GREEN tree: no kids/scratch fixup — every completed row and scratch entry lies
+    // wholly BEFORE the splice point (token pos is being consumed right now), and the
+    // carried memo was just cleared, so nothing reachable references shifted indices.
     scPush(~(pos << 2));
     if (++pos > maxPos) maxPos = pos;
     return true;
@@ -1821,7 +1861,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`        if (NOUNARY_T[tkT[pos]] !== 0 && rowCount[lhs] > 0) {`);
   e.emit(`          const _h = kids[rowStart[lhs]];`);
   e.emit(`          if (_h < 0 && ((~_h) & 3) === 2) {`);
-  e.emit(`            const _ht = (~_h) >>> 2;`);
+  e.emit(`            const _ht = absTok[lhs] + ((~_h) >>> 2);`);
   e.emit(`            const _htext = ${e.soa ? 'src.slice(tkOff[_ht], tkEnd[_ht])' : 'tkText[_ht]'};`);
   e.emit(`            if (prefixOps.has(_htext) && !postfixOpValues.has(_htext)) { return -1; }`);
   e.emit(`          }`);
@@ -1972,7 +2012,15 @@ function parseRuleEntry(idx, name, core) {
       const ex = mx[start];
       if (ex > maxPos) maxPos = ex;
       const id = mn[start];
-      if (id >= 0) { scPush(id); return true; }
+      if (id >= 0) {
+        // refresh the reused root's transient BUILD coordinates to the current stream
+        // (its green internals are position-independent; only the attachment point —
+        // what the enclosing finishNode reads — must be current).
+        absTok[id] = start;
+        absChar[id] = tkOff[start];
+        scPush(id);
+        return true;
+      }
       return false;
     }
   }
@@ -2036,8 +2084,8 @@ export function getText(node, source) {
 // The arena IS the tree: parse() returns the root node id and consumers traverse
 // via visit()/the accessors — nothing is materialized on the parse path. All views
 // are valid until the NEXT parse (the columns are reused).
-function leafTokenType(entry) {
-  const tok = (~entry) >>> 2;
+function leafTokenType(entry, tokBase) {
+  const tok = tokBase + ((~entry) >>> 2);
   const kind = (~entry) & 3;
   return kind === 1 ? '$keyword'
     : kind === 2 ? '$operator'
@@ -2046,11 +2094,21 @@ function leafTokenType(entry) {
 }
 // Raw arena accessors. An ENTRY is a node id (>= 0) or a leaf (< 0, token-encoded);
 // offsetOf/endOf/textOf accept either.
+// GREEN accessors: positions are RELATIVE — a node knows (rel, len) against its
+// parent and (tokRel, tokLen) in tokens; consumers descend with (charBase, tokBase)
+// — the node's own absolute start coordinates. Leaf spans come from the token
+// columns at tokBase + the entry's node-relative token index.
 export const tree = {
   ruleNameOf: (id) => RULE_NAMES[rowRule[id]],
   ruleIdOf: (id) => rowRule[id],
-  offsetOf: (entry) => entry >= 0 ? rowOff[entry] : tkOff[(~entry) >>> 2],
-  endOf: (entry) => entry >= 0 ? rowOff[entry] + rowLen[entry] : tkEnd[(~entry) >>> 2],
+  lenOf: (id) => rowLen[id],
+  tokLenOf: (id) => rowTokLen[id],
+  // a node CHILD's relative coordinates live on the parent edge (kids-parallel)
+  childRelAt: (id, i) => kidRel[rowStart[id] + i],
+  childTokRelAt: (id, i) => kidTokRel[rowStart[id] + i],
+  // base-threaded spans: nodes from their bases, leaves from the token columns
+  offsetOf: (entry, charBase, tokBase) => entry >= 0 ? charBase : tkOff[tokBase + ((~entry) >>> 2)],
+  endOf: (entry, charBase, tokBase) => entry >= 0 ? charBase + rowLen[entry] : tkEnd[tokBase + ((~entry) >>> 2)],
   childCount: (id) => rowCount[id],
   childAt: (id, i) => kids[rowStart[id] + i],
   // Bulk child load into a caller-owned array; returns the count. One call per node
@@ -2062,40 +2120,51 @@ export const tree = {
     return n2;
   },
   isLeaf: (entry) => entry < 0,
-  leafToken: (entry) => (~entry) >>> 2,
+  leafToken: (entry, tokBase) => tokBase + ((~entry) >>> 2),
   leafTokenType,
   // Int-world leaf accessors (the match-path encoding): kind bits — 0 type-derived,
   // 1 '$keyword', 2 '$operator' — and the token's TYPE kind int (1 = punctuation).
   leafKindOf: (entry) => (~entry) & 3,
-  leafTokKindOf: (entry) => tkK[(~entry) >>> 2],
-  textOf: (entry, source) => entry >= 0
-    ? source.slice(rowOff[entry], rowOff[entry] + rowLen[entry])
-    : source.slice(tkOff[(~entry) >>> 2], tkEnd[(~entry) >>> 2]),
+  leafTokKindOf: (entry, tokBase) => tkK[tokBase + ((~entry) >>> 2)],
+  leafOffsetOf: (entry, tokBase) => tkOff[tokBase + ((~entry) >>> 2)],
+  leafEndOf: (entry, tokBase) => tkEnd[tokBase + ((~entry) >>> 2)],
+  textOf: (entry, source, charBase, tokBase) => entry >= 0
+    ? source.slice(charBase, charBase + rowLen[entry])
+    : source.slice(tkOff[tokBase + ((~entry) >>> 2)], tkEnd[tokBase + ((~entry) >>> 2)]),
 };
 // Depth-first traversal from a node id or leaf entry:
 //   enter(id)         — each NODE before its children; return false to skip its subtree
 //   leave(id)         — each node after its children
 //   leaf(entry, tok)  — each leaf (tok = its token index)
-export function visit(entry, fns) {
-  if (entry < 0) { if (fns.leaf) fns.leaf(entry, (~entry) >>> 2); return; }
-  if (fns.enter && fns.enter(entry) === false) return;
+// Depth-first traversal threading the RED coordinates: enter/leave receive the
+// node's absolute (charBase, tokBase); leaf receives its absolute token index.
+// Call with the root only — the bases default from the root's rel fields.
+export function visit(entry, fns, charBase, tokBase) {
+  if (charBase === undefined) { charBase = rootCharBase; tokBase = rootTokBase; }
+  if (entry < 0) { if (fns.leaf) fns.leaf(entry, tokBase + ((~entry) >>> 2)); return; }
+  if (fns.enter && fns.enter(entry, charBase, tokBase) === false) return;
   const n = rowCount[entry];
   const cs = rowStart[entry];
-  for (let i = 0; i < n; i++) visit(kids[cs + i], fns);
-  if (fns.leave) fns.leave(entry);
+  for (let i = 0; i < n; i++) {
+    const e = kids[cs + i];
+    if (e < 0) { if (fns.leaf) fns.leaf(e, tokBase + ((~e) >>> 2)); }
+    else visit(e, fns, charBase + kidRel[cs + i], tokBase + kidTokRel[cs + i]);
+  }
+  if (fns.leave) fns.leave(entry, charBase, tokBase);
 }
 // Materialize the classic object CST from a node id — a BRIDGE for tests/debugging
 // (the byte-identical gate against the interpreter), not a parse-path product.
-export function toObject(id) {
+export function toObject(id, charBase, tokBase) {
+  if (charBase === undefined) { charBase = rootCharBase; tokBase = rootTokBase; }
   const n = rowCount[id];
   const cs = rowStart[id];
   const children = new Array(n);
   for (let i = 0; i < n; i++) {
     const entry = kids[cs + i];
-    children[i] = entry >= 0 ? toObject(entry)
-      : { tokenType: leafTokenType(entry), offset: tkOff[(~entry) >>> 2], end: tkEnd[(~entry) >>> 2] };
+    children[i] = entry >= 0 ? toObject(entry, charBase + kidRel[cs + i], tokBase + kidTokRel[cs + i])
+      : { tokenType: leafTokenType(entry, tokBase), offset: tkOff[tokBase + ((~entry) >>> 2)], end: tkEnd[tokBase + ((~entry) >>> 2)] };
   }
-  return { rule: RULE_NAMES[rowRule[id]], children, offset: rowOff[id], end: rowOff[id] + rowLen[id] };
+  return { rule: RULE_NAMES[rowRule[id]], children, offset: charBase, end: charBase + rowLen[id] };
 }
 
 // Parse to the ARENA: returns the root node id.
@@ -2134,7 +2203,9 @@ function runParse(entryRule) {
   const entry = entryRule ?? ENTRY;
   if (tokN === 0) {
     const rid = RULE_NAMES.indexOf(entry);
-    return finishNode(rid < 0 ? 0 : rid, scn);
+    const er = finishNode(rid < 0 ? 0 : rid, scn);
+    rootCharBase = absChar[er]; rootTokBase = absTok[er];
+    return er;
   }
   if (!RULES[entry]()) {
     const hasTok = pos < cap;
@@ -2143,13 +2214,18 @@ function runParse(entryRule) {
   if (pos < tokN) {
     throw new Error('Parse error at offset ' + tkOff[pos] + ": unexpected '" + tokTextAt(pos) + "' after successful parse" + farthest(pos));
   }
-  return sc[--scn];
+  const rootId = sc[--scn];
+  rootCharBase = absChar[rootId]; rootTokBase = absTok[rootId];
+  return rootId;
 }
 
 // Source of the last COMPLETED parse — the token columns, arena and memo describe it.
 // null whenever the module state is not a coherent snapshot (no parse yet, or the last
 // attempt threw), so parseEdited falls back to a full parse.
 let lastSrc = null;
+// the LAST parse root's absolute coordinates (the descent origin — see visit/toObject)
+let rootCharBase = 0;
+let rootTokBase = 0;
 // The spare token-column buffer set (parseEdited ping-pongs between the live set and
 // this one, so steady-state edits never allocate columns).
 let altK = null, altT = null, altOff = null, altEnd = null, altFl = null, altDp = null, altPd = null;
@@ -2247,7 +2323,6 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   }
   const dOldEnd = R;
   const tokenDelta = (B + 1 + W) - R;
-  const charThresh = R < oN ? tkOff[R] : 0x7fffffff;
   // ── splice: old[0..B] + window[0..W) + old[R..oN), then shift the suffix spans ──
   const nN = B + 1 + W + (oN - R);
   while (tkCap < nN + 1) growTok();
@@ -2263,8 +2338,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     for (let i = B + 1 + W; i < nN; i++) { tkOff[i] += charDelta; tkEnd[i] += charDelta; }
   }
   tokN = nN;
-  const nN2 = nN;
-  const oN2 = oN;` : String.raw`  // (fallback-lexer grammars keep the full-relex + token-diff path)
+  const nN2 = nN;` : String.raw`  // (fallback-lexer grammars keep the full-relex + token-diff path)
   const oK = tkK, oT = tkT, oOff = tkOff, oEnd = tkEnd, oFl = tkFl, oN = tokN;
   const oText = tkText;
   if (altK === null || altK.length !== tkCap) {
@@ -2293,25 +2367,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   }
   const dOldEnd = oN - s;
   const tokenDelta = nN - oN;
-  const charThresh = s > 0 ? oOff[dOldEnd] : 0x7fffffff;
-  const nN2 = nN;
-  const oN2 = oN;`}
-  // Re-base the old arena in place: rows starting at/after the first kept-suffix
-  // token's OLD offset shift by charDelta; reused leaf entries past the damage shift
-  // by tokenDelta. (A reusable subtree lies entirely on one side of the damage; rows
-  // spanning it are unreachable garbage either way.)
-  if (dOldEnd < oN2 && (charDelta !== 0 || tokenDelta !== 0)) {
-    if (charDelta !== 0) {
-      for (let i = 0; i < nodeN; i++) if (rowOff[i] >= charThresh) rowOff[i] += charDelta;
-    }
-    if (tokenDelta !== 0) {
-      const eShift = tokenDelta << 2;
-      for (let i = 0; i < kidN; i++) {
-        const e = kids[i];
-        if (e < 0 && ((~e) >>> 2) >= dOldEnd) kids[i] = e - eShift;
-      }
-    }
-  }
+  const nN2 = nN;`}
   // Carry the memo across: prefix entries whose lookahead never reached the damage
   // stay; suffix entries shift by tokenDelta; the damage window drops.
   for (let r = 0; r < MEMO_RULES; r++) {
@@ -2332,7 +2388,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     for (let i = 0; i < pCap; i++) {
       if (me[i] !== undefined) { nme[i] = me[i]; nmn[i] = mn[i]; nmx[i] = mx[i]; }
     }
-    for (let i = dOldEnd; i <= oN2; i++) {
+    for (let i = dOldEnd; i <= oN; i++) {
       if (me[i] !== undefined) {
         const j = i + tokenDelta;
         nme[j] = me[i] + tokenDelta; nmn[j] = mn[i]; nmx[j] = mx[i] + tokenDelta;

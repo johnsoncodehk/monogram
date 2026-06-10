@@ -321,7 +321,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       return c.field === c.name ? c.name : `${c.field}: ${c.name}`;
     });
     w(`  return { arm: ${J(plan.name)}${fields.length ? ', ' + fields.join(', ') : ''} };`);
-    emit(`function ${fn}(t: TreeAccess, n: number, cc: number, src: string): ${matchTypeName(rule.name)} | null {`);
+    emit(`function ${fn}(t: TreeAccess, n: number, cc: number, tb: number, src: string): ${matchTypeName(rule.name)} | null {`);
     for (const line of body) emit(line);
     emit(`}`);
     return fn;
@@ -333,7 +333,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   }
 
   function litCond(text: string, tt: string): string {
-    return `__lit(t, cc, i, src, ${J(text)}, ${tt === '$keyword' ? 1 : 0})`;
+    return `__lit(t, cc, tb, i, src, ${J(text)}, ${tt === '$keyword' ? 1 : 0})`;
   }
 
   function renderStep(st: Step, w: (s: string) => void, ind: string, fail: () => string): void {
@@ -346,7 +346,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       case 'litAlt': {
         const conds = st.texts.map((t, k) => litCond(t, st.tt[k]));
         w(`${ind}if (!(${conds.join(' || ')})) ${fail()}`);
-        if (st.cap) assign(st.cap, `src.slice(t.offsetOf(__SC[i]), t.endOf(__SC[i])) as ${st.cap.tsType}`, w, ind);
+        if (st.cap) assign(st.cap, `src.slice(t.leafOffsetOf(__SC[i], tb), t.leafEndOf(__SC[i], tb)) as ${st.cap.tsType}`, w, ind);
         w(`${ind}i++;`);
         return;
       }
@@ -354,8 +354,8 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         const cond = st.name === '$operator'
           ? `__opTok(t, cc, i)`
           : st.template
-            ? `__tok(t, cc, i, ${typeKind.get(st.name)}) || __nodeOf(t, cc, i, ${ruleId.get('$template')})`
-            : `__tok(t, cc, i, ${typeKind.get(st.name)})`;
+            ? `__tok(t, cc, tb, i, ${typeKind.get(st.name)}) || __nodeOf(t, cc, i, ${ruleId.get('$template')})`
+            : `__tok(t, cc, tb, i, ${typeKind.get(st.name)})`;
         w(`${ind}if (!(${cond})) ${fail()}`);
         if (st.cap) assign(st.cap, `__SC[i] as ${st.cap.tsType}`, w, ind);
         w(`${ind}i++;`);
@@ -564,7 +564,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     // ("always") arms appear in every bucket at their declaration position; the buckets
     // are superset filters (each arm fn re-checks exactly).
     const admits = plans.map(p => firstAdmit(p.steps));
-    const tryLine = (k: number) => `    { const m = ${fns[k]}(t, n, cc, src); if (m !== null) return m; }`;
+    const tryLine = (k: number) => `    { const m = ${fns[k]}(t, n, cc, tb, src); if (m !== null) return m; }`;
     const bucketLines = (pred: (keys: Set<string>) => boolean): string[] =>
       plans.map((_, k) => (admits[k].keys.size === 0 || pred(admits[k].keys) ? tryLine(k) : ''))
         .filter(Boolean);
@@ -618,8 +618,8 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       lines.push(`${pad}      break;`);
       lines.push(`${pad}    }`);
       lines.push(`${pad}  }`);
-      lines.push(`${pad}} else if ((_k1 = t.leafKindOf(e1)) === 1 || (_k1 === 0 && t.leafTokKindOf(e1) === 1)) {`);
-      lines.push(`${pad}  switch (src.charCodeAt(t.offsetOf(e1))) {`);
+      lines.push(`${pad}} else if ((_k1 = t.leafKindOf(e1)) === 1 || (_k1 === 0 && t.leafTokKindOf(e1, tb) === 1)) {`);
+      lines.push(`${pad}  switch (src.charCodeAt(t.leafOffsetOf(e1, tb))) {`);
       for (const cc of [...cset].sort((a, b) => a - b)) {
         lines.push(`${pad}    case ${cc}: {`);
         lines.push(...subTry(i => restAdmit[i]!.keys.has('c:' + cc)).map(l => '    ' + l));
@@ -634,7 +634,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       lines.push(`${pad}} else if (_k1 === 2) {`);
       lines.push(...subTry(i => restAdmit[i]!.keys.has('t:$operator')));
       lines.push(`${pad}} else {`);
-      lines.push(`${pad}  switch (t.leafTokKindOf(e1)) {`);
+      lines.push(`${pad}  switch (t.leafTokKindOf(e1, tb)) {`);
       for (const t of [...tset].sort()) {
         if (t === '$operator') continue;   // handled by the kind-2 branch above
         lines.push(`${pad}    case ${typeKind.get(t)}: { // ${t}`);
@@ -652,7 +652,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     };
 
     const disp: string[] = [];
-    disp.push(`export function match${sanitizeIdent(rule.name)}(t: TreeAccess, n: NodeEntry<${J(rule.name)}>, src: string): ${tName} {`);
+    disp.push(`export function match${sanitizeIdent(rule.name)}(t: TreeAccess, n: NodeEntry<${J(rule.name)}>, tb: number, src: string): ${tName} {`);
     disp.push(`  const cc = __load(t, n);`);
     disp.push(`  let e1 = 0; let _k1 = 0;`);
     disp.push(`  if (cc === 0) {`);
@@ -681,8 +681,8 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     }
     disp.push(`    }`);
     disp.push(`  } else { const _k0 = t.leafKindOf(e0);`);
-    disp.push(`  if (_k0 === 1 || (_k0 === 0 && t.leafTokKindOf(e0) === 1)) {`);
-    disp.push(`    switch (src.charCodeAt(t.offsetOf(e0))) {`);
+    disp.push(`  if (_k0 === 1 || (_k0 === 0 && t.leafTokKindOf(e0, tb) === 1)) {`);
+    disp.push(`    switch (src.charCodeAt(t.leafOffsetOf(e0, tb))) {`);
     for (const cc of [...charCodes].sort((a, b) => a - b)) {
       disp.push(`      case ${cc}: {`);
       for (const l of bucketLines(keys => keys.has('c:' + cc))) disp.push('    ' + l);
@@ -699,7 +699,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     disp.push(`  } else if (_k0 === 2) {`);
     for (const l of bucketLines(keys => keys.has('t:$operator'))) disp.push(l);
     disp.push(`  } else {`);
-    disp.push(`    switch (t.leafTokKindOf(e0)) {`);
+    disp.push(`    switch (t.leafTokKindOf(e0, tb)) {`);
     for (const t of [...tokNames].sort()) {
       if (t === '$operator') continue;   // handled by the kind-2 branch above
       disp.push(`      case ${typeKind.get(t)}: { // ${t}`);
@@ -715,7 +715,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     }
     disp.push(`    }`);
     disp.push(`  } } }`);
-    disp.push(`  throw new Error(${J(`match${sanitizeIdent(rule.name)}: no arm matches`)} + ' @' + t.offsetOf(n));`);
+    disp.push(`  throw new Error(${J(`match${sanitizeIdent(rule.name)}: no arm matches`)} + ' @tok' + tb);`);
     disp.push(`}`);
     bodyParts.push(disp.join('\n'));
     matcherMapEntries.push(`  ${J(rule.name)}: match${sanitizeIdent(rule.name)},`);
@@ -732,11 +732,10 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   header.push(`  childCount(id: number): number;`);
   header.push(`  childAt(id: number, i: number): number;`);
   header.push(`  childrenInto(id: number, out: number[]): number;`);
-  header.push(`  leafTokenType(entry: number): string;`);
   header.push(`  leafKindOf(entry: number): number;`);
-  header.push(`  leafTokKindOf(entry: number): number;`);
-  header.push(`  offsetOf(entry: number): number;`);
-  header.push(`  endOf(entry: number): number;`);
+  header.push(`  leafTokKindOf(entry: number, tokBase: number): number;`);
+  header.push(`  leafOffsetOf(entry: number, tokBase: number): number;`);
+  header.push(`  leafEndOf(entry: number, tokBase: number): number;`);
   header.push(`}`);
   header.push(`// Branded entry aliases — compile-time discrimination over plain numbers.`);
   header.push(`export type NodeEntry<R extends string = string> = number & { readonly __node?: R };`);
@@ -747,17 +746,17 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   header.push(`const __SC: number[] = [];`);
   header.push(`const __load = (t: TreeAccess, n: number): number => t.childrenInto(n, __SC);`);
   header.push(`// kind: 1 = '$keyword' (leaf kind bit), 0 = '$punct' (type-derived + tok-kind 1).`);
-  header.push(`const __lit = (t: TreeAccess, cc: number, i: number, src: string, text: string, kind: number): boolean => {`);
+  header.push(`const __lit = (t: TreeAccess, cc: number, tb: number, i: number, src: string, text: string, kind: number): boolean => {`);
   header.push(`  if (i >= cc) return false;`);
   header.push(`  const e = __SC[i];`);
-  header.push(`  if (e >= 0 || t.leafKindOf(e) !== kind || (kind === 0 && t.leafTokKindOf(e) !== 1)) return false;`);
-  header.push(`  const off = t.offsetOf(e);`);
-  header.push(`  return t.endOf(e) - off === text.length && src.startsWith(text, off);`);
+  header.push(`  if (e >= 0 || t.leafKindOf(e) !== kind || (kind === 0 && t.leafTokKindOf(e, tb) !== 1)) return false;`);
+  header.push(`  const off = t.leafOffsetOf(e, tb);`);
+  header.push(`  return t.leafEndOf(e, tb) - off === text.length && src.startsWith(text, off);`);
   header.push(`};`);
-  header.push(`const __tok = (t: TreeAccess, cc: number, i: number, k: number): boolean => {`);
+  header.push(`const __tok = (t: TreeAccess, cc: number, tb: number, i: number, k: number): boolean => {`);
   header.push(`  if (i >= cc) return false;`);
   header.push(`  const e = __SC[i];`);
-  header.push(`  return e < 0 && t.leafKindOf(e) === 0 && t.leafTokKindOf(e) === k;`);
+  header.push(`  return e < 0 && t.leafKindOf(e) === 0 && t.leafTokKindOf(e, tb) === k;`);
   header.push(`};`);
   header.push(`const __opTok = (t: TreeAccess, cc: number, i: number): boolean => {`);
   header.push(`  if (i >= cc) return false;`);
@@ -774,11 +773,11 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   const footer = [
     ``,
     `/** rule name → its matcher (generic walking; the totality gate uses this). */`,
-    `export const MATCHERS: Record<string, (t: TreeAccess, n: never, src: string) => { arm: string }> = {`,
+    `export const MATCHERS: Record<string, (t: TreeAccess, n: never, tb: number, src: string) => { arm: string }> = {`,
     ...matcherMapEntries,
     `};`,
     `/** rule ID → matcher (the emitted parser's rowRule ids — declaration order). */`,
-    `export const MATCHERS_BY_ID: ((t: TreeAccess, n: never, src: string) => { arm: string })[] = [`,
+    `export const MATCHERS_BY_ID: ((t: TreeAccess, n: never, tb: number, src: string) => { arm: string })[] = [`,
     ...grammar.rules.map(r => `  match${sanitizeIdent(r.name)},`),
     `];`,
   ];
