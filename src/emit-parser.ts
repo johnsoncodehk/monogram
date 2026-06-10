@@ -1329,6 +1329,12 @@ let tkT = new ${T_ARR}(4096);
 let tkOff = new Int32Array(4096);
 let tkEnd = new Int32Array(4096);
 let tkFl = new Uint8Array(4096);
+// lexer-state depth records per token (windowed relex restart/resync safety):
+// tkDp = template-interp stack depth, tkPd = paren-head stack depth, both AS RECORDED
+// at the token's push (the convention per token kind is fixed by the lexer's code
+// path; determinism is what the predicates rely on, depth-0 is the safe state).
+let tkDp = new Uint8Array(4096);
+let tkPd = new Uint16Array(4096);
 let tkCap = 4096;
 let tokN = 0;
 let src = '';
@@ -1340,6 +1346,8 @@ function growTok() {
   const o = new Int32Array(tkCap); o.set(tkOff); tkOff = o;
   const e2 = new Int32Array(tkCap); e2.set(tkEnd); tkEnd = e2;
   const f = new Uint8Array(tkCap); f.set(tkFl); tkFl = f;
+  const d = new Uint8Array(tkCap); d.set(tkDp); tkDp = d;
+  const q = new Uint16Array(tkCap); q.set(tkPd); tkPd = q;
 }
 
 // ── CST arena: nodes are rows in parallel columns; leaves are TOKEN REFERENCES ──
@@ -1489,6 +1497,8 @@ function matchPuLitGT(pu) {
     tkT.copyWithin(pos + 1, pos, tokN);
     tkOff.copyWithin(pos + 1, pos, tokN);
     tkEnd.copyWithin(pos + 1, pos, tokN);
+    tkDp.copyWithin(pos + 1, pos, tokN);
+    tkPd.copyWithin(pos + 1, pos, tokN);
     tkFl.copyWithin(pos + 1, pos, tokN);
     ${e.soa ? '' : "tkText.splice(pos, 1, '>', restText);"}
     tkT[pos] = pu; tkEnd[pos] = off + 1; tkFl[pos] = 0;
@@ -2099,6 +2109,7 @@ ${e.soa ? `  tokenize(source);` : String.raw`  src = source;
     const _t = _toks[_i];
     tkK[_i] = _t.k; tkT[_i] = _t.t; tkOff[_i] = _t.offset; tkEnd[_i] = _t.offset + _t.text.length;
     tkFl[_i] = (_t.newlineBefore ? 1 : 0) | (_t.commentBefore ? 2 : 0) | (_t.multilineFlowBefore ? 4 : 0);
+    tkDp[_i] = 0; tkPd[_i] = 0;
     tkText[_i] = _t.text;
   }
   tokN = _n;`}
@@ -2141,7 +2152,20 @@ function runParse(entryRule) {
 let lastSrc = null;
 // The spare token-column buffer set (parseEdited ping-pongs between the live set and
 // this one, so steady-state edits never allocate columns).
-let altK = null, altT = null, altOff = null, altEnd = null, altFl = null;
+let altK = null, altT = null, altOff = null, altEnd = null, altFl = null, altDp = null, altPd = null;
+let altCap = 0;
+let altN = 0;   // old-stream token count while a window lex runs (lexCore's resync bound)
+function swapBuffers() {
+  let x;
+  x = tkK; tkK = altK; altK = x;
+  x = tkT; tkT = altT; altT = x;
+  x = tkOff; tkOff = altOff; altOff = x;
+  x = tkEnd; tkEnd = altEnd; altEnd = x;
+  x = tkFl; tkFl = altFl; altFl = x;
+  x = tkDp; tkDp = altDp; altDp = x;
+  x = tkPd; tkPd = altPd; altPd = x;
+  x = tkCap; tkCap = altCap; altCap = x;
+}
 ${e.soa ? '' : 'let altText = [];'}
 
 export function parse(source, entryRule) {
@@ -2176,46 +2200,106 @@ export function parseEdited(source, entryRule) {
   if (lastSrc === null) return parse(source, entryRule);
   const oSrc = lastSrc;
   lastSrc = null;
-  // Stash the old columns BY REFERENCE and lex into the spare buffer set (ping-pong
-  // double buffer — steady-state edits allocate nothing and keep the pages warm).
+${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
+  // Char-level envelope (cheapest possible without an edit protocol).
+  const oldLen = oSrc.length, newLen = source.length;
+  const minL = oldLen < newLen ? oldLen : newLen;
+  let cs = 0;
+  while (cs < minL && oSrc.charCodeAt(cs) === source.charCodeAt(cs)) cs++;
+  let ce = 0;
+  while (ce < minL - cs && oSrc.charCodeAt(oldLen - 1 - ce) === source.charCodeAt(newLen - 1 - ce)) ce++;
+  const ceOld = oldLen - ce, ceNew = newLen - ce;
+  const charDelta = newLen - oldLen;
+  // Restart anchor: the last token B ending at/before the damage whose recorded
+  // depths are zero and whose shape carries no cross-token lexer flag (')' control-
+  // head, postfix-ambiguous op). B = -1 restarts at the file head — always sound.
+  const B = findRestart(cs);
+  const oN = tokN;
+  // first old token at/after the damage end — the resync search floor
+  let r0 = oN;
+  { let lo = 0, hi = oN;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tkOff[mid] < ceOld) lo = mid + 1; else hi = mid; }
+    r0 = lo; }
+  // Lex the window into the spare buffers (the old stream stays live for resync).
+  if (altK === null || altCap < tkCap) {
+    altK = new tkK.constructor(tkCap); altT = new tkT.constructor(tkCap);
+    altOff = new Int32Array(tkCap); altEnd = new Int32Array(tkCap); altFl = new Uint8Array(tkCap);
+    altDp = new Uint8Array(tkCap); altPd = new Uint16Array(tkCap);
+    altCap = tkCap;
+  }
+  altN = oN;
+  swapBuffers();              // live = scratch, alt = OLD stream
+  src = source;
+  tokN = 0;
+  const startOff = B >= 0 ? altEnd[B] : 0;
+  const R0 = lexCore(source, startOff, B >= 0 ? altK[B] : -1, B >= 0 ? altT[B] : 0, r0, ceNew, charDelta, cs);
+  const W = tokN;
+  const R = R0 >= 0 ? R0 : oN;
+  swapBuffers();              // live = OLD stream again; window sits in the alt buffers
+  tokN = oN;
+  // TRUE token prefix p: the window re-derives [B+1 .. p) byte-identically; only past
+  // p is real damage (compared BEFORE the splice clobbers the old slots).
+  let p = B + 1;
+  { let i = 0;
+    while (i < W && p < R && altK[i] === tkK[p] && altT[i] === tkT[p] && altOff[i] === tkOff[p]
+        && altEnd[i] === tkEnd[p] && altFl[i] === tkFl[p]) { i++; p++; }
+  }
+  const dOldEnd = R;
+  const tokenDelta = (B + 1 + W) - R;
+  const charThresh = R < oN ? tkOff[R] : 0x7fffffff;
+  // ── splice: old[0..B] + window[0..W) + old[R..oN), then shift the suffix spans ──
+  const nN = B + 1 + W + (oN - R);
+  while (tkCap < nN + 1) growTok();
+  tkK.copyWithin(B + 1 + W, R, oN); tkT.copyWithin(B + 1 + W, R, oN);
+  tkOff.copyWithin(B + 1 + W, R, oN); tkEnd.copyWithin(B + 1 + W, R, oN);
+  tkFl.copyWithin(B + 1 + W, R, oN); tkDp.copyWithin(B + 1 + W, R, oN); tkPd.copyWithin(B + 1 + W, R, oN);
+  if (W > 0) {
+    tkK.set(altK.subarray(0, W), B + 1); tkT.set(altT.subarray(0, W), B + 1);
+    tkOff.set(altOff.subarray(0, W), B + 1); tkEnd.set(altEnd.subarray(0, W), B + 1);
+    tkFl.set(altFl.subarray(0, W), B + 1); tkDp.set(altDp.subarray(0, W), B + 1); tkPd.set(altPd.subarray(0, W), B + 1);
+  }
+  if (charDelta !== 0) {
+    for (let i = B + 1 + W; i < nN; i++) { tkOff[i] += charDelta; tkEnd[i] += charDelta; }
+  }
+  tokN = nN;
+  const nN2 = nN;
+  const oN2 = oN;` : String.raw`  // (fallback-lexer grammars keep the full-relex + token-diff path)
   const oK = tkK, oT = tkT, oOff = tkOff, oEnd = tkEnd, oFl = tkFl, oN = tokN;
-${e.soa ? '' : '  const oText = tkText;'}
+  const oText = tkText;
   if (altK === null || altK.length !== tkCap) {
     altK = new tkK.constructor(tkCap); altT = new tkT.constructor(tkCap);
     altOff = new Int32Array(tkCap); altEnd = new Int32Array(tkCap); altFl = new Uint8Array(tkCap);
+    altDp = new Uint8Array(tkCap); altPd = new Uint16Array(tkCap);
   }
   tkK = altK; tkT = altT; tkOff = altOff; tkEnd = altEnd; tkFl = altFl;
-${e.soa ? '' : '  tkText = altText; tkText.length = 0;'}
+  { const _d = tkDp; tkDp = altDp; altDp = _d; const _q = tkPd; tkPd = altPd; altPd = _q; }
+  tkText = altText; tkText.length = 0;
   altK = oK; altT = oT; altOff = oOff; altEnd = oEnd; altFl = oFl;
-${e.soa ? '' : '  altText = oText;'}
+  altText = oText;
   lexInto(source);
-  if (tkCap !== oK.length) {
-    // the new lex outgrew the buffer (growTok reallocated): drop the stale spare
-    altK = null;
-  }
   const nN = tokN;
   const charDelta = source.length - oSrc.length;
   const minN = oN < nN ? oN : nN;
-  // Longest identical prefix (positions included — the prefix is unshifted).
   let p = 0;
   while (p < minN && oK[p] === tkK[p] && oT[p] === tkT[p] && oFl[p] === tkFl[p]
-      && oOff[p] === tkOff[p] && oEnd[p] === tkEnd[p]${e.soa ? '' : ' && oText[p] === tkText[p]'}) p++;
-  // Longest identical suffix modulo charDelta (disjoint from the prefix).
+      && oOff[p] === tkOff[p] && oEnd[p] === tkEnd[p] && oText[p] === tkText[p]) p++;
   let s = 0;
   while (s < minN - p) {
     const i = oN - 1 - s, j = nN - 1 - s;
     if (oK[i] === tkK[j] && oT[i] === tkT[j] && oFl[i] === tkFl[j]
-      && oOff[i] + charDelta === tkOff[j] && oEnd[i] + charDelta === tkEnd[j]${e.soa ? '' : ' && oText[i] === tkText[j]'}) s++;
+      && oOff[i] + charDelta === tkOff[j] && oEnd[i] + charDelta === tkEnd[j] && oText[i] === tkText[j]) s++;
     else break;
   }
-  const dOldEnd = oN - s;          // damaged OLD tokens: [p, dOldEnd)
+  const dOldEnd = oN - s;
   const tokenDelta = nN - oN;
-  // Re-base the old arena in place: rows starting at/after the first suffix token's OLD
-  // offset shift by charDelta; reused leaf entries past the damage shift by tokenDelta.
-  // (A reusable subtree lies entirely on one side of the damage, so the start-threshold
-  // classifies it correctly; damage-spanning rows are garbage either way.)
-  if (s > 0 && (charDelta !== 0 || tokenDelta !== 0)) {
-    const charThresh = oOff[dOldEnd];
+  const charThresh = s > 0 ? oOff[dOldEnd] : 0x7fffffff;
+  const nN2 = nN;
+  const oN2 = oN;`}
+  // Re-base the old arena in place: rows starting at/after the first kept-suffix
+  // token's OLD offset shift by charDelta; reused leaf entries past the damage shift
+  // by tokenDelta. (A reusable subtree lies entirely on one side of the damage; rows
+  // spanning it are unreachable garbage either way.)
+  if (dOldEnd < oN2 && (charDelta !== 0 || tokenDelta !== 0)) {
     if (charDelta !== 0) {
       for (let i = 0; i < nodeN; i++) if (rowOff[i] >= charThresh) rowOff[i] += charDelta;
     }
@@ -2227,18 +2311,12 @@ ${e.soa ? '' : '  altText = oText;'}
       }
     }
   }
-  // Carry the memo across: prefix entries whose lookahead never reached the damage stay
-  // at their index; suffix entries move by tokenDelta (ids reference the re-based rows).
-  // tokenDelta === 0 (the common keystroke: editing within a token) mutates IN PLACE —
-  // no per-rule array allocation; only the damage window and the prefix entries whose
-  // extent crossed into it are cleared.
+  // Carry the memo across: prefix entries whose lookahead never reached the damage
+  // stay; suffix entries shift by tokenDelta; the damage window drops.
   for (let r = 0; r < MEMO_RULES; r++) {
     const me = memoEnd[r];
     if (me === undefined) continue;
     const mn = memoNode[r], mx = memoExt[r];
-    // prefix entries whose lookahead may have crossed into the damage die in place
-    // (mx is the advance watermark; reads run up to two tokens past it: the stop
-    // token and the SECOND-token dispatch probe)
     for (let i = 0; i < p; i++) {
       if (me[i] !== undefined && mx[i] + 2 > p) { me[i] = undefined; mn[i] = undefined; mx[i] = undefined; }
     }
@@ -2248,15 +2326,12 @@ ${e.soa ? '' : '  altText = oText;'}
       }
       continue;
     }
-    // token count changed: rebuild the rule's arrays sparsely (measured FASTER than an
-    // in-place direction-aware shift — writing undefined through the holes materializes
-    // them; fresh holey arrays skip that entirely).
-    const nme = new Array(nN + 1), nmn = new Array(nN + 1), nmx = new Array(nN + 1);
-    const pCap = p < nN + 1 ? p : nN + 1;
+    const nme = new Array(nN2 + 1), nmn = new Array(nN2 + 1), nmx = new Array(nN2 + 1);
+    const pCap = p < nN2 + 1 ? p : nN2 + 1;
     for (let i = 0; i < pCap; i++) {
       if (me[i] !== undefined) { nme[i] = me[i]; nmn[i] = mn[i]; nmx[i] = mx[i]; }
     }
-    for (let i = dOldEnd; i <= oN; i++) {
+    for (let i = dOldEnd; i <= oN2; i++) {
       if (me[i] !== undefined) {
         const j = i + tokenDelta;
         nme[j] = me[i] + tokenDelta; nmn[j] = mn[i]; nmx[j] = mx[i] + tokenDelta;
