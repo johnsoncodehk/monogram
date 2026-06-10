@@ -39,7 +39,9 @@ function run(parse: (s: string) => unknown, code: string): Outcome {
 // Compare one file. Returns 'agree' | 'accept-mismatch' | 'cst-mismatch' | 'oracle-capacity'.
 function compare(code: string): { verdict: string; detail?: string } {
   const o = run(oracle.parse, code);
-  const e = run(emitted.parse as (s: string) => unknown, code);
+  // The emitted parser returns an arena node id; materialize the object view for the
+  // byte-identical comparison against the interpreter's object tree.
+  const e = run((s: string) => emitted.toObject(emitted.parse(s)), code);
   if (!o.ok && o.err.includes('Maximum call stack')) {
     // The interpreter recursed out of stack — a CAPACITY limit, not a parse verdict;
     // the emitted parser's flatter frames can legitimately survive deeper inputs

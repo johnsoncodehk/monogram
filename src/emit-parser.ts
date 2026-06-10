@@ -1964,46 +1964,62 @@ export function getText(node, source) {
   return source.slice(node.offset, node.end);
 }
 
-// ── Arena tree view ──
-// Materialize the classic object CST ({rule, children, offset, end} / leaf
-// {tokenType, offset, end}) from a node id. parse() returns this view, so every
-// object-contract consumer is unchanged; parseTree() exposes the raw arena.
-function leafObj(entry) {
+// ── Arena tree access ──
+// The arena IS the tree: parse() returns the root node id and consumers traverse
+// via visit()/the accessors — nothing is materialized on the parse path. All views
+// are valid until the NEXT parse (the columns are reused).
+function leafTokenType(entry) {
   const tok = (~entry) >>> 2;
   const kind = (~entry) & 3;
-  const tt = kind === 1 ? '$keyword'
+  return kind === 1 ? '$keyword'
     : kind === 2 ? '$operator'
     : tkK[tok] === K_PUNCT ? '$punct'
     : (K_NAMES[tkK[tok]] ?? '');
-  return { tokenType: tt, offset: tkOff[tok], end: tkEnd[tok] };
 }
+// Raw arena accessors. An ENTRY is a node id (>= 0) or a leaf (< 0, token-encoded);
+// offsetOf/endOf/textOf accept either.
+export const tree = {
+  ruleNameOf: (id) => RULE_NAMES[rowRule[id]],
+  ruleIdOf: (id) => rowRule[id],
+  offsetOf: (entry) => entry >= 0 ? rowOff[entry] : tkOff[(~entry) >>> 2],
+  endOf: (entry) => entry >= 0 ? rowOff[entry] + rowLen[entry] : tkEnd[(~entry) >>> 2],
+  childCount: (id) => rowCount[id],
+  childAt: (id, i) => kids[rowStart[id] + i],
+  isLeaf: (entry) => entry < 0,
+  leafToken: (entry) => (~entry) >>> 2,
+  leafTokenType,
+  textOf: (entry, source) => entry >= 0
+    ? source.slice(rowOff[entry], rowOff[entry] + rowLen[entry])
+    : source.slice(tkOff[(~entry) >>> 2], tkEnd[(~entry) >>> 2]),
+};
+// Depth-first traversal from a node id or leaf entry:
+//   enter(id)         — each NODE before its children; return false to skip its subtree
+//   leave(id)         — each node after its children
+//   leaf(entry, tok)  — each leaf (tok = its token index)
+export function visit(entry, fns) {
+  if (entry < 0) { if (fns.leaf) fns.leaf(entry, (~entry) >>> 2); return; }
+  if (fns.enter && fns.enter(entry) === false) return;
+  const n = rowCount[entry];
+  const cs = rowStart[entry];
+  for (let i = 0; i < n; i++) visit(kids[cs + i], fns);
+  if (fns.leave) fns.leave(entry);
+}
+// Materialize the classic object CST from a node id — a BRIDGE for tests/debugging
+// (the byte-identical gate against the interpreter), not a parse-path product.
 export function toObject(id) {
   const n = rowCount[id];
   const cs = rowStart[id];
   const children = new Array(n);
   for (let i = 0; i < n; i++) {
     const entry = kids[cs + i];
-    children[i] = entry >= 0 ? toObject(entry) : leafObj(entry);
+    children[i] = entry >= 0 ? toObject(entry)
+      : { tokenType: leafTokenType(entry), offset: tkOff[(~entry) >>> 2], end: tkEnd[(~entry) >>> 2] };
   }
   return { rule: RULE_NAMES[rowRule[id]], children, offset: rowOff[id], end: rowOff[id] + rowLen[id] };
 }
-// Raw arena accessors (valid until the NEXT parse — the columns are reused).
-export const tree = {
-  ruleNameOf: (id) => RULE_NAMES[rowRule[id]],
-  ruleIdOf: (id) => rowRule[id],
-  offsetOf: (id) => rowOff[id],
-  endOf: (id) => rowOff[id] + rowLen[id],
-  childCount: (id) => rowCount[id],
-  childAt: (id, i) => kids[rowStart[id] + i],
-  isLeaf: (entry) => entry < 0,
-  leafToken: (entry) => (~entry) >>> 2,
-  leafTokenType: (entry) => leafObj(entry).tokenType,
-  leafOffsetOf: (entry) => tkOff[(~entry) >>> 2],
-  leafEndOf: (entry) => tkEnd[(~entry) >>> 2],
-};
 
-// Parse to the ARENA (no object materialization): returns the root node id.
-export function parseTree(source, entryRule) {
+// Parse to the ARENA: returns the root node id.
+export function parse(source, entryRule) {
 ${e.soa ? `  tokenize(source);` : String.raw`  src = source;
   const _toks = tokenize(source);
   const _n = _toks.length;
@@ -2049,11 +2065,7 @@ ${e.soa ? `  tokenize(source);` : String.raw`  src = source;
   }
 }
 
-export function parse(source, entryRule) {
-  return toObject(parseTree(source, entryRule));
-}
-
 export { tokenize };
-export function createParser() { return { parse, parseTree, tokenize }; }
+export function createParser() { return { parse, tree, visit, toObject, tokenize }; }
 `);
 }
