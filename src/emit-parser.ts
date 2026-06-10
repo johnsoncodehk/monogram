@@ -1431,6 +1431,7 @@ let pos = 0;
 let maxPos = 0;
 let memoNode = [];
 let memoEnd = [];
+let memoExt = [];   // per-entry lookahead extent (see parseRuleEntry)
 let parseLimit = -1;
 // cap = the exclusive lookahead bound: min(parseLimit-or-∞, tokN), maintained at the
 // parseLimit set/restore sites and the one token-stream mutation (the '>' splice).
@@ -1498,6 +1499,7 @@ function matchPuLitGT(pu) {
     // Token indices shifted: drop the per-rule memo arrays (recreated lazily at the new size).
     memoNode.fill(undefined);
     memoEnd.fill(undefined);
+    memoExt.fill(undefined);
     // Leaf entries reference tokens BY INDEX, so the splice's +1 shift must be applied
     // to every committed/scratch entry past the split point. (Object trees were immune —
     // leaves copied their spans; the arena trades that copy for this rare O(kidN) pass.
@@ -1578,10 +1580,30 @@ function parseTemplateExpr() {
 // Emit the per-rule parse functions + the RULES dispatch table.
 function emitRuleFns(e: Emitter, a: ReturnType<typeof analyze>) {
   const ruleFn = (name: string) => `R_${sanitize(name)}`;
+  // SPINE rules — the entry rule's repetition units (the rules its body references
+  // directly): the natural reuse granularity for incremental re-parsing, so they get
+  // memoized through parseRuleEntry like pratt/left-rec rules. Without this only
+  // expression/type subtrees reuse and every statement re-walks on each edit.
+  // Derived from the grammar shape — no language names.
+  const spine = new Set<string>();
+  {
+    const entryRule = a.grammar.rules[a.grammar.rules.length - 1];
+    const walk = (x: RuleExpr): void => {
+      switch (x.type) {
+        case 'ref': if (a.ruleByName.has(x.name)) spine.add(x.name); return;
+        case 'seq': case 'alt': x.items.forEach(walk); return;
+        case 'quantifier': case 'group': walk(x.body); return;
+        case 'sep': walk(x.element); return;
+        default: return;
+      }
+    };
+    walk(entryRule.body);
+    spine.delete(entryRule.name);
+  }
   for (const rule of a.grammar.rules) {
     if (a.prattRules.has(rule.name)) emitPrattRule(e, a, rule);
     else if (a.leftRecSet.has(rule.name)) emitLeftRecRule(e, a, rule);
-    else emitNonRecRule(e, a, rule);
+    else emitNonRecRule(e, a, rule, spine.has(rule.name) && !a.prattRules.has(rule.name) && !a.leftRecSet.has(rule.name));
   }
   // Dispatch table (string rule name → fn), for parseTemplateExpr's dynamic interp rule.
   e.emit(`const RULES = {`);
@@ -1593,11 +1615,19 @@ function emitRuleFns(e: Emitter, a: ReturnType<typeof analyze>) {
 // committed to the arena IMMEDIATELY (finishNode also truncates scratch back to mark);
 // a not-better arm's children are dropped by the next arm's scn reset (a beaten
 // committed candidate stays as an arena hole — the measured 3-5% discard class).
-function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl) {
+function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl, memoized = false) {
   const ruleFn = `R_${sanitize(rule.name)}`;
   const rid = a.grammar.rules.indexOf(rule);
   const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-  e.emit(`function ${ruleFn}() {`);
+  // A memoized (spine) rule splits into the public wrapper (parseRuleEntry owns the
+  // push+boolean contract and the memo) and an id-returning core, exactly like the
+  // pratt/left-rec rules.
+  if (memoized) {
+    e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${J(rule.name)}, ${ruleFn}_core); }`);
+    e.emit(`function ${ruleFn}_core(_minBp) {`);
+  } else {
+    e.emit(`function ${ruleFn}() {`);
+  }
   e.emit(`  const saved = pos; const mark = scn;`);
   e.emit(`  let bestId = -1; let bestPos = saved;`);
   const dispatch = e.altMaskDispatch(alts, '_am');
@@ -1612,8 +1642,13 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
     e.emit(`    }`);
     e.emit(`  }`);
   });
-  e.emit(`  if (bestId >= 0) { pos = bestPos; scn = mark; scPush(bestId); return true; }`);
-  e.emit(`  pos = saved; scn = mark; return false;`);
+  if (memoized) {
+    e.emit(`  if (bestId >= 0) { pos = bestPos; scn = mark; return bestId; }`);
+    e.emit(`  pos = saved; scn = mark; return -1;`);
+  } else {
+    e.emit(`  if (bestId >= 0) { pos = bestPos; scn = mark; scPush(bestId); return true; }`);
+    e.emit(`  pos = saved; scn = mark; return false;`);
+  }
   e.emit(`}`);
   // Arm matchers.
   alts.forEach((alt, i) => emitArm(e, a, rule.name, i, alt));
@@ -1890,24 +1925,42 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
 function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
   e.emit(String.raw`
 // parseRule for a pratt/left-rec rule: memo + context + suppress, then the core.
-// The memo is a pair of per-rule arrays indexed by start pos (lazily sized to the token
-// count, undefined-holed): a lookup is two array loads, a store allocates nothing — no
-// Map hashing and no {node, end} wrapper per store. The core returns a node ID (or -1);
+// The memo is per-rule arrays indexed by start pos (lazily sized to the token count,
+// undefined-holed): a lookup is two array loads, a store allocates nothing — no Map
+// hashing and no {node, end} wrapper per store. The core returns a node ID (or -1);
 // this wrapper owns the public arena contract (push the id, return a boolean).
+//
+// memoExt records each entry's LOOKAHEAD EXTENT — the farthest token index the parse
+// may have READ (not merely consumed) — which is what incremental invalidation must
+// intersect with an edit's damage window: a PEG parse probes beyond its end (failed
+// longer arms, not() lookaheads, SECOND-token dispatch). The extent comes for free
+// from the global advance watermark: maxPos at frame exit, +2 covering the stop-token
+// and SECOND-token reads past it. Left-to-right parsing keeps the watermark near the
+// current frontier, so the value is tight on the dominant flow and only OVER-
+// invalidates (soundly) near big-backtrack clusters.
 function parseRuleEntry(idx, name, core) {
   const mySup = suppressNext;
   suppressNext = null;
   const capped = parseLimit >= 0;
   const start = pos;
-  // Capture the pair together: a '>'-splice inside core() detaches both via fill(undefined),
-  // and the store below must then write into the DETACHED pair (i.e. be discarded), exactly
-  // like the old per-rule Map did.
+  // Capture the arrays together: a '>'-splice inside core() detaches them via
+  // fill(undefined), and the store below must then write into the DETACHED arrays
+  // (i.e. be discarded), exactly like the old per-rule Map did.
   let me = memoEnd[idx];
   let mn = memoNode[idx];
+  let mx = memoExt[idx];
   if (!mySup && !capped && me !== undefined) {
     const e = me[start];
     if (e !== undefined) {
       pos = e;
+      // The jump SEMANTICALLY reads everything the stored parse read: keep the advance
+      // watermark ≥ the entry's watermark, or an ENCLOSING rule that completes right
+      // after a reused subtree stores a watermark smaller than what its result depends
+      // on (including the child's own over-probing failed arms), and a later edit in
+      // the gap keeps the stale entry alive. A guaranteed batch no-op: the watermark is
+      // monotone and was already ≥ this value when the entry was stored.
+      const ex = mx[start];
+      if (ex > maxPos) maxPos = ex;
       const id = mn[start];
       if (id >= 0) { scPush(id); return true; }
       return false;
@@ -1928,11 +1981,16 @@ function parseRuleEntry(idx, name, core) {
     if (me === undefined) {
       me = new Array(tokN + 1);
       mn = new Array(tokN + 1);
+      mx = new Array(tokN + 1);
       memoEnd[idx] = me;
       memoNode[idx] = mn;
+      memoExt[idx] = mx;
     }
     me[start] = pos;
     mn[start] = result;
+    mx[start] = maxPos;   // the TRUE probe watermark — the +2 read slack (stop token,
+                          // SECOND-token dispatch) is applied at INVALIDATION time
+
   }
   if (result >= 0) { scPush(result); return true; }
   return false;
@@ -2031,7 +2089,7 @@ export function toObject(id) {
 }
 
 // Parse to the ARENA: returns the root node id.
-export function parse(source, entryRule) {
+function lexInto(source) {
 ${e.soa ? `  tokenize(source);` : String.raw`  src = source;
   const _toks = tokenize(source);
   const _n = _toks.length;
@@ -2044,19 +2102,24 @@ ${e.soa ? `  tokenize(source);` : String.raw`  src = source;
     tkText[_i] = _t.text;
   }
   tokN = _n;`}
+}
+
+function farthest(errPos) {
+  if (maxPos <= errPos || maxPos >= tokN) return '';
+  return ' [farthest: offset ' + tkOff[maxPos] + " near '" + tokTextAt(maxPos).slice(0, 20) + "']";
+}
+
+// Run the entry rule over the CURRENT token stream (shared by parse / parseEdited —
+// everything per-parse EXCEPT the memo and the arena cursor, which parseEdited carries).
+function runParse(entryRule) {
   pos = 0;
   maxPos = 0;
-  memoNode = new Array(MEMO_RULES);
-  memoEnd = new Array(MEMO_RULES);
   parseLimit = -1;
   cap = tokN;
   currentPrattContext = null;
   suppressNext = null;
   suppressCur = null;
-  nodeN = 0;
-  kidN = 0;
   scn = 0;
-
   const entry = entryRule ?? ENTRY;
   if (tokN === 0) {
     const rid = RULE_NAMES.indexOf(entry);
@@ -2070,14 +2133,143 @@ ${e.soa ? `  tokenize(source);` : String.raw`  src = source;
     throw new Error('Parse error at offset ' + tkOff[pos] + ": unexpected '" + tokTextAt(pos) + "' after successful parse" + farthest(pos));
   }
   return sc[--scn];
+}
 
-  function farthest(errPos) {
-    if (maxPos <= errPos || maxPos >= tokN) return '';
-    return ' [farthest: offset ' + tkOff[maxPos] + " near '" + tokTextAt(maxPos).slice(0, 20) + "']";
+// Source of the last COMPLETED parse — the token columns, arena and memo describe it.
+// null whenever the module state is not a coherent snapshot (no parse yet, or the last
+// attempt threw), so parseEdited falls back to a full parse.
+let lastSrc = null;
+// The spare token-column buffer set (parseEdited ping-pongs between the live set and
+// this one, so steady-state edits never allocate columns).
+let altK = null, altT = null, altOff = null, altEnd = null, altFl = null;
+${e.soa ? '' : 'let altText = [];'}
+
+export function parse(source, entryRule) {
+  lastSrc = null;
+  lexInto(source);
+  memoNode = new Array(MEMO_RULES);
+  memoEnd = new Array(MEMO_RULES);
+  memoExt = new Array(MEMO_RULES);
+  nodeN = 0;
+  kidN = 0;
+  const root = runParse(entryRule);
+  lastSrc = source;
+  return root;
+}
+
+// ── Incremental re-parse ──
+// No edit protocol: the caller hands the NEW source; the damage window is DERIVED by
+// diffing the old and new token columns (longest identical prefix; longest suffix
+// identical modulo the character delta). Reuse then flows through the carried memo:
+//   - prefix entries survive when their lookahead extent never reached the damage;
+//   - suffix entries survive shifted by the token delta (their reads are wholly inside
+//     the suffix, which is identical modulo position);
+//   - damaged-region entries are dropped and re-parsed.
+// The old arena is re-based in place (rows starting at/after the suffix shift by the
+// char delta; reused leaf entries by the token delta; rows STARTING inside the damage
+// are unreachable garbage — their values no longer matter), and new rows append after
+// the old ones. A full parse() compacts (resets the arena); long edit sessions grow
+// until then. Lexing is FULL-FILE by design: the lexer carries cross-token state
+// (template nesting, regex context, markup modes), full lexing is a small share of a
+// parse, and the diff is what localizes the damage — not the lexer.
+export function parseEdited(source, entryRule) {
+  if (lastSrc === null) return parse(source, entryRule);
+  const oSrc = lastSrc;
+  lastSrc = null;
+  // Stash the old columns BY REFERENCE and lex into the spare buffer set (ping-pong
+  // double buffer — steady-state edits allocate nothing and keep the pages warm).
+  const oK = tkK, oT = tkT, oOff = tkOff, oEnd = tkEnd, oFl = tkFl, oN = tokN;
+${e.soa ? '' : '  const oText = tkText;'}
+  if (altK === null || altK.length !== tkCap) {
+    altK = new tkK.constructor(tkCap); altT = new tkT.constructor(tkCap);
+    altOff = new Int32Array(tkCap); altEnd = new Int32Array(tkCap); altFl = new Uint8Array(tkCap);
   }
+  tkK = altK; tkT = altT; tkOff = altOff; tkEnd = altEnd; tkFl = altFl;
+${e.soa ? '' : '  tkText = altText; tkText.length = 0;'}
+  altK = oK; altT = oT; altOff = oOff; altEnd = oEnd; altFl = oFl;
+${e.soa ? '' : '  altText = oText;'}
+  lexInto(source);
+  if (tkCap !== oK.length) {
+    // the new lex outgrew the buffer (growTok reallocated): drop the stale spare
+    altK = null;
+  }
+  const nN = tokN;
+  const charDelta = source.length - oSrc.length;
+  const minN = oN < nN ? oN : nN;
+  // Longest identical prefix (positions included — the prefix is unshifted).
+  let p = 0;
+  while (p < minN && oK[p] === tkK[p] && oT[p] === tkT[p] && oFl[p] === tkFl[p]
+      && oOff[p] === tkOff[p] && oEnd[p] === tkEnd[p]${e.soa ? '' : ' && oText[p] === tkText[p]'}) p++;
+  // Longest identical suffix modulo charDelta (disjoint from the prefix).
+  let s = 0;
+  while (s < minN - p) {
+    const i = oN - 1 - s, j = nN - 1 - s;
+    if (oK[i] === tkK[j] && oT[i] === tkT[j] && oFl[i] === tkFl[j]
+      && oOff[i] + charDelta === tkOff[j] && oEnd[i] + charDelta === tkEnd[j]${e.soa ? '' : ' && oText[i] === tkText[j]'}) s++;
+    else break;
+  }
+  const dOldEnd = oN - s;          // damaged OLD tokens: [p, dOldEnd)
+  const tokenDelta = nN - oN;
+  // Re-base the old arena in place: rows starting at/after the first suffix token's OLD
+  // offset shift by charDelta; reused leaf entries past the damage shift by tokenDelta.
+  // (A reusable subtree lies entirely on one side of the damage, so the start-threshold
+  // classifies it correctly; damage-spanning rows are garbage either way.)
+  if (s > 0 && (charDelta !== 0 || tokenDelta !== 0)) {
+    const charThresh = oOff[dOldEnd];
+    if (charDelta !== 0) {
+      for (let i = 0; i < nodeN; i++) if (rowOff[i] >= charThresh) rowOff[i] += charDelta;
+    }
+    if (tokenDelta !== 0) {
+      const eShift = tokenDelta << 2;
+      for (let i = 0; i < kidN; i++) {
+        const e = kids[i];
+        if (e < 0 && ((~e) >>> 2) >= dOldEnd) kids[i] = e - eShift;
+      }
+    }
+  }
+  // Carry the memo across: prefix entries whose lookahead never reached the damage stay
+  // at their index; suffix entries move by tokenDelta (ids reference the re-based rows).
+  // tokenDelta === 0 (the common keystroke: editing within a token) mutates IN PLACE —
+  // no per-rule array allocation; only the damage window and the prefix entries whose
+  // extent crossed into it are cleared.
+  for (let r = 0; r < MEMO_RULES; r++) {
+    const me = memoEnd[r];
+    if (me === undefined) continue;
+    const mn = memoNode[r], mx = memoExt[r];
+    // prefix entries whose lookahead may have crossed into the damage die in place
+    // (mx is the advance watermark; reads run up to two tokens past it: the stop
+    // token and the SECOND-token dispatch probe)
+    for (let i = 0; i < p; i++) {
+      if (me[i] !== undefined && mx[i] + 2 > p) { me[i] = undefined; mn[i] = undefined; mx[i] = undefined; }
+    }
+    if (tokenDelta === 0) {
+      for (let i = p; i < dOldEnd; i++) {
+        if (me[i] !== undefined) { me[i] = undefined; mn[i] = undefined; mx[i] = undefined; }
+      }
+      continue;
+    }
+    // token count changed: rebuild the rule's arrays sparsely (measured FASTER than an
+    // in-place direction-aware shift — writing undefined through the holes materializes
+    // them; fresh holey arrays skip that entirely).
+    const nme = new Array(nN + 1), nmn = new Array(nN + 1), nmx = new Array(nN + 1);
+    const pCap = p < nN + 1 ? p : nN + 1;
+    for (let i = 0; i < pCap; i++) {
+      if (me[i] !== undefined) { nme[i] = me[i]; nmn[i] = mn[i]; nmx[i] = mx[i]; }
+    }
+    for (let i = dOldEnd; i <= oN; i++) {
+      if (me[i] !== undefined) {
+        const j = i + tokenDelta;
+        nme[j] = me[i] + tokenDelta; nmn[j] = mn[i]; nmx[j] = mx[i] + tokenDelta;
+      }
+    }
+    memoEnd[r] = nme; memoNode[r] = nmn; memoExt[r] = nmx;
+  }
+  const root = runParse(entryRule);
+  lastSrc = source;
+  return root;
 }
 
 export { tokenize };
-export function createParser() { return { parse, tree, visit, toObject, tokenize }; }
+export function createParser() { return { parse, parseEdited, tree, visit, toObject, tokenize }; }
 `);
 }
