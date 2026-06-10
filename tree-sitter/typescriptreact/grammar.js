@@ -97,6 +97,15 @@ module.exports = grammar({
     [$.type, $.class_heritage],
     [$.type_param, $.jsxtag_name],
     [$.expr, $.jsxcontainer],
+    [$.class_member],
+    [$.expr, $.prop, $.export_specifier],
+    [$.expr, $.export_specifier],
+    [$.prop],
+    [$.prop, $.decl],
+    [$.expr, $.prop, $.member_name],
+    [$.decorator_expr, $.new_target],
+    [$.binding_element],
+    [$.type_member, $.expr, $.prop, $.member_name],
   ],
 
   rules: {
