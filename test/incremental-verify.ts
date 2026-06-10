@@ -16,7 +16,7 @@ type Edit = { start: number; oldEnd: number; newEnd: number };
 type Cst = { root: number };
 type Parser = {
   parse(s: string): Cst;
-  edit(cst: Cst, s: string, edits?: Edit[]): Cst;
+  edit(cst: Cst, s: string, edits?: Edit[]): void;
   toObject(cst: Cst): unknown;
 };
 type Em = {
@@ -99,18 +99,18 @@ const failures: string[] = [];
 
 for (const [base, edited] of GLUE) {
   steps++;
-  let c0 = session.parse(base);
+  const c0 = session.parse(base);
   let fe: string | null = null, ie: string | null = null;
-  let fr = -1, ic: Cst | null = null;
+  let fr = -1;
   try { fr = fresh.parse(edited); } catch (e) { fe = (e as Error).message; }
-  try { ic = session.edit(c0, edited); } catch (e) { ie = (e as Error).message; }
+  try { session.edit(c0, edited); } catch (e) { ie = (e as Error).message; }
   if (fe !== null || ie !== null) {
     if ((fe === null) !== (ie === null)) { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: fresh ${fe ? 'reject' : 'accept'} / incremental ${ie ? 'reject' : 'accept'}`); }
     else bothReject++;
     continue;
   }
   const a = JSON.stringify(fresh.toObject(fr));
-  const b = JSON.stringify(session.toObject(ic!));
+  const b = JSON.stringify(session.toObject(c0));
   if (a === b) equal++;
   else { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: tree diverges`); }
 }
@@ -125,20 +125,19 @@ for (const f of FILES) {
     const tf0 = performance.now();
     try { freshRoot = fresh.parse(next); } catch (e) { freshErr = (e as Error).message; }
     const tf1 = performance.now();
-    let incCst: Cst | null = null, incErr: string | null = null;
+    let incErr: string | null = null;
     const useProtocol = k % 2 === 1;   // alternate: edits protocol / char-diff fallback
     const ti0 = performance.now();
-    try { incCst = session.edit(cst, next, useProtocol ? [edit] : undefined); } catch (e) { incErr = (e as Error).message; }
+    try { session.edit(cst, next, useProtocol ? [edit] : undefined); } catch (e) { incErr = (e as Error).message; }
     const ti1 = performance.now();
     if (freshErr !== null || incErr !== null) {
       if ((freshErr === null) !== (incErr === null)) {
         mismatch++;
         if (failures.length < 5) failures.push(`${f.split('/').pop()} step ${k}: fresh ${freshErr ? 'reject' : 'accept'} / incremental ${incErr ? 'reject' : 'accept'}\n    fresh: ${freshErr ?? '-'}\n    inc:   ${incErr ?? '-'}`);
       } else bothReject++;
-      // rejected text: the handle stays valid; the session does not advance
+      // rejected text: the handle stays on the previous tree; do not advance
       continue;
     }
-    cst = incCst!;
     tFresh += tf1 - tf0; tInc += ti1 - ti0;
     const a = JSON.stringify(fresh.toObject(freshRoot));
     const b = JSON.stringify(session.toObject(cst));

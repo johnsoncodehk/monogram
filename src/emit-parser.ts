@@ -2394,6 +2394,10 @@ function runParse(entryRule) {
 // null whenever the module state is not a coherent snapshot (no parse yet, or the last
 // attempt threw), so parseEdited falls back to a full parse.
 let lastSrc = null;
+// Source text of the LIVE tree (unlike lastSrc it survives a rejected edit): the
+// reject path restores the token columns to it so the handle keeps reading the
+// previous tree; only a successful parse/edit moves it.
+let treeSrc = null;
 // the LAST parse root's absolute coordinates (the descent origin — see visit/toObject)
 let rootCharBase = 0;
 let rootTokBase = 0;
@@ -2851,7 +2855,7 @@ function makeDoc() {
     kids: new Int32Array(16384), kidRel: new Int32Array(16384), kidTokRel: new Int32Array(16384),
     kidCap: 16384, kidN: 0,
     memoNode: [], memoEnd: [], memoExt: [], memoGen: [], memoGenCur: 0,
-    lastSrc: null, rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0,
+    lastSrc: null, treeSrc: null, rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0,
 ${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : ''}
     altK: null, altT: null, altOff: null, altEnd: null, altFl: null, altDp: null, altPd: null,
     altCap: 0, altN: 0,
@@ -2867,7 +2871,7 @@ function saveDoc(d) {
   d.kids = kids; d.kidRel = kidRel; d.kidTokRel = kidTokRel; d.kidCap = kidCap; d.kidN = kidN;
   d.memoNode = memoNode; d.memoEnd = memoEnd; d.memoExt = memoExt; d.memoGen = memoGen;
   d.memoGenCur = memoGenCur;
-  d.lastSrc = lastSrc; d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
+  d.lastSrc = lastSrc; d.treeSrc = treeSrc; d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
   d.lastRoot = lastRoot; d.lastRootTok = lastRootTok;
 ${e.soa ? '  d.parenCachePos = parenCachePos; d.parenCacheStack = parenCacheStack;' : ''}
   d.altK = altK; d.altT = altT; d.altOff = altOff; d.altEnd = altEnd; d.altFl = altFl;
@@ -2883,7 +2887,7 @@ function loadDoc(d) {
   kids = d.kids; kidRel = d.kidRel; kidTokRel = d.kidTokRel; kidCap = d.kidCap; kidN = d.kidN;
   memoNode = d.memoNode; memoEnd = d.memoEnd; memoExt = d.memoExt; memoGen = d.memoGen;
   memoGenCur = d.memoGenCur;
-  lastSrc = d.lastSrc; rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
+  lastSrc = d.lastSrc; treeSrc = d.treeSrc; rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
   lastRoot = d.lastRoot; lastRootTok = d.lastRootTok;
 ${e.soa ? '  parenCachePos = d.parenCachePos; parenCacheStack = d.parenCacheStack;' : ''}
   altK = d.altK; altT = d.altT; altOff = d.altOff; altEnd = d.altEnd; altFl = d.altFl;
@@ -2929,6 +2933,7 @@ function parseCore(source, entryRule) {
   lastRoot = root;
   lastRootTok = rootTokBase;
   lastSrc = source;
+  treeSrc = source;
   return root;
 }
 
@@ -2948,7 +2953,40 @@ function parseCore(source, entryRule) {
 // (template nesting, regex context, markup modes), full lexing is a small share of a
 // parse, and the diff is what localizes the damage — not the lexer.
 function editCore(source, entryRule, edits) {
-  if (lastSrc === null) return parseCore(source, entryRule);
+  try {
+    return editCoreRun(source, entryRule, edits);
+  } catch (e) {
+    // REJECTED edit: the splice (and any '>' splits of the failed attempt) already
+    // rewrote the token columns to the rejected text, and the append-mode fallback
+    // may have grown the arena — but the live tree's ROWS are untouched. Re-lexing
+    // the live tree's source restores every read path (leaf spans, visit, next
+    // edit's restart anchors); O(n) on the reject path only.
+    if (treeSrc !== null) { lexInto(treeSrc); lastSrc = null; }
+    throw e;
+  }
+}
+function editCoreRun(source, entryRule, edits) {
+  if (lastSrc === null) {
+    // No coherent edit base (a previous attempt rejected): full re-parse in APPEND
+    // mode — parseCore would reset the arena and destroy the live tree the handle
+    // still exposes if THIS parse rejects too. parse() is the only compaction point.
+    lexInto(source);
+    if (memoEnd.length !== MEMO_RULES) {
+      memoNode = new Array(MEMO_RULES);
+      memoEnd = new Array(MEMO_RULES);
+      memoExt = new Array(MEMO_RULES);
+      memoGen = new Array(MEMO_RULES);
+    }
+    memoGenCur++;
+    adoptRoot = -1;
+    adoptRunPos = -1;
+    const root = runParse(entryRule);
+    lastRoot = root;
+    lastRootTok = rootTokBase;
+    lastSrc = source;
+    treeSrc = source;
+    return root;
+  }
   const oSrc = lastSrc;
   lastSrc = null;
 ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
@@ -3103,6 +3141,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     lastRoot = sroot;
     lastRootTok = adoptRootTok;
     lastSrc = source;
+    treeSrc = source;
     return sroot;
   }
   const root = runParse(entryRule);
@@ -3110,6 +3149,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   lastRoot = root;
   lastRootTok = rootTokBase;
   lastSrc = source;
+  treeSrc = source;
   return root;
 }
 
@@ -3121,18 +3161,19 @@ export function parseEdited(source, entryRule, edits) { activate(docDefault); re
 export function visit(entry, fns, charBase, tokBase) { activate(docDefault); return visitCore(entry, fns, charBase, tokBase); }
 export function toObject(id, charBase, tokBase) { activate(docDefault); return toObjectCore(id, charBase, tokBase); }
 // ── Handle API: explicit trees over per-instance documents ──
-// const p = createParser(); const cst = p.parse(text); const cst2 = p.edit(cst, next[, edits]);
-// Trees are edited IN PLACE (node surgery): an edit invalidates every earlier handle
-// of this parser — using one throws instead of silently reading a mutated tree. A
-// REJECTED edit (parse error) leaves the previous handle valid; the next edit falls
-// back to a full re-parse internally.
+// const p = createParser(); const cst = p.parse(text); p.edit(cst, next[, edits]);
+// The handle is the STABLE IDENTITY of this document's tree: edit() mutates it in
+// place (node surgery) and returns nothing — a return value would read as a clone,
+// and there is none. A REJECTED edit (parse error) throws and leaves the handle on
+// the previous tree; the next edit falls back to a full re-parse internally. Only
+// parse() re-opening the document invalidates old handles (they throw).
 export function createParser() {
   const d = makeDoc();
   let gen = 0;
   let entryUsed;
   const chk = (cst) => {
     if (cst === null || cst === undefined || cst.d !== d) throw new Error('foreign tree handle: it belongs to another parser instance');
-    if (cst.gen !== gen) throw new Error('stale tree handle: trees are edited in place - use the handle returned by the latest parse/edit');
+    if (cst.gen !== gen) throw new Error('stale tree handle: parse() re-opened this document - use the handle from the latest parse()');
   };
   const view = {};
   for (const k of Object.keys(tree)) {
@@ -3143,14 +3184,14 @@ export function createParser() {
     parse(source, entryRule) {
       activate(d);
       entryUsed = entryRule;
+      gen++;   // re-opening resets the arena: old handles die even if THIS parse rejects
       const root = parseCore(source, entryRule);
-      return { d, gen: ++gen, root };
+      return { d, gen, root };
     },
     edit(cst, source, edits) {
       chk(cst);
       activate(d);
-      const root = editCore(source, entryUsed, edits);
-      return { d, gen: ++gen, root };
+      cst.root = editCore(source, entryUsed, edits);
     },
     visit(cst, fns) { chk(cst); activate(d); return visitCore(cst.root, fns); },
     toObject(cst) { chk(cst); activate(d); return toObjectCore(cst.root); },

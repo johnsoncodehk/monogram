@@ -16,7 +16,7 @@ const emPath = '/tmp/emitted-multidoc.mjs';
 writeFileSync(emPath, emitParser(grammar));
 type Edit = { start: number; oldEnd: number; newEnd: number };
 type Cst = { root: number };
-type Parser = { parse(s: string): Cst; edit(cst: Cst, s: string, edits?: Edit[]): Cst; toObject(cst: Cst): unknown; visit(cst: Cst, fns: object): void };
+type Parser = { parse(s: string): Cst; edit(cst: Cst, s: string, edits?: Edit[]): void; toObject(cst: Cst): unknown; visit(cst: Cst, fns: object): void };
 type Em = { parse(s: string): number; toObject(id: number): unknown; createParser(): Parser };
 const em = (await import(emPath + '?v=' + process.pid)) as Em;
 
@@ -55,9 +55,9 @@ for (let k = 0; k < 60; k++) {
   const next = mutate(text);
   steps++;
   let fe: string | null = null, ie: string | null = null;
-  let fc: Cst | null = null, ic: Cst | null = null;
+  let fc: Cst | null = null;
   try { fc = f.parse(next); } catch (e) { fe = (e as Error).message; }
-  try { ic = (onA ? p1 : p2).edit(onA ? cstA : cstB, next); } catch (e) { ie = (e as Error).message; }
+  try { (onA ? p1 : p2).edit(onA ? cstA : cstB, next); } catch (e) { ie = (e as Error).message; }
   if (fe !== null || ie !== null) {
     if ((fe === null) !== (ie === null)) { mismatch++; if (failures.length < 5) failures.push(`step ${k} (${onA ? 'A' : 'B'}): fresh ${fe ? 'reject' : 'accept'} / edit ${ie ? 'reject' : 'accept'}`); }
     else bothReject++;
@@ -66,7 +66,7 @@ for (let k = 0; k < 60; k++) {
   // mix the module-level default doc in between: it must not disturb either instance
   if (k % 5 === 0) em.parse('const mix = ' + k + ';');
   const a = JSON.stringify(f.toObject(fc!));
-  const b = JSON.stringify((onA ? p1 : p2).toObject(ic!));
+  const b = JSON.stringify((onA ? p1 : p2).toObject(onA ? cstA : cstB));
   if (a === b) equal++;
   else {
     mismatch++;
@@ -75,29 +75,38 @@ for (let k = 0; k < 60; k++) {
       failures.push(`step ${k} (${onA ? 'A' : 'B'}): tree diverges @${i}`);
     }
   }
-  if (onA) { textA = next; cstA = ic!; } else { textB = next; cstB = ic!; }
+  if (onA) textA = next; else textB = next;
 }
 
-// handle contract
+// handle contract: edit mutates the handle IN PLACE (no return — no clone illusion);
+// only parse() re-opening the document invalidates old handles; rejects keep the tree.
 let contract = 0;
 {
   const p = em.createParser();
   const c1 = p.parse('const a = 1;');
-  const c2 = p.edit(c1, 'const ab = 1;');
-  try { p.edit(c1, 'const x = 2;'); failures.push('stale handle did not throw'); } catch { contract++; }
-  try { p.toObject(c1); failures.push('stale toObject did not throw'); } catch { contract++; }
-  try { p2.edit(c2, 'const y = 3;'); failures.push('foreign handle did not throw'); } catch { contract++; }
-  // a rejected edit leaves the handle valid
+  const before = JSON.stringify(p.toObject(c1));
+  p.edit(c1, 'const ab = 1;');
+  const after = JSON.stringify(p.toObject(c1));
+  if (after !== before && after.includes('"end":8')) contract++;   // same handle, new tree
+  else failures.push('in-place edit did not update the handle');
+  try { p2.edit(c1, 'const y = 3;'); failures.push('foreign handle did not throw'); } catch { contract++; }
   let rejected = false;
-  try { p.edit(c2, 'const ] = ;'); } catch { rejected = true; }
-  const c3 = rejected ? p.edit(c2, 'const ab = 12;') : null;
-  if (!rejected || c3 === null) failures.push('reject-then-edit flow broke');
-  else contract++;
+  try { p.edit(c1, 'const ] = ;'); } catch { rejected = true; }
+  if (rejected && JSON.stringify(p.toObject(c1)) === after) contract++;   // reject keeps the tree
+  else failures.push('reject-then-read flow broke');
+  const c2 = p.parse('let q = 1;');
+  try { p.toObject(c1); failures.push('re-opened document: old handle did not throw'); } catch { contract++; }
+  // a REJECTING parse() resets the arena too — it must invalidate prior handles
+  try { p.parse('const ] = ;'); } catch { /* expected reject */ }
+  let dead = false;
+  try { p.toObject(c2); } catch { dead = true; }
+  if (dead) contract++;
+  else failures.push('rejecting parse() left the old handle readable over a reset arena');
 }
 
-console.log(`multi-doc: ${equal} equal · ${bothReject} both-reject · ${mismatch} MISMATCH (${steps} interleaved steps) · contract ${contract}/4`);
+console.log(`multi-doc: ${equal} equal · ${bothReject} both-reject · ${mismatch} MISMATCH (${steps} interleaved steps) · contract ${contract}/5`);
 for (const s of failures) console.log('  ✗ ' + s);
-if (mismatch > 0 || contract !== 4 || failures.length > 0) {
+if (mismatch > 0 || contract !== 5 || failures.length > 0) {
   console.error('✗ document isolation / handle contract violated');
   process.exit(1);
 }

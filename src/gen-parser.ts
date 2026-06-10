@@ -1482,9 +1482,14 @@ export function createParser(grammar: CstGrammar) {
     }
   }
 
-  // API parity with the emitted engine's handle surface: the interpreter builds
-  // immutable object trees, so edit() is a full re-parse (no reuse, no staleness).
-  const edit = (_cst: unknown, source: string) => parse(source);
+  // API parity with the emitted engine's handle surface: edit() re-parses and
+  // updates the SAME tree object in place (the handle is the document's tree —
+  // edit returns nothing, exactly like the emitted engine; no reuse here).
+  const edit = (cst: { rule: string; children: unknown[]; offset: number; end: number }, source: string): void => {
+    const next = parse(source) as typeof cst;
+    cst.rule = next.rule; cst.children = next.children;
+    cst.offset = next.offset; cst.end = next.end;
+  };
   return { parse, edit, tokenize, profCounts };
 }
 
