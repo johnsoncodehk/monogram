@@ -1504,6 +1504,12 @@ let maxPos = 0;
 let memoNode = [];
 let memoEnd = [];
 let memoExt = [];   // per-entry lookahead extent (see parseRuleEntry)
+// GENERATION-STAMPED memo: the per-rule arrays persist across parses (allocating
+// fresh multi-million-slot arrays per edit cost ~30% of a large-file edit in GC
+// alone); an entry is live iff its stamp equals the current generation — bumping
+// memoGenCur IS the whole reset.
+let memoGen = [];
+let memoGenCur = 0;
 let parseLimit = -1;
 // cap = the exclusive lookahead bound: min(parseLimit-or-∞, tokN), maintained at the
 // parseLimit set/restore sites and the one token-stream mutation (the '>' splice).
@@ -1571,9 +1577,7 @@ function matchPuLitGT(pu) {
     tokN++;
     if (parseLimit < 0) cap = tokN;
     // Token indices shifted: drop the per-rule memo arrays (recreated lazily at the new size).
-    memoNode.fill(undefined);
-    memoEnd.fill(undefined);
-    memoExt.fill(undefined);
+    memoGenCur++;   // positions shifted mid-parse: every stamped entry is stale
     // GREEN tree: no kids/scratch fixup — every completed row and scratch entry lies
     // wholly BEFORE the splice point (token pos is being consumed right now), and the
     // carried memo was just cleared, so nothing reachable references shifted indices.
@@ -2014,7 +2018,8 @@ function parseRuleEntry(idx, rid, name, core) {
   let me = memoEnd[idx];
   let mn = memoNode[idx];
   let mx = memoExt[idx];
-  if (!mySup && !capped && me !== undefined) {
+  let mg = memoGen[idx];
+  if (!mySup && !capped && me !== undefined && mg[start] === memoGenCur) {
     const e = me[start];
     if (e !== undefined) {
       pos = e;
@@ -2051,17 +2056,20 @@ function parseRuleEntry(idx, rid, name, core) {
         if (ext > maxPos) maxPos = ext;
         absTok[aid] = start;
         absChar[aid] = tkOff[start];
-        if (me === undefined) {
+        if (me === undefined || me.length < tokN + 1) {
           me = new Array(tokN + 1);
           mn = new Array(tokN + 1);
           mx = new Array(tokN + 1);
+          mg = new Int32Array(tokN + 1);
           memoEnd[idx] = me;
           memoNode[idx] = mn;
           memoExt[idx] = mx;
+          memoGen[idx] = mg;
         }
         me[start] = pos;
         mn[start] = aid;
         mx[start] = maxPos;
+        mg[start] = memoGenCur;
         scPush(aid);
         return true;
       }
@@ -2079,17 +2087,20 @@ function parseRuleEntry(idx, rid, name, core) {
     suppressCur = prevSup;
   }
   if (!mySup && !capped) {
-    if (me === undefined) {
+    if (me === undefined || me.length < tokN + 1) {
       me = new Array(tokN + 1);
       mn = new Array(tokN + 1);
       mx = new Array(tokN + 1);
+      mg = new Int32Array(tokN + 1);
       memoEnd[idx] = me;
       memoNode[idx] = mn;
       memoExt[idx] = mx;
+      memoGen[idx] = mg;
     }
     me[start] = pos;
     mn[start] = result;
-    mx[start] = maxPos;   // the TRUE probe watermark — the +2 read slack (stop token,
+    mx[start] = maxPos;
+    mg[start] = memoGenCur;   // the TRUE probe watermark — the +2 read slack (stop token,
                           // SECOND-token dispatch) is applied at INVALIDATION time
     if (result >= 0) rowOK[result] = 1;
 
@@ -2368,9 +2379,13 @@ export function parse(source, entryRule) {
   lastSrc = null;
   adoptRoot = -1;
   lexInto(source);
-  memoNode = new Array(MEMO_RULES);
-  memoEnd = new Array(MEMO_RULES);
-  memoExt = new Array(MEMO_RULES);
+  if (memoEnd.length !== MEMO_RULES) {
+    memoNode = new Array(MEMO_RULES);
+    memoEnd = new Array(MEMO_RULES);
+    memoExt = new Array(MEMO_RULES);
+    memoGen = new Array(MEMO_RULES);
+  }
+  memoGenCur++;
   nodeN = 0;
   kidN = 0;
   const root = runParse(entryRule);
@@ -2494,9 +2509,13 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // M4: NO memo carry — the memo is intra-parse; reuse flows through old-tree
   // adoption (parseRuleEntry consults the previous root via adoptSeek), so the whole
   // O(rules × n) carry/invalidate machinery is gone.
-  memoNode = new Array(MEMO_RULES);
-  memoEnd = new Array(MEMO_RULES);
-  memoExt = new Array(MEMO_RULES);
+  if (memoEnd.length !== MEMO_RULES) {
+    memoNode = new Array(MEMO_RULES);
+    memoEnd = new Array(MEMO_RULES);
+    memoExt = new Array(MEMO_RULES);
+    memoGen = new Array(MEMO_RULES);
+  }
+  memoGenCur++;
   adoptRoot = lastRoot;
   adoptRootTok = lastRootTok;
   adoptDmgStart = p;
