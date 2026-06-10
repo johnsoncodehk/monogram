@@ -103,6 +103,11 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// ── Emitted lexer (emit-lexer.ts): specialized tokenize for this grammar ──`);
   for (const m of matchers) emit(`const ${m.re} = new RegExp(${J(`(?:${m.pattern})`)}, ${J(m.flags)});`);
   emit(`const LX_WS = /\\s+/y;`);
+  emit(`// window-truncation retry: a matcher failing at the WINDOW edge is not a lex`);
+  emit(`// error — the caller re-materializes a larger window (truncation cannot fake a`);
+  emit(`// resync: suffix-zone equality makes a cut token's END mismatch the old one)`);
+  emit(`const LEX_RETRY = { retry: true };`);
+  emit(`let lexWindowMore = false;`);
   emit(`const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;`);
   emit(`const LX_UNI_CONT = /[$\\u200c\\u200d\\p{ID_Continue}]+/uy;`);
   emit(`const LX_UNI_FULL = /^[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/u;`);
@@ -177,7 +182,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       emit(`      if (validateEscapes) {`);
       emit(`        LX_TPL_ESC.lastIndex = pos;`);
       emit(`        const m = LX_TPL_ESC.exec(source);`);
-      emit(`        if (!m) throw new Error('Invalid escape sequence in template at offset ' + pos);`);
+      emit(`        if (!m) { if (lexWindowMore) throw LEX_RETRY; throw new Error('Invalid escape sequence in template at offset ' + pos); }`);
       emit(`        pos += m[0].length;`);
       emit(`      } else { pos += 2; }`);
     } else {
@@ -188,6 +193,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`    if (${startsWithExpr('source', 'pos', tplOpen)}) return { endsWithInterp: false, end: pos + ${tplOpen.length} };`);
     emit(`    pos++;`);
     emit(`  }`);
+    emit(`  if (lexWindowMore) throw LEX_RETRY;`);
     emit(`  throw new Error('Unterminated template literal at offset ' + pos);`);
     emit(`}`);
   }
@@ -197,7 +203,8 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   // when a CST leaf is built. Flag bits: 1 = newlineBefore (the only stamp this emitted
   // lexer ever sets; comment/multilineFlow stamps belong to fallback-only grammars).
   emit(`function tokenize(source) {`);
-  emit(`  src = source;`);
+  emit(`  docPieces = [source]; docPieceOff = [0]; docLen = source.length;`);
+  emit(`  docFlat = source; docCur = 0;`);
   emit(`  tokN = 0;`);
   emit(`  parenCachePos = -1;`);
   emit(`  srcLenP1 = source.length + 1;`);
@@ -213,7 +220,9 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// old token (same k/t, offsets shifted by wndDelta, both depth records 0) while`);
   emit(`// the window's own stacks are empty — returns that OLD index (the duplicate push`);
   emit(`// is retracted), or -1 when lexing ran to EOF.`);
-  emit(`function lexCore(source, startPos, pvK, pvT, wndPtr0, wndMinOff, wndDelta, wndCs, initParens) {`);
+  emit(`function lexCore(source, startPos, pvK, pvT, wndPtr0, wndMinOff, wndDelta, wndCs, initParens, srcBase, hasMore) {`);
+  emit(`  if (srcBase === undefined) srcBase = 0;`);
+  emit(`  lexWindowMore = hasMore === true;`);
   emit(`  const n = source.length;`);
   emit(`  let pos = startPos;`);
   emit(`  let pendingNl = false;`);
@@ -231,6 +240,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  let dmgDp = -1, dmgPd = -1;`);
   emit(`  let lastDp = templateStack.length, lastPd = parenHeadStack.length;`);
   emit(`  function tkPush(k, t, off, end) {`);
+  emit(`    off += srcBase; end += srcBase;`);
   emit(`    if (tokN === tkCap) growTok();`);
   emit(`    tkK[tokN] = k; tkT[tokN] = t; tkOff[tokN] = off; tkEnd[tokN] = end;`);
   emit(`    tkFl[tokN] = (pendingNl ? 1 : 0) | extraFl;`);
@@ -360,7 +370,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`${ind}  if (m !== null) {`);
     if (m.identLike) {
       const plen = (identPrefixByName.get(m.name) ?? '').length;
-      emit(`${ind}    if (!lexIdentValid(m[0], ${plen})) throw new Error("Invalid identifier escape at offset " + pos + ": '" + m[0] + "'");`);
+      emit(`${ind}    if (!lexIdentValid(m[0], ${plen})) { if (lexWindowMore) throw LEX_RETRY; throw new Error("Invalid identifier escape at offset " + pos + ": '" + m[0] + "'"); }`);
     }
     if (m.skip) {
       emit(`${ind}    if (m[0].includes('\\n')) pendingNl = true;`);
@@ -470,13 +480,13 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`      const _li = tokN - 1;`);
     const likeKs = [...identLike].map(kOf);
     const likeCond = likeKs.map(k => `tkK[_li] === ${k}`).join(' || ');
-    emit(`      if ((${likeCond}) && tkEnd[_li] === pos) {`);
+    emit(`      if ((${likeCond}) && tkEnd[_li] === pos + srcBase) {`);
     emit(`        LX_UNI_CONT.lastIndex = pos;`);
     emit(`        const cont = LX_UNI_CONT.exec(source);`);
     emit(`        if (cont !== null) {`);
     emit(`          pos += cont[0].length;`);
-    emit(`          tkEnd[_li] = pos;`);
-    emit(`          tkT[_li] = lexKwT(source, tkOff[_li], pos);`);
+    emit(`          tkEnd[_li] = pos + srcBase;`);
+    emit(`          tkT[_li] = lexKwT(source, tkOff[_li] - srcBase, pos);`);
     emit(`          continue;`);
     emit(`        }`);
     emit(`      }`);
@@ -504,10 +514,11 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`      }`);
     emit(`    }`);
   }
+  emit(`    if (lexWindowMore) throw LEX_RETRY;`);
   emit(`    throw new Error("Unexpected character at offset " + pos + ": '" + source[pos] + "'");`);
   emit(`  }`);
   emit(`  if (wndHit >= 0) { tokN--; return wndHit; }`);
-  emit(`  return -1;`);
+  emit(`  return hasMore ? -2 : -1;`);
   emit(`}`);
   emit(`// Windowed-relex restart anchor: the last token B ending at/before the damage`);
   emit(`// whose recorded stack depths are zero and whose shape leaves no cross-token`);

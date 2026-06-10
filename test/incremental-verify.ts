@@ -13,11 +13,11 @@ import { emitParser } from '../src/emit-parser.ts';
 const grammar = (await import('../typescript.ts')).default;
 const emPath = '/tmp/emitted-incremental.mjs';
 writeFileSync(emPath, emitParser(grammar));
-type Edit = { start: number; oldEnd: number; newEnd: number };
+type Edit = { start: number; end: number; text: string };
 type Cst = { root: number };
 type Parser = {
   parse(s: string): Cst;
-  edit(cst: Cst, s: string, edits?: Edit[]): void;
+  edit(cst: Cst, edits: Edit[]): void;
   visit(cst: Cst, fns: object): void;
   tree: import('./emitted-obj.ts').TreeView;
 };
@@ -46,16 +46,16 @@ function mutate(text: string): { next: string; edit: Edit } {
     case 0: { // insert a small fragment at a random position
       const at = randInt(text.length);
       const ins = INSERTS[randInt(INSERTS.length)];
-      return { next: text.slice(0, at) + ins + text.slice(at), edit: { start: at, oldEnd: at, newEnd: at + ins.length } };
+      return { next: text.slice(0, at) + ins + text.slice(at), edit: { start: at, end: at, text: ins } };
     }
     case 1: { // delete a small span
       const at = randInt(Math.max(1, text.length - 8));
       const n = 1 + randInt(6);
-      return { next: text.slice(0, at) + text.slice(at + n), edit: { start: at, oldEnd: at + n, newEnd: at } };
+      return { next: text.slice(0, at) + text.slice(at + n), edit: { start: at, end: at + n, text: '' } };
     }
     case 2: { // replace a character
       const at = randInt(Math.max(1, text.length - 1));
-      return { next: text.slice(0, at) + 'z' + text.slice(at + 1), edit: { start: at, oldEnd: at + 1, newEnd: at + 1 } };
+      return { next: text.slice(0, at) + 'z' + text.slice(at + 1), edit: { start: at, end: at + 1, text: 'z' } };
     }
     case 3: { // insert a whole statement at a line boundary
       const lines = text.split('\n');
@@ -63,11 +63,11 @@ function mutate(text: string): { next: string; edit: Edit } {
       const stmt = STMTS[randInt(STMTS.length)].trimEnd();
       lines.splice(at, 0, stmt);
       const start = at === 0 ? 0 : lines.slice(0, at).join('\n').length + 1;
-      return { next: lines.join('\n'), edit: { start, oldEnd: start, newEnd: start + stmt.length + 1 } };
+      return { next: lines.join('\n'), edit: { start, end: start, text: stmt + '\n' } };
     }
     default: { // append at the end (the pure-prefix reuse case)
       const stmt = '\n' + STMTS[randInt(STMTS.length)];
-      return { next: text + stmt, edit: { start: text.length, oldEnd: text.length, newEnd: text.length + stmt.length } };
+      return { next: text + stmt, edit: { start: text.length, end: text.length, text: stmt } };
     }
   }
 }
@@ -87,13 +87,13 @@ const STEPS = 30;
 // strict-< restart anchor; every one must match fresh (tree or reject) exactly.
 // Test-side range derivation for constructed pairs (the ENGINE requires explicit
 // ranges — a caller without them passes the whole-file range for a full re-parse).
-function diffRange(a: string, b: string): Edit {
+function diffChange(a: string, b: string): Edit {
   const minL = Math.min(a.length, b.length);
   let s = 0;
   while (s < minL && a.charCodeAt(s) === b.charCodeAt(s)) s++;
   let e = 0;
   while (e < minL - s && a.charCodeAt(a.length - 1 - e) === b.charCodeAt(b.length - 1 - e)) e++;
-  return { start: s, oldEnd: a.length - e, newEnd: b.length - e };
+  return { start: s, end: a.length - e, text: b.slice(s, b.length - e) };
 }
 
 const GLUE: Array<[string, string]> = [
@@ -117,7 +117,7 @@ for (const [base, edited] of GLUE) {
   let fe: string | null = null, ie: string | null = null;
   let fr = -1;
   try { fr = fresh.parse(edited); } catch (e) { fe = (e as Error).message; }
-  try { session.edit(c0, edited, [diffRange(base, edited)]); } catch (e) { ie = (e as Error).message; }
+  try { session.edit(c0, [diffChange(base, edited)]); } catch (e) { ie = (e as Error).message; }
   if (fe !== null || ie !== null) {
     if ((fe === null) !== (ie === null)) { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: fresh ${fe ? 'reject' : 'accept'} / incremental ${ie ? 'reject' : 'accept'}`); }
     else bothReject++;
@@ -141,14 +141,31 @@ for (const f of FILES) {
     const tf1 = performance.now();
     let incErr: string | null = null;
     const ti0 = performance.now();
-    try { session.edit(cst, next, [edit]); } catch (e) { incErr = (e as Error).message; }
+    try { session.edit(cst, [edit]); } catch (e) { incErr = (e as Error).message; }
     const ti1 = performance.now();
     if (freshErr !== null || incErr !== null) {
       if ((freshErr === null) !== (incErr === null)) {
         mismatch++;
         if (failures.length < 5) failures.push(`${f.split('/').pop()} step ${k}: fresh ${freshErr ? 'reject' : 'accept'} / incremental ${incErr ? 'reject' : 'accept'}\n    fresh: ${freshErr ?? '-'}\n    inc:   ${incErr ?? '-'}`);
       } else bothReject++;
-      // rejected text: the handle stays on the previous tree; do not advance
+      // REJECTED text: the handle stays on the previous tree, but the DOCUMENT
+      // advances (editor-buffer model — the buffer applied the change regardless,
+      // and the engine's docSrc tracks it). Model the editor's UNDO: revert via a
+      // diff edit in the rejected text's coordinates; it must be accepted and
+      // byte-identical to a fresh parse of the restored text.
+      try {
+        session.edit(cst, [diffChange(next, text)]);
+        const rfr = fresh.parse(text);
+        const ra = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(rfr, fns)));
+        const rb = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns)));
+        if (ra !== rb) {
+          mismatch++;
+          if (failures.length < 5) failures.push(`${f.split('/').pop()} step ${k}: REVERT tree diverges`);
+        }
+      } catch (e2) {
+        mismatch++;
+        if (failures.length < 5) failures.push(`${f.split('/').pop()} step ${k}: revert rejected: ${(e2 as Error).message.slice(0, 50)}`);
+      }
       continue;
     }
     tFresh += tf1 - tf0; tInc += ti1 - ti0;

@@ -1387,7 +1387,85 @@ let tkDp = new Uint8Array(4096);
 let tkPd = new Uint16Array(4096);
 let tkCap = 4096;
 let tokN = 0;
-let src = '';
+// ── The DOCUMENT text layer ──
+// The text lives as PIECES (flat string fragments): applying a change splits the
+// covering pieces (O(1) SlicedString views — never a flatten) and splices the new
+// text in, so a keystroke costs O(pieces), not the O(n) cons-flatten a slice+concat
+// per edit forces in V8 (measured: ~1.2ms per edit on 9MB). docFlat caches the
+// joined form for the cold paths that need one (errors, debug views); batch parses
+// set it directly. Reads route through docChar/docText: flat fast path, piece
+// lookup (cursor-cached) otherwise.
+let docPieces = null;
+let docPieceOff = null;
+let docLen = 0;
+let docFlat = null;
+let docCur = 0;
+function docLocate(i) {
+  let k = docCur;
+  const po = docPieceOff;
+  const n = po.length;
+  if (k >= n || po[k] > i || (k + 1 < n && po[k + 1] <= i)) {
+    let lo = 0, hi = n;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (po[m] <= i) lo = m + 1; else hi = m; }
+    k = lo - 1;
+    docCur = k;
+  }
+  return k;
+}
+function docChar(i) {
+  if (docFlat !== null) return docFlat.charCodeAt(i);
+  const k = docLocate(i);
+  return docPieces[k].charCodeAt(i - docPieceOff[k]);
+}
+function docText(a, b) {
+  if (docFlat !== null) return docFlat.slice(a, b);
+  if (b <= a) return '';
+  let k = docLocate(a);
+  const first = docPieces[k];
+  const lo = a - docPieceOff[k];
+  if (b - docPieceOff[k] <= first.length) return first.slice(lo, b - docPieceOff[k]);
+  let out = first.slice(lo);
+  k++;
+  while (k < docPieces.length && docPieceOff[k] < b) {
+    const piece = docPieces[k];
+    const need = b - docPieceOff[k];
+    out += need >= piece.length ? piece : piece.slice(0, need);
+    k++;
+  }
+  return out;
+}
+function flattenDoc() {
+  if (docFlat === null) docFlat = docPieces.join('');
+  return docFlat;
+}
+function applyChange(start, end, text) {
+  const ks = docLocate(start);
+  const ke = docLocate(end > start ? end - 1 : start);
+  const head = docPieces[ks].slice(0, start - docPieceOff[ks]);
+  const tailPiece = end > start ? docPieces[ke] : docPieces[ks];
+  const tailOff = end - docPieceOff[end > start ? ke : ks];
+  const tail = tailPiece.slice(tailOff);
+  const repl = [];
+  if (head.length > 0) repl.push(head);
+  if (text.length > 0) repl.push(text);
+  if (tail.length > 0) repl.push(tail);
+  docPieces.splice(ks, (end > start ? ke : ks) - ks + 1, ...repl);
+  // consolidate when fragmenting (amortized: a join every ≥256 edits)
+  if (docPieces.length > 256) {
+    docPieces = [docPieces.join('')];
+  }
+  docLen += text.length - (end - start);
+  // rebuild offsets from the splice point (suffix offsets shifted anyway)
+  if (docPieceOff.length !== docPieces.length) docPieceOff.length = docPieces.length;
+  let off = ks > 0 && ks - 1 < docPieces.length ? docPieceOff[ks - 1] + docPieces[ks - 1].length : 0;
+  for (let k2 = ks > 0 ? ks : 0; k2 < docPieces.length; k2++) {
+    docPieceOff[k2] = off;
+    off += docPieces[k2].length;
+  }
+  if (docPieces.length === 1) docPieceOff[0] = 0;
+  docCur = 0;
+  docFlat = null;
+}
 // ── EOF-relative spans (incremental sessions) ──
 // A token's tkOff/tkEnd may be stored EOF-RELATIVE (value − (srcLen + 1), strictly
 // negative): the decode adds the CURRENT length back, so a pure suffix never needs
@@ -1643,7 +1721,7 @@ function matchPuLitGT(pu) {
   // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>': shift the
   // columns up one slot and write the '>' + rest pair in place (both born flag-less,
   // matching the old mkPunct pair).
-  if (tkK[pos] === K_PUNCT && tend(pos) - off > 1 && ${e.soa ? 'src.charCodeAt(off) === 62' : "tkText[pos].charCodeAt(0) === 62"}) {
+  if (tkK[pos] === K_PUNCT && tend(pos) - off > 1 && ${e.soa ? 'docChar(off) === 62' : "tkText[pos].charCodeAt(0) === 62"}) {
     const end0 = tend(pos);
     ${e.soa ? '' : 'const restText = tkText[pos].slice(1);'}
     if (tokN === tkCap) growTok();
@@ -1667,7 +1745,7 @@ function matchPuLitGT(pu) {
       tkT[pos] = pu; tkEnd[pos] = off + 1 - srcLenP1; tkFl[pos] = 0;
       tkOff[pos + 1] = off + 1 - srcLenP1; tkFl[pos + 1] = 0;
     }
-    tkT[pos + 1] = ${e.soa ? 'LIT_PU.get(src.slice(off + 1, end0)) ?? 0' : 'LIT_PU.get(restText) ?? 0'};
+    tkT[pos + 1] = ${e.soa ? 'LIT_PU.get(docText(off + 1, end0)) ?? 0' : 'LIT_PU.get(restText) ?? 0'};
     tokN++;
     if (parseLimit < 0) cap = tokN;
     // Token indices shifted: drop the per-rule memo arrays (recreated lazily at the new size).
@@ -1992,7 +2070,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`          const _h = kids[rowStart[lhs]];`);
   e.emit(`          if (_h < 0 && ((~_h) & 3) === 2) {`);
   e.emit(`            const _ht = absTok[lhs] + ((~_h) >>> 2);`);
-  e.emit(`            const _htext = ${e.soa ? 'src.slice(toff(_ht), tend(_ht))' : 'tkText[_ht]'};`);
+  e.emit(`            const _htext = ${e.soa ? 'docText(toff(_ht), tend(_ht))' : 'tkText[_ht]'};`);
   e.emit(`            if (prefixOps.has(_htext) && !postfixOpValues.has(_htext)) { return -1; }`);
   e.emit(`          }`);
   e.emit(`        }`);
@@ -2227,7 +2305,7 @@ function parseRuleEntry(idx, rid, name, core) {
 
 // Token text at an arbitrary index (cold paths: errors, the tokenAt debug view).
 function tokTextAt(i) {
-  return ${e.soa ? 'src.slice(toff(i), tend(i))' : 'tkText[i]'};
+  return ${e.soa ? 'docText(toff(i), tend(i))' : 'tkText[i]'};
 }
 // The k → type-name inverse, for reconstructing a token object (tokenAt).
 const K_NAMES = [];
@@ -2322,7 +2400,7 @@ function visitCore(entry, fns, charBase, tokBase) {
 
 // Parse to the ARENA: returns the root node id.
 function lexInto(source) {
-${e.soa ? `  tokenize(source);` : String.raw`  src = source;
+${e.soa ? `  tokenize(source);` : String.raw`  docPieces = [source]; docPieceOff = [0]; docLen = source.length; docFlat = source; docCur = 0;
   const _toks = tokenize(source);
   const _n = _toks.length;
   while (tkCap < _n + 1) growTok();
@@ -2375,11 +2453,14 @@ function runParse(entryRule) {
 // Source of the last COMPLETED parse — the token columns, arena and memo describe it.
 // null whenever the module state is not a coherent snapshot (no parse yet, or the last
 // attempt threw), so parseEdited falls back to a full parse.
-let lastSrc = null;
-// Source text of the LIVE tree (unlike lastSrc it survives a rejected edit): the
-// reject path restores the token columns to it so the handle keeps reading the
-// previous tree; only a successful parse/edit moves it.
-let treeSrc = null;
+// Coherent-edit-base flag: false after a rejected attempt (the next edit falls
+// back to a full re-parse of the document text).
+let lastOk = false;
+// Pieces snapshot of the LIVE tree's text (survives a rejected edit): the reject
+// path re-lexes it so the handle keeps reading the previous tree. The document
+// pieces above advance on EVERY edit, accepted or rejected — the editor's buffer
+// applied the change regardless, and later coordinates are against it.
+let treePieces = null;
 // the LAST parse root's absolute coordinates (the descent origin — see visit/toObject)
 let rootCharBase = 0;
 let rootTokBase = 0;
@@ -2519,6 +2600,8 @@ function runExtend(rid) {
 // uses, made transitive by rowKC: each kid's probe watermark stays at/below the
 // next kid's start, so checking the LAST kept kid bounds them all.
 let surgX = [], surgBase = [], surgA = [], surgB = [];
+// composed change envelope handed from the text-application step to the window relex
+let editDmgS = 0, editDmgE = 0;
 function rowKCof(id) {
   const c = rowKC[id];
   if (c !== 0) return c;
@@ -2827,7 +2910,7 @@ function makeDoc() {
     tkK: new tkK.constructor(4096), tkT: new tkT.constructor(4096),
     tkOff: new Int32Array(4096), tkEnd: new Int32Array(4096), tkFl: new Uint8Array(4096),
     tkDp: new Uint8Array(4096), tkPd: new Uint16Array(4096),
-    tkCap: 4096, tokN: 0, src: '', srcLenP1: 1, negFrom: 0x7fffffff,
+    tkCap: 4096, tokN: 0, srcLenP1: 1, negFrom: 0x7fffffff,
     rowRule: new Uint16Array(8192), rowLen: new Int32Array(8192), rowTokLen: new Int32Array(8192),
     rowStart: new Int32Array(8192), rowCount: new Int32Array(8192), rowExt: new Int32Array(8192),
     rowOK: new Uint8Array(8192), rowKC: new Uint8Array(8192),
@@ -2837,7 +2920,9 @@ function makeDoc() {
     kids: new Int32Array(16384), kidRel: new Int32Array(16384), kidTokRel: new Int32Array(16384),
     kidCap: 16384, kidN: 0,
     memoNode: [], memoEnd: [], memoExt: [], memoGen: [], memoGenCur: 0,
-    lastSrc: null, treeSrc: null, rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0,
+    lastOk: false, treePieces: null,
+    docPieces: null, docPieceOff: null, docLen: 0, docFlat: null, docCur: 0,
+    rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0,
 ${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : ''}
     altK: null, altT: null, altOff: null, altEnd: null, altFl: null, altDp: null, altPd: null,
     altCap: 0, altN: 0,
@@ -2845,7 +2930,7 @@ ${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : ''}
 }
 function saveDoc(d) {
   d.tkK = tkK; d.tkT = tkT; d.tkOff = tkOff; d.tkEnd = tkEnd; d.tkFl = tkFl;
-  d.tkDp = tkDp; d.tkPd = tkPd; d.tkCap = tkCap; d.tokN = tokN; d.src = src;
+  d.tkDp = tkDp; d.tkPd = tkPd; d.tkCap = tkCap; d.tokN = tokN;
   d.srcLenP1 = srcLenP1; d.negFrom = negFrom;
   d.rowRule = rowRule; d.rowLen = rowLen; d.rowTokLen = rowTokLen; d.rowStart = rowStart;
   d.rowCount = rowCount; d.rowExt = rowExt; d.rowOK = rowOK; d.rowKC = rowKC; d.rowNF = rowNF;
@@ -2853,7 +2938,9 @@ function saveDoc(d) {
   d.kids = kids; d.kidRel = kidRel; d.kidTokRel = kidTokRel; d.kidCap = kidCap; d.kidN = kidN;
   d.memoNode = memoNode; d.memoEnd = memoEnd; d.memoExt = memoExt; d.memoGen = memoGen;
   d.memoGenCur = memoGenCur;
-  d.lastSrc = lastSrc; d.treeSrc = treeSrc; d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
+  d.lastOk = lastOk; d.treePieces = treePieces;
+  d.docPieces = docPieces; d.docPieceOff = docPieceOff; d.docLen = docLen; d.docFlat = docFlat; d.docCur = docCur;
+  d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
   d.lastRoot = lastRoot; d.lastRootTok = lastRootTok;
 ${e.soa ? '  d.parenCachePos = parenCachePos; d.parenCacheStack = parenCacheStack;' : ''}
   d.altK = altK; d.altT = altT; d.altOff = altOff; d.altEnd = altEnd; d.altFl = altFl;
@@ -2861,7 +2948,7 @@ ${e.soa ? '  d.parenCachePos = parenCachePos; d.parenCacheStack = parenCacheStac
 }
 function loadDoc(d) {
   tkK = d.tkK; tkT = d.tkT; tkOff = d.tkOff; tkEnd = d.tkEnd; tkFl = d.tkFl;
-  tkDp = d.tkDp; tkPd = d.tkPd; tkCap = d.tkCap; tokN = d.tokN; src = d.src;
+  tkDp = d.tkDp; tkPd = d.tkPd; tkCap = d.tkCap; tokN = d.tokN;
   srcLenP1 = d.srcLenP1; negFrom = d.negFrom;
   rowRule = d.rowRule; rowLen = d.rowLen; rowTokLen = d.rowTokLen; rowStart = d.rowStart;
   rowCount = d.rowCount; rowExt = d.rowExt; rowOK = d.rowOK; rowKC = d.rowKC; rowNF = d.rowNF;
@@ -2869,7 +2956,9 @@ function loadDoc(d) {
   kids = d.kids; kidRel = d.kidRel; kidTokRel = d.kidTokRel; kidCap = d.kidCap; kidN = d.kidN;
   memoNode = d.memoNode; memoEnd = d.memoEnd; memoExt = d.memoExt; memoGen = d.memoGen;
   memoGenCur = d.memoGenCur;
-  lastSrc = d.lastSrc; treeSrc = d.treeSrc; rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
+  lastOk = d.lastOk; treePieces = d.treePieces;
+  docPieces = d.docPieces; docPieceOff = d.docPieceOff; docLen = d.docLen; docFlat = d.docFlat; docCur = d.docCur;
+  rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
   lastRoot = d.lastRoot; lastRootTok = d.lastRootTok;
 ${e.soa ? '  parenCachePos = d.parenCachePos; parenCacheStack = d.parenCacheStack;' : ''}
   altK = d.altK; altT = d.altT; altOff = d.altOff; altEnd = d.altEnd; altFl = d.altFl;
@@ -2898,7 +2987,7 @@ function swapBuffers() {
 ${e.soa ? '' : 'let altText = [];'}
 
 function parseCore(source, entryRule) {
-  lastSrc = null;
+  lastOk = false;
   adoptRoot = -1;
   adoptRunPos = -1;
   lexInto(source);
@@ -2914,8 +3003,8 @@ function parseCore(source, entryRule) {
   const root = runParse(entryRule);
   lastRoot = root;
   lastRootTok = rootTokBase;
-  lastSrc = source;
-  treeSrc = source;
+  lastOk = true;
+  treePieces = docPieces.slice();
   return root;
 }
 
@@ -2934,28 +3023,65 @@ function parseCore(source, entryRule) {
 // until then. Lexing is FULL-FILE by design: the lexer carries cross-token state
 // (template nesting, regex context, markup modes), full lexing is a small share of a
 // parse, and the diff is what localizes the damage — not the lexer.
-function editCore(source, entryRule, edits) {
+function editCore(entryRule, edits) {
   try {
-    return editCoreRun(source, entryRule, edits);
+    return editCoreRun(entryRule, edits);
   } catch (e) {
     // REJECTED edit: the splice (and any '>' splits of the failed attempt) already
     // rewrote the token columns to the rejected text, and the append-mode fallback
     // may have grown the arena — but the live tree's ROWS are untouched. Re-lexing
     // the live tree's source restores every read path (leaf spans, visit, next
     // edit's restart anchors); O(n) on the reject path only.
-    if (treeSrc !== null) { lexInto(treeSrc); lastSrc = null; }
+    if (treePieces !== null) {
+      // restore the token columns to the LIVE TREE's text — but the DOCUMENT text
+      // must stay on the rejected content (lexInto/tokenize resets the doc layer
+      // as a side effect, so save it around the re-lex)
+      const kP = docPieces, kO = docPieceOff, kL = docLen, kF = docFlat;
+      lexInto(treePieces.join(''));
+      docPieces = kP; docPieceOff = kO; docLen = kL; docFlat = kF; docCur = 0;
+      lastOk = false;
+    }
     throw e;
   }
 }
-function editCoreRun(source, entryRule, edits) {
+function editCoreRun(entryRule, edits) {
   if (edits === undefined || edits.length === 0) {
-    throw new Error('edit() requires the edit ranges: [{ start, oldEnd, newEnd }] in old/new character coordinates (covering every change); pass [{ start: 0, oldEnd: <old length>, newEnd: <new length> }] to force a full re-parse');
+    throw new Error('edit() requires the changes: [{ start, end, text }] (LSP-style - each edit in the coordinates of the document AFTER the preceding edits in the array)');
   }
-  if (lastSrc === null) {
+  // The engine owns the document text: the new source is BUILT from the changes,
+  // so "the ranges do not match the text" is unrepresentable. Each edit is applied
+  // sequentially (LSP incremental-sync semantics); the damage envelope is composed
+  // alongside: dS in prefix coordinates (identical old/new), dE in FINAL
+  // coordinates, the old end recovered through the total delta. V8 cons strings
+  // make the slice+concat construction cheap; the flat-string cost, where a read
+  // path needs one, is the same the caller would have paid building the text.
+  if (docPieces === null) throw new Error('edit() before parse(): no document');
+  const oldLen = docLen;
+  {
+    let dS = 0x7fffffff;
+    let dE = -1;
+    for (let i = 0; i < edits.length; i++) {
+      const ed = edits[i];
+      const start = ed.start, end = ed.end, text = ed.text;
+      if (!(start >= 0 && start <= end && end <= docLen) || typeof text !== 'string') {
+        throw new Error('edit() change #' + i + ' out of range: [' + start + ', ' + end + ') of ' + docLen);
+      }
+      applyChange(start, end, text);
+      const newEnd = start + text.length;
+      const delta = newEnd - end;
+      if (dE > start) dE = dE >= end ? dE + delta : newEnd;
+      if (newEnd > dE) dE = newEnd;
+      if (start < dS) dS = start;
+    }
+    editDmgS = dS;
+    editDmgE = dE;
+  }
+  if (!lastOk) {
     // No coherent edit base (a previous attempt rejected): full re-parse in APPEND
     // mode — parseCore would reset the arena and destroy the live tree the handle
     // still exposes if THIS parse rejects too. parse() is the only compaction point.
-    lexInto(source);
+    const whole = flattenDoc();
+    lexInto(whole);
     if (memoEnd.length !== MEMO_RULES) {
       memoNode = new Array(MEMO_RULES);
       memoEnd = new Array(MEMO_RULES);
@@ -2968,28 +3094,18 @@ function editCoreRun(source, entryRule, edits) {
     const root = runParse(entryRule);
     lastRoot = root;
     lastRootTok = rootTokBase;
-    lastSrc = source;
-    treeSrc = source;
+    lastOk = true;
+    treePieces = docPieces.slice();
     return root;
   }
-  const oSrc = lastSrc;
-  lastSrc = null;
+  lastOk = false;
 ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
-  // Damage envelope: the caller's edit ranges, merged ([{start, oldEnd, newEnd}] in
-  // old/new coordinates — an editor's change events). The ranges MUST cover every
-  // change: over-claiming only shrinks via the true token-prefix compare below;
-  // under-claiming means text outside the window is never re-lexed (the same
-  // garbage-in contract as tree-sitter's tree.edit). There is deliberately no
-  // char-diff fallback — it would silently spend O(file) scans, and a caller
-  // without ranges can pass the whole-file range for an honest full re-parse.
-  const oldLen = oSrc.length, newLen = source.length;
-  let cs = edits[0].start, ceOld = edits[0].oldEnd, ceNew = edits[0].newEnd;
-  for (let i = 1; i < edits.length; i++) {
-    const ed = edits[i];
-    if (ed.start < cs) cs = ed.start;
-    if (ed.oldEnd > ceOld) ceOld = ed.oldEnd;
-    if (ed.newEnd > ceNew) ceNew = ed.newEnd;
-  }
+  // Damage envelope from the composed changes: prefix coordinates are shared, the
+  // old end comes back through the total delta.
+  const newLen = docLen;
+  const cs = editDmgS < newLen ? editDmgS : newLen;
+  const ceNew = editDmgE < cs ? cs : editDmgE;
+  const ceOld = ceNew - (newLen - oldLen);
   const charDelta = newLen - oldLen;
   // Restart anchor: the last token B ending at/before the damage whose recorded
   // depths are zero and whose shape carries no cross-token lexer flag (')' control-
@@ -3011,10 +3127,28 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   }
   altN = oN;
   swapBuffers();              // live = scratch, alt = OLD stream
-  src = source;
   tokN = 0;
   const startOff = B >= 0 ? (altEnd[B] < 0 ? altEnd[B] + srcLenP1 : altEnd[B]) : 0;
-  const R0 = lexCore(source, startOff, B >= 0 ? altK[B] : -1, B >= 0 ? altT[B] : 0, r0, ceNew, charDelta, cs, initParens);
+  // Window-materialized relex: lexCore reads a SMALL flat slice of the pieces with
+  // an absolute bias; -2 = ran off the window end before resyncing — re-materialize
+  // a larger window and retry (the common case fits the first one).
+  let R0;
+  {
+    let wHi = ceNew + 4096;
+    for (;;) {
+      if (wHi > docLen) wHi = docLen;
+      const windowStr = docText(startOff, wHi);
+      tokN = 0;
+      try {
+        R0 = lexCore(windowStr, 0, B >= 0 ? altK[B] : -1, B >= 0 ? altT[B] : 0, r0, ceNew, charDelta, cs, initParens.slice(), startOff, wHi < docLen);
+      } catch (e2) {
+        if (e2 !== LEX_RETRY) throw e2;
+        R0 = -2;
+      }
+      if (R0 !== -2) break;
+      wHi = wHi >= docLen ? docLen : (wHi - startOff) * 4 + startOff;
+    }
+  }
   const W = tokN;
   const R = R0 >= 0 ? R0 : oN;
   swapBuffers();              // live = OLD stream again; window sits in the alt buffers
@@ -3076,9 +3210,9 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   tkText = altText; tkText.length = 0;
   altK = oK; altT = oT; altOff = oOff; altEnd = oEnd; altFl = oFl;
   altText = oText;
-  lexInto(source);
+  lexInto(flattenDoc());
   const nN = tokN;
-  const charDelta = source.length - oSrc.length;
+  const charDelta = docLen - oldLen;
   const minN = oN < nN ? oN : nN;
   let p = 0;
   while (p < minN && oK[p] === tkK[p] && oT[p] === tkT[p] && oFl[p] === tkFl[p]
@@ -3118,16 +3252,16 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     rootTokBase = adoptRootTok;
     lastRoot = sroot;
     lastRootTok = adoptRootTok;
-    lastSrc = source;
-    treeSrc = source;
+    lastOk = true;
+    treePieces = docPieces.slice();
     return sroot;
   }
   const root = runParse(entryRule);
   adoptRoot = -1;
   lastRoot = root;
   lastRootTok = rootTokBase;
-  lastSrc = source;
-  treeSrc = source;
+  lastOk = true;
+  treePieces = docPieces.slice();
   return root;
 }
 
@@ -3135,7 +3269,7 @@ export { tokenize };
 // ── Module-level API: the DEFAULT document (one shared session; tokenize and the
 // raw tree/tokenAt views read the ACTIVE doc — they are gate/debug surfaces) ──
 export function parse(source, entryRule) { activate(docDefault); return parseCore(source, entryRule); }
-export function parseEdited(source, entryRule, edits) { activate(docDefault); return editCore(source, entryRule, edits); }
+export function parseEdited(entryRule, edits) { activate(docDefault); return editCore(entryRule, edits); }
 export function visit(entry, fns, charBase, tokBase) { activate(docDefault); return visitCore(entry, fns, charBase, tokBase); }
 // ── Handle API: explicit trees over per-instance documents ──
 // const p = createParser(); const cst = p.parse(text); p.edit(cst, next[, edits]);
@@ -3165,10 +3299,10 @@ export function createParser() {
       const root = parseCore(source, entryRule);
       return { d, gen, root };
     },
-    edit(cst, source, edits) {
+    edit(cst, edits) {
       chk(cst);
       activate(d);
-      cst.root = editCore(source, entryUsed, edits);
+      cst.root = editCore(entryUsed, edits);
     },
     visit(cst, fns) { chk(cst); activate(d); return visitCore(cst.root, fns); },
     tree: view,
