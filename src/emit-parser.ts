@@ -1364,6 +1364,15 @@ let rowLen = new Int32Array(8192);
 let rowTokLen = new Int32Array(8192);   // subtree token count
 let rowStart = new Int32Array(8192);    // first index into kids
 let rowCount = new Int32Array(8192);
+// lookahead GAP: how far past its own first token the node's parse may have READ
+// (ext − start, a length — position-independent like everything green). Adoption
+// validity across edits compares q + rowExt + slack against the damage start.
+let rowExt = new Int32Array(8192);
+// adoption eligibility: set ONLY where the old parse MEMOIZED the node — a row built
+// under a suppress (no-'in') or parseLimit-capped context is a context-dependent
+// parse and must never be adopted into a normal entry (the memo carry never stored
+// those; adoption must not widen the contract).
+let rowOK = new Uint8Array(8192);
 // transient BUILD coordinates (absolute), valid for rows completed in the current
 // parse and REFRESHED at memo-hit time for reused roots — parents read them at
 // finishNode to write the children's relative fields; never part of the green tree.
@@ -1392,6 +1401,8 @@ function growRows() {
   const tl = new Int32Array(rowCap); tl.set(rowTokLen); rowTokLen = tl;
   const s = new Int32Array(rowCap); s.set(rowStart); rowStart = s;
   const c = new Int32Array(rowCap); c.set(rowCount); rowCount = c;
+  const x = new Int32Array(rowCap); x.set(rowExt); rowExt = x;
+  const ok = new Uint8Array(rowCap); ok.set(rowOK); rowOK = ok;
   const ac = new Int32Array(rowCap); ac.set(absChar); absChar = ac;
   const at = new Int32Array(rowCap); at.set(absTok); absTok = at;
 }
@@ -1446,6 +1457,8 @@ function finishNode(rid, mark) {
   }
   rowRule[id] = rid; rowLen[id] = myEnd - myOff; rowCount[id] = n;
   rowTokLen[id] = myTokEnd - myTok;
+  rowExt[id] = maxPos - myTok;
+  rowOK[id] = 0;
   absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
   return id;
@@ -1478,6 +1491,8 @@ function finishWrap(rid, lhsId, mark) {
   rowRule[id] = rid; rowLen[id] = myEnd - myOff;
   rowStart[id] = ks; rowCount[id] = n + 1;
   rowTokLen[id] = myTokEnd - myTok;
+  rowExt[id] = maxPos - myTok;
+  rowOK[id] = 0;
   absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
   return id;
@@ -1673,7 +1688,7 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
   // push+boolean contract and the memo) and an id-returning core, exactly like the
   // pratt/left-rec rules.
   if (memoized) {
-    e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${J(rule.name)}, ${ruleFn}_core); }`);
+    e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_core); }`);
     e.emit(`function ${ruleFn}_core(_minBp) {`);
   } else {
     e.emit(`function ${ruleFn}() {`);
@@ -1713,8 +1728,8 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   // suppress wrapper in the interpreter — so currentPrattContext is set to this rule
   // (the template-interpolation rule resolution depends on it: a `${…}` hole inside a
   // template-literal TYPE must parse as Type, not the default expression rule).
-  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${J(rule.name)}, ${ruleFn}_lr); }`);
   const rid = a.grammar.rules.indexOf(rule);
+  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_lr); }`);
   e.emit(`function ${ruleFn}_lr(_minBp) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
   e.emit(`  let node = -1; let bestAtomPos = saved;`);
@@ -1767,7 +1782,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
 
   // R_<rule>() wraps parseRule's memo/context handling, then calls the bp-taking core.
   const rid = a.grammar.rules.indexOf(rule);
-  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${J(rule.name)}, ${ruleFn}_pratt); }`);
+  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_pratt); }`);
   e.emit(`function ${ruleFn}_pratt(minBp) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
   e.emit(`  let lhs = -1; let bestNudPos = saved;`);
@@ -1988,7 +2003,7 @@ function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
 // and SECOND-token reads past it. Left-to-right parsing keeps the watermark near the
 // current frontier, so the value is tight on the dominant flow and only OVER-
 // invalidates (soundly) near big-backtrack clusters.
-function parseRuleEntry(idx, name, core) {
+function parseRuleEntry(idx, rid, name, core) {
   const mySup = suppressNext;
   suppressNext = null;
   const capped = parseLimit >= 0;
@@ -2024,6 +2039,34 @@ function parseRuleEntry(idx, name, core) {
       return false;
     }
   }
+  if (!mySup && !capped && adoptRoot >= 0) {
+    // map the new position into OLD token coordinates; inside the damage = no mapping
+    const q = start < adoptDmgStart ? start
+      : start >= adoptDmgOldEnd + adoptDelta ? start - adoptDelta : -1;
+    if (q >= 0) {
+      const aid = adoptSeek(q, rid);
+      if (aid >= 0) {
+        pos = start + rowTokLen[aid];
+        const ext = start + rowExt[aid];
+        if (ext > maxPos) maxPos = ext;
+        absTok[aid] = start;
+        absChar[aid] = tkOff[start];
+        if (me === undefined) {
+          me = new Array(tokN + 1);
+          mn = new Array(tokN + 1);
+          mx = new Array(tokN + 1);
+          memoEnd[idx] = me;
+          memoNode[idx] = mn;
+          memoExt[idx] = mx;
+        }
+        me[start] = pos;
+        mn[start] = aid;
+        mx[start] = maxPos;
+        scPush(aid);
+        return true;
+      }
+    }
+  }
   const prevContext = currentPrattContext;
   currentPrattContext = name;
   const prevSup = suppressCur;
@@ -2048,6 +2091,7 @@ function parseRuleEntry(idx, name, core) {
     mn[start] = result;
     mx[start] = maxPos;   // the TRUE probe watermark — the +2 read slack (stop token,
                           // SECOND-token dispatch) is applied at INVALIDATION time
+    if (result >= 0) rowOK[result] = 1;
 
   }
   if (result >= 0) { scPush(result); return true; }
@@ -2226,6 +2270,82 @@ let lastSrc = null;
 // the LAST parse root's absolute coordinates (the descent origin — see visit/toObject)
 let rootCharBase = 0;
 let rootTokBase = 0;
+
+// ── M4: old-tree ADOPTION (cursor reuse) ──
+// During an incremental re-parse, a rule entry first asks the PREVIOUS tree: is there
+// an old node of this rule starting at the corresponding old position whose lookahead
+// stayed clear of the damage? Adoption is STATELESS — nothing is consumed, so PEG
+// backtracking needs no cursor rollback, and a node refused under one candidate arm
+// can be adopted by the next. The memo stays purely intra-parse.
+let lastRoot = -1;           // previous parse's root id + its absolute first token
+let lastRootTok = 0;
+let adoptRoot = -1;          // previous root id (-1 = no adoption)
+let adoptRootTok = 0;        // its absolute first token (old coords)
+let adoptDmgStart = 0;       // damage window in OLD token coords: [adoptDmgStart, adoptDmgOldEnd)
+let adoptDmgOldEnd = 0;
+let adoptDelta = 0;          // new-minus-old token delta past the damage
+// cached descent path (top-down): ids + their absolute old token bases
+let adoptPath = [];
+let adoptBase = [];
+function adoptSeek(q, rid) {
+  // reuse the cached path while it still CONTAINS q (strictly inside, not at start)
+  let depth = 0;
+  while (depth < adoptPath.length) {
+    const id = adoptPath[depth];
+    const b = adoptBase[depth];
+    if (b < q && q < b + rowTokLen[id]) depth++;
+    else break;
+  }
+  adoptPath.length = depth;
+  adoptBase.length = depth;
+  let id, base;
+  if (depth === 0) {
+    if (q < adoptRootTok || q >= adoptRootTok + rowTokLen[adoptRoot]) return -1;
+    id = adoptRoot; base = adoptRootTok;
+    if (base === q) { /* root itself starts at q — fall through to the chain walk */ }
+    adoptPath.push(id); adoptBase.push(base);
+  } else {
+    id = adoptPath[depth - 1]; base = adoptBase[depth - 1];
+  }
+  // descend: containment steps are committed to the cache; the exploratory chain of
+  // nodes starting EXACTLY at q is walked in locals (a later seek with another rule
+  // must see the same chain).
+  for (;;) {
+    // binary search the first child whose END exceeds q
+    const cs = rowStart[id];
+    const n = rowCount[id];
+    let lo = 0, hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const e = kids[cs + mid];
+      const end = e < 0 ? base + ((~e) >>> 2) + 1 : base + kidTokRel[cs + mid] + rowTokLen[e];
+      if (end <= q) lo = mid + 1; else hi = mid;
+    }
+    if (lo >= n) return -1;
+    const e = kids[cs + lo];
+    if (e < 0) return -1;                                  // the position is a leaf here
+    const cb = base + kidTokRel[cs + lo];
+    if (cb > q) return -1;                                 // a gap — nothing starts at q
+    if (cb === q) {
+      // the exploratory chain: every node from here down whose start is exactly q
+      let xid = e, xb = cb;
+      for (;;) {
+        if (rowOK[xid] !== 0 && rowRule[xid] === rid
+            && (q + rowExt[xid] + 2 <= adoptDmgStart || q >= adoptDmgOldEnd)) {
+          return xid;
+        }
+        const xcs = rowStart[xid];
+        if (rowCount[xid] === 0) return -1;
+        const fe = kids[xcs];
+        if (fe < 0 || kidTokRel[xcs] !== 0) return -1;
+        xid = fe; xb = xb;
+      }
+    }
+    // containment: commit and descend
+    id = e; base = cb;
+    adoptPath.push(id); adoptBase.push(base);
+  }
+}
 // The spare token-column buffer set (parseEdited ping-pongs between the live set and
 // this one, so steady-state edits never allocate columns).
 let altK = null, altT = null, altOff = null, altEnd = null, altFl = null, altDp = null, altPd = null;
@@ -2246,6 +2366,7 @@ ${e.soa ? '' : 'let altText = [];'}
 
 export function parse(source, entryRule) {
   lastSrc = null;
+  adoptRoot = -1;
   lexInto(source);
   memoNode = new Array(MEMO_RULES);
   memoEnd = new Array(MEMO_RULES);
@@ -2253,6 +2374,8 @@ export function parse(source, entryRule) {
   nodeN = 0;
   kidN = 0;
   const root = runParse(entryRule);
+  lastRoot = root;
+  lastRootTok = rootTokBase;
   lastSrc = source;
   return root;
 }
@@ -2368,35 +2491,23 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   const dOldEnd = oN - s;
   const tokenDelta = nN - oN;
   const nN2 = nN;`}
-  // Carry the memo across: prefix entries whose lookahead never reached the damage
-  // stay; suffix entries shift by tokenDelta; the damage window drops.
-  for (let r = 0; r < MEMO_RULES; r++) {
-    const me = memoEnd[r];
-    if (me === undefined) continue;
-    const mn = memoNode[r], mx = memoExt[r];
-    for (let i = 0; i < p; i++) {
-      if (me[i] !== undefined && mx[i] + 2 > p) { me[i] = undefined; mn[i] = undefined; mx[i] = undefined; }
-    }
-    if (tokenDelta === 0) {
-      for (let i = p; i < dOldEnd; i++) {
-        if (me[i] !== undefined) { me[i] = undefined; mn[i] = undefined; mx[i] = undefined; }
-      }
-      continue;
-    }
-    const nme = new Array(nN2 + 1), nmn = new Array(nN2 + 1), nmx = new Array(nN2 + 1);
-    const pCap = p < nN2 + 1 ? p : nN2 + 1;
-    for (let i = 0; i < pCap; i++) {
-      if (me[i] !== undefined) { nme[i] = me[i]; nmn[i] = mn[i]; nmx[i] = mx[i]; }
-    }
-    for (let i = dOldEnd; i <= oN; i++) {
-      if (me[i] !== undefined) {
-        const j = i + tokenDelta;
-        nme[j] = me[i] + tokenDelta; nmn[j] = mn[i]; nmx[j] = mx[i] + tokenDelta;
-      }
-    }
-    memoEnd[r] = nme; memoNode[r] = nmn; memoExt[r] = nmx;
-  }
+  // M4: NO memo carry — the memo is intra-parse; reuse flows through old-tree
+  // adoption (parseRuleEntry consults the previous root via adoptSeek), so the whole
+  // O(rules × n) carry/invalidate machinery is gone.
+  memoNode = new Array(MEMO_RULES);
+  memoEnd = new Array(MEMO_RULES);
+  memoExt = new Array(MEMO_RULES);
+  adoptRoot = lastRoot;
+  adoptRootTok = lastRootTok;
+  adoptDmgStart = p;
+  adoptDmgOldEnd = dOldEnd;
+  adoptDelta = tokenDelta;
+  adoptPath.length = 0;
+  adoptBase.length = 0;
   const root = runParse(entryRule);
+  adoptRoot = -1;
+  lastRoot = root;
+  lastRootTok = rootTokBase;
   lastSrc = source;
   return root;
 }
