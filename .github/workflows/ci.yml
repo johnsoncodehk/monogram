@@ -32,7 +32,7 @@ jobs:
       - name: Generate editor artifacts (must be in sync)
         run: |
           npm run gen
-          git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.cst-types.ts' '*.contributes.json' tree-sitter
+          git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.cst-types.ts' '*.cst-match.ts' '*.contributes.json' tree-sitter
 
       # Every correctness GATE through ONE runner — sanity / agnostic / conformance /
       # highlighter / vue / yaml / the generative scope≡role check / the gap-ledger selftest

@@ -1,0 +1,10 @@
+# Generated artifacts (npm run gen) — committed for consumers, CI-gated for
+# staleness, collapsed in GitHub diffs. The grammar sources (*.ts at the repo
+# root) are the hand-written truth; everything below is derived from them.
+*.tmLanguage.json linguist-generated=true
+*.language-configuration.json linguist-generated=true
+*.monarch.json linguist-generated=true
+*.contributes.json linguist-generated=true
+*.cst-types.ts linguist-generated=true
+*.cst-match.ts linguist-generated=true
+tree-sitter/** linguist-generated=true
