@@ -8,6 +8,7 @@
 // an in-place-mutated tree, and a REJECTED edit leaves the old handle valid.
 //
 //   node test/multi-doc.ts
+import { objectify } from './emitted-obj.ts';
 import { writeFileSync } from 'node:fs';
 import { emitParser } from '../src/emit-parser.ts';
 
@@ -16,8 +17,8 @@ const emPath = '/tmp/emitted-multidoc.mjs';
 writeFileSync(emPath, emitParser(grammar));
 type Edit = { start: number; oldEnd: number; newEnd: number };
 type Cst = { root: number };
-type Parser = { parse(s: string): Cst; edit(cst: Cst, s: string, edits?: Edit[]): void; toObject(cst: Cst): unknown; visit(cst: Cst, fns: object): void };
-type Em = { parse(s: string): number; toObject(id: number): unknown; createParser(): Parser };
+type Parser = { parse(s: string): Cst; edit(cst: Cst, s: string, edits?: Edit[]): void; visit(cst: Cst, fns: object): void; tree: import('./emitted-obj.ts').TreeView };
+type Em = { parse(s: string): number; createParser(): Parser };
 const em = (await import(emPath + '?v=' + process.pid)) as Em;
 
 // Two synthetic documents (no corpus dependency — the gate always exercises).
@@ -65,8 +66,9 @@ for (let k = 0; k < 60; k++) {
   }
   // mix the module-level default doc in between: it must not disturb either instance
   if (k % 5 === 0) em.parse('const mix = ' + k + ';');
-  const a = JSON.stringify(f.toObject(fc!));
-  const b = JSON.stringify((onA ? p1 : p2).toObject(onA ? cstA : cstB));
+  const a = JSON.stringify(objectify(f.tree, (fns) => f.visit(fc!, fns)));
+  const q = onA ? p1 : p2;
+  const b = JSON.stringify(objectify(q.tree, (fns) => q.visit(onA ? cstA : cstB, fns)));
   if (a === b) equal++;
   else {
     mismatch++;
@@ -84,22 +86,23 @@ let contract = 0;
 {
   const p = em.createParser();
   const c1 = p.parse('const a = 1;');
-  const before = JSON.stringify(p.toObject(c1));
+  const obj = (h: Cst) => JSON.stringify(objectify(p.tree, (fns) => p.visit(h, fns)));
+  const before = obj(c1);
   p.edit(c1, 'const ab = 1;');
-  const after = JSON.stringify(p.toObject(c1));
+  const after = obj(c1);
   if (after !== before && after.includes('"end":8')) contract++;   // same handle, new tree
   else failures.push('in-place edit did not update the handle');
   try { p2.edit(c1, 'const y = 3;'); failures.push('foreign handle did not throw'); } catch { contract++; }
   let rejected = false;
   try { p.edit(c1, 'const ] = ;'); } catch { rejected = true; }
-  if (rejected && JSON.stringify(p.toObject(c1)) === after) contract++;   // reject keeps the tree
+  if (rejected && obj(c1) === after) contract++;   // reject keeps the tree
   else failures.push('reject-then-read flow broke');
   const c2 = p.parse('let q = 1;');
-  try { p.toObject(c1); failures.push('re-opened document: old handle did not throw'); } catch { contract++; }
+  try { obj(c1); failures.push('re-opened document: old handle did not throw'); } catch { contract++; }
   // a REJECTING parse() resets the arena too — it must invalidate prior handles
   try { p.parse('const ] = ;'); } catch { /* expected reject */ }
   let dead = false;
-  try { p.toObject(c2); } catch { dead = true; }
+  try { obj(c2); } catch { dead = true; }
   if (dead) contract++;
   else failures.push('rejecting parse() left the old handle readable over a reset arena');
 }

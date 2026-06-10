@@ -2247,10 +2247,6 @@ export function tokenAt(i) {
 }
 
 // The CST is span-only: a node's text is derived from the source it was parsed from.
-export function getText(node, source) {
-  return source.slice(node.offset, node.end);
-}
-
 // ── Arena tree access ──
 // The arena IS the tree: parse() returns the root node id and consumers traverse
 // via visit()/the accessors — nothing is materialized on the parse path. All views
@@ -2322,20 +2318,6 @@ function visitCore(entry, fns, charBase, tokBase) {
     else visitCore(e, fns, charBase + kcr(entry, cs + i), tokBase + ktr(entry, cs + i));
   }
   if (fns.leave) fns.leave(entry, charBase, tokBase);
-}
-// Materialize the classic object CST from a node id — a BRIDGE for tests/debugging
-// (the byte-identical gate against the interpreter), not a parse-path product.
-function toObjectCore(id, charBase, tokBase) {
-  if (charBase === undefined) { charBase = rootCharBase; tokBase = rootTokBase; }
-  const n = rowCount[id];
-  const cs = rowStart[id];
-  const children = new Array(n);
-  for (let i = 0; i < n; i++) {
-    const entry = kids[cs + i];
-    children[i] = entry >= 0 ? toObjectCore(entry, charBase + kcr(id, cs + i), tokBase + ktr(id, cs + i))
-      : { tokenType: leafTokenType(entry, tokBase), offset: toff(tokBase + ((~entry) >>> 2)), end: tend(tokBase + ((~entry) >>> 2)) };
-  }
-  return { rule: RULE_NAMES[rowRule[id]], children, offset: charBase, end: charBase + rowLen[id] };
 }
 
 // Parse to the ARENA: returns the root node id.
@@ -3159,7 +3141,6 @@ export { tokenize };
 export function parse(source, entryRule) { activate(docDefault); return parseCore(source, entryRule); }
 export function parseEdited(source, entryRule, edits) { activate(docDefault); return editCore(source, entryRule, edits); }
 export function visit(entry, fns, charBase, tokBase) { activate(docDefault); return visitCore(entry, fns, charBase, tokBase); }
-export function toObject(id, charBase, tokBase) { activate(docDefault); return toObjectCore(id, charBase, tokBase); }
 // ── Handle API: explicit trees over per-instance documents ──
 // const p = createParser(); const cst = p.parse(text); p.edit(cst, next[, edits]);
 // The handle is the STABLE IDENTITY of this document's tree: edit() mutates it in
@@ -3194,7 +3175,6 @@ export function createParser() {
       cst.root = editCore(source, entryUsed, edits);
     },
     visit(cst, fns) { chk(cst); activate(d); return visitCore(cst.root, fns); },
-    toObject(cst) { chk(cst); activate(d); return toObjectCore(cst.root); },
     tree: view,
   };
 }

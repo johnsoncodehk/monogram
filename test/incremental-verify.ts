@@ -6,6 +6,7 @@
 // and the arena growth, so reuse is MEASURED, not assumed.
 //
 //   node test/incremental-verify.ts
+import { objectify } from './emitted-obj.ts';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { emitParser } from '../src/emit-parser.ts';
 
@@ -17,11 +18,13 @@ type Cst = { root: number };
 type Parser = {
   parse(s: string): Cst;
   edit(cst: Cst, s: string, edits?: Edit[]): void;
-  toObject(cst: Cst): unknown;
+  visit(cst: Cst, fns: object): void;
+  tree: import('./emitted-obj.ts').TreeView;
 };
 type Em = {
   parse(s: string): number;
-  toObject(id: number): unknown;
+  visit(entry: number, fns: object): void;
+  tree: import('./emitted-obj.ts').TreeView;
   createParser(): Parser;
 };
 const session = ((await import(emPath + '?session=' + process.pid)) as Em).createParser();
@@ -109,8 +112,8 @@ for (const [base, edited] of GLUE) {
     else bothReject++;
     continue;
   }
-  const a = JSON.stringify(fresh.toObject(fr));
-  const b = JSON.stringify(session.toObject(c0));
+  const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fr, fns)));
+  const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(c0, fns)));
   if (a === b) equal++;
   else { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: tree diverges`); }
 }
@@ -139,8 +142,8 @@ for (const f of FILES) {
       continue;
     }
     tFresh += tf1 - tf0; tInc += ti1 - ti0;
-    const a = JSON.stringify(fresh.toObject(freshRoot));
-    const b = JSON.stringify(session.toObject(cst));
+    const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(freshRoot, fns)));
+    const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns)));
     if (a === b) equal++;
     else {
       mismatch++;
