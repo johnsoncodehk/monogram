@@ -85,6 +85,17 @@ const STEPS = 30;
 // ending exactly at the damage start can be EXTENDED under maximal munch — 'b'+'x'
 // = 'bx', '='+'=' = '==', deleting a gap glues neighbours). These cases pin the
 // strict-< restart anchor; every one must match fresh (tree or reject) exactly.
+// Test-side range derivation for constructed pairs (the ENGINE requires explicit
+// ranges — a caller without them passes the whole-file range for a full re-parse).
+function diffRange(a: string, b: string): Edit {
+  const minL = Math.min(a.length, b.length);
+  let s = 0;
+  while (s < minL && a.charCodeAt(s) === b.charCodeAt(s)) s++;
+  let e = 0;
+  while (e < minL - s && a.charCodeAt(a.length - 1 - e) === b.charCodeAt(b.length - 1 - e)) e++;
+  return { start: s, oldEnd: a.length - e, newEnd: b.length - e };
+}
+
 const GLUE: Array<[string, string]> = [
   ['const a = 1;\nconst b = 2;\n', 'const a = 1;\nconst bx = 2;\n'],
   ['let a = b; let c = 1;\n', 'let a = b1; let c = 1;\n'],
@@ -106,7 +117,7 @@ for (const [base, edited] of GLUE) {
   let fe: string | null = null, ie: string | null = null;
   let fr = -1;
   try { fr = fresh.parse(edited); } catch (e) { fe = (e as Error).message; }
-  try { session.edit(c0, edited); } catch (e) { ie = (e as Error).message; }
+  try { session.edit(c0, edited, [diffRange(base, edited)]); } catch (e) { ie = (e as Error).message; }
   if (fe !== null || ie !== null) {
     if ((fe === null) !== (ie === null)) { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: fresh ${fe ? 'reject' : 'accept'} / incremental ${ie ? 'reject' : 'accept'}`); }
     else bothReject++;
@@ -129,9 +140,8 @@ for (const f of FILES) {
     try { freshRoot = fresh.parse(next); } catch (e) { freshErr = (e as Error).message; }
     const tf1 = performance.now();
     let incErr: string | null = null;
-    const useProtocol = k % 2 === 1;   // alternate: edits protocol / char-diff fallback
     const ti0 = performance.now();
-    try { session.edit(cst, next, useProtocol ? [edit] : undefined); } catch (e) { incErr = (e as Error).message; }
+    try { session.edit(cst, next, [edit]); } catch (e) { incErr = (e as Error).message; }
     const ti1 = performance.now();
     if (freshErr !== null || incErr !== null) {
       if ((freshErr === null) !== (incErr === null)) {

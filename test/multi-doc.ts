@@ -34,11 +34,22 @@ let seed = 0x51C0FFEE;
 const rand = () => ((seed = (seed * 48271) % 0x7fffffff) / 0x7fffffff);
 const randInt = (n: number) => Math.floor(rand() * n);
 const INS = ['x', '1', ' + q', '.m', '(/*c*/)', '"s"'];
-function mutate(text: string): string {
+function mutate(text: string): { next: string; edit: Edit } {
   switch (randInt(3)) {
-    case 0: { const at = randInt(text.length); return text.slice(0, at) + INS[randInt(INS.length)] + text.slice(at); }
-    case 1: { const at = randInt(Math.max(1, text.length - 6)); return text.slice(0, at) + text.slice(at + 1 + randInt(4)); }
-    default: { const at = randInt(Math.max(1, text.length - 1)); return text.slice(0, at) + 'z' + text.slice(at + 1); }
+    case 0: {
+      const at = randInt(text.length);
+      const ins = INS[randInt(INS.length)];
+      return { next: text.slice(0, at) + ins + text.slice(at), edit: { start: at, oldEnd: at, newEnd: at + ins.length } };
+    }
+    case 1: {
+      const at = randInt(Math.max(1, text.length - 6));
+      const n = 1 + randInt(4);
+      return { next: text.slice(0, at) + text.slice(at + n), edit: { start: at, oldEnd: at + n, newEnd: at } };
+    }
+    default: {
+      const at = randInt(Math.max(1, text.length - 1));
+      return { next: text.slice(0, at) + 'z' + text.slice(at + 1), edit: { start: at, oldEnd: at + 1, newEnd: at + 1 } };
+    }
   }
 }
 
@@ -53,12 +64,12 @@ const failures: string[] = [];
 for (let k = 0; k < 60; k++) {
   const onA = (k & 1) === 0;
   const text = onA ? textA : textB;
-  const next = mutate(text);
+  const { next, edit } = mutate(text);
   steps++;
   let fe: string | null = null, ie: string | null = null;
   let fc: Cst | null = null;
   try { fc = f.parse(next); } catch (e) { fe = (e as Error).message; }
-  try { (onA ? p1 : p2).edit(onA ? cstA : cstB, next); } catch (e) { ie = (e as Error).message; }
+  try { (onA ? p1 : p2).edit(onA ? cstA : cstB, next, [edit]); } catch (e) { ie = (e as Error).message; }
   if (fe !== null || ie !== null) {
     if ((fe === null) !== (ie === null)) { mismatch++; if (failures.length < 5) failures.push(`step ${k} (${onA ? 'A' : 'B'}): fresh ${fe ? 'reject' : 'accept'} / edit ${ie ? 'reject' : 'accept'}`); }
     else bothReject++;
@@ -88,17 +99,23 @@ let contract = 0;
   const c1 = p.parse('const a = 1;');
   const obj = (h: Cst) => JSON.stringify(objectify(p.tree, (fns) => p.visit(h, fns)));
   const before = obj(c1);
-  p.edit(c1, 'const ab = 1;');
+  p.edit(c1, 'const ab = 1;', [{ start: 7, oldEnd: 7, newEnd: 8 }]);
   const after = obj(c1);
   if (after !== before && after.includes('"end":8')) contract++;   // same handle, new tree
   else failures.push('in-place edit did not update the handle');
-  try { p2.edit(c1, 'const y = 3;'); failures.push('foreign handle did not throw'); } catch { contract++; }
+  try { p2.edit(c1, 'const y = 3;', [{ start: 0, oldEnd: 13, newEnd: 12 }]); failures.push('foreign handle did not throw'); } catch { contract++; }
   let rejected = false;
-  try { p.edit(c1, 'const ] = ;'); } catch { rejected = true; }
+  try { p.edit(c1, 'const ] = ;', [{ start: 6, oldEnd: 13, newEnd: 11 }]); } catch { rejected = true; }
   if (rejected && obj(c1) === after) contract++;   // reject keeps the tree
   else failures.push('reject-then-read flow broke');
   const c2 = p.parse('let q = 1;');
   try { obj(c1); failures.push('re-opened document: old handle did not throw'); } catch { contract++; }
+  // missing ranges: ONE usage only — edit() without ranges must throw, not
+  // silently fall back to O(file) diff scans
+  let needsRanges = false;
+  try { (p as unknown as { edit(c: Cst, s: string): void }).edit(c2, 'let q = 2;'); } catch { needsRanges = true; }
+  if (needsRanges) contract++;
+  else failures.push('edit() without ranges did not throw');
   // a REJECTING parse() resets the arena too — it must invalidate prior handles
   try { p.parse('const ] = ;'); } catch { /* expected reject */ }
   let dead = false;
@@ -107,9 +124,9 @@ let contract = 0;
   else failures.push('rejecting parse() left the old handle readable over a reset arena');
 }
 
-console.log(`multi-doc: ${equal} equal · ${bothReject} both-reject · ${mismatch} MISMATCH (${steps} interleaved steps) · contract ${contract}/5`);
+console.log(`multi-doc: ${equal} equal · ${bothReject} both-reject · ${mismatch} MISMATCH (${steps} interleaved steps) · contract ${contract}/6`);
 for (const s of failures) console.log('  ✗ ' + s);
-if (mismatch > 0 || contract !== 5 || failures.length > 0) {
+if (mismatch > 0 || contract !== 6 || failures.length > 0) {
   console.error('✗ document isolation / handle contract violated');
   process.exit(1);
 }

@@ -2948,6 +2948,9 @@ function editCore(source, entryRule, edits) {
   }
 }
 function editCoreRun(source, entryRule, edits) {
+  if (edits === undefined || edits.length === 0) {
+    throw new Error('edit() requires the edit ranges: [{ start, oldEnd, newEnd }] in old/new character coordinates (covering every change); pass [{ start: 0, oldEnd: <old length>, newEnd: <new length> }] to force a full re-parse');
+  }
   if (lastSrc === null) {
     // No coherent edit base (a previous attempt rejected): full re-parse in APPEND
     // mode — parseCore would reset the arena and destroy the live tree the handle
@@ -2972,27 +2975,20 @@ function editCoreRun(source, entryRule, edits) {
   const oSrc = lastSrc;
   lastSrc = null;
 ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
-  // Damage envelope: from the EDIT PROTOCOL when the caller provides it (an editor
-  // knows its edit ranges — [{start, oldEnd, newEnd}] in old/new coordinates), else
-  // derived by the char-level prefix/suffix compare (the cheapest possible fallback,
-  // but O(file) scans).
+  // Damage envelope: the caller's edit ranges, merged ([{start, oldEnd, newEnd}] in
+  // old/new coordinates — an editor's change events). The ranges MUST cover every
+  // change: over-claiming only shrinks via the true token-prefix compare below;
+  // under-claiming means text outside the window is never re-lexed (the same
+  // garbage-in contract as tree-sitter's tree.edit). There is deliberately no
+  // char-diff fallback — it would silently spend O(file) scans, and a caller
+  // without ranges can pass the whole-file range for an honest full re-parse.
   const oldLen = oSrc.length, newLen = source.length;
-  let cs, ceOld, ceNew;
-  if (edits !== undefined && edits.length > 0) {
-    cs = edits[0].start; ceOld = edits[0].oldEnd; ceNew = edits[0].newEnd;
-    for (let i = 1; i < edits.length; i++) {
-      const ed = edits[i];
-      if (ed.start < cs) cs = ed.start;
-      if (ed.oldEnd > ceOld) ceOld = ed.oldEnd;
-      if (ed.newEnd > ceNew) ceNew = ed.newEnd;
-    }
-  } else {
-    const minL = oldLen < newLen ? oldLen : newLen;
-    cs = 0;
-    while (cs < minL && oSrc.charCodeAt(cs) === source.charCodeAt(cs)) cs++;
-    let ce = 0;
-    while (ce < minL - cs && oSrc.charCodeAt(oldLen - 1 - ce) === source.charCodeAt(newLen - 1 - ce)) ce++;
-    ceOld = oldLen - ce; ceNew = newLen - ce;
+  let cs = edits[0].start, ceOld = edits[0].oldEnd, ceNew = edits[0].newEnd;
+  for (let i = 1; i < edits.length; i++) {
+    const ed = edits[i];
+    if (ed.start < cs) cs = ed.start;
+    if (ed.oldEnd > ceOld) ceOld = ed.oldEnd;
+    if (ed.newEnd > ceNew) ceNew = ed.newEnd;
   }
   const charDelta = newLen - oldLen;
   // Restart anchor: the last token B ending at/before the damage whose recorded
