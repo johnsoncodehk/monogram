@@ -1985,9 +1985,21 @@ export const tree = {
   endOf: (entry) => entry >= 0 ? rowOff[entry] + rowLen[entry] : tkEnd[(~entry) >>> 2],
   childCount: (id) => rowCount[id],
   childAt: (id, i) => kids[rowStart[id] + i],
+  // Bulk child load into a caller-owned array; returns the count. One call per node
+  // instead of childCount+childAt-per-probe (the generated matchers' hot path).
+  childrenInto: (id, out2) => {
+    const n2 = rowCount[id];
+    const cs2 = rowStart[id];
+    for (let i2 = 0; i2 < n2; i2++) out2[i2] = kids[cs2 + i2];
+    return n2;
+  },
   isLeaf: (entry) => entry < 0,
   leafToken: (entry) => (~entry) >>> 2,
   leafTokenType,
+  // Int-world leaf accessors (the match-path encoding): kind bits — 0 type-derived,
+  // 1 '$keyword', 2 '$operator' — and the token's TYPE kind int (1 = punctuation).
+  leafKindOf: (entry) => (~entry) & 3,
+  leafTokKindOf: (entry) => tkK[(~entry) >>> 2],
   textOf: (entry, source) => entry >= 0
     ? source.slice(rowOff[entry], rowOff[entry] + rowLen[entry])
     : source.slice(tkOff[(~entry) >>> 2], tkEnd[(~entry) >>> 2]),
