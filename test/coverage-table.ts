@@ -94,6 +94,30 @@ if (!/<!-- coverage:start -->[\s\S]*?<!-- coverage:end -->/.test(txt)) {
   console.error('No <!-- coverage:start/end --> markers in README.md — add them first.');
   process.exit(1);
 }
+
+// Refuse to publish a metric COLLAPSE: a harness broken by an internal contract change
+// (not a real regression) produces an absurd drop, and the auto-regen workflow would
+// commit it silently — the HTML parser axis once sat at 1.2% for two regens because a
+// duplicated normalizer kept reading a deleted CST field. Compare each new parser-agree
+// value against the committed table; a fall of more than 20 points is treated as a
+// broken harness, not a result.
+{
+  const committed = txt.match(/<!-- coverage:start -->[\s\S]*?<!-- coverage:end -->/)![0];
+  const collapsed: string[] = [];
+  for (const lang of LANGS) {
+    const c = covBy.get(lang);
+    if (!c) continue;
+    const row = committed.match(new RegExp(`\\|\\s*${lang}\\s*\\|\\s*([\\d.]+)%`));
+    if (row && Number(row[1]) - c.agreePct > 20) {
+      collapsed.push(`${lang}: ${row[1]}% → ${c.agreePct.toFixed(1)}%`);
+    }
+  }
+  if (collapsed.length) {
+    console.error('Refusing to write a collapsed parser-agree value (broken harness, not a result): ' + collapsed.join(', '));
+    process.exit(1);
+  }
+}
+
 txt = txt.replace(/<!-- coverage:start -->[\s\S]*?<!-- coverage:end -->/, () => block);
 writeFileSync(README, txt);
 console.error('✓ README coverage region updated.');

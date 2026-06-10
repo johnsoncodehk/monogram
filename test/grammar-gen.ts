@@ -275,7 +275,7 @@ export interface GenOptions {
   fuzzRounds?: number;  // budget (cap) on systematic-coverage rounds — DETERMINISTIC choice vectors, not random
   seed?: number;        // NO-OP, retained for back-compat: the generator is a pure function of the grammar
   nestDepth?: number;   // self-recursive nesting depth
-  timeBudgetMs?: number; // wall-clock cap for the depth strategies (large token-stream grammars)
+  timeBudgetMs?: number; // NO-OP, retained for back-compat: generation is deterministically work-capped (a wall-clock budget made the gate load-dependent)
 }
 
 class Walker {
@@ -1204,13 +1204,14 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
   const matOpts: MatOptions = { mode, indentStep: 2 };
   const entry = grammar.rules[grammar.rules.length - 1];
 
-  // wall-clock budget: the depth strategies (nest / dirnest) over a LARGE token-stream grammar (the
-  // TS family — 50+ self-recursive rules, huge Pratt-expression alts) are heavy and add little, since
-  // those grammars have no indent/markup depth bugs for the scope≡role check to find. Cap total time
-  // so one driver stays tractable across all 7 languages; each per-rule loop checks it.
-  const t0 = Date.now();
-  const timeBudgetMs = opts.timeBudgetMs ?? 9000;
-  const timeUp = () => Date.now() - t0 > timeBudgetMs;
+  // NO wall-clock budget: every strategy below is bounded by DETERMINISTIC work caps
+  // (enumTop's budgetCalls, coverRounds, maxInputs, per-token sample counts), and the
+  // depth strategies only run for indent/markup grammars at all (depthMatters) — the
+  // whole 7-grammar sweep measures ~5s on a calm machine, worst single grammar ~4s.
+  // A Date.now() budget USED to sit here and made the GATE load-dependent: under a
+  // saturated machine the yaml depth strategies got cut mid-walk, the #23/#24 witness
+  // shapes silently vanished from the corpus, and mustCover failed with no code change
+  // anywhere. A correctness gate must be a pure function of the grammar.
 
   const seen = new Set<string>();
   const out: GenInput[] = [];
@@ -1266,7 +1267,6 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
   // 2) bounded-exhaustive ROOTED at each self-recursive rule: exercises every rule's own small shapes
   //    (round-tripped against that rule as the entry), incl. the FIRST level of self-embedding.
   for (const rn of recursive) {
-    if (timeUp()) break;
     const r = w.ruleByName.get(rn)!;
     for (let d = 1; d <= Math.min(nestDepth, 3); d++) for (const ems of w.enumTop(r.body, d)) push(ems, `nest:${rn}@${d}`, rn);
   }
@@ -1275,7 +1275,6 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
   //    inner sibling) at depth 1..N — monogram#24 is a BlockSequence inside a BlockSequence with an
   //    inner sibling (`- - a\n  - b\n- c`), which the un-biased capped enumeration starves.
   for (const rn of recursive) {
-    if (timeUp()) break;
     const r = w.ruleByName.get(rn)!;
     for (let d = 1; d <= nestDepth; d++) push(w.nestChain(r.body, rn, d), `dirnest:${rn}@${d}`, rn);
   }
@@ -1293,7 +1292,6 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
   const COVER_BASE = 4, COVER_DIGITS = 4, ROTS = [0, 1, 2];
   for (const ch of coverSchedule(COVER_BASE, COVER_DIGITS, coverRounds, ROTS)) push(w.cover(entry.body, depth + 2, ch), 'fuzz', entry.name);
   for (const rn of recursive) {
-    if (timeUp()) break;
     const r = w.ruleByName.get(rn)!;
     for (const ch of coverSchedule(COVER_BASE, COVER_DIGITS, Math.ceil(coverRounds / 8), ROTS)) push(w.cover(r.body, depth + 2, ch), `fuzz:${rn}`, rn);
   }
@@ -1306,7 +1304,6 @@ export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenI
   //    on the 50-rule TS grammar and needs no depth budget. The samples are guard-filtered (sampleVariants
   //    skips the leading-literal embeds for decimal-/anchor-led tokens, so `0x1F` is never mangled to `-0x1F`).
   for (const tok of w.coverableTokens(entry.name)) {
-    if (timeUp()) break;
     // CLEAN samples only (no interesting-literal embeds): tokenCover's job is to make the token APPEAR in
     // a legal context, not to stress boundary collisions — that is the enum/fuzz strategies' role, where
     // the embed belongs. Prepending a boundary sigil to a sigil-led token (`<` + `#name`, `>` + `@name`)

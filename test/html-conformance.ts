@@ -17,41 +17,7 @@ import { parseFragment } from 'parse5';
 const grammar = (await import('../html.ts')).default;
 const { parse } = createParser(grammar);
 
-interface El { tag: string; children: El[] }
-
-// Element tree (tag + nested elements only — text/comments/attrs ignored) from the
-// Monogram CST: an Element node's tag is its open Name/VoidName leaf; its children
-// are the Element nodes nested in its content.
-function monoTree(node: any, src: string): El[] {
-  const out: El[] = [];
-  for (const c of node.children ?? []) collect(c, out, src);
-  return out;
-}
-function collect(node: any, out: El[], src: string): void {
-  if (node.tokenType !== undefined) return;
-  if (node.rule === 'Element') {
-    const name = (node.children ?? []).find(
-      (c: any) => c.tokenType === 'Name' || c.tokenType === 'VoidName',
-    );
-    out.push({ tag: (name ? src.slice(name.offset, name.end) : '').toLowerCase(), children: monoTree(node, src) });
-    return; // its element children are handled by the recursive monoTree above
-  }
-  for (const c of node.children ?? []) collect(c, out, src); // descend through wrappers (Node, …)
-}
-
-// Same element tree from a parse5 fragment. Spec-mandated containers parse5 SYNTHESISES
-// (implied <tbody>, <colgroup>, …) carry a null sourceCodeLocation (needs
-// {sourceCodeLocationInfo:true}); drop them and hoist their real children so this compares
-// SOURCE structure against the source-faithful CST, not against parse5's constructed DOM.
-function p5Tree(node: any): El[] {
-  const out: El[] = [];
-  for (const c of node.childNodes ?? []) {
-    if (!c.tagName) continue;
-    if (c.sourceCodeLocation == null) { out.push(...p5Tree(c)); continue; }
-    out.push({ tag: c.tagName.toLowerCase(), children: p5Tree(c) });
-  }
-  return out;
-}
+import { monoTree, p5Tree } from './html-tree.ts';
 
 // Curated WELL-FORMED HTML fragments (B-lite scope: proper nesting, explicit or
 // self-closed/void tags). No DOCTYPE, no optional-close-tag leniency — those are

@@ -19,40 +19,7 @@ import { run, type AgreeResult, type CorpusItem } from './src-coverage.ts';
 const grammar = (await import('../html.ts')).default;
 const { parse } = createParser(grammar);
 
-// ── Tree normalization + comparison — VERBATIM from test/html-conformance.ts. ──
-interface El { tag: string; children: El[] }
-function monoTree(node: any): El[] {
-  const out: El[] = [];
-  for (const c of node.children ?? []) collect(c, out);
-  return out;
-}
-function collect(node: any, out: El[]): void {
-  if (node.tokenType !== undefined) return;
-  if (node.rule === 'Element') {
-    const name = (node.children ?? []).find(
-      (c: any) => c.tokenType === 'Name' || c.tokenType === 'VoidName',
-    );
-    out.push({ tag: (name?.text ?? '').toLowerCase(), children: monoTree(node) });
-    return;
-  }
-  for (const c of node.children ?? []) collect(c, out);
-}
-function p5Tree(node: any): El[] {
-  const out: El[] = [];
-  for (const c of node.childNodes ?? []) {
-    if (!c.tagName) continue;
-    // parse5's tree construction synthesises spec-mandated containers (implied <tbody>,
-    // <colgroup>, …) that are NOT in the source; those carry a null sourceCodeLocation
-    // (requires parseFragment(..., {sourceCodeLocationInfo:true})). Drop them and hoist
-    // their real children, so we compare SOURCE structure (the CST's basis) against SOURCE
-    // structure — not Monogram's source-faithful CST against parse5's constructed DOM.
-    // Relocations (foster-parenting) keep their location → still differ; a Monogram parse
-    // failure still throws → still a disagreement. So only pure implied-container inserts flip.
-    if (c.sourceCodeLocation == null) { out.push(...p5Tree(c)); continue; }
-    out.push({ tag: c.tagName.toLowerCase(), children: p5Tree(c) });
-  }
-  return out;
-}
+import { monoTree, p5Tree } from './html-tree.ts';
 
 // ── Corpus. Pool every existing HTML fixture in the repo + tricky tree-construction. ──
 const conformanceCorpus: string[] = [
@@ -137,7 +104,7 @@ await run({
   agree: (html, official): AgreeResult => {
     const off = (official as { tree: string }).tree;
     let monoStr = '<throw>', agree = false;
-    try { monoStr = JSON.stringify(monoTree(parse(html))); agree = monoStr === off; }
+    try { monoStr = JSON.stringify(monoTree(parse(html), html)); agree = monoStr === off; }
     catch (e) { monoThrew++; monoStr = '<throw: ' + String((e as Error).message).split('\n')[0] + '>'; }
     if (!agree) treeFails.push({ html, mono: monoStr, off });
     return { agree };
