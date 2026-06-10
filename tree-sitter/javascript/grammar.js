@@ -53,6 +53,14 @@ module.exports = grammar({
     [$.prop, $.member_name],
     [$.prop, $.member_name, $.binding_property],
     [$.stmt, $.param],
+    [$.class_member],
+    [$.expr, $.prop, $.export_specifier],
+    [$.expr, $.export_specifier],
+    [$.prop],
+    [$.prop, $.decl],
+    [$.expr, $.prop, $.member_name],
+    [$.decorator_expr, $.new_target],
+    [$.binding_element],
   ],
 
   rules: {
@@ -78,17 +86,17 @@ module.exports = grammar({
       prec.right(15, seq(field('operator', choice("!", "~", "+", "-", "typeof", "void", "delete", "await", "yield")), $.expr)),
       prec.right(16, seq(field('operator', choice("++", "--")), $.expr)),
       prec.left(17, seq($.expr, field('operator', choice("++", "--")))),
-      $.ident,
-      $.number,
-      $.string,
-      $.template,
-      $.regex_literal,
       "true",
       "false",
       "null",
       "undefined",
       "this",
       "super",
+      $.ident,
+      $.number,
+      $.string,
+      $.template,
+      $.regex_literal,
       seq("...", $.expr),
       prec.left(18, seq($.expr, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
       prec.left(18, seq($.expr, ".", choice($.ident, $.private_field))),
@@ -104,6 +112,7 @@ module.exports = grammar({
       seq("[", repeat(seq(optional($.expr), ",")), optional($.expr), "]"),
       seq("{", optional(seq($.prop, repeat(seq(",", $.prop)), optional(","))), "}"),
       seq(optional("async"), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", "=>", choice($.expr, $.block)),
+      seq("async", $.ident, "=>", choice($.expr, $.block)),
       seq($.ident, "=>", choice($.expr, $.block)),
       seq("yield", choice(seq("*", $.expr), optional($.expr))),
       seq("(", $.expr, repeat(seq(",", $.expr)), ")"),
@@ -114,8 +123,8 @@ module.exports = grammar({
       $.binary_number,
       $.big_int,
       seq(optional("async"), "function", optional("*"), optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
-      seq(optional($.decorator_expr), "class", field('name', $.ident), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"),
-      seq(optional($.decorator_expr), "class", optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}")
+      seq(optional($.decorator_expr), "class", field('name', $.ident), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"),
+      seq(optional($.decorator_expr), "class", repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}")
     ),
 
     prop: $ => choice(seq("...", $.expr), seq(choice("get", "set"), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", $.block), seq(optional("async"), optional("*"), $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.member_name, ":", $.expr), seq("[", $.expr, repeat(seq(",", $.expr)), "]", ":", $.expr), seq($.ident, choice(seq("=", $.expr), blank()))),
@@ -124,7 +133,7 @@ module.exports = grammar({
 
     new_target: $ => choice($.ident, seq($.new_target, ".", $.ident), seq($.new_target, "[", $.expr, "]"), seq("(", $.expr, ")")),
 
-    class_heritage: $ => choice($.ident, seq($.class_heritage, ".", $.ident), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
+    class_heritage: $ => choice($.ident, $.number, $.string, "true", "false", "null", "undefined", seq($.class_heritage, ".", $.ident), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
 
     stmt: $ => choice($.block, seq(choice("let", "const", "var"), optional(seq($.binding, repeat(seq(",", $.binding)), optional(","))), optional(";")), seq("if", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq("else", $.stmt))), seq("for", optional("await"), "(", $.for_head, ")", $.stmt), seq("while", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq("do", $.stmt, "while", "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq("switch", "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq("return", optional(seq($.expr, repeat(seq(",", $.expr)))), optional(";")), seq("throw", $.expr, repeat(seq(",", $.expr)), optional(";")), seq("break", optional($.ident), optional(";")), seq("continue", optional($.ident), optional(";")), seq("try", $.block, optional(seq("catch", optional(seq("(", choice($.param, $.binding_pattern), ")")), $.block)), optional(seq("finally", $.block))), seq($.ident, ":", $.stmt), ";", seq("debugger", optional(";")), seq("with", "(", $.expr, ")", $.stmt), seq(optional("await"), "using", optional(seq($.binding, repeat(seq(",", $.binding)), optional(","))), optional(";")), $.decl, seq($.expr, repeat(seq(",", $.expr)), optional(";"))),
 
@@ -142,19 +151,21 @@ module.exports = grammar({
 
     for_binding: $ => seq(choice($.ident, $.binding_pattern), optional(seq("=", $.expr))),
 
-    param: $ => seq(optional($.decorator_expr), choice(seq($.ident, optional(seq("=", $.expr))), seq($.binding_pattern, optional(seq("=", $.expr))), seq("...", choice($.ident, $.binding_pattern)))),
+    param: $ => seq(optional($.decorator_expr), choice(seq($.ident, optional(seq("=", $.expr))), seq($.binding_pattern, optional(seq("=", $.expr))), seq("...", choice($.ident, $.binding_pattern), optional(seq("=", $.expr))))),
 
     for_head: $ => choice(seq(choice("let", "const", "var", "using", seq("await", "using")), optional(seq($.for_binding, repeat(seq(",", $.for_binding)), optional(","))), choice(seq(";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq(choice("in", "of"), $.expr))), seq(optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq($.expr, choice("in", "of"), $.expr)),
 
     switch_case: $ => choice(seq("case", $.expr, repeat(seq(",", $.expr)), ":"), seq("default", ":"), $.stmt),
 
-    decl: $ => choice(seq(optional("async"), "function", optional("*"), field('name', $.ident), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), "class", field('name', $.ident), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq("export", choice($.decl, $.stmt)), seq("export", "default", choice(seq(optional("async"), "function", optional("*"), optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.expr, optional(";")))), seq("export", "*", choice(seq("from", $.string, optional(";")), seq("as", $.ident, "from", $.string, optional(";")))), seq("export", "{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}", optional(seq("from", $.string)), optional(";")), seq("import", choice(seq($.import_clause, "from", $.string, optional(";")), seq($.ident, "=", $.expr, optional(";")), seq($.string, optional(";")))), seq(repeat($.decorator_expr), "export", choice($.decl, $.stmt))),
+    decl: $ => choice(seq(optional("async"), "function", optional("*"), field('name', $.ident), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq(repeat($.decorator_expr), "class", field('name', $.ident), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"), seq("export", choice($.decl, $.stmt)), seq(repeat1($.decorator_expr), $.decl), seq("export", "default", choice(seq(optional("async"), "function", optional("*"), optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block), seq($.expr, optional(";")))), seq("export", "*", choice(seq("from", $.string, optional(";")), seq("as", $.ident, "from", $.string, optional(";")))), seq("export", "{", optional(seq($.export_specifier, repeat(seq(",", $.export_specifier)), optional(","))), "}", optional(seq("from", $.string)), optional(";")), seq("import", choice(seq($.import_clause, "from", $.string, optional(";")), seq($.ident, "=", $.expr, optional(";")), seq($.string, optional(";")))), seq(repeat($.decorator_expr), "export", choice($.decl, $.stmt))),
 
-    class_member: $ => choice($.decorator_expr, seq("constructor", "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block, optional(";")), seq("static", $.block), seq(repeat(choice("static", "accessor", "async")), choice(seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional($.block), optional(";")), seq(choice("get", "set"), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", optional($.block), optional(";")), seq($.member_name, choice(seq("(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional($.block), optional(";")), seq(optional(seq("=", $.expr)), optional(";")))))), seq($.member_name, optional(seq("=", $.expr)), optional(";")), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional($.block), optional(";"))),
+    class_member: $ => choice(";", $.decorator_expr, seq("constructor", "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block, optional(";")), seq("static", $.block), seq(repeat(choice("static", "accessor", "async")), choice(seq("*", $.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional($.block), optional(";")), seq(choice("get", "set"), $.member_name, "(", optional(optional(seq($.param, repeat(seq(",", $.param)), optional(",")))), ")", optional($.block), optional(";")), seq($.member_name, choice(seq("(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional($.block), optional(";")), seq(optional(seq("=", $.expr)), optional(";")))))), seq($.member_name, optional(seq("=", $.expr)), optional(";")), seq($.member_name, "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional($.block), optional(";"))),
 
     import_clause: $ => choice(seq($.ident, optional(seq(",", choice(seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", $.ident))))), seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", $.ident)),
 
-    import_specifier: $ => seq($.ident, optional(seq("as", $.ident))),
+    import_specifier: $ => choice(seq($.ident, optional(seq("as", $.ident))), seq($.string, "as", $.ident)),
+
+    export_specifier: $ => seq(choice($.ident, $.string), optional(seq("as", choice($.ident, $.string)))),
 
     shebang: $ => token(/#![^\n]*/),
 

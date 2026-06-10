@@ -23,16 +23,19 @@ jobs:
 
       - run: npm ci
 
-      - name: Typecheck
-        run: npx tsc --noEmit
-
-      # Regenerate every grammar's artifacts and fail if any drifts from the committed
-      # files (someone edited a grammar but forgot to regenerate). Covers all four
-      # grammars (sources at the repo root) + the tree-sitter packages.
-      - name: Generate editor artifacts (must be in sync)
+      # Regenerate every grammar's artifacts FIRST: the uncommitted ones
+      # (*.cst-types.ts / *.cst-match.ts, gitignored) must exist before Typecheck
+      # and the gates, which import them. Then fail if any COMMITTED artifact
+      # drifts from the regenerated output (someone edited a grammar but forgot
+      # to regenerate). Covers all grammars (sources at the repo root) + the
+      # tree-sitter packages.
+      - name: Generate editor artifacts (committed ones must be in sync)
         run: |
           npm run gen
-          git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.cst-types.ts' '*.contributes.json' tree-sitter
+          git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter
+
+      - name: Typecheck
+        run: npx tsc --noEmit
 
       # Every correctness GATE through ONE runner — sanity / agnostic / conformance /
       # highlighter / vue / yaml / the generative scope≡role check / the gap-ledger selftest

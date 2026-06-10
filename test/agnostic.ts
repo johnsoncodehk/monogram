@@ -36,7 +36,7 @@ try { tokenize('`x`'); } catch { backtickHandled = false; }
 check('template machinery gated off when undeclared', !backtickHandled);
 
 // 4. The whole thing parses end-to-end on the shared engine.
-check('parses on the shared engine', parse('foo + 12 + bar').kind === 'node');
+check('parses on the shared engine', parse('foo + 12 + bar').rule !== undefined);
 
 check('token-pattern decimal-start fact handles range/char-class IR',
   tokenPatternStartsWithDecimal(Num) &&

@@ -5,7 +5,6 @@ import { createLexer, type Token } from './gen-lexer.ts';
 // ── CST output ──
 
 export interface CstNode {
-  kind: 'node';
   rule: string;
   children: CstChild[];
   offset: number;
@@ -13,9 +12,7 @@ export interface CstNode {
 }
 
 export interface CstLeaf {
-  kind: 'leaf';
   tokenType: string;
-  text: string;
   offset: number;
   end: number;
 }
@@ -32,6 +29,11 @@ interface OpInfo {
 }
 
 // ── Parser ──
+
+// The CST is span-only: a node's text is derived from the source it was parsed from.
+export function getText(node: { offset: number; end: number }, source: string): string {
+  return source.slice(node.offset, node.end);
+}
 
 export function createParser(grammar: CstGrammar) {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
@@ -133,6 +135,19 @@ export function createParser(grammar: CstGrammar) {
         if (op.noUnaryLhs) noUnaryLhsOps.add(op.value);
       }
     }
+  }
+
+  // Alternative-form LED binding powers (see LedPrec in types.ts): resolve the ladder
+  // anchors to concrete lbp numbers. Levels are spaced 2 apart, so `below` (lbp-1) sits
+  // BETWEEN two ladder levels without colliding with any op's lbp/rbp.
+  const ledPrecByConnector = new Map<string, { lbp: number; rhsBp: number | null }>();
+  for (const lp of grammar.ledPrecs ?? []) {
+    const anchorOp = lp.sameAs ?? lp.below;
+    if (!anchorOp) throw new Error(`ledPrec ${lp.connector}: needs sameAs or below`);
+    const op = opTable.get(anchorOp);
+    if (!op) throw new Error(`ledPrec ${lp.connector}: anchor ${JSON.stringify(anchorOp)} is not a ladder operator`);
+    const lbp = lp.sameAs !== undefined ? op.lbp : op.lbp - 1;
+    ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
   }
 
   // Classify rules: which use Pratt parsing
@@ -331,6 +346,26 @@ export function createParser(grammar: CstGrammar) {
     if (prattRules.has(rule.name)) prattClassified.set(rule.name, classifyAlts(rule));
     else if (leftRecSet.has(rule.name)) leftRecClassified.set(rule.name, classifyLeftRec(rule));
   }
+  // Per-LED binding-power lookup (object-keyed like ledFirst): a led whose first
+  // connector literal has a declared LedPrec is precedence-gated; chainRhs leds must
+  // end in a self-operand (the trailing ref the chain re-parses at the level's bp).
+  const ledPrecOf = new Map<object, { lbp: number; rhsBp: number | null }>();
+  for (const [ruleName, { leds }] of prattClassified.entries()) {
+    for (const led of leds) {
+      const first = led.items[0];
+      if (first?.type !== 'literal') continue;
+      const lp = ledPrecByConnector.get(first.value);
+      if (!lp) continue;
+      if (lp.rhsBp !== null) {
+        const last = led.items[led.items.length - 1];
+        if (!(last?.type === 'ref' && last.name === ruleName)) {
+          throw new Error(`ledPrec ${first.value}: chainRhs requires a trailing self-operand`);
+        }
+      }
+      ledPrecOf.set(led, lp);
+    }
+  }
+
   // The template token(s): the parser routes their tokens to the interpolation-aware
   // parseTemplateExpr path (the lexer owns producing them — see gen-lexer.ts).
   const templateTokenName = grammar.tokens.find(t => t.template)?.name;
@@ -552,13 +587,180 @@ export function createParser(grammar: CstGrammar) {
     return false;
   }
 
+  // ── SECOND-token dispatch refinement ──
+  // The keys admissible as a match's SECOND token, plus whether a one-token match
+  // exists (len1). An admitted alternative whose SECOND set excludes the actual second
+  // token — and that cannot end after one token — provably fails, so its arm is
+  // skipped before it runs (a labeled-statement arm without a ':' second token, an
+  // arrow head without '=>', …). Over-approximated everywhere: unknown shapes → top,
+  // op/prefix/postfix pratt items are one-op-token consumers with known literal sets.
+  // MUST stay algorithm-identical to emit-parser.ts's copy (same plain FIRST inputs):
+  // the prune decisions are engine-identical by construction, which the
+  // emit-reject-messages gate depends on (an arm skipped by only one engine would
+  // advance the farthest-position error state in the other).
+  type Sec = { s: Set<string> | null; len1: boolean };
+  const SEC_TOP: Sec = { s: null, len1: true };
+  const ruleSecond = new Map<string, Sec>();
+  const secOpKeys = new Set<string>([...opTable.keys(), ...postfixOpValues]);
+  function suffixFirst(items: RuleExpr[], j: number): Set<string> | null {
+    const acc = new Set<string>();
+    for (let i = j; i < items.length; i++) {
+      const item = items[i];
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'op' || item.type === 'postfix') { for (const k of secOpKeys) acc.add(k); return acc; }
+      if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
+      const f = exprFirst(item);
+      if (f === null) return null;
+      for (const k of f) acc.add(k);
+      if (!exprNullable(item)) return acc;
+    }
+    return acc;
+  }
+  function suffixNullable(items: RuleExpr[], j: number): boolean {
+    for (let i = j; i < items.length; i++) {
+      const item = items[i];
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
+      if (!exprNullable(item)) return false;
+    }
+    return true;
+  }
+  function exprSecond(e: RuleExpr): Sec {
+    switch (e.type) {
+      case 'literal': return { s: new Set(), len1: true };
+      case 'ref':
+        if (tokenNames.has(e.name)) return { s: new Set(), len1: true };
+        return ruleSecond.get(e.name) ?? { s: new Set(), len1: false };
+      case 'seq': {
+        const acc = new Set<string>();
+        let len1 = false;
+        const items = e.items;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          let isec: Sec;
+          let itemNullable: boolean;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
+            isec = { s: new Set(), len1: true };
+            itemNullable = false;
+          } else {
+            isec = exprSecond(item);
+            itemNullable = exprNullable(item);
+          }
+          if (isec.s === null) return SEC_TOP;
+          for (const k of isec.s) acc.add(k);
+          if (isec.len1) {
+            const rf = suffixFirst(items, i + 1);
+            if (rf === null) return SEC_TOP;
+            for (const k of rf) acc.add(k);
+            if (suffixNullable(items, i + 1)) len1 = true;
+          }
+          if (!itemNullable) return { s: acc, len1 };
+        }
+        return { s: acc, len1 };
+      }
+      case 'alt': {
+        const acc = new Set<string>();
+        let len1 = false;
+        for (const item of e.items) {
+          const sec = exprSecond(item);
+          if (sec.s === null) return SEC_TOP;
+          for (const k of sec.s) acc.add(k);
+          len1 ||= sec.len1;
+        }
+        return { s: acc, len1 };
+      }
+      case 'quantifier': {
+        const sec = exprSecond(e.body);
+        if (sec.s === null) return SEC_TOP;
+        const acc = new Set(sec.s);
+        if (e.kind !== '?' && sec.len1) {
+          const bf = exprFirst(e.body);
+          if (bf === null) return SEC_TOP;
+          for (const k of bf) acc.add(k);
+        }
+        return { s: acc, len1: sec.len1 };
+      }
+      case 'group': return exprSecond(e.body);
+      case 'sep': {
+        const sec = exprSecond(e.element);
+        if (sec.s === null) return SEC_TOP;
+        const acc = new Set(sec.s);
+        if (sec.len1) acc.add(e.delimiter);
+        return { s: acc, len1: sec.len1 };
+      }
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+        return { s: new Set(), len1: false };
+      case 'op': case 'prefix': case 'postfix':
+        return { s: new Set(), len1: true };
+      default: return SEC_TOP;
+    }
+  }
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const rule of grammar.rules) {
+      const prev = ruleSecond.get(rule.name);
+      if (prev && prev.s === null && prev.len1) continue;
+      const next = exprSecond(rule.body);
+      let nv: Sec;
+      if (!prev) nv = next;
+      else if (next.s === null || prev.s === null) nv = { s: null, len1: prev.len1 || next.len1 };
+      else nv = { s: new Set([...prev.s, ...next.s]), len1: prev.len1 || next.len1 };
+      const grew = !prev || (nv.s === null) !== (prev.s === null) || nv.len1 !== prev.len1
+        || (nv.s !== null && prev.s !== null && nv.s.size > prev.s.size);
+      if (grew) { ruleSecond.set(rule.name, nv); changed = true; }
+    }
+  }
+  // null = always try (nullable / top / len1 / empty — the emit tables' always rows).
+  const altSecondDispatch = new Map<RuleExpr, string[] | null>();
+  for (const rule of grammar.rules) {
+    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
+    for (const alt of alts) {
+      const sec = exprSecond(alt);
+      const always = exprNullable(alt) || sec.s === null || sec.len1 || sec.s.size === 0;
+      altSecondDispatch.set(alt, always ? null : [...sec.s!]);
+    }
+  }
+  function altMightSecond(alt: RuleExpr, tok2: Token | null): boolean {
+    const keys = altSecondDispatch.get(alt);
+    if (!keys) return true;
+    if (!tok2) return false;                                     // needs a second token; none exists
+    for (let i = 0; i < keys.length; i++) if (keyMatchesTok(keys[i], tok2)) return true;
+    return false;
+  }
+
+  // ── Fast `not(alt-of-keywords)` ──
+  // A negative lookahead over a literal / alternation of KEYWORD literals (e.g. an
+  // identifier that isn't a reserved word, `not('catch'|'delete'|…)`) is matched by trying
+  // each literal in turn — O(N) matchLiteral calls (+ an `out` alloc each) at every position
+  // the construct sits on, which on the identifier path is the hottest in the grammar. The
+  // set of keywords is static, so collapse it to ONE membership test. Byte-identical: the
+  // `not` fails iff some literal matches the token, and a keyword literal matches iff the
+  // token is an ident-kind whose text equals it — exactly `kwSet.has(tok.text)`. Pure-keyword
+  // bodies only (a punctuation literal would need matchLiteral's split-`>` semantics) → else
+  // the recursive path stands. `null` cached = no fast form for this node.
+  const notKwCache = new Map<RuleExpr, Set<string> | null>();
+  function notKwSet(notNode: RuleExpr): Set<string> | null {
+    const cached = notKwCache.get(notNode);
+    if (cached !== undefined) return cached;
+    const set = new Set<string>();
+    const collect = (e: RuleExpr): boolean =>
+      e.type === 'literal' ? (isKeywordLiteral(e.value) && (set.add(e.value), true))
+        : e.type === 'alt' ? e.items.every(collect)
+        : false;
+    const body = (notNode as Extract<RuleExpr, { type: 'not' }>).body;
+    const result = collect(body) && set.size > 0 ? set : null;
+    notKwCache.set(notNode, result);
+    return result;
+  }
+
   // ── Parser core ──
 
   const profCounts = new Map<string, number>();
   function parse(source: string, entryRule?: string): CstNode {
     const tokens = tokenize(source);
     let pos = 0;
-    let maxPos = 0;   // farthest token index the parser ever attempted to read (diagnostic)
+    let maxPos = 0;   // farthest token index ever ADVANCED past (diagnostic; updated at the pos++ sites, mirroring the emitted engine so reject messages stay engine-identical)
     // Packrat memo for pratt/left-recursive rules (Expr, Type, …): cache the
     // parse result + end position by start position, so backtracking doesn't
     // re-parse the same rule at the same spot. Sound because those rules reset
@@ -575,7 +777,6 @@ export function createParser(grammar: CstGrammar) {
     let parseLimit = -1;
 
     function peek(): Token | null {
-      if (pos > maxPos) maxPos = pos;
       if (parseLimit >= 0 && pos >= parseLimit) return null;
       return tokens[pos] ?? null;
     }
@@ -592,26 +793,26 @@ export function createParser(grammar: CstGrammar) {
       if (isKeywordLiteral(value)) {
         // Keyword literal: match against Ident token with same text
         if (tok.type !== '' && tokenNames.has(tok.type) && tok.text === value) {
-          pos++;
-          return { kind: 'leaf', tokenType: '$keyword', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
+          if (++pos > maxPos) maxPos = pos;
+          return { tokenType: '$keyword', offset: tok.offset, end: tok.offset + tok.text.length };
         }
         return null;
       }
       // Punctuation literal
       if (tok.type === '' && tok.text === value) {
-        pos++;
-        return { kind: 'leaf', tokenType: '$punct', text: value, offset: tok.offset, end: tok.offset + tok.text.length };
+        if (++pos > maxPos) maxPos = pos;
+        return { tokenType: '$punct', offset: tok.offset, end: tok.offset + tok.text.length };
       }
       // Split multi-`>` tokens: `>>`, `>>>`, `>>=`, `>>>=` can yield a single `>`
       if (value === '>' && tok.type === '' && tok.text.length > 1 && tok.text[0] === '>') {
         const rest = tok.text.slice(1);
         tokens.splice(pos, 1,
-          { type: '', text: '>', offset: tok.offset },
-          { type: '', text: rest, offset: tok.offset + 1 },
+          { type: '', text: '>', offset: tok.offset, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
+          { type: '', text: rest, offset: tok.offset + 1, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
         );
         memo.clear();   // splice shifts later token indices → memo entries are stale
-        pos++;
-        return { kind: 'leaf', tokenType: '$punct', text: '>', offset: tok.offset, end: tok.offset + 1 };
+        if (++pos > maxPos) maxPos = pos;
+        return { tokenType: '$punct', offset: tok.offset, end: tok.offset + 1 };
       }
       return null;
     }
@@ -621,8 +822,8 @@ export function createParser(grammar: CstGrammar) {
       const tok = peek();
       if (!tok) return null;
       if (tok.type === name) {
-        pos++;
-        return { kind: 'leaf', tokenType: name, text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
+        if (++pos > maxPos) maxPos = pos;
+        return { tokenType: name, offset: tok.offset, end: tok.offset + tok.text.length };
       }
       return null;
     }
@@ -640,13 +841,13 @@ export function createParser(grammar: CstGrammar) {
       const tok = peek();
       if (!tok) return null;
       if (tok.type === templateTokenName) {
-        pos++;
-        return { kind: 'leaf', tokenType: templateTokenName, text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
+        if (++pos > maxPos) maxPos = pos;
+        return { tokenType: templateTokenName, offset: tok.offset, end: tok.offset + tok.text.length };
       }
       if (tok.type === '$templateHead') {
         const children: CstChild[] = [];
-        pos++;
-        children.push({ kind: 'leaf', tokenType: '$templateHead', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length });
+        if (++pos > maxPos) maxPos = pos;
+        children.push({ tokenType: '$templateHead', offset: tok.offset, end: tok.offset + tok.text.length });
         const interpRule = currentPrattContext ?? findExprRule();
         while (true) {
           const exprNode = parseRule(interpRule);
@@ -654,20 +855,20 @@ export function createParser(grammar: CstGrammar) {
           const next = peek();
           if (!next) break;
           if (next.type === '$templateMiddle') {
-            pos++;
-            children.push({ kind: 'leaf', tokenType: '$templateMiddle', text: next.text, offset: next.offset, end: next.offset + next.text.length });
+            if (++pos > maxPos) maxPos = pos;
+            children.push({ tokenType: '$templateMiddle', offset: next.offset, end: next.offset + next.text.length });
             continue;
           }
           if (next.type === '$templateTail') {
-            pos++;
-            children.push({ kind: 'leaf', tokenType: '$templateTail', text: next.text, offset: next.offset, end: next.offset + next.text.length });
+            if (++pos > maxPos) maxPos = pos;
+            children.push({ tokenType: '$templateTail', offset: next.offset, end: next.offset + next.text.length });
             break;
           }
           break;
         }
         const startOff = children.length > 0 ? childOffset(children[0]) : offset();
         const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-        return { kind: 'node', rule: '$template', children, offset: startOff, end: endOff };
+        return { rule: '$template', children, offset: startOff, end: endOff };
       }
       return null;
     }
@@ -733,9 +934,11 @@ export function createParser(grammar: CstGrammar) {
       let bestNode: CstNode | null = null;
       let bestPos = saved;
       const startTok = tokens[saved] ?? null;
+      const startTok2 = (parseLimit >= 0 && saved + 1 >= parseLimit) ? null : (tokens[saved + 1] ?? null);
 
       for (const alt of alts) {
         if (!altMightStart(alt, startTok)) continue;
+        if (!altMightSecond(alt, startTok2)) continue;
         pos = saved;
         // The markup container arm (HTML element with children) is matched by a
         // dedicated path that honours optional end tags — content stops at a trigger
@@ -747,7 +950,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          bestNode = { kind: 'node', rule: rule.name, children, offset: startOff, end: endOff };
+          bestNode = { rule: rule.name, children, offset: startOff, end: endOff };
           bestPos = pos;
         }
       }
@@ -766,14 +969,16 @@ export function createParser(grammar: CstGrammar) {
       let node: CstNode | null = null;
       let bestAtomPos = saved;
       const startTok = tokens[saved] ?? null;
+      const startTok2 = (parseLimit >= 0 && saved + 1 >= parseLimit) ? null : (tokens[saved + 1] ?? null);
       for (const atom of atoms) {
         if (!altMightStart(atom, startTok)) continue;
+        if (!altMightSecond(atom, startTok2)) continue;
         pos = saved;
         const children = matchExpr(atom);
         if (children !== null && pos > bestAtomPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          node = { kind: 'node', rule: rule.name, children, offset: startOff, end: endOff };
+          node = { rule: rule.name, children, offset: startOff, end: endOff };
           bestAtomPos = pos;
         }
       }
@@ -797,7 +1002,6 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             node = {
-              kind: 'node',
               rule: rule.name,
               children: [node, ...children],
               offset: node.offset,
@@ -822,8 +1026,10 @@ export function createParser(grammar: CstGrammar) {
       let lhs: CstNode | null = null;
       let bestNudPos = saved;
       const startTok = tokens[saved] ?? null;
+      const startTok2 = (parseLimit >= 0 && saved + 1 >= parseLimit) ? null : (tokens[saved + 1] ?? null);
       for (const nud of nuds) {
         if (!altMightStart(nud, startTok)) continue;
+        if (!altMightSecond(nud, startTok2)) continue;
         pos = saved;
         const items = nud.type === 'seq' ? nud.items : [nud];
 
@@ -834,11 +1040,11 @@ export function createParser(grammar: CstGrammar) {
             const key = tok.text;
             const info = prefixOps.get(key);
             if (info) {
-              pos++;
-              const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
+              if (++pos > maxPos) maxPos = pos;
+              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
               const rhs = parsePratt(rule, info.rbp);
               if (rhs && pos > bestNudPos) {
-                lhs = { kind: 'node', rule: rule.name, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
+                lhs = { rule: rule.name, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 bestNudPos = pos;
               }
             }
@@ -850,7 +1056,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestNudPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          lhs = { kind: 'node', rule: rule.name, children, offset: startOff, end: endOff };
+          lhs = { rule: rule.name, children, offset: startOff, end: endOff };
           bestNudPos = pos;
         }
       }
@@ -878,10 +1084,28 @@ export function createParser(grammar: CstGrammar) {
           // Skip a LED whose connector is excluded in this context (e.g. `in` under
           // a no-`in` for-head) — it rebinds to the enclosing rule instead.
           if (suppressCur && led.items[0]?.type === 'literal' && suppressCur.has(led.items[0].value)) continue;
+          // Precedence gate for alternative-form LEDs: without it they bind maximally
+          // tight (`a == b ? c : d` mis-grouped as `a == (b ? c : d)`).
+          const lp = ledPrecOf.get(led);
+          if (lp !== undefined && lp.lbp <= minBp) continue;
           if (!canStart(ledFirst.get(led), tok)) continue;   // first-token dispatch for LED continuations
 
           pos = ledSaved;
-          let children = matchSeq(led.items);
+          let children: CstChild[] | null;
+          if (lp !== undefined && lp.rhsBp !== null) {
+            // Chain-rhs led ('in'/'instanceof'): the trailing self-operand parses at the
+            // level's bp (left-chaining like a ladder op), not as a full expression.
+            const head = matchSeq(led.items.slice(0, -1));
+            if (head !== null) {
+              const rhs = parsePratt(rule, lp.rhsBp);
+              children = rhs !== null ? [...head, rhs] : null;
+            } else {
+              children = null;
+            }
+            if (children === null) pos = ledSaved;
+          } else {
+            children = matchSeq(led.items);
+          }
           // Mixfix operand re-bound: if a `<L1> $ <L2> …` LED failed, the inner
           // operand may have over-consumed the L2 it needs — retry it capped.
           if (children === null && ledMixfix.has(led)) {
@@ -890,7 +1114,6 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             lhs = {
-              kind: 'node',
               rule: rule.name,
               children: [lhs, ...children],
               offset: lhs.offset,
@@ -912,9 +1135,9 @@ export function createParser(grammar: CstGrammar) {
         if (info && info.lbp > minBp) {
           if (info.position === 'postfix') {
             if (!tailClosed) {                                   // can't postfix an update expr (`a++ --`)
-              pos++;
-              const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
-              lhs = { kind: 'node', rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
+              if (++pos > maxPos) maxPos = pos;
+              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+              lhs = { rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
               tailClosed = true;
               matched = true;
             }
@@ -926,18 +1149,18 @@ export function createParser(grammar: CstGrammar) {
             // reparse another way (left-assoc `(x ** -y) ** z`, or `typeof` as a bare
             // identifier splitting the statement). `(-x) ** y` is unaffected: lhs is then
             // a parenthesized node, not a prefix node.
-            if (noUnaryLhsOps.has(tokKey) && lhs.kind === 'node') {
+            if (noUnaryLhsOps.has(tokKey) && 'children' in lhs) {
               const head = lhs.children[0];
-              if (head?.kind === 'leaf' && head.tokenType === '$operator'
-                  && prefixOps.has(head.text) && !postfixOpValues.has(head.text)) {
+              if (head !== undefined && 'tokenType' in head && head.tokenType === '$operator'
+                  && prefixOps.has(source.slice(head.offset, head.end)) && !postfixOpValues.has(source.slice(head.offset, head.end))) {
                 return null;
               }
             }
-            pos++;
-            const opLeaf: CstLeaf = { kind: 'leaf', tokenType: '$operator', text: tok.text, offset: tok.offset, end: tok.offset + tok.text.length };
+            if (++pos > maxPos) maxPos = pos;
+            const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
             const rhs = parsePratt(rule, info.rbp);
             if (rhs) {
-              lhs = { kind: 'node', rule: rule.name, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              lhs = { rule: rule.name, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
               matched = true;
             } else {
               pos = ledSaved;
@@ -998,6 +1221,12 @@ export function createParser(grammar: CstGrammar) {
         case 'not': {
           // Zero-width negative lookahead: succeed (no children) iff the body
           // does NOT match here; never consume input either way.
+          const kw = notKwSet(expr);
+          if (kw) {                                              // fast path: one membership test
+            const tok = peek();
+            const hit = !!tok && tok.type !== '' && tokenNames.has(tok.type) && kw.has(tok.text);
+            return hit ? null : [];
+          }
           const saved = pos;
           const m = matchExpr(expr.body);
           pos = saved;
@@ -1063,8 +1292,8 @@ export function createParser(grammar: CstGrammar) {
         const result = matchExpr(item);
         if (result === null) { pos = saved; return null; }
         // The open-tag name leaf (a name token) — drives the optional-end lookup.
-        if (item.type === 'ref' && c.nameTokens.has(item.name) && result[0]?.kind === 'leaf') {
-          openName = result[0].text;
+        if (item.type === 'ref' && c.nameTokens.has(item.name) && result[0] !== undefined && 'tokenType' in result[0]) {
+          openName = source.slice(result[0].offset, result[0].end);
         }
         children.push(...result);
       }
@@ -1095,8 +1324,8 @@ export function createParser(grammar: CstGrammar) {
       const beforeClose = pos;
       const close = matchSeq(c.items.slice(c.closeStart));
       if (close !== null) {
-        const closeName = close.find((ch, i) => i > 0 && ch.kind === 'leaf' && c.nameTokens.has((ch as CstLeaf).tokenType)) as CstLeaf | undefined;
-        if (!closeName || closeName.text.toLowerCase() === openName.toLowerCase()) {
+        const closeName = close.find((ch, i) => i > 0 && 'tokenType' in ch && c.nameTokens.has(ch.tokenType)) as CstLeaf | undefined;
+        if (!closeName || source.slice(closeName.offset, closeName.end).toLowerCase() === openName.toLowerCase()) {
           children.push(...close);
           return children;
         }
@@ -1230,7 +1459,7 @@ export function createParser(grammar: CstGrammar) {
     // Entry
     const entry = entryRule ?? findEntryRule(grammar);
     if (tokens.length === 0) {
-      return { kind: 'node', rule: entry, children: [], offset: 0, end: 0 };
+      return { rule: entry, children: [], offset: 0, end: 0 };
     }
     const result = parseRule(entry);
     if (!result) {

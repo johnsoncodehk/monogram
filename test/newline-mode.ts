@@ -67,7 +67,7 @@ check('leading boundary suppressed (no NEWLINE before first content)', tokenize(
 
 // ── 2. Parser: accepts line-delimited / flow-spanning input, rejects malformed ──
 const { parse } = createParser(g);
-const accepts = (s: string) => { try { return parse(s).kind === 'node'; } catch { return false; } };
+const accepts = (s: string) => { try { return parse(s).rule !== undefined; } catch { return false; } };
 check('accepts a single statement', accepts('A=1'));
 check('accepts newline-separated statements', accepts('A=1\nB=2'));
 check('accepts a trailing newline', accepts('A=1\n'));

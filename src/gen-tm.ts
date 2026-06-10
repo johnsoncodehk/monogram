@@ -6099,9 +6099,52 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
 
   // Collect alphabetic keywords that can appear inside type expressions
   // (e.g., keyof, typeof, readonly, extends, infer).
+  //
+  // A keyword is "paren-gated" when EVERY occurrence of it inside the @type rules
+  // is immediately followed by a literal `(` (the JSDoc `function(...)` type shape):
+  // bare at line start it can only begin a STATEMENT, so it must NOT count as a
+  // type-context keyword here — subtracting it from the statement-start set below
+  // would keep a multi-line type region open across a real `function f() {}`
+  // declaration on the next line (issue #1043).
+  const parenGatedTypeKw = (kw: string): boolean => {
+    let saw = false, gated = true;
+    const walk = (e: RuleExpr): void => {
+      if (!e || !gated) return;
+      switch (e.type) {
+        case 'seq':
+          for (let i = 0; i < e.items.length; i++) {
+            const it = e.items[i];
+            if (it.type === 'literal' && it.value === kw) {
+              saw = true;
+              const next = e.items[i + 1];
+              if (!(next && next.type === 'literal' && next.value === '(')) gated = false;
+            } else walk(it);
+          }
+          return;
+        case 'alt':
+          for (const it of e.items) {
+            if (it.type === 'literal' && it.value === kw) { saw = true; gated = false; } else walk(it);
+          }
+          return;
+        case 'quantifier': case 'group': case 'not':
+          if (e.body.type === 'literal' && e.body.value === kw) { saw = true; gated = false; } else walk(e.body);
+          return;
+        case 'sep':
+          if (e.delimiter === kw) { saw = true; gated = false; }
+          if (e.element.type === 'literal' && e.element.value === kw) { saw = true; gated = false; } else walk(e.element);
+          return;
+        case 'literal':
+          if (e.value === kw) { saw = true; gated = false; }
+          return;
+        default: return;
+      }
+    };
+    for (const r of grammar.rules) if (r.flags.includes('type')) walk(r.body);
+    return saw && gated;
+  };
   const typeContextKeywords = new Set<string>();
   for (const lit of typeLiterals) {
-    if (isKeywordLiteral(lit)) typeContextKeywords.add(lit);
+    if (isKeywordLiteral(lit) && !parenGatedTypeKw(lit)) typeContextKeywords.add(lit);
   }
 
   // Statement-starting keywords: alphabetic literals whose scope indicates
@@ -7265,28 +7308,12 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       topPatterns.push({ include: '#property-access' });
     }
 
-    if (propAccess.hasOptionalChain) {
-      const optScope = getScope(scopeOverrides,'?.') ?? `punctuation.accessor.optional.${langName}`;
-      // Optional method call: obj?.method() → entity.name.function
-      repository['optional-method-call'] = {
-        match: `(\\?\\.)\\s*(${identPattern})(?=\\s*\\()`,
-        captures: {
-          '1': { name: optScope.includes(langName) ? optScope : `${optScope}.${langName}` },
-          '2': { name: `entity.name.function.${langName}` },
-        },
-      };
-      topPatterns.push({ include: '#optional-method-call' });
-
-      // Optional property access: obj?.prop → entity.other.property
-      repository['optional-property-access'] = {
-        match: `(\\?\\.)\\s*(${identPattern})`,
-        captures: {
-          '1': { name: optScope.includes(langName) ? optScope : `${optScope}.${langName}` },
-          '2': { name: `entity.other.property.${langName}` },
-        },
-      };
-      topPatterns.push({ include: '#optional-property-access' });
-    }
+    // NOTE: no dedicated optional-chain ('?.') mint. The detector's direct-ref shape
+    // requirement meant this never fired for any grammar (the expression rule's '?.'
+    // led targets an alt()); when a class-heritage '?.' led first activated it, the
+    // minted entity.other.property scope contradicted the ledger-pinned contract for
+    // `a?.b` (variable.other, matching the official grammar). '?.' punctuation comes
+    // from scopeOverrides; the name after it follows the general identifier scoping.
   }
 
   // ── 4b3. Arrow parameter detection ──

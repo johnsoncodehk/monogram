@@ -549,6 +549,20 @@ const LR_CONFLICT_CLOSURE: string[][] = [
   // while completing the closure (CI builds only the typescript + html tree-sitters, so
   // tsx/jsx generate was never exercised). Each is inert for languages lacking the rule.
   ['type', 'class_heritage'], ['type_param', 'jsxtag_name'], ['expr', 'jsxcontainer'],
+  // FN=0 round (tsc parse-surface widening): repeatable heritage clauses + `;` class
+  // elements (class_member), the object-literal modifier soup + `?`/`!` name marks
+  // (prop tuples), string export specifiers (export_specifier), `@new x` decorators
+  // (decorator_expr/new_target), rest-binding `...r: n` (binding_element), and the
+  // JSDoc `function(...)` type (type_member 4-way).
+  ['class_member'],
+  ['expr', 'prop', 'export_specifier'],
+  ['expr', 'export_specifier'],
+  ['prop'],
+  ['prop', 'decl'],
+  ['expr', 'prop', 'member_name'],
+  ['decorator_expr', 'new_target'],
+  ['binding_element'],
+  ['type_member', 'expr', 'prop', 'member_name'],
   // YAML (issue #3): an indentation grammar is massively ambiguous — a newline may continue a node or
   // start the next document, a `:` may open a value or be an empty-key map, a scalar may be a key or a
   // leaf, a flow collection may be a value or an implicit block key. tree-sitter's GLR absorbs all of

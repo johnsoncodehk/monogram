@@ -374,8 +374,10 @@
             "unique": "keyword",
             "symbol": "keyword",
             "import": "keyword",
+            "function": "keyword",
             "in": "keyword",
             "as": "operator",
+            "@new": "keyword",
             "super": "keyword",
             "instanceof": "operator",
             "class": "keyword",
@@ -384,10 +386,15 @@
             "yield": "keyword",
             "satisfies": "operator",
             "meta": "keyword",
-            "function": "keyword",
             "public": "keyword",
             "private": "keyword",
             "protected": "keyword",
+            "static": "keyword",
+            "override": "keyword",
+            "accessor": "keyword",
+            "export": "keyword",
+            "declare": "keyword",
+            "out": "keyword",
             "get": "keyword",
             "set": "keyword",
             "let": "keyword",
@@ -413,19 +420,13 @@
             "of": "keyword",
             "case": "keyword",
             "default": "keyword",
-            "out": "keyword",
             "interface": "keyword",
             "type": "keyword",
             "enum": "keyword",
-            "declare": "keyword",
             "namespace": "keyword",
             "module": "keyword",
-            "export": "keyword",
             "from": "keyword",
-            "static": "keyword",
             "constructor": "keyword",
-            "override": "keyword",
-            "accessor": "keyword",
             "defer": "keyword",
             "delete": "operator",
             "string": "keyword",
@@ -659,12 +660,20 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "function": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "in": {
               "token": "keyword",
               "switchTo": "@root"
             },
             "as": {
               "token": "operator",
+              "switchTo": "@root"
+            },
+            "@new": {
+              "token": "keyword",
               "switchTo": "@root"
             },
             "super": {
@@ -699,10 +708,6 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "function": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
             "public": {
               "token": "keyword",
               "switchTo": "@root"
@@ -712,6 +717,30 @@
               "switchTo": "@root"
             },
             "protected": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "static": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "override": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "accessor": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "export": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "declare": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "out": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -815,10 +844,6 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "out": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
             "interface": {
               "token": "keyword",
               "switchTo": "@root"
@@ -831,10 +856,6 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "declare": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
             "namespace": {
               "token": "keyword",
               "switchTo": "@root"
@@ -843,27 +864,11 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "export": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
             "from": {
               "token": "keyword",
               "switchTo": "@root"
             },
-            "static": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
             "constructor": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "override": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "accessor": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -1030,7 +1035,7 @@
         }
       ],
       [
-        ">>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|===|!==|>>>|=>|\\+=|-=|\\*=|%=|&=|\\|=|\\^=|\\?\\?|\\|\\||&&|==|!=|<=|>=|<<|>>|\\*\\*|\\+\\+|--|\\||&|-|\\+|!|\\*|=|\\^|%|~",
+        ">>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|===|!==|>>>|=>|\\+=|-=|\\*=|%=|&=|\\|=|\\^=|\\?\\?|\\|\\||&&|==|!=|<=|>=|<<|>>|\\*\\*|\\+\\+|--|\\||&|-|!|\\*|\\+|=|\\^|%|~",
         {
           "token": "operator",
           "switchTo": "@root"
@@ -1155,8 +1160,10 @@
             "unique": "keyword",
             "symbol": "keyword",
             "import": "keyword",
+            "function": "keyword",
             "in": "keyword",
             "as": "operator",
+            "@new": "keyword",
             "super": "keyword",
             "instanceof": "operator",
             "class": "keyword",
@@ -1165,10 +1172,15 @@
             "yield": "keyword",
             "satisfies": "operator",
             "meta": "keyword",
-            "function": "keyword",
             "public": "keyword",
             "private": "keyword",
             "protected": "keyword",
+            "static": "keyword",
+            "override": "keyword",
+            "accessor": "keyword",
+            "export": "keyword",
+            "declare": "keyword",
+            "out": "keyword",
             "get": "keyword",
             "set": "keyword",
             "let": "keyword",
@@ -1194,19 +1206,13 @@
             "of": "keyword",
             "case": "keyword",
             "default": "keyword",
-            "out": "keyword",
             "interface": "keyword",
             "type": "keyword",
             "enum": "keyword",
-            "declare": "keyword",
             "namespace": "keyword",
             "module": "keyword",
-            "export": "keyword",
             "from": "keyword",
-            "static": "keyword",
             "constructor": "keyword",
-            "override": "keyword",
-            "accessor": "keyword",
             "defer": "keyword",
             "delete": "operator",
             "string": "keyword",
@@ -1258,7 +1264,7 @@
         "delimiter.square"
       ],
       [
-        ">>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|===|!==|>>>|=>|\\+=|-=|\\*=|%=|&=|\\|=|\\^=|\\?\\?|\\|\\||&&|==|!=|<=|>=|<<|>>|\\*\\*|\\+\\+|--|\\||&|-|\\+|!|\\*|=|\\^|%|~",
+        ">>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|===|!==|>>>|=>|\\+=|-=|\\*=|%=|&=|\\|=|\\^=|\\?\\?|\\|\\||&&|==|!=|<=|>=|<<|>>|\\*\\*|\\+\\+|--|\\||&|-|!|\\*|\\+|=|\\^|%|~",
         "operator"
       ],
       [

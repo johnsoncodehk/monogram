@@ -9,18 +9,48 @@ export interface Token {
   type: string;   // token decl name (e.g. 'Ident'), or '' for punctuation literals
   text: string;
   offset: number;
-  newlineBefore?: boolean;   // a line terminator preceded this token (drives ASI / "no LineTerminator here" rules)
-  commentBefore?: boolean;   // a comment was skipped before this token (indentation grammars: a comment
-                             // ENDS a plain scalar, so a folded multi-line scalar must not cross it)
-  multilineFlowBefore?: boolean; // the flow collection that closed immediately before this token spanned >1 line
-                             // (indentation grammars: a flow used as an implicit block KEY must be single-line, §7.4.2)
+  k: number;      // interned TYPE kind (see LexerIntern; 0 without an intern config)
+  t: number;      // interned LITERAL kind: keyword int for a named token's text, punct int for a '' token's
+  newlineBefore: boolean;   // a line terminator preceded this token (drives ASI / "no LineTerminator here" rules)
+  commentBefore: boolean;   // a comment was skipped before this token (indentation grammars: a comment
+                            // ENDS a plain scalar, so a folded multi-line scalar must not cross it)
+  multilineFlowBefore: boolean; // the flow collection that closed immediately before this token spanned >1 line
+                            // (indentation grammars: a flow used as an implicit block KEY must be single-line, §7.4.2)
+}
+
+// Optional integer-interning config (the emitted parser supplies it): every token is
+// built WITH its int kinds, so no post-pass mutates token shapes. Without it, k/t are 0.
+export interface LexerIntern {
+  typeKind: ReadonlyMap<string, number>;   // token-type name → int (incl. the $template* kinds)
+  kwLit: ReadonlyMap<string, number>;      // keyword literal text → int
+  puLit: ReadonlyMap<string, number>;      // punct literal text → int
+  punctKind: number;                       // k for '' tokens
+  namedFallback: number;                   // k for a named type missing from typeKind
 }
 
 // Build a standalone lexer from the grammar's token definitions + lexer hints.
 // It depends ONLY on tokens/precs — never on the parse rules — so it is the first
 // derived stage: grammar → lexer → parser (and grammar → highlighter), all from one
 // definition. The parser composes this (see gen-parser.ts).
-export function createLexer(grammar: CstGrammar) {
+export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
+  // Integer interning (k/t on every token, baked at construction — see LexerIntern).
+  // Without a config every kind is 0 and the EMPTY map makes each lookup a cheap miss.
+  const EMPTY_INTERN: ReadonlyMap<string, number> = new Map();
+  const kwLitOf = intern?.kwLit ?? EMPTY_INTERN;
+  const puLitOf = intern?.puLit ?? EMPTY_INTERN;
+  const typeKindOf = intern?.typeKind ?? EMPTY_INTERN;
+  const kPunct = intern?.punctKind ?? 0;
+  const kOf = (name: string | undefined | null): number =>
+    name === '' ? kPunct : name == null ? 0 : (typeKindOf.get(name) ?? intern?.namedFallback ?? 0);
+  // Single-allocation token builders: every token is born with its final shape (k/t and
+  // the stamp flags present), so nothing later transitions its hidden class. A named
+  // token's t is its text's keyword int (a keyword here is an identifier-with-text, and
+  // any named token whose text equals a keyword matches that keyword key); a '' token's
+  // t is its punct int, passed in (precomputed where the literal is static).
+  const mkNamed = (type: string, text: string, offset: number, k: number): Token =>
+    ({ type, text, offset, k, t: kwLitOf.get(text) ?? 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false });
+  const mkPu = (text: string, offset: number, t: number): Token =>
+    ({ type: '', text, offset, k: kPunct, t, newlineBefore: false, commentBefore: false, multilineFlowBefore: false });
   // Punctuation literals from rules + operators (everything that isn't a keyword word).
   const allLiterals = new Set<string>();
   for (const rule of grammar.rules) for (const l of collectLiterals(rule.body)) allLiterals.add(l);
@@ -29,6 +59,17 @@ export function createLexer(grammar: CstGrammar) {
   const punctLiterals = [...allLiterals]
     .filter(l => !isKeywordLiteral(l))
     .sort((a, b) => b.length - a.length);
+  // First-char index over the punct literals: only literals sharing the position's first
+  // char can startsWith-match there, so the scan loop tries just that group (longest-first
+  // order is preserved within a group — same-first-char literals are the only competitors,
+  // so the group scan picks exactly the literal the full scan picked).
+  const punctByFirstCc = new Map<number, { lit: string; t: number }[]>();
+  for (const lit of punctLiterals) {
+    const cc = lit.charCodeAt(0);
+    let group = punctByFirstCc.get(cc);
+    if (!group) punctByFirstCc.set(cc, group = []);
+    group.push({ lit, t: puLitOf.get(lit) ?? 0 });
+  }
 
   // Token matchers (order matters: earlier declarations win). `blockRegex` is the optional
   // block-context (flowDepth===0) variant for indentation grammars — see TokenDecl.blockPattern;
@@ -53,6 +94,7 @@ export function createLexer(grammar: CstGrammar) {
     const flags = tokenPatternHasStartAnchor(t) ? 'ym' : 'y';
     return {
       name: t.name,
+      k: kOf(t.name),   // interned type kind, baked once (0 without an intern config)
       regex: new RegExp(`(?:${pattern})`, flags),
       blockRegex: blockPattern ? new RegExp(`(?:${blockPattern})`, flags) : null,
       skip: t.flags.includes('skip'),
@@ -93,7 +135,7 @@ export function createLexer(grammar: CstGrammar) {
   // prefix, tagged with that token's name (so `#℘` lexes as the private-name token, not Ident).
   const prefixedIdentTokens = grammar.tokens
     .filter(t => t.identifierPrefix)
-    .map(t => ({ name: t.name, prefix: t.identifierPrefix as string }));
+    .map(t => ({ name: t.name, prefix: t.identifierPrefix as string, k: kOf(t.name) }));
   // Token names that denote an identifier (the bare one + any prefixed) — the ones the
   // continue-run extension above may legitimately grow.
   const identLikeTokenNames = new Set<string>(
@@ -209,6 +251,11 @@ export function createLexer(grammar: CstGrammar) {
   );
   const flowOpenSet = new Set((indent ?? newline)?.flowOpen ?? []);
   const flowCloseSet = new Set((indent ?? newline)?.flowClose ?? []);
+  // The matchers the per-position scan loop actually tries: the template token is handled by
+  // the template state machine, markup/indent tokens by theirs — all position-independent
+  // exclusions, filtered ONCE here instead of re-tested per matcher per position.
+  const scanMatchers = tokenMatchers.filter(tm =>
+    tm.name !== templateTokenName && !markupTokenNames.has(tm.name) && !indentTokenNames.has(tm.name));
   // String-literal token names (the `string`-flagged tokens — quoted scalars in YAML). Used by the
   // flow mapping-separator guard below: a quoted scalar can never run past its closing quote, so a
   // `:` immediately after one (inside flow) is ALWAYS the mapping `key: value` separator, never the
@@ -245,6 +292,21 @@ export function createLexer(grammar: CstGrammar) {
   // line begins with content (an `&`/`!`/`-`/… that is scalar content), so only a real key separator
   // makes it a mapping line that must NOT fold (`k: a\n  b: c` stays a reject). Returns false ⇒ no
   // separator ⇒ the line is plain content eligible to fold.
+  // Interned kinds for the fixed-name token-creation sites (all 0 without an intern
+  // config). Computed once so no push site does a name lookup at scan time.
+  const kIdentTok = kOf(identTokenName ?? null);
+  const kTplHead = kOf('$templateHead'), kTplMiddle = kOf('$templateMiddle'), kTplTail = kOf('$templateTail');
+  const kTemplateTok = kOf(templateTokenName ?? null);
+  const kMarkupComment = kOf(markup?.comment?.token ?? null), kMarkupText = kOf(markup?.textToken ?? null);
+  const kMarkupRawText = kOf(markup?.rawText?.token ?? null), kUnquotedTok = kOf(markup?.unquotedValueToken ?? null);
+  const kVoidNameTok = kOf(markup?.voidNameToken ?? null);
+  const tTagOpen = markup ? (puLitOf.get(markup.tagOpen) ?? 0) : 0;
+  const kNewlineModeTok = kOf(newline?.token ?? null);
+  const kIndentTok = kOf(indent?.indentToken ?? null), kDedentTok = kOf(indent?.dedentToken ?? null), kIndentNewlineTok = kOf(indent?.newlineToken ?? null);
+  const kBlockScalarTok = kOf(indent?.blockScalar?.token ?? null);
+  const kPlainCont = kOf(plainContinuationTokenName);
+  const tColon = puLitOf.get(':') ?? 0;
+
   function lineHasKeySeparator(src: string, start: number): boolean {
     for (let i = start; i < src.length; i++) {
       const ch = src[i];
@@ -544,12 +606,12 @@ export function createLexer(grammar: CstGrammar) {
         if (markup.comment && source.startsWith(markup.comment.open, pos)) {
           const idx = source.indexOf(markup.comment.close, pos + markup.comment.open.length);
           const end = idx < 0 ? source.length : idx + markup.comment.close.length;
-          push({ type: markup.comment.token, text: source.slice(pos, end), offset: pos });
+          push(mkNamed(markup.comment.token, source.slice(pos, end), pos, kMarkupComment));
           pos = end;
           continue;
         }
         if (source.startsWith(markup.tagOpen, pos) && opensTag(pos)) {
-          push({ type: '', text: markup.tagOpen, offset: pos });
+          push(mkPu(markup.tagOpen, pos, tTagOpen));
           pos += markup.tagOpen.length;
           mode = 'tag'; inTagName = true; sawCloseMarker = false; curTag = '';
           continue;
@@ -561,7 +623,7 @@ export function createLexer(grammar: CstGrammar) {
         // a real tag/comment), so the run is always ≥ 1 char and progress is guaranteed.
         let p = pos;
         while (p < source.length && !(source.startsWith(markup.tagOpen, p) && opensTag(p))) p++;
-        push({ type: markup.textToken, text: source.slice(pos, p), offset: pos });
+        push(mkNamed(markup.textToken, source.slice(pos, p), pos, kMarkupText));
         pos = p;
         continue;
       }
@@ -572,7 +634,7 @@ export function createLexer(grammar: CstGrammar) {
         const needle = (markup.tagOpen + (markup.closeMarker ?? '') + curTag).toLowerCase();
         const idx = source.toLowerCase().indexOf(needle, pos);
         const end = idx < 0 ? source.length : idx;
-        if (end > pos) push({ type: markup.rawText!.token, text: source.slice(pos, end), offset: pos });
+        if (end > pos) push(mkNamed(markup.rawText!.token, source.slice(pos, end), pos, kMarkupRawText));
         pos = end;
         mode = 'text'; curTag = '';   // the close tag re-tokenizes via text → tag
         continue;
@@ -630,7 +692,7 @@ export function createLexer(grammar: CstGrammar) {
         // ── newline-only mode: no indent stack — emit ONE NEWLINE at this real line boundary (a
         // leading boundary before any content is suppressed via emittedContent) and move on. ──
         if (!indent) {
-          if (emittedContent) push({ type: newline!.token, text: '', offset: pos });
+          if (emittedContent) push(mkNamed(newline!.token, '', pos, kNewlineModeTok));
           lineStart = false;
           atLineLead = true;
           continue;
@@ -653,14 +715,14 @@ export function createLexer(grammar: CstGrammar) {
           if (plainContinuationTokenName && prevReal && plainScalarTokenNames.has(prevReal.type)
               && !lineHasKeySeparator(source, pos)) {
             indentStack.push(col);
-            push({ type: indent.indentToken, text: '', offset: pos });
+            push(mkNamed(indent.indentToken, '', pos, kIndentTok));
             let e = pos;
             while (e < source.length && source[e] !== '\n' && source[e] !== '\r'
                    && !(indent.comment !== undefined && (source[e] === ' ' || source[e] === '\t') && source.startsWith(indent.comment, e + 1))) e++;
             // Trim trailing inline whitespace (a ` #…` comment or EOL follows) so the comment/EOL is
             // handled by the normal loop on the next pass — the fold token is the bare content.
             let end = e; while (end > pos && (source[end - 1] === ' ' || source[end - 1] === '\t')) end--;
-            push({ type: plainContinuationTokenName, text: source.slice(pos, end), offset: pos });
+            push(mkNamed(plainContinuationTokenName, source.slice(pos, end), pos, kPlainCont));
             pos = e;
             lineStart = false;
             // If a trailing comment / EOL remains on the line, leaving lineStart=false lets the loop
@@ -669,17 +731,17 @@ export function createLexer(grammar: CstGrammar) {
             continue;
           }
           indentStack.push(col);
-          push({ type: indent.indentToken, text: '', offset: pos });
+          push(mkNamed(indent.indentToken, '', pos, kIndentTok));
         } else {
           while (indentStack.length > 1 && indentStack[indentStack.length - 1] > col) {
             indentStack.pop();
-            push({ type: indent.dedentToken, text: '', offset: pos });
+            push(mkNamed(indent.dedentToken, '', pos, kDedentTok));
           }
           // Dedenting to/below the pending explicit-key column ends that `? key` scope — a `:` arriving
           // here can no longer be its compact-`:`-value half (yaml-test-suite KK5P misalignment guard).
           if (col < lastExplicitKeyCol) lastExplicitKeyCol = -1;
           if (emittedContent && indentStack[indentStack.length - 1] === col) {
-            push({ type: indent.newlineToken, text: '', offset: pos });     // sibling separator at this level
+            push(mkNamed(indent.newlineToken, '', pos, kIndentNewlineTok));     // sibling separator at this level
           }
         }
         lineStart = false;
@@ -738,9 +800,28 @@ export function createLexer(grammar: CstGrammar) {
           continue;
         }
       } else {
-        wsReY.lastIndex = pos;
-        const wsMatch = wsReY.exec(source);
-        if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
+        // ASCII fast path: consume the \s run char-by-char (the per-position regex call
+        // dominated this step); only a non-ASCII candidate falls back to the \s regex
+        // (Unicode spaces). ASCII ∩ \s = {9..13, 32} exactly.
+        let wc = source.charCodeAt(pos);
+        if (wc === 32 || (wc >= 9 && wc <= 13)) {
+          do {
+            if (wc === 10) pendingNl = true;
+            pos++;
+            wc = source.charCodeAt(pos);
+          } while (wc === 32 || (wc >= 9 && wc <= 13));
+          if (wc > 127) {   // a Unicode space may continue the run — absorb it like the old regex did
+            wsReY.lastIndex = pos;
+            const wsMatch = wsReY.exec(source);
+            if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; }
+          }
+          continue;
+        }
+        if (wc > 127) {
+          wsReY.lastIndex = pos;
+          const wsMatch = wsReY.exec(source);
+          if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
+        }
       }
 
       // ── Block scalar (YAML | / >): from the introducer line, take all following lines more
@@ -817,7 +898,7 @@ export function createLexer(grammar: CstGrammar) {
           }
           else break;                                                     // dedent → the block scalar ends
         }
-        push({ type: indent.blockScalar!.token, text: source.slice(startPos, p), offset: startPos });
+        push(mkNamed(indent.blockScalar!.token, source.slice(startPos, p), startPos, kBlockScalarTok));
         pos = p;
         lineStart = true;
         continue;
@@ -835,10 +916,10 @@ export function createLexer(grammar: CstGrammar) {
           // the prev token here (it's the interpolation's last token).
           const { endsWithInterp, end } = scanTemplateSpan(source, pos, false);
           if (endsWithInterp) {
-            push({ type: '$templateMiddle', text: source.slice(startPos, end), offset: startPos });
+            push(mkNamed('$templateMiddle', source.slice(startPos, end), startPos, kTplMiddle));
             templateStack.push(0);
           } else {
-            push({ type: '$templateTail', text: source.slice(startPos, end), offset: startPos });
+            push(mkNamed('$templateTail', source.slice(startPos, end), startPos, kTplTail));
           }
           pos = end;
           continue;
@@ -861,10 +942,10 @@ export function createLexer(grammar: CstGrammar) {
         pos += tplOpen.length;
         const { endsWithInterp, end } = scanTemplateSpan(source, pos, !tagged);
         if (endsWithInterp) {
-          push({ type: '$templateHead', text: source.slice(startPos, end), offset: startPos });
+          push(mkNamed('$templateHead', source.slice(startPos, end), startPos, kTplHead));
           templateStack.push(0);
         } else {
-          push({ type: templateTokenName!, text: source.slice(startPos, end), offset: startPos });
+          push(mkNamed(templateTokenName!, source.slice(startPos, end), startPos, kTemplateTok));
         }
         pos = end;
         continue;
@@ -884,7 +965,7 @@ export function createLexer(grammar: CstGrammar) {
           unquotedValueRe.lastIndex = pos;
           const vm = unquotedValueRe.exec(source);
           if (vm) {
-            push({ type: markup.unquotedValueToken, text: vm[0], offset: pos });
+            push(mkNamed(markup.unquotedValueToken, vm[0], pos, kUnquotedTok));
             pos += vm[0].length;
             continue;
           }
@@ -904,7 +985,7 @@ export function createLexer(grammar: CstGrammar) {
       if (indent && flowDepth > 0 && source[pos] === ':') {
         const prevTok = tokens[tokens.length - 1];
         if (prevTok && (stringTokenNames.has(prevTok.type) || (prevTok.type === '' && flowCloseSet.has(prevTok.text)))) {
-          push({ type: '', text: ':', offset: pos });
+          push(mkPu(':', pos, tColon));
           pos += 1;
           continue;
         }
@@ -919,10 +1000,7 @@ export function createLexer(grammar: CstGrammar) {
       // filter (Win B): a matcher whose proven first-char set excludes it is skipped without running
       // the regex (so a `(` skips all 16 word/number/string/comment regexes before the punct loop).
       const cc = source.charCodeAt(pos);
-      for (const tm of tokenMatchers) {
-        if (tm.name === templateTokenName) continue;
-        if (markupTokenNames.has(tm.name)) continue;   // scanned by the markup state machine
-        if (indentTokenNames.has(tm.name)) continue;    // emitted by the indentation state machine
+      for (const tm of scanMatchers) {
         if (tm.blockOnly && flowDepth > 0) continue;    // line-structural token (YAML directive) — content in flow
         if (tm.isRegex) {
           // prev is a completed value → `/` is division, not a regex literal → skip.
@@ -954,7 +1032,7 @@ export function createLexer(grammar: CstGrammar) {
               if (m[0][k] === '\n' && markerAt(source, pos + k + 1)) { cut = k; break; }
             }
             if (cut >= 0) {
-              push({ type: tm.name, text: m[0].slice(0, cut), offset: pos });
+              push(mkNamed(tm.name, m[0].slice(0, cut), pos, tm.k));
               pos += cut;
               matched = true;
               break;
@@ -1005,7 +1083,7 @@ export function createLexer(grammar: CstGrammar) {
             throw new Error(`Invalid identifier escape at offset ${pos}: '${m[0]}'`);
           }
           if (!tm.skip) {
-            push({ type: tm.name, text: m[0], offset: pos });
+            push(mkNamed(tm.name, m[0], pos, tm.k));
           } else {
             if (m[0].includes('\n')) pendingNl = true;   // a skipped comment spanning a newline still terminates the previous line
             // An inline comment (indentation grammars) ENDS a plain scalar — flag the next token so a
@@ -1019,8 +1097,10 @@ export function createLexer(grammar: CstGrammar) {
       }
 
       if (!matched) {
-        // Try punctuation literals (longest first)
-        for (const lit of punctLiterals) {
+        // Try punctuation literals (longest first, within the position's first-char group)
+        const punctGroup = punctByFirstCc.get(cc);
+        if (punctGroup) for (const pe of punctGroup) {
+          const lit = pe.lit;
           if (source.startsWith(lit, pos)) {
             // Track control-head parens so a `/` after `if (…)`/`while (…)` is a regex.
             // The keyword must be a real keyword head, not a member name: `obj.for(x) / y`
@@ -1050,7 +1130,7 @@ export function createLexer(grammar: CstGrammar) {
             const wasLineLead = atLineLead;
             // Track a line-lead `?` explicit-key column so its paired `:` can legalise a compact `: -`.
             if (indent && flowDepth === 0 && wasLineLead && lit === '?') lastExplicitKeyCol = currentLineCol;
-            push({ type: '', text: lit, offset: pos });
+            push(mkPu(lit, pos, pe.t));
             pos += lit.length;
             // The EXPLICIT-value half of a `? key` entry whose value is a `-` SEQUENCE on the SAME line
             // (`? k\n: - one\n  - two`; yaml-test-suite 5WE3 / KK5P) needs the SAME compact push as a
@@ -1084,7 +1164,7 @@ export function createLexer(grammar: CstGrammar) {
                   && contentCol > indentStack[indentStack.length - 1]
                   && compactNestsHere(source, q)) {
                 indentStack.push(contentCol);
-                push({ type: indent.indentToken, text: '', offset: q });
+                push(mkNamed(indent.indentToken, '', q, kIndentTok));
                 atLineLead = true;     // the inline content is itself a fresh line-lead (so `? - x` nests once more if `- x` is structural)
               }
             }
@@ -1105,6 +1185,7 @@ export function createLexer(grammar: CstGrammar) {
           const cont = uniIdentContReY.exec(source);
           if (cont) {
             prev.text += cont[0];
+            prev.t = kwLitOf.get(prev.text) ?? 0;   // re-intern: the extended text is never an ASCII keyword, but stay exact
             pos += cont[0].length;
             matched = true;
           }
@@ -1117,7 +1198,7 @@ export function createLexer(grammar: CstGrammar) {
         uniIdentReY.lastIndex = pos;
         const identMatch = uniIdentReY.exec(source);
         if (identMatch) {
-          push({ type: identTokenName, text: identMatch[0], offset: pos });
+          push(mkNamed(identTokenName, identMatch[0], pos, kIdentTok));
           pos += identMatch[0].length;
           matched = true;
         }
@@ -1132,7 +1213,7 @@ export function createLexer(grammar: CstGrammar) {
           const m = uniIdentReY.exec(source);
           if (m) {
             const text = pt.prefix + m[0];
-            push({ type: pt.name, text, offset: pos });
+            push(mkNamed(pt.name, text, pos, pt.k));
             pos += text.length;
             matched = true;
             break;
@@ -1153,7 +1234,7 @@ export function createLexer(grammar: CstGrammar) {
         if (prevTok && plainScalarTokenNames.has(prevTok.type)) {
           const bodyM = source.slice(pos + 1).match(plainFlowRe);     // plain BODY after the illegal head char
           const text = source[pos] + (bodyM ? bodyM[0] : '');
-          push({ type: plainContinuationTokenName, text, offset: pos });
+          push(mkNamed(plainContinuationTokenName, text, pos, kPlainCont));
           pos += text.length;
           matched = true;
         }
@@ -1192,6 +1273,7 @@ export function createLexer(grammar: CstGrammar) {
               // An OPEN void-element name → retag so the parser's void branch matches it.
               if (markup.voidNameToken && !sawCloseMarker && voidTagSet.has(curTag.toLowerCase())) {
                 last.type = markup.voidNameToken;
+                last.k = kVoidNameTok;   // re-intern the retagged type (text unchanged)
               }
             }
           }
@@ -1203,20 +1285,22 @@ export function createLexer(grammar: CstGrammar) {
     if (indent) {
       while (indentStack.length > 1) {
         indentStack.pop();
-        push({ type: indent.dedentToken, text: '', offset: pos });
+        push(mkNamed(indent.dedentToken, '', pos, kDedentTok));
       }
     }
 
-    // Multi-line PLAIN-scalar FOLD inside flow (indentation grammars): a plain scalar may span several
-    // lines inside a flow collection (`{ multi\n  line: value }` → key "multi line"). The lexer breaks
-    // it at each newline (a `\n` is not plain-scalar content), so it arrives as ADJACENT plain-scalar
-    // tokens with no punctuation between (a SPACE-separated plain is already one token — only a newline
-    // splits one — so two consecutive plain tokens were necessarily newline-separated, i.e. a fold).
-    // Merge each such run into one token, taking the LAST token's TYPE (a trailing `key:` line makes the
-    // whole fold a key; an unkeyed run stays a plain value) and the first's offset/leading flags. Only
-    // inside flow (block context separates siblings with a NEWLINE token, so plains are never adjacent
-    // there). yaml-test-suite 8KB6 / NJ66 / CT4Q. A `,`/`:`/bracket between scalars is a separate token,
-    // so it naturally breaks the run (the next scalar isn't adjacent) — no over-merge across separators.
+    // Multi-line PLAIN-scalar MERGE inside flow (indentation grammars): a plain scalar may span several
+    // lines inside a flow collection (`{ multi\n  line: value }`). The lexer breaks it at each newline
+    // (a `\n` is not plain-scalar content), so it arrives as ADJACENT plain-scalar tokens with no
+    // punctuation between (a SPACE-separated plain is already one token — only a newline splits one —
+    // so two consecutive plain tokens were necessarily newline-separated). Merge each such run into one
+    // token covering the RAW source span (text ≡ source.slice(offset, end) — the CST is concrete; the
+    // YAML fold-to-one-space is the scalar's VALUE semantics and belongs to consumers that resolve
+    // values), taking the LAST token's TYPE (a trailing `key:` line makes the whole run a key; an
+    // unkeyed run stays a plain value) and the first's offset/leading flags. Only inside flow (block
+    // context separates siblings with a NEWLINE token, so plains are never adjacent there).
+    // yaml-test-suite 8KB6 / NJ66 / CT4Q. A `,`/`:`/bracket between scalars is a separate token, so it
+    // naturally breaks the run (the next scalar isn't adjacent) — no over-merge across separators.
     if (indent && plainScalarTokenNames.size) {
       const merged: Token[] = [];
       let depth = 0;
@@ -1227,8 +1311,10 @@ export function createLexer(grammar: CstGrammar) {
         // `[ word1\n# c\n word2 ]`. Guarding on `t.commentBefore` keeps that a reject.
         if (depth > 0 && prev && !t.commentBefore
             && plainScalarTokenNames.has(prev.type) && plainScalarTokenNames.has(t.type)) {
-          prev.text += ' ' + t.text;   // fold: newline+indent → a single space
+          prev.text = source.slice(prev.offset, t.offset + t.text.length);  // raw span across the run
           prev.type = t.type;          // the run's type is its LAST line's (key-ness follows the trailing `:`)
+          prev.k = t.k;                // re-intern for the merged token (text now contains a newline → kw int is 0)
+          prev.t = kwLitOf.get(prev.text) ?? 0;
         } else {
           merged.push(t);
         }

@@ -22,21 +22,21 @@ interface El { tag: string; children: El[] }
 // Element tree (tag + nested elements only — text/comments/attrs ignored) from the
 // Monogram CST: an Element node's tag is its open Name/VoidName leaf; its children
 // are the Element nodes nested in its content.
-function monoTree(node: any): El[] {
+function monoTree(node: any, src: string): El[] {
   const out: El[] = [];
-  for (const c of node.children ?? []) collect(c, out);
+  for (const c of node.children ?? []) collect(c, out, src);
   return out;
 }
-function collect(node: any, out: El[]): void {
-  if (node.kind === 'leaf') return;
+function collect(node: any, out: El[], src: string): void {
+  if (node.tokenType !== undefined) return;
   if (node.rule === 'Element') {
     const name = (node.children ?? []).find(
-      (c: any) => c.kind === 'leaf' && (c.tokenType === 'Name' || c.tokenType === 'VoidName'),
+      (c: any) => c.tokenType === 'Name' || c.tokenType === 'VoidName',
     );
-    out.push({ tag: (name?.text ?? '').toLowerCase(), children: monoTree(node) });
+    out.push({ tag: (name ? src.slice(name.offset, name.end) : '').toLowerCase(), children: monoTree(node, src) });
     return; // its element children are handled by the recursive monoTree above
   }
-  for (const c of node.children ?? []) collect(c, out); // descend through wrappers (Node, …)
+  for (const c of node.children ?? []) collect(c, out, src); // descend through wrappers (Node, …)
 }
 
 // Same element tree from a parse5 fragment. Spec-mandated containers parse5 SYNTHESISES
@@ -115,7 +115,7 @@ for (const html of corpus) {
   let mono: any;
   try { mono = parse(html); accepted++; }
   catch (e) { acceptFails.push(`${html}\n      → ${String((e as Error).message).split('\n')[0]}`); continue; }
-  const a = JSON.stringify(monoTree(mono));
+  const a = JSON.stringify(monoTree(mono, html));
   const b = JSON.stringify(p5Tree(parseFragment(html, { sourceCodeLocationInfo: true })));
   if (a === b) treeMatch++;
   else treeFails.push(`${html}\n      mono:   ${a}\n      parse5: ${b}`);

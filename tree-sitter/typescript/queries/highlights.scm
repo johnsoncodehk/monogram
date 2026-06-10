@@ -69,8 +69,8 @@
   "implements" "interface" "namespace" "protected" "debugger" "readonly" "abstract" "override"
   "accessor" "default" "private" "declare" "extends" "switch" "export" "module"
   "public" "static" "unique" "const" "using" "class" "async" "case"
-  "with" "from" "type" "enum" "meta" "let" "var" "get"
-  "set" "out"
+  "with" "from" "type" "enum" "@new" "meta" "let" "var"
+  "get" "set" "out"
 ] @keyword
 [
   "constructor" "function" "=>"

@@ -188,6 +188,16 @@ export const notReservedExpr = not(alt(
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
 
+// Binding powers for the ALTERNATIVE-form LEDs (rule alternatives `[$, connector, …]`).
+// The conditional sits between the assignment levels and `??` (its branches stay full
+// assignment expressions); `in`/`instanceof` sit AT the relational level and left-chain
+// their right operand like the ladder relationals they are.
+export const jsLedPrecs = [
+  { connector: '?', below: '??' },
+  { connector: 'in', sameAs: '<', chainRhs: true },
+  { connector: 'instanceof', sameAs: '<', chainRhs: true },
+];
+
 export const ecmaPrec = [
   right('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^='),
   right('??=', '||=', '&&='),
@@ -238,6 +248,8 @@ const Prop = rule($ => {
 
 const ClassHeritage = rule($ => [
   Ident,
+  // Non-constructor primaries: parse-clean in tsc/V8 grammar terms (runtime/checker errors).
+  Number_, String_, 'true', 'false', 'null', 'undefined',
   [$, '.', Ident],
   [$, '(', sep(Expr, ','), ')'],
 ]);
@@ -254,12 +266,16 @@ const Expr = rule($ => [
   // role (see notReservedExpr). This kills the bare-identifier fallback for keywords like
   // `catch`/`throw` and the prefix operators `void`/`typeof`/`delete`, so `catch(x){}`
   // with no `try`, `void ;`, and `throw ;` are rejected as TS does.
+  // Keyword-valued literals come BEFORE the bare-identifier nud: a longest-match TIE
+  // (both are one token) goes to the first-listed alternative, so listing the literals
+  // first makes `this`/`true`/… arrive as $keyword leaves — the tree records what the
+  // word IS instead of the bare-identifier fallback winning the tie and stamping Ident.
+  'true', 'false', 'null', 'undefined', 'this', 'super',
   [notReservedExpr, Ident],
   Number_,
   String_,
   Template,
   Regex_,
-  'true', 'false', 'null', 'undefined', 'this', 'super',
   [$, op, $],
   [prefix, $],
   [$, postfix],
@@ -280,6 +296,10 @@ const Expr = rule($ => [
   ['[', many(opt($), ','), opt($), ']'],
   ['{', sep(Prop, ','), '}'],
   [opt('async'), '(', sep(Param, ','), ')', '=>', alt($, Block)],
+  // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
+  // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
+  // the spec's [no LineTerminator here] between async and the binding identifier).
+  ['async', sameLine, Ident, '=>', alt($, Block)],
   [Ident, '=>', alt($, Block)],
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
@@ -289,8 +309,8 @@ const Expr = rule($ => [
   [opt('async'), 'function', opt('*'), opt(Ident), '(', sep(Param, ','), ')', Block],
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`); decorator dimension collapsed via opt(DecoratorExpr).
-  [opt(DecoratorExpr), 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
-  [opt(DecoratorExpr), 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
+  [opt(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
+  [opt(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
 ]);
 
 // ── Statements ──
@@ -344,7 +364,7 @@ const Param = rule($ => {
     [Ident, opt('=', Expr)],
     [BindingPattern, opt('=', Expr)],
     // a rest element can never validly be a reserved word (`...while`), so guarding it is FN-safe.
-    ['...', alt([notReserved, Ident], BindingPattern)],   // rest
+    ['...', alt([notReserved, Ident], BindingPattern), opt('=', Expr)],   // rest (an initializer is a CHECKER error in tsc, not a parse error)
   );
   return [
     [opt(DecoratorExpr), body],
@@ -361,7 +381,11 @@ const ForHead = rule($ => {
       [alt('in', 'of'), Expr],
     )],
     [opt(Expr, many(',', Expr)), ...cTail],   // C-style, no declaration: `for (i=0; …; …)` / `for (;;)`
-    [Expr, alt('in', 'of'), Expr],            // for-in/of, no declaration: `for (x of xs)`
+    // for-in/of, no declaration: `for (x of xs)`. The target Expr parses in a no-`in`
+    // context (same exclude as binding initializers): the `in` belongs to the for-head,
+    // not to an in-LED inside the target — without it `for (key in obj)` swallowed the
+    // `in`, the arm failed, and the statement fell back to a CALL parse `for(...)`.
+    [exclude('in', Expr), alt('in', 'of'), Expr],
   ];
 });
 
@@ -381,8 +405,11 @@ const Stmt = rule($ => [
   ['switch', '(', Expr, many(',', Expr), ')', '{', many(SwitchCase), '}'],
   ['return', opt(Expr, many(',', Expr)), opt(';')],
   ['throw', Expr, many(',', Expr), opt(';')],
-  ['break', opt(Ident), opt(';')],
-  ['continue', opt(Ident), opt(';')],
+  // The label is a RESTRICTED production (`break [no LineTerminator here] Label`)
+  // and a label can't be a reserved word — without both, `break` ⏎ `case "X":`
+  // inside a switch eats `case` as the label and the whole switch cascades.
+  ['break', opt(sameLine, notReserved, Ident), opt(';')],
+  ['continue', opt(sameLine, notReserved, Ident), opt(';')],
   ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
   [Ident, ':', $],
   ';',
@@ -390,7 +417,17 @@ const Stmt = rule($ => [
   ['with', '(', Expr, ')', $],
   [opt('await'), 'using', sep(Binding, ','), opt(';')],
   Decl,
-  [Expr, many(',', Expr), opt(';')],
+  // ExpressionStatement lookahead restriction (ES2023 §14.5): a statement may not
+  // begin with `function` / `async function` — those are declarations at statement
+  // level. Without this guard, longest-match lets the expression arm win whenever a
+  // call/member tail makes it LONGER (`function f(){}\n(g)()` merged into one
+  // IIFE-style expression statement; tsc keeps them separate). `{` needs no guard
+  // (the Block alternative ties in length and wins as the first-listed alternative).
+  // `class` is NOT guarded yet: the class-DECLARATION arm is narrower than tsc's
+  // (extends-expression heritage, bare `;` class elements, decorator placements), so
+  // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
+  // declaration arm first, then guard.
+  [not(alt('function', 'class', ['async', 'function'])), Expr, many(',', Expr), opt(';')],
 ]);
 
 // ── Declarations ──
@@ -414,6 +451,7 @@ const MemberName = rule($ => [
 const Modifier = alt('static', 'accessor', 'async');
 const callTail = ['(', sep(Param, ','), ')', opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
+  ';',   // SemicolonClassElement: `class C { ; }`
   DecoratorExpr,
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
   ['static', Block],
@@ -436,6 +474,16 @@ const ClassMember = rule($ => [
 
 const ImportSpecifier = rule($ => [
   [Ident, opt('as', Ident)],
+  // arbitrary module namespace identifier (ES2022): `import { "str" as x }` — the
+  // string form requires the rename (the local binding must be an identifier).
+  [String_, 'as', Ident],
+]);
+
+// Export specifiers are WIDER than import ones: a ModuleExportName (identifier or
+// string) is valid on BOTH sides and may stand alone (`export { x as "s" }`,
+// `export { "a" as "b" } from "m"`).
+const ExportSpecifier = rule($ => [
+  [alt(Ident, String_), opt('as', alt(Ident, String_))],
 ]);
 
 const ImportClause = rule($ => [
@@ -453,14 +501,15 @@ const Decl = rule($ => [
   [opt('async'), 'function', opt('*'), Ident, '(', sep(Param, ','), ')', Block],
   // class decl: optional decorators. gen-tm expands the opt()/many() to recover
   // the `class Ident … { … }` shape for highlighting.
-  [many(DecoratorExpr), 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
   ['export', alt($, Stmt)],
+  [many1(DecoratorExpr), $],   // decorators before export/default/etc.
   ['export', 'default', alt(
     [opt('async'), 'function', opt('*'), opt(Ident), '(', sep(Param, ','), ')', Block],  // function
     [Expr, opt(';')],   // catch-all: export default <expr>
   )],
   ['export', '*', alt(['from', String_, opt(';')], ['as', Ident, 'from', String_, opt(';')])],
-  ['export', '{', sep(ImportSpecifier, ','), '}', opt('from', String_), opt(';')],
+  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), opt(';')],
   ['import', alt(
     [ImportClause, 'from', String_, opt(';')],          // import X from "m"
     [Ident, '=', Expr, opt(';')],                       // import x = expr
@@ -590,6 +639,7 @@ export default defineGrammar({
   },
 
   prec: ecmaPrec,
+  ledPrec: jsLedPrecs,
 
   rules: {
     DecoratorExpr,
@@ -598,7 +648,7 @@ export default defineGrammar({
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
     Binding, ForBinding, Param, ForHead, SwitchCase,
     Decl, ClassMember,
-    ImportClause, ImportSpecifier,
+    ImportClause, ImportSpecifier, ExportSpecifier,
     Program,
   },
 

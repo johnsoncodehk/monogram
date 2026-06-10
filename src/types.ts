@@ -382,6 +382,20 @@ export interface PrecLevel {
   operators: PrecOperator[];
 }
 
+/** Binding power for an ALTERNATIVE-form Pratt LED (a rule alternative `[$, connector, …]`
+ *  like the conditional `?:` or `as Type`). Without one, such a LED fires inside ANY
+ *  operator's right operand — i.e. it binds maximally tight, which mis-associates
+ *  `a == b ? c : d` as `a == (b ? c : d)`. The anchor names a ladder operator:
+ *  `sameAs` borrows its lbp, `below` sits one notch under it (between ladder levels —
+ *  levels are spaced 2 apart). `chainRhs` parses the led's TRAILING self-operand at this
+ *  lbp (left-chaining, like a ladder op's rhs) instead of as a full expression. */
+export interface LedPrec {
+  connector: string;     // the led's first literal after the self-operand ('?', 'in', 'as', …)
+  sameAs?: string;       // lbp = lbp(thisLadderOp)
+  below?: string;        // lbp = lbp(thisLadderOp) - 1
+  chainRhs?: boolean;    // trailing self-operand at this lbp (default: full expression)
+}
+
 export type RuleExpr =
   | { type: 'seq'; items: RuleExpr[] }
   | { type: 'alt'; items: RuleExpr[] }
@@ -427,6 +441,7 @@ export interface RuleDecl {
 export interface CstGrammar {
   tokens: TokenDecl[];
   precs: PrecLevel[];
+  ledPrecs?: LedPrec[];
   rules: RuleDecl[];
   scopeOverrides: Map<string, string[]>;  // literal → scope overrides from `scopes` section (multiple if keyword appears in multiple groups)
   name?: string;
