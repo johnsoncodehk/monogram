@@ -12,9 +12,10 @@ import { emitParser } from '../src/emit-parser.ts';
 const grammar = (await import('../typescript.ts')).default;
 const emPath = '/tmp/emitted-incremental.mjs';
 writeFileSync(emPath, emitParser(grammar));
+type Edit = { start: number; oldEnd: number; newEnd: number };
 type Em = {
   parse(s: string): number;
-  parseEdited(s: string): number;
+  parseEdited(s: string, entryRule?: string, edits?: Edit[]): number;
   toObject(id: number): unknown;
 };
 const session = (await import(emPath + '?session=' + process.pid)) as Em;
@@ -28,28 +29,36 @@ const randInt = (n: number) => Math.floor(rand() * n);
 const INSERTS = ['x', '_v', '42', ' + y', '.m', '()', ' /*c*/ ', '"s"', 'await ', '!', '?'];
 const STMTS = ['const q9 = 1;\n', 'function g9(a) { return a; }\n', 'if (x9) { y9(); }\n', '// note\n', 'type T9 = string | number;\n'];
 
-function mutate(text: string): string {
+// Mutations return the edit RANGE too, so half the steps can exercise the edits
+// PROTOCOL path (the editor-facing API) while the other half exercises the
+// char-diff fallback envelope.
+function mutate(text: string): { next: string; edit: Edit } {
   switch (randInt(5)) {
     case 0: { // insert a small fragment at a random position
       const at = randInt(text.length);
-      return text.slice(0, at) + INSERTS[randInt(INSERTS.length)] + text.slice(at);
+      const ins = INSERTS[randInt(INSERTS.length)];
+      return { next: text.slice(0, at) + ins + text.slice(at), edit: { start: at, oldEnd: at, newEnd: at + ins.length } };
     }
     case 1: { // delete a small span
       const at = randInt(Math.max(1, text.length - 8));
-      return text.slice(0, at) + text.slice(at + 1 + randInt(6));
+      const n = 1 + randInt(6);
+      return { next: text.slice(0, at) + text.slice(at + n), edit: { start: at, oldEnd: at + n, newEnd: at } };
     }
     case 2: { // replace a character
       const at = randInt(Math.max(1, text.length - 1));
-      return text.slice(0, at) + 'z' + text.slice(at + 1);
+      return { next: text.slice(0, at) + 'z' + text.slice(at + 1), edit: { start: at, oldEnd: at + 1, newEnd: at + 1 } };
     }
     case 3: { // insert a whole statement at a line boundary
       const lines = text.split('\n');
       const at = randInt(lines.length);
-      lines.splice(at, 0, STMTS[randInt(STMTS.length)].trimEnd());
-      return lines.join('\n');
+      const stmt = STMTS[randInt(STMTS.length)].trimEnd();
+      lines.splice(at, 0, stmt);
+      const start = at === 0 ? 0 : lines.slice(0, at).join('\n').length + 1;
+      return { next: lines.join('\n'), edit: { start, oldEnd: start, newEnd: start + stmt.length + 1 } };
     }
     default: { // append at the end (the pure-prefix reuse case)
-      return text + '\n' + STMTS[randInt(STMTS.length)];
+      const stmt = '\n' + STMTS[randInt(STMTS.length)];
+      return { next: text + stmt, edit: { start: text.length, oldEnd: text.length, newEnd: text.length + stmt.length } };
     }
   }
 }
@@ -70,15 +79,16 @@ for (const f of FILES) {
   let text = readFileSync(f, 'utf-8');
   session.parse(text);   // open the session
   for (let k = 0; k < STEPS; k++) {
-    const next = mutate(text);
+    const { next, edit } = mutate(text);
     steps++;
     let freshRoot = -1, freshErr: string | null = null;
     const tf0 = performance.now();
     try { freshRoot = fresh.parse(next); } catch (e) { freshErr = (e as Error).message; }
     const tf1 = performance.now();
     let incRoot = -1, incErr: string | null = null;
+    const useProtocol = k % 2 === 1;   // alternate: edits protocol / char-diff fallback
     const ti0 = performance.now();
-    try { incRoot = session.parseEdited(next); } catch (e) { incErr = (e as Error).message; }
+    try { incRoot = session.parseEdited(next, undefined, useProtocol ? [edit] : undefined); } catch (e) { incErr = (e as Error).message; }
     const ti1 = performance.now();
     if (freshErr !== null || incErr !== null) {
       if ((freshErr === null) !== (incErr === null)) {

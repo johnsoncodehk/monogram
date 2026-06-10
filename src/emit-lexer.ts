@@ -200,6 +200,8 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  src = source;`);
   emit(`  tokN = 0;`);
   emit(`  parenCachePos = -1;`);
+  emit(`  srcLenP1 = source.length + 1;`);
+  emit(`  negFrom = 0x7fffffff;`);
   emit(`  lexCore(source, 0, -1, 0, -1, 0, 0);`);
   emit(`  return tokN;`);
   emit(`}`);
@@ -245,9 +247,9 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`      }`);
   emit(`      if (off >= wndMinOff && dmgPd >= 0`);
   emit(`          && templateStack.length <= dmgDp && parenHeadStack.length <= dmgPd) {`);
-  emit(`        while (wndPtr < altN && altOff[wndPtr] + wndDelta < off) wndPtr++;`);
-  emit(`        if (wndPtr < altN && altOff[wndPtr] + wndDelta === off && altK[wndPtr] === k && altT[wndPtr] === t`);
-  emit(`            && altEnd[wndPtr] + wndDelta === end && altDp[wndPtr] === templateStack.length && altPd[wndPtr] === parenHeadStack.length) {`);
+  emit(`        while (wndPtr < altN && (altOff[wndPtr] < 0 ? altOff[wndPtr] + srcLenP1 : altOff[wndPtr]) + wndDelta < off) wndPtr++;`);
+  emit(`        if (wndPtr < altN && (altOff[wndPtr] < 0 ? altOff[wndPtr] + srcLenP1 : altOff[wndPtr]) + wndDelta === off && altK[wndPtr] === k && altT[wndPtr] === t`);
+  emit(`            && (altEnd[wndPtr] < 0 ? altEnd[wndPtr] + srcLenP1 : altEnd[wndPtr]) + wndDelta === end && altDp[wndPtr] === templateStack.length && altPd[wndPtr] === parenHeadStack.length) {`);
   emit(`          wndHit = wndPtr;`);
   emit(`        }`);
   emit(`      }`);
@@ -514,7 +516,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// head (always sound, degrades to a full re-lex).`);
   emit(`function findRestart(cs) {`);
   emit(`  let lo = 0, hi = tokN;`);
-  emit(`  while (lo < hi) { const mid = (lo + hi) >> 1; if (tkEnd[mid] <= cs) lo = mid + 1; else hi = mid; }`);
+  emit(`  while (lo < hi) { const mid = (lo + hi) >> 1; if (tend(mid) <= cs) lo = mid + 1; else hi = mid; }`);
   emit(`  for (let b = lo - 1; b >= 0; b--) {`);
   emit(`    // template depth must be zero (interp brace counters are not reconstructable),`);
   emit(`    // and the anchor token must leave no cross-token lexer flag live: not a`);

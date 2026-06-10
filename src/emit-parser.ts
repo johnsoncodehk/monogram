@@ -715,7 +715,7 @@ class Emitter {
   // The run-extension target of a repetition: when the body unwraps to a plain ref of
   // a rule that routes through parseRuleEntry (pratt / left-rec / spine), its rule id;
   // else -1 (the loop gets no extension hook — adoption stays element-by-element).
-  private quantRunRuleId(body: RuleExpr): number {
+  quantRunRuleId(body: RuleExpr): number {
     const a = this.a;
     let expr = body;
     while (true) {
@@ -1388,6 +1388,17 @@ let tkPd = new Uint16Array(4096);
 let tkCap = 4096;
 let tokN = 0;
 let src = '';
+// ── EOF-relative spans (incremental sessions) ──
+// A token's tkOff/tkEnd may be stored EOF-RELATIVE (value − (srcLen + 1), strictly
+// negative): the decode adds the CURRENT length back, so a pure suffix never needs
+// the O(suffix) add-loop a char delta would otherwise force — updating srcLenP1 IS
+// the shift. Values self-describe by sign, so mixed zones stay readable; negFrom
+// only bounds where negatives may exist (the flip-band maintenance range). Batch
+// parses are all-positive and the decode branch never fires.
+let srcLenP1 = 1;
+let negFrom = 0x7fffffff;
+function toff(i) { const v = tkOff[i]; return v < 0 ? v + srcLenP1 : v; }
+function tend(i) { const v = tkEnd[i]; return v < 0 ? v + srcLenP1 : v; }
 ${e.soa ? '' : 'let tkText = [];   // fallback-lexer text column (synthetic tokens are not source spans)'}
 function growTok() {
   tkCap *= 2;
@@ -1423,6 +1434,23 @@ let rowExt = new Int32Array(8192);
 // parse and must never be adopted into a normal entry (the memo carry never stored
 // those; adoption must not widen the contract).
 let rowOK = new Uint8Array(8192);
+// kid-containment bit (lazy): 0 unknown, 1 = every kid's probe watermark stays
+// at/below the next kid's start (so a prefix-keep check of the LAST kept kid
+// transitively bounds all earlier ones), 2 = violated somewhere. Computed on
+// first surgical use of a row, maintained across in-place splices.
+let rowKC = new Uint8Array(8192);
+// END-RELATIVE kid rels (incremental sessions): a ROW kid's kidTokRel/kidRel may be
+// stored relative to the parent's END (value − (parentLen + 1), strictly negative);
+// the decode adds the parent's CURRENT length back. A surgical splice then shifts
+// the whole suffix by updating the parent's lengths — no per-kid add-loop — and the
+// values stay correct as long as the parent row is unedited (only surgery changes a
+// row's lengths, and it maintains its own band). Leaf kids pack their rel inside the
+// kids value and always stay start-relative (the trailing-leaf walk shifts them
+// eagerly). rowNF = first kid index (absolute, like rowStart) that may hold an
+// end-relative value; batch parses never flip, so the decode branch never fires.
+let rowNF = new Int32Array(8192).fill(0x7fffffff);
+function ktr(p, k) { const v = kidTokRel[k]; return v < 0 ? v + rowTokLen[p] + 1 : v; }
+function kcr(p, k) { const v = kidRel[k]; return v < 0 ? v + rowLen[p] + 1 : v; }
 // transient BUILD coordinates (absolute), valid for rows completed in the current
 // parse and REFRESHED at memo-hit time for reused roots — parents read them at
 // finishNode to write the children's relative fields; never part of the green tree.
@@ -1453,6 +1481,8 @@ function growRows() {
   const c = new Int32Array(rowCap); c.set(rowCount); rowCount = c;
   const x = new Int32Array(rowCap); x.set(rowExt); rowExt = x;
   const ok = new Uint8Array(rowCap); ok.set(rowOK); rowOK = ok;
+  const kc = new Uint8Array(rowCap); kc.set(rowKC); rowKC = kc;
+  const nf = new Int32Array(rowCap).fill(0x7fffffff); nf.set(rowNF.subarray(0, nodeN)); rowNF = nf;
   const ac = new Int32Array(rowCap); ac.set(absChar); absChar = ac;
   const at = new Int32Array(rowCap); at.set(absTok); absTok = at;
 }
@@ -1466,8 +1496,8 @@ function scPush(e) {
   if (scn === scCap) { scCap *= 2; const s = new Int32Array(scCap); s.set(sc); sc = s; }
   sc[scn++] = e;
 }
-function entryOff(e) { return e >= 0 ? absChar[e] : tkOff[(~e) >>> 2]; }
-function entryEnd(e) { return e >= 0 ? absChar[e] + rowLen[e] : tkEnd[(~e) >>> 2]; }
+function entryOff(e) { return e >= 0 ? absChar[e] : toff((~e) >>> 2); }
+function entryEnd(e) { return e >= 0 ? absChar[e] + rowLen[e] : tend((~e) >>> 2); }
 function entryTok(e) { return e >= 0 ? absTok[e] : (~e) >>> 2; }
 function entryTokEnd(e) { return e >= 0 ? absTok[e] + rowTokLen[e] : ((~e) >>> 2) + 1; }
 // Complete a node whose children are scratch[mark..scn): copy them into kids, write
@@ -1509,6 +1539,8 @@ function finishNode(rid, mark) {
   rowTokLen[id] = myTokEnd - myTok;
   rowExt[id] = maxPos - myTok;
   rowOK[id] = 0;
+  rowKC[id] = 0;
+  rowNF[id] = 0x7fffffff;
   absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
   return id;
@@ -1543,6 +1575,8 @@ function finishWrap(rid, lhsId, mark) {
   rowTokLen[id] = myTokEnd - myTok;
   rowExt[id] = maxPos - myTok;
   rowOK[id] = 0;
+  rowKC[id] = 0;
+  rowNF[id] = 0x7fffffff;
   absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
   return id;
@@ -1569,8 +1603,8 @@ let suppressNext = null;
 let suppressCur = null;
 
 function offset() {
-  if (pos < cap) return tkOff[pos];
-  return tokN > 0 ? tkEnd[tokN - 1] : 0;
+  if (pos < cap) return toff(pos);
+  return tokN > 0 ? tend(tokN - 1) : 0;
 }
 
 // ── Lever 1: integer-kind matchers ──
@@ -1600,7 +1634,7 @@ function matchPuLit(pu) {
 }
 function matchPuLitGT(pu) {
   if (pos >= cap) return false;
-  const off = tkOff[pos];
+  const off = toff(pos);
   if (tkT[pos] === pu) {
     scPush(~(pos << 2));
     if (++pos > maxPos) maxPos = pos;
@@ -1609,8 +1643,8 @@ function matchPuLitGT(pu) {
   // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>': shift the
   // columns up one slot and write the '>' + rest pair in place (both born flag-less,
   // matching the old mkPunct pair).
-  if (tkK[pos] === K_PUNCT && tkEnd[pos] - off > 1 && ${e.soa ? 'src.charCodeAt(off) === 62' : "tkText[pos].charCodeAt(0) === 62"}) {
-    const end0 = tkEnd[pos];
+  if (tkK[pos] === K_PUNCT && tend(pos) - off > 1 && ${e.soa ? 'src.charCodeAt(off) === 62' : "tkText[pos].charCodeAt(0) === 62"}) {
+    const end0 = tend(pos);
     ${e.soa ? '' : 'const restText = tkText[pos].slice(1);'}
     if (tokN === tkCap) growTok();
     parenCachePos = -1;
@@ -1622,8 +1656,17 @@ function matchPuLitGT(pu) {
     tkPd.copyWithin(pos + 1, pos, tokN);
     tkFl.copyWithin(pos + 1, pos, tokN);
     ${e.soa ? '' : "tkText.splice(pos, 1, '>', restText);"}
-    tkT[pos] = pu; tkEnd[pos] = off + 1; tkFl[pos] = 0;
-    tkOff[pos + 1] = off + 1; tkFl[pos + 1] = 0;
+    // Keep the EOF-relative zone invariant: a split at/past negFrom writes the new
+    // pair EOF-relative (a positive value there would not ride later srcLenP1
+    // shifts); below it, the boundary index moves up one slot with the suffix.
+    if (pos < negFrom) {
+      negFrom++;
+      tkT[pos] = pu; tkEnd[pos] = off + 1; tkFl[pos] = 0;
+      tkOff[pos + 1] = off + 1; tkFl[pos + 1] = 0;
+    } else {
+      tkT[pos] = pu; tkEnd[pos] = off + 1 - srcLenP1; tkFl[pos] = 0;
+      tkOff[pos + 1] = off + 1 - srcLenP1; tkFl[pos + 1] = 0;
+    }
     tkT[pos + 1] = ${e.soa ? 'LIT_PU.get(src.slice(off + 1, end0)) ?? 0' : 'LIT_PU.get(restText) ?? 0'};
     tokN++;
     if (parseLimit < 0) cap = tokN;
@@ -1715,6 +1758,37 @@ function emitRuleFns(e: Emitter, a: ReturnType<typeof analyze>) {
   e.emit(`const RULES = {`);
   for (const rule of a.grammar.rules) e.emit(`  ${J(rule.name)}: ${ruleFn(rule.name)},`);
   e.emit(`};`);
+
+  // Surgical-container table: rule id → its repetition element's rule id, for rules
+  // whose body is a PURE seq/group of literals/refs around exactly one '*'/'+' rep
+  // of a parseRuleEntry-routed rule. No alt/sep/opt/not anywhere in the body: a
+  // longest-match arm (or lookahead) at the container's OWN level may probe into
+  // the rep zone without any kid row owning the read, which would break the
+  // prefix-keep watermark argument node surgery relies on.
+  const surg: number[] = a.grammar.rules.map(() => -1);
+  a.grammar.rules.forEach((rule, ri) => {
+    if (a.prattRules.has(rule.name) || a.leftRecSet.has(rule.name)) return;
+    let reps = 0; let bad = false; let elem = -1;
+    const walk = (x: RuleExpr): void => {
+      if (bad) return;
+      switch (x.type) {
+        case 'seq': x.items.forEach(walk); return;
+        case 'group':
+          if (x.suppress && x.suppress.length) { bad = true; return; }
+          walk(x.body); return;
+        case 'literal': case 'ref': case 'op': case 'prefix': case 'postfix': return;
+        case 'quantifier':
+          if (x.kind === '?') { bad = true; return; }
+          reps++; elem = e.quantRunRuleId(x.body);
+          return;
+        default: bad = true; return;
+      }
+    };
+    walk(rule.body);
+    if (!bad && reps === 1 && elem >= 0) surg[ri] = elem;
+  });
+  e.emit(`const SURG_ELEM = new Int32Array([${surg.join(',')}]);`);
+  e.emit(`const RULE_FN_BY_ID = [${a.grammar.rules.map(r => ruleFn(r.name)).join(', ')}];`);
 }
 
 // Non-recursive rule: longest-match over alts (mirrors parseNonRec). A better arm is
@@ -1918,7 +1992,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`          const _h = kids[rowStart[lhs]];`);
   e.emit(`          if (_h < 0 && ((~_h) & 3) === 2) {`);
   e.emit(`            const _ht = absTok[lhs] + ((~_h) >>> 2);`);
-  e.emit(`            const _htext = ${e.soa ? 'src.slice(tkOff[_ht], tkEnd[_ht])' : 'tkText[_ht]'};`);
+  e.emit(`            const _htext = ${e.soa ? 'src.slice(toff(_ht), tend(_ht))' : 'tkText[_ht]'};`);
   e.emit(`            if (prefixOps.has(_htext) && !postfixOpValues.has(_htext)) { return -1; }`);
   e.emit(`          }`);
   e.emit(`        }`);
@@ -2074,7 +2148,7 @@ function parseRuleEntry(idx, rid, name, core) {
         // (its green internals are position-independent; only the attachment point —
         // what the enclosing finishNode reads — must be current).
         absTok[id] = start;
-        absChar[id] = tkOff[start];
+        absChar[id] = toff(start);
         scPush(id);
         return true;
       }
@@ -2092,7 +2166,7 @@ function parseRuleEntry(idx, rid, name, core) {
         const ext = start + rowExt[aid];
         if (ext > maxPos) maxPos = ext;
         absTok[aid] = start;
-        absChar[aid] = tkOff[start];
+        absChar[aid] = toff(start);
         if (adoptHitP >= 0) {
           adoptRunPos = pos; adoptRunRid = rid; adoptRunGen = memoGenCur;
           adoptRunP = adoptHitP; adoptRunKid = adoptHitKid + 1;
@@ -2153,7 +2227,7 @@ function parseRuleEntry(idx, rid, name, core) {
 
 // Token text at an arbitrary index (cold paths: errors, the tokenAt debug view).
 function tokTextAt(i) {
-  return ${e.soa ? 'src.slice(tkOff[i], tkEnd[i])' : 'tkText[i]'};
+  return ${e.soa ? 'src.slice(toff(i), tend(i))' : 'tkText[i]'};
 }
 // The k → type-name inverse, for reconstructing a token object (tokenAt).
 const K_NAMES = [];
@@ -2163,7 +2237,7 @@ export function tokenAt(i) {
   return {
     type: K_NAMES[tkK[i]] ?? '',
     text: tokTextAt(i),
-    offset: tkOff[i],
+    offset: toff(i),
     k: tkK[i],
     t: tkT[i],
     newlineBefore: (tkFl[i] & 1) !== 0,
@@ -2201,11 +2275,11 @@ export const tree = {
   lenOf: (id) => rowLen[id],
   tokLenOf: (id) => rowTokLen[id],
   // a node CHILD's relative coordinates live on the parent edge (kids-parallel)
-  childRelAt: (id, i) => kidRel[rowStart[id] + i],
-  childTokRelAt: (id, i) => kidTokRel[rowStart[id] + i],
+  childRelAt: (id, i) => kcr(id, rowStart[id] + i),
+  childTokRelAt: (id, i) => ktr(id, rowStart[id] + i),
   // base-threaded spans: nodes from their bases, leaves from the token columns
-  offsetOf: (entry, charBase, tokBase) => entry >= 0 ? charBase : tkOff[tokBase + ((~entry) >>> 2)],
-  endOf: (entry, charBase, tokBase) => entry >= 0 ? charBase + rowLen[entry] : tkEnd[tokBase + ((~entry) >>> 2)],
+  offsetOf: (entry, charBase, tokBase) => entry >= 0 ? charBase : toff(tokBase + ((~entry) >>> 2)),
+  endOf: (entry, charBase, tokBase) => entry >= 0 ? charBase + rowLen[entry] : tend(tokBase + ((~entry) >>> 2)),
   childCount: (id) => rowCount[id],
   childAt: (id, i) => kids[rowStart[id] + i],
   // Bulk child load into a caller-owned array; returns the count. One call per node
@@ -2223,11 +2297,11 @@ export const tree = {
   // 1 '$keyword', 2 '$operator' — and the token's TYPE kind int (1 = punctuation).
   leafKindOf: (entry) => (~entry) & 3,
   leafTokKindOf: (entry, tokBase) => tkK[tokBase + ((~entry) >>> 2)],
-  leafOffsetOf: (entry, tokBase) => tkOff[tokBase + ((~entry) >>> 2)],
-  leafEndOf: (entry, tokBase) => tkEnd[tokBase + ((~entry) >>> 2)],
+  leafOffsetOf: (entry, tokBase) => toff(tokBase + ((~entry) >>> 2)),
+  leafEndOf: (entry, tokBase) => tend(tokBase + ((~entry) >>> 2)),
   textOf: (entry, source, charBase, tokBase) => entry >= 0
     ? source.slice(charBase, charBase + rowLen[entry])
-    : source.slice(tkOff[tokBase + ((~entry) >>> 2)], tkEnd[tokBase + ((~entry) >>> 2)]),
+    : source.slice(toff(tokBase + ((~entry) >>> 2)), tend(tokBase + ((~entry) >>> 2))),
 };
 // Depth-first traversal from a node id or leaf entry:
 //   enter(id)         — each NODE before its children; return false to skip its subtree
@@ -2245,7 +2319,7 @@ export function visit(entry, fns, charBase, tokBase) {
   for (let i = 0; i < n; i++) {
     const e = kids[cs + i];
     if (e < 0) { if (fns.leaf) fns.leaf(e, tokBase + ((~e) >>> 2)); }
-    else visit(e, fns, charBase + kidRel[cs + i], tokBase + kidTokRel[cs + i]);
+    else visit(e, fns, charBase + kcr(entry, cs + i), tokBase + ktr(entry, cs + i));
   }
   if (fns.leave) fns.leave(entry, charBase, tokBase);
 }
@@ -2258,8 +2332,8 @@ export function toObject(id, charBase, tokBase) {
   const children = new Array(n);
   for (let i = 0; i < n; i++) {
     const entry = kids[cs + i];
-    children[i] = entry >= 0 ? toObject(entry, charBase + kidRel[cs + i], tokBase + kidTokRel[cs + i])
-      : { tokenType: leafTokenType(entry, tokBase), offset: tkOff[tokBase + ((~entry) >>> 2)], end: tkEnd[tokBase + ((~entry) >>> 2)] };
+    children[i] = entry >= 0 ? toObject(entry, charBase + kcr(id, cs + i), tokBase + ktr(id, cs + i))
+      : { tokenType: leafTokenType(entry, tokBase), offset: toff(tokBase + ((~entry) >>> 2)), end: tend(tokBase + ((~entry) >>> 2)) };
   }
   return { rule: RULE_NAMES[rowRule[id]], children, offset: charBase, end: charBase + rowLen[id] };
 }
@@ -2283,7 +2357,7 @@ ${e.soa ? `  tokenize(source);` : String.raw`  src = source;
 
 function farthest(errPos) {
   if (maxPos <= errPos || maxPos >= tokN) return '';
-  return ' [farthest: offset ' + tkOff[maxPos] + " near '" + tokTextAt(maxPos).slice(0, 20) + "']";
+  return ' [farthest: offset ' + toff(maxPos) + " near '" + tokTextAt(maxPos).slice(0, 20) + "']";
 }
 
 // Run the entry rule over the CURRENT token stream (shared by parse / parseEdited —
@@ -2306,10 +2380,10 @@ function runParse(entryRule) {
   }
   if (!RULES[entry]()) {
     const hasTok = pos < cap;
-    throw new Error('Parse error at offset ' + (hasTok ? tkOff[pos] : 0) + ': unexpected ' + (hasTok ? "'" + tokTextAt(pos) + "'" : 'end of input') + farthest(pos));
+    throw new Error('Parse error at offset ' + (hasTok ? toff(pos) : 0) + ': unexpected ' + (hasTok ? "'" + tokTextAt(pos) + "'" : 'end of input') + farthest(pos));
   }
   if (pos < tokN) {
-    throw new Error('Parse error at offset ' + tkOff[pos] + ": unexpected '" + tokTextAt(pos) + "' after successful parse" + farthest(pos));
+    throw new Error('Parse error at offset ' + toff(pos) + ": unexpected '" + tokTextAt(pos) + "' after successful parse" + farthest(pos));
   }
   const rootId = sc[--scn];
   rootCharBase = absChar[rootId]; rootTokBase = absTok[rootId];
@@ -2377,13 +2451,13 @@ function adoptSeek(q, rid) {
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
       const e = kids[cs + mid];
-      const end = e < 0 ? base + ((~e) >>> 2) + 1 : base + kidTokRel[cs + mid] + rowTokLen[e];
+      const end = e < 0 ? base + ((~e) >>> 2) + 1 : base + ktr(id, cs + mid) + rowTokLen[e];
       if (end <= q) lo = mid + 1; else hi = mid;
     }
     if (lo >= n) return -1;
     const e = kids[cs + lo];
     if (e < 0) return -1;                                  // the position is a leaf here
-    const cb = base + kidTokRel[cs + lo];
+    const cb = base + ktr(id, cs + lo);
     if (cb > q) return -1;                                 // a gap — nothing starts at q
     if (cb === q) {
       // the exploratory chain: every node from here down whose start is exactly q
@@ -2397,7 +2471,7 @@ function adoptSeek(q, rid) {
         const xcs = rowStart[xid];
         if (rowCount[xid] === 0) return -1;
         const fe = kids[xcs];
-        if (fe < 0 || kidTokRel[xcs] !== 0) return -1;
+        if (fe < 0 || ktr(xid, xcs) !== 0) return -1;
         adoptHitP = -1;
         xid = fe; xb = xb;
       }
@@ -2429,13 +2503,13 @@ function runExtend(rid) {
   while (i < csEnd) {
     const e = kids[i];
     if (e < 0) break;
-    if (pb + kidTokRel[i] !== oq) break;
+    if (pb + ktr(P, i) !== oq) break;
     if (rowRule[e] !== rid || rowOK[e] === 0) break;
     const tl = rowTokLen[e];
     if (tl === 0) break;
     const ex = rowExt[e];
     if (!sfx && oq + ex + 2 > adoptDmgStart) break;
-    absTok[e] = nq; absChar[e] = tkOff[nq];
+    absTok[e] = nq; absChar[e] = toff(nq);
     scPush(e);
     const w = nq + ex;
     if (w > mp) mp = w;
@@ -2444,6 +2518,277 @@ function runExtend(rid) {
   }
   if (mp > maxPos) maxPos = mp;
   pos = nq;
+}
+
+// ── Node SURGERY: patch the damage path in place ──
+// Even with run-adoption, a keystroke inside one statement of a large list rebuilds
+// every node on the damage path — the list parent re-collects ALL its kids through
+// scratch (and the arena grows by that much per edit). Surgery keeps those rows:
+// descend the old tree to the deepest PURE container (SURG_ELEM), re-parse only the
+// affected elements with the real rule fn (adoption reuses their undamaged
+// subtrees), and when the fresh elements REJOIN an old kid start exactly, splice the
+// container's kid range and shift the suffix rels by the edit deltas. Every check
+// happens BEFORE any row is mutated; any failure falls back to the full adoption
+// re-parse. Prefix kids are kept under the same watermark rule single adoption
+// uses, made transitive by rowKC: each kid's probe watermark stays at/below the
+// next kid's start, so checking the LAST kept kid bounds them all.
+let surgX = [], surgBase = [], surgA = [], surgB = [];
+function rowKCof(id) {
+  const c = rowKC[id];
+  if (c !== 0) return c;
+  const cs = rowStart[id], n = rowCount[id];
+  let ok = 1, prevW = -1;
+  for (let k = 0; k < n; k++) {
+    const e = kids[cs + k];
+    const st = e < 0 ? (~e) >>> 2 : ktr(id, cs + k);
+    if (prevW > st) { ok = 2; break; }
+    prevW = e < 0 ? st + 1 : st + rowExt[e];
+  }
+  rowKC[id] = ok;
+  return ok;
+}
+function trySurgery(dmgA, dmgB, tokD, chrD) {
+  if (adoptRoot < 0) return -1;
+  // the whole-file token math must close, or the shape changed beyond a splice
+  if (adoptRootTok + rowTokLen[adoptRoot] + tokD !== tokN) return -1;
+  // 1. descend along single-affected-row kids, recording the path
+  surgX.length = 0; surgBase.length = 0; surgA.length = 0; surgB.length = 0;
+  let X = adoptRoot, base = adoptRootTok;
+  for (;;) {
+    const cs = rowStart[X], n = rowCount[X];
+    let lo = 0, hi = n;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      const e = kids[cs + m];
+      const st = base + (e < 0 ? (~e) >>> 2 : ktr(X, cs + m));
+      if (st < dmgB) lo = m + 1; else hi = m;
+    }
+    const b = lo;
+    let a = b;
+    while (a > 0) {
+      const e = kids[cs + a - 1];
+      const st = base + (e < 0 ? (~e) >>> 2 : ktr(X, cs + a - 1));
+      if (e < 0 ? st < dmgA : st + rowExt[e] + 2 <= dmgA) break;
+      a--;
+    }
+    surgX.push(X); surgBase.push(base); surgA.push(a); surgB.push(b);
+    if (b - a !== 1) break;
+    const e = kids[cs + a];
+    if (e < 0 || rowCount[e] === 0) break;
+    base = base + ktr(X, cs + a);
+    X = e;
+  }
+  // 2. choose D: the deepest surgical level whose affected kids are all rep rows
+  let L = -1;
+  for (let i = surgX.length - 1; i >= 0; i--) {
+    const Xi = surgX[i];
+    const elem = SURG_ELEM[rowRule[Xi]];
+    if (elem < 0) continue;
+    const cs = rowStart[Xi];
+    const ai = surgA[i], bi = surgB[i];
+    let okR = true;
+    for (let k = ai; k < bi; k++) {
+      const e = kids[cs + k];
+      if (e < 0 || rowRule[e] !== elem) { okR = false; break; }
+    }
+    if (!okR) continue;
+    if (bi === ai) {
+      // pure insertion at a kid boundary: it must sit INSIDE the rep zone — at
+      // least one neighbour is an element row. Otherwise the insertion belongs to
+      // an enclosing list (e.g. right after this container's closing brace, where
+      // an element-loop alignment would stitch the new element into a CLOSED node).
+      const pe = ai > 0 ? kids[cs + ai - 1] : -1;
+      const ne = ai < rowCount[Xi] ? kids[cs + ai] : -1;
+      const prevOk = pe >= 0 && rowRule[pe] === elem;
+      const nextOk = ne >= 0 && rowRule[ne] === elem;
+      if (!prevOk && !nextOk) continue;
+    }
+    if (ai > 0 && rowKCof(Xi) !== 1) continue;
+    L = i;
+    break;
+  }
+  if (L < 0) return -1;
+  const D = surgX[L], Dbase = surgBase[L], Da = surgA[L];
+  const Db = surgB[L];
+  const elem = SURG_ELEM[rowRule[D]];
+  const csD = rowStart[D], nD = rowCount[D];
+  const DendNew = Dbase + rowTokLen[D] + tokD;
+  // 3. re-parse the affected span with the real rule (adoption live); the first
+  //    affected kid starts at/before the damage, so old == new coordinates there
+  pos = Da < Db
+    ? Dbase + (kids[csD + Da] < 0 ? (~kids[csD + Da]) >>> 2 : ktr(D, csD + Da))
+    : dmgA;
+  maxPos = pos; scn = 0; parseLimit = -1; cap = tokN;
+  currentPrattContext = null; suppressNext = null; suppressCur = null;
+  const genAt = memoGenCur;
+  const fn = RULE_FN_BY_ID[elem];
+  let j = Db, guard = 0;
+  for (;;) {
+    let target;
+    if (j < nD) {
+      const e = kids[csD + j];
+      target = Dbase + (e < 0 ? (~e) >>> 2 : ktr(D, csD + j)) + tokD;
+    } else target = DendNew;
+    if (pos === target) break;
+    if (pos > target) {
+      // the fresh parse consumed past old kid j: only a rep row may be subsumed
+      if (j >= nD) return -1;
+      const e = kids[csD + j];
+      if (e < 0 || rowRule[e] !== elem) return -1;
+      j++;
+      continue;
+    }
+    if (++guard > 65536) return -1;
+    const pp = pos;
+    if (!fn()) return -1;
+    if (memoGenCur !== genAt || pos === pp) return -1;
+  }
+  // 4. POINT OF NO RETURN — splice D's kid range, shift suffix rels, patch the path
+  const f = scn;
+  const removed = j - Da;
+  const DcharBase = toff(Dbase);
+  let csD2 = csD;
+  if (f === removed) {
+    for (let k = 0; k < f; k++) {
+      const id = sc[k];
+      kids[csD + Da + k] = id;
+      kidTokRel[csD + Da + k] = absTok[id] - Dbase;
+      kidRel[csD + Da + k] = absChar[id] - DcharBase;
+    }
+  } else {
+    const n2k = nD - removed + f;
+    if (kidN + n2k > kidCap) growKids(n2k);
+    const ks = kidN;
+    for (let k = 0; k < Da; k++) {
+      kids[ks + k] = kids[csD + k];
+      kidRel[ks + k] = kidRel[csD + k];
+      kidTokRel[ks + k] = kidTokRel[csD + k];
+    }
+    for (let k = 0; k < f; k++) {
+      const id = sc[k];
+      kids[ks + Da + k] = id;
+      kidTokRel[ks + Da + k] = absTok[id] - Dbase;
+      kidRel[ks + Da + k] = absChar[id] - DcharBase;
+    }
+    for (let k = j; k < nD; k++) {
+      kids[ks + Da + f + (k - j)] = kids[csD + k];
+      kidRel[ks + Da + f + (k - j)] = kidRel[csD + k];
+      kidTokRel[ks + Da + f + (k - j)] = kidTokRel[csD + k];
+    }
+    kidN = ks + n2k;
+    rowStart[D] = ks;
+    rowCount[D] = n2k;
+    // remap the end-relative boundary into the relocated range (suffix kids kept
+    // their sign-encoded values; indices shifted by the move + the count change).
+    // Three cases keep it Int32-safe: no negatives among the copied kids (the
+    // sentinel maps to itself, NOT through the index arithmetic), all possibly
+    // negative, or a boundary inside the copied range.
+    const nfOld = rowNF[D];
+    rowNF[D] = nfOld >= csD + nD ? 0x7fffffff
+      : nfOld <= csD + j ? ks + Da + f
+      : (nfOld - csD - j) + ks + Da + f;
+    csD2 = ks;
+  }
+  const n2 = rowCount[D];
+  // End-relative band maintenance (old lengths — the bias cancels against the new
+  // ones exactly like the token-level flip): rows entering the suffix flip to
+  // end-relative; rows leaving it flip back to absolute rels. Rows already beyond
+  // the old boundary auto-shift via the length update below. Leaf kids cannot be
+  // sign-encoded (packed): inside the flip-up band they are re-packed eagerly, and
+  // the trailing run (a pure container's only leaves past the rep) gets the same
+  // eager shift by the backward walk.
+  const bnd = csD2 + Da + f;
+  const nf = rowNF[D];
+  const kidsEnd = csD2 + n2;
+  if (nf < bnd) {
+    for (let k = nf; k < bnd; k++) {
+      const v = kidTokRel[k];
+      if (v < 0) { kidTokRel[k] = v + rowTokLen[D] + 1; kidRel[k] += rowLen[D] + 1; }
+    }
+  } else if (nf > bnd) {
+    const hi = nf < kidsEnd ? nf : kidsEnd;
+    for (let k = bnd; k < hi; k++) {
+      const e = kids[k];
+      if (e < 0) { if (tokD !== 0) kids[k] = ~(((((~e) >>> 2) + tokD) << 2) | ((~e) & 3)); }
+      else {
+        const v = kidTokRel[k];
+        if (v >= 0) { kidTokRel[k] = v - rowTokLen[D] - 1; kidRel[k] -= rowLen[D] + 1; }
+      }
+    }
+  }
+  if (tokD !== 0) {
+    const tlFrom = nf > bnd ? (nf < kidsEnd ? nf : kidsEnd) : bnd;
+    for (let k = kidsEnd - 1; k >= tlFrom; k--) {
+      const e = kids[k];
+      if (e >= 0) break;
+      kids[k] = ~(((((~e) >>> 2) + tokD) << 2) | ((~e) & 3));
+    }
+  }
+  rowNF[D] = bnd;
+  rowTokLen[D] += tokD;
+  // Derive the char length from the token columns rather than adding chrD: a pure-
+  // trivia edit can sit at a node's token BOUNDARY (between its last token and the
+  // next sibling's first), token-inside but char-outside — the gap belongs to no
+  // node. tend/toff give the exact new span; when suffix tokens exist inside the
+  // node the delta equals chrD (so the suffix-kid rel adds and the end-relative
+  // bias-cancel stay consistent), and when they don't there are no suffix kids.
+  if (rowTokLen[D] > 0) rowLen[D] = tend(Dbase + rowTokLen[D] - 1) - toff(Dbase);
+  {
+    let x = rowExt[D] + (tokD > 0 ? tokD : 0);
+    const fw = maxPos - Dbase;
+    if (fw > x) x = fw;
+    rowExt[D] = x;
+  }
+  // containment bit: only the pairs around the splice changed
+  if (rowKC[D] === 1) {
+    let okB = 1;
+    const from = Da > 0 ? Da - 1 : 0;
+    for (let k = from; k < Da + f && k + 1 < n2; k++) {
+      const e = kids[csD2 + k];
+      const w = e < 0 ? ((~e) >>> 2) + 1 : ktr(D, csD2 + k) + rowExt[e];
+      const e2 = kids[csD2 + k + 1];
+      const st2 = e2 < 0 ? (~e2) >>> 2 : ktr(D, csD2 + k + 1);
+      if (w > st2) { okB = 2; break; }
+    }
+    rowKC[D] = okB;
+  }
+  // 5. ancestors bottom-up: lengths, suffix rels, ext, containment boundary pair
+  for (let i = L - 1; i >= 0; i--) {
+    const Ai = surgX[i];
+    const csA = rowStart[Ai], nA = rowCount[Ai];
+    const ki = surgA[i];
+    // kids at/before the path kid are NOT suffix for this edit (the damage sits
+    // inside the path kid): any end-relative rel there must flip back to absolute
+    // with the OLD lengths, or the length update below would shift it
+    const nfA = rowNF[Ai];
+    if (nfA <= csA + ki) {
+      for (let k = nfA; k <= csA + ki; k++) {
+        const v = kidTokRel[k];
+        if (v < 0) { kidTokRel[k] = v + rowTokLen[Ai] + 1; kidRel[k] += rowLen[Ai] + 1; }
+      }
+      rowNF[Ai] = csA + ki + 1;
+    }
+    for (let k = ki + 1; k < nA; k++) {
+      const e = kids[csA + k];
+      if (e < 0) kids[csA + k] = ~(((((~e) >>> 2) + tokD) << 2) | ((~e) & 3));
+      else if (kidTokRel[csA + k] >= 0) { kidTokRel[csA + k] += tokD; kidRel[csA + k] += chrD; }
+      // (end-relative kids past the boundary auto-shift via the length update below)
+    }
+    rowTokLen[Ai] += tokD;
+    if (rowTokLen[Ai] > 0) rowLen[Ai] = tend(surgBase[i] + rowTokLen[Ai] - 1) - toff(surgBase[i]);
+    {
+      let x = rowExt[Ai] + (tokD > 0 ? tokD : 0);
+      const cw = ktr(Ai, csA + ki) + rowExt[surgX[i + 1]];
+      if (cw > x) x = cw;
+      rowExt[Ai] = x;
+    }
+    if (rowKC[Ai] === 1 && ki + 1 < nA) {
+      const e2 = kids[csA + ki + 1];
+      const st2 = e2 < 0 ? (~e2) >>> 2 : ktr(Ai, csA + ki + 1);
+      if (ktr(Ai, csA + ki) + rowExt[surgX[i + 1]] > st2) rowKC[Ai] = 2;
+    }
+  }
+  return adoptRoot;
 }
 
 // The spare token-column buffer set (parseEdited ping-pongs between the live set and
@@ -2537,7 +2882,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // first old token at/after the damage end — the resync search floor
   let r0 = oN;
   { let lo = 0, hi = oN;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (tkOff[mid] < ceOld) lo = mid + 1; else hi = mid; }
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (toff(mid) < ceOld) lo = mid + 1; else hi = mid; }
     r0 = lo; }
   // Lex the window into the spare buffers (the old stream stays live for resync).
   if (altK === null || altCap < tkCap) {
@@ -2550,12 +2895,31 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   swapBuffers();              // live = scratch, alt = OLD stream
   src = source;
   tokN = 0;
-  const startOff = B >= 0 ? altEnd[B] : 0;
+  const startOff = B >= 0 ? (altEnd[B] < 0 ? altEnd[B] + srcLenP1 : altEnd[B]) : 0;
   const R0 = lexCore(source, startOff, B >= 0 ? altK[B] : -1, B >= 0 ? altT[B] : 0, r0, ceNew, charDelta, cs, initParens);
   const W = tokN;
   const R = R0 >= 0 ? R0 : oN;
   swapBuffers();              // live = OLD stream again; window sits in the alt buffers
   tokN = oN;
+  // EOF-relative maintenance: move the negative-zone boundary to THIS edit's suffix
+  // start R. Tokens dropping out of the suffix ([negFrom, R)) flip back to absolute
+  // (they sit at/before the damage now — EOF-unstable); tokens entering it
+  // ([R, negFrom)) flip to EOF-relative, encoded against the OLD length (their new
+  // absolute is oldValue + charDelta, and newLen = oldLen + charDelta, so the bias
+  // cancels). Both bands are cursor-locality sized; the suffix itself is never
+  // walked again — updating srcLenP1 after the splice IS the char-delta shift the
+  // old O(suffix) add-loop used to apply.
+  if (negFrom < R) {
+    for (let i = negFrom, e2 = R < oN ? R : oN; i < e2; i++) {
+      const o = tkOff[i]; if (o < 0) tkOff[i] = o + srcLenP1;
+      const en = tkEnd[i]; if (en < 0) tkEnd[i] = en + srcLenP1;
+    }
+  } else if (negFrom > R) {
+    for (let i = R, e2 = negFrom < oN ? negFrom : oN; i < e2; i++) {
+      const o = tkOff[i]; if (o >= 0) tkOff[i] = o - srcLenP1;
+      const en = tkEnd[i]; if (en >= 0) tkEnd[i] = en - srcLenP1;
+    }
+  }
   // TRUE token prefix p: the window re-derives [B+1 .. p) byte-identically; only past
   // p is real damage (compared BEFORE the splice clobbers the old slots).
   let p = B + 1;
@@ -2568,17 +2932,18 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // ── splice: old[0..B] + window[0..W) + old[R..oN), then shift the suffix spans ──
   const nN = B + 1 + W + (oN - R);
   while (tkCap < nN + 1) growTok();
-  tkK.copyWithin(B + 1 + W, R, oN); tkT.copyWithin(B + 1 + W, R, oN);
-  tkOff.copyWithin(B + 1 + W, R, oN); tkEnd.copyWithin(B + 1 + W, R, oN);
-  tkFl.copyWithin(B + 1 + W, R, oN); tkDp.copyWithin(B + 1 + W, R, oN); tkPd.copyWithin(B + 1 + W, R, oN);
+  if (R !== B + 1 + W) {
+    tkK.copyWithin(B + 1 + W, R, oN); tkT.copyWithin(B + 1 + W, R, oN);
+    tkOff.copyWithin(B + 1 + W, R, oN); tkEnd.copyWithin(B + 1 + W, R, oN);
+    tkFl.copyWithin(B + 1 + W, R, oN); tkDp.copyWithin(B + 1 + W, R, oN); tkPd.copyWithin(B + 1 + W, R, oN);
+  }
   if (W > 0) {
     tkK.set(altK.subarray(0, W), B + 1); tkT.set(altT.subarray(0, W), B + 1);
     tkOff.set(altOff.subarray(0, W), B + 1); tkEnd.set(altEnd.subarray(0, W), B + 1);
     tkFl.set(altFl.subarray(0, W), B + 1); tkDp.set(altDp.subarray(0, W), B + 1); tkPd.set(altPd.subarray(0, W), B + 1);
   }
-  if (charDelta !== 0) {
-    for (let i = B + 1 + W; i < nN; i++) { tkOff[i] += charDelta; tkEnd[i] += charDelta; }
-  }
+  negFrom = B + 1 + W;
+  srcLenP1 = newLen + 1;
   tokN = nN;
   const nN2 = nN;` : String.raw`  // (fallback-lexer grammars keep the full-relex + token-diff path)
   const oK = tkK, oT = tkT, oOff = tkOff, oEnd = tkEnd, oFl = tkFl, oN = tokN;
@@ -2628,6 +2993,16 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   adoptPath.length = 0;
   adoptBase.length = 0;
   adoptRunPos = -1;
+  const sroot = trySurgery(p, dOldEnd, tokenDelta, charDelta);
+  if (sroot >= 0) {
+    adoptRoot = -1;
+    rootCharBase = toff(adoptRootTok);
+    rootTokBase = adoptRootTok;
+    lastRoot = sroot;
+    lastRootTok = adoptRootTok;
+    lastSrc = source;
+    return sroot;
+  }
   const root = runParse(entryRule);
   adoptRoot = -1;
   lastRoot = root;
