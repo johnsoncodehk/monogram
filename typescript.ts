@@ -382,8 +382,11 @@ const Stmt = rule($ => [
   ['switch', '(', Expr, many(',', Expr), ')', '{', many(SwitchCase), '}'],
   ['return', opt(Expr, many(',', Expr)), opt(';')],
   ['throw', Expr, many(',', Expr), opt(';')],
-  ['break', opt(Ident), opt(';')],
-  ['continue', opt(Ident), opt(';')],
+  // The label is a RESTRICTED production (`break [no LineTerminator here] Label`)
+  // and a label can't be a reserved word — without both, `break` ⏎ `case "X":`
+  // inside a switch eats `case` as the label and the whole switch cascades.
+  ['break', opt(sameLine, notReserved, Ident), opt(';')],
+  ['continue', opt(sameLine, notReserved, Ident), opt(';')],
   ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
   [Ident, ':', $],
   ';',

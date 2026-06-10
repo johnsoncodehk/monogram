@@ -4,10 +4,8 @@
   "type": "module",
   "scripts": {
     "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts vue.ts && node src/cli.ts yaml.ts",
-
     "test": "node test/check.ts",
     "check": "node test/check.ts",
-
     "gate:generative": "node test/generative.ts",
     "gate:conformance-js": "node test/js-conformance.ts",
     "gate:conformance-tsx": "node test/tsx-conformance.ts",
@@ -20,7 +18,6 @@
     "gate:left-recursion": "node test/left-recursion.ts",
     "gate:html-lexer": "node test/html-lexer-spike.ts",
     "gate:treesitter": "(cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/treesitter-bench.ts",
-
     "metric:scope-gap:ts": "node test/scope-gap-run.ts ts",
     "metric:scope-gap:js": "node test/scope-gap-run.ts js",
     "metric:scope-gap:jsx": "node test/scope-gap-run.ts jsx",
@@ -38,13 +35,11 @@
     "metric:conformance": "node test/run-conformance.ts",
     "metric:compat": "node test/repo-compat.ts",
     "coverage:table": "node test/coverage-table.ts --write",
-
     "ledger": "node test/gap-ledger.ts --write",
     "ledger:check": "node test/gap-ledger.ts --check",
     "ledger:selftest": "node test/gap-ledger-selftest.ts",
     "ledger:issues": "node test/gap-issues.ts",
     "ledger:issues:dry": "node test/gap-issues.ts --dry-run",
-
     "bench:perf": "node test/perf-bench.ts",
     "bench:issues": "node test/issue-table.ts --write",
     "bench:html-official": "node test/html-bench.ts",
@@ -58,6 +53,7 @@
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "@vue/compiler-dom": "^3.5.35",
     "@vue/compiler-sfc": "^3.5.35",
+    "acorn": "^8.16.0",
     "parse5": "^8.0.1",
     "tree-sitter-cli": "^0.26.9",
     "typescript": "^5.6.0",
