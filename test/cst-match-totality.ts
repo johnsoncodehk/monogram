@@ -4,12 +4,16 @@
 // generator's unification semantics diverged from the engine's matcher semantics
 // (greediness, sep trailing delimiters, template duals, op forms, …).
 //
+// The matchers are ARENA-NATIVE: inputs are parsed with the EMITTED parser (built
+// fresh per grammar) and every node id is destructured through TreeAccess — this gate
+// therefore also exercises the emitted arena end-to-end.
+//
 // Inputs: the deterministic generative corpus per grammar (grammar-gen), plus a TS
 // conformance stride sample when the corpus is present.
 //   node test/cst-match-totality.ts
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createParser } from '../src/gen-parser.ts';
+import { emitParser } from '../src/emit-parser.ts';
 import { generateInputs } from './grammar-gen.ts';
 
 const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'vue'];
@@ -18,66 +22,71 @@ let nodes = 0;
 let misses = 0;
 const samples: string[] = [];
 
-type AnyNode = { rule?: string; tokenType?: string; offset: number; end: number; children?: AnyNode[] };
+type Emitted = {
+  parse(src: string, entry?: string): number;
+  visit(entry: number, fns: { enter?(id: number): boolean | void; leaf?(e: number, tok: number): void }): void;
+  tree: { ruleNameOf(id: number): string; childCount(id: number): number; childAt(id: number, i: number): number; leafTokenType(e: number): string; offsetOf(e: number): number; endOf(e: number): number };
+};
 
-function checkTree(cst: AnyNode, src: string, matchers: Record<string, (n: never, src: string) => { arm: string }>, tag: string): void {
-  const walk = (n: AnyNode): void => {
-    if (n.children === undefined) return;
-    const m = matchers[n.rule!];
-    if (m !== undefined) {
-      nodes++;
-      try {
-        m(n as never, src);
-      } catch (e) {
-        misses++;
-        if (samples.length < 10) {
-          samples.push(`${tag} ${n.rule} @${n.offset}..${n.end} «${src.slice(n.offset, Math.min(n.end, n.offset + 50)).replace(/\n/g, '\\n')}» — ${(e as Error).message.slice(0, 60)}`);
+function checkTree(em: Emitted, root: number, src: string, matchers: Record<string, (t: never, n: never, src: string) => { arm: string }>, tag: string): void {
+  em.visit(root, {
+    enter(id) {
+      const m = matchers[em.tree.ruleNameOf(id)];
+      if (m !== undefined) {
+        nodes++;
+        try {
+          m(em.tree as never, id as never, src);
+        } catch (e) {
+          misses++;
+          if (samples.length < 10) {
+            const off = em.tree.offsetOf(id);
+            samples.push(`${tag} ${em.tree.ruleNameOf(id)} @${off}..${em.tree.endOf(id)} «${src.slice(off, Math.min(em.tree.endOf(id), off + 50)).replace(/\n/g, '\\n')}» — ${(e as Error).message.slice(0, 60)}`);
+          }
         }
       }
-    }
-    for (const c of n.children) walk(c);
-  };
-  walk(cst);
+    },
+  });
 }
 
 for (const name of GRAMMARS) {
   const grammar = (await import(`../${name}.ts`)).default;
   const matchers = (await import(`../${name}.cst-match.ts`)).MATCHERS;
-  const parser = createParser(grammar);
+  const emPath = `/tmp/emitted-totality-${name}.mjs`;
+  writeFileSync(emPath, emitParser(grammar));
+  const em = (await import(emPath + '?v=' + process.pid)) as Emitted;
   let parsed = 0;
   for (const input of generateInputs(grammar, { depth: 5, nestDepth: 5, cap: 7, fuzzRounds: 250, maxInputs: 1500, seed: 5 })) {
-    let cst: AnyNode;
-    try { cst = parser.parse(input.text) as AnyNode; } catch { continue; }
-    checkTree(cst, input.text, matchers, name);
+    let root: number;
+    try { root = em.parse(input.text); } catch { continue; }
+    checkTree(em, root, input.text, matchers, name);
     parsed++;
   }
   console.log(`${name.padEnd(18)} inputs parsed: ${parsed}`);
-}
 
-const corpus = '/tmp/ts-repo/tests/cases/conformance';
-if (existsSync(corpus)) {
-  const files: string[] = [];
-  (function walk(d: string) {
-    for (const e of readdirSync(d)) {
-      const p = join(d, e);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith('.ts') && !p.endsWith('.d.ts')) files.push(p);
+  if (name === 'typescript') {
+    const corpus = '/tmp/ts-repo/tests/cases/conformance';
+    if (existsSync(corpus)) {
+      const files: string[] = [];
+      (function walk(d: string) {
+        for (const e of readdirSync(d)) {
+          const p = join(d, e);
+          if (statSync(p).isDirectory()) walk(p);
+          else if (p.endsWith('.ts') && !p.endsWith('.d.ts')) files.push(p);
+        }
+      })(corpus);
+      files.sort();
+      const stride = Math.max(1, Math.floor(files.length / 300));
+      let parsed2 = 0;
+      for (let i = 0; i < files.length; i += stride) {
+        const src = readFileSync(files[i], 'utf-8');
+        let root: number;
+        try { root = em.parse(src); } catch { continue; }
+        checkTree(em, root, src, matchers, 'ts-corpus:' + files[i].split('/').pop());
+        parsed2++;
+      }
+      console.log(`${'ts-corpus'.padEnd(18)} corpus files parsed: ${parsed2}`);
     }
-  })(corpus);
-  files.sort();
-  const grammar = (await import('../typescript.ts')).default;
-  const matchers = (await import('../typescript.cst-match.ts')).MATCHERS;
-  const parser = createParser(grammar);
-  const stride = Math.max(1, Math.floor(files.length / 300));
-  let parsed = 0;
-  for (let i = 0; i < files.length; i += stride) {
-    const src = readFileSync(files[i], 'utf-8');
-    let cst: AnyNode;
-    try { cst = parser.parse(src) as AnyNode; } catch { continue; }
-    checkTree(cst, src, matchers, 'ts-corpus:' + files[i].split('/').pop());
-    parsed++;
   }
-  console.log(`${'ts-corpus'.padEnd(18)} corpus files parsed: ${parsed}`);
 }
 
 console.log(`nodes matched: ${nodes}, misses: ${misses}`);
