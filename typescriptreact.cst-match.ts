@@ -744,42 +744,174 @@ function _Type$led_dot(c: readonly CstChild[], src: string): TypeMatch | null {
 
 export function matchType(n: TypeNode, src: string): TypeMatch {
   const c = n.children;
-  { const m = _Type$ident(c, src); if (m !== null) return m; }
-  { const m = _Type$led_lt(c, src); if (m !== null) return m; }
-  { const m = _Type$led_bracket(c, src); if (m !== null) return m; }
-  { const m = _Type$led_pipe(c, src); if (m !== null) return m; }
-  { const m = _Type$led_amp(c, src); if (m !== null) return m; }
-  { const m = _Type$pipe(c, src); if (m !== null) return m; }
-  { const m = _Type$amp(c, src); if (m !== null) return m; }
-  { const m = _Type$keyof(c, src); if (m !== null) return m; }
-  { const m = _Type$typeof_(c, src); if (m !== null) return m; }
-  { const m = _Type$readonly(c, src); if (m !== null) return m; }
-  { const m = _Type$paren(c, src); if (m !== null) return m; }
-  { const m = _Type$typeParams(c, src); if (m !== null) return m; }
-  { const m = _Type$abstract(c, src); if (m !== null) return m; }
-  { const m = _Type$bracket(c, src); if (m !== null) return m; }
-  { const m = _Type$brace(c, src); if (m !== null) return m; }
-  { const m = _Type$asserts(c, src); if (m !== null) return m; }
-  { const m = _Type$led_extends(c, src); if (m !== null) return m; }
-  { const m = _Type$infer(c, src); if (m !== null) return m; }
-  { const m = _Type$string(c, src); if (m !== null) return m; }
-  { const m = _Type$number(c, src); if (m !== null) return m; }
-  { const m = _Type$hexNumber(c, src); if (m !== null) return m; }
-  { const m = _Type$octalNumber(c, src); if (m !== null) return m; }
-  { const m = _Type$binaryNumber(c, src); if (m !== null) return m; }
-  { const m = _Type$bigInt(c, src); if (m !== null) return m; }
-  { const m = _Type$dash(c, src); if (m !== null) return m; }
-  { const m = _Type$true_(c, src); if (m !== null) return m; }
-  { const m = _Type$false_(c, src); if (m !== null) return m; }
-  { const m = _Type$null_(c, src); if (m !== null) return m; }
-  { const m = _Type$undefined(c, src); if (m !== null) return m; }
-  { const m = _Type$void_(c, src); if (m !== null) return m; }
-  { const m = _Type$this_(c, src); if (m !== null) return m; }
-  { const m = _Type$unique(c, src); if (m !== null) return m; }
-  { const m = _Type$import_(c, src); if (m !== null) return m; }
-  { const m = _Type$template(c, src); if (m !== null) return m; }
-  { const m = _Type$led_bracket2(c, src); if (m !== null) return m; }
-  { const m = _Type$led_dot(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "$template": {
+        { const m = _Type$template(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Type": {
+        const k1 = c[1] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+        if (k1 === undefined) {
+        } else if (k1.tokenType === undefined) {
+          switch (k1.rule) {
+            default: {
+              break;
+            }
+          }
+        } else if (k1.tokenType === '$keyword' || k1.tokenType === '$punct') {
+          switch (src.charCodeAt(k1.offset)) {
+            case 38: {
+            { const m = _Type$led_amp(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 46: {
+            { const m = _Type$led_dot(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 60: {
+            { const m = _Type$led_lt(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 91: {
+            { const m = _Type$led_bracket(c, src); if (m !== null) return m; }
+            { const m = _Type$led_bracket2(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 101: {
+            { const m = _Type$led_extends(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 124: {
+            { const m = _Type$led_pipe(c, src); if (m !== null) return m; }
+              break;
+            }
+            default: {
+              break;
+            }
+          }
+        } else {
+          switch (k1.tokenType) {
+            default: {
+              break;
+            }
+          }
+        }
+        break;
+      }
+      case "TypeParams": {
+        { const m = _Type$typeParams(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 38: {
+        { const m = _Type$amp(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 40: {
+        { const m = _Type$paren(c, src); if (m !== null) return m; }
+        { const m = _Type$typeParams(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 45: {
+        { const m = _Type$dash(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 91: {
+        { const m = _Type$bracket(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 97: {
+        { const m = _Type$abstract(c, src); if (m !== null) return m; }
+        { const m = _Type$asserts(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 102: {
+        { const m = _Type$false_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 105: {
+        { const m = _Type$infer(c, src); if (m !== null) return m; }
+        { const m = _Type$import_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 107: {
+        { const m = _Type$keyof(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 110: {
+        { const m = _Type$abstract(c, src); if (m !== null) return m; }
+        { const m = _Type$null_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 114: {
+        { const m = _Type$readonly(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 116: {
+        { const m = _Type$typeof_(c, src); if (m !== null) return m; }
+        { const m = _Type$true_(c, src); if (m !== null) return m; }
+        { const m = _Type$this_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 117: {
+        { const m = _Type$undefined(c, src); if (m !== null) return m; }
+        { const m = _Type$unique(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 118: {
+        { const m = _Type$void_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 123: {
+        { const m = _Type$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 124: {
+        { const m = _Type$pipe(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "BigInt": {
+        { const m = _Type$bigInt(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "BinaryNumber": {
+        { const m = _Type$binaryNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "HexNumber": {
+        { const m = _Type$hexNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Ident": {
+        { const m = _Type$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Number": {
+        { const m = _Type$number(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "OctalNumber": {
+        { const m = _Type$octalNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "String": {
+        { const m = _Type$string(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Template": {
+        { const m = _Type$template(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchType: no arm matches" + ' @' + n.offset);
 }
 
@@ -1246,10 +1378,63 @@ function _TypeMember$ident(c: readonly CstChild[], src: string): TypeMemberMatch
 
 export function matchTypeMember(n: TypeMemberNode, src: string): TypeMemberMatch {
   const c = n.children;
-  { const m = _TypeMember$new_(c, src); if (m !== null) return m; }
-  { const m = _TypeMember$_(c, src); if (m !== null) return m; }
-  { const m = _TypeMember$readonly(c, src); if (m !== null) return m; }
-  { const m = _TypeMember$ident(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "TypeParams": {
+        { const m = _TypeMember$new_(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 40: {
+        { const m = _TypeMember$new_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 43: {
+        { const m = _TypeMember$_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 45: {
+        { const m = _TypeMember$_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 91: {
+        { const m = _TypeMember$_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 110: {
+        { const m = _TypeMember$new_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 114: {
+        { const m = _TypeMember$_(c, src); if (m !== null) return m; }
+        { const m = _TypeMember$readonly(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _TypeMember$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Number": {
+        { const m = _TypeMember$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "PrivateField": {
+        { const m = _TypeMember$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "String": {
+        { const m = _TypeMember$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchTypeMember: no arm matches" + ' @' + n.offset);
 }
 
@@ -1406,7 +1591,22 @@ function _DecoratorExpr$decorator(c: readonly CstChild[], src: string): Decorato
 
 export function matchDecoratorExpr(n: DecoratorExprNode, src: string): DecoratorExprMatch {
   const c = n.children;
-  { const m = _DecoratorExpr$decorator(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Decorator": {
+        { const m = _DecoratorExpr$decorator(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchDecoratorExpr: no arm matches" + ' @' + n.offset);
 }
 
@@ -1442,8 +1642,26 @@ function _TypeofRef$led_dot(c: readonly CstChild[], src: string): TypeofRefMatch
 
 export function matchTypeofRef(n: TypeofRefNode, src: string): TypeofRefMatch {
   const c = n.children;
-  { const m = _TypeofRef$ident(c, src); if (m !== null) return m; }
-  { const m = _TypeofRef$led_dot(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "TypeofRef": {
+        { const m = _TypeofRef$led_dot(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _TypeofRef$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchTypeofRef: no arm matches" + ' @' + n.offset);
 }
 
@@ -3009,53 +3227,216 @@ function _Expr$postfixOp(c: readonly CstChild[], src: string): ExprMatch | null 
 
 export function matchExpr(n: ExprNode, src: string): ExprMatch {
   const c = n.children;
-  { const m = _Expr$jSXElement(c, src); if (m !== null) return m; }
-  { const m = _Expr$ident(c, src); if (m !== null) return m; }
-  { const m = _Expr$number(c, src); if (m !== null) return m; }
-  { const m = _Expr$string(c, src); if (m !== null) return m; }
-  { const m = _Expr$template(c, src); if (m !== null) return m; }
-  { const m = _Expr$regex(c, src); if (m !== null) return m; }
-  { const m = _Expr$true_(c, src); if (m !== null) return m; }
-  { const m = _Expr$false_(c, src); if (m !== null) return m; }
-  { const m = _Expr$null_(c, src); if (m !== null) return m; }
-  { const m = _Expr$undefined(c, src); if (m !== null) return m; }
-  { const m = _Expr$this_(c, src); if (m !== null) return m; }
-  { const m = _Expr$super_(c, src); if (m !== null) return m; }
-  { const m = _Expr$spread(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_lt(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_lt2(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_paren(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_dot(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_optChain(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_bracket(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_bang(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_question(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_as(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_instanceof(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_in(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_template(c, src); if (m !== null) return m; }
-  { const m = _Expr$new_(c, src); if (m !== null) return m; }
-  { const m = _Expr$new_2(c, src); if (m !== null) return m; }
-  { const m = _Expr$new_3(c, src); if (m !== null) return m; }
-  { const m = _Expr$bracket(c, src); if (m !== null) return m; }
-  { const m = _Expr$brace(c, src); if (m !== null) return m; }
-  { const m = _Expr$async(c, src); if (m !== null) return m; }
-  { const m = _Expr$ident2(c, src); if (m !== null) return m; }
-  { const m = _Expr$yield_(c, src); if (m !== null) return m; }
-  { const m = _Expr$paren(c, src); if (m !== null) return m; }
-  { const m = _Expr$led_satisfies(c, src); if (m !== null) return m; }
-  { const m = _Expr$import_(c, src); if (m !== null) return m; }
-  { const m = _Expr$privateField(c, src); if (m !== null) return m; }
-  { const m = _Expr$hexNumber(c, src); if (m !== null) return m; }
-  { const m = _Expr$octalNumber(c, src); if (m !== null) return m; }
-  { const m = _Expr$binaryNumber(c, src); if (m !== null) return m; }
-  { const m = _Expr$bigInt(c, src); if (m !== null) return m; }
-  { const m = _Expr$async2(c, src); if (m !== null) return m; }
-  { const m = _Expr$decoratorExpr(c, src); if (m !== null) return m; }
-  { const m = _Expr$decoratorExpr2(c, src); if (m !== null) return m; }
-  { const m = _Expr$binaryOp(c, src); if (m !== null) return m; }
-  { const m = _Expr$prefixOp(c, src); if (m !== null) return m; }
-  { const m = _Expr$postfixOp(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "$template": {
+        { const m = _Expr$template(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DecoratorExpr": {
+        { const m = _Expr$decoratorExpr(c, src); if (m !== null) return m; }
+        { const m = _Expr$decoratorExpr2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Expr": {
+        const k1 = c[1] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+        if (k1 === undefined) {
+        } else if (k1.tokenType === undefined) {
+          switch (k1.rule) {
+            case "$template": {
+            { const m = _Expr$led_template(c, src); if (m !== null) return m; }
+              break;
+            }
+            default: {
+              break;
+            }
+          }
+        } else if (k1.tokenType === '$keyword' || k1.tokenType === '$punct') {
+          switch (src.charCodeAt(k1.offset)) {
+            case 33: {
+            { const m = _Expr$led_bang(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 40: {
+            { const m = _Expr$led_paren(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 46: {
+            { const m = _Expr$led_dot(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 60: {
+            { const m = _Expr$led_lt(c, src); if (m !== null) return m; }
+            { const m = _Expr$led_lt2(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 63: {
+            { const m = _Expr$led_optChain(c, src); if (m !== null) return m; }
+            { const m = _Expr$led_question(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 91: {
+            { const m = _Expr$led_bracket(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 97: {
+            { const m = _Expr$led_as(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 105: {
+            { const m = _Expr$led_instanceof(c, src); if (m !== null) return m; }
+            { const m = _Expr$led_in(c, src); if (m !== null) return m; }
+              break;
+            }
+            case 115: {
+            { const m = _Expr$led_satisfies(c, src); if (m !== null) return m; }
+              break;
+            }
+            default: {
+              break;
+            }
+          }
+        } else {
+          switch (k1.tokenType) {
+            case "$operator": {
+            { const m = _Expr$binaryOp(c, src); if (m !== null) return m; }
+            { const m = _Expr$postfixOp(c, src); if (m !== null) return m; }
+              break;
+            }
+            case "Template": {
+            { const m = _Expr$led_template(c, src); if (m !== null) return m; }
+              break;
+            }
+            default: {
+              break;
+            }
+          }
+        }
+        break;
+      }
+      case "JSXElement": {
+        { const m = _Expr$jSXElement(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "TypeParams": {
+        { const m = _Expr$async(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 40: {
+        { const m = _Expr$async(c, src); if (m !== null) return m; }
+        { const m = _Expr$paren(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 46: {
+        { const m = _Expr$spread(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 91: {
+        { const m = _Expr$bracket(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 97: {
+        { const m = _Expr$async(c, src); if (m !== null) return m; }
+        { const m = _Expr$async2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 99: {
+        { const m = _Expr$decoratorExpr(c, src); if (m !== null) return m; }
+        { const m = _Expr$decoratorExpr2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 102: {
+        { const m = _Expr$false_(c, src); if (m !== null) return m; }
+        { const m = _Expr$async2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 105: {
+        { const m = _Expr$import_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 110: {
+        { const m = _Expr$null_(c, src); if (m !== null) return m; }
+        { const m = _Expr$new_(c, src); if (m !== null) return m; }
+        { const m = _Expr$new_2(c, src); if (m !== null) return m; }
+        { const m = _Expr$new_3(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 115: {
+        { const m = _Expr$super_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 116: {
+        { const m = _Expr$true_(c, src); if (m !== null) return m; }
+        { const m = _Expr$this_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 117: {
+        { const m = _Expr$undefined(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 121: {
+        { const m = _Expr$yield_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 123: {
+        { const m = _Expr$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "$operator": {
+        { const m = _Expr$prefixOp(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "BigInt": {
+        { const m = _Expr$bigInt(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "BinaryNumber": {
+        { const m = _Expr$binaryNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "HexNumber": {
+        { const m = _Expr$hexNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Ident": {
+        { const m = _Expr$ident(c, src); if (m !== null) return m; }
+        { const m = _Expr$ident2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Number": {
+        { const m = _Expr$number(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "OctalNumber": {
+        { const m = _Expr$octalNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "PrivateField": {
+        { const m = _Expr$privateField(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Regex": {
+        { const m = _Expr$regex(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "String": {
+        { const m = _Expr$string(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Template": {
+        { const m = _Expr$template(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchExpr: no arm matches" + ' @' + n.offset);
 }
 
@@ -3325,12 +3706,55 @@ function _Prop$ident(c: readonly CstChild[], src: string): PropMatch | null {
 
 export function matchProp(n: PropNode, src: string): PropMatch {
   const c = n.children;
-  { const m = _Prop$spread(c, src); if (m !== null) return m; }
-  { const m = _Prop$public(c, src); if (m !== null) return m; }
-  { const m = _Prop$async(c, src); if (m !== null) return m; }
-  { const m = _Prop$memberName(c, src); if (m !== null) return m; }
-  { const m = _Prop$bracket(c, src); if (m !== null) return m; }
-  { const m = _Prop$ident(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "MemberName": {
+        { const m = _Prop$async(c, src); if (m !== null) return m; }
+        { const m = _Prop$memberName(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 42: {
+        { const m = _Prop$async(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 46: {
+        { const m = _Prop$spread(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 91: {
+        { const m = _Prop$bracket(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 97: {
+        { const m = _Prop$async(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 103: {
+        { const m = _Prop$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 112: {
+        { const m = _Prop$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 115: {
+        { const m = _Prop$public(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _Prop$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchProp: no arm matches" + ' @' + n.offset);
 }
 
@@ -3441,15 +3865,54 @@ function _MemberName$bracket(c: readonly CstChild[], src: string): MemberNameMat
 
 export function matchMemberName(n: MemberNameNode, src: string): MemberNameMatch {
   const c = n.children;
-  { const m = _MemberName$ident(c, src); if (m !== null) return m; }
-  { const m = _MemberName$privateField(c, src); if (m !== null) return m; }
-  { const m = _MemberName$string(c, src); if (m !== null) return m; }
-  { const m = _MemberName$number(c, src); if (m !== null) return m; }
-  { const m = _MemberName$hexNumber(c, src); if (m !== null) return m; }
-  { const m = _MemberName$octalNumber(c, src); if (m !== null) return m; }
-  { const m = _MemberName$binaryNumber(c, src); if (m !== null) return m; }
-  { const m = _MemberName$bigInt(c, src); if (m !== null) return m; }
-  { const m = _MemberName$bracket(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 91: {
+        { const m = _MemberName$bracket(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "BigInt": {
+        { const m = _MemberName$bigInt(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "BinaryNumber": {
+        { const m = _MemberName$binaryNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "HexNumber": {
+        { const m = _MemberName$hexNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Ident": {
+        { const m = _MemberName$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Number": {
+        { const m = _MemberName$number(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "OctalNumber": {
+        { const m = _MemberName$octalNumber(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "PrivateField": {
+        { const m = _MemberName$privateField(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "String": {
+        { const m = _MemberName$string(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchMemberName: no arm matches" + ' @' + n.offset);
 }
 
@@ -3519,10 +3982,31 @@ function _NewTarget$paren(c: readonly CstChild[], src: string): NewTargetMatch |
 
 export function matchNewTarget(n: NewTargetNode, src: string): NewTargetMatch {
   const c = n.children;
-  { const m = _NewTarget$ident(c, src); if (m !== null) return m; }
-  { const m = _NewTarget$led_dot(c, src); if (m !== null) return m; }
-  { const m = _NewTarget$led_bracket(c, src); if (m !== null) return m; }
-  { const m = _NewTarget$paren(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "NewTarget": {
+        { const m = _NewTarget$led_dot(c, src); if (m !== null) return m; }
+        { const m = _NewTarget$led_bracket(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 40: {
+        { const m = _NewTarget$paren(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _NewTarget$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchNewTarget: no arm matches" + ' @' + n.offset);
 }
 
@@ -3730,12 +4214,36 @@ function _ClassHeritage$led_paren(c: readonly CstChild[], src: string): ClassHer
 
 export function matchClassHeritage(n: ClassHeritageNode, src: string): ClassHeritageMatch {
   const c = n.children;
-  { const m = _ClassHeritage$ident(c, src); if (m !== null) return m; }
-  { const m = _ClassHeritage$paren(c, src); if (m !== null) return m; }
-  { const m = _ClassHeritage$class_(c, src); if (m !== null) return m; }
-  { const m = _ClassHeritage$led_dot(c, src); if (m !== null) return m; }
-  { const m = _ClassHeritage$led_lt(c, src); if (m !== null) return m; }
-  { const m = _ClassHeritage$led_paren(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "ClassHeritage": {
+        { const m = _ClassHeritage$led_dot(c, src); if (m !== null) return m; }
+        { const m = _ClassHeritage$led_lt(c, src); if (m !== null) return m; }
+        { const m = _ClassHeritage$led_paren(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 40: {
+        { const m = _ClassHeritage$paren(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 99: {
+        { const m = _ClassHeritage$class_(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _ClassHeritage$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchClassHeritage: no arm matches" + ' @' + n.offset);
 }
 
@@ -4344,25 +4852,94 @@ function _Stmt$expr(c: readonly CstChild[], src: string): StmtMatch | null {
 
 export function matchStmt(n: StmtNode, src: string): StmtMatch {
   const c = n.children;
-  { const m = _Stmt$block(c, src); if (m !== null) return m; }
-  { const m = _Stmt$let_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$if_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$for_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$while_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$do_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$switch_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$return_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$throw_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$break_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$continue_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$try_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$ident(c, src); if (m !== null) return m; }
-  { const m = _Stmt$semi(c, src); if (m !== null) return m; }
-  { const m = _Stmt$debugger_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$with_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$await_(c, src); if (m !== null) return m; }
-  { const m = _Stmt$decl(c, src); if (m !== null) return m; }
-  { const m = _Stmt$expr(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "Block": {
+        { const m = _Stmt$block(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Decl": {
+        { const m = _Stmt$decl(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Expr": {
+        { const m = _Stmt$expr(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 59: {
+        { const m = _Stmt$semi(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 97: {
+        { const m = _Stmt$await_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 98: {
+        { const m = _Stmt$break_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 99: {
+        { const m = _Stmt$let_(c, src); if (m !== null) return m; }
+        { const m = _Stmt$continue_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 100: {
+        { const m = _Stmt$do_(c, src); if (m !== null) return m; }
+        { const m = _Stmt$debugger_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 102: {
+        { const m = _Stmt$for_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 105: {
+        { const m = _Stmt$if_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 108: {
+        { const m = _Stmt$let_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 114: {
+        { const m = _Stmt$return_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 115: {
+        { const m = _Stmt$switch_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 116: {
+        { const m = _Stmt$throw_(c, src); if (m !== null) return m; }
+        { const m = _Stmt$try_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 117: {
+        { const m = _Stmt$await_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 118: {
+        { const m = _Stmt$let_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 119: {
+        { const m = _Stmt$while_(c, src); if (m !== null) return m; }
+        { const m = _Stmt$with_(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _Stmt$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchStmt: no arm matches" + ' @' + n.offset);
 }
 
@@ -4392,7 +4969,22 @@ function _Block$brace(c: readonly CstChild[], src: string): BlockMatch | null {
 
 export function matchBlock(n: BlockNode, src: string): BlockMatch {
   const c = n.children;
-  { const m = _Block$brace(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 123: {
+        { const m = _Block$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchBlock: no arm matches" + ' @' + n.offset);
 }
 
@@ -4524,10 +5116,39 @@ function _BindingProperty$spread(c: readonly CstChild[], src: string): BindingPr
 
 export function matchBindingProperty(n: BindingPropertyNode, src: string): BindingPropertyMatch {
   const c = n.children;
-  { const m = _BindingProperty$ident(c, src); if (m !== null) return m; }
-  { const m = _BindingProperty$ident2(c, src); if (m !== null) return m; }
-  { const m = _BindingProperty$string(c, src); if (m !== null) return m; }
-  { const m = _BindingProperty$spread(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 46: {
+        { const m = _BindingProperty$spread(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 91: {
+        { const m = _BindingProperty$string(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _BindingProperty$ident(c, src); if (m !== null) return m; }
+        { const m = _BindingProperty$ident2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Number": {
+        { const m = _BindingProperty$string(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "String": {
+        { const m = _BindingProperty$string(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchBindingProperty: no arm matches" + ' @' + n.offset);
 }
 
@@ -4578,7 +5199,26 @@ function _BindingElement$seq(c: readonly CstChild[], src: string): BindingElemen
 
 export function matchBindingElement(n: BindingElementNode, src: string): BindingElementMatch {
   const c = n.children;
-  { const m = _BindingElement$seq(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BindingPattern": {
+        { const m = _BindingElement$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _BindingElement$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchBindingElement: no arm matches" + ' @' + n.offset);
 }
 
@@ -4630,8 +5270,26 @@ function _ArrayBindingElement$spread(c: readonly CstChild[], src: string): Array
 
 export function matchArrayBindingElement(n: ArrayBindingElementNode, src: string): ArrayBindingElementMatch {
   const c = n.children;
-  { const m = _ArrayBindingElement$bindingElement(c, src); if (m !== null) return m; }
-  { const m = _ArrayBindingElement$spread(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BindingElement": {
+        { const m = _ArrayBindingElement$bindingElement(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 46: {
+        { const m = _ArrayBindingElement$spread(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchArrayBindingElement: no arm matches" + ' @' + n.offset);
 }
 
@@ -4711,8 +5369,26 @@ function _BindingPattern$bracket(c: readonly CstChild[], src: string): BindingPa
 
 export function matchBindingPattern(n: BindingPatternNode, src: string): BindingPatternMatch {
   const c = n.children;
-  { const m = _BindingPattern$brace(c, src); if (m !== null) return m; }
-  { const m = _BindingPattern$bracket(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 91: {
+        { const m = _BindingPattern$bracket(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 123: {
+        { const m = _BindingPattern$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchBindingPattern: no arm matches" + ' @' + n.offset);
 }
 
@@ -4783,7 +5459,26 @@ function _Binding$seq(c: readonly CstChild[], src: string): BindingMatch | null 
 
 export function matchBinding(n: BindingNode, src: string): BindingMatch {
   const c = n.children;
-  { const m = _Binding$seq(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BindingPattern": {
+        { const m = _Binding$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _Binding$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchBinding: no arm matches" + ' @' + n.offset);
 }
 
@@ -4854,7 +5549,26 @@ function _ForBinding$seq(c: readonly CstChild[], src: string): ForBindingMatch |
 
 export function matchForBinding(n: ForBindingNode, src: string): ForBindingMatch {
   const c = n.children;
-  { const m = _ForBinding$seq(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BindingPattern": {
+        { const m = _ForBinding$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _ForBinding$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchForBinding: no arm matches" + ' @' + n.offset);
 }
 
@@ -5235,9 +5949,47 @@ function _Param$decoratorExpr2(c: readonly CstChild[], src: string): ParamMatch 
 
 export function matchParam(n: ParamNode, src: string): ParamMatch {
   const c = n.children;
-  { const m = _Param$this_(c, src); if (m !== null) return m; }
-  { const m = _Param$decoratorExpr(c, src); if (m !== null) return m; }
-  { const m = _Param$decoratorExpr2(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BindingPattern": {
+        { const m = _Param$decoratorExpr2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DecoratorExpr": {
+        { const m = _Param$decoratorExpr(c, src); if (m !== null) return m; }
+        { const m = _Param$decoratorExpr2(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 46: {
+        { const m = _Param$decoratorExpr2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 112: {
+        { const m = _Param$decoratorExpr(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 114: {
+        { const m = _Param$decoratorExpr(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 116: {
+        { const m = _Param$this_(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _Param$decoratorExpr2(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchParam: no arm matches" + ' @' + n.offset);
 }
 
@@ -5492,9 +6244,47 @@ function _ForHead$expr(c: readonly CstChild[], src: string): ForHeadMatch | null
 
 export function matchForHead(n: ForHeadNode, src: string): ForHeadMatch {
   const c = n.children;
-  { const m = _ForHead$let_(c, src); if (m !== null) return m; }
-  { const m = _ForHead$seq(c, src); if (m !== null) return m; }
-  { const m = _ForHead$expr(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "Expr": {
+        { const m = _ForHead$seq(c, src); if (m !== null) return m; }
+        { const m = _ForHead$expr(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 59: {
+        { const m = _ForHead$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 97: {
+        { const m = _ForHead$let_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 99: {
+        { const m = _ForHead$let_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 108: {
+        { const m = _ForHead$let_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 117: {
+        { const m = _ForHead$let_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 118: {
+        { const m = _ForHead$let_(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchForHead: no arm matches" + ' @' + n.offset);
 }
 
@@ -5552,9 +6342,30 @@ function _SwitchCase$stmt(c: readonly CstChild[], src: string): SwitchCaseMatch 
 
 export function matchSwitchCase(n: SwitchCaseNode, src: string): SwitchCaseMatch {
   const c = n.children;
-  { const m = _SwitchCase$case_(c, src); if (m !== null) return m; }
-  { const m = _SwitchCase$default_(c, src); if (m !== null) return m; }
-  { const m = _SwitchCase$stmt(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "Stmt": {
+        { const m = _SwitchCase$stmt(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 99: {
+        { const m = _SwitchCase$case_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 100: {
+        { const m = _SwitchCase$default_(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchSwitchCase: no arm matches" + ' @' + n.offset);
 }
 
@@ -5594,7 +6405,22 @@ function _TypeParams$lt(c: readonly CstChild[], src: string): TypeParamsMatch | 
 
 export function matchTypeParams(n: TypeParamsNode, src: string): TypeParamsMatch {
   const c = n.children;
-  { const m = _TypeParams$lt(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 60: {
+        { const m = _TypeParams$lt(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchTypeParams: no arm matches" + ' @' + n.offset);
 }
 
@@ -5783,9 +6609,49 @@ function _TypeParam$ident(c: readonly CstChild[], src: string): TypeParamMatch |
 
 export function matchTypeParam(n: TypeParamNode, src: string): TypeParamMatch {
   const c = n.children;
-  { const m = _TypeParam$const_(c, src); if (m !== null) return m; }
-  { const m = _TypeParam$const_2(c, src); if (m !== null) return m; }
-  { const m = _TypeParam$ident(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 99: {
+        { const m = _TypeParam$const_(c, src); if (m !== null) return m; }
+        { const m = _TypeParam$const_2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 105: {
+        { const m = _TypeParam$const_(c, src); if (m !== null) return m; }
+        { const m = _TypeParam$const_2(c, src); if (m !== null) return m; }
+        { const m = _TypeParam$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 111: {
+        { const m = _TypeParam$const_(c, src); if (m !== null) return m; }
+        { const m = _TypeParam$const_2(c, src); if (m !== null) return m; }
+        { const m = _TypeParam$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 112: {
+        { const m = _TypeParam$const_(c, src); if (m !== null) return m; }
+        { const m = _TypeParam$const_2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 114: {
+        { const m = _TypeParam$const_(c, src); if (m !== null) return m; }
+        { const m = _TypeParam$const_2(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _TypeParam$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchTypeParam: no arm matches" + ' @' + n.offset);
 }
 
@@ -7074,24 +7940,70 @@ function _Decl$decoratorExpr2(c: readonly CstChild[], src: string): DeclMatch | 
 
 export function matchDecl(n: DeclNode, src: string): DeclMatch {
   const c = n.children;
-  { const m = _Decl$async(c, src); if (m !== null) return m; }
-  { const m = _Decl$interface(c, src); if (m !== null) return m; }
-  { const m = _Decl$type(c, src); if (m !== null) return m; }
-  { const m = _Decl$decoratorExpr(c, src); if (m !== null) return m; }
-  { const m = _Decl$enum_(c, src); if (m !== null) return m; }
-  { const m = _Decl$declare(c, src); if (m !== null) return m; }
-  { const m = _Decl$declare2(c, src); if (m !== null) return m; }
-  { const m = _Decl$namespace(c, src); if (m !== null) return m; }
-  { const m = _Decl$module(c, src); if (m !== null) return m; }
-  { const m = _Decl$export_(c, src); if (m !== null) return m; }
-  { const m = _Decl$export_2(c, src); if (m !== null) return m; }
-  { const m = _Decl$export_3(c, src); if (m !== null) return m; }
-  { const m = _Decl$export_4(c, src); if (m !== null) return m; }
-  { const m = _Decl$export_5(c, src); if (m !== null) return m; }
-  { const m = _Decl$export_6(c, src); if (m !== null) return m; }
-  { const m = _Decl$const_(c, src); if (m !== null) return m; }
-  { const m = _Decl$import_(c, src); if (m !== null) return m; }
-  { const m = _Decl$decoratorExpr2(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "DecoratorExpr": {
+        { const m = _Decl$decoratorExpr(c, src); if (m !== null) return m; }
+        { const m = _Decl$decoratorExpr2(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 97: {
+        { const m = _Decl$async(c, src); if (m !== null) return m; }
+        { const m = _Decl$decoratorExpr(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 99: {
+        { const m = _Decl$decoratorExpr(c, src); if (m !== null) return m; }
+        { const m = _Decl$const_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 100: {
+        { const m = _Decl$declare(c, src); if (m !== null) return m; }
+        { const m = _Decl$declare2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 101: {
+        { const m = _Decl$enum_(c, src); if (m !== null) return m; }
+        { const m = _Decl$export_(c, src); if (m !== null) return m; }
+        { const m = _Decl$export_2(c, src); if (m !== null) return m; }
+        { const m = _Decl$export_3(c, src); if (m !== null) return m; }
+        { const m = _Decl$export_4(c, src); if (m !== null) return m; }
+        { const m = _Decl$export_5(c, src); if (m !== null) return m; }
+        { const m = _Decl$export_6(c, src); if (m !== null) return m; }
+        { const m = _Decl$decoratorExpr2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 102: {
+        { const m = _Decl$async(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 105: {
+        { const m = _Decl$interface(c, src); if (m !== null) return m; }
+        { const m = _Decl$import_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 109: {
+        { const m = _Decl$module(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 110: {
+        { const m = _Decl$namespace(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 116: {
+        { const m = _Decl$type(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchDecl: no arm matches" + ' @' + n.offset);
 }
 
@@ -7477,12 +8389,63 @@ function _InterfaceMember$static_2(c: readonly CstChild[], src: string): Interfa
 
 export function matchInterfaceMember(n: InterfaceMemberNode, src: string): InterfaceMemberMatch {
   const c = n.children;
-  { const m = _InterfaceMember$new_(c, src); if (m !== null) return m; }
-  { const m = _InterfaceMember$get(c, src); if (m !== null) return m; }
-  { const m = _InterfaceMember$static_(c, src); if (m !== null) return m; }
-  { const m = _InterfaceMember$readonly(c, src); if (m !== null) return m; }
-  { const m = _InterfaceMember$memberName(c, src); if (m !== null) return m; }
-  { const m = _InterfaceMember$static_2(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "MemberName": {
+        { const m = _InterfaceMember$memberName(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "TypeParams": {
+        { const m = _InterfaceMember$new_(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 40: {
+        { const m = _InterfaceMember$new_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 43: {
+        { const m = _InterfaceMember$static_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 45: {
+        { const m = _InterfaceMember$static_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 91: {
+        { const m = _InterfaceMember$static_(c, src); if (m !== null) return m; }
+        { const m = _InterfaceMember$static_2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 103: {
+        { const m = _InterfaceMember$get(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 110: {
+        { const m = _InterfaceMember$new_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 114: {
+        { const m = _InterfaceMember$static_(c, src); if (m !== null) return m; }
+        { const m = _InterfaceMember$readonly(c, src); if (m !== null) return m; }
+        { const m = _InterfaceMember$static_2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 115: {
+        { const m = _InterfaceMember$get(c, src); if (m !== null) return m; }
+        { const m = _InterfaceMember$static_(c, src); if (m !== null) return m; }
+        { const m = _InterfaceMember$static_2(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchInterfaceMember: no arm matches" + ' @' + n.offset);
 }
 
@@ -8066,12 +9029,65 @@ function _ClassMember$memberName2(c: readonly CstChild[], src: string): ClassMem
 
 export function matchClassMember(n: ClassMemberNode, src: string): ClassMemberMatch {
   const c = n.children;
-  { const m = _ClassMember$decoratorExpr(c, src); if (m !== null) return m; }
-  { const m = _ClassMember$constructor(c, src); if (m !== null) return m; }
-  { const m = _ClassMember$static_(c, src); if (m !== null) return m; }
-  { const m = _ClassMember$public(c, src); if (m !== null) return m; }
-  { const m = _ClassMember$memberName(c, src); if (m !== null) return m; }
-  { const m = _ClassMember$memberName2(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "DecoratorExpr": {
+        { const m = _ClassMember$decoratorExpr(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MemberName": {
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        { const m = _ClassMember$memberName(c, src); if (m !== null) return m; }
+        { const m = _ClassMember$memberName2(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 42: {
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 91: {
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 97: {
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 99: {
+        { const m = _ClassMember$constructor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 103: {
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 111: {
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 112: {
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 114: {
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 115: {
+        { const m = _ClassMember$static_(c, src); if (m !== null) return m; }
+        { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchClassMember: no arm matches" + ' @' + n.offset);
 }
 
@@ -8102,7 +9118,22 @@ function _EnumMember$memberName(c: readonly CstChild[], src: string): EnumMember
 
 export function matchEnumMember(n: EnumMemberNode, src: string): EnumMemberMatch {
   const c = n.children;
-  { const m = _EnumMember$memberName(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "MemberName": {
+        { const m = _EnumMember$memberName(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchEnumMember: no arm matches" + ' @' + n.offset);
 }
 
@@ -8242,10 +9273,34 @@ function _ImportClause$star(c: readonly CstChild[], src: string): ImportClauseMa
 
 export function matchImportClause(n: ImportClauseNode, src: string): ImportClauseMatch {
   const c = n.children;
-  { const m = _ImportClause$defer(c, src); if (m !== null) return m; }
-  { const m = _ImportClause$ident(c, src); if (m !== null) return m; }
-  { const m = _ImportClause$brace(c, src); if (m !== null) return m; }
-  { const m = _ImportClause$star(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 42: {
+        { const m = _ImportClause$star(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 100: {
+        { const m = _ImportClause$defer(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 123: {
+        { const m = _ImportClause$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _ImportClause$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchImportClause: no arm matches" + ' @' + n.offset);
 }
 
@@ -8276,7 +9331,22 @@ function _ImportSpecifier$ident(c: readonly CstChild[], src: string): ImportSpec
 
 export function matchImportSpecifier(n: ImportSpecifierNode, src: string): ImportSpecifierMatch {
   const c = n.children;
-  { const m = _ImportSpecifier$ident(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _ImportSpecifier$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchImportSpecifier: no arm matches" + ' @' + n.offset);
 }
 
@@ -8342,7 +9412,22 @@ function _JSXTagName$ident(c: readonly CstChild[], src: string): JSXTagNameMatch
 
 export function matchJSXTagName(n: JSXTagNameNode, src: string): JSXTagNameMatch {
   const c = n.children;
-  { const m = _JSXTagName$ident(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _JSXTagName$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchJSXTagName: no arm matches" + ' @' + n.offset);
 }
 
@@ -8376,8 +9461,26 @@ function _JSXAttrValue$brace(c: readonly CstChild[], src: string): JSXAttrValueM
 
 export function matchJSXAttrValue(n: JSXAttrValueNode, src: string): JSXAttrValueMatch {
   const c = n.children;
-  { const m = _JSXAttrValue$string(c, src); if (m !== null) return m; }
-  { const m = _JSXAttrValue$brace(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 123: {
+        { const m = _JSXAttrValue$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "String": {
+        { const m = _JSXAttrValue$string(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchJSXAttrValue: no arm matches" + ' @' + n.offset);
 }
 
@@ -8472,8 +9575,26 @@ function _JSXAttr$ident(c: readonly CstChild[], src: string): JSXAttrMatch | nul
 
 export function matchJSXAttr(n: JSXAttrNode, src: string): JSXAttrMatch {
   const c = n.children;
-  { const m = _JSXAttr$brace(c, src); if (m !== null) return m; }
-  { const m = _JSXAttr$ident(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 123: {
+        { const m = _JSXAttr$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _JSXAttr$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchJSXAttr: no arm matches" + ' @' + n.offset);
 }
 
@@ -8510,7 +9631,22 @@ function _JSXContainer$brace(c: readonly CstChild[], src: string): JSXContainerM
 
 export function matchJSXContainer(n: JSXContainerNode, src: string): JSXContainerMatch {
   const c = n.children;
-  { const m = _JSXContainer$brace(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 123: {
+        { const m = _JSXContainer$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchJSXContainer: no arm matches" + ' @' + n.offset);
 }
 
@@ -8584,12 +9720,62 @@ function _JSXChild$_(c: readonly CstChild[], src: string): JSXChildMatch | null 
 
 export function matchJSXChild(n: JSXChildNode, src: string): JSXChildMatch {
   const c = n.children;
-  { const m = _JSXChild$jSXElement(c, src); if (m !== null) return m; }
-  { const m = _JSXChild$jSXContainer(c, src); if (m !== null) return m; }
-  { const m = _JSXChild$ident(c, src); if (m !== null) return m; }
-  { const m = _JSXChild$number(c, src); if (m !== null) return m; }
-  { const m = _JSXChild$string(c, src); if (m !== null) return m; }
-  { const m = _JSXChild$_(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "JSXContainer": {
+        { const m = _JSXChild$jSXContainer(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "JSXElement": {
+        { const m = _JSXChild$jSXElement(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 33: {
+        { const m = _JSXChild$_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 44: {
+        { const m = _JSXChild$_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 46: {
+        { const m = _JSXChild$_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 58: {
+        { const m = _JSXChild$_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 59: {
+        { const m = _JSXChild$_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 63: {
+        { const m = _JSXChild$_(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Ident": {
+        { const m = _JSXChild$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Number": {
+        { const m = _JSXChild$number(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "String": {
+        { const m = _JSXChild$string(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchJSXChild: no arm matches" + ' @' + n.offset);
 }
 
@@ -8768,9 +9954,24 @@ function _JSXElement$lt3(c: readonly CstChild[], src: string): JSXElementMatch |
 
 export function matchJSXElement(n: JSXElementNode, src: string): JSXElementMatch {
   const c = n.children;
-  { const m = _JSXElement$lt(c, src); if (m !== null) return m; }
-  { const m = _JSXElement$lt2(c, src); if (m !== null) return m; }
-  { const m = _JSXElement$lt3(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 60: {
+        { const m = _JSXElement$lt(c, src); if (m !== null) return m; }
+        { const m = _JSXElement$lt2(c, src); if (m !== null) return m; }
+        { const m = _JSXElement$lt3(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchJSXElement: no arm matches" + ' @' + n.offset);
 }
 
@@ -8816,7 +10017,27 @@ function _Program$decl(c: readonly CstChild[], src: string): ProgramMatch | null
 
 export function matchProgram(n: ProgramNode, src: string): ProgramMatch {
   const c = n.children;
-  { const m = _Program$decl(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+    { const m = _Program$decl(c, src); if (m !== null) return m; }
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "Decl": {
+        { const m = _Program$decl(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Stmt": {
+        { const m = _Program$decl(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchProgram: no arm matches" + ' @' + n.offset);
 }
 

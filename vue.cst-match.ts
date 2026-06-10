@@ -158,10 +158,25 @@ function _Element$lt4(c: readonly CstChild[], src: string): ElementMatch | null 
 
 export function matchElement(n: ElementNode, src: string): ElementMatch {
   const c = n.children;
-  { const m = _Element$lt(c, src); if (m !== null) return m; }
-  { const m = _Element$lt2(c, src); if (m !== null) return m; }
-  { const m = _Element$lt3(c, src); if (m !== null) return m; }
-  { const m = _Element$lt4(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 60: {
+        { const m = _Element$lt(c, src); if (m !== null) return m; }
+        { const m = _Element$lt2(c, src); if (m !== null) return m; }
+        { const m = _Element$lt3(c, src); if (m !== null) return m; }
+        { const m = _Element$lt4(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchElement: no arm matches" + ' @' + n.offset);
 }
 
@@ -222,7 +237,22 @@ function _Attr$name(c: readonly CstChild[], src: string): AttrMatch | null {
 
 export function matchAttr(n: AttrNode, src: string): AttrMatch {
   const c = n.children;
-  { const m = _Attr$name(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Name": {
+        { const m = _Attr$name(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchAttr: no arm matches" + ' @' + n.offset);
 }
 
@@ -274,10 +304,34 @@ function _Node$text(c: readonly CstChild[], src: string): NodeMatch | null {
 
 export function matchNode(n: NodeNode, src: string): NodeMatch {
   const c = n.children;
-  { const m = _Node$element(c, src); if (m !== null) return m; }
-  { const m = _Node$comment(c, src); if (m !== null) return m; }
-  { const m = _Node$rawText(c, src); if (m !== null) return m; }
-  { const m = _Node$text(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "Element": {
+        { const m = _Node$element(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Comment": {
+        { const m = _Node$comment(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "RawText": {
+        { const m = _Node$rawText(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Text": {
+        { const m = _Node$text(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchNode: no arm matches" + ' @' + n.offset);
 }
 
@@ -333,7 +387,31 @@ function _Document$element(c: readonly CstChild[], src: string): DocumentMatch |
 
 export function matchDocument(n: DocumentNode, src: string): DocumentMatch {
   const c = n.children;
-  { const m = _Document$element(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+    { const m = _Document$element(c, src); if (m !== null) return m; }
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "Element": {
+        { const m = _Document$element(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Comment": {
+        { const m = _Document$element(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Text": {
+        { const m = _Document$element(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchDocument: no arm matches" + ' @' + n.offset);
 }
 

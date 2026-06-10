@@ -61,8 +61,26 @@ function _Property$tag(c: readonly CstChild[], src: string): PropertyMatch | nul
 
 export function matchProperty(n: PropertyNode, src: string): PropertyMatch {
   const c = n.children;
-  { const m = _Property$anchor(c, src); if (m !== null) return m; }
-  { const m = _Property$tag(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Anchor": {
+        { const m = _Property$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Tag": {
+        { const m = _Property$tag(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchProperty: no arm matches" + ' @' + n.offset);
 }
 
@@ -158,14 +176,50 @@ function _ContentNode$mappingOrScalar(c: readonly CstChild[], src: string): Cont
 
 export function matchContentNode(n: ContentNodeNode, src: string): ContentNodeMatch {
   const c = n.children;
-  { const m = _ContentNode$blockSequence(c, src); if (m !== null) return m; }
-  { const m = _ContentNode$explicitMapping(c, src); if (m !== null) return m; }
-  { const m = _ContentNode$emptyKeyMapping(c, src); if (m !== null) return m; }
-  { const m = _ContentNode$flowMapping(c, src); if (m !== null) return m; }
-  { const m = _ContentNode$flowSequence(c, src); if (m !== null) return m; }
-  { const m = _ContentNode$mappingFromFlow(c, src); if (m !== null) return m; }
-  { const m = _ContentNode$aliasOrKeyed(c, src); if (m !== null) return m; }
-  { const m = _ContentNode$mappingOrScalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "AliasOrKeyed": {
+        { const m = _ContentNode$aliasOrKeyed(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "BlockSequence": {
+        { const m = _ContentNode$blockSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "EmptyKeyMapping": {
+        { const m = _ContentNode$emptyKeyMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "ExplicitMapping": {
+        { const m = _ContentNode$explicitMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowMapping": {
+        { const m = _ContentNode$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _ContentNode$flowSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MappingFromFlow": {
+        { const m = _ContentNode$mappingFromFlow(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MappingOrScalar": {
+        { const m = _ContentNode$mappingOrScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchContentNode: no arm matches" + ' @' + n.offset);
 }
 
@@ -470,9 +524,69 @@ function _Node$blockSequence(c: readonly CstChild[], src: string): NodeMatch | n
 
 export function matchNode(n: NodeNode, src: string): NodeMatch {
   const c = n.children;
-  { const m = _Node$anchor(c, src); if (m !== null) return m; }
-  { const m = _Node$tag(c, src); if (m !== null) return m; }
-  { const m = _Node$blockSequence(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+    { const m = _Node$anchor(c, src); if (m !== null) return m; }
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "AliasOrKeyed": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "BlockSequence": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        { const m = _Node$blockSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "EmptyKeyMapping": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "ExplicitMapping": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowMapping": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MappingFromFlow": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MappingOrScalar": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Anchor": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Indent": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Newline": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Tag": {
+        { const m = _Node$anchor(c, src); if (m !== null) return m; }
+        { const m = _Node$tag(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchNode: no arm matches" + ' @' + n.offset);
 }
 
@@ -657,9 +771,38 @@ function _MappingOrScalar$scalar(c: readonly CstChild[], src: string): MappingOr
 
 export function matchMappingOrScalar(n: MappingOrScalarNode, src: string): MappingOrScalarMatch {
   const c = n.children;
-  { const m = _MappingOrScalar$num(c, src); if (m !== null) return m; }
-  { const m = _MappingOrScalar$blockKeyScalar(c, src); if (m !== null) return m; }
-  { const m = _MappingOrScalar$scalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BlockKeyScalar": {
+        { const m = _MappingOrScalar$blockKeyScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Scalar": {
+        { const m = _MappingOrScalar$scalar(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "BoolNull": {
+        { const m = _MappingOrScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Num": {
+        { const m = _MappingOrScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Plain": {
+        { const m = _MappingOrScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchMappingOrScalar: no arm matches" + ' @' + n.offset);
 }
 
@@ -711,7 +854,22 @@ function _AliasOrKeyed$alias(c: readonly CstChild[], src: string): AliasOrKeyedM
 
 export function matchAliasOrKeyed(n: AliasOrKeyedNode, src: string): AliasOrKeyedMatch {
   const c = n.children;
-  { const m = _AliasOrKeyed$alias(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Alias": {
+        { const m = _AliasOrKeyed$alias(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchAliasOrKeyed: no arm matches" + ' @' + n.offset);
 }
 
@@ -792,9 +950,39 @@ function _BlockKey$property2(c: readonly CstChild[], src: string): BlockKeyMatch
 
 export function matchBlockKey(n: BlockKeyNode, src: string): BlockKeyMatch {
   const c = n.children;
-  { const m = _BlockKey$property(c, src); if (m !== null) return m; }
-  { const m = _BlockKey$alias(c, src); if (m !== null) return m; }
-  { const m = _BlockKey$property2(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BlockKeyScalar": {
+        { const m = _BlockKey$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowMapping": {
+        { const m = _BlockKey$property2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _BlockKey$property2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _BlockKey$property(c, src); if (m !== null) return m; }
+        { const m = _BlockKey$property2(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Alias": {
+        { const m = _BlockKey$alias(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchBlockKey: no arm matches" + ' @' + n.offset);
 }
 
@@ -871,7 +1059,22 @@ function _ExplicitEntry$question(c: readonly CstChild[], src: string): ExplicitE
 
 export function matchExplicitEntry(n: ExplicitEntryNode, src: string): ExplicitEntryMatch {
   const c = n.children;
-  { const m = _ExplicitEntry$question(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 63: {
+        { const m = _ExplicitEntry$question(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchExplicitEntry: no arm matches" + ' @' + n.offset);
 }
 
@@ -932,9 +1135,30 @@ function _MapEntry$colon(c: readonly CstChild[], src: string): MapEntryMatch | n
 
 export function matchMapEntry(n: MapEntryNode, src: string): MapEntryMatch {
   const c = n.children;
-  { const m = _MapEntry$blockKey(c, src); if (m !== null) return m; }
-  { const m = _MapEntry$explicitEntry(c, src); if (m !== null) return m; }
-  { const m = _MapEntry$colon(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BlockKey": {
+        { const m = _MapEntry$blockKey(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "ExplicitEntry": {
+        { const m = _MapEntry$explicitEntry(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 58: {
+        { const m = _MapEntry$colon(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchMapEntry: no arm matches" + ' @' + n.offset);
 }
 
@@ -976,8 +1200,26 @@ function _MapEntryNoEmpty$explicitEntry(c: readonly CstChild[], src: string): Ma
 
 export function matchMapEntryNoEmpty(n: MapEntryNoEmptyNode, src: string): MapEntryNoEmptyMatch {
   const c = n.children;
-  { const m = _MapEntryNoEmpty$blockKey(c, src); if (m !== null) return m; }
-  { const m = _MapEntryNoEmpty$explicitEntry(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BlockKey": {
+        { const m = _MapEntryNoEmpty$blockKey(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "ExplicitEntry": {
+        { const m = _MapEntryNoEmpty$explicitEntry(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchMapEntryNoEmpty: no arm matches" + ' @' + n.offset);
 }
 
@@ -1011,7 +1253,22 @@ function _ExplicitMapping$explicitEntry(c: readonly CstChild[], src: string): Ex
 
 export function matchExplicitMapping(n: ExplicitMappingNode, src: string): ExplicitMappingMatch {
   const c = n.children;
-  { const m = _ExplicitMapping$explicitEntry(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "ExplicitEntry": {
+        { const m = _ExplicitMapping$explicitEntry(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchExplicitMapping: no arm matches" + ' @' + n.offset);
 }
 
@@ -1053,7 +1310,22 @@ function _EmptyKeyMapping$colon(c: readonly CstChild[], src: string): EmptyKeyMa
 
 export function matchEmptyKeyMapping(n: EmptyKeyMappingNode, src: string): EmptyKeyMappingMatch {
   const c = n.children;
-  { const m = _EmptyKeyMapping$colon(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 58: {
+        { const m = _EmptyKeyMapping$colon(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchEmptyKeyMapping: no arm matches" + ' @' + n.offset);
 }
 
@@ -1167,9 +1439,27 @@ function _Value$seqValueNode(c: readonly CstChild[], src: string): ValueMatch | 
 
 export function matchValue(n: ValueNode, src: string): ValueMatch {
   const c = n.children;
-  { const m = _Value$indent(c, src); if (m !== null) return m; }
-  { const m = _Value$indent2(c, src); if (m !== null) return m; }
-  { const m = _Value$seqValueNode(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "SeqValueNode": {
+        { const m = _Value$seqValueNode(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Indent": {
+        { const m = _Value$indent(c, src); if (m !== null) return m; }
+        { const m = _Value$indent2(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchValue: no arm matches" + ' @' + n.offset);
 }
 
@@ -1495,14 +1785,49 @@ function _MapValue$mapValueNode(c: readonly CstChild[], src: string): MapValueMa
 
 export function matchMapValue(n: MapValueNode, src: string): MapValueMatch {
   const c = n.children;
-  { const m = _MapValue$num(c, src); if (m !== null) return m; }
-  { const m = _MapValue$indent(c, src); if (m !== null) return m; }
-  { const m = _MapValue$indent2(c, src); if (m !== null) return m; }
-  { const m = _MapValue$indent3(c, src); if (m !== null) return m; }
-  { const m = _MapValue$indent4(c, src); if (m !== null) return m; }
-  { const m = _MapValue$property(c, src); if (m !== null) return m; }
-  { const m = _MapValue$newline(c, src); if (m !== null) return m; }
-  { const m = _MapValue$mapValueNode(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "MapValueNode": {
+        { const m = _MapValue$mapValueNode(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _MapValue$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "BoolNull": {
+        { const m = _MapValue$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Indent": {
+        { const m = _MapValue$indent(c, src); if (m !== null) return m; }
+        { const m = _MapValue$indent2(c, src); if (m !== null) return m; }
+        { const m = _MapValue$indent3(c, src); if (m !== null) return m; }
+        { const m = _MapValue$indent4(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Newline": {
+        { const m = _MapValue$newline(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Num": {
+        { const m = _MapValue$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Plain": {
+        { const m = _MapValue$num(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchMapValue: no arm matches" + ' @' + n.offset);
 }
 
@@ -1828,14 +2153,49 @@ function _MapValueScalar$mapValueNodeScalar(c: readonly CstChild[], src: string)
 
 export function matchMapValueScalar(n: MapValueScalarNode, src: string): MapValueScalarMatch {
   const c = n.children;
-  { const m = _MapValueScalar$num(c, src); if (m !== null) return m; }
-  { const m = _MapValueScalar$indent(c, src); if (m !== null) return m; }
-  { const m = _MapValueScalar$indent2(c, src); if (m !== null) return m; }
-  { const m = _MapValueScalar$indent3(c, src); if (m !== null) return m; }
-  { const m = _MapValueScalar$indent4(c, src); if (m !== null) return m; }
-  { const m = _MapValueScalar$property(c, src); if (m !== null) return m; }
-  { const m = _MapValueScalar$newline(c, src); if (m !== null) return m; }
-  { const m = _MapValueScalar$mapValueNodeScalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "MapValueNodeScalar": {
+        { const m = _MapValueScalar$mapValueNodeScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _MapValueScalar$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "BoolNull": {
+        { const m = _MapValueScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Indent": {
+        { const m = _MapValueScalar$indent(c, src); if (m !== null) return m; }
+        { const m = _MapValueScalar$indent2(c, src); if (m !== null) return m; }
+        { const m = _MapValueScalar$indent3(c, src); if (m !== null) return m; }
+        { const m = _MapValueScalar$indent4(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Newline": {
+        { const m = _MapValueScalar$newline(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Num": {
+        { const m = _MapValueScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Plain": {
+        { const m = _MapValueScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchMapValueScalar: no arm matches" + ' @' + n.offset);
 }
 
@@ -1897,8 +2257,26 @@ function _IndentedValueNode$contentNode(c: readonly CstChild[], src: string): In
 
 export function matchIndentedValueNode(n: IndentedValueNodeNode, src: string): IndentedValueNodeMatch {
   const c = n.children;
-  { const m = _IndentedValueNode$property(c, src); if (m !== null) return m; }
-  { const m = _IndentedValueNode$contentNode(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "ContentNode": {
+        { const m = _IndentedValueNode$contentNode(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _IndentedValueNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchIndentedValueNode: no arm matches" + ' @' + n.offset);
 }
 
@@ -1972,12 +2350,42 @@ function _CollectionContent$mappingFromScalar(c: readonly CstChild[], src: strin
 
 export function matchCollectionContent(n: CollectionContentNode, src: string): CollectionContentMatch {
   const c = n.children;
-  { const m = _CollectionContent$blockSequence(c, src); if (m !== null) return m; }
-  { const m = _CollectionContent$explicitMapping(c, src); if (m !== null) return m; }
-  { const m = _CollectionContent$flowMapping(c, src); if (m !== null) return m; }
-  { const m = _CollectionContent$flowSequence(c, src); if (m !== null) return m; }
-  { const m = _CollectionContent$mappingFromFlow(c, src); if (m !== null) return m; }
-  { const m = _CollectionContent$mappingFromScalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BlockSequence": {
+        { const m = _CollectionContent$blockSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "ExplicitMapping": {
+        { const m = _CollectionContent$explicitMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowMapping": {
+        { const m = _CollectionContent$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _CollectionContent$flowSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MappingFromFlow": {
+        { const m = _CollectionContent$mappingFromFlow(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MappingFromScalar": {
+        { const m = _CollectionContent$mappingFromScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchCollectionContent: no arm matches" + ' @' + n.offset);
 }
 
@@ -2023,7 +2431,22 @@ function _MappingFromScalar$blockKeyScalar(c: readonly CstChild[], src: string):
 
 export function matchMappingFromScalar(n: MappingFromScalarNode, src: string): MappingFromScalarMatch {
   const c = n.children;
-  { const m = _MappingFromScalar$blockKeyScalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BlockKeyScalar": {
+        { const m = _MappingFromScalar$blockKeyScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchMappingFromScalar: no arm matches" + ' @' + n.offset);
 }
 
@@ -2089,7 +2512,26 @@ function _MappingFromFlow$flowMapping(c: readonly CstChild[], src: string): Mapp
 
 export function matchMappingFromFlow(n: MappingFromFlowNode, src: string): MappingFromFlowMatch {
   const c = n.children;
-  { const m = _MappingFromFlow$flowMapping(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "FlowMapping": {
+        { const m = _MappingFromFlow$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _MappingFromFlow$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchMappingFromFlow: no arm matches" + ' @' + n.offset);
 }
 
@@ -2157,8 +2599,26 @@ function _MapValueNode$mapInlineContent(c: readonly CstChild[], src: string): Ma
 
 export function matchMapValueNode(n: MapValueNodeNode, src: string): MapValueNodeMatch {
   const c = n.children;
-  { const m = _MapValueNode$property(c, src); if (m !== null) return m; }
-  { const m = _MapValueNode$mapInlineContent(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "MapInlineContent": {
+        { const m = _MapValueNode$mapInlineContent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _MapValueNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchMapValueNode: no arm matches" + ' @' + n.offset);
 }
 
@@ -2210,10 +2670,34 @@ function _MapInlineContent$mappingOrScalar(c: readonly CstChild[], src: string):
 
 export function matchMapInlineContent(n: MapInlineContentNode, src: string): MapInlineContentMatch {
   const c = n.children;
-  { const m = _MapInlineContent$flowMapping(c, src); if (m !== null) return m; }
-  { const m = _MapInlineContent$flowSequence(c, src); if (m !== null) return m; }
-  { const m = _MapInlineContent$alias(c, src); if (m !== null) return m; }
-  { const m = _MapInlineContent$mappingOrScalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "FlowMapping": {
+        { const m = _MapInlineContent$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _MapInlineContent$flowSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MappingOrScalar": {
+        { const m = _MapInlineContent$mappingOrScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Alias": {
+        { const m = _MapInlineContent$alias(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchMapInlineContent: no arm matches" + ' @' + n.offset);
 }
 
@@ -2281,8 +2765,26 @@ function _MapValueNodeScalar$mapInlineScalar(c: readonly CstChild[], src: string
 
 export function matchMapValueNodeScalar(n: MapValueNodeScalarNode, src: string): MapValueNodeScalarMatch {
   const c = n.children;
-  { const m = _MapValueNodeScalar$property(c, src); if (m !== null) return m; }
-  { const m = _MapValueNodeScalar$mapInlineScalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "MapInlineScalar": {
+        { const m = _MapValueNodeScalar$mapInlineScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _MapValueNodeScalar$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchMapValueNodeScalar: no arm matches" + ' @' + n.offset);
 }
 
@@ -2462,11 +2964,46 @@ function _MapInlineScalar$scalar(c: readonly CstChild[], src: string): MapInline
 
 export function matchMapInlineScalar(n: MapInlineScalarNode, src: string): MapInlineScalarMatch {
   const c = n.children;
-  { const m = _MapInlineScalar$flowMapping(c, src); if (m !== null) return m; }
-  { const m = _MapInlineScalar$flowSequence(c, src); if (m !== null) return m; }
-  { const m = _MapInlineScalar$alias(c, src); if (m !== null) return m; }
-  { const m = _MapInlineScalar$num(c, src); if (m !== null) return m; }
-  { const m = _MapInlineScalar$scalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "FlowMapping": {
+        { const m = _MapInlineScalar$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _MapInlineScalar$flowSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Scalar": {
+        { const m = _MapInlineScalar$scalar(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Alias": {
+        { const m = _MapInlineScalar$alias(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "BoolNull": {
+        { const m = _MapInlineScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Num": {
+        { const m = _MapInlineScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Plain": {
+        { const m = _MapInlineScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchMapInlineScalar: no arm matches" + ' @' + n.offset);
 }
 
@@ -2534,8 +3071,26 @@ function _SeqValueNode$seqInlineContent(c: readonly CstChild[], src: string): Se
 
 export function matchSeqValueNode(n: SeqValueNodeNode, src: string): SeqValueNodeMatch {
   const c = n.children;
-  { const m = _SeqValueNode$property(c, src); if (m !== null) return m; }
-  { const m = _SeqValueNode$seqInlineContent(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "Property": {
+        { const m = _SeqValueNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "SeqInlineContent": {
+        { const m = _SeqValueNode$seqInlineContent(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchSeqValueNode: no arm matches" + ' @' + n.offset);
 }
 
@@ -2609,12 +3164,42 @@ function _SeqInlineContent$mappingOrScalar(c: readonly CstChild[], src: string):
 
 export function matchSeqInlineContent(n: SeqInlineContentNode, src: string): SeqInlineContentMatch {
   const c = n.children;
-  { const m = _SeqInlineContent$blockSequence(c, src); if (m !== null) return m; }
-  { const m = _SeqInlineContent$emptyKeyMapping(c, src); if (m !== null) return m; }
-  { const m = _SeqInlineContent$flowMapping(c, src); if (m !== null) return m; }
-  { const m = _SeqInlineContent$flowSequence(c, src); if (m !== null) return m; }
-  { const m = _SeqInlineContent$alias(c, src); if (m !== null) return m; }
-  { const m = _SeqInlineContent$mappingOrScalar(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "BlockSequence": {
+        { const m = _SeqInlineContent$blockSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "EmptyKeyMapping": {
+        { const m = _SeqInlineContent$emptyKeyMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowMapping": {
+        { const m = _SeqInlineContent$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _SeqInlineContent$flowSequence(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "MappingOrScalar": {
+        { const m = _SeqInlineContent$mappingOrScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Alias": {
+        { const m = _SeqInlineContent$alias(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchSeqInlineContent: no arm matches" + ' @' + n.offset);
 }
 
@@ -2648,7 +3233,22 @@ function _BlockSequence$seqItem(c: readonly CstChild[], src: string): BlockSeque
 
 export function matchBlockSequence(n: BlockSequenceNode, src: string): BlockSequenceMatch {
   const c = n.children;
-  { const m = _BlockSequence$seqItem(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "SeqItem": {
+        { const m = _BlockSequence$seqItem(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchBlockSequence: no arm matches" + ' @' + n.offset);
 }
 
@@ -2675,7 +3275,22 @@ function _SeqItem$dash(c: readonly CstChild[], src: string): SeqItemMatch | null
 
 export function matchSeqItem(n: SeqItemNode, src: string): SeqItemMatch {
   const c = n.children;
-  { const m = _SeqItem$dash(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 45: {
+        { const m = _SeqItem$dash(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchSeqItem: no arm matches" + ' @' + n.offset);
 }
 
@@ -2750,7 +3365,39 @@ function _FlowNode$property(c: readonly CstChild[], src: string): FlowNodeMatch 
 
 export function matchFlowNode(n: FlowNodeNode, src: string): FlowNodeMatch {
   const c = n.children;
-  { const m = _FlowNode$property(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+    { const m = _FlowNode$property(c, src); if (m !== null) return m; }
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "FlowMapping": {
+        { const m = _FlowNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _FlowNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _FlowNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Scalar": {
+        { const m = _FlowNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Alias": {
+        { const m = _FlowNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchFlowNode: no arm matches" + ' @' + n.offset);
 }
 
@@ -2777,7 +3424,22 @@ function _FlowExplicit$question(c: readonly CstChild[], src: string): FlowExplic
 
 export function matchFlowExplicit(n: FlowExplicitNode, src: string): FlowExplicitMatch {
   const c = n.children;
-  { const m = _FlowExplicit$question(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 63: {
+        { const m = _FlowExplicit$question(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchFlowExplicit: no arm matches" + ' @' + n.offset);
 }
 
@@ -2830,7 +3492,31 @@ function _FlowMapEntry$flowExplicit(c: readonly CstChild[], src: string): FlowMa
 
 export function matchFlowMapEntry(n: FlowMapEntryNode, src: string): FlowMapEntryMatch {
   const c = n.children;
-  { const m = _FlowMapEntry$flowExplicit(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+    { const m = _FlowMapEntry$flowExplicit(c, src); if (m !== null) return m; }
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "FlowExplicit": {
+        { const m = _FlowMapEntry$flowExplicit(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowNode": {
+        { const m = _FlowMapEntry$flowExplicit(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 58: {
+        { const m = _FlowMapEntry$flowExplicit(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchFlowMapEntry: no arm matches" + ' @' + n.offset);
 }
 
@@ -2880,7 +3566,22 @@ function _FlowMapping$brace(c: readonly CstChild[], src: string): FlowMappingMat
 
 export function matchFlowMapping(n: FlowMappingNode, src: string): FlowMappingMatch {
   const c = n.children;
-  { const m = _FlowMapping$brace(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 123: {
+        { const m = _FlowMapping$brace(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchFlowMapping: no arm matches" + ' @' + n.offset);
 }
 
@@ -2978,10 +3679,34 @@ function _FlowSeqEntry$flowNode(c: readonly CstChild[], src: string): FlowSeqEnt
 
 export function matchFlowSeqEntry(n: FlowSeqEntryNode, src: string): FlowSeqEntryMatch {
   const c = n.children;
-  { const m = _FlowSeqEntry$flowSeqKey(c, src); if (m !== null) return m; }
-  { const m = _FlowSeqEntry$question(c, src); if (m !== null) return m; }
-  { const m = _FlowSeqEntry$colon(c, src); if (m !== null) return m; }
-  { const m = _FlowSeqEntry$flowNode(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "FlowNode": {
+        { const m = _FlowSeqEntry$flowNode(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSeqKey": {
+        { const m = _FlowSeqEntry$flowSeqKey(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 58: {
+        { const m = _FlowSeqEntry$colon(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 63: {
+        { const m = _FlowSeqEntry$question(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchFlowSeqEntry: no arm matches" + ' @' + n.offset);
 }
 
@@ -3071,8 +3796,46 @@ function _FlowSeqKey$alias(c: readonly CstChild[], src: string): FlowSeqKeyMatch
 
 export function matchFlowSeqKey(n: FlowSeqKeyNode, src: string): FlowSeqKeyMatch {
   const c = n.children;
-  { const m = _FlowSeqKey$property(c, src); if (m !== null) return m; }
-  { const m = _FlowSeqKey$alias(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "FlowMapping": {
+        { const m = _FlowSeqKey$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _FlowSeqKey$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _FlowSeqKey$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Alias": {
+        { const m = _FlowSeqKey$alias(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DQuoteKey": {
+        { const m = _FlowSeqKey$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Key": {
+        { const m = _FlowSeqKey$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "SQuoteKey": {
+        { const m = _FlowSeqKey$property(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchFlowSeqKey: no arm matches" + ' @' + n.offset);
 }
 
@@ -3122,7 +3885,22 @@ function _FlowSequence$bracket(c: readonly CstChild[], src: string): FlowSequenc
 
 export function matchFlowSequence(n: FlowSequenceNode, src: string): FlowSequenceMatch {
   const c = n.children;
-  { const m = _FlowSequence$bracket(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+      case 91: {
+        { const m = _FlowSequence$bracket(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else {
+    switch (k0.tokenType) {
+    }
+  }
   throw new Error("matchFlowSequence: no arm matches" + ' @' + n.offset);
 }
 
@@ -3229,15 +4007,54 @@ function _Scalar$plain(c: readonly CstChild[], src: string): ScalarMatch | null 
 
 export function matchScalar(n: ScalarNode, src: string): ScalarMatch {
   const c = n.children;
-  { const m = _Scalar$dQuoteKey(c, src); if (m !== null) return m; }
-  { const m = _Scalar$sQuoteKey(c, src); if (m !== null) return m; }
-  { const m = _Scalar$dQuote(c, src); if (m !== null) return m; }
-  { const m = _Scalar$sQuote(c, src); if (m !== null) return m; }
-  { const m = _Scalar$blockScalar(c, src); if (m !== null) return m; }
-  { const m = _Scalar$key(c, src); if (m !== null) return m; }
-  { const m = _Scalar$num(c, src); if (m !== null) return m; }
-  { const m = _Scalar$boolNull(c, src); if (m !== null) return m; }
-  { const m = _Scalar$plain(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "BlockScalar": {
+        { const m = _Scalar$blockScalar(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "BoolNull": {
+        { const m = _Scalar$boolNull(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DQuote": {
+        { const m = _Scalar$dQuote(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DQuoteKey": {
+        { const m = _Scalar$dQuoteKey(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Key": {
+        { const m = _Scalar$key(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Num": {
+        { const m = _Scalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Plain": {
+        { const m = _Scalar$plain(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "SQuote": {
+        { const m = _Scalar$sQuote(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "SQuoteKey": {
+        { const m = _Scalar$sQuoteKey(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchScalar: no arm matches" + ' @' + n.offset);
 }
 
@@ -3311,12 +4128,42 @@ function _BlockKeyScalar$plain(c: readonly CstChild[], src: string): BlockKeySca
 
 export function matchBlockKeyScalar(n: BlockKeyScalarNode, src: string): BlockKeyScalarMatch {
   const c = n.children;
-  { const m = _BlockKeyScalar$dQuoteKey(c, src); if (m !== null) return m; }
-  { const m = _BlockKeyScalar$sQuoteKey(c, src); if (m !== null) return m; }
-  { const m = _BlockKeyScalar$key(c, src); if (m !== null) return m; }
-  { const m = _BlockKeyScalar$num(c, src); if (m !== null) return m; }
-  { const m = _BlockKeyScalar$boolNull(c, src); if (m !== null) return m; }
-  { const m = _BlockKeyScalar$plain(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "BoolNull": {
+        { const m = _BlockKeyScalar$boolNull(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DQuoteKey": {
+        { const m = _BlockKeyScalar$dQuoteKey(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Key": {
+        { const m = _BlockKeyScalar$key(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Num": {
+        { const m = _BlockKeyScalar$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Plain": {
+        { const m = _BlockKeyScalar$plain(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "SQuoteKey": {
+        { const m = _BlockKeyScalar$sQuoteKey(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchBlockKeyScalar: no arm matches" + ' @' + n.offset);
 }
 
@@ -3647,7 +4494,30 @@ function _DocFold$num(c: readonly CstChild[], src: string): DocFoldMatch | null 
 
 export function matchDocFold(n: DocFoldNode, src: string): DocFoldMatch {
   const c = n.children;
-  { const m = _DocFold$num(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "BoolNull": {
+        { const m = _DocFold$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Num": {
+        { const m = _DocFold$num(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Plain": {
+        { const m = _DocFold$num(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchDocFold: no arm matches" + ' @' + n.offset);
 }
 
@@ -3842,9 +4712,42 @@ function _InlineDocNode$flowMapping(c: readonly CstChild[], src: string): Inline
 
 export function matchInlineDocNode(n: InlineDocNodeNode, src: string): InlineDocNodeMatch {
   const c = n.children;
-  { const m = _InlineDocNode$property(c, src); if (m !== null) return m; }
-  { const m = _InlineDocNode$docFold(c, src); if (m !== null) return m; }
-  { const m = _InlineDocNode$flowMapping(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "DocFold": {
+        { const m = _InlineDocNode$docFold(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowMapping": {
+        { const m = _InlineDocNode$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "FlowSequence": {
+        { const m = _InlineDocNode$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Property": {
+        { const m = _InlineDocNode$property(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Scalar": {
+        { const m = _InlineDocNode$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Alias": {
+        { const m = _InlineDocNode$flowMapping(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchInlineDocNode: no arm matches" + ' @' + n.offset);
 }
 
@@ -3924,8 +4827,26 @@ function _ExplicitDocBody$inlineDocNode(c: readonly CstChild[], src: string): Ex
 
 export function matchExplicitDocBody(n: ExplicitDocBodyNode, src: string): ExplicitDocBodyMatch {
   const c = n.children;
-  { const m = _ExplicitDocBody$newline(c, src); if (m !== null) return m; }
-  { const m = _ExplicitDocBody$inlineDocNode(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "InlineDocNode": {
+        { const m = _ExplicitDocBody$inlineDocNode(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Newline": {
+        { const m = _ExplicitDocBody$newline(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchExplicitDocBody: no arm matches" + ' @' + n.offset);
 }
 
@@ -4046,8 +4967,42 @@ function _AfterDocEnd$indent(c: readonly CstChild[], src: string): AfterDocEndMa
 
 export function matchAfterDocEnd(n: AfterDocEndNode, src: string): AfterDocEndMatch {
   const c = n.children;
-  { const m = _AfterDocEnd$seq(c, src); if (m !== null) return m; }
-  { const m = _AfterDocEnd$indent(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "DocFold": {
+        { const m = _AfterDocEnd$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Node": {
+        { const m = _AfterDocEnd$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Directive": {
+        { const m = _AfterDocEnd$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DocStart": {
+        { const m = _AfterDocEnd$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Indent": {
+        { const m = _AfterDocEnd$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "YamlDirective": {
+        { const m = _AfterDocEnd$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchAfterDocEnd: no arm matches" + ' @' + n.offset);
 }
 
@@ -4107,8 +5062,26 @@ function _NextDoc$docEnd(c: readonly CstChild[], src: string): NextDocMatch | nu
 
 export function matchNextDoc(n: NextDocNode, src: string): NextDocMatch {
   const c = n.children;
-  { const m = _NextDoc$docStart(c, src); if (m !== null) return m; }
-  { const m = _NextDoc$docEnd(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "DocEnd": {
+        { const m = _NextDoc$docEnd(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DocStart": {
+        { const m = _NextDoc$docStart(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchNextDoc: no arm matches" + ' @' + n.offset);
 }
 
@@ -4380,8 +5353,55 @@ function _Stream$indent(c: readonly CstChild[], src: string): StreamMatch | null
 
 export function matchStream(n: StreamNode, src: string): StreamMatch {
   const c = n.children;
-  { const m = _Stream$seq(c, src); if (m !== null) return m; }
-  { const m = _Stream$indent(c, src); if (m !== null) return m; }
+  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;
+  if (k0 === undefined) {
+    { const m = _Stream$indent(c, src); if (m !== null) return m; }
+  } else if (k0.tokenType === undefined) {
+    switch (k0.rule) {
+      case "DocFold": {
+        { const m = _Stream$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "NextDoc": {
+        { const m = _Stream$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Node": {
+        { const m = _Stream$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
+    switch (src.charCodeAt(k0.offset)) {
+    }
+  } else {
+    switch (k0.tokenType) {
+      case "Dedent": {
+        { const m = _Stream$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Directive": {
+        { const m = _Stream$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "DocEnd": {
+        { const m = _Stream$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Indent": {
+        { const m = _Stream$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Newline": {
+        { const m = _Stream$indent(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "YamlDirective": {
+        { const m = _Stream$seq(c, src); if (m !== null) return m; }
+        break;
+      }
+    }
+  }
   throw new Error("matchStream: no arm matches" + ' @' + n.offset);
 }
 

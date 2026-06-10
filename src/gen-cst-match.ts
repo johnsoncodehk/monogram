@@ -416,6 +416,60 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
 
   function matchTypeName(rule: string): string { return `${sanitizeIdent(rule)}Match`; }
 
+  // ── Dispatcher v2: first-child admission keys per arm ──
+  // Keys: 'n:<rule>' (node child), 't:<tokenType>' (leaf child by name, incl $operator),
+  // 'c:<charCode>' (a $keyword/$punct literal's first char). The dispatcher buckets are
+  // SUPERSET filters — the arm unifiers re-check exactly — so over-admission is safe;
+  // an arm may appear in many buckets, and bucket-internal order = declaration order
+  // (the tie semantics the totality proof relies on).
+  function firstAdmit(steps: Step[]): { keys: Set<string>; canEmpty: boolean } {
+    const keys = new Set<string>();
+    for (const st of steps) {
+      switch (st.kind) {
+        case 'lit':
+          keys.add('c:' + st.text.charCodeAt(0));
+          return { keys, canEmpty: false };
+        case 'litAlt':
+          for (const t of st.texts) keys.add('c:' + t.charCodeAt(0));
+          return { keys, canEmpty: false };
+        case 'tok':
+          keys.add('t:' + st.name);
+          if (st.template) keys.add('n:$template');
+          return { keys, canEmpty: false };
+        case 'node':
+          keys.add('n:' + st.rule);
+          return { keys, canEmpty: false };
+        case 'opt': {
+          const a = firstAdmit(st.body);
+          for (const k of a.keys) keys.add(k);
+          if (st.min1 && !a.canEmpty) return { keys, canEmpty: false };
+          continue;
+        }
+        case 'many': {
+          const a = firstAdmit(st.body);
+          for (const k of a.keys) keys.add(k);
+          continue;
+        }
+        case 'sep': {
+          const a = firstAdmit(st.element);
+          for (const k of a.keys) keys.add(k);
+          continue;
+        }
+        case 'branches': {
+          let anyEmpty = false;
+          for (const b of st.branches) {
+            const a = firstAdmit(b);
+            for (const k of a.keys) keys.add(k);
+            if (a.canEmpty || b.length === 0) anyEmpty = true;
+          }
+          if (!anyEmpty) return { keys, canEmpty: false };
+          continue;
+        }
+      }
+    }
+    return { keys, canEmpty: true };
+  }
+
   // ── Drive ──
 
   const header: string[] = [];
@@ -443,13 +497,157 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       bodyParts.push(lines.join('\n'));
       return fn;
     });
-    bodyParts.push([
-      `export function match${sanitizeIdent(rule.name)}(n: ${nName}, src: string): ${tName} {`,
-      `  const c = n.children;`,
-      ...fns.map(fn => `  { const m = ${fn}(c, src); if (m !== null) return m; }`),
-      `  throw new Error(${J(`match${sanitizeIdent(rule.name)}: no arm matches`)} + ' @' + n.offset);`,
-      `}`,
-    ].join('\n'));
+    // Dispatcher v2: bucket arms by their first-child admission keys. Nullable-first
+    // ("always") arms appear in every bucket at their declaration position; the buckets
+    // are superset filters (each arm fn re-checks exactly).
+    const admits = plans.map(p => firstAdmit(p.steps));
+    const tryLine = (k: number) => `    { const m = ${fns[k]}(c, src); if (m !== null) return m; }`;
+    const bucketLines = (pred: (keys: Set<string>) => boolean): string[] =>
+      plans.map((_, k) => (admits[k].keys.size === 0 || pred(admits[k].keys) ? tryLine(k) : ''))
+        .filter(Boolean);
+    // (an arm with NO concrete first key — pure-nullable — admits everything)
+    const alwaysIdx = plans.map((_, k) => k).filter(k => admits[k].keys.size === 0);
+
+    const nodeRules = new Set<string>();
+    const tokNames = new Set<string>();
+    const charCodes = new Set<number>();
+    for (const a of admits) {
+      for (const key of a.keys) {
+        if (key.startsWith('n:')) nodeRules.add(key.slice(2));
+        else if (key.startsWith('t:')) tokNames.add(key.slice(2));
+        else charCodes.add(Number(key.slice(2)));
+      }
+    }
+
+    // Second-level sub-dispatch for a big node-rule bucket: every concrete member
+    // consumed exactly one step (the node), so bucket the rest by position 1's keys
+    // read from c[1]. Always-arms ride along in every sub-bucket; the sub-buckets are
+    // superset filters like everything else here.
+    const subDispatch = (memberIdx: number[], pad: string): string[] => {
+      const lines: string[] = [];
+      const restAdmit = memberIdx.map(k => {
+        if (admits[k].keys.size === 0) return null;            // always-arm: in every sub-bucket
+        return firstAdmit(plans[k].steps.slice(1));
+      });
+      const subTry = (pred: (i: number) => boolean): string[] =>
+        memberIdx.map((k, i) => (restAdmit[i] === null || pred(i) ? pad + tryLine(k).trim() : '')).filter(Boolean);
+      const nset = new Set<string>(); const tset = new Set<string>(); const cset = new Set<number>();
+      for (const a of restAdmit) {
+        if (a === null) continue;
+        for (const key of a.keys) {
+          if (key.startsWith('n:')) nset.add(key.slice(2));
+          else if (key.startsWith('t:')) tset.add(key.slice(2));
+          else cset.add(Number(key.slice(2)));
+        }
+      }
+      lines.push(`${pad}const k1 = c[1] as (CstChild & { tokenType?: string; rule?: string }) | undefined;`);
+      lines.push(`${pad}if (k1 === undefined) {`);
+      lines.push(...memberIdx.map((k, i) => (restAdmit[i] === null || restAdmit[i]!.canEmpty ? pad + '  ' + tryLine(k).trim() : '')).filter(Boolean));
+      lines.push(`${pad}} else if (k1.tokenType === undefined) {`);
+      lines.push(`${pad}  switch (k1.rule) {`);
+      for (const r of [...nset].sort()) {
+        lines.push(`${pad}    case ${J(r)}: {`);
+        lines.push(...subTry(i => restAdmit[i]!.keys.has('n:' + r)).map(l => '    ' + l));
+        lines.push(`${pad}      break;`);
+        lines.push(`${pad}    }`);
+      }
+      lines.push(`${pad}    default: {`);
+      lines.push(...subTry(() => false).map(l => '    ' + l));
+      lines.push(`${pad}      break;`);
+      lines.push(`${pad}    }`);
+      lines.push(`${pad}  }`);
+      lines.push(`${pad}} else if (k1.tokenType === '$keyword' || k1.tokenType === '$punct') {`);
+      lines.push(`${pad}  switch (src.charCodeAt(k1.offset)) {`);
+      for (const cc of [...cset].sort((a, b) => a - b)) {
+        lines.push(`${pad}    case ${cc}: {`);
+        lines.push(...subTry(i => restAdmit[i]!.keys.has('c:' + cc)).map(l => '    ' + l));
+        lines.push(`${pad}      break;`);
+        lines.push(`${pad}    }`);
+      }
+      lines.push(`${pad}    default: {`);
+      lines.push(...subTry(() => false).map(l => '    ' + l));
+      lines.push(`${pad}      break;`);
+      lines.push(`${pad}    }`);
+      lines.push(`${pad}  }`);
+      lines.push(`${pad}} else {`);
+      lines.push(`${pad}  switch (k1.tokenType) {`);
+      for (const t of [...tset].sort()) {
+        lines.push(`${pad}    case ${J(t)}: {`);
+        lines.push(...subTry(i => restAdmit[i]!.keys.has('t:' + t)).map(l => '    ' + l));
+        lines.push(`${pad}      break;`);
+        lines.push(`${pad}    }`);
+      }
+      lines.push(`${pad}    default: {`);
+      lines.push(...subTry(() => false).map(l => '    ' + l));
+      lines.push(`${pad}      break;`);
+      lines.push(`${pad}    }`);
+      lines.push(`${pad}  }`);
+      lines.push(`${pad}}`);
+      return lines;
+    };
+
+    const disp: string[] = [];
+    disp.push(`export function match${sanitizeIdent(rule.name)}(n: ${nName}, src: string): ${tName} {`);
+    disp.push(`  const c = n.children;`);
+    disp.push(`  const k0 = c[0] as (CstChild & { tokenType?: string; rule?: string }) | undefined;`);
+    disp.push(`  if (k0 === undefined) {`);
+    for (let k = 0; k < plans.length; k++) if (admits[k].canEmpty || admits[k].keys.size === 0) disp.push(tryLine(k));
+    disp.push(`  } else if (k0.tokenType === undefined) {`);
+    disp.push(`    switch (k0.rule) {`);
+    for (const r of [...nodeRules].sort()) {
+      disp.push(`      case ${J(r)}: {`);
+      const members = plans.map((_, k) => k).filter(k => admits[k].keys.size === 0 || admits[k].keys.has('n:' + r));
+      const concrete = members.filter(k => admits[k].keys.size !== 0);
+      const oneStep = concrete.every(k => plans[k].steps[0]?.kind === 'node');
+      if (members.length > 4 && oneStep) {
+        disp.push(...subDispatch(members, '        '));
+      } else {
+        for (const l of bucketLines(keys => keys.has('n:' + r))) disp.push('    ' + l);
+      }
+      disp.push(`        break;`);
+      disp.push(`      }`);
+    }
+    if (alwaysIdx.length) {
+      disp.push(`      default: {`);
+      for (const k of alwaysIdx) disp.push('    ' + tryLine(k));
+      disp.push(`        break;`);
+      disp.push(`      }`);
+    }
+    disp.push(`    }`);
+    disp.push(`  } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {`);
+    disp.push(`    switch (src.charCodeAt(k0.offset)) {`);
+    for (const cc of [...charCodes].sort((a, b) => a - b)) {
+      disp.push(`      case ${cc}: {`);
+      for (const l of bucketLines(keys => keys.has('c:' + cc))) disp.push('    ' + l);
+      disp.push(`        break;`);
+      disp.push(`      }`);
+    }
+    if (alwaysIdx.length) {
+      disp.push(`      default: {`);
+      for (const k of alwaysIdx) disp.push('    ' + tryLine(k));
+      disp.push(`        break;`);
+      disp.push(`      }`);
+    }
+    disp.push(`    }`);
+    disp.push(`  } else {`);
+    disp.push(`    switch (k0.tokenType) {`);
+    for (const t of [...tokNames].sort()) {
+      disp.push(`      case ${J(t)}: {`);
+      for (const l of bucketLines(keys => keys.has('t:' + t))) disp.push('    ' + l);
+      disp.push(`        break;`);
+      disp.push(`      }`);
+    }
+    if (alwaysIdx.length) {
+      disp.push(`      default: {`);
+      for (const k of alwaysIdx) disp.push('    ' + tryLine(k));
+      disp.push(`        break;`);
+      disp.push(`      }`);
+    }
+    disp.push(`    }`);
+    disp.push(`  }`);
+    disp.push(`  throw new Error(${J(`match${sanitizeIdent(rule.name)}: no arm matches`)} + ' @' + n.offset);`);
+    disp.push(`}`);
+    bodyParts.push(disp.join('\n'));
     matcherMapEntries.push(`  ${J(rule.name)}: match${sanitizeIdent(rule.name)},`);
   }
 
