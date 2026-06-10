@@ -137,8 +137,11 @@ export interface NewTargetNode extends CstPos {
 export interface ClassHeritageNode extends CstPos {
   rule: 'ClassHeritage';
   children: Array<
+    | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: '$punct' })
     | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'Number' })
+    | (CstLeaf & { tokenType: 'String' })
     | ClassHeritageNode
     | ExprNode
   >;

@@ -117,8 +117,8 @@ export type ExprMatch =
   | { arm: "binaryNumber"; binaryNumber: CstLeaf }
   | { arm: "bigInt"; bigInt: CstLeaf }
   | { arm: "async2"; asyncTok?: CstLeaf; ident?: CstLeaf; param: (ParamNode)[]; block: BlockNode }
-  | { arm: "decoratorExpr"; decoratorExpr?: DecoratorExprNode; ident: CstLeaf; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
-  | { arm: "decoratorExpr2"; decoratorExpr?: DecoratorExprNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
+  | { arm: "decoratorExpr"; decoratorExpr?: DecoratorExprNode; ident: CstLeaf; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[]; classMember: (ClassMemberNode)[] }
+  | { arm: "decoratorExpr2"; decoratorExpr?: DecoratorExprNode; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[]; classMember: (ClassMemberNode)[] }
   | { arm: "binaryOp"; left: ExprNode; op: CstLeaf; right: ExprNode }
   | { arm: "prefixOp"; op: CstLeaf; operand: ExprNode }
   | { arm: "postfixOp"; operand: ExprNode; op: CstLeaf };
@@ -1083,8 +1083,7 @@ function _Expr$async2(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$decoratorExpr(c: readonly CstChild[], src: string): ExprMatch | null {
   let decoratorExpr: (DecoratorExprNode) | undefined;
   let ident: (CstLeaf) | undefined;
-  let classHeritage: (ClassHeritageNode) | undefined;
-  let extendsTok: (CstLeaf) | undefined;
+  const alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   {
@@ -1101,40 +1100,80 @@ function _Expr$decoratorExpr(c: readonly CstChild[], src: string): ExprMatch | n
   if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
-  {
+  for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
       if (!__lit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
-      extendsTok = c[i] as CstLeaf;
       i++;
-      if (!__nodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
-      classHeritage = c[i] as ClassHeritageNode;
-      i++;
+      {
+        const _t6 = i; let _t9 = true;
+        _b10: {
+          {
+            let _t11 = false;
+            if (!_t11) {
+              let _t15_classHeritage: (ClassHeritageNode) | undefined;
+              const _t12 = i; let _t13 = true;
+              _b14: {
+                if (!__nodeOf(c, i, "ClassHeritage")) { _t13 = false; break _b14; }
+                _t15_classHeritage = c[i] as ClassHeritageNode;
+                i++;
+              }
+              if (_t13) { _t11 = true; alt.push({ branch: "classHeritage", classHeritage: _t15_classHeritage! } as never); }
+              else i = _t12;
+            }
+            if (!_t11) { _t9 = false; break _b10; }
+          }
+        }
+        if (!_t9) { i = _t6; }
+        else for (;;) {
+          if (!__lit(c, i, src, ",", "$punct")) break;
+          i++;
+          const _t62 = i; let _t7 = true;
+          _b8: {
+            {
+              let _t16 = false;
+              if (!_t16) {
+                let _t20_classHeritage: (ClassHeritageNode) | undefined;
+                const _t17 = i; let _t18 = true;
+                _b19: {
+                  if (!__nodeOf(c, i, "ClassHeritage")) { _t18 = false; break _b19; }
+                  _t20_classHeritage = c[i] as ClassHeritageNode;
+                  i++;
+                }
+                if (_t18) { _t16 = true; alt.push({ branch: "classHeritage", classHeritage: _t20_classHeritage! } as never); }
+                else i = _t17;
+              }
+              if (!_t16) { _t7 = false; break _b8; }
+            }
+          }
+          if (!_t7) { i = _t62; break; }
+        }
+      }
     }
-    if (!_t4) i = _t3;
+    if (!_t4) { i = _t3; break; }
+    if (i === _t3) break;
   }
   if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
-    const _t6 = i; let _t7 = true;
-    _b8: {
-      if (!__nodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
+    const _t21 = i; let _t22 = true;
+    _b23: {
+      if (!__nodeOf(c, i, "ClassMember")) { _t22 = false; break _b23; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
-    if (!_t7) { i = _t6; break; }
-    if (i === _t6) break;
+    if (!_t22) { i = _t21; break; }
+    if (i === _t21) break;
   }
   if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, classHeritage, extendsTok, classMember };
+  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, alt, classMember };
 }
 
 function _Expr$decoratorExpr2(c: readonly CstChild[], src: string): ExprMatch | null {
   let decoratorExpr: (DecoratorExprNode) | undefined;
-  let classHeritage: (ClassHeritageNode) | undefined;
-  let extendsTok: (CstLeaf) | undefined;
+  const alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   {
@@ -1148,34 +1187,75 @@ function _Expr$decoratorExpr2(c: readonly CstChild[], src: string): ExprMatch | 
   }
   if (!__lit(c, i, src, "class", "$keyword")) return null;
   i++;
-  {
+  for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
       if (!__lit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
-      extendsTok = c[i] as CstLeaf;
       i++;
-      if (!__nodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
-      classHeritage = c[i] as ClassHeritageNode;
-      i++;
+      {
+        const _t6 = i; let _t9 = true;
+        _b10: {
+          {
+            let _t11 = false;
+            if (!_t11) {
+              let _t15_classHeritage: (ClassHeritageNode) | undefined;
+              const _t12 = i; let _t13 = true;
+              _b14: {
+                if (!__nodeOf(c, i, "ClassHeritage")) { _t13 = false; break _b14; }
+                _t15_classHeritage = c[i] as ClassHeritageNode;
+                i++;
+              }
+              if (_t13) { _t11 = true; alt.push({ branch: "classHeritage", classHeritage: _t15_classHeritage! } as never); }
+              else i = _t12;
+            }
+            if (!_t11) { _t9 = false; break _b10; }
+          }
+        }
+        if (!_t9) { i = _t6; }
+        else for (;;) {
+          if (!__lit(c, i, src, ",", "$punct")) break;
+          i++;
+          const _t62 = i; let _t7 = true;
+          _b8: {
+            {
+              let _t16 = false;
+              if (!_t16) {
+                let _t20_classHeritage: (ClassHeritageNode) | undefined;
+                const _t17 = i; let _t18 = true;
+                _b19: {
+                  if (!__nodeOf(c, i, "ClassHeritage")) { _t18 = false; break _b19; }
+                  _t20_classHeritage = c[i] as ClassHeritageNode;
+                  i++;
+                }
+                if (_t18) { _t16 = true; alt.push({ branch: "classHeritage", classHeritage: _t20_classHeritage! } as never); }
+                else i = _t17;
+              }
+              if (!_t16) { _t7 = false; break _b8; }
+            }
+          }
+          if (!_t7) { i = _t62; break; }
+        }
+      }
     }
-    if (!_t4) i = _t3;
+    if (!_t4) { i = _t3; break; }
+    if (i === _t3) break;
   }
   if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
-    const _t6 = i; let _t7 = true;
-    _b8: {
-      if (!__nodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
+    const _t21 = i; let _t22 = true;
+    _b23: {
+      if (!__nodeOf(c, i, "ClassMember")) { _t22 = false; break _b23; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
-    if (!_t7) { i = _t6; break; }
-    if (i === _t6) break;
+    if (!_t22) { i = _t21; break; }
+    if (i === _t21) break;
   }
   if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr2", decoratorExpr, classHeritage, extendsTok, classMember };
+  return { arm: "decoratorExpr2", decoratorExpr, alt, classMember };
 }
 
 function _Expr$binaryOp(c: readonly CstChild[], src: string): ExprMatch | null {
@@ -1922,6 +2002,12 @@ export function matchNewTarget(n: NewTargetNode, src: string): NewTargetMatch {
 
 export type ClassHeritageMatch =
   | { arm: "ident"; ident: CstLeaf }
+  | { arm: "number"; number: CstLeaf }
+  | { arm: "string"; string: CstLeaf }
+  | { arm: "true_" }
+  | { arm: "false_" }
+  | { arm: "null_" }
+  | { arm: "undefined" }
   | { arm: "led_dot"; left: ClassHeritageNode; ident: CstLeaf }
   | { arm: "led_paren"; left: ClassHeritageNode; expr: (ExprNode)[] };
 
@@ -1933,6 +2019,58 @@ function _ClassHeritage$ident(c: readonly CstChild[], src: string): ClassHeritag
   i++;
   if (i !== c.length) return null;
   return { arm: "ident", ident: ident! };
+}
+
+function _ClassHeritage$number(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let number: (CstLeaf) | undefined;
+  let i = 0;
+  if (!(__tok(c, i, "Number"))) return null;
+  number = c[i] as CstLeaf;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "number", number: number! };
+}
+
+function _ClassHeritage$string(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let string: (CstLeaf) | undefined;
+  let i = 0;
+  if (!(__tok(c, i, "String"))) return null;
+  string = c[i] as CstLeaf;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "string", string: string! };
+}
+
+function _ClassHeritage$true_(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, "true", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "true_" };
+}
+
+function _ClassHeritage$false_(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, "false", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "false_" };
+}
+
+function _ClassHeritage$null_(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, "null", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "null_" };
+}
+
+function _ClassHeritage$undefined(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, "undefined", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "undefined" };
 }
 
 function _ClassHeritage$led_dot(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
@@ -2000,11 +2138,35 @@ export function matchClassHeritage(n: ClassHeritageNode, src: string): ClassHeri
     }
   } else if (k0.tokenType === '$keyword' || k0.tokenType === '$punct') {
     switch (src.charCodeAt(k0.offset)) {
+      case 102: {
+        { const m = _ClassHeritage$false_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 110: {
+        { const m = _ClassHeritage$null_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 116: {
+        { const m = _ClassHeritage$true_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 117: {
+        { const m = _ClassHeritage$undefined(c, src); if (m !== null) return m; }
+        break;
+      }
     }
   } else {
     switch (k0.tokenType) {
       case "Ident": {
         { const m = _ClassHeritage$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Number": {
+        { const m = _ClassHeritage$number(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "String": {
+        { const m = _ClassHeritage$string(c, src); if (m !== null) return m; }
         break;
       }
     }
@@ -3867,13 +4029,14 @@ export function matchSwitchCase(n: SwitchCaseNode, src: string): SwitchCaseMatch
 
 export type DeclMatch =
   | { arm: "async"; asyncTok?: CstLeaf; ident: CstLeaf; param: (ParamNode)[]; block: BlockNode }
-  | { arm: "decoratorExpr"; decoratorExpr: (DecoratorExprNode)[]; ident: CstLeaf; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
+  | { arm: "decoratorExpr"; decoratorExpr: (DecoratorExprNode)[]; ident: CstLeaf; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[]; classMember: (ClassMemberNode)[] }
   | { arm: "export_"; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } }
+  | { arm: "decoratorExpr2"; decoratorExpr: (DecoratorExprNode)[]; decl: DeclNode }
   | { arm: "export_2"; alt: { branch: "async"; asyncTok?: CstLeaf; ident?: CstLeaf; param: (ParamNode)[]; block: BlockNode } | { branch: "expr"; expr: ExprNode } }
   | { arm: "export_3"; alt: { branch: "from"; string: CstLeaf } | { branch: "as"; ident: CstLeaf; string: CstLeaf } }
   | { arm: "export_4"; importSpecifier: (ImportSpecifierNode)[]; string?: CstLeaf; fromTok?: CstLeaf }
   | { arm: "import_"; alt: { branch: "importClause"; importClause: ImportClauseNode; string: CstLeaf } | { branch: "ident"; ident: CstLeaf; expr: ExprNode } | { branch: "string"; string: CstLeaf } }
-  | { arm: "decoratorExpr2"; decoratorExpr: (DecoratorExprNode)[]; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } };
+  | { arm: "decoratorExpr3"; decoratorExpr: (DecoratorExprNode)[]; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } };
 
 function _Decl$async(c: readonly CstChild[], src: string): DeclMatch | null {
   let asyncTok: (CstLeaf) | undefined;
@@ -3937,8 +4100,7 @@ function _Decl$async(c: readonly CstChild[], src: string): DeclMatch | null {
 function _Decl$decoratorExpr(c: readonly CstChild[], src: string): DeclMatch | null {
   const decoratorExpr: (DecoratorExprNode)[] = [];
   let ident: (CstLeaf) | undefined;
-  let classHeritage: (ClassHeritageNode) | undefined;
-  let extendsTok: (CstLeaf) | undefined;
+  const alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   for (;;) {
@@ -3956,34 +4118,75 @@ function _Decl$decoratorExpr(c: readonly CstChild[], src: string): DeclMatch | n
   if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
-  {
+  for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
       if (!__lit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
-      extendsTok = c[i] as CstLeaf;
       i++;
-      if (!__nodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
-      classHeritage = c[i] as ClassHeritageNode;
-      i++;
+      {
+        const _t6 = i; let _t9 = true;
+        _b10: {
+          {
+            let _t11 = false;
+            if (!_t11) {
+              let _t15_classHeritage: (ClassHeritageNode) | undefined;
+              const _t12 = i; let _t13 = true;
+              _b14: {
+                if (!__nodeOf(c, i, "ClassHeritage")) { _t13 = false; break _b14; }
+                _t15_classHeritage = c[i] as ClassHeritageNode;
+                i++;
+              }
+              if (_t13) { _t11 = true; alt.push({ branch: "classHeritage", classHeritage: _t15_classHeritage! } as never); }
+              else i = _t12;
+            }
+            if (!_t11) { _t9 = false; break _b10; }
+          }
+        }
+        if (!_t9) { i = _t6; }
+        else for (;;) {
+          if (!__lit(c, i, src, ",", "$punct")) break;
+          i++;
+          const _t62 = i; let _t7 = true;
+          _b8: {
+            {
+              let _t16 = false;
+              if (!_t16) {
+                let _t20_classHeritage: (ClassHeritageNode) | undefined;
+                const _t17 = i; let _t18 = true;
+                _b19: {
+                  if (!__nodeOf(c, i, "ClassHeritage")) { _t18 = false; break _b19; }
+                  _t20_classHeritage = c[i] as ClassHeritageNode;
+                  i++;
+                }
+                if (_t18) { _t16 = true; alt.push({ branch: "classHeritage", classHeritage: _t20_classHeritage! } as never); }
+                else i = _t17;
+              }
+              if (!_t16) { _t7 = false; break _b8; }
+            }
+          }
+          if (!_t7) { i = _t62; break; }
+        }
+      }
     }
-    if (!_t4) i = _t3;
+    if (!_t4) { i = _t3; break; }
+    if (i === _t3) break;
   }
   if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
-    const _t6 = i; let _t7 = true;
-    _b8: {
-      if (!__nodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
+    const _t21 = i; let _t22 = true;
+    _b23: {
+      if (!__nodeOf(c, i, "ClassMember")) { _t22 = false; break _b23; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
-    if (!_t7) { i = _t6; break; }
-    if (i === _t6) break;
+    if (!_t22) { i = _t21; break; }
+    if (i === _t21) break;
   }
   if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, classHeritage, extendsTok, classMember };
+  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, alt, classMember };
 }
 
 function _Decl$export_(c: readonly CstChild[], src: string): DeclMatch | null {
@@ -4019,6 +4222,36 @@ function _Decl$export_(c: readonly CstChild[], src: string): DeclMatch | null {
   }
   if (i !== c.length) return null;
   return { arm: "export_", alt: alt! };
+}
+
+function _Decl$decoratorExpr2(c: readonly CstChild[], src: string): DeclMatch | null {
+  const decoratorExpr: (DecoratorExprNode)[] = [];
+  let decl: (DeclNode) | undefined;
+  let i = 0;
+  {
+    const _t0 = i; let _t1 = true;
+    _b2: {
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
+      decoratorExpr.push(c[i] as DecoratorExprNode);
+      i++;
+    }
+    if (!_t1) return null;
+  }
+  for (;;) {
+    const _t3 = i; let _t4 = true;
+    _b5: {
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t4 = false; break _b5; }
+      decoratorExpr.push(c[i] as DecoratorExprNode);
+      i++;
+    }
+    if (!_t4) { i = _t3; break; }
+    if (i === _t3) break;
+  }
+  if (!__nodeOf(c, i, "Decl")) return null;
+  decl = c[i] as DeclNode;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "decoratorExpr2", decoratorExpr, decl: decl! };
 }
 
 function _Decl$export_2(c: readonly CstChild[], src: string): DeclMatch | null {
@@ -4321,7 +4554,7 @@ function _Decl$import_(c: readonly CstChild[], src: string): DeclMatch | null {
   return { arm: "import_", alt: alt! };
 }
 
-function _Decl$decoratorExpr2(c: readonly CstChild[], src: string): DeclMatch | null {
+function _Decl$decoratorExpr3(c: readonly CstChild[], src: string): DeclMatch | null {
   const decoratorExpr: (DecoratorExprNode)[] = [];
   let alt: ({ branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode }) | undefined;
   let i = 0;
@@ -4364,7 +4597,7 @@ function _Decl$decoratorExpr2(c: readonly CstChild[], src: string): DeclMatch | 
     if (!_t3) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr2", decoratorExpr, alt: alt! };
+  return { arm: "decoratorExpr3", decoratorExpr, alt: alt! };
 }
 
 export function matchDecl(n: DeclNode, src: string): DeclMatch {
@@ -4376,6 +4609,7 @@ export function matchDecl(n: DeclNode, src: string): DeclMatch {
       case "DecoratorExpr": {
         { const m = _Decl$decoratorExpr(c, src); if (m !== null) return m; }
         { const m = _Decl$decoratorExpr2(c, src); if (m !== null) return m; }
+        { const m = _Decl$decoratorExpr3(c, src); if (m !== null) return m; }
         break;
       }
     }
@@ -4394,7 +4628,7 @@ export function matchDecl(n: DeclNode, src: string): DeclMatch {
         { const m = _Decl$export_2(c, src); if (m !== null) return m; }
         { const m = _Decl$export_3(c, src); if (m !== null) return m; }
         { const m = _Decl$export_4(c, src); if (m !== null) return m; }
-        { const m = _Decl$decoratorExpr2(c, src); if (m !== null) return m; }
+        { const m = _Decl$decoratorExpr3(c, src); if (m !== null) return m; }
         break;
       }
       case 102: {
@@ -4414,12 +4648,21 @@ export function matchDecl(n: DeclNode, src: string): DeclMatch {
 }
 
 export type ClassMemberMatch =
+  | { arm: "semi" }
   | { arm: "decoratorExpr"; decoratorExpr: DecoratorExprNode }
   | { arm: "constructor"; param: (ParamNode)[]; block: BlockNode }
   | { arm: "static_"; block: BlockNode }
   | { arm: "static_2"; static_Kw: ("static" | "accessor" | "async")[]; alt: { branch: "star"; memberName: MemberNameNode; param: (ParamNode)[]; block?: BlockNode } | { branch: "get"; getKw: "get" | "set"; memberName: MemberNameNode; param: (ParamNode)[]; block?: BlockNode } | { branch: "memberName"; memberName: MemberNameNode; alt: { branch: "paren"; param: (ParamNode)[]; block?: BlockNode } | { branch: "seq"; expr?: ExprNode } } }
   | { arm: "memberName"; memberName: MemberNameNode; expr?: ExprNode }
   | { arm: "memberName2"; memberName: MemberNameNode; param: (ParamNode)[]; block?: BlockNode };
+
+function _ClassMember$semi(c: readonly CstChild[], src: string): ClassMemberMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, ";", "$punct")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "semi" };
+}
 
 function _ClassMember$decoratorExpr(c: readonly CstChild[], src: string): ClassMemberMatch | null {
   let decoratorExpr: (DecoratorExprNode) | undefined;
@@ -4827,6 +5070,10 @@ export function matchClassMember(n: ClassMemberNode, src: string): ClassMemberMa
     switch (src.charCodeAt(k0.offset)) {
       case 42: {
         { const m = _ClassMember$static_2(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 59: {
+        { const m = _ClassMember$semi(c, src); if (m !== null) return m; }
         break;
       }
       case 97: {

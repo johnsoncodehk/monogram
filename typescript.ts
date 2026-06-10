@@ -128,6 +128,10 @@ const Prop = rule($ => {
 
 const ClassHeritage = rule($ => [
   Ident,
+  // (leds below also cover `A?.B` — tsc parses optional chains in heritage cleanly)
+  // Non-constructor primaries: tsc PARSES `extends undefined/true/42/"x"` cleanly
+  // (rejecting them is the CHECKER's job), so the heritage grammar must too.
+  Number_, String_, 'true', 'false', 'null', 'undefined',
   // The heritage clause is a LeftHandSideExpression, not just a dotted name: a
   // parenthesized expression (`extends (B)`, `extends (cond ? A : B)`) and a class
   // EXPRESSION (`extends class {}`, `extends class Q extends P {}`) are both valid
@@ -136,6 +140,7 @@ const ClassHeritage = rule($ => [
   ['(', Expr, ')'],
   ['class', opt(notReserved, Ident), opt(TypeParams), opt('extends', $), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],
   [$, '.', Ident],
+  [$, '?.', Ident],
   [$, '<', sep(Type, ','), '>'],
   [$, '(', sep(Expr, ','), ')'],
 ]);
@@ -211,8 +216,8 @@ const Expr = rule($ => [
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`/`implements`); decorator dimension is a `many` (a class expression may
   // carry ≥2 decorators, `x = @d @d class C {}`, like the declaration arm below).
-  [many(DecoratorExpr), 'class', notReserved, Ident, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],
-  [many(DecoratorExpr), 'class', opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), 'class', notReserved, Ident, opt(TypeParams), many(alt(['extends', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')], ['implements', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')])), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), 'class', opt(TypeParams), many(alt(['extends', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')], ['implements', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')])), '{', many(ClassMember), '}'],
   ['<', Type, '>', $],
 ]);
 
@@ -339,7 +344,7 @@ const Stmt = rule($ => [
   // (extends-expression heritage, bare `;` class elements, decorator placements), so
   // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
   // declaration arm first, then guard.
-  [not(alt('function', ['async', 'function'])), Expr, many(',', Expr), opt(';')],
+  [not(alt('function', 'class', ['async', 'function'])), Expr, many(',', Expr), opt(';')],
 ]);
 
 // ── Type Parameters ──
@@ -408,6 +413,7 @@ const MemberName = rule($ => [
 const Modifier = alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'async');
 const callTail = ['(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
+  ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
   DecoratorExpr,
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
   ['static', Block],
@@ -463,17 +469,18 @@ const Decl = rule($ => [
   ['type', notReserved, Ident, opt(TypeParams), '=', Type, opt(';')],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
   // class decl: optional decorators + optional `abstract`. gen-tm expands the
   // opt()/many() to recover the `class Ident … { … }` shape for highlighting.
-  [many(DecoratorExpr), opt('abstract'), 'class', notReserved, Ident, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), opt('abstract'), 'class', notReserved, Ident, opt(TypeParams), many(alt(['extends', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')], ['implements', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')])), '{', many(ClassMember), '}'],
   ['enum', notReserved, Ident, '{', sep(EnumMember, ','), '}'],
   ['declare', 'function', opt('*'), notReserved, Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), opt(';')],
   ['declare', alt($, Stmt)],
   ['namespace', notReserved, Ident, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([notReserved, Ident, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
   ['export', alt($, Stmt)],
+  [many1(DecoratorExpr), $],   // decorators before export/default/etc. — tsc allows either order
   ['export', 'default', alt(
     [opt('async'), 'function', opt('*'), opt(notReserved, Ident), opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), alt(Block, opt(';'))],  // function
-    ['abstract', 'class', notReserved, Ident, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],  // named abstract class
-    ['abstract', 'class', opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],          // anonymous abstract class
+    ['abstract', 'class', notReserved, Ident, opt(TypeParams), many(alt(['extends', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')], ['implements', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')])), '{', many(ClassMember), '}'],  // named abstract class
+    ['abstract', 'class', opt(TypeParams), many(alt(['extends', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')], ['implements', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')])), '{', many(ClassMember), '}'],          // anonymous abstract class
     [Expr, opt(';')],   // catch-all: export default <expr>
   )],
   ['export', '*', alt(['from', String_, opt(';')], ['as', Ident, 'from', String_, opt(';')])],

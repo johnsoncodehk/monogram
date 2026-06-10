@@ -248,6 +248,8 @@ const Prop = rule($ => {
 
 const ClassHeritage = rule($ => [
   Ident,
+  // Non-constructor primaries: parse-clean in tsc/V8 grammar terms (runtime/checker errors).
+  Number_, String_, 'true', 'false', 'null', 'undefined',
   [$, '.', Ident],
   [$, '(', sep(Expr, ','), ')'],
 ]);
@@ -303,8 +305,8 @@ const Expr = rule($ => [
   [opt('async'), 'function', opt('*'), opt(Ident), '(', sep(Param, ','), ')', Block],
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`); decorator dimension collapsed via opt(DecoratorExpr).
-  [opt(DecoratorExpr), 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
-  [opt(DecoratorExpr), 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
+  [opt(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
+  [opt(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
 ]);
 
 // ── Statements ──
@@ -418,7 +420,7 @@ const Stmt = rule($ => [
   // (extends-expression heritage, bare `;` class elements, decorator placements), so
   // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
   // declaration arm first, then guard.
-  [not(alt('function', ['async', 'function'])), Expr, many(',', Expr), opt(';')],
+  [not(alt('function', 'class', ['async', 'function'])), Expr, many(',', Expr), opt(';')],
 ]);
 
 // ── Declarations ──
@@ -442,6 +444,7 @@ const MemberName = rule($ => [
 const Modifier = alt('static', 'accessor', 'async');
 const callTail = ['(', sep(Param, ','), ')', opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
+  ';',   // SemicolonClassElement: `class C { ; }`
   DecoratorExpr,
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
   ['static', Block],
@@ -481,8 +484,9 @@ const Decl = rule($ => [
   [opt('async'), 'function', opt('*'), Ident, '(', sep(Param, ','), ')', Block],
   // class decl: optional decorators. gen-tm expands the opt()/many() to recover
   // the `class Ident … { … }` shape for highlighting.
-  [many(DecoratorExpr), 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
   ['export', alt($, Stmt)],
+  [many1(DecoratorExpr), $],   // decorators before export/default/etc.
   ['export', 'default', alt(
     [opt('async'), 'function', opt('*'), opt(Ident), '(', sep(Param, ','), ')', Block],  // function
     [Expr, opt(';')],   // catch-all: export default <expr>

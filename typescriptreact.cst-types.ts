@@ -198,6 +198,8 @@ export interface ClassHeritageNode extends CstPos {
     | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: '$punct' })
     | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'Number' })
+    | (CstLeaf & { tokenType: 'String' })
     | ClassHeritageNode
     | ClassMemberNode
     | ExprNode

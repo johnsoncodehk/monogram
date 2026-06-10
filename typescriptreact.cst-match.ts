@@ -1751,8 +1751,8 @@ export type ExprMatch =
   | { arm: "binaryNumber"; binaryNumber: CstLeaf }
   | { arm: "bigInt"; bigInt: CstLeaf }
   | { arm: "async2"; asyncTok?: CstLeaf; ident?: CstLeaf; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; block: BlockNode }
-  | { arm: "decoratorExpr"; decoratorExpr: (DecoratorExprNode)[]; ident: CstLeaf; typeParams?: TypeParamsNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; type: (TypeNode)[]; implementsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
-  | { arm: "decoratorExpr2"; decoratorExpr: (DecoratorExprNode)[]; typeParams?: TypeParamsNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; type: (TypeNode)[]; implementsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
+  | { arm: "decoratorExpr"; decoratorExpr: (DecoratorExprNode)[]; ident: CstLeaf; typeParams?: TypeParamsNode; alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[]; classMember: (ClassMemberNode)[] }
+  | { arm: "decoratorExpr2"; decoratorExpr: (DecoratorExprNode)[]; typeParams?: TypeParamsNode; alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[]; classMember: (ClassMemberNode)[] }
   | { arm: "binaryOp"; left: ExprNode; op: CstLeaf; right: ExprNode }
   | { arm: "prefixOp"; op: CstLeaf; operand: ExprNode }
   | { arm: "postfixOp"; operand: ExprNode; op: CstLeaf };
@@ -3091,10 +3091,7 @@ function _Expr$decoratorExpr(c: readonly CstChild[], src: string): ExprMatch | n
   const decoratorExpr: (DecoratorExprNode)[] = [];
   let ident: (CstLeaf) | undefined;
   let typeParams: (TypeParamsNode) | undefined;
-  let classHeritage: (ClassHeritageNode) | undefined;
-  let extendsTok: (CstLeaf) | undefined;
-  const type: (TypeNode)[] = [];
-  let implementsTok: (CstLeaf) | undefined;
+  const alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[] = [];
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   for (;;) {
@@ -3121,72 +3118,147 @@ function _Expr$decoratorExpr(c: readonly CstChild[], src: string): ExprMatch | n
     }
     if (!_t4) i = _t3;
   }
-  {
+  for (;;) {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!__lit(c, i, src, "extends", "$keyword")) { _t7 = false; break _b8; }
-      extendsTok = c[i] as CstLeaf;
-      i++;
-      if (!__nodeOf(c, i, "ClassHeritage")) { _t7 = false; break _b8; }
-      classHeritage = c[i] as ClassHeritageNode;
-      i++;
-    }
-    if (!_t7) i = _t6;
-  }
-  {
-    const _t9 = i; let _t10 = true;
-    _b11: {
-      if (!__lit(c, i, src, "implements", "$keyword")) { _t10 = false; break _b11; }
-      implementsTok = c[i] as CstLeaf;
-      i++;
       {
-        const _t12 = i; let _t15 = true;
-        _b16: {
-          if (!__nodeOf(c, i, "Type")) { _t15 = false; break _b16; }
-          type.push(c[i] as TypeNode);
-          i++;
-        }
-        if (!_t15) { i = _t12; }
-        else for (;;) {
-          if (!__lit(c, i, src, ",", "$punct")) break;
-          i++;
-          const _t122 = i; let _t13 = true;
-          _b14: {
-            if (!__nodeOf(c, i, "Type")) { _t13 = false; break _b14; }
-            type.push(c[i] as TypeNode);
+        let _t9 = false;
+        if (!_t9) {
+          const _t13_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+          const _t10 = i; let _t11 = true;
+          _b12: {
+            if (!__lit(c, i, src, "extends", "$keyword")) { _t11 = false; break _b12; }
             i++;
+            {
+              const _t14 = i; let _t17 = true;
+              _b18: {
+                {
+                  let _t19 = false;
+                  if (!_t19) {
+                    let _t23__t13_classHeritage: (ClassHeritageNode) | undefined;
+                    const _t20 = i; let _t21 = true;
+                    _b22: {
+                      if (!__nodeOf(c, i, "ClassHeritage")) { _t21 = false; break _b22; }
+                      _t23__t13_classHeritage = c[i] as ClassHeritageNode;
+                      i++;
+                    }
+                    if (_t21) { _t19 = true; _t13_alt.push({ branch: "classHeritage", classHeritage: _t23__t13_classHeritage! } as never); }
+                    else i = _t20;
+                  }
+                  if (!_t19) { _t17 = false; break _b18; }
+                }
+              }
+              if (!_t17) { i = _t14; }
+              else for (;;) {
+                if (!__lit(c, i, src, ",", "$punct")) break;
+                i++;
+                const _t142 = i; let _t15 = true;
+                _b16: {
+                  {
+                    let _t24 = false;
+                    if (!_t24) {
+                      let _t28__t13_classHeritage: (ClassHeritageNode) | undefined;
+                      const _t25 = i; let _t26 = true;
+                      _b27: {
+                        if (!__nodeOf(c, i, "ClassHeritage")) { _t26 = false; break _b27; }
+                        _t28__t13_classHeritage = c[i] as ClassHeritageNode;
+                        i++;
+                      }
+                      if (_t26) { _t24 = true; _t13_alt.push({ branch: "classHeritage", classHeritage: _t28__t13_classHeritage! } as never); }
+                      else i = _t25;
+                    }
+                    if (!_t24) { _t15 = false; break _b16; }
+                  }
+                }
+                if (!_t15) { i = _t142; break; }
+              }
+            }
           }
-          if (!_t13) { i = _t122; break; }
+          if (_t11) { _t9 = true; alt.push({ branch: "extends_", alt: _t13_alt } as never); }
+          else i = _t10;
         }
+        if (!_t9) {
+          const _t32_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+          const _t29 = i; let _t30 = true;
+          _b31: {
+            if (!__lit(c, i, src, "implements", "$keyword")) { _t30 = false; break _b31; }
+            i++;
+            {
+              const _t33 = i; let _t36 = true;
+              _b37: {
+                {
+                  let _t38 = false;
+                  if (!_t38) {
+                    let _t42__t32_classHeritage: (ClassHeritageNode) | undefined;
+                    const _t39 = i; let _t40 = true;
+                    _b41: {
+                      if (!__nodeOf(c, i, "ClassHeritage")) { _t40 = false; break _b41; }
+                      _t42__t32_classHeritage = c[i] as ClassHeritageNode;
+                      i++;
+                    }
+                    if (_t40) { _t38 = true; _t32_alt.push({ branch: "classHeritage", classHeritage: _t42__t32_classHeritage! } as never); }
+                    else i = _t39;
+                  }
+                  if (!_t38) { _t36 = false; break _b37; }
+                }
+              }
+              if (!_t36) { i = _t33; }
+              else for (;;) {
+                if (!__lit(c, i, src, ",", "$punct")) break;
+                i++;
+                const _t332 = i; let _t34 = true;
+                _b35: {
+                  {
+                    let _t43 = false;
+                    if (!_t43) {
+                      let _t47__t32_classHeritage: (ClassHeritageNode) | undefined;
+                      const _t44 = i; let _t45 = true;
+                      _b46: {
+                        if (!__nodeOf(c, i, "ClassHeritage")) { _t45 = false; break _b46; }
+                        _t47__t32_classHeritage = c[i] as ClassHeritageNode;
+                        i++;
+                      }
+                      if (_t45) { _t43 = true; _t32_alt.push({ branch: "classHeritage", classHeritage: _t47__t32_classHeritage! } as never); }
+                      else i = _t44;
+                    }
+                    if (!_t43) { _t34 = false; break _b35; }
+                  }
+                }
+                if (!_t34) { i = _t332; break; }
+              }
+            }
+          }
+          if (_t30) { _t9 = true; alt.push({ branch: "implements", alt: _t32_alt } as never); }
+          else i = _t29;
+        }
+        if (!_t9) { _t7 = false; break _b8; }
       }
     }
-    if (!_t10) i = _t9;
+    if (!_t7) { i = _t6; break; }
+    if (i === _t6) break;
   }
   if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
-    const _t17 = i; let _t18 = true;
-    _b19: {
-      if (!__nodeOf(c, i, "ClassMember")) { _t18 = false; break _b19; }
+    const _t48 = i; let _t49 = true;
+    _b50: {
+      if (!__nodeOf(c, i, "ClassMember")) { _t49 = false; break _b50; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
-    if (!_t18) { i = _t17; break; }
-    if (i === _t17) break;
+    if (!_t49) { i = _t48; break; }
+    if (i === _t48) break;
   }
   if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, typeParams, classHeritage, extendsTok, type, implementsTok, classMember };
+  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, typeParams, alt, classMember };
 }
 
 function _Expr$decoratorExpr2(c: readonly CstChild[], src: string): ExprMatch | null {
   const decoratorExpr: (DecoratorExprNode)[] = [];
   let typeParams: (TypeParamsNode) | undefined;
-  let classHeritage: (ClassHeritageNode) | undefined;
-  let extendsTok: (CstLeaf) | undefined;
-  const type: (TypeNode)[] = [];
-  let implementsTok: (CstLeaf) | undefined;
+  const alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[] = [];
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   for (;;) {
@@ -3210,63 +3282,141 @@ function _Expr$decoratorExpr2(c: readonly CstChild[], src: string): ExprMatch | 
     }
     if (!_t4) i = _t3;
   }
-  {
+  for (;;) {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!__lit(c, i, src, "extends", "$keyword")) { _t7 = false; break _b8; }
-      extendsTok = c[i] as CstLeaf;
-      i++;
-      if (!__nodeOf(c, i, "ClassHeritage")) { _t7 = false; break _b8; }
-      classHeritage = c[i] as ClassHeritageNode;
-      i++;
-    }
-    if (!_t7) i = _t6;
-  }
-  {
-    const _t9 = i; let _t10 = true;
-    _b11: {
-      if (!__lit(c, i, src, "implements", "$keyword")) { _t10 = false; break _b11; }
-      implementsTok = c[i] as CstLeaf;
-      i++;
       {
-        const _t12 = i; let _t15 = true;
-        _b16: {
-          if (!__nodeOf(c, i, "Type")) { _t15 = false; break _b16; }
-          type.push(c[i] as TypeNode);
-          i++;
-        }
-        if (!_t15) { i = _t12; }
-        else for (;;) {
-          if (!__lit(c, i, src, ",", "$punct")) break;
-          i++;
-          const _t122 = i; let _t13 = true;
-          _b14: {
-            if (!__nodeOf(c, i, "Type")) { _t13 = false; break _b14; }
-            type.push(c[i] as TypeNode);
+        let _t9 = false;
+        if (!_t9) {
+          const _t13_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+          const _t10 = i; let _t11 = true;
+          _b12: {
+            if (!__lit(c, i, src, "extends", "$keyword")) { _t11 = false; break _b12; }
             i++;
+            {
+              const _t14 = i; let _t17 = true;
+              _b18: {
+                {
+                  let _t19 = false;
+                  if (!_t19) {
+                    let _t23__t13_classHeritage: (ClassHeritageNode) | undefined;
+                    const _t20 = i; let _t21 = true;
+                    _b22: {
+                      if (!__nodeOf(c, i, "ClassHeritage")) { _t21 = false; break _b22; }
+                      _t23__t13_classHeritage = c[i] as ClassHeritageNode;
+                      i++;
+                    }
+                    if (_t21) { _t19 = true; _t13_alt.push({ branch: "classHeritage", classHeritage: _t23__t13_classHeritage! } as never); }
+                    else i = _t20;
+                  }
+                  if (!_t19) { _t17 = false; break _b18; }
+                }
+              }
+              if (!_t17) { i = _t14; }
+              else for (;;) {
+                if (!__lit(c, i, src, ",", "$punct")) break;
+                i++;
+                const _t142 = i; let _t15 = true;
+                _b16: {
+                  {
+                    let _t24 = false;
+                    if (!_t24) {
+                      let _t28__t13_classHeritage: (ClassHeritageNode) | undefined;
+                      const _t25 = i; let _t26 = true;
+                      _b27: {
+                        if (!__nodeOf(c, i, "ClassHeritage")) { _t26 = false; break _b27; }
+                        _t28__t13_classHeritage = c[i] as ClassHeritageNode;
+                        i++;
+                      }
+                      if (_t26) { _t24 = true; _t13_alt.push({ branch: "classHeritage", classHeritage: _t28__t13_classHeritage! } as never); }
+                      else i = _t25;
+                    }
+                    if (!_t24) { _t15 = false; break _b16; }
+                  }
+                }
+                if (!_t15) { i = _t142; break; }
+              }
+            }
           }
-          if (!_t13) { i = _t122; break; }
+          if (_t11) { _t9 = true; alt.push({ branch: "extends_", alt: _t13_alt } as never); }
+          else i = _t10;
         }
+        if (!_t9) {
+          const _t32_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+          const _t29 = i; let _t30 = true;
+          _b31: {
+            if (!__lit(c, i, src, "implements", "$keyword")) { _t30 = false; break _b31; }
+            i++;
+            {
+              const _t33 = i; let _t36 = true;
+              _b37: {
+                {
+                  let _t38 = false;
+                  if (!_t38) {
+                    let _t42__t32_classHeritage: (ClassHeritageNode) | undefined;
+                    const _t39 = i; let _t40 = true;
+                    _b41: {
+                      if (!__nodeOf(c, i, "ClassHeritage")) { _t40 = false; break _b41; }
+                      _t42__t32_classHeritage = c[i] as ClassHeritageNode;
+                      i++;
+                    }
+                    if (_t40) { _t38 = true; _t32_alt.push({ branch: "classHeritage", classHeritage: _t42__t32_classHeritage! } as never); }
+                    else i = _t39;
+                  }
+                  if (!_t38) { _t36 = false; break _b37; }
+                }
+              }
+              if (!_t36) { i = _t33; }
+              else for (;;) {
+                if (!__lit(c, i, src, ",", "$punct")) break;
+                i++;
+                const _t332 = i; let _t34 = true;
+                _b35: {
+                  {
+                    let _t43 = false;
+                    if (!_t43) {
+                      let _t47__t32_classHeritage: (ClassHeritageNode) | undefined;
+                      const _t44 = i; let _t45 = true;
+                      _b46: {
+                        if (!__nodeOf(c, i, "ClassHeritage")) { _t45 = false; break _b46; }
+                        _t47__t32_classHeritage = c[i] as ClassHeritageNode;
+                        i++;
+                      }
+                      if (_t45) { _t43 = true; _t32_alt.push({ branch: "classHeritage", classHeritage: _t47__t32_classHeritage! } as never); }
+                      else i = _t44;
+                    }
+                    if (!_t43) { _t34 = false; break _b35; }
+                  }
+                }
+                if (!_t34) { i = _t332; break; }
+              }
+            }
+          }
+          if (_t30) { _t9 = true; alt.push({ branch: "implements", alt: _t32_alt } as never); }
+          else i = _t29;
+        }
+        if (!_t9) { _t7 = false; break _b8; }
       }
     }
-    if (!_t10) i = _t9;
+    if (!_t7) { i = _t6; break; }
+    if (i === _t6) break;
   }
   if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
-    const _t17 = i; let _t18 = true;
-    _b19: {
-      if (!__nodeOf(c, i, "ClassMember")) { _t18 = false; break _b19; }
+    const _t48 = i; let _t49 = true;
+    _b50: {
+      if (!__nodeOf(c, i, "ClassMember")) { _t49 = false; break _b50; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
-    if (!_t18) { i = _t17; break; }
-    if (i === _t17) break;
+    if (!_t49) { i = _t48; break; }
+    if (i === _t48) break;
   }
   if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr2", decoratorExpr, typeParams, classHeritage, extendsTok, type, implementsTok, classMember };
+  return { arm: "decoratorExpr2", decoratorExpr, typeParams, alt, classMember };
 }
 
 function _Expr$binaryOp(c: readonly CstChild[], src: string): ExprMatch | null {
@@ -4107,9 +4257,16 @@ export function matchNewTarget(n: NewTargetNode, src: string): NewTargetMatch {
 
 export type ClassHeritageMatch =
   | { arm: "ident"; ident: CstLeaf }
+  | { arm: "number"; number: CstLeaf }
+  | { arm: "string"; string: CstLeaf }
+  | { arm: "true_" }
+  | { arm: "false_" }
+  | { arm: "null_" }
+  | { arm: "undefined" }
   | { arm: "paren"; expr: ExprNode }
   | { arm: "class_"; ident?: CstLeaf; typeParams?: TypeParamsNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; type: (TypeNode)[]; implementsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
   | { arm: "led_dot"; left: ClassHeritageNode; ident: CstLeaf }
+  | { arm: "led_optChain"; left: ClassHeritageNode; ident: CstLeaf }
   | { arm: "led_lt"; left: ClassHeritageNode; type: (TypeNode)[] }
   | { arm: "led_paren"; left: ClassHeritageNode; expr: (ExprNode)[] };
 
@@ -4121,6 +4278,58 @@ function _ClassHeritage$ident(c: readonly CstChild[], src: string): ClassHeritag
   i++;
   if (i !== c.length) return null;
   return { arm: "ident", ident: ident! };
+}
+
+function _ClassHeritage$number(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let number: (CstLeaf) | undefined;
+  let i = 0;
+  if (!(__tok(c, i, "Number"))) return null;
+  number = c[i] as CstLeaf;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "number", number: number! };
+}
+
+function _ClassHeritage$string(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let string: (CstLeaf) | undefined;
+  let i = 0;
+  if (!(__tok(c, i, "String"))) return null;
+  string = c[i] as CstLeaf;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "string", string: string! };
+}
+
+function _ClassHeritage$true_(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, "true", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "true_" };
+}
+
+function _ClassHeritage$false_(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, "false", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "false_" };
+}
+
+function _ClassHeritage$null_(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, "null", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "null_" };
+}
+
+function _ClassHeritage$undefined(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, "undefined", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "undefined" };
 }
 
 function _ClassHeritage$paren(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
@@ -4241,6 +4450,22 @@ function _ClassHeritage$led_dot(c: readonly CstChild[], src: string): ClassHerit
   return { arm: "led_dot", left: left!, ident: ident! };
 }
 
+function _ClassHeritage$led_optChain(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
+  let left: (ClassHeritageNode) | undefined;
+  let ident: (CstLeaf) | undefined;
+  let i = 0;
+  if (!__nodeOf(c, i, "ClassHeritage")) return null;
+  left = c[i] as ClassHeritageNode;
+  i++;
+  if (!__lit(c, i, src, "?.", "$punct")) return null;
+  i++;
+  if (!(__tok(c, i, "Ident"))) return null;
+  ident = c[i] as CstLeaf;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "led_optChain", left: left!, ident: ident! };
+}
+
 function _ClassHeritage$led_lt(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
   let left: (ClassHeritageNode) | undefined;
   const type: (TypeNode)[] = [];
@@ -4319,6 +4544,7 @@ export function matchClassHeritage(n: ClassHeritageNode, src: string): ClassHeri
     switch (k0.rule) {
       case "ClassHeritage": {
         { const m = _ClassHeritage$led_dot(c, src); if (m !== null) return m; }
+        { const m = _ClassHeritage$led_optChain(c, src); if (m !== null) return m; }
         { const m = _ClassHeritage$led_lt(c, src); if (m !== null) return m; }
         { const m = _ClassHeritage$led_paren(c, src); if (m !== null) return m; }
         break;
@@ -4334,11 +4560,35 @@ export function matchClassHeritage(n: ClassHeritageNode, src: string): ClassHeri
         { const m = _ClassHeritage$class_(c, src); if (m !== null) return m; }
         break;
       }
+      case 102: {
+        { const m = _ClassHeritage$false_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 110: {
+        { const m = _ClassHeritage$null_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 116: {
+        { const m = _ClassHeritage$true_(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 117: {
+        { const m = _ClassHeritage$undefined(c, src); if (m !== null) return m; }
+        break;
+      }
     }
   } else {
     switch (k0.tokenType) {
       case "Ident": {
         { const m = _ClassHeritage$ident(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "Number": {
+        { const m = _ClassHeritage$number(c, src); if (m !== null) return m; }
+        break;
+      }
+      case "String": {
+        { const m = _ClassHeritage$string(c, src); if (m !== null) return m; }
         break;
       }
     }
@@ -6827,21 +7077,22 @@ export type DeclMatch =
   | { arm: "async"; asyncTok?: CstLeaf; ident: CstLeaf; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; alt: { branch: "block"; block: BlockNode } | { branch: "semi" } }
   | { arm: "interface"; ident: CstLeaf; typeParams?: TypeParamsNode; type: (TypeNode)[]; extendsTok?: CstLeaf; interfaceMember: (InterfaceMemberNode)[]; _Kw: (";" | ",")[] }
   | { arm: "type"; ident: CstLeaf; typeParams?: TypeParamsNode; type: TypeNode }
-  | { arm: "decoratorExpr"; decoratorExpr: (DecoratorExprNode)[]; abstractTok?: CstLeaf; ident: CstLeaf; typeParams?: TypeParamsNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; type: (TypeNode)[]; implementsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
+  | { arm: "decoratorExpr"; decoratorExpr: (DecoratorExprNode)[]; abstractTok?: CstLeaf; ident: CstLeaf; typeParams?: TypeParamsNode; alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[]; classMember: (ClassMemberNode)[] }
   | { arm: "enum_"; ident: CstLeaf; enumMember: (EnumMemberNode)[] }
   | { arm: "declare"; ident: CstLeaf; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode }
   | { arm: "declare2"; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } }
   | { arm: "namespace"; ident: CstLeaf; ident2: (CstLeaf)[]; stmt: (StmtNode)[] }
   | { arm: "module"; alt: { branch: "ident"; ident: CstLeaf; ident2: (CstLeaf)[] } | { branch: "string"; string: CstLeaf }; stmt: (StmtNode)[] }
   | { arm: "export_"; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } }
-  | { arm: "export_2"; alt: { branch: "async"; asyncTok?: CstLeaf; ident?: CstLeaf; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; alt: { branch: "block"; block: BlockNode } | { branch: "semi" } } | { branch: "abstract"; ident: CstLeaf; typeParams?: TypeParamsNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; type: (TypeNode)[]; implementsTok?: CstLeaf; classMember: (ClassMemberNode)[] } | { branch: "abstract2"; typeParams?: TypeParamsNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; type: (TypeNode)[]; implementsTok?: CstLeaf; classMember: (ClassMemberNode)[] } | { branch: "expr"; expr: ExprNode } }
+  | { arm: "decoratorExpr2"; decoratorExpr: (DecoratorExprNode)[]; decl: DeclNode }
+  | { arm: "export_2"; alt: { branch: "async"; asyncTok?: CstLeaf; ident?: CstLeaf; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; alt: { branch: "block"; block: BlockNode } | { branch: "semi" } } | { branch: "abstract"; ident: CstLeaf; typeParams?: TypeParamsNode; alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[]; classMember: (ClassMemberNode)[] } | { branch: "abstract2"; typeParams?: TypeParamsNode; alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[]; classMember: (ClassMemberNode)[] } | { branch: "expr"; expr: ExprNode } }
   | { arm: "export_3"; alt: { branch: "from"; string: CstLeaf } | { branch: "as"; ident: CstLeaf; string: CstLeaf } }
   | { arm: "export_4"; importSpecifier: (ImportSpecifierNode)[]; string?: CstLeaf; fromTok?: CstLeaf }
   | { arm: "export_5"; expr: ExprNode }
   | { arm: "export_6"; importSpecifier: (ImportSpecifierNode)[]; string?: CstLeaf; fromTok?: CstLeaf }
   | { arm: "const_"; ident: CstLeaf; enumMember: (EnumMemberNode)[] }
   | { arm: "import_"; alt: { branch: "importClause"; importClause: ImportClauseNode; string: CstLeaf } | { branch: "type"; importClause: ImportClauseNode; string: CstLeaf } | { branch: "ident"; ident: CstLeaf; expr: ExprNode } | { branch: "string"; string: CstLeaf } }
-  | { arm: "decoratorExpr2"; decoratorExpr: (DecoratorExprNode)[]; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } };
+  | { arm: "decoratorExpr3"; decoratorExpr: (DecoratorExprNode)[]; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } };
 
 function _Decl$async(c: readonly CstChild[], src: string): DeclMatch | null {
   let asyncTok: (CstLeaf) | undefined;
@@ -7070,10 +7321,7 @@ function _Decl$decoratorExpr(c: readonly CstChild[], src: string): DeclMatch | n
   let abstractTok: (CstLeaf) | undefined;
   let ident: (CstLeaf) | undefined;
   let typeParams: (TypeParamsNode) | undefined;
-  let classHeritage: (ClassHeritageNode) | undefined;
-  let extendsTok: (CstLeaf) | undefined;
-  const type: (TypeNode)[] = [];
-  let implementsTok: (CstLeaf) | undefined;
+  const alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[] = [];
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   for (;;) {
@@ -7109,63 +7357,141 @@ function _Decl$decoratorExpr(c: readonly CstChild[], src: string): DeclMatch | n
     }
     if (!_t7) i = _t6;
   }
-  {
+  for (;;) {
     const _t9 = i; let _t10 = true;
     _b11: {
-      if (!__lit(c, i, src, "extends", "$keyword")) { _t10 = false; break _b11; }
-      extendsTok = c[i] as CstLeaf;
-      i++;
-      if (!__nodeOf(c, i, "ClassHeritage")) { _t10 = false; break _b11; }
-      classHeritage = c[i] as ClassHeritageNode;
-      i++;
-    }
-    if (!_t10) i = _t9;
-  }
-  {
-    const _t12 = i; let _t13 = true;
-    _b14: {
-      if (!__lit(c, i, src, "implements", "$keyword")) { _t13 = false; break _b14; }
-      implementsTok = c[i] as CstLeaf;
-      i++;
       {
-        const _t15 = i; let _t18 = true;
-        _b19: {
-          if (!__nodeOf(c, i, "Type")) { _t18 = false; break _b19; }
-          type.push(c[i] as TypeNode);
-          i++;
-        }
-        if (!_t18) { i = _t15; }
-        else for (;;) {
-          if (!__lit(c, i, src, ",", "$punct")) break;
-          i++;
-          const _t152 = i; let _t16 = true;
-          _b17: {
-            if (!__nodeOf(c, i, "Type")) { _t16 = false; break _b17; }
-            type.push(c[i] as TypeNode);
+        let _t12 = false;
+        if (!_t12) {
+          const _t16_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+          const _t13 = i; let _t14 = true;
+          _b15: {
+            if (!__lit(c, i, src, "extends", "$keyword")) { _t14 = false; break _b15; }
             i++;
+            {
+              const _t17 = i; let _t20 = true;
+              _b21: {
+                {
+                  let _t22 = false;
+                  if (!_t22) {
+                    let _t26__t16_classHeritage: (ClassHeritageNode) | undefined;
+                    const _t23 = i; let _t24 = true;
+                    _b25: {
+                      if (!__nodeOf(c, i, "ClassHeritage")) { _t24 = false; break _b25; }
+                      _t26__t16_classHeritage = c[i] as ClassHeritageNode;
+                      i++;
+                    }
+                    if (_t24) { _t22 = true; _t16_alt.push({ branch: "classHeritage", classHeritage: _t26__t16_classHeritage! } as never); }
+                    else i = _t23;
+                  }
+                  if (!_t22) { _t20 = false; break _b21; }
+                }
+              }
+              if (!_t20) { i = _t17; }
+              else for (;;) {
+                if (!__lit(c, i, src, ",", "$punct")) break;
+                i++;
+                const _t172 = i; let _t18 = true;
+                _b19: {
+                  {
+                    let _t27 = false;
+                    if (!_t27) {
+                      let _t31__t16_classHeritage: (ClassHeritageNode) | undefined;
+                      const _t28 = i; let _t29 = true;
+                      _b30: {
+                        if (!__nodeOf(c, i, "ClassHeritage")) { _t29 = false; break _b30; }
+                        _t31__t16_classHeritage = c[i] as ClassHeritageNode;
+                        i++;
+                      }
+                      if (_t29) { _t27 = true; _t16_alt.push({ branch: "classHeritage", classHeritage: _t31__t16_classHeritage! } as never); }
+                      else i = _t28;
+                    }
+                    if (!_t27) { _t18 = false; break _b19; }
+                  }
+                }
+                if (!_t18) { i = _t172; break; }
+              }
+            }
           }
-          if (!_t16) { i = _t152; break; }
+          if (_t14) { _t12 = true; alt.push({ branch: "extends_", alt: _t16_alt } as never); }
+          else i = _t13;
         }
+        if (!_t12) {
+          const _t35_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+          const _t32 = i; let _t33 = true;
+          _b34: {
+            if (!__lit(c, i, src, "implements", "$keyword")) { _t33 = false; break _b34; }
+            i++;
+            {
+              const _t36 = i; let _t39 = true;
+              _b40: {
+                {
+                  let _t41 = false;
+                  if (!_t41) {
+                    let _t45__t35_classHeritage: (ClassHeritageNode) | undefined;
+                    const _t42 = i; let _t43 = true;
+                    _b44: {
+                      if (!__nodeOf(c, i, "ClassHeritage")) { _t43 = false; break _b44; }
+                      _t45__t35_classHeritage = c[i] as ClassHeritageNode;
+                      i++;
+                    }
+                    if (_t43) { _t41 = true; _t35_alt.push({ branch: "classHeritage", classHeritage: _t45__t35_classHeritage! } as never); }
+                    else i = _t42;
+                  }
+                  if (!_t41) { _t39 = false; break _b40; }
+                }
+              }
+              if (!_t39) { i = _t36; }
+              else for (;;) {
+                if (!__lit(c, i, src, ",", "$punct")) break;
+                i++;
+                const _t362 = i; let _t37 = true;
+                _b38: {
+                  {
+                    let _t46 = false;
+                    if (!_t46) {
+                      let _t50__t35_classHeritage: (ClassHeritageNode) | undefined;
+                      const _t47 = i; let _t48 = true;
+                      _b49: {
+                        if (!__nodeOf(c, i, "ClassHeritage")) { _t48 = false; break _b49; }
+                        _t50__t35_classHeritage = c[i] as ClassHeritageNode;
+                        i++;
+                      }
+                      if (_t48) { _t46 = true; _t35_alt.push({ branch: "classHeritage", classHeritage: _t50__t35_classHeritage! } as never); }
+                      else i = _t47;
+                    }
+                    if (!_t46) { _t37 = false; break _b38; }
+                  }
+                }
+                if (!_t37) { i = _t362; break; }
+              }
+            }
+          }
+          if (_t33) { _t12 = true; alt.push({ branch: "implements", alt: _t35_alt } as never); }
+          else i = _t32;
+        }
+        if (!_t12) { _t10 = false; break _b11; }
       }
     }
-    if (!_t13) i = _t12;
+    if (!_t10) { i = _t9; break; }
+    if (i === _t9) break;
   }
   if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
-    const _t20 = i; let _t21 = true;
-    _b22: {
-      if (!__nodeOf(c, i, "ClassMember")) { _t21 = false; break _b22; }
+    const _t51 = i; let _t52 = true;
+    _b53: {
+      if (!__nodeOf(c, i, "ClassMember")) { _t52 = false; break _b53; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
-    if (!_t21) { i = _t20; break; }
-    if (i === _t20) break;
+    if (!_t52) { i = _t51; break; }
+    if (i === _t51) break;
   }
   if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr", decoratorExpr, abstractTok, ident: ident!, typeParams, classHeritage, extendsTok, type, implementsTok, classMember };
+  return { arm: "decoratorExpr", decoratorExpr, abstractTok, ident: ident!, typeParams, alt, classMember };
 }
 
 function _Decl$enum_(c: readonly CstChild[], src: string): DeclMatch | null {
@@ -7455,8 +7781,38 @@ function _Decl$export_(c: readonly CstChild[], src: string): DeclMatch | null {
   return { arm: "export_", alt: alt! };
 }
 
+function _Decl$decoratorExpr2(c: readonly CstChild[], src: string): DeclMatch | null {
+  const decoratorExpr: (DecoratorExprNode)[] = [];
+  let decl: (DeclNode) | undefined;
+  let i = 0;
+  {
+    const _t0 = i; let _t1 = true;
+    _b2: {
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
+      decoratorExpr.push(c[i] as DecoratorExprNode);
+      i++;
+    }
+    if (!_t1) return null;
+  }
+  for (;;) {
+    const _t3 = i; let _t4 = true;
+    _b5: {
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t4 = false; break _b5; }
+      decoratorExpr.push(c[i] as DecoratorExprNode);
+      i++;
+    }
+    if (!_t4) { i = _t3; break; }
+    if (i === _t3) break;
+  }
+  if (!__nodeOf(c, i, "Decl")) return null;
+  decl = c[i] as DeclNode;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "decoratorExpr2", decoratorExpr, decl: decl! };
+}
+
 function _Decl$export_2(c: readonly CstChild[], src: string): DeclMatch | null {
-  let alt: ({ branch: "async"; asyncTok?: CstLeaf; ident?: CstLeaf; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; alt: { branch: "block"; block: BlockNode } | { branch: "semi" } } | { branch: "abstract"; ident: CstLeaf; typeParams?: TypeParamsNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; type: (TypeNode)[]; implementsTok?: CstLeaf; classMember: (ClassMemberNode)[] } | { branch: "abstract2"; typeParams?: TypeParamsNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; type: (TypeNode)[]; implementsTok?: CstLeaf; classMember: (ClassMemberNode)[] } | { branch: "expr"; expr: ExprNode }) | undefined;
+  let alt: ({ branch: "async"; asyncTok?: CstLeaf; ident?: CstLeaf; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; alt: { branch: "block"; block: BlockNode } | { branch: "semi" } } | { branch: "abstract"; ident: CstLeaf; typeParams?: TypeParamsNode; alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[]; classMember: (ClassMemberNode)[] } | { branch: "abstract2"; typeParams?: TypeParamsNode; alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[]; classMember: (ClassMemberNode)[] } | { branch: "expr"; expr: ExprNode }) | undefined;
   let i = 0;
   if (!__lit(c, i, src, "export", "$keyword")) return null;
   i++;
@@ -7582,10 +7938,7 @@ function _Decl$export_2(c: readonly CstChild[], src: string): DeclMatch | null {
     if (!_t0) {
       let _t40_ident: (CstLeaf) | undefined;
       let _t40_typeParams: (TypeParamsNode) | undefined;
-      let _t40_classHeritage: (ClassHeritageNode) | undefined;
-      let _t40_extendsTok: (CstLeaf) | undefined;
-      const _t40_type: (TypeNode)[] = [];
-      let _t40_implementsTok: (CstLeaf) | undefined;
+      const _t40_alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[] = [];
       const _t40_classMember: (ClassMemberNode)[] = [];
       const _t37 = i; let _t38 = true;
       _b39: {
@@ -7605,164 +7958,317 @@ function _Decl$export_2(c: readonly CstChild[], src: string): DeclMatch | null {
           }
           if (!_t42) i = _t41;
         }
-        {
+        for (;;) {
           const _t44 = i; let _t45 = true;
           _b46: {
-            if (!__lit(c, i, src, "extends", "$keyword")) { _t45 = false; break _b46; }
-            _t40_extendsTok = c[i] as CstLeaf;
-            i++;
-            if (!__nodeOf(c, i, "ClassHeritage")) { _t45 = false; break _b46; }
-            _t40_classHeritage = c[i] as ClassHeritageNode;
-            i++;
-          }
-          if (!_t45) i = _t44;
-        }
-        {
-          const _t47 = i; let _t48 = true;
-          _b49: {
-            if (!__lit(c, i, src, "implements", "$keyword")) { _t48 = false; break _b49; }
-            _t40_implementsTok = c[i] as CstLeaf;
-            i++;
             {
-              const _t50 = i; let _t53 = true;
-              _b54: {
-                if (!__nodeOf(c, i, "Type")) { _t53 = false; break _b54; }
-                _t40_type.push(c[i] as TypeNode);
-                i++;
-              }
-              if (!_t53) { i = _t50; }
-              else for (;;) {
-                if (!__lit(c, i, src, ",", "$punct")) break;
-                i++;
-                const _t502 = i; let _t51 = true;
-                _b52: {
-                  if (!__nodeOf(c, i, "Type")) { _t51 = false; break _b52; }
-                  _t40_type.push(c[i] as TypeNode);
+              let _t47 = false;
+              if (!_t47) {
+                const _t51__t40_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+                const _t48 = i; let _t49 = true;
+                _b50: {
+                  if (!__lit(c, i, src, "extends", "$keyword")) { _t49 = false; break _b50; }
                   i++;
+                  {
+                    const _t52 = i; let _t55 = true;
+                    _b56: {
+                      {
+                        let _t57 = false;
+                        if (!_t57) {
+                          let _t61__t51__t40_classHeritage: (ClassHeritageNode) | undefined;
+                          const _t58 = i; let _t59 = true;
+                          _b60: {
+                            if (!__nodeOf(c, i, "ClassHeritage")) { _t59 = false; break _b60; }
+                            _t61__t51__t40_classHeritage = c[i] as ClassHeritageNode;
+                            i++;
+                          }
+                          if (_t59) { _t57 = true; _t51__t40_alt.push({ branch: "classHeritage", classHeritage: _t61__t51__t40_classHeritage! } as never); }
+                          else i = _t58;
+                        }
+                        if (!_t57) { _t55 = false; break _b56; }
+                      }
+                    }
+                    if (!_t55) { i = _t52; }
+                    else for (;;) {
+                      if (!__lit(c, i, src, ",", "$punct")) break;
+                      i++;
+                      const _t522 = i; let _t53 = true;
+                      _b54: {
+                        {
+                          let _t62 = false;
+                          if (!_t62) {
+                            let _t66__t51__t40_classHeritage: (ClassHeritageNode) | undefined;
+                            const _t63 = i; let _t64 = true;
+                            _b65: {
+                              if (!__nodeOf(c, i, "ClassHeritage")) { _t64 = false; break _b65; }
+                              _t66__t51__t40_classHeritage = c[i] as ClassHeritageNode;
+                              i++;
+                            }
+                            if (_t64) { _t62 = true; _t51__t40_alt.push({ branch: "classHeritage", classHeritage: _t66__t51__t40_classHeritage! } as never); }
+                            else i = _t63;
+                          }
+                          if (!_t62) { _t53 = false; break _b54; }
+                        }
+                      }
+                      if (!_t53) { i = _t522; break; }
+                    }
+                  }
                 }
-                if (!_t51) { i = _t502; break; }
+                if (_t49) { _t47 = true; _t40_alt.push({ branch: "extends_", alt: _t51__t40_alt } as never); }
+                else i = _t48;
               }
+              if (!_t47) {
+                const _t70__t40_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+                const _t67 = i; let _t68 = true;
+                _b69: {
+                  if (!__lit(c, i, src, "implements", "$keyword")) { _t68 = false; break _b69; }
+                  i++;
+                  {
+                    const _t71 = i; let _t74 = true;
+                    _b75: {
+                      {
+                        let _t76 = false;
+                        if (!_t76) {
+                          let _t80__t70__t40_classHeritage: (ClassHeritageNode) | undefined;
+                          const _t77 = i; let _t78 = true;
+                          _b79: {
+                            if (!__nodeOf(c, i, "ClassHeritage")) { _t78 = false; break _b79; }
+                            _t80__t70__t40_classHeritage = c[i] as ClassHeritageNode;
+                            i++;
+                          }
+                          if (_t78) { _t76 = true; _t70__t40_alt.push({ branch: "classHeritage", classHeritage: _t80__t70__t40_classHeritage! } as never); }
+                          else i = _t77;
+                        }
+                        if (!_t76) { _t74 = false; break _b75; }
+                      }
+                    }
+                    if (!_t74) { i = _t71; }
+                    else for (;;) {
+                      if (!__lit(c, i, src, ",", "$punct")) break;
+                      i++;
+                      const _t712 = i; let _t72 = true;
+                      _b73: {
+                        {
+                          let _t81 = false;
+                          if (!_t81) {
+                            let _t85__t70__t40_classHeritage: (ClassHeritageNode) | undefined;
+                            const _t82 = i; let _t83 = true;
+                            _b84: {
+                              if (!__nodeOf(c, i, "ClassHeritage")) { _t83 = false; break _b84; }
+                              _t85__t70__t40_classHeritage = c[i] as ClassHeritageNode;
+                              i++;
+                            }
+                            if (_t83) { _t81 = true; _t70__t40_alt.push({ branch: "classHeritage", classHeritage: _t85__t70__t40_classHeritage! } as never); }
+                            else i = _t82;
+                          }
+                          if (!_t81) { _t72 = false; break _b73; }
+                        }
+                      }
+                      if (!_t72) { i = _t712; break; }
+                    }
+                  }
+                }
+                if (_t68) { _t47 = true; _t40_alt.push({ branch: "implements", alt: _t70__t40_alt } as never); }
+                else i = _t67;
+              }
+              if (!_t47) { _t45 = false; break _b46; }
             }
           }
-          if (!_t48) i = _t47;
+          if (!_t45) { i = _t44; break; }
+          if (i === _t44) break;
         }
         if (!__lit(c, i, src, "{", "$punct")) { _t38 = false; break _b39; }
         i++;
         for (;;) {
-          const _t55 = i; let _t56 = true;
-          _b57: {
-            if (!__nodeOf(c, i, "ClassMember")) { _t56 = false; break _b57; }
+          const _t86 = i; let _t87 = true;
+          _b88: {
+            if (!__nodeOf(c, i, "ClassMember")) { _t87 = false; break _b88; }
             _t40_classMember.push(c[i] as ClassMemberNode);
             i++;
           }
-          if (!_t56) { i = _t55; break; }
-          if (i === _t55) break;
+          if (!_t87) { i = _t86; break; }
+          if (i === _t86) break;
         }
         if (!__lit(c, i, src, "}", "$punct")) { _t38 = false; break _b39; }
         i++;
       }
-      if (_t38) { _t0 = true; alt = ({ branch: "abstract", ident: _t40_ident!, typeParams: _t40_typeParams, classHeritage: _t40_classHeritage, extendsTok: _t40_extendsTok, type: _t40_type, implementsTok: _t40_implementsTok, classMember: _t40_classMember }) as typeof alt; }
+      if (_t38) { _t0 = true; alt = ({ branch: "abstract", ident: _t40_ident!, typeParams: _t40_typeParams, alt: _t40_alt, classMember: _t40_classMember }) as typeof alt; }
       else i = _t37;
     }
     if (!_t0) {
-      let _t61_typeParams: (TypeParamsNode) | undefined;
-      let _t61_classHeritage: (ClassHeritageNode) | undefined;
-      let _t61_extendsTok: (CstLeaf) | undefined;
-      const _t61_type: (TypeNode)[] = [];
-      let _t61_implementsTok: (CstLeaf) | undefined;
-      const _t61_classMember: (ClassMemberNode)[] = [];
-      const _t58 = i; let _t59 = true;
-      _b60: {
-        if (!__lit(c, i, src, "abstract", "$keyword")) { _t59 = false; break _b60; }
+      let _t92_typeParams: (TypeParamsNode) | undefined;
+      const _t92_alt: ({ branch: "extends_"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] } | { branch: "implements"; alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] })[] = [];
+      const _t92_classMember: (ClassMemberNode)[] = [];
+      const _t89 = i; let _t90 = true;
+      _b91: {
+        if (!__lit(c, i, src, "abstract", "$keyword")) { _t90 = false; break _b91; }
         i++;
-        if (!__lit(c, i, src, "class", "$keyword")) { _t59 = false; break _b60; }
+        if (!__lit(c, i, src, "class", "$keyword")) { _t90 = false; break _b91; }
         i++;
         {
-          const _t62 = i; let _t63 = true;
-          _b64: {
-            if (!__nodeOf(c, i, "TypeParams")) { _t63 = false; break _b64; }
-            _t61_typeParams = c[i] as TypeParamsNode;
+          const _t93 = i; let _t94 = true;
+          _b95: {
+            if (!__nodeOf(c, i, "TypeParams")) { _t94 = false; break _b95; }
+            _t92_typeParams = c[i] as TypeParamsNode;
             i++;
           }
-          if (!_t63) i = _t62;
+          if (!_t94) i = _t93;
         }
-        {
-          const _t65 = i; let _t66 = true;
-          _b67: {
-            if (!__lit(c, i, src, "extends", "$keyword")) { _t66 = false; break _b67; }
-            _t61_extendsTok = c[i] as CstLeaf;
-            i++;
-            if (!__nodeOf(c, i, "ClassHeritage")) { _t66 = false; break _b67; }
-            _t61_classHeritage = c[i] as ClassHeritageNode;
-            i++;
-          }
-          if (!_t66) i = _t65;
-        }
-        {
-          const _t68 = i; let _t69 = true;
-          _b70: {
-            if (!__lit(c, i, src, "implements", "$keyword")) { _t69 = false; break _b70; }
-            _t61_implementsTok = c[i] as CstLeaf;
-            i++;
+        for (;;) {
+          const _t96 = i; let _t97 = true;
+          _b98: {
             {
-              const _t71 = i; let _t74 = true;
-              _b75: {
-                if (!__nodeOf(c, i, "Type")) { _t74 = false; break _b75; }
-                _t61_type.push(c[i] as TypeNode);
-                i++;
-              }
-              if (!_t74) { i = _t71; }
-              else for (;;) {
-                if (!__lit(c, i, src, ",", "$punct")) break;
-                i++;
-                const _t712 = i; let _t72 = true;
-                _b73: {
-                  if (!__nodeOf(c, i, "Type")) { _t72 = false; break _b73; }
-                  _t61_type.push(c[i] as TypeNode);
+              let _t99 = false;
+              if (!_t99) {
+                const _t103__t92_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+                const _t100 = i; let _t101 = true;
+                _b102: {
+                  if (!__lit(c, i, src, "extends", "$keyword")) { _t101 = false; break _b102; }
                   i++;
+                  {
+                    const _t104 = i; let _t107 = true;
+                    _b108: {
+                      {
+                        let _t109 = false;
+                        if (!_t109) {
+                          let _t113__t103__t92_classHeritage: (ClassHeritageNode) | undefined;
+                          const _t110 = i; let _t111 = true;
+                          _b112: {
+                            if (!__nodeOf(c, i, "ClassHeritage")) { _t111 = false; break _b112; }
+                            _t113__t103__t92_classHeritage = c[i] as ClassHeritageNode;
+                            i++;
+                          }
+                          if (_t111) { _t109 = true; _t103__t92_alt.push({ branch: "classHeritage", classHeritage: _t113__t103__t92_classHeritage! } as never); }
+                          else i = _t110;
+                        }
+                        if (!_t109) { _t107 = false; break _b108; }
+                      }
+                    }
+                    if (!_t107) { i = _t104; }
+                    else for (;;) {
+                      if (!__lit(c, i, src, ",", "$punct")) break;
+                      i++;
+                      const _t1042 = i; let _t105 = true;
+                      _b106: {
+                        {
+                          let _t114 = false;
+                          if (!_t114) {
+                            let _t118__t103__t92_classHeritage: (ClassHeritageNode) | undefined;
+                            const _t115 = i; let _t116 = true;
+                            _b117: {
+                              if (!__nodeOf(c, i, "ClassHeritage")) { _t116 = false; break _b117; }
+                              _t118__t103__t92_classHeritage = c[i] as ClassHeritageNode;
+                              i++;
+                            }
+                            if (_t116) { _t114 = true; _t103__t92_alt.push({ branch: "classHeritage", classHeritage: _t118__t103__t92_classHeritage! } as never); }
+                            else i = _t115;
+                          }
+                          if (!_t114) { _t105 = false; break _b106; }
+                        }
+                      }
+                      if (!_t105) { i = _t1042; break; }
+                    }
+                  }
                 }
-                if (!_t72) { i = _t712; break; }
+                if (_t101) { _t99 = true; _t92_alt.push({ branch: "extends_", alt: _t103__t92_alt } as never); }
+                else i = _t100;
               }
+              if (!_t99) {
+                const _t122__t92_alt: ({ branch: "classHeritage"; classHeritage: ClassHeritageNode })[] = [];
+                const _t119 = i; let _t120 = true;
+                _b121: {
+                  if (!__lit(c, i, src, "implements", "$keyword")) { _t120 = false; break _b121; }
+                  i++;
+                  {
+                    const _t123 = i; let _t126 = true;
+                    _b127: {
+                      {
+                        let _t128 = false;
+                        if (!_t128) {
+                          let _t132__t122__t92_classHeritage: (ClassHeritageNode) | undefined;
+                          const _t129 = i; let _t130 = true;
+                          _b131: {
+                            if (!__nodeOf(c, i, "ClassHeritage")) { _t130 = false; break _b131; }
+                            _t132__t122__t92_classHeritage = c[i] as ClassHeritageNode;
+                            i++;
+                          }
+                          if (_t130) { _t128 = true; _t122__t92_alt.push({ branch: "classHeritage", classHeritage: _t132__t122__t92_classHeritage! } as never); }
+                          else i = _t129;
+                        }
+                        if (!_t128) { _t126 = false; break _b127; }
+                      }
+                    }
+                    if (!_t126) { i = _t123; }
+                    else for (;;) {
+                      if (!__lit(c, i, src, ",", "$punct")) break;
+                      i++;
+                      const _t1232 = i; let _t124 = true;
+                      _b125: {
+                        {
+                          let _t133 = false;
+                          if (!_t133) {
+                            let _t137__t122__t92_classHeritage: (ClassHeritageNode) | undefined;
+                            const _t134 = i; let _t135 = true;
+                            _b136: {
+                              if (!__nodeOf(c, i, "ClassHeritage")) { _t135 = false; break _b136; }
+                              _t137__t122__t92_classHeritage = c[i] as ClassHeritageNode;
+                              i++;
+                            }
+                            if (_t135) { _t133 = true; _t122__t92_alt.push({ branch: "classHeritage", classHeritage: _t137__t122__t92_classHeritage! } as never); }
+                            else i = _t134;
+                          }
+                          if (!_t133) { _t124 = false; break _b125; }
+                        }
+                      }
+                      if (!_t124) { i = _t1232; break; }
+                    }
+                  }
+                }
+                if (_t120) { _t99 = true; _t92_alt.push({ branch: "implements", alt: _t122__t92_alt } as never); }
+                else i = _t119;
+              }
+              if (!_t99) { _t97 = false; break _b98; }
             }
           }
-          if (!_t69) i = _t68;
+          if (!_t97) { i = _t96; break; }
+          if (i === _t96) break;
         }
-        if (!__lit(c, i, src, "{", "$punct")) { _t59 = false; break _b60; }
+        if (!__lit(c, i, src, "{", "$punct")) { _t90 = false; break _b91; }
         i++;
         for (;;) {
-          const _t76 = i; let _t77 = true;
-          _b78: {
-            if (!__nodeOf(c, i, "ClassMember")) { _t77 = false; break _b78; }
-            _t61_classMember.push(c[i] as ClassMemberNode);
+          const _t138 = i; let _t139 = true;
+          _b140: {
+            if (!__nodeOf(c, i, "ClassMember")) { _t139 = false; break _b140; }
+            _t92_classMember.push(c[i] as ClassMemberNode);
             i++;
           }
-          if (!_t77) { i = _t76; break; }
-          if (i === _t76) break;
+          if (!_t139) { i = _t138; break; }
+          if (i === _t138) break;
         }
-        if (!__lit(c, i, src, "}", "$punct")) { _t59 = false; break _b60; }
+        if (!__lit(c, i, src, "}", "$punct")) { _t90 = false; break _b91; }
         i++;
       }
-      if (_t59) { _t0 = true; alt = ({ branch: "abstract2", typeParams: _t61_typeParams, classHeritage: _t61_classHeritage, extendsTok: _t61_extendsTok, type: _t61_type, implementsTok: _t61_implementsTok, classMember: _t61_classMember }) as typeof alt; }
-      else i = _t58;
+      if (_t90) { _t0 = true; alt = ({ branch: "abstract2", typeParams: _t92_typeParams, alt: _t92_alt, classMember: _t92_classMember }) as typeof alt; }
+      else i = _t89;
     }
     if (!_t0) {
-      let _t82_expr: (ExprNode) | undefined;
-      const _t79 = i; let _t80 = true;
-      _b81: {
-        if (!__nodeOf(c, i, "Expr")) { _t80 = false; break _b81; }
-        _t82_expr = c[i] as ExprNode;
+      let _t144_expr: (ExprNode) | undefined;
+      const _t141 = i; let _t142 = true;
+      _b143: {
+        if (!__nodeOf(c, i, "Expr")) { _t142 = false; break _b143; }
+        _t144_expr = c[i] as ExprNode;
         i++;
         {
-          const _t83 = i; let _t84 = true;
-          _b85: {
-            if (!__lit(c, i, src, ";", "$punct")) { _t84 = false; break _b85; }
+          const _t145 = i; let _t146 = true;
+          _b147: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t146 = false; break _b147; }
             i++;
           }
-          if (!_t84) i = _t83;
+          if (!_t146) i = _t145;
         }
       }
-      if (_t80) { _t0 = true; alt = ({ branch: "expr", expr: _t82_expr! }) as typeof alt; }
-      else i = _t79;
+      if (_t142) { _t0 = true; alt = ({ branch: "expr", expr: _t144_expr! }) as typeof alt; }
+      else i = _t141;
     }
     if (!_t0) return null;
   }
@@ -8115,7 +8621,7 @@ function _Decl$import_(c: readonly CstChild[], src: string): DeclMatch | null {
   return { arm: "import_", alt: alt! };
 }
 
-function _Decl$decoratorExpr2(c: readonly CstChild[], src: string): DeclMatch | null {
+function _Decl$decoratorExpr3(c: readonly CstChild[], src: string): DeclMatch | null {
   const decoratorExpr: (DecoratorExprNode)[] = [];
   let alt: ({ branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode }) | undefined;
   let i = 0;
@@ -8158,7 +8664,7 @@ function _Decl$decoratorExpr2(c: readonly CstChild[], src: string): DeclMatch | 
     if (!_t3) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr2", decoratorExpr, alt: alt! };
+  return { arm: "decoratorExpr3", decoratorExpr, alt: alt! };
 }
 
 export function matchDecl(n: DeclNode, src: string): DeclMatch {
@@ -8170,6 +8676,7 @@ export function matchDecl(n: DeclNode, src: string): DeclMatch {
       case "DecoratorExpr": {
         { const m = _Decl$decoratorExpr(c, src); if (m !== null) return m; }
         { const m = _Decl$decoratorExpr2(c, src); if (m !== null) return m; }
+        { const m = _Decl$decoratorExpr3(c, src); if (m !== null) return m; }
         break;
       }
     }
@@ -8198,7 +8705,7 @@ export function matchDecl(n: DeclNode, src: string): DeclMatch {
         { const m = _Decl$export_4(c, src); if (m !== null) return m; }
         { const m = _Decl$export_5(c, src); if (m !== null) return m; }
         { const m = _Decl$export_6(c, src); if (m !== null) return m; }
-        { const m = _Decl$decoratorExpr2(c, src); if (m !== null) return m; }
+        { const m = _Decl$decoratorExpr3(c, src); if (m !== null) return m; }
         break;
       }
       case 102: {
@@ -8688,12 +9195,21 @@ export function matchInterfaceMember(n: InterfaceMemberNode, src: string): Inter
 }
 
 export type ClassMemberMatch =
+  | { arm: "semi" }
   | { arm: "decoratorExpr"; decoratorExpr: DecoratorExprNode }
   | { arm: "constructor"; param: (ParamNode)[]; block: BlockNode }
   | { arm: "static_"; block: BlockNode }
   | { arm: "public"; publicKw: ("public" | "private" | "protected" | "static" | "abstract" | "readonly" | "override" | "accessor" | "async")[]; alt: { branch: "star"; memberName: MemberNameNode; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; block?: BlockNode } | { branch: "get"; getKw: "get" | "set"; memberName: MemberNameNode; param: (ParamNode)[]; type?: TypeNode; block?: BlockNode } | { branch: "bracket"; ident: CstLeaf; type: TypeNode; type2: TypeNode } | { branch: "memberName"; memberName: MemberNameNode; alt: { branch: "question"; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; block?: BlockNode } | { branch: "bang"; type?: TypeNode; expr?: ExprNode } } }
   | { arm: "memberName"; memberName: MemberNameNode; type?: TypeNode; expr?: ExprNode }
   | { arm: "memberName2"; memberName: MemberNameNode; typeParams?: TypeParamsNode; param: (ParamNode)[]; type?: TypeNode; block?: BlockNode };
+
+function _ClassMember$semi(c: readonly CstChild[], src: string): ClassMemberMatch | null {
+  let i = 0;
+  if (!__lit(c, i, src, ";", "$punct")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "semi" };
+}
 
 function _ClassMember$decoratorExpr(c: readonly CstChild[], src: string): ClassMemberMatch | null {
   let decoratorExpr: (DecoratorExprNode) | undefined;
@@ -9294,6 +9810,10 @@ export function matchClassMember(n: ClassMemberNode, src: string): ClassMemberMa
     switch (src.charCodeAt(k0.offset)) {
       case 42: {
         { const m = _ClassMember$public(c, src); if (m !== null) return m; }
+        break;
+      }
+      case 59: {
+        { const m = _ClassMember$semi(c, src); if (m !== null) return m; }
         break;
       }
       case 91: {
