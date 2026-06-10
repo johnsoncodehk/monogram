@@ -2410,19 +2410,33 @@ export function parse(source, entryRule) {
 // until then. Lexing is FULL-FILE by design: the lexer carries cross-token state
 // (template nesting, regex context, markup modes), full lexing is a small share of a
 // parse, and the diff is what localizes the damage — not the lexer.
-export function parseEdited(source, entryRule) {
+export function parseEdited(source, entryRule, edits) {
   if (lastSrc === null) return parse(source, entryRule);
   const oSrc = lastSrc;
   lastSrc = null;
 ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
-  // Char-level envelope (cheapest possible without an edit protocol).
+  // Damage envelope: from the EDIT PROTOCOL when the caller provides it (an editor
+  // knows its edit ranges — [{start, oldEnd, newEnd}] in old/new coordinates), else
+  // derived by the char-level prefix/suffix compare (the cheapest possible fallback,
+  // but O(file) scans).
   const oldLen = oSrc.length, newLen = source.length;
-  const minL = oldLen < newLen ? oldLen : newLen;
-  let cs = 0;
-  while (cs < minL && oSrc.charCodeAt(cs) === source.charCodeAt(cs)) cs++;
-  let ce = 0;
-  while (ce < minL - cs && oSrc.charCodeAt(oldLen - 1 - ce) === source.charCodeAt(newLen - 1 - ce)) ce++;
-  const ceOld = oldLen - ce, ceNew = newLen - ce;
+  let cs, ceOld, ceNew;
+  if (edits !== undefined && edits.length > 0) {
+    cs = edits[0].start; ceOld = edits[0].oldEnd; ceNew = edits[0].newEnd;
+    for (let i = 1; i < edits.length; i++) {
+      const ed = edits[i];
+      if (ed.start < cs) cs = ed.start;
+      if (ed.oldEnd > ceOld) ceOld = ed.oldEnd;
+      if (ed.newEnd > ceNew) ceNew = ed.newEnd;
+    }
+  } else {
+    const minL = oldLen < newLen ? oldLen : newLen;
+    cs = 0;
+    while (cs < minL && oSrc.charCodeAt(cs) === source.charCodeAt(cs)) cs++;
+    let ce = 0;
+    while (ce < minL - cs && oSrc.charCodeAt(oldLen - 1 - ce) === source.charCodeAt(newLen - 1 - ce)) ce++;
+    ceOld = oldLen - ce; ceNew = newLen - ce;
+  }
   const charDelta = newLen - oldLen;
   // Restart anchor: the last token B ending at/before the damage whose recorded
   // depths are zero and whose shape carries no cross-token lexer flag (')' control-
