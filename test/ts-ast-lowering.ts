@@ -6,7 +6,8 @@
 //
 // Deliberately NOT complete: unlowered constructs throw Unlowered (the verify driver
 // counts them) — the goal is an honest pain inventory, not a shipped frontend.
-import { matchStmt, type TreeAccess } from '../typescript.cst-match.ts';
+import { matchStmt } from '../typescript.cst-match.ts';
+import type { ObjTree } from './obj-tree.ts';
 
 export type Ast = { kind: string; pos: number; end: number; children: Ast[] };
 const ast = (kind: string, pos: number, end: number, children: Ast[] = []): Ast => ({ kind, pos, end, children });
@@ -27,7 +28,7 @@ export class Unlowered extends Error {
 // against undefined, never truthiness.
 type E = number;
 let SRC = '';
-let T!: TreeAccess;
+let T!: ObjTree;
 const isLeaf = (n: E | undefined): boolean => n !== undefined && n < 0;
 const isNode = (n: E | undefined): boolean => n !== undefined && n >= 0;
 const off = (n: E): number => T.offsetOf(n);
@@ -510,7 +511,7 @@ function lowerBindingElement(n: E): Ast {
 // A few arms still reach into kidsOf(n) for the positions of uncaptured structural
 // keywords ('catch', the switch '{') — a noted destructurer gap.
 function lowerStmt(n: E): Ast {
-  const m = matchStmt(T, n as never, SRC);
+  const m = matchStmt(T as never, n as never, 0, SRC);
   const c = kidsOf(n);
   switch (m.arm) {
     case 'block': return lowerBlock(m.block);
@@ -924,7 +925,7 @@ function lowerExport(n: E, c: E[], i: number, mods: Ast[]): Ast {
 }
 
 // ── Entry ──
-export function lowerProgram(t: TreeAccess, root: E, source: string): Ast {
+export function lowerProgram(t: ObjTree, root: E, source: string): Ast {
   T = t;
   SRC = source;
   const stmts: Ast[] = [];

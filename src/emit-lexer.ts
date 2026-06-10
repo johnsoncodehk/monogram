@@ -103,6 +103,11 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// ── Emitted lexer (emit-lexer.ts): specialized tokenize for this grammar ──`);
   for (const m of matchers) emit(`const ${m.re} = new RegExp(${J(`(?:${m.pattern})`)}, ${J(m.flags)});`);
   emit(`const LX_WS = /\\s+/y;`);
+  emit(`// window-truncation retry: a matcher failing at the WINDOW edge is not a lex`);
+  emit(`// error — the caller re-materializes a larger window (truncation cannot fake a`);
+  emit(`// resync: suffix-zone equality makes a cut token's END mismatch the old one)`);
+  emit(`const LEX_RETRY = { retry: true };`);
+  emit(`let lexWindowMore = false;`);
   emit(`const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;`);
   emit(`const LX_UNI_CONT = /[$\\u200c\\u200d\\p{ID_Continue}]+/uy;`);
   emit(`const LX_UNI_FULL = /^[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/u;`);
@@ -177,7 +182,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       emit(`      if (validateEscapes) {`);
       emit(`        LX_TPL_ESC.lastIndex = pos;`);
       emit(`        const m = LX_TPL_ESC.exec(source);`);
-      emit(`        if (!m) throw new Error('Invalid escape sequence in template at offset ' + pos);`);
+      emit(`        if (!m) { if (lexWindowMore) throw LEX_RETRY; throw new Error('Invalid escape sequence in template at offset ' + pos); }`);
       emit(`        pos += m[0].length;`);
       emit(`      } else { pos += 2; }`);
     } else {
@@ -188,6 +193,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`    if (${startsWithExpr('source', 'pos', tplOpen)}) return { endsWithInterp: false, end: pos + ${tplOpen.length} };`);
     emit(`    pos++;`);
     emit(`  }`);
+    emit(`  if (lexWindowMore) throw LEX_RETRY;`);
     emit(`  throw new Error('Unterminated template literal at offset ' + pos);`);
     emit(`}`);
   }
@@ -197,34 +203,81 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   // when a CST leaf is built. Flag bits: 1 = newlineBefore (the only stamp this emitted
   // lexer ever sets; comment/multilineFlow stamps belong to fallback-only grammars).
   emit(`function tokenize(source) {`);
-  emit(`  src = source;`);
+  emit(`  docPieces = [source]; docPieceOff = [0]; docLen = source.length;`);
+  emit(`  docFlat = source; docCur = 0;`);
   emit(`  tokN = 0;`);
+  emit(`  parenCachePos = -1;`);
+  emit(`  srcLenP1 = source.length + 1;`);
+  emit(`  negFrom = 0x7fffffff;`);
+  emit(`  lexCore(source, 0, -1, 0, -1, 0, 0);`);
+  emit(`  return tokN;`);
+  emit(`}`);
+  emit(`// The lexer core, parameterized for WINDOWED re-lexing: start at startPos with`);
+  emit(`// the previous token's (k, t) as the regex-context seed (-1 = none / file start)`);
+  emit(`// and EMPTY template/paren stacks (the caller restarts only at depth-0 safe`);
+  emit(`// points). In window mode (wndPtr0 >= 0) the OLD stream sits in the alt buffers;`);
+  emit(`// after each token pushed at/past wndMinOff, resync fires when it aligns with an`);
+  emit(`// old token (same k/t, offsets shifted by wndDelta, both depth records 0) while`);
+  emit(`// the window's own stacks are empty — returns that OLD index (the duplicate push`);
+  emit(`// is retracted), or -1 when lexing ran to EOF.`);
+  emit(`function lexCore(source, startPos, pvK, pvT, wndPtr0, wndMinOff, wndDelta, wndCs, initParens, srcBase, hasMore) {`);
+  emit(`  if (srcBase === undefined) srcBase = 0;`);
+  emit(`  lexWindowMore = hasMore === true;`);
   emit(`  const n = source.length;`);
-  emit(`  let pos = 0;`);
+  emit(`  let pos = startPos;`);
   emit(`  let pendingNl = false;`);
+  emit(`  let extraFl = 0;`);
   emit(`  let lastBangWasPostfix = false;`);
   emit(`  let lastCloseWasParenHead = false;`);
   emit(`  const templateStack = [];`);
-  emit(`  const parenHeadStack = [];`);
+  emit(`  const parenHeadStack = initParens !== undefined && initParens !== null ? initParens : [];`);
+  emit(`  let wndPtr = wndPtr0;`);
+  emit(`  let wndHit = -1;`);
+  emit(`  // stack depths as of the last token fully BEFORE the damage: a resync point may`);
+  emit(`  // sit at any depth as long as every bracket still open there was opened before`);
+  emit(`  // the damage (the prefix agrees byte-for-byte, so those stack entries agree too;`);
+  emit(`  // anything opened inside the damage could differ in control-head-ness).`);
+  emit(`  let dmgDp = -1, dmgPd = -1;`);
+  emit(`  let lastDp = templateStack.length, lastPd = parenHeadStack.length;`);
   emit(`  function tkPush(k, t, off, end) {`);
+  emit(`    off += srcBase; end += srcBase;`);
   emit(`    if (tokN === tkCap) growTok();`);
   emit(`    tkK[tokN] = k; tkT[tokN] = t; tkOff[tokN] = off; tkEnd[tokN] = end;`);
-  emit(`    tkFl[tokN] = pendingNl ? 1 : 0;`);
+  emit(`    tkFl[tokN] = (pendingNl ? 1 : 0) | extraFl;`);
+  emit(`    extraFl = 0;`);
+  emit(`    tkDp[tokN] = templateStack.length;`);
+  emit(`    tkPd[tokN] = parenHeadStack.length;`);
   emit(`    pendingNl = false;`);
+  emit(`    pvK = k; pvT = t;`);
   emit(`    tokN++;`);
+  emit(`    if (wndPtr >= 0) {`);
+  emit(`      if (dmgPd < 0) {`);
+  emit(`        if (off >= wndCs) { dmgDp = lastDp; dmgPd = lastPd; }`);
+  emit(`        else { lastDp = tkDp[tokN - 1]; lastPd = tkPd[tokN - 1]; }`);
+  emit(`      }`);
+  emit(`      if (off >= wndMinOff && dmgPd >= 0`);
+  emit(`          && templateStack.length <= dmgDp && parenHeadStack.length <= dmgPd) {`);
+  emit(`        while (wndPtr < altN && (altOff[wndPtr] < 0 ? altOff[wndPtr] + srcLenP1 : altOff[wndPtr]) + wndDelta < off) wndPtr++;`);
+  emit(`        if (wndPtr < altN && (altOff[wndPtr] < 0 ? altOff[wndPtr] + srcLenP1 : altOff[wndPtr]) + wndDelta === off && altK[wndPtr] === k && altT[wndPtr] === t`);
+  emit(`            && (altEnd[wndPtr] < 0 ? altEnd[wndPtr] + srcLenP1 : altEnd[wndPtr]) + wndDelta === end && altDp[wndPtr] === templateStack.length && altPd[wndPtr] === parenHeadStack.length) {`);
+  emit(`          wndHit = wndPtr;`);
+  emit(`        }`);
+  emit(`      }`);
+  emit(`    }`);
   emit(`  }`);
   emit(`  // prevIsValue, baked: postfix-ambiguous op → its recorded position; an expression-`);
   emit(`  // head keyword or a control-head ')' is NOT a value; else division-prev type/text.`);
   emit(`  function prevIsValue() {`);
-  emit(`    if (tokN === 0) return false;`);
-  emit(`    const i = tokN - 1;`);
-  emit(`    const t = tkT[i];`);
+  emit(`    const k = tokN > 0 ? tkK[tokN - 1] : pvK;`);
+  emit(`    if (k < 0) return false;`);
+  emit(`    const t = tokN > 0 ? tkT[tokN - 1] : pvT;`);
   emit(`    if (LX_PFXV[t] !== 0) return lastBangWasPostfix;`);
-  emit(`    if (tkK[i] === ${kIdent} && LX_EXPRKW[t] !== 0) return false;`);
+  emit(`    if (k === ${kIdent} && LX_EXPRKW[t] !== 0) return false;`);
   emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
-  emit(`    return LX_DIVK[tkK[i]] !== 0 || LX_DIVT[t] !== 0;`);
+  emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
   emit(`  while (pos < n) {`);
+  emit(`    if (wndHit >= 0) { tokN--; return wndHit; }`);
   emit(`    const cc = source.charCodeAt(pos);`);
   emit(`    // whitespace: ASCII \\s run by char loop; a non-ASCII candidate falls back to the regex`);
   emit(`    if (cc === 32 || (cc >= 9 && cc <= 13)) {`);
@@ -317,7 +370,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`${ind}  if (m !== null) {`);
     if (m.identLike) {
       const plen = (identPrefixByName.get(m.name) ?? '').length;
-      emit(`${ind}    if (!lexIdentValid(m[0], ${plen})) throw new Error("Invalid identifier escape at offset " + pos + ": '" + m[0] + "'");`);
+      emit(`${ind}    if (!lexIdentValid(m[0], ${plen})) { if (lexWindowMore) throw LEX_RETRY; throw new Error("Invalid identifier escape at offset " + pos + ": '" + m[0] + "'"); }`);
     }
     if (m.skip) {
       emit(`${ind}    if (m[0].includes('\\n')) pendingNl = true;`);
@@ -334,7 +387,9 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     // Chars 1..len-1 already known to match when this leaf is reached via the chain below.
     if (lit === '(') {
       emit(`${ind}{ const isMemberName = tokN >= 2 && LX_MEMBER[tkT[tokN - 2]] !== 0;`);
-      emit(`${ind}  parenHeadStack.push(!isMemberName && tokN >= 1 && tkK[tokN - 1] === ${kIdent} && LX_PARENKW[tkT[tokN - 1]] !== 0); }`);
+      emit(`${ind}  const _ph = !isMemberName && tokN >= 1 && tkK[tokN - 1] === ${kIdent} && LX_PARENKW[tkT[tokN - 1]] !== 0;`);
+      emit(`${ind}  parenHeadStack.push(_ph);`);
+      emit(`${ind}  extraFl = _ph ? 8 : 0; }`);
     } else if (lit === ')') {
       emit(`${ind}lastCloseWasParenHead = parenHeadStack.pop() ?? false;`);
     }
@@ -425,13 +480,13 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`      const _li = tokN - 1;`);
     const likeKs = [...identLike].map(kOf);
     const likeCond = likeKs.map(k => `tkK[_li] === ${k}`).join(' || ');
-    emit(`      if ((${likeCond}) && tkEnd[_li] === pos) {`);
+    emit(`      if ((${likeCond}) && tkEnd[_li] === pos + srcBase) {`);
     emit(`        LX_UNI_CONT.lastIndex = pos;`);
     emit(`        const cont = LX_UNI_CONT.exec(source);`);
     emit(`        if (cont !== null) {`);
     emit(`          pos += cont[0].length;`);
-    emit(`          tkEnd[_li] = pos;`);
-    emit(`          tkT[_li] = lexKwT(source, tkOff[_li], pos);`);
+    emit(`          tkEnd[_li] = pos + srcBase;`);
+    emit(`          tkT[_li] = lexKwT(source, tkOff[_li] - srcBase, pos);`);
     emit(`          continue;`);
     emit(`        }`);
     emit(`      }`);
@@ -459,9 +514,70 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`      }`);
     emit(`    }`);
   }
+  emit(`    if (lexWindowMore) throw LEX_RETRY;`);
   emit(`    throw new Error("Unexpected character at offset " + pos + ": '" + source[pos] + "'");`);
   emit(`  }`);
-  emit(`  return tokN;`);
+  emit(`  if (wndHit >= 0) { tokN--; return wndHit; }`);
+  emit(`  return hasMore ? -2 : -1;`);
+  emit(`}`);
+  emit(`// Windowed-relex restart anchor: the last token B ending at/before the damage`);
+  emit(`// whose recorded stack depths are zero and whose shape leaves no cross-token`);
+  emit(`// lexer flag live (a control-head ')' or a postfix-ambiguous operator would`);
+  emit(`// make the next token's regex-context depend on unrecoverable state). -1 = file`);
+  emit(`// head (always sound, degrades to a full re-lex).`);
+  emit(`function findRestart(cs) {`);
+  emit(`  let lo = 0, hi = tokN;`);
+  // STRICTLY before the damage: a token ENDING exactly at cs can be EXTENDED by
+  // the edit under maximal munch ('b' + inserted 'x' = 'bx'; '=' + '=' = '==';
+  // deleting the gap glues neighbours) and the anchor itself is never re-lexed —
+  // with < the abutting token falls inside the window and the merge is re-derived.
+  emit(`  while (lo < hi) { const mid = (lo + hi) >> 1; if (tend(mid) < cs) lo = mid + 1; else hi = mid; }`);
+  emit(`  for (let b = lo - 1; b >= 0; b--) {`);
+  emit(`    // template depth must be zero (interp brace counters are not reconstructable),`);
+  emit(`    // and the anchor token must leave no cross-token lexer flag live: not a`);
+  emit(`    // control-head ')', not a postfix-ambiguous op, and not a control KEYWORD`);
+  emit(`    // (a '(' lexed first in the window would mis-derive its head-ness from a`);
+  emit(`    // missing predecessor). Paren depth may be anything — the live stack is`);
+  emit(`    // reconstructed from the recorded depths and the '(' head bits.`);
+  emit(`    if (tkDp[b] === 0 && LX_PFXV[tkT[b]] === 0 && LX_PARENKW[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
+  emit(`  }`);
+  emit(`  return -1;`);
+  emit(`}`);
+  emit(`// Rebuild the live paren-head stack enclosing token b: scanning backward, the`);
+  emit(`// first '(' recording exactly depth d is the live opener of level d (closed`);
+  emit(`// openers at that depth are re-opened later, and the re-opener comes first`);
+  emit(`// backward). The '(' records its depth INCLUDING itself, and carries its`);
+  emit(`// control-head-ness as tkFl bit 8.`);
+  emit(`function reconstructParens(b) {`);
+  emit(`  let need = b >= 0 ? tkPd[b] : 0;`);
+  emit(`  const out = new Array(need);`);
+  emit(`  for (let i = b; i >= 0 && need > 0; i--) {`);
+  emit(`    if (tkK[i] === 1 && tkT[i] === ${tOf('(')} && tkPd[i] === need) { out[need - 1] = (tkFl[i] & 8) !== 0; need--; }`);
+  emit(`  }`);
+  emit(`  return out;`);
+  emit(`}`);
+  emit(`// Session cache for the live paren stack: the previous edit's anchor stack rolled`);
+  emit(`// FORWARD over the tokens between the two anchors (push on '(', pop on ')') — the`);
+  emit(`// backward scan is O(distance to the outermost live opener), which a deep`);
+  emit(`// stationary session would pay per keystroke. Tokens at/before the cached anchor`);
+  emit(`// are splice-stable (every splice begins past its own anchor), so the baseline`);
+  emit(`// stays exact; a backward jump (b < cached) falls back to the full scan.`);
+  emit(`let parenCachePos = -1;`);
+  emit(`let parenCacheStack = [];`);
+  emit(`function reconstructParensCached(b) {`);
+  emit(`  let stack;`);
+  emit(`  if (b < 0) stack = [];`);
+  emit(`  else if (parenCachePos >= 0 && parenCachePos <= b) {`);
+  emit(`    stack = parenCacheStack;`);
+  emit(`    for (let i = parenCachePos + 1; i <= b; i++) {`);
+  emit(`      if (tkK[i] === 1) {`);
+  emit(`        if (tkT[i] === ${tOf('(')}) stack.push((tkFl[i] & 8) !== 0);`);
+  emit(`        else if (tkT[i] === ${tRParen}) { if (stack.length > 0) stack.pop(); }`);
+  emit(`      }`);
+  emit(`    }`);
+  emit(`  } else stack = reconstructParens(b);`);
+  emit(`  parenCachePos = b; parenCacheStack = stack;`);
+  emit(`  return stack.slice();`);
   emit(`}`);
   return out.join('\n');
 }

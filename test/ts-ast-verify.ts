@@ -10,19 +10,15 @@
 //   node test/ts-ast-verify.ts <file.ts> [...]  # real files
 import { existsSync, readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { writeFileSync } from 'node:fs';
-import { emitParser } from '../src/emit-parser.ts';
+import { createParser } from '../src/gen-parser.ts';
 import { lowerProgram, Unlowered, type Ast } from './ts-ast-lowering.ts';
+import { objTree } from './obj-tree.ts';
 
-// The lowering consumes the ARENA through TreeAccess, so parse with the emitted
-// parser (the product representation) — built fresh from the current grammar.
+// The lowering runs against the INTERPRETER oracle through the object-tree adapter
+// (absolute coordinates) — the grammar↔tsc structure contract is engine-independent,
+// and the emitted tree's green (relative) coordinates stay the emitted gates' concern.
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-tsast.mjs';
-writeFileSync(emPath, emitParser(grammar));
-const parser = (await import(emPath + '?v=' + process.pid)) as {
-  parse(src: string, entry?: string): number;
-  tree: import('../typescript.cst-match.ts').TreeAccess;
-};
+const parser = createParser(grammar);
 
 const kindNum = (name: string): number => {
   const v = (ts.SyntaxKind as unknown as Record<string, number>)[name];
@@ -72,11 +68,12 @@ function run(name: string, code: string): { ok: boolean; skipped?: boolean; line
       return { ok: true, skipped: true, line: `${name}: SKIPPED (tsc reports ${probe.parseDiagnostics.length} parse error(s) — recovery shapes are out of contract)`, samples: [] };
     }
   }
-  let root: number;
-  try { root = parser.parse(code); }
+  let rootObj;
+  try { rootObj = parser.parse(code); }
   catch (e) { return { ok: false, line: `${name}: MONOGRAM REJECT ${(e as Error).message.slice(0, 60)}`, samples: [] }; }
+  const adapter = objTree(rootObj as never, grammar);
   let mine: Ast;
-  try { mine = lowerProgram(parser.tree, root, code); }
+  try { mine = lowerProgram(adapter, adapter.rootId, code); }
   catch (e) {
     if (e instanceof Unlowered) return { ok: false, line: `${name}: UNLOWERED ${e.what} @${e.at}`, samples: [] };
     return { ok: false, line: `${name}: LOWER THROW ${(e as Error).message.slice(0, 80)}`, samples: [] };

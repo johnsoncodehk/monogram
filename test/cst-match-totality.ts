@@ -24,23 +24,23 @@ const samples: string[] = [];
 
 type Emitted = {
   parse(src: string, entry?: string): number;
-  visit(entry: number, fns: { enter?(id: number): boolean | void; leaf?(e: number, tok: number): void }): void;
-  tree: { ruleNameOf(id: number): string; childCount(id: number): number; childAt(id: number, i: number): number; leafTokenType(e: number): string; offsetOf(e: number): number; endOf(e: number): number };
+  visit(entry: number, fns: { enter?(id: number, charBase: number, tokBase: number): boolean | void; leaf?(e: number, tok: number): void }): void;
+  tree: { ruleNameOf(id: number): string; lenOf(id: number): number };
 };
 
-function checkTree(em: Emitted, root: number, src: string, matchers: Record<string, (t: never, n: never, src: string) => { arm: string }>, tag: string): void {
+function checkTree(em: Emitted, root: number, src: string, matchers: Record<string, (t: never, n: never, tb: number, src: string) => { arm: string }>, tag: string): void {
   em.visit(root, {
-    enter(id) {
+    enter(id, charBase, tokBase) {
       const m = matchers[em.tree.ruleNameOf(id)];
       if (m !== undefined) {
         nodes++;
         try {
-          m(em.tree as never, id as never, src);
+          m(em.tree as never, id as never, tokBase, src);
         } catch (e) {
           misses++;
           if (samples.length < 10) {
-            const off = em.tree.offsetOf(id);
-            samples.push(`${tag} ${em.tree.ruleNameOf(id)} @${off}..${em.tree.endOf(id)} «${src.slice(off, Math.min(em.tree.endOf(id), off + 50)).replace(/\n/g, '\\n')}» — ${(e as Error).message.slice(0, 60)}`);
+            const end = charBase + em.tree.lenOf(id);
+            samples.push(`${tag} ${em.tree.ruleNameOf(id)} @${charBase}..${end} «${src.slice(charBase, Math.min(end, charBase + 50)).replace(/\n/g, '\\n')}» — ${(e as Error).message.slice(0, 60)}`);
           }
         }
       }

@@ -9,6 +9,7 @@
 //   node test/emit-parser-verify.ts            # 4 bench files + ~400-file corpus sample
 //   node test/emit-parser-verify.ts <N>        # sample stride N (default ~ to hit ~400)
 //   node test/emit-parser-verify.ts all        # every .ts file under conformance
+import { objectify } from './emitted-obj.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { emitParser } from '../src/emit-parser.ts';
 import { readdir } from 'fs/promises';
@@ -41,7 +42,7 @@ function compare(code: string): { verdict: string; detail?: string } {
   const o = run(oracle.parse, code);
   // The emitted parser returns an arena node id; materialize the object view for the
   // byte-identical comparison against the interpreter's object tree.
-  const e = run((s: string) => emitted.toObject(emitted.parse(s)), code);
+  const e = run((s: string) => { const r = emitted.parse(s); return objectify(emitted.tree, (fns) => emitted.visit(r, fns)); }, code);
   if (!o.ok && o.err.includes('Maximum call stack')) {
     // The interpreter recursed out of stack — a CAPACITY limit, not a parse verdict;
     // the emitted parser's flatter frames can legitimately survive deeper inputs
