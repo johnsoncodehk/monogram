@@ -36,10 +36,17 @@ function run(parse: (s: string) => unknown, code: string): Outcome {
   catch (e) { return { ok: false, err: (e as Error).message }; }
 }
 
-// Compare one file. Returns 'agree' | 'accept-mismatch' | 'cst-mismatch'.
+// Compare one file. Returns 'agree' | 'accept-mismatch' | 'cst-mismatch' | 'oracle-capacity'.
 function compare(code: string): { verdict: string; detail?: string } {
   const o = run(oracle.parse, code);
   const e = run(emitted.parse as (s: string) => unknown, code);
+  if (!o.ok && o.err.includes('Maximum call stack')) {
+    // The interpreter recursed out of stack — a CAPACITY limit, not a parse verdict;
+    // the emitted parser's flatter frames can legitimately survive deeper inputs
+    // (first seen on a 139KB union-type stress file the official tsc also accepts).
+    // Semantic parity is only checkable where the oracle can actually answer.
+    return { verdict: 'oracle-capacity', detail: `oracle stack overflow / emit ${e.ok ? 'accept' : 'reject'}` };
+  }
   if (o.ok !== e.ok) {
     return { verdict: 'accept-mismatch', detail: `oracle ${o.ok ? 'accept' : 'reject'} / emit ${e.ok ? 'accept' : 'reject'}` };
   }
@@ -100,13 +107,14 @@ for (const f of sample) {
   try { r = compare(code); }
   catch (e) { r = { verdict: 'cst-mismatch', detail: 'compare threw: ' + (e as Error).message }; }
   counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
-  if (r.verdict !== 'agree') divergences.push({ file: f.replace(baseDir + '/', ''), verdict: r.verdict, detail: r.detail });
+  if (r.verdict !== 'agree' && r.verdict !== 'oracle-capacity') divergences.push({ file: f.replace(baseDir + '/', ''), verdict: r.verdict, detail: r.detail });
 }
 const total = sample.length;
 const agree = counts.agree ?? 0;
 console.log(`agreement: ${agree}/${total} = ${(100 * agree / total).toFixed(2)}%`);
 console.log(`  accept/reject mismatches: ${counts['accept-mismatch'] ?? 0}`);
 console.log(`  CST mismatches:           ${counts['cst-mismatch'] ?? 0}`);
+console.log(`  oracle-capacity skips:    ${counts['oracle-capacity'] ?? 0}`);
 if (divergences.length) {
   console.log(`\nfirst ${Math.min(15, divergences.length)} divergences:`);
   for (const d of divergences.slice(0, 15)) {
