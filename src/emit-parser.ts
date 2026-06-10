@@ -1035,84 +1035,104 @@ class Emitter {
   // shared pair of loads. Bit i is set exactly where altGuard(alt_i) is true: an
   // always-tried alt (nullable / unknown-FIRST) has its bit in every k slot, and a null
   // lookahead (EOF) admits every alt, mirroring the per-alt guards' !tok → true.
-  // null when the list is too small to pay for the tables or exceeds 32 bits.
+  //
+  // Lists over 32 alts span MULTIPLE mask words (one table pair + one local per word;
+  // alt i lives in word i>>5, bit i&31) — there is deliberately NO arm-count ceiling:
+  // a single-word cap silently dropped a rule back to serial per-alt guards the moment
+  // a grammar widening pushed it past 32 (R_Type crossed at 33 and cost ~25% whole-parse
+  // until the cliff was found), and dispatch must degrade smoothly, not cliff.
+  // null only when the list is too small for the tables to pay.
   altMaskDispatch(alts: RuleExpr[], maskVar: string): { maskInit: string; bit: (i: number) => string } | null {
-    if (alts.length < 3 || alts.length > 32) return null;
+    if (alts.length < 3) return null;
     const a = this.a;
-    const kMask = new Array<number>(this.kSize()).fill(0);
-    const tMask = new Array<number>(this.tSize()).fill(0);
-    let all = 0;
+    const words = Math.ceil(alts.length / 32);
+    const wVar = (w: number) => (words === 1 ? maskVar : `${maskVar}_w${w}`);
+    const kMask = Array.from({ length: words }, () => new Array<number>(this.kSize()).fill(0));
+    const tMask = Array.from({ length: words }, () => new Array<number>(this.tSize()).fill(0));
+    const all = new Array<number>(words).fill(0);
     alts.forEach((alt, i) => {
-      const bit = (1 << i) | 0;
-      all |= bit;
+      const w = i >> 5;
+      const bit = (1 << (i & 31)) | 0;
+      all[w] |= bit;
       const fs = a.altDeepFirst.get(alt);
       if (a.altNullable.get(alt) || !fs || fs.size === 0) {
-        for (let k = 0; k < kMask.length; k++) kMask[k] |= bit;
+        for (let k = 0; k < kMask[w].length; k++) kMask[w][k] |= bit;
         return;
       }
       const { kOnes, tOnes } = this.firstSetOnes(fs);
-      for (const k of kOnes) kMask[k] |= bit;
-      for (const t of tOnes) tMask[t] |= bit;
+      for (const k of kOnes) kMask[w][k] |= bit;
+      for (const t of tOnes) tMask[w][t] |= bit;
     });
-    const kArr = this.u32Const(kMask);
-    const tArr = this.u32Const(tMask);
     // SECOND-token refinement: drop an admitted alt when the actual second token can't
     // be its second token and it can't end after one. An alt with unknown/len1/nullable
     // SECOND keeps its bit everywhere (and in the EOF-after-one mask `alw2`). Sound:
     // a pruned arm needs a second token it provably can't accept — it would fail.
     // (The '>'-split is covered: a '>' SECOND key sets every '>'-led punct bit via
     // firstSetOnes' startsWith expansion, so post-splice second tokens stay admitted.)
-    const k2Mask = new Array<number>(this.kSize()).fill(0);
-    const t2Mask = new Array<number>(this.tSize()).fill(0);
-    let alw2 = 0;
+    const k2Mask = Array.from({ length: words }, () => new Array<number>(this.kSize()).fill(0));
+    const t2Mask = Array.from({ length: words }, () => new Array<number>(this.tSize()).fill(0));
+    const alw2 = new Array<number>(words).fill(0);
     let refines = false;
     alts.forEach((alt, i) => {
-      const bit = (1 << i) | 0;
+      const w = i >> 5;
+      const bit = (1 << (i & 31)) | 0;
       const sec = a.altSecond.get(alt);
       // The always conditions MIRROR gen-parser's altMightSecond null-keys cases
       // exactly (incl. empty-set → always) — engine-identical prune decisions.
       if (a.altNullable.get(alt) || !sec || sec.s === null || sec.len1 || sec.s.size === 0) {
-        for (let k = 0; k < k2Mask.length; k++) k2Mask[k] |= bit;
-        alw2 |= bit;
+        for (let k = 0; k < k2Mask[w].length; k++) k2Mask[w][k] |= bit;
+        alw2[w] |= bit;
         return;
       }
       refines = true;
       const { kOnes, tOnes } = this.firstSetOnes(sec.s);
-      for (const k of kOnes) k2Mask[k] |= bit;
-      for (const t of tOnes) t2Mask[t] |= bit;
+      for (const k of kOnes) k2Mask[w][k] |= bit;
+      for (const t of tOnes) t2Mask[w][t] |= bit;
     });
-    if (!refines) {
-      return {
-        maskInit: `const ${maskVar} = saved < tokN ? (${kArr}[tkK[saved]] | ${tArr}[tkT[saved]]) : ${all};`,
-        bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
-      };
+    const inits: string[] = [];
+    for (let w = 0; w < words; w++) {
+      const kArr = this.u32Const(kMask[w]);
+      const tArr = this.u32Const(tMask[w]);
+      if (!refines) {
+        inits.push(`const ${wVar(w)} = saved < tokN ? (${kArr}[tkK[saved]] | ${tArr}[tkT[saved]]) : ${all[w]};`);
+      } else {
+        const k2Arr = this.u32Const(k2Mask[w]);
+        const t2Arr = this.u32Const(t2Mask[w]);
+        inits.push(`const ${wVar(w)} = saved < tokN ? ((${kArr}[tkK[saved]] | ${tArr}[tkT[saved]]) & (saved + 1 < cap ? (${k2Arr}[tkK[saved + 1]] | ${t2Arr}[tkT[saved + 1]]) : ${alw2[w]})) : ${all[w]};`);
+      }
     }
-    const k2Arr = this.u32Const(k2Mask);
-    const t2Arr = this.u32Const(t2Mask);
     return {
-      maskInit: `const ${maskVar} = saved < tokN ? ((${kArr}[tkK[saved]] | ${tArr}[tkT[saved]]) & (saved + 1 < cap ? (${k2Arr}[tkK[saved + 1]] | ${t2Arr}[tkT[saved + 1]]) : ${alw2})) : ${all};`,
-      bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
+      maskInit: inits.join(' '),
+      bit: (i: number) => `${wVar(i >> 5)} & ${(1 << (i & 31)) | 0}`,
     };
   }
 
   // Bitmask dispatch over a list of first-TOKEN gates (the LED chain): the same mask
   // tables as altMaskDispatch, built from per-LED FirstTok keys (null ft = always
-  // admitted); the lookahead is known non-null at the LED loop head.
+  // admitted); the lookahead is known non-null at the LED loop head. Multi-word over
+  // 32 entries, same scheme as altMaskDispatch — no arm-count cliff.
   ftMaskDispatch(fts: FirstTok[], maskVar: string, tokVar: string): { maskInit: string; bit: (i: number) => string } | null {
-    if (fts.length < 3 || fts.length > 32) return null;
-    const kMask = new Array<number>(this.kSize()).fill(0);
-    const tMask = new Array<number>(this.tSize()).fill(0);
+    if (fts.length < 3) return null;
+    const words = Math.ceil(fts.length / 32);
+    const wVar = (w: number) => (words === 1 ? maskVar : `${maskVar}_w${w}`);
+    const kMask = Array.from({ length: words }, () => new Array<number>(this.kSize()).fill(0));
+    const tMask = Array.from({ length: words }, () => new Array<number>(this.tSize()).fill(0));
     fts.forEach((ft, i) => {
-      const bit = (1 << i) | 0;
-      if (!ft) { for (let k = 0; k < kMask.length; k++) kMask[k] |= bit; return; }
+      const w = i >> 5;
+      const bit = (1 << (i & 31)) | 0;
+      if (!ft) { for (let k = 0; k < kMask[w].length; k++) kMask[w][k] |= bit; return; }
       const key = 'tok' in ft ? ft.tok : ft.lit;
       const { kOnes, tOnes } = this.firstSetOnes(new Set([key]));
-      for (const k of kOnes) kMask[k] |= bit;
-      for (const t of tOnes) tMask[t] |= bit;
+      for (const k of kOnes) kMask[w][k] |= bit;
+      for (const t of tOnes) tMask[w][t] |= bit;
     });
+    const inits: string[] = [];
+    for (let w = 0; w < words; w++) {
+      inits.push(`const ${wVar(w)} = ${this.u32Const(kMask[w])}[tkK[${tokVar}]] | ${this.u32Const(tMask[w])}[tkT[${tokVar}]];`);
+    }
     return {
-      maskInit: `const ${maskVar} = ${this.u32Const(kMask)}[tkK[${tokVar}]] | ${this.u32Const(tMask)}[tkT[${tokVar}]];`,
-      bit: (i: number) => `${maskVar} & ${(1 << i) | 0}`,
+      maskInit: inits.join(' '),
+      bit: (i: number) => `${wVar(i >> 5)} & ${(1 << (i & 31)) | 0}`,
     };
   }
 
