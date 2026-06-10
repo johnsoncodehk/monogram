@@ -2214,6 +2214,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // depths are zero and whose shape carries no cross-token lexer flag (')' control-
   // head, postfix-ambiguous op). B = -1 restarts at the file head — always sound.
   const B = findRestart(cs);
+  const initParens = B >= 0 ? reconstructParens(B) : [];
   const oN = tokN;
   // first old token at/after the damage end — the resync search floor
   let r0 = oN;
@@ -2232,7 +2233,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   src = source;
   tokN = 0;
   const startOff = B >= 0 ? altEnd[B] : 0;
-  const R0 = lexCore(source, startOff, B >= 0 ? altK[B] : -1, B >= 0 ? altT[B] : 0, r0, ceNew, charDelta, cs);
+  const R0 = lexCore(source, startOff, B >= 0 ? altK[B] : -1, B >= 0 ? altT[B] : 0, r0, ceNew, charDelta, cs, initParens);
   const W = tokN;
   const R = R0 >= 0 ? R0 : oN;
   swapBuffers();              // live = OLD stream again; window sits in the alt buffers

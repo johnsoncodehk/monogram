@@ -210,14 +210,15 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// old token (same k/t, offsets shifted by wndDelta, both depth records 0) while`);
   emit(`// the window's own stacks are empty — returns that OLD index (the duplicate push`);
   emit(`// is retracted), or -1 when lexing ran to EOF.`);
-  emit(`function lexCore(source, startPos, pvK, pvT, wndPtr0, wndMinOff, wndDelta, wndCs) {`);
+  emit(`function lexCore(source, startPos, pvK, pvT, wndPtr0, wndMinOff, wndDelta, wndCs, initParens) {`);
   emit(`  const n = source.length;`);
   emit(`  let pos = startPos;`);
   emit(`  let pendingNl = false;`);
+  emit(`  let extraFl = 0;`);
   emit(`  let lastBangWasPostfix = false;`);
   emit(`  let lastCloseWasParenHead = false;`);
   emit(`  const templateStack = [];`);
-  emit(`  const parenHeadStack = [];`);
+  emit(`  const parenHeadStack = initParens !== undefined && initParens !== null ? initParens : [];`);
   emit(`  let wndPtr = wndPtr0;`);
   emit(`  let wndHit = -1;`);
   emit(`  // stack depths as of the last token fully BEFORE the damage: a resync point may`);
@@ -225,11 +226,12 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  // the damage (the prefix agrees byte-for-byte, so those stack entries agree too;`);
   emit(`  // anything opened inside the damage could differ in control-head-ness).`);
   emit(`  let dmgDp = -1, dmgPd = -1;`);
-  emit(`  let lastDp = 0, lastPd = 0;`);
+  emit(`  let lastDp = templateStack.length, lastPd = parenHeadStack.length;`);
   emit(`  function tkPush(k, t, off, end) {`);
   emit(`    if (tokN === tkCap) growTok();`);
   emit(`    tkK[tokN] = k; tkT[tokN] = t; tkOff[tokN] = off; tkEnd[tokN] = end;`);
-  emit(`    tkFl[tokN] = pendingNl ? 1 : 0;`);
+  emit(`    tkFl[tokN] = (pendingNl ? 1 : 0) | extraFl;`);
+  emit(`    extraFl = 0;`);
   emit(`    tkDp[tokN] = templateStack.length;`);
   emit(`    tkPd[tokN] = parenHeadStack.length;`);
   emit(`    pendingNl = false;`);
@@ -372,7 +374,9 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     // Chars 1..len-1 already known to match when this leaf is reached via the chain below.
     if (lit === '(') {
       emit(`${ind}{ const isMemberName = tokN >= 2 && LX_MEMBER[tkT[tokN - 2]] !== 0;`);
-      emit(`${ind}  parenHeadStack.push(!isMemberName && tokN >= 1 && tkK[tokN - 1] === ${kIdent} && LX_PARENKW[tkT[tokN - 1]] !== 0); }`);
+      emit(`${ind}  const _ph = !isMemberName && tokN >= 1 && tkK[tokN - 1] === ${kIdent} && LX_PARENKW[tkT[tokN - 1]] !== 0;`);
+      emit(`${ind}  parenHeadStack.push(_ph);`);
+      emit(`${ind}  extraFl = _ph ? 8 : 0; }`);
     } else if (lit === ')') {
       emit(`${ind}lastCloseWasParenHead = parenHeadStack.pop() ?? false;`);
     }
@@ -511,9 +515,28 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  let lo = 0, hi = tokN;`);
   emit(`  while (lo < hi) { const mid = (lo + hi) >> 1; if (tkEnd[mid] <= cs) lo = mid + 1; else hi = mid; }`);
   emit(`  for (let b = lo - 1; b >= 0; b--) {`);
-  emit(`    if (tkDp[b] === 0 && tkPd[b] === 0 && LX_PFXV[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
+  emit(`    // template depth must be zero (interp brace counters are not reconstructable),`);
+  emit(`    // and the anchor token must leave no cross-token lexer flag live: not a`);
+  emit(`    // control-head ')', not a postfix-ambiguous op, and not a control KEYWORD`);
+  emit(`    // (a '(' lexed first in the window would mis-derive its head-ness from a`);
+  emit(`    // missing predecessor). Paren depth may be anything — the live stack is`);
+  emit(`    // reconstructed from the recorded depths and the '(' head bits.`);
+  emit(`    if (tkDp[b] === 0 && LX_PFXV[tkT[b]] === 0 && LX_PARENKW[tkT[b]] === 0 && !(tkK[b] === 1 && tkT[b] === ${tRParen})) return b;`);
   emit(`  }`);
   emit(`  return -1;`);
+  emit(`}`);
+  emit(`// Rebuild the live paren-head stack enclosing token b: scanning backward, the`);
+  emit(`// first '(' recording exactly depth d is the live opener of level d (closed`);
+  emit(`// openers at that depth are re-opened later, and the re-opener comes first`);
+  emit(`// backward). The '(' records its depth INCLUDING itself, and carries its`);
+  emit(`// control-head-ness as tkFl bit 8.`);
+  emit(`function reconstructParens(b) {`);
+  emit(`  let need = b >= 0 ? tkPd[b] : 0;`);
+  emit(`  const out = new Array(need);`);
+  emit(`  for (let i = b; i >= 0 && need > 0; i--) {`);
+  emit(`    if (tkK[i] === 1 && tkT[i] === ${tOf('(')} && tkPd[i] === need) { out[need - 1] = (tkFl[i] & 8) !== 0; need--; }`);
+  emit(`  }`);
+  emit(`  return out;`);
   emit(`}`);
   return out.join('\n');
 }
