@@ -93,11 +93,16 @@ export interface TypeMemberNode extends CstPos {
 export interface DecoratorExprNode extends CstPos {
   rule: 'DecoratorExpr';
   children: Array<
+    | $templateNode
+    | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: '$punct' })
+    | (CstLeaf & { tokenType: '$templateHead' })
     | (CstLeaf & { tokenType: 'Decorator' })
     | (CstLeaf & { tokenType: 'Ident' })
     | (CstLeaf & { tokenType: 'PrivateField' })
+    | (CstLeaf & { tokenType: 'Template' })
     | ExprNode
+    | NewTargetNode
     | TypeNode
   >;
 }
@@ -106,8 +111,10 @@ export interface DecoratorExprNode extends CstPos {
 export interface TypeofRefNode extends CstPos {
   rule: 'TypeofRef';
   children: Array<
+    | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: '$punct' })
     | (CstLeaf & { tokenType: 'Ident' })
+    | TypeNode
     | TypeofRefNode
   >;
 }
@@ -367,15 +374,16 @@ export interface DeclNode extends CstPos {
     | (CstLeaf & { tokenType: '$punct' })
     | (CstLeaf & { tokenType: 'Ident' })
     | (CstLeaf & { tokenType: 'String' })
+    | BindingNode
     | BlockNode
     | ClassHeritageNode
     | ClassMemberNode
     | DeclNode
     | DecoratorExprNode
     | EnumMemberNode
+    | ExportSpecifierNode
     | ExprNode
     | ImportClauseNode
-    | ImportSpecifierNode
     | InterfaceMemberNode
     | ParamNode
     | StmtNode
@@ -442,6 +450,17 @@ export interface ImportSpecifierNode extends CstPos {
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'String' })
+  >;
+}
+
+/** `ExportSpecifier` node. Children (flattened, in source order) are drawn from: */
+export interface ExportSpecifierNode extends CstPos {
+  rule: 'ExportSpecifier';
+  children: Array<
+    | (CstLeaf & { tokenType: '$keyword' })
+    | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'String' })
   >;
 }
 
@@ -485,6 +504,7 @@ export type CstNode =
   | EnumMemberNode
   | ImportClauseNode
   | ImportSpecifierNode
+  | ExportSpecifierNode
   | ProgramNode;
 
 /** Every `rule` discriminant value (the keys of the CstNode union). */
@@ -518,6 +538,7 @@ export type RuleName =
   | 'EnumMember'
   | 'ImportClause'
   | 'ImportSpecifier'
+  | 'ExportSpecifier'
   | 'Program';
 
 /** Any CST element: a node or a leaf. */

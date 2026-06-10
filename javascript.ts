@@ -296,6 +296,10 @@ const Expr = rule($ => [
   ['[', many(opt($), ','), opt($), ']'],
   ['{', sep(Prop, ','), '}'],
   [opt('async'), '(', sep(Param, ','), ')', '=>', alt($, Block)],
+  // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
+  // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
+  // the spec's [no LineTerminator here] between async and the binding identifier).
+  ['async', sameLine, Ident, '=>', alt($, Block)],
   [Ident, '=>', alt($, Block)],
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
@@ -467,6 +471,16 @@ const ClassMember = rule($ => [
 
 const ImportSpecifier = rule($ => [
   [Ident, opt('as', Ident)],
+  // arbitrary module namespace identifier (ES2022): `import { "str" as x }` — the
+  // string form requires the rename (the local binding must be an identifier).
+  [String_, 'as', Ident],
+]);
+
+// Export specifiers are WIDER than import ones: a ModuleExportName (identifier or
+// string) is valid on BOTH sides and may stand alone (`export { x as "s" }`,
+// `export { "a" as "b" } from "m"`).
+const ExportSpecifier = rule($ => [
+  [alt(Ident, String_), opt('as', alt(Ident, String_))],
 ]);
 
 const ImportClause = rule($ => [
@@ -492,7 +506,7 @@ const Decl = rule($ => [
     [Expr, opt(';')],   // catch-all: export default <expr>
   )],
   ['export', '*', alt(['from', String_, opt(';')], ['as', Ident, 'from', String_, opt(';')])],
-  ['export', '{', sep(ImportSpecifier, ','), '}', opt('from', String_), opt(';')],
+  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), opt(';')],
   ['import', alt(
     [ImportClause, 'from', String_, opt(';')],          // import X from "m"
     [Ident, '=', Expr, opt(';')],                       // import x = expr
@@ -631,7 +645,7 @@ export default defineGrammar({
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
     Binding, ForBinding, Param, ForHead, SwitchCase,
     Decl, ClassMember,
-    ImportClause, ImportSpecifier,
+    ImportClause, ImportSpecifier, ExportSpecifier,
     Program,
   },
 

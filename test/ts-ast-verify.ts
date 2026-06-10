@@ -95,6 +95,8 @@ const SNIPPETS: [string, string][] = [
   ['member-chain', 'a.b?.c!.d;'],
   ['paren-arrow', '(x) => x + 1;'],
   ['arrow-noparen', 'const f = x => x * 2;'],
+  ['arrow-async-bare', 'g(1, async err => { h(err); }); const k = async x => x + 1;'],
+  ['arrow-async-paren', 'const p = async (a, b) => a + b;'],
   ['if-else', 'if (a) b(); else { c(); }'],
   ['class', 'class A extends B { m(p: T): U { return p; } }'],
   ['class-members', 'class C { static x = 1; #p: number; get v() { return 1; } constructor(a) {} }'],

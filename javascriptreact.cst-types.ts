@@ -290,9 +290,9 @@ export interface DeclNode extends CstPos {
     | ClassMemberNode
     | DeclNode
     | DecoratorExprNode
+    | ExportSpecifierNode
     | ExprNode
     | ImportClauseNode
-    | ImportSpecifierNode
     | ParamNode
     | StmtNode
   >;
@@ -329,6 +329,17 @@ export interface ImportSpecifierNode extends CstPos {
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'String' })
+  >;
+}
+
+/** `ExportSpecifier` node. Children (flattened, in source order) are drawn from: */
+export interface ExportSpecifierNode extends CstPos {
+  rule: 'ExportSpecifier';
+  children: Array<
+    | (CstLeaf & { tokenType: '$keyword' })
+    | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'String' })
   >;
 }
 
@@ -430,6 +441,7 @@ export type CstNode =
   | ClassMemberNode
   | ImportClauseNode
   | ImportSpecifierNode
+  | ExportSpecifierNode
   | JSXTagNameNode
   | JSXAttrValueNode
   | JSXAttrNode
@@ -462,6 +474,7 @@ export type RuleName =
   | 'ClassMember'
   | 'ImportClause'
   | 'ImportSpecifier'
+  | 'ExportSpecifier'
   | 'JSXTagName'
   | 'JSXAttrValue'
   | 'JSXAttr'

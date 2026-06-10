@@ -169,16 +169,25 @@ function lowerExpr(n: CstNode): Ast {
     if (t0 === '<' && c.length === 4 && ruleIs(c[1], 'Type') && ruleIs(c[3], 'Expr')) {
       return ast('TypeAssertionExpression', n.offset, n.end, [lowerType(c[1]), lowerExpr(c[3])]);
     }
-    // Parenthesized vs arrow: both arms start '('.
+    // Parenthesized vs arrow: both arms start '(' (or 'async' '(' for an async arrow).
     // PAIN(5): two different grammar ALTERNATIVES with the same first token reach the
     // consumer as child-shape puzzles — '(' Expr ')' vs '(' Param* ')' '=>' …; the
     // discriminant (did the arrow arm match?) is re-derived by scanning for '=>'.
-    if (t0 === '(') {
+    if (t0 === '(' || (t0 === 'async' && leafIs(c[1], '('))) {
       const arrowIdx = findText(c, '=>');
       if (arrowIdx < 0 && c.length === 3 && ruleIs(c[1], 'Expr')) {
         return ast('ParenthesizedExpression', n.offset, n.end, [lowerExpr(c[1])]);
       }
       if (arrowIdx >= 0) return lowerArrow(n, c, arrowIdx);
+    }
+    // Async single-param arrow: ['async' Ident '=>' body] — tsc: ArrowFunction with
+    // an AsyncKeyword modifier, then the bare parameter.
+    if (t0 === 'async' && c[1] && isLeaf(c[1]) && c[1].tokenType === 'Ident' && leafIs(c[2], '=>')) {
+      const params = [ast('Parameter', c[1].offset, c[1].end, [ast('Identifier', c[1].offset, c[1].end)])];
+      const body = c[3];
+      const bodyAst = ruleIs(body, 'Expr') ? lowerExpr(body) : ruleIs(body, 'Block') ? lowerBlock(body) : null;
+      if (!bodyAst) throw new Unlowered('arrow body', n.offset);
+      return ast('ArrowFunction', n.offset, n.end, [ast('AsyncKeyword', c[0].offset, c[0].end), ...params, ast('EqualsGreaterThanToken', c[2].offset, c[2].end), bodyAst]);
     }
     // Single-param arrow: [Ident…?] — actually [Param-less ident '=>' body]
     if (c[0] && isLeaf(c[0]) && c[0].tokenType === 'Ident' && leafIs(c[1], '=>')) {
@@ -292,13 +301,15 @@ function lowerNewTarget(n: CstNode): Ast {
 }
 
 function lowerArrow(n: CstNode, c: CstChild[], arrowIdx: number): Ast {
+  const asyncMod = isLeaf(c[0]) && text(c[0]) === 'async'
+    ? [ast('AsyncKeyword', c[0].offset, c[0].end)] : [];
   const params = rules(c.slice(0, arrowIdx), 'Param').map(lowerParam);
   const retT = findRule(c.slice(0, arrowIdx), 'Type');
   const arrowTok = c[arrowIdx];
   const body = c[arrowIdx + 1];
   const bodyAst = ruleIs(body, 'Expr') ? lowerExpr(body) : ruleIs(body, 'Block') ? lowerBlock(body) : null;
   if (!bodyAst) throw new Unlowered('arrow body', n.offset);
-  return ast('ArrowFunction', n.offset, n.end, [...params, ...(retT ? [lowerType(retT)] : []),
+  return ast('ArrowFunction', n.offset, n.end, [...asyncMod, ...params, ...(retT ? [lowerType(retT)] : []),
     ast('EqualsGreaterThanToken', arrowTok.offset, arrowTok.end), bodyAst]);
 }
 

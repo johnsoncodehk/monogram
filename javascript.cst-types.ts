@@ -287,9 +287,9 @@ export interface DeclNode extends CstPos {
     | ClassMemberNode
     | DeclNode
     | DecoratorExprNode
+    | ExportSpecifierNode
     | ExprNode
     | ImportClauseNode
-    | ImportSpecifierNode
     | ParamNode
     | StmtNode
   >;
@@ -326,6 +326,17 @@ export interface ImportSpecifierNode extends CstPos {
   children: Array<
     | (CstLeaf & { tokenType: '$keyword' })
     | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'String' })
+  >;
+}
+
+/** `ExportSpecifier` node. Children (flattened, in source order) are drawn from: */
+export interface ExportSpecifierNode extends CstPos {
+  rule: 'ExportSpecifier';
+  children: Array<
+    | (CstLeaf & { tokenType: '$keyword' })
+    | (CstLeaf & { tokenType: 'Ident' })
+    | (CstLeaf & { tokenType: 'String' })
   >;
 }
 
@@ -362,6 +373,7 @@ export type CstNode =
   | ClassMemberNode
   | ImportClauseNode
   | ImportSpecifierNode
+  | ExportSpecifierNode
   | ProgramNode;
 
 /** Every `rule` discriminant value (the keys of the CstNode union). */
@@ -388,6 +400,7 @@ export type RuleName =
   | 'ClassMember'
   | 'ImportClause'
   | 'ImportSpecifier'
+  | 'ExportSpecifier'
   | 'Program';
 
 /** Any CST element: a node or a leaf. */

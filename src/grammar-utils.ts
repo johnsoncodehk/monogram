@@ -26,9 +26,14 @@ export function isIdentStartCode(code: number): boolean {
  * Single source of truth so the parser and the highlighter classify keywords
  * IDENTICALLY — the project's "single grammar → parser + highlighter, never
  * disagree" invariant would be violated by two private predicates.
+ *
+ * `@`-headed word literals (`@new`) are keyword-class too: a keyword literal
+ * matches a NAMED token by exact text (matchLiteral's keyword branch), which is
+ * exactly what a fused decorator-head token (`@new` lexed as one Decorator
+ * token) needs — it can never be punctuation. A bare `@` stays punctuation.
  */
 export function isKeywordLiteral(s: string): boolean {
-  return isIdentStartCode(s.charCodeAt(0));
+  return isIdentStartCode(s.charCodeAt(0)) || (s.charCodeAt(0) === 64 && isIdentStartCode(s.charCodeAt(1)));
 }
 
 /** Every literal string reachable in a rule expression (incl. `sep` delimiters). */
