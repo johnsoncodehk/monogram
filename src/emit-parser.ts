@@ -689,6 +689,49 @@ class Emitter {
   // Reference to a rule's parse function (token refs are inlined where used).
   private ruleFn(name: string) { return `R_${sanitize(name)}`; }
 
+  // SPINE rules — the entry rule's repetition units (the rules its body references
+  // directly): memoized through parseRuleEntry and therefore the adoption/run-
+  // extension granularity. Shared by emitRuleFns (memoized emission) and the
+  // quantifier run-extension hook. Grammar-shape-derived — no language names.
+  private spine: Set<string> | null = null;
+  spineSet(): Set<string> {
+    if (this.spine !== null) return this.spine;
+    const a = this.a;
+    const spine = new Set<string>();
+    const entryRule = a.grammar.rules[a.grammar.rules.length - 1];
+    const walk = (x: RuleExpr): void => {
+      switch (x.type) {
+        case 'ref': if (a.ruleByName.has(x.name)) spine.add(x.name); return;
+        case 'seq': case 'alt': x.items.forEach(walk); return;
+        case 'quantifier': case 'group': walk(x.body); return;
+        case 'sep': walk(x.element); return;
+        default: return;
+      }
+    };
+    walk(entryRule.body);
+    spine.delete(entryRule.name);
+    return (this.spine = spine);
+  }
+  // The run-extension target of a repetition: when the body unwraps to a plain ref of
+  // a rule that routes through parseRuleEntry (pratt / left-rec / spine), its rule id;
+  // else -1 (the loop gets no extension hook — adoption stays element-by-element).
+  private quantRunRuleId(body: RuleExpr): number {
+    const a = this.a;
+    let expr = body;
+    while (true) {
+      if (expr.type === 'group' && !(expr.suppress && expr.suppress.length)) { expr = expr.body; continue; }
+      if (expr.type === 'seq') {
+        const real = expr.items.filter(it => it.type !== 'op' && it.type !== 'prefix' && it.type !== 'postfix');
+        if (real.length === 1) { expr = real[0]; continue; }
+      }
+      break;
+    }
+    if (expr.type !== 'ref' || !a.ruleByName.has(expr.name)) return -1;
+    const name = expr.name;
+    if (!(a.prattRules.has(name) || a.leftRecSet.has(name) || this.spineSet().has(name))) return -1;
+    return a.grammar.rules.findIndex(r => r.name === name);
+  }
+
   /**
    * Emit (once) a helper fn for a compound `expr` and return its name. The helper
    * has the matchExpr contract: returns the matched children array or null, with pos
@@ -853,13 +896,20 @@ class Emitter {
       // Try once; on failure the helper restored pos/scn itself.
       return `${fn}();`;
     }
+    // Run-extension: after an iteration whose element was ADOPTED from the old tree,
+    // bulk-adopt its following old siblings (runExtend) instead of re-entering the
+    // rule machinery once per element. Only loops over a parseRuleEntry-routed rule
+    // get the hook, and runExtend re-checks rid + generation, so an inner rule's
+    // adoption can never feed elements into an outer loop.
+    const runId = this.quantRunRuleId(body);
+    const ext = runId >= 0 ? `\n  if (adoptRunPos === pos) runExtend(${runId});` : '';
     if (kind === '*') {
       const before = this.id(), bsn = this.id();
       return [
         `while (true) {`,
         `  const ${before} = pos; const ${bsn} = scn;`,
         `  if (!${fn}()) break;`,
-        `  if (pos === ${before} && scn === ${bsn}) break;`,
+        `  if (pos === ${before} && scn === ${bsn}) break;` + ext,
         `}`,
       ].join('\n');
     }
@@ -870,7 +920,7 @@ class Emitter {
       `while (true) {`,
       `  const ${before} = pos; const ${bsn} = scn;`,
       `  if (!${fn}()) break;`,
-      `  if (pos === ${before} && scn === ${bsn}) break;`,
+      `  if (pos === ${before} && scn === ${bsn}) break;` + ext,
       `}`,
     ].join('\n');
   }
@@ -1563,6 +1613,7 @@ function matchPuLitGT(pu) {
     const end0 = tkEnd[pos];
     ${e.soa ? '' : 'const restText = tkText[pos].slice(1);'}
     if (tokN === tkCap) growTok();
+    parenCachePos = -1;
     tkK.copyWithin(pos + 1, pos, tokN);
     tkT.copyWithin(pos + 1, pos, tokN);
     tkOff.copyWithin(pos + 1, pos, tokN);
@@ -1654,21 +1705,7 @@ function emitRuleFns(e: Emitter, a: ReturnType<typeof analyze>) {
   // memoized through parseRuleEntry like pratt/left-rec rules. Without this only
   // expression/type subtrees reuse and every statement re-walks on each edit.
   // Derived from the grammar shape — no language names.
-  const spine = new Set<string>();
-  {
-    const entryRule = a.grammar.rules[a.grammar.rules.length - 1];
-    const walk = (x: RuleExpr): void => {
-      switch (x.type) {
-        case 'ref': if (a.ruleByName.has(x.name)) spine.add(x.name); return;
-        case 'seq': case 'alt': x.items.forEach(walk); return;
-        case 'quantifier': case 'group': walk(x.body); return;
-        case 'sep': walk(x.element); return;
-        default: return;
-      }
-    };
-    walk(entryRule.body);
-    spine.delete(entryRule.name);
-  }
+  const spine = e.spineSet();
   for (const rule of a.grammar.rules) {
     if (a.prattRules.has(rule.name)) emitPrattRule(e, a, rule);
     else if (a.leftRecSet.has(rule.name)) emitLeftRecRule(e, a, rule);
@@ -2056,6 +2093,11 @@ function parseRuleEntry(idx, rid, name, core) {
         if (ext > maxPos) maxPos = ext;
         absTok[aid] = start;
         absChar[aid] = tkOff[start];
+        if (adoptHitP >= 0) {
+          adoptRunPos = pos; adoptRunRid = rid; adoptRunGen = memoGenCur;
+          adoptRunP = adoptHitP; adoptRunKid = adoptHitKid + 1;
+          adoptRunOq = q + rowTokLen[aid]; adoptRunBase = adoptHitBase;
+        }
         if (me === undefined || me.length < tokN + 1) {
           me = new Array(tokN + 1);
           mn = new Array(tokN + 1);
@@ -2298,6 +2340,12 @@ let adoptDelta = 0;          // new-minus-old token delta past the damage
 // cached descent path (top-down): ids + their absolute old token bases
 let adoptPath = [];
 let adoptBase = [];
+// run-extension state: where the last single adoption sat in the old tree (its
+// parent row / kid index / parent token base), published by adoptSeek, plus the
+// (pos, rid, generation) signature a repetition must present to consume it.
+let adoptHitP = -1, adoptHitKid = 0, adoptHitBase = 0;
+let adoptRunPos = -1, adoptRunRid = -1, adoptRunGen = -1;
+let adoptRunP = -1, adoptRunKid = 0, adoptRunOq = 0, adoptRunBase = 0;
 function adoptSeek(q, rid) {
   // reuse the cached path while it still CONTAINS q (strictly inside, not at start)
   let depth = 0;
@@ -2339,6 +2387,7 @@ function adoptSeek(q, rid) {
     if (cb > q) return -1;                                 // a gap — nothing starts at q
     if (cb === q) {
       // the exploratory chain: every node from here down whose start is exactly q
+      adoptHitP = id; adoptHitKid = cs + lo; adoptHitBase = base;
       let xid = e, xb = cb;
       for (;;) {
         if (rowOK[xid] !== 0 && rowRule[xid] === rid
@@ -2349,6 +2398,7 @@ function adoptSeek(q, rid) {
         if (rowCount[xid] === 0) return -1;
         const fe = kids[xcs];
         if (fe < 0 || kidTokRel[xcs] !== 0) return -1;
+        adoptHitP = -1;
         xid = fe; xb = xb;
       }
     }
@@ -2357,6 +2407,45 @@ function adoptSeek(q, rid) {
     adoptPath.push(id); adoptBase.push(base);
   }
 }
+// Run-extension: a repetition whose element was just ADOPTED bulk-adopts the
+// following OLD SIBLINGS in one tight loop — whole-statement reuse without
+// re-entering parseRuleEntry/adoptSeek once per element. Soundness: each member
+// re-passes exactly the single-adoption eligibility (same-rule row, memoized
+// [rowOK], contiguous, lookahead clear of the damage), a member's existence
+// proves the loop's FIRST-set guard true at its position (its first token starts
+// the rule), and the loop's own continuation checks run again after the run
+// breaks. Members get no memo entries — a backtracking re-probe just re-adopts.
+function runExtend(rid) {
+  if (rid !== adoptRunRid || memoGenCur !== adoptRunGen) { adoptRunPos = -1; return; }
+  adoptRunPos = -1;
+  const P = adoptRunP;
+  const csEnd = rowStart[P] + rowCount[P];
+  const pb = adoptRunBase;
+  let i = adoptRunKid;
+  let oq = adoptRunOq;
+  let nq = pos;
+  const sfx = oq >= adoptDmgOldEnd;   // past the damage: monotone, no per-member ext check
+  let mp = maxPos;
+  while (i < csEnd) {
+    const e = kids[i];
+    if (e < 0) break;
+    if (pb + kidTokRel[i] !== oq) break;
+    if (rowRule[e] !== rid || rowOK[e] === 0) break;
+    const tl = rowTokLen[e];
+    if (tl === 0) break;
+    const ex = rowExt[e];
+    if (!sfx && oq + ex + 2 > adoptDmgStart) break;
+    absTok[e] = nq; absChar[e] = tkOff[nq];
+    scPush(e);
+    const w = nq + ex;
+    if (w > mp) mp = w;
+    nq += tl; oq += tl;
+    i++;
+  }
+  if (mp > maxPos) maxPos = mp;
+  pos = nq;
+}
+
 // The spare token-column buffer set (parseEdited ping-pongs between the live set and
 // this one, so steady-state edits never allocate columns).
 let altK = null, altT = null, altOff = null, altEnd = null, altFl = null, altDp = null, altPd = null;
@@ -2378,6 +2467,7 @@ ${e.soa ? '' : 'let altText = [];'}
 export function parse(source, entryRule) {
   lastSrc = null;
   adoptRoot = -1;
+  adoptRunPos = -1;
   lexInto(source);
   if (memoEnd.length !== MEMO_RULES) {
     memoNode = new Array(MEMO_RULES);
@@ -2442,7 +2532,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // depths are zero and whose shape carries no cross-token lexer flag (')' control-
   // head, postfix-ambiguous op). B = -1 restarts at the file head — always sound.
   const B = findRestart(cs);
-  const initParens = B >= 0 ? reconstructParens(B) : [];
+  const initParens = reconstructParensCached(B);
   const oN = tokN;
   // first old token at/after the damage end — the resync search floor
   let r0 = oN;
@@ -2537,6 +2627,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   adoptDelta = tokenDelta;
   adoptPath.length = 0;
   adoptBase.length = 0;
+  adoptRunPos = -1;
   const root = runParse(entryRule);
   adoptRoot = -1;
   lastRoot = root;

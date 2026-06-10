@@ -199,6 +199,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`function tokenize(source) {`);
   emit(`  src = source;`);
   emit(`  tokN = 0;`);
+  emit(`  parenCachePos = -1;`);
   emit(`  lexCore(source, 0, -1, 0, -1, 0, 0);`);
   emit(`  return tokN;`);
   emit(`}`);
@@ -537,6 +538,29 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`    if (tkK[i] === 1 && tkT[i] === ${tOf('(')} && tkPd[i] === need) { out[need - 1] = (tkFl[i] & 8) !== 0; need--; }`);
   emit(`  }`);
   emit(`  return out;`);
+  emit(`}`);
+  emit(`// Session cache for the live paren stack: the previous edit's anchor stack rolled`);
+  emit(`// FORWARD over the tokens between the two anchors (push on '(', pop on ')') — the`);
+  emit(`// backward scan is O(distance to the outermost live opener), which a deep`);
+  emit(`// stationary session would pay per keystroke. Tokens at/before the cached anchor`);
+  emit(`// are splice-stable (every splice begins past its own anchor), so the baseline`);
+  emit(`// stays exact; a backward jump (b < cached) falls back to the full scan.`);
+  emit(`let parenCachePos = -1;`);
+  emit(`let parenCacheStack = [];`);
+  emit(`function reconstructParensCached(b) {`);
+  emit(`  let stack;`);
+  emit(`  if (b < 0) stack = [];`);
+  emit(`  else if (parenCachePos >= 0 && parenCachePos <= b) {`);
+  emit(`    stack = parenCacheStack;`);
+  emit(`    for (let i = parenCachePos + 1; i <= b; i++) {`);
+  emit(`      if (tkK[i] === 1) {`);
+  emit(`        if (tkT[i] === ${tOf('(')}) stack.push((tkFl[i] & 8) !== 0);`);
+  emit(`        else if (tkT[i] === ${tRParen}) { if (stack.length > 0) stack.pop(); }`);
+  emit(`      }`);
+  emit(`    }`);
+  emit(`  } else stack = reconstructParens(b);`);
+  emit(`  parenCachePos = b; parenCacheStack = stack;`);
+  emit(`  return stack.slice();`);
   emit(`}`);
   return out.join('\n');
 }
