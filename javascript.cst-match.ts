@@ -2,15 +2,15 @@
 /* eslint-disable */
 import type { $templateNode, ArrayBindingElementNode, BindingElementNode, BindingNode, BindingPatternNode, BindingPropertyNode, BlockNode, ClassHeritageNode, ClassMemberNode, CstChild, CstLeaf, DeclNode, DecoratorExprNode, ExprNode, ForBindingNode, ForHeadNode, ImportClauseNode, ImportSpecifierNode, MemberNameNode, NewTargetNode, ParamNode, ProgramNode, PropNode, StmtNode, SwitchCaseNode } from "./javascript.cst-types.ts";
 
-const isLit = (c: readonly CstChild[], i: number, src: string, text: string, tt: string): boolean => {
+const __lit = (c: readonly CstChild[], i: number, src: string, text: string, tt: string): boolean => {
   const k = c[i] as CstLeaf | undefined;
   return k !== undefined && k.tokenType === tt && k.end - k.offset === text.length && src.startsWith(text, k.offset);
 };
-const isTok = (c: readonly CstChild[], i: number, name: string): boolean => {
+const __tok = (c: readonly CstChild[], i: number, name: string): boolean => {
   const k = c[i] as CstLeaf | undefined;
   return k !== undefined && k.tokenType === name;
 };
-const isNodeOf = (c: readonly CstChild[], i: number, rule: string): boolean => {
+const __nodeOf = (c: readonly CstChild[], i: number, rule: string): boolean => {
   const k = c[i] as { rule?: string } | undefined;
   return k !== undefined && k.rule === rule;
 };
@@ -22,35 +22,35 @@ function _DecoratorExpr$decorator(c: readonly CstChild[], src: string): Decorato
   let decorator: (CstLeaf) | undefined;
   const expr: (ExprNode)[] = [];
   let i = 0;
-  if (!(isTok(c, i, "Decorator"))) return null;
+  if (!(__tok(c, i, "Decorator"))) return null;
   decorator = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "(", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "(", "$punct")) { _t1 = false; break _b2; }
       i++;
       {
         const _t3 = i; let _t6 = true;
         _b7: {
-          if (!isNodeOf(c, i, "Expr")) { _t6 = false; break _b7; }
+          if (!__nodeOf(c, i, "Expr")) { _t6 = false; break _b7; }
           expr.push(c[i] as ExprNode);
           i++;
         }
         if (!_t6) { i = _t3; }
         else for (;;) {
-          if (!isLit(c, i, src, ",", "$punct")) break;
+          if (!__lit(c, i, src, ",", "$punct")) break;
           i++;
           const _t32 = i; let _t4 = true;
           _b5: {
-            if (!isNodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
+            if (!__nodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
             expr.push(c[i] as ExprNode);
             i++;
           }
           if (!_t4) { i = _t32; break; }
         }
       }
-      if (!isLit(c, i, src, ")", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ")", "$punct")) { _t1 = false; break _b2; }
       i++;
     }
     if (!_t1) i = _t0;
@@ -94,38 +94,38 @@ export type ExprMatch =
   | { arm: "regex"; regex: CstLeaf }
   | { arm: "spread"; expr: ExprNode }
   | { arm: "led_paren"; left: ExprNode; expr: (ExprNode)[] }
-  | { arm: "led_dot"; left: ExprNode; ident?: CstLeaf; privateField?: CstLeaf }
-  | { arm: "led_optChain"; left: ExprNode; ident?: CstLeaf; privateField?: CstLeaf; expr: (ExprNode)[]; expr2?: ExprNode; template?: CstLeaf | $templateNode }
+  | { arm: "led_dot"; left: ExprNode; alt: { branch: "ident"; ident: CstLeaf } | { branch: "privateField"; privateField: CstLeaf } }
+  | { arm: "led_optChain"; left: ExprNode; alt: { branch: "ident"; ident: CstLeaf } | { branch: "privateField"; privateField: CstLeaf } | { branch: "paren"; expr: (ExprNode)[] } | { branch: "bracket"; expr: ExprNode } | { branch: "template"; template: CstLeaf | $templateNode } }
   | { arm: "led_bracket"; left: ExprNode; expr: ExprNode }
   | { arm: "led_question"; left: ExprNode; expr: ExprNode; expr2: ExprNode }
   | { arm: "led_instanceof"; left: ExprNode; expr: ExprNode }
   | { arm: "led_in"; left: ExprNode; expr: ExprNode }
   | { arm: "led_template"; left: ExprNode; template: CstLeaf | $templateNode }
   | { arm: "new_"; newTarget: NewTargetNode; expr: (ExprNode)[] }
-  | { arm: "new_2"; ident: CstLeaf; classHeritage?: ClassHeritageNode; classMember: (ClassMemberNode)[]; expr: (ExprNode)[] }
-  | { arm: "new_3"; classHeritage?: ClassHeritageNode; classMember: (ClassMemberNode)[]; expr: (ExprNode)[] }
+  | { arm: "new_2"; ident: CstLeaf; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; classMember: (ClassMemberNode)[]; expr: (ExprNode)[] }
+  | { arm: "new_3"; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; classMember: (ClassMemberNode)[]; expr: (ExprNode)[] }
   | { arm: "bracket"; expr: (ExprNode)[]; expr2?: ExprNode }
   | { arm: "brace"; prop: (PropNode)[] }
-  | { arm: "async"; param: (ParamNode)[]; expr?: ExprNode; block?: BlockNode }
-  | { arm: "ident2"; ident: CstLeaf; expr?: ExprNode; block?: BlockNode }
-  | { arm: "yield_"; expr?: ExprNode; expr2?: ExprNode }
+  | { arm: "async"; asyncTok?: CstLeaf; param: (ParamNode)[]; alt: { branch: "expr"; expr: ExprNode } | { branch: "block"; block: BlockNode } }
+  | { arm: "ident2"; ident: CstLeaf; alt: { branch: "expr"; expr: ExprNode } | { branch: "block"; block: BlockNode } }
+  | { arm: "yield_"; alt: { branch: "star"; expr: ExprNode } | { branch: "expr"; expr?: ExprNode } }
   | { arm: "paren"; expr: ExprNode; expr2: (ExprNode)[] }
-  | { arm: "import_"; expr?: ExprNode }
+  | { arm: "import_"; alt: { branch: "paren"; expr: ExprNode } | { branch: "dot" } }
   | { arm: "privateField"; privateField: CstLeaf }
   | { arm: "hexNumber"; hexNumber: CstLeaf }
   | { arm: "octalNumber"; octalNumber: CstLeaf }
   | { arm: "binaryNumber"; binaryNumber: CstLeaf }
   | { arm: "bigInt"; bigInt: CstLeaf }
-  | { arm: "async2"; ident?: CstLeaf; param: (ParamNode)[]; block: BlockNode }
-  | { arm: "decoratorExpr"; decoratorExpr?: DecoratorExprNode; ident: CstLeaf; classHeritage?: ClassHeritageNode; classMember: (ClassMemberNode)[] }
-  | { arm: "decoratorExpr2"; decoratorExpr?: DecoratorExprNode; classHeritage?: ClassHeritageNode; classMember: (ClassMemberNode)[] }
+  | { arm: "async2"; asyncTok?: CstLeaf; ident?: CstLeaf; param: (ParamNode)[]; block: BlockNode }
+  | { arm: "decoratorExpr"; decoratorExpr?: DecoratorExprNode; ident: CstLeaf; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
+  | { arm: "decoratorExpr2"; decoratorExpr?: DecoratorExprNode; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
   | { arm: "binaryOp"; left: ExprNode; op: CstLeaf; right: ExprNode }
   | { arm: "prefixOp"; op: CstLeaf; operand: ExprNode }
   | { arm: "postfixOp"; operand: ExprNode; op: CstLeaf };
 
 function _Expr$true_(c: readonly CstChild[], src: string): ExprMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, "true", "$keyword")) return null;
+  if (!__lit(c, i, src, "true", "$keyword")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "true_" };
@@ -133,7 +133,7 @@ function _Expr$true_(c: readonly CstChild[], src: string): ExprMatch | null {
 
 function _Expr$false_(c: readonly CstChild[], src: string): ExprMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, "false", "$keyword")) return null;
+  if (!__lit(c, i, src, "false", "$keyword")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "false_" };
@@ -141,7 +141,7 @@ function _Expr$false_(c: readonly CstChild[], src: string): ExprMatch | null {
 
 function _Expr$null_(c: readonly CstChild[], src: string): ExprMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, "null", "$keyword")) return null;
+  if (!__lit(c, i, src, "null", "$keyword")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "null_" };
@@ -149,7 +149,7 @@ function _Expr$null_(c: readonly CstChild[], src: string): ExprMatch | null {
 
 function _Expr$undefined(c: readonly CstChild[], src: string): ExprMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, "undefined", "$keyword")) return null;
+  if (!__lit(c, i, src, "undefined", "$keyword")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "undefined" };
@@ -157,7 +157,7 @@ function _Expr$undefined(c: readonly CstChild[], src: string): ExprMatch | null 
 
 function _Expr$this_(c: readonly CstChild[], src: string): ExprMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, "this", "$keyword")) return null;
+  if (!__lit(c, i, src, "this", "$keyword")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "this_" };
@@ -165,7 +165,7 @@ function _Expr$this_(c: readonly CstChild[], src: string): ExprMatch | null {
 
 function _Expr$super_(c: readonly CstChild[], src: string): ExprMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, "super", "$keyword")) return null;
+  if (!__lit(c, i, src, "super", "$keyword")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "super_" };
@@ -174,7 +174,7 @@ function _Expr$super_(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$ident(c: readonly CstChild[], src: string): ExprMatch | null {
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -184,7 +184,7 @@ function _Expr$ident(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$number(c: readonly CstChild[], src: string): ExprMatch | null {
   let number: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Number"))) return null;
+  if (!(__tok(c, i, "Number"))) return null;
   number = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -194,7 +194,7 @@ function _Expr$number(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$string(c: readonly CstChild[], src: string): ExprMatch | null {
   let string: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "String"))) return null;
+  if (!(__tok(c, i, "String"))) return null;
   string = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -204,7 +204,7 @@ function _Expr$string(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$template(c: readonly CstChild[], src: string): ExprMatch | null {
   let template: (CstLeaf | $templateNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Template") || isNodeOf(c, i, '$template'))) return null;
+  if (!(__tok(c, i, "Template") || __nodeOf(c, i, '$template'))) return null;
   template = c[i] as CstLeaf | $templateNode;
   i++;
   if (i !== c.length) return null;
@@ -214,7 +214,7 @@ function _Expr$template(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$regex(c: readonly CstChild[], src: string): ExprMatch | null {
   let regex: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Regex"))) return null;
+  if (!(__tok(c, i, "Regex"))) return null;
   regex = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -224,9 +224,9 @@ function _Expr$regex(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$spread(c: readonly CstChild[], src: string): ExprMatch | null {
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "...", "$punct")) return null;
+  if (!__lit(c, i, src, "...", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -237,32 +237,32 @@ function _Expr$led_paren(c: readonly CstChild[], src: string): ExprMatch | null 
   let left: (ExprNode) | undefined;
   const expr: (ExprNode)[] = [];
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "Expr")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "Expr")) { _t3 = false; break _b4; }
       expr.push(c[i] as ExprNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
         expr.push(c[i] as ExprNode);
         i++;
       }
       if (!_t1) { i = _t02; break; }
     }
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "led_paren", left: left!, expr };
@@ -270,144 +270,153 @@ function _Expr$led_paren(c: readonly CstChild[], src: string): ExprMatch | null 
 
 function _Expr$led_dot(c: readonly CstChild[], src: string): ExprMatch | null {
   let left: (ExprNode) | undefined;
-  let ident: (CstLeaf) | undefined;
-  let privateField: (CstLeaf) | undefined;
+  let alt: ({ branch: "ident"; ident: CstLeaf } | { branch: "privateField"; privateField: CstLeaf }) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, ".", "$punct")) return null;
+  if (!__lit(c, i, src, ".", "$punct")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_ident: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Ident"))) { _t2 = false; break _b3; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t2 = false; break _b3; }
+        _t4_ident = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "ident", ident: _t4_ident! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "PrivateField"))) { _t5 = false; break _b6; }
-        privateField = c[i] as CstLeaf;
+      let _t8_privateField: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "PrivateField"))) { _t6 = false; break _b7; }
+        _t8_privateField = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "privateField", privateField: _t8_privateField! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "led_dot", left: left!, ident, privateField };
+  return { arm: "led_dot", left: left!, alt: alt! };
 }
 
 function _Expr$led_optChain(c: readonly CstChild[], src: string): ExprMatch | null {
   let left: (ExprNode) | undefined;
-  let ident: (CstLeaf) | undefined;
-  let privateField: (CstLeaf) | undefined;
-  const expr: (ExprNode)[] = [];
-  let expr2: (ExprNode) | undefined;
-  let template: (CstLeaf | $templateNode) | undefined;
+  let alt: ({ branch: "ident"; ident: CstLeaf } | { branch: "privateField"; privateField: CstLeaf } | { branch: "paren"; expr: (ExprNode)[] } | { branch: "bracket"; expr: ExprNode } | { branch: "template"; template: CstLeaf | $templateNode }) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "?.", "$punct")) return null;
+  if (!__lit(c, i, src, "?.", "$punct")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_ident: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Ident"))) { _t2 = false; break _b3; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t2 = false; break _b3; }
+        _t4_ident = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "ident", ident: _t4_ident! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "PrivateField"))) { _t5 = false; break _b6; }
-        privateField = c[i] as CstLeaf;
+      let _t8_privateField: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "PrivateField"))) { _t6 = false; break _b7; }
+        _t8_privateField = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "privateField", privateField: _t8_privateField! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!isLit(c, i, src, "(", "$punct")) { _t8 = false; break _b9; }
+      const _t12_expr: (ExprNode)[] = [];
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!__lit(c, i, src, "(", "$punct")) { _t10 = false; break _b11; }
         i++;
         {
-          const _t10 = i; let _t13 = true;
-          _b14: {
-            if (!isNodeOf(c, i, "Expr")) { _t13 = false; break _b14; }
-            expr.push(c[i] as ExprNode);
+          const _t13 = i; let _t16 = true;
+          _b17: {
+            if (!__nodeOf(c, i, "Expr")) { _t16 = false; break _b17; }
+            _t12_expr.push(c[i] as ExprNode);
             i++;
           }
-          if (!_t13) { i = _t10; }
+          if (!_t16) { i = _t13; }
           else for (;;) {
-            if (!isLit(c, i, src, ",", "$punct")) break;
+            if (!__lit(c, i, src, ",", "$punct")) break;
             i++;
-            const _t102 = i; let _t11 = true;
-            _b12: {
-              if (!isNodeOf(c, i, "Expr")) { _t11 = false; break _b12; }
-              expr.push(c[i] as ExprNode);
+            const _t132 = i; let _t14 = true;
+            _b15: {
+              if (!__nodeOf(c, i, "Expr")) { _t14 = false; break _b15; }
+              _t12_expr.push(c[i] as ExprNode);
               i++;
             }
-            if (!_t11) { i = _t102; break; }
+            if (!_t14) { i = _t132; break; }
           }
         }
-        if (!isLit(c, i, src, ")", "$punct")) { _t8 = false; break _b9; }
+        if (!__lit(c, i, src, ")", "$punct")) { _t10 = false; break _b11; }
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "paren", expr: _t12_expr }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) {
-      const _t15 = i; let _t16 = true;
-      _b17: {
-        if (!isLit(c, i, src, "[", "$punct")) { _t16 = false; break _b17; }
-        i++;
-        if (!isNodeOf(c, i, "Expr")) { _t16 = false; break _b17; }
-        expr2 = c[i] as ExprNode;
-        i++;
-        if (!isLit(c, i, src, "]", "$punct")) { _t16 = false; break _b17; }
-        i++;
-      }
-      if (_t16) _t0 = true; else i = _t15;
-    }
-    if (!_t0) {
+      let _t21_expr: (ExprNode) | undefined;
       const _t18 = i; let _t19 = true;
       _b20: {
-        if (!(isTok(c, i, "Template") || isNodeOf(c, i, '$template'))) { _t19 = false; break _b20; }
-        template = c[i] as CstLeaf | $templateNode;
+        if (!__lit(c, i, src, "[", "$punct")) { _t19 = false; break _b20; }
+        i++;
+        if (!__nodeOf(c, i, "Expr")) { _t19 = false; break _b20; }
+        _t21_expr = c[i] as ExprNode;
+        i++;
+        if (!__lit(c, i, src, "]", "$punct")) { _t19 = false; break _b20; }
         i++;
       }
-      if (_t19) _t0 = true; else i = _t18;
+      if (_t19) { _t0 = true; alt = ({ branch: "bracket", expr: _t21_expr! }) as typeof alt; }
+      else i = _t18;
+    }
+    if (!_t0) {
+      let _t25_template: (CstLeaf | $templateNode) | undefined;
+      const _t22 = i; let _t23 = true;
+      _b24: {
+        if (!(__tok(c, i, "Template") || __nodeOf(c, i, '$template'))) { _t23 = false; break _b24; }
+        _t25_template = c[i] as CstLeaf | $templateNode;
+        i++;
+      }
+      if (_t23) { _t0 = true; alt = ({ branch: "template", template: _t25_template! }) as typeof alt; }
+      else i = _t22;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "led_optChain", left: left!, ident, privateField, expr, expr2, template };
+  return { arm: "led_optChain", left: left!, alt: alt! };
 }
 
 function _Expr$led_bracket(c: readonly CstChild[], src: string): ExprMatch | null {
   let left: (ExprNode) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "[", "$punct")) return null;
+  if (!__lit(c, i, src, "[", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "]", "$punct")) return null;
+  if (!__lit(c, i, src, "]", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "led_bracket", left: left!, expr: expr! };
@@ -418,17 +427,17 @@ function _Expr$led_question(c: readonly CstChild[], src: string): ExprMatch | nu
   let expr: (ExprNode) | undefined;
   let expr2: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "?", "$punct")) return null;
+  if (!__lit(c, i, src, "?", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr2 = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -439,12 +448,12 @@ function _Expr$led_instanceof(c: readonly CstChild[], src: string): ExprMatch | 
   let left: (ExprNode) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "instanceof", "$keyword")) return null;
+  if (!__lit(c, i, src, "instanceof", "$keyword")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -455,12 +464,12 @@ function _Expr$led_in(c: readonly CstChild[], src: string): ExprMatch | null {
   let left: (ExprNode) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "in", "$keyword")) return null;
+  if (!__lit(c, i, src, "in", "$keyword")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -471,10 +480,10 @@ function _Expr$led_template(c: readonly CstChild[], src: string): ExprMatch | nu
   let left: (ExprNode) | undefined;
   let template: (CstLeaf | $templateNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!(isTok(c, i, "Template") || isNodeOf(c, i, '$template'))) return null;
+  if (!(__tok(c, i, "Template") || __nodeOf(c, i, '$template'))) return null;
   template = c[i] as CstLeaf | $templateNode;
   i++;
   if (i !== c.length) return null;
@@ -485,37 +494,37 @@ function _Expr$new_(c: readonly CstChild[], src: string): ExprMatch | null {
   let newTarget: (NewTargetNode) | undefined;
   const expr: (ExprNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "new", "$keyword")) return null;
+  if (!__lit(c, i, src, "new", "$keyword")) return null;
   i++;
-  if (!isNodeOf(c, i, "NewTarget")) return null;
+  if (!__nodeOf(c, i, "NewTarget")) return null;
   newTarget = c[i] as NewTargetNode;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "(", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "(", "$punct")) { _t1 = false; break _b2; }
       i++;
       {
         const _t3 = i; let _t6 = true;
         _b7: {
-          if (!isNodeOf(c, i, "Expr")) { _t6 = false; break _b7; }
+          if (!__nodeOf(c, i, "Expr")) { _t6 = false; break _b7; }
           expr.push(c[i] as ExprNode);
           i++;
         }
         if (!_t6) { i = _t3; }
         else for (;;) {
-          if (!isLit(c, i, src, ",", "$punct")) break;
+          if (!__lit(c, i, src, ",", "$punct")) break;
           i++;
           const _t32 = i; let _t4 = true;
           _b5: {
-            if (!isNodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
+            if (!__nodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
             expr.push(c[i] as ExprNode);
             i++;
           }
           if (!_t4) { i = _t32; break; }
         }
       }
-      if (!isLit(c, i, src, ")", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ")", "$punct")) { _t1 = false; break _b2; }
       i++;
     }
     if (!_t1) i = _t0;
@@ -527,148 +536,152 @@ function _Expr$new_(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$new_2(c: readonly CstChild[], src: string): ExprMatch | null {
   let ident: (CstLeaf) | undefined;
   let classHeritage: (ClassHeritageNode) | undefined;
+  let extendsTok: (CstLeaf) | undefined;
   const classMember: (ClassMemberNode)[] = [];
   const expr: (ExprNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "new", "$keyword")) return null;
+  if (!__lit(c, i, src, "new", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "class", "$keyword")) return null;
+  if (!__lit(c, i, src, "class", "$keyword")) return null;
   i++;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "extends", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "extends", "$keyword")) { _t1 = false; break _b2; }
+      extendsTok = c[i] as CstLeaf;
       i++;
-      if (!isNodeOf(c, i, "ClassHeritage")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "ClassHeritage")) { _t1 = false; break _b2; }
       classHeritage = c[i] as ClassHeritageNode;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isNodeOf(c, i, "ClassMember")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "ClassMember")) { _t4 = false; break _b5; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
     if (!_t4) { i = _t3; break; }
     if (i === _t3) break;
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isLit(c, i, src, "(", "$punct")) { _t7 = false; break _b8; }
+      if (!__lit(c, i, src, "(", "$punct")) { _t7 = false; break _b8; }
       i++;
       {
         const _t9 = i; let _t12 = true;
         _b13: {
-          if (!isNodeOf(c, i, "Expr")) { _t12 = false; break _b13; }
+          if (!__nodeOf(c, i, "Expr")) { _t12 = false; break _b13; }
           expr.push(c[i] as ExprNode);
           i++;
         }
         if (!_t12) { i = _t9; }
         else for (;;) {
-          if (!isLit(c, i, src, ",", "$punct")) break;
+          if (!__lit(c, i, src, ",", "$punct")) break;
           i++;
           const _t92 = i; let _t10 = true;
           _b11: {
-            if (!isNodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
+            if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
             expr.push(c[i] as ExprNode);
             i++;
           }
           if (!_t10) { i = _t92; break; }
         }
       }
-      if (!isLit(c, i, src, ")", "$punct")) { _t7 = false; break _b8; }
+      if (!__lit(c, i, src, ")", "$punct")) { _t7 = false; break _b8; }
       i++;
     }
     if (!_t7) i = _t6;
   }
   if (i !== c.length) return null;
-  return { arm: "new_2", ident: ident!, classHeritage, classMember, expr };
+  return { arm: "new_2", ident: ident!, classHeritage, extendsTok, classMember, expr };
 }
 
 function _Expr$new_3(c: readonly CstChild[], src: string): ExprMatch | null {
   let classHeritage: (ClassHeritageNode) | undefined;
+  let extendsTok: (CstLeaf) | undefined;
   const classMember: (ClassMemberNode)[] = [];
   const expr: (ExprNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "new", "$keyword")) return null;
+  if (!__lit(c, i, src, "new", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "class", "$keyword")) return null;
+  if (!__lit(c, i, src, "class", "$keyword")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "extends", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "extends", "$keyword")) { _t1 = false; break _b2; }
+      extendsTok = c[i] as CstLeaf;
       i++;
-      if (!isNodeOf(c, i, "ClassHeritage")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "ClassHeritage")) { _t1 = false; break _b2; }
       classHeritage = c[i] as ClassHeritageNode;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isNodeOf(c, i, "ClassMember")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "ClassMember")) { _t4 = false; break _b5; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
     if (!_t4) { i = _t3; break; }
     if (i === _t3) break;
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isLit(c, i, src, "(", "$punct")) { _t7 = false; break _b8; }
+      if (!__lit(c, i, src, "(", "$punct")) { _t7 = false; break _b8; }
       i++;
       {
         const _t9 = i; let _t12 = true;
         _b13: {
-          if (!isNodeOf(c, i, "Expr")) { _t12 = false; break _b13; }
+          if (!__nodeOf(c, i, "Expr")) { _t12 = false; break _b13; }
           expr.push(c[i] as ExprNode);
           i++;
         }
         if (!_t12) { i = _t9; }
         else for (;;) {
-          if (!isLit(c, i, src, ",", "$punct")) break;
+          if (!__lit(c, i, src, ",", "$punct")) break;
           i++;
           const _t92 = i; let _t10 = true;
           _b11: {
-            if (!isNodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
+            if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
             expr.push(c[i] as ExprNode);
             i++;
           }
           if (!_t10) { i = _t92; break; }
         }
       }
-      if (!isLit(c, i, src, ")", "$punct")) { _t7 = false; break _b8; }
+      if (!__lit(c, i, src, ")", "$punct")) { _t7 = false; break _b8; }
       i++;
     }
     if (!_t7) i = _t6;
   }
   if (i !== c.length) return null;
-  return { arm: "new_3", classHeritage, classMember, expr };
+  return { arm: "new_3", classHeritage, extendsTok, classMember, expr };
 }
 
 function _Expr$bracket(c: readonly CstChild[], src: string): ExprMatch | null {
   const expr: (ExprNode)[] = [];
   let expr2: (ExprNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "[", "$punct")) return null;
+  if (!__lit(c, i, src, "[", "$punct")) return null;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
@@ -676,13 +689,13 @@ function _Expr$bracket(c: readonly CstChild[], src: string): ExprMatch | null {
       {
         const _t3 = i; let _t4 = true;
         _b5: {
-          if (!isNodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
+          if (!__nodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
           expr.push(c[i] as ExprNode);
           i++;
         }
         if (!_t4) i = _t3;
       }
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
     }
     if (!_t1) { i = _t0; break; }
@@ -691,13 +704,13 @@ function _Expr$bracket(c: readonly CstChild[], src: string): ExprMatch | null {
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isNodeOf(c, i, "Expr")) { _t7 = false; break _b8; }
+      if (!__nodeOf(c, i, "Expr")) { _t7 = false; break _b8; }
       expr2 = c[i] as ExprNode;
       i++;
     }
     if (!_t7) i = _t6;
   }
-  if (!isLit(c, i, src, "]", "$punct")) return null;
+  if (!__lit(c, i, src, "]", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "bracket", expr, expr2 };
@@ -706,242 +719,256 @@ function _Expr$bracket(c: readonly CstChild[], src: string): ExprMatch | null {
 function _Expr$brace(c: readonly CstChild[], src: string): ExprMatch | null {
   const prop: (PropNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "Prop")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "Prop")) { _t3 = false; break _b4; }
       prop.push(c[i] as PropNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "Prop")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "Prop")) { _t1 = false; break _b2; }
         prop.push(c[i] as PropNode);
         i++;
       }
       if (!_t1) { i = _t02; break; }
     }
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "brace", prop };
 }
 
 function _Expr$async(c: readonly CstChild[], src: string): ExprMatch | null {
+  let asyncTok: (CstLeaf) | undefined;
   const param: (ParamNode)[] = [];
-  let expr: (ExprNode) | undefined;
-  let block: (BlockNode) | undefined;
+  let alt: ({ branch: "expr"; expr: ExprNode } | { branch: "block"; block: BlockNode }) | undefined;
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "async", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "async", "$keyword")) { _t1 = false; break _b2; }
+      asyncTok = c[i] as CstLeaf;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t3 = i; let _t6 = true;
     _b7: {
-      if (!isNodeOf(c, i, "Param")) { _t6 = false; break _b7; }
+      if (!__nodeOf(c, i, "Param")) { _t6 = false; break _b7; }
       param.push(c[i] as ParamNode);
       i++;
     }
     if (!_t6) { i = _t3; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t32 = i; let _t4 = true;
       _b5: {
-        if (!isNodeOf(c, i, "Param")) { _t4 = false; break _b5; }
+        if (!__nodeOf(c, i, "Param")) { _t4 = false; break _b5; }
         param.push(c[i] as ParamNode);
         i++;
       }
       if (!_t4) { i = _t32; break; }
     }
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isLit(c, i, src, "=>", "$punct")) return null;
+  if (!__lit(c, i, src, "=>", "$punct")) return null;
   i++;
   {
     let _t8 = false;
     if (!_t8) {
+      let _t12_expr: (ExprNode) | undefined;
       const _t9 = i; let _t10 = true;
       _b11: {
-        if (!isNodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
-        expr = c[i] as ExprNode;
+        if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
+        _t12_expr = c[i] as ExprNode;
         i++;
       }
-      if (_t10) _t8 = true; else i = _t9;
+      if (_t10) { _t8 = true; alt = ({ branch: "expr", expr: _t12_expr! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t8) {
-      const _t12 = i; let _t13 = true;
-      _b14: {
-        if (!isNodeOf(c, i, "Block")) { _t13 = false; break _b14; }
-        block = c[i] as BlockNode;
+      let _t16_block: (BlockNode) | undefined;
+      const _t13 = i; let _t14 = true;
+      _b15: {
+        if (!__nodeOf(c, i, "Block")) { _t14 = false; break _b15; }
+        _t16_block = c[i] as BlockNode;
         i++;
       }
-      if (_t13) _t8 = true; else i = _t12;
+      if (_t14) { _t8 = true; alt = ({ branch: "block", block: _t16_block! }) as typeof alt; }
+      else i = _t13;
     }
     if (!_t8) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "async", param, expr, block };
+  return { arm: "async", asyncTok, param, alt: alt! };
 }
 
 function _Expr$ident2(c: readonly CstChild[], src: string): ExprMatch | null {
   let ident: (CstLeaf) | undefined;
-  let expr: (ExprNode) | undefined;
-  let block: (BlockNode) | undefined;
+  let alt: ({ branch: "expr"; expr: ExprNode } | { branch: "block"; block: BlockNode }) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
-  if (!isLit(c, i, src, "=>", "$punct")) return null;
+  if (!__lit(c, i, src, "=>", "$punct")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_expr: (ExprNode) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isNodeOf(c, i, "Expr")) { _t2 = false; break _b3; }
-        expr = c[i] as ExprNode;
+        if (!__nodeOf(c, i, "Expr")) { _t2 = false; break _b3; }
+        _t4_expr = c[i] as ExprNode;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "expr", expr: _t4_expr! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "Block")) { _t5 = false; break _b6; }
-        block = c[i] as BlockNode;
+      let _t8_block: (BlockNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "Block")) { _t6 = false; break _b7; }
+        _t8_block = c[i] as BlockNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "block", block: _t8_block! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "ident2", ident: ident!, expr, block };
+  return { arm: "ident2", ident: ident!, alt: alt! };
 }
 
 function _Expr$yield_(c: readonly CstChild[], src: string): ExprMatch | null {
-  let expr: (ExprNode) | undefined;
-  let expr2: (ExprNode) | undefined;
+  let alt: ({ branch: "star"; expr: ExprNode } | { branch: "expr"; expr?: ExprNode }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "yield", "$keyword")) return null;
+  if (!__lit(c, i, src, "yield", "$keyword")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_expr: (ExprNode) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isLit(c, i, src, "*", "$punct")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, "*", "$punct")) { _t2 = false; break _b3; }
         i++;
-        if (!isNodeOf(c, i, "Expr")) { _t2 = false; break _b3; }
-        expr = c[i] as ExprNode;
+        if (!__nodeOf(c, i, "Expr")) { _t2 = false; break _b3; }
+        _t4_expr = c[i] as ExprNode;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "star", expr: _t4_expr! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
+      let _t8_expr: (ExprNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
         {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!isNodeOf(c, i, "Expr")) { _t8 = false; break _b9; }
-            expr2 = c[i] as ExprNode;
+          const _t9 = i; let _t10 = true;
+          _b11: {
+            if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
+            _t8_expr = c[i] as ExprNode;
             i++;
           }
-          if (!_t8) i = _t7;
+          if (!_t10) i = _t9;
         }
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "expr", expr: _t8_expr }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "yield_", expr, expr2 };
+  return { arm: "yield_", alt: alt! };
 }
 
 function _Expr$paren(c: readonly CstChild[], src: string): ExprMatch | null {
   let expr: (ExprNode) | undefined;
   const expr2: (ExprNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "paren", expr: expr!, expr2 };
 }
 
 function _Expr$import_(c: readonly CstChild[], src: string): ExprMatch | null {
-  let expr: (ExprNode) | undefined;
+  let alt: ({ branch: "paren"; expr: ExprNode } | { branch: "dot" }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "import", "$keyword")) return null;
+  if (!__lit(c, i, src, "import", "$keyword")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_expr: (ExprNode) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isLit(c, i, src, "(", "$punct")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, "(", "$punct")) { _t2 = false; break _b3; }
         i++;
-        if (!isNodeOf(c, i, "Expr")) { _t2 = false; break _b3; }
-        expr = c[i] as ExprNode;
+        if (!__nodeOf(c, i, "Expr")) { _t2 = false; break _b3; }
+        _t4_expr = c[i] as ExprNode;
         i++;
-        if (!isLit(c, i, src, ")", "$punct")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, ")", "$punct")) { _t2 = false; break _b3; }
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "paren", expr: _t4_expr! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isLit(c, i, src, ".", "$punct")) { _t5 = false; break _b6; }
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__lit(c, i, src, ".", "$punct")) { _t6 = false; break _b7; }
         i++;
-        if (!isLit(c, i, src, "meta", "$keyword")) { _t5 = false; break _b6; }
+        if (!__lit(c, i, src, "meta", "$keyword")) { _t6 = false; break _b7; }
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "dot" }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "import_", expr };
+  return { arm: "import_", alt: alt! };
 }
 
 function _Expr$privateField(c: readonly CstChild[], src: string): ExprMatch | null {
   let privateField: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "PrivateField"))) return null;
+  if (!(__tok(c, i, "PrivateField"))) return null;
   privateField = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -951,7 +978,7 @@ function _Expr$privateField(c: readonly CstChild[], src: string): ExprMatch | nu
 function _Expr$hexNumber(c: readonly CstChild[], src: string): ExprMatch | null {
   let hexNumber: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "HexNumber"))) return null;
+  if (!(__tok(c, i, "HexNumber"))) return null;
   hexNumber = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -961,7 +988,7 @@ function _Expr$hexNumber(c: readonly CstChild[], src: string): ExprMatch | null 
 function _Expr$octalNumber(c: readonly CstChild[], src: string): ExprMatch | null {
   let octalNumber: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "OctalNumber"))) return null;
+  if (!(__tok(c, i, "OctalNumber"))) return null;
   octalNumber = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -971,7 +998,7 @@ function _Expr$octalNumber(c: readonly CstChild[], src: string): ExprMatch | nul
 function _Expr$binaryNumber(c: readonly CstChild[], src: string): ExprMatch | null {
   let binaryNumber: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "BinaryNumber"))) return null;
+  if (!(__tok(c, i, "BinaryNumber"))) return null;
   binaryNumber = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -981,7 +1008,7 @@ function _Expr$binaryNumber(c: readonly CstChild[], src: string): ExprMatch | nu
 function _Expr$bigInt(c: readonly CstChild[], src: string): ExprMatch | null {
   let bigInt: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "BigInt"))) return null;
+  if (!(__tok(c, i, "BigInt"))) return null;
   bigInt = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -989,6 +1016,7 @@ function _Expr$bigInt(c: readonly CstChild[], src: string): ExprMatch | null {
 }
 
 function _Expr$async2(c: readonly CstChild[], src: string): ExprMatch | null {
+  let asyncTok: (CstLeaf) | undefined;
   let ident: (CstLeaf) | undefined;
   const param: (ParamNode)[] = [];
   let block: (BlockNode) | undefined;
@@ -996,17 +1024,18 @@ function _Expr$async2(c: readonly CstChild[], src: string): ExprMatch | null {
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "async", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "async", "$keyword")) { _t1 = false; break _b2; }
+      asyncTok = c[i] as CstLeaf;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "function", "$keyword")) return null;
+  if (!__lit(c, i, src, "function", "$keyword")) return null;
   i++;
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, "*", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, "*", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
@@ -1014,135 +1043,139 @@ function _Expr$async2(c: readonly CstChild[], src: string): ExprMatch | null {
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!(isTok(c, i, "Ident"))) { _t7 = false; break _b8; }
+      if (!(__tok(c, i, "Ident"))) { _t7 = false; break _b8; }
       ident = c[i] as CstLeaf;
       i++;
     }
     if (!_t7) i = _t6;
   }
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t9 = i; let _t12 = true;
     _b13: {
-      if (!isNodeOf(c, i, "Param")) { _t12 = false; break _b13; }
+      if (!__nodeOf(c, i, "Param")) { _t12 = false; break _b13; }
       param.push(c[i] as ParamNode);
       i++;
     }
     if (!_t12) { i = _t9; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t92 = i; let _t10 = true;
       _b11: {
-        if (!isNodeOf(c, i, "Param")) { _t10 = false; break _b11; }
+        if (!__nodeOf(c, i, "Param")) { _t10 = false; break _b11; }
         param.push(c[i] as ParamNode);
         i++;
       }
       if (!_t10) { i = _t92; break; }
     }
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Block")) return null;
+  if (!__nodeOf(c, i, "Block")) return null;
   block = c[i] as BlockNode;
   i++;
   if (i !== c.length) return null;
-  return { arm: "async2", ident, param, block: block! };
+  return { arm: "async2", asyncTok, ident, param, block: block! };
 }
 
 function _Expr$decoratorExpr(c: readonly CstChild[], src: string): ExprMatch | null {
   let decoratorExpr: (DecoratorExprNode) | undefined;
   let ident: (CstLeaf) | undefined;
   let classHeritage: (ClassHeritageNode) | undefined;
+  let extendsTok: (CstLeaf) | undefined;
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
       decoratorExpr = c[i] as DecoratorExprNode;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "class", "$keyword")) return null;
+  if (!__lit(c, i, src, "class", "$keyword")) return null;
   i++;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
+      extendsTok = c[i] as CstLeaf;
       i++;
-      if (!isNodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
       classHeritage = c[i] as ClassHeritageNode;
       i++;
     }
     if (!_t4) i = _t3;
   }
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isNodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
+      if (!__nodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
     if (!_t7) { i = _t6; break; }
     if (i === _t6) break;
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, classHeritage, classMember };
+  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, classHeritage, extendsTok, classMember };
 }
 
 function _Expr$decoratorExpr2(c: readonly CstChild[], src: string): ExprMatch | null {
   let decoratorExpr: (DecoratorExprNode) | undefined;
   let classHeritage: (ClassHeritageNode) | undefined;
+  let extendsTok: (CstLeaf) | undefined;
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
       decoratorExpr = c[i] as DecoratorExprNode;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "class", "$keyword")) return null;
+  if (!__lit(c, i, src, "class", "$keyword")) return null;
   i++;
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
+      extendsTok = c[i] as CstLeaf;
       i++;
-      if (!isNodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
       classHeritage = c[i] as ClassHeritageNode;
       i++;
     }
     if (!_t4) i = _t3;
   }
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isNodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
+      if (!__nodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
     if (!_t7) { i = _t6; break; }
     if (i === _t6) break;
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr2", decoratorExpr, classHeritage, classMember };
+  return { arm: "decoratorExpr2", decoratorExpr, classHeritage, extendsTok, classMember };
 }
 
 function _Expr$binaryOp(c: readonly CstChild[], src: string): ExprMatch | null {
@@ -1150,13 +1183,13 @@ function _Expr$binaryOp(c: readonly CstChild[], src: string): ExprMatch | null {
   let op: (CstLeaf) | undefined;
   let right: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   left = c[i] as ExprNode;
   i++;
-  if (!(isTok(c, i, "$operator"))) return null;
+  if (!(__tok(c, i, "$operator"))) return null;
   op = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   right = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -1167,10 +1200,10 @@ function _Expr$prefixOp(c: readonly CstChild[], src: string): ExprMatch | null {
   let op: (CstLeaf) | undefined;
   let operand: (ExprNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "$operator"))) return null;
+  if (!(__tok(c, i, "$operator"))) return null;
   op = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   operand = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -1181,10 +1214,10 @@ function _Expr$postfixOp(c: readonly CstChild[], src: string): ExprMatch | null 
   let operand: (ExprNode) | undefined;
   let op: (CstLeaf) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   operand = c[i] as ExprNode;
   i++;
-  if (!(isTok(c, i, "$operator"))) return null;
+  if (!(__tok(c, i, "$operator"))) return null;
   op = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1384,17 +1417,17 @@ export function matchExpr(n: ExprNode, src: string): ExprMatch {
 export type PropMatch =
   | { arm: "spread"; expr: ExprNode }
   | { arm: "get"; getKw: "get" | "set"; memberName: MemberNameNode; param: (ParamNode)[]; block: BlockNode }
-  | { arm: "async"; memberName: MemberNameNode; param: (ParamNode)[]; block: BlockNode }
+  | { arm: "async"; asyncTok?: CstLeaf; memberName: MemberNameNode; param: (ParamNode)[]; block: BlockNode }
   | { arm: "memberName"; memberName: MemberNameNode; expr: ExprNode }
   | { arm: "bracket"; expr: ExprNode; expr2: (ExprNode)[]; expr3: ExprNode }
-  | { arm: "ident"; ident: CstLeaf; expr?: ExprNode };
+  | { arm: "ident"; ident: CstLeaf; alt: { branch: "eq"; expr: ExprNode } | { branch: "empty" } };
 
 function _Prop$spread(c: readonly CstChild[], src: string): PropMatch | null {
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "...", "$punct")) return null;
+  if (!__lit(c, i, src, "...", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -1407,13 +1440,13 @@ function _Prop$get(c: readonly CstChild[], src: string): PropMatch | null {
   const param: (ParamNode)[] = [];
   let block: (BlockNode) | undefined;
   let i = 0;
-  if (!(isLit(c, i, src, "get", "$keyword") || isLit(c, i, src, "set", "$keyword"))) return null;
+  if (!(__lit(c, i, src, "get", "$keyword") || __lit(c, i, src, "set", "$keyword"))) return null;
   getKw = src.slice(c[i].offset, c[i].end) as "get" | "set";
   i++;
-  if (!isNodeOf(c, i, "MemberName")) return null;
+  if (!__nodeOf(c, i, "MemberName")) return null;
   memberName = c[i] as MemberNameNode;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
@@ -1421,17 +1454,17 @@ function _Prop$get(c: readonly CstChild[], src: string): PropMatch | null {
       {
         const _t3 = i; let _t6 = true;
         _b7: {
-          if (!isNodeOf(c, i, "Param")) { _t6 = false; break _b7; }
+          if (!__nodeOf(c, i, "Param")) { _t6 = false; break _b7; }
           param.push(c[i] as ParamNode);
           i++;
         }
         if (!_t6) { i = _t3; }
         else for (;;) {
-          if (!isLit(c, i, src, ",", "$punct")) break;
+          if (!__lit(c, i, src, ",", "$punct")) break;
           i++;
           const _t32 = i; let _t4 = true;
           _b5: {
-            if (!isNodeOf(c, i, "Param")) { _t4 = false; break _b5; }
+            if (!__nodeOf(c, i, "Param")) { _t4 = false; break _b5; }
             param.push(c[i] as ParamNode);
             i++;
           }
@@ -1441,9 +1474,9 @@ function _Prop$get(c: readonly CstChild[], src: string): PropMatch | null {
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Block")) return null;
+  if (!__nodeOf(c, i, "Block")) return null;
   block = c[i] as BlockNode;
   i++;
   if (i !== c.length) return null;
@@ -1451,6 +1484,7 @@ function _Prop$get(c: readonly CstChild[], src: string): PropMatch | null {
 }
 
 function _Prop$async(c: readonly CstChild[], src: string): PropMatch | null {
+  let asyncTok: (CstLeaf) | undefined;
   let memberName: (MemberNameNode) | undefined;
   const param: (ParamNode)[] = [];
   let block: (BlockNode) | undefined;
@@ -1458,7 +1492,8 @@ function _Prop$async(c: readonly CstChild[], src: string): PropMatch | null {
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "async", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "async", "$keyword")) { _t1 = false; break _b2; }
+      asyncTok = c[i] as CstLeaf;
       i++;
     }
     if (!_t1) i = _t0;
@@ -1466,55 +1501,55 @@ function _Prop$async(c: readonly CstChild[], src: string): PropMatch | null {
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, "*", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, "*", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
   }
-  if (!isNodeOf(c, i, "MemberName")) return null;
+  if (!__nodeOf(c, i, "MemberName")) return null;
   memberName = c[i] as MemberNameNode;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t6 = i; let _t9 = true;
     _b10: {
-      if (!isNodeOf(c, i, "Param")) { _t9 = false; break _b10; }
+      if (!__nodeOf(c, i, "Param")) { _t9 = false; break _b10; }
       param.push(c[i] as ParamNode);
       i++;
     }
     if (!_t9) { i = _t6; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t62 = i; let _t7 = true;
       _b8: {
-        if (!isNodeOf(c, i, "Param")) { _t7 = false; break _b8; }
+        if (!__nodeOf(c, i, "Param")) { _t7 = false; break _b8; }
         param.push(c[i] as ParamNode);
         i++;
       }
       if (!_t7) { i = _t62; break; }
     }
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Block")) return null;
+  if (!__nodeOf(c, i, "Block")) return null;
   block = c[i] as BlockNode;
   i++;
   if (i !== c.length) return null;
-  return { arm: "async", memberName: memberName!, param, block: block! };
+  return { arm: "async", asyncTok, memberName: memberName!, param, block: block! };
 }
 
 function _Prop$memberName(c: readonly CstChild[], src: string): PropMatch | null {
   let memberName: (MemberNameNode) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MemberName")) return null;
+  if (!__nodeOf(c, i, "MemberName")) return null;
   memberName = c[i] as MemberNameNode;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -1526,28 +1561,28 @@ function _Prop$bracket(c: readonly CstChild[], src: string): PropMatch | null {
   const expr2: (ExprNode)[] = [];
   let expr3: (ExprNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "[", "$punct")) return null;
+  if (!__lit(c, i, src, "[", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, "]", "$punct")) return null;
+  if (!__lit(c, i, src, "]", "$punct")) return null;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr3 = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -1556,29 +1591,31 @@ function _Prop$bracket(c: readonly CstChild[], src: string): PropMatch | null {
 
 function _Prop$ident(c: readonly CstChild[], src: string): PropMatch | null {
   let ident: (CstLeaf) | undefined;
-  let expr: (ExprNode) | undefined;
+  let alt: ({ branch: "eq"; expr: ExprNode } | { branch: "empty" }) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_expr: (ExprNode) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isLit(c, i, src, "=", "$punct")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, "=", "$punct")) { _t2 = false; break _b3; }
         i++;
-        if (!isNodeOf(c, i, "Expr")) { _t2 = false; break _b3; }
-        expr = c[i] as ExprNode;
+        if (!__nodeOf(c, i, "Expr")) { _t2 = false; break _b3; }
+        _t4_expr = c[i] as ExprNode;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "eq", expr: _t4_expr! }) as typeof alt; }
+      else i = _t1;
     }
-    if (!_t0) _t0 = true;   // empty branch always matches
+    if (!_t0) { _t0 = true; alt = ({ branch: "empty" }) as typeof alt; }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "ident", ident: ident!, expr };
+  return { arm: "ident", ident: ident!, alt: alt! };
 }
 
 export function matchProp(n: PropNode, src: string): PropMatch {
@@ -1645,7 +1682,7 @@ export type MemberNameMatch =
 function _MemberName$ident(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1655,7 +1692,7 @@ function _MemberName$ident(c: readonly CstChild[], src: string): MemberNameMatch
 function _MemberName$privateField(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let privateField: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "PrivateField"))) return null;
+  if (!(__tok(c, i, "PrivateField"))) return null;
   privateField = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1665,7 +1702,7 @@ function _MemberName$privateField(c: readonly CstChild[], src: string): MemberNa
 function _MemberName$string(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let string: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "String"))) return null;
+  if (!(__tok(c, i, "String"))) return null;
   string = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1675,7 +1712,7 @@ function _MemberName$string(c: readonly CstChild[], src: string): MemberNameMatc
 function _MemberName$number(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let number: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Number"))) return null;
+  if (!(__tok(c, i, "Number"))) return null;
   number = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1685,7 +1722,7 @@ function _MemberName$number(c: readonly CstChild[], src: string): MemberNameMatc
 function _MemberName$hexNumber(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let hexNumber: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "HexNumber"))) return null;
+  if (!(__tok(c, i, "HexNumber"))) return null;
   hexNumber = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1695,7 +1732,7 @@ function _MemberName$hexNumber(c: readonly CstChild[], src: string): MemberNameM
 function _MemberName$octalNumber(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let octalNumber: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "OctalNumber"))) return null;
+  if (!(__tok(c, i, "OctalNumber"))) return null;
   octalNumber = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1705,7 +1742,7 @@ function _MemberName$octalNumber(c: readonly CstChild[], src: string): MemberNam
 function _MemberName$binaryNumber(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let binaryNumber: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "BinaryNumber"))) return null;
+  if (!(__tok(c, i, "BinaryNumber"))) return null;
   binaryNumber = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1715,7 +1752,7 @@ function _MemberName$binaryNumber(c: readonly CstChild[], src: string): MemberNa
 function _MemberName$bigInt(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let bigInt: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "BigInt"))) return null;
+  if (!(__tok(c, i, "BigInt"))) return null;
   bigInt = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1725,12 +1762,12 @@ function _MemberName$bigInt(c: readonly CstChild[], src: string): MemberNameMatc
 function _MemberName$bracket(c: readonly CstChild[], src: string): MemberNameMatch | null {
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "[", "$punct")) return null;
+  if (!__lit(c, i, src, "[", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "]", "$punct")) return null;
+  if (!__lit(c, i, src, "]", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "bracket", expr: expr! };
@@ -1798,7 +1835,7 @@ export type NewTargetMatch =
 function _NewTarget$ident(c: readonly CstChild[], src: string): NewTargetMatch | null {
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1809,12 +1846,12 @@ function _NewTarget$led_dot(c: readonly CstChild[], src: string): NewTargetMatch
   let left: (NewTargetNode) | undefined;
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "NewTarget")) return null;
+  if (!__nodeOf(c, i, "NewTarget")) return null;
   left = c[i] as NewTargetNode;
   i++;
-  if (!isLit(c, i, src, ".", "$punct")) return null;
+  if (!__lit(c, i, src, ".", "$punct")) return null;
   i++;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1825,15 +1862,15 @@ function _NewTarget$led_bracket(c: readonly CstChild[], src: string): NewTargetM
   let left: (NewTargetNode) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "NewTarget")) return null;
+  if (!__nodeOf(c, i, "NewTarget")) return null;
   left = c[i] as NewTargetNode;
   i++;
-  if (!isLit(c, i, src, "[", "$punct")) return null;
+  if (!__lit(c, i, src, "[", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, "]", "$punct")) return null;
+  if (!__lit(c, i, src, "]", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "led_bracket", left: left!, expr: expr! };
@@ -1842,12 +1879,12 @@ function _NewTarget$led_bracket(c: readonly CstChild[], src: string): NewTargetM
 function _NewTarget$paren(c: readonly CstChild[], src: string): NewTargetMatch | null {
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "paren", expr: expr! };
@@ -1891,7 +1928,7 @@ export type ClassHeritageMatch =
 function _ClassHeritage$ident(c: readonly CstChild[], src: string): ClassHeritageMatch | null {
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1902,12 +1939,12 @@ function _ClassHeritage$led_dot(c: readonly CstChild[], src: string): ClassHerit
   let left: (ClassHeritageNode) | undefined;
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "ClassHeritage")) return null;
+  if (!__nodeOf(c, i, "ClassHeritage")) return null;
   left = c[i] as ClassHeritageNode;
   i++;
-  if (!isLit(c, i, src, ".", "$punct")) return null;
+  if (!__lit(c, i, src, ".", "$punct")) return null;
   i++;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1918,32 +1955,32 @@ function _ClassHeritage$led_paren(c: readonly CstChild[], src: string): ClassHer
   let left: (ClassHeritageNode) | undefined;
   const expr: (ExprNode)[] = [];
   let i = 0;
-  if (!isNodeOf(c, i, "ClassHeritage")) return null;
+  if (!__nodeOf(c, i, "ClassHeritage")) return null;
   left = c[i] as ClassHeritageNode;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "Expr")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "Expr")) { _t3 = false; break _b4; }
       expr.push(c[i] as ExprNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
         expr.push(c[i] as ExprNode);
         i++;
       }
       if (!_t1) { i = _t02; break; }
     }
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "led_paren", left: left!, expr };
@@ -1978,8 +2015,8 @@ export function matchClassHeritage(n: ClassHeritageNode, src: string): ClassHeri
 export type StmtMatch =
   | { arm: "block"; block: BlockNode }
   | { arm: "let_"; let_Kw: "let" | "const" | "var"; binding: (BindingNode)[] }
-  | { arm: "if_"; expr: ExprNode; expr2: (ExprNode)[]; stmt: StmtNode; stmt2?: StmtNode }
-  | { arm: "for_"; forHead: ForHeadNode; stmt: StmtNode }
+  | { arm: "if_"; expr: ExprNode; expr2: (ExprNode)[]; stmt: StmtNode; stmt2?: StmtNode; elseTok?: CstLeaf }
+  | { arm: "for_"; awaitTok?: CstLeaf; forHead: ForHeadNode; stmt: StmtNode }
   | { arm: "while_"; expr: ExprNode; expr2: (ExprNode)[]; stmt: StmtNode }
   | { arm: "do_"; stmt: StmtNode; expr: ExprNode; expr2: (ExprNode)[] }
   | { arm: "switch_"; expr: ExprNode; expr2: (ExprNode)[]; switchCase: (SwitchCaseNode)[] }
@@ -1987,19 +2024,19 @@ export type StmtMatch =
   | { arm: "throw_"; expr: ExprNode; expr2: (ExprNode)[] }
   | { arm: "break_"; ident?: CstLeaf }
   | { arm: "continue_"; ident?: CstLeaf }
-  | { arm: "try_"; block: BlockNode; param?: ParamNode; bindingPattern?: BindingPatternNode; block2?: BlockNode; block3?: BlockNode }
+  | { arm: "try_"; block: BlockNode; alt?: { branch: "param"; param: ParamNode } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }; block2?: BlockNode; catchTok?: CstLeaf; block3?: BlockNode; finallyTok?: CstLeaf }
   | { arm: "ident"; ident: CstLeaf; stmt: StmtNode }
   | { arm: "semi" }
   | { arm: "debugger_" }
   | { arm: "with_"; expr: ExprNode; stmt: StmtNode }
-  | { arm: "await_"; binding: (BindingNode)[] }
+  | { arm: "await_"; awaitTok?: CstLeaf; binding: (BindingNode)[] }
   | { arm: "decl"; decl: DeclNode }
   | { arm: "expr"; expr: ExprNode; expr2: (ExprNode)[] };
 
 function _Stmt$block(c: readonly CstChild[], src: string): StmtMatch | null {
   let block: (BlockNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Block")) return null;
+  if (!__nodeOf(c, i, "Block")) return null;
   block = c[i] as BlockNode;
   i++;
   if (i !== c.length) return null;
@@ -2010,23 +2047,23 @@ function _Stmt$let_(c: readonly CstChild[], src: string): StmtMatch | null {
   let let_Kw: ("let" | "const" | "var") | undefined;
   const binding: (BindingNode)[] = [];
   let i = 0;
-  if (!(isLit(c, i, src, "let", "$keyword") || isLit(c, i, src, "const", "$keyword") || isLit(c, i, src, "var", "$keyword"))) return null;
+  if (!(__lit(c, i, src, "let", "$keyword") || __lit(c, i, src, "const", "$keyword") || __lit(c, i, src, "var", "$keyword"))) return null;
   let_Kw = src.slice(c[i].offset, c[i].end) as "let" | "const" | "var";
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "Binding")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "Binding")) { _t3 = false; break _b4; }
       binding.push(c[i] as BindingNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "Binding")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "Binding")) { _t1 = false; break _b2; }
         binding.push(c[i] as BindingNode);
         i++;
       }
@@ -2036,7 +2073,7 @@ function _Stmt$let_(c: readonly CstChild[], src: string): StmtMatch | null {
   {
     const _t5 = i; let _t6 = true;
     _b7: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t6 = false; break _b7; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t6 = false; break _b7; }
       i++;
     }
     if (!_t6) i = _t5;
@@ -2050,72 +2087,76 @@ function _Stmt$if_(c: readonly CstChild[], src: string): StmtMatch | null {
   const expr2: (ExprNode)[] = [];
   let stmt: (StmtNode) | undefined;
   let stmt2: (StmtNode) | undefined;
+  let elseTok: (CstLeaf) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "if", "$keyword")) return null;
+  if (!__lit(c, i, src, "if", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Stmt")) return null;
+  if (!__nodeOf(c, i, "Stmt")) return null;
   stmt = c[i] as StmtNode;
   i++;
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, "else", "$keyword")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, "else", "$keyword")) { _t4 = false; break _b5; }
+      elseTok = c[i] as CstLeaf;
       i++;
-      if (!isNodeOf(c, i, "Stmt")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "Stmt")) { _t4 = false; break _b5; }
       stmt2 = c[i] as StmtNode;
       i++;
     }
     if (!_t4) i = _t3;
   }
   if (i !== c.length) return null;
-  return { arm: "if_", expr: expr!, expr2, stmt: stmt!, stmt2 };
+  return { arm: "if_", expr: expr!, expr2, stmt: stmt!, stmt2, elseTok };
 }
 
 function _Stmt$for_(c: readonly CstChild[], src: string): StmtMatch | null {
+  let awaitTok: (CstLeaf) | undefined;
   let forHead: (ForHeadNode) | undefined;
   let stmt: (StmtNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "for", "$keyword")) return null;
+  if (!__lit(c, i, src, "for", "$keyword")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "await", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "await", "$keyword")) { _t1 = false; break _b2; }
+      awaitTok = c[i] as CstLeaf;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "ForHead")) return null;
+  if (!__nodeOf(c, i, "ForHead")) return null;
   forHead = c[i] as ForHeadNode;
   i++;
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Stmt")) return null;
+  if (!__nodeOf(c, i, "Stmt")) return null;
   stmt = c[i] as StmtNode;
   i++;
   if (i !== c.length) return null;
-  return { arm: "for_", forHead: forHead!, stmt: stmt! };
+  return { arm: "for_", awaitTok, forHead: forHead!, stmt: stmt! };
 }
 
 function _Stmt$while_(c: readonly CstChild[], src: string): StmtMatch | null {
@@ -2123,28 +2164,28 @@ function _Stmt$while_(c: readonly CstChild[], src: string): StmtMatch | null {
   const expr2: (ExprNode)[] = [];
   let stmt: (StmtNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "while", "$keyword")) return null;
+  if (!__lit(c, i, src, "while", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Stmt")) return null;
+  if (!__nodeOf(c, i, "Stmt")) return null;
   stmt = c[i] as StmtNode;
   i++;
   if (i !== c.length) return null;
@@ -2156,36 +2197,36 @@ function _Stmt$do_(c: readonly CstChild[], src: string): StmtMatch | null {
   let expr: (ExprNode) | undefined;
   const expr2: (ExprNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "do", "$keyword")) return null;
+  if (!__lit(c, i, src, "do", "$keyword")) return null;
   i++;
-  if (!isNodeOf(c, i, "Stmt")) return null;
+  if (!__nodeOf(c, i, "Stmt")) return null;
   stmt = c[i] as StmtNode;
   i++;
-  if (!isLit(c, i, src, "while", "$keyword")) return null;
+  if (!__lit(c, i, src, "while", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
@@ -2199,40 +2240,40 @@ function _Stmt$switch_(c: readonly CstChild[], src: string): StmtMatch | null {
   const expr2: (ExprNode)[] = [];
   const switchCase: (SwitchCaseNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "switch", "$keyword")) return null;
+  if (!__lit(c, i, src, "switch", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isNodeOf(c, i, "SwitchCase")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "SwitchCase")) { _t4 = false; break _b5; }
       switchCase.push(c[i] as SwitchCaseNode);
       i++;
     }
     if (!_t4) { i = _t3; break; }
     if (i === _t3) break;
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "switch_", expr: expr!, expr2, switchCase };
@@ -2242,20 +2283,20 @@ function _Stmt$return_(c: readonly CstChild[], src: string): StmtMatch | null {
   let expr: (ExprNode) | undefined;
   const expr2: (ExprNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "return", "$keyword")) return null;
+  if (!__lit(c, i, src, "return", "$keyword")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr = c[i] as ExprNode;
       i++;
       for (;;) {
         const _t3 = i; let _t4 = true;
         _b5: {
-          if (!isLit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
+          if (!__lit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
           i++;
-          if (!isNodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
+          if (!__nodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
           expr2.push(c[i] as ExprNode);
           i++;
         }
@@ -2268,7 +2309,7 @@ function _Stmt$return_(c: readonly CstChild[], src: string): StmtMatch | null {
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t7 = false; break _b8; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t7 = false; break _b8; }
       i++;
     }
     if (!_t7) i = _t6;
@@ -2281,17 +2322,17 @@ function _Stmt$throw_(c: readonly CstChild[], src: string): StmtMatch | null {
   let expr: (ExprNode) | undefined;
   const expr2: (ExprNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "throw", "$keyword")) return null;
+  if (!__lit(c, i, src, "throw", "$keyword")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
@@ -2301,7 +2342,7 @@ function _Stmt$throw_(c: readonly CstChild[], src: string): StmtMatch | null {
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
@@ -2313,12 +2354,12 @@ function _Stmt$throw_(c: readonly CstChild[], src: string): StmtMatch | null {
 function _Stmt$break_(c: readonly CstChild[], src: string): StmtMatch | null {
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "break", "$keyword")) return null;
+  if (!__lit(c, i, src, "break", "$keyword")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Ident"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Ident"))) { _t1 = false; break _b2; }
       ident = c[i] as CstLeaf;
       i++;
     }
@@ -2327,7 +2368,7 @@ function _Stmt$break_(c: readonly CstChild[], src: string): StmtMatch | null {
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
@@ -2339,12 +2380,12 @@ function _Stmt$break_(c: readonly CstChild[], src: string): StmtMatch | null {
 function _Stmt$continue_(c: readonly CstChild[], src: string): StmtMatch | null {
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "continue", "$keyword")) return null;
+  if (!__lit(c, i, src, "continue", "$keyword")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Ident"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Ident"))) { _t1 = false; break _b2; }
       ident = c[i] as CstLeaf;
       i++;
     }
@@ -2353,7 +2394,7 @@ function _Stmt$continue_(c: readonly CstChild[], src: string): StmtMatch | null 
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
@@ -2364,84 +2405,91 @@ function _Stmt$continue_(c: readonly CstChild[], src: string): StmtMatch | null 
 
 function _Stmt$try_(c: readonly CstChild[], src: string): StmtMatch | null {
   let block: (BlockNode) | undefined;
-  let param: (ParamNode) | undefined;
-  let bindingPattern: (BindingPatternNode) | undefined;
+  let alt: ({ branch: "param"; param: ParamNode } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }) | undefined;
   let block2: (BlockNode) | undefined;
+  let catchTok: (CstLeaf) | undefined;
   let block3: (BlockNode) | undefined;
+  let finallyTok: (CstLeaf) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "try", "$keyword")) return null;
+  if (!__lit(c, i, src, "try", "$keyword")) return null;
   i++;
-  if (!isNodeOf(c, i, "Block")) return null;
+  if (!__nodeOf(c, i, "Block")) return null;
   block = c[i] as BlockNode;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "catch", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "catch", "$keyword")) { _t1 = false; break _b2; }
+      catchTok = c[i] as CstLeaf;
       i++;
       {
         const _t3 = i; let _t4 = true;
         _b5: {
-          if (!isLit(c, i, src, "(", "$punct")) { _t4 = false; break _b5; }
+          if (!__lit(c, i, src, "(", "$punct")) { _t4 = false; break _b5; }
           i++;
           {
             let _t6 = false;
             if (!_t6) {
+              let _t10_param: (ParamNode) | undefined;
               const _t7 = i; let _t8 = true;
               _b9: {
-                if (!isNodeOf(c, i, "Param")) { _t8 = false; break _b9; }
-                param = c[i] as ParamNode;
+                if (!__nodeOf(c, i, "Param")) { _t8 = false; break _b9; }
+                _t10_param = c[i] as ParamNode;
                 i++;
               }
-              if (_t8) _t6 = true; else i = _t7;
+              if (_t8) { _t6 = true; alt = ({ branch: "param", param: _t10_param! }) as typeof alt; }
+              else i = _t7;
             }
             if (!_t6) {
-              const _t10 = i; let _t11 = true;
-              _b12: {
-                if (!isNodeOf(c, i, "BindingPattern")) { _t11 = false; break _b12; }
-                bindingPattern = c[i] as BindingPatternNode;
+              let _t14_bindingPattern: (BindingPatternNode) | undefined;
+              const _t11 = i; let _t12 = true;
+              _b13: {
+                if (!__nodeOf(c, i, "BindingPattern")) { _t12 = false; break _b13; }
+                _t14_bindingPattern = c[i] as BindingPatternNode;
                 i++;
               }
-              if (_t11) _t6 = true; else i = _t10;
+              if (_t12) { _t6 = true; alt = ({ branch: "bindingPattern", bindingPattern: _t14_bindingPattern! }) as typeof alt; }
+              else i = _t11;
             }
             if (!_t6) { _t4 = false; break _b5; }
           }
-          if (!isLit(c, i, src, ")", "$punct")) { _t4 = false; break _b5; }
+          if (!__lit(c, i, src, ")", "$punct")) { _t4 = false; break _b5; }
           i++;
         }
         if (!_t4) i = _t3;
       }
-      if (!isNodeOf(c, i, "Block")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Block")) { _t1 = false; break _b2; }
       block2 = c[i] as BlockNode;
       i++;
     }
     if (!_t1) i = _t0;
   }
   {
-    const _t13 = i; let _t14 = true;
-    _b15: {
-      if (!isLit(c, i, src, "finally", "$keyword")) { _t14 = false; break _b15; }
+    const _t15 = i; let _t16 = true;
+    _b17: {
+      if (!__lit(c, i, src, "finally", "$keyword")) { _t16 = false; break _b17; }
+      finallyTok = c[i] as CstLeaf;
       i++;
-      if (!isNodeOf(c, i, "Block")) { _t14 = false; break _b15; }
+      if (!__nodeOf(c, i, "Block")) { _t16 = false; break _b17; }
       block3 = c[i] as BlockNode;
       i++;
     }
-    if (!_t14) i = _t13;
+    if (!_t16) i = _t15;
   }
   if (i !== c.length) return null;
-  return { arm: "try_", block: block!, param, bindingPattern, block2, block3 };
+  return { arm: "try_", block: block!, alt, block2, catchTok, block3, finallyTok };
 }
 
 function _Stmt$ident(c: readonly CstChild[], src: string): StmtMatch | null {
   let ident: (CstLeaf) | undefined;
   let stmt: (StmtNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Stmt")) return null;
+  if (!__nodeOf(c, i, "Stmt")) return null;
   stmt = c[i] as StmtNode;
   i++;
   if (i !== c.length) return null;
@@ -2450,7 +2498,7 @@ function _Stmt$ident(c: readonly CstChild[], src: string): StmtMatch | null {
 
 function _Stmt$semi(c: readonly CstChild[], src: string): StmtMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, ";", "$punct")) return null;
+  if (!__lit(c, i, src, ";", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "semi" };
@@ -2458,12 +2506,12 @@ function _Stmt$semi(c: readonly CstChild[], src: string): StmtMatch | null {
 
 function _Stmt$debugger_(c: readonly CstChild[], src: string): StmtMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, "debugger", "$keyword")) return null;
+  if (!__lit(c, i, src, "debugger", "$keyword")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t1 = false; break _b2; }
       i++;
     }
     if (!_t1) i = _t0;
@@ -2476,16 +2524,16 @@ function _Stmt$with_(c: readonly CstChild[], src: string): StmtMatch | null {
   let expr: (ExprNode) | undefined;
   let stmt: (StmtNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "with", "$keyword")) return null;
+  if (!__lit(c, i, src, "with", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Stmt")) return null;
+  if (!__nodeOf(c, i, "Stmt")) return null;
   stmt = c[i] as StmtNode;
   i++;
   if (i !== c.length) return null;
@@ -2493,32 +2541,34 @@ function _Stmt$with_(c: readonly CstChild[], src: string): StmtMatch | null {
 }
 
 function _Stmt$await_(c: readonly CstChild[], src: string): StmtMatch | null {
+  let awaitTok: (CstLeaf) | undefined;
   const binding: (BindingNode)[] = [];
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "await", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "await", "$keyword")) { _t1 = false; break _b2; }
+      awaitTok = c[i] as CstLeaf;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "using", "$keyword")) return null;
+  if (!__lit(c, i, src, "using", "$keyword")) return null;
   i++;
   {
     const _t3 = i; let _t6 = true;
     _b7: {
-      if (!isNodeOf(c, i, "Binding")) { _t6 = false; break _b7; }
+      if (!__nodeOf(c, i, "Binding")) { _t6 = false; break _b7; }
       binding.push(c[i] as BindingNode);
       i++;
     }
     if (!_t6) { i = _t3; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t32 = i; let _t4 = true;
       _b5: {
-        if (!isNodeOf(c, i, "Binding")) { _t4 = false; break _b5; }
+        if (!__nodeOf(c, i, "Binding")) { _t4 = false; break _b5; }
         binding.push(c[i] as BindingNode);
         i++;
       }
@@ -2528,19 +2578,19 @@ function _Stmt$await_(c: readonly CstChild[], src: string): StmtMatch | null {
   {
     const _t8 = i; let _t9 = true;
     _b10: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t9 = false; break _b10; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t9 = false; break _b10; }
       i++;
     }
     if (!_t9) i = _t8;
   }
   if (i !== c.length) return null;
-  return { arm: "await_", binding };
+  return { arm: "await_", awaitTok, binding };
 }
 
 function _Stmt$decl(c: readonly CstChild[], src: string): StmtMatch | null {
   let decl: (DeclNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Decl")) return null;
+  if (!__nodeOf(c, i, "Decl")) return null;
   decl = c[i] as DeclNode;
   i++;
   if (i !== c.length) return null;
@@ -2551,15 +2601,15 @@ function _Stmt$expr(c: readonly CstChild[], src: string): StmtMatch | null {
   let expr: (ExprNode) | undefined;
   const expr2: (ExprNode)[] = [];
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
@@ -2569,7 +2619,7 @@ function _Stmt$expr(c: readonly CstChild[], src: string): StmtMatch | null {
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
@@ -2677,19 +2727,19 @@ export type BlockMatch =
 function _Block$brace(c: readonly CstChild[], src: string): BlockMatch | null {
   const stmt: (StmtNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Stmt")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Stmt")) { _t1 = false; break _b2; }
       stmt.push(c[i] as StmtNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "brace", stmt };
@@ -2719,19 +2769,19 @@ export function matchBlock(n: BlockNode, src: string): BlockMatch {
 export type BindingPropertyMatch =
   | { arm: "ident"; ident: CstLeaf; bindingElement: BindingElementNode }
   | { arm: "ident2"; ident: CstLeaf; expr?: ExprNode }
-  | { arm: "string"; string?: CstLeaf; number?: CstLeaf; expr?: ExprNode; bindingElement: BindingElementNode }
-  | { arm: "spread"; ident?: CstLeaf; bindingPattern?: BindingPatternNode };
+  | { arm: "string"; alt: { branch: "string"; string: CstLeaf } | { branch: "number"; number: CstLeaf } | { branch: "bracket"; expr: ExprNode }; bindingElement: BindingElementNode }
+  | { arm: "spread"; alt: { branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode } };
 
 function _BindingProperty$ident(c: readonly CstChild[], src: string): BindingPropertyMatch | null {
   let ident: (CstLeaf) | undefined;
   let bindingElement: (BindingElementNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "BindingElement")) return null;
+  if (!__nodeOf(c, i, "BindingElement")) return null;
   bindingElement = c[i] as BindingElementNode;
   i++;
   if (i !== c.length) return null;
@@ -2742,15 +2792,15 @@ function _BindingProperty$ident2(c: readonly CstChild[], src: string): BindingPr
   let ident: (CstLeaf) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "=", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "=", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr = c[i] as ExprNode;
       i++;
     }
@@ -2761,85 +2811,92 @@ function _BindingProperty$ident2(c: readonly CstChild[], src: string): BindingPr
 }
 
 function _BindingProperty$string(c: readonly CstChild[], src: string): BindingPropertyMatch | null {
-  let string: (CstLeaf) | undefined;
-  let number: (CstLeaf) | undefined;
-  let expr: (ExprNode) | undefined;
+  let alt: ({ branch: "string"; string: CstLeaf } | { branch: "number"; number: CstLeaf } | { branch: "bracket"; expr: ExprNode }) | undefined;
   let bindingElement: (BindingElementNode) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_string: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "String"))) { _t2 = false; break _b3; }
-        string = c[i] as CstLeaf;
+        if (!(__tok(c, i, "String"))) { _t2 = false; break _b3; }
+        _t4_string = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "string", string: _t4_string! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "Number"))) { _t5 = false; break _b6; }
-        number = c[i] as CstLeaf;
+      let _t8_number: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "Number"))) { _t6 = false; break _b7; }
+        _t8_number = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "number", number: _t8_number! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!isLit(c, i, src, "[", "$punct")) { _t8 = false; break _b9; }
+      let _t12_expr: (ExprNode) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!__lit(c, i, src, "[", "$punct")) { _t10 = false; break _b11; }
         i++;
-        if (!isNodeOf(c, i, "Expr")) { _t8 = false; break _b9; }
-        expr = c[i] as ExprNode;
+        if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
+        _t12_expr = c[i] as ExprNode;
         i++;
-        if (!isLit(c, i, src, "]", "$punct")) { _t8 = false; break _b9; }
+        if (!__lit(c, i, src, "]", "$punct")) { _t10 = false; break _b11; }
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "bracket", expr: _t12_expr! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "BindingElement")) return null;
+  if (!__nodeOf(c, i, "BindingElement")) return null;
   bindingElement = c[i] as BindingElementNode;
   i++;
   if (i !== c.length) return null;
-  return { arm: "string", string, number, expr, bindingElement: bindingElement! };
+  return { arm: "string", alt: alt!, bindingElement: bindingElement! };
 }
 
 function _BindingProperty$spread(c: readonly CstChild[], src: string): BindingPropertyMatch | null {
-  let ident: (CstLeaf) | undefined;
-  let bindingPattern: (BindingPatternNode) | undefined;
+  let alt: ({ branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "...", "$punct")) return null;
+  if (!__lit(c, i, src, "...", "$punct")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_ident: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Ident"))) { _t2 = false; break _b3; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t2 = false; break _b3; }
+        _t4_ident = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "ident", ident: _t4_ident! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "BindingPattern")) { _t5 = false; break _b6; }
-        bindingPattern = c[i] as BindingPatternNode;
+      let _t8_bindingPattern: (BindingPatternNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "BindingPattern")) { _t6 = false; break _b7; }
+        _t8_bindingPattern = c[i] as BindingPatternNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "bindingPattern", bindingPattern: _t8_bindingPattern! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "spread", ident, bindingPattern };
+  return { arm: "spread", alt: alt! };
 }
 
 export function matchBindingProperty(n: BindingPropertyNode, src: string): BindingPropertyMatch {
@@ -2881,48 +2938,51 @@ export function matchBindingProperty(n: BindingPropertyNode, src: string): Bindi
 }
 
 export type BindingElementMatch =
-  | { arm: "seq"; ident?: CstLeaf; bindingPattern?: BindingPatternNode; expr?: ExprNode };
+  | { arm: "seq"; alt: { branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }; expr?: ExprNode };
 
 function _BindingElement$seq(c: readonly CstChild[], src: string): BindingElementMatch | null {
-  let ident: (CstLeaf) | undefined;
-  let bindingPattern: (BindingPatternNode) | undefined;
+  let alt: ({ branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_ident: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Ident"))) { _t2 = false; break _b3; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t2 = false; break _b3; }
+        _t4_ident = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "ident", ident: _t4_ident! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "BindingPattern")) { _t5 = false; break _b6; }
-        bindingPattern = c[i] as BindingPatternNode;
+      let _t8_bindingPattern: (BindingPatternNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "BindingPattern")) { _t6 = false; break _b7; }
+        _t8_bindingPattern = c[i] as BindingPatternNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "bindingPattern", bindingPattern: _t8_bindingPattern! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   {
-    const _t7 = i; let _t8 = true;
-    _b9: {
-      if (!isLit(c, i, src, "=", "$punct")) { _t8 = false; break _b9; }
+    const _t9 = i; let _t10 = true;
+    _b11: {
+      if (!__lit(c, i, src, "=", "$punct")) { _t10 = false; break _b11; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t8 = false; break _b9; }
+      if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
       expr = c[i] as ExprNode;
       i++;
     }
-    if (!_t8) i = _t7;
+    if (!_t10) i = _t9;
   }
   if (i !== c.length) return null;
-  return { arm: "seq", ident, bindingPattern, expr };
+  return { arm: "seq", alt: alt!, expr };
 }
 
 export function matchBindingElement(n: BindingElementNode, src: string): BindingElementMatch {
@@ -2952,12 +3012,12 @@ export function matchBindingElement(n: BindingElementNode, src: string): Binding
 
 export type ArrayBindingElementMatch =
   | { arm: "bindingElement"; bindingElement: BindingElementNode }
-  | { arm: "spread"; ident?: CstLeaf; bindingPattern?: BindingPatternNode };
+  | { arm: "spread"; alt: { branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode } };
 
 function _ArrayBindingElement$bindingElement(c: readonly CstChild[], src: string): ArrayBindingElementMatch | null {
   let bindingElement: (BindingElementNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "BindingElement")) return null;
+  if (!__nodeOf(c, i, "BindingElement")) return null;
   bindingElement = c[i] as BindingElementNode;
   i++;
   if (i !== c.length) return null;
@@ -2965,35 +3025,38 @@ function _ArrayBindingElement$bindingElement(c: readonly CstChild[], src: string
 }
 
 function _ArrayBindingElement$spread(c: readonly CstChild[], src: string): ArrayBindingElementMatch | null {
-  let ident: (CstLeaf) | undefined;
-  let bindingPattern: (BindingPatternNode) | undefined;
+  let alt: ({ branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "...", "$punct")) return null;
+  if (!__lit(c, i, src, "...", "$punct")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_ident: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Ident"))) { _t2 = false; break _b3; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t2 = false; break _b3; }
+        _t4_ident = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "ident", ident: _t4_ident! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "BindingPattern")) { _t5 = false; break _b6; }
-        bindingPattern = c[i] as BindingPatternNode;
+      let _t8_bindingPattern: (BindingPatternNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "BindingPattern")) { _t6 = false; break _b7; }
+        _t8_bindingPattern = c[i] as BindingPatternNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "bindingPattern", bindingPattern: _t8_bindingPattern! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "spread", ident, bindingPattern };
+  return { arm: "spread", alt: alt! };
 }
 
 export function matchArrayBindingElement(n: ArrayBindingElementNode, src: string): ArrayBindingElementMatch {
@@ -3028,29 +3091,29 @@ export type BindingPatternMatch =
 function _BindingPattern$brace(c: readonly CstChild[], src: string): BindingPatternMatch | null {
   const bindingProperty: (BindingPropertyNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "BindingProperty")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "BindingProperty")) { _t3 = false; break _b4; }
       bindingProperty.push(c[i] as BindingPropertyNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "BindingProperty")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "BindingProperty")) { _t1 = false; break _b2; }
         bindingProperty.push(c[i] as BindingPropertyNode);
         i++;
       }
       if (!_t1) { i = _t02; break; }
     }
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "brace", bindingProperty };
@@ -3060,12 +3123,12 @@ function _BindingPattern$bracket(c: readonly CstChild[], src: string): BindingPa
   let arrayBindingElement: (ArrayBindingElementNode) | undefined;
   const arrayBindingElement2: (ArrayBindingElementNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "[", "$punct")) return null;
+  if (!__lit(c, i, src, "[", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "ArrayBindingElement")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "ArrayBindingElement")) { _t1 = false; break _b2; }
       arrayBindingElement = c[i] as ArrayBindingElementNode;
       i++;
     }
@@ -3074,12 +3137,12 @@ function _BindingPattern$bracket(c: readonly CstChild[], src: string): BindingPa
   for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
       i++;
       {
         const _t6 = i; let _t7 = true;
         _b8: {
-          if (!isNodeOf(c, i, "ArrayBindingElement")) { _t7 = false; break _b8; }
+          if (!__nodeOf(c, i, "ArrayBindingElement")) { _t7 = false; break _b8; }
           arrayBindingElement2.push(c[i] as ArrayBindingElementNode);
           i++;
         }
@@ -3089,7 +3152,7 @@ function _BindingPattern$bracket(c: readonly CstChild[], src: string): BindingPa
     if (!_t4) { i = _t3; break; }
     if (i === _t3) break;
   }
-  if (!isLit(c, i, src, "]", "$punct")) return null;
+  if (!__lit(c, i, src, "]", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "bracket", arrayBindingElement, arrayBindingElement2 };
@@ -3121,48 +3184,51 @@ export function matchBindingPattern(n: BindingPatternNode, src: string): Binding
 }
 
 export type BindingMatch =
-  | { arm: "seq"; ident?: CstLeaf; bindingPattern?: BindingPatternNode; expr?: ExprNode };
+  | { arm: "seq"; alt: { branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }; expr?: ExprNode };
 
 function _Binding$seq(c: readonly CstChild[], src: string): BindingMatch | null {
-  let ident: (CstLeaf) | undefined;
-  let bindingPattern: (BindingPatternNode) | undefined;
+  let alt: ({ branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_ident: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Ident"))) { _t2 = false; break _b3; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t2 = false; break _b3; }
+        _t4_ident = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "ident", ident: _t4_ident! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "BindingPattern")) { _t5 = false; break _b6; }
-        bindingPattern = c[i] as BindingPatternNode;
+      let _t8_bindingPattern: (BindingPatternNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "BindingPattern")) { _t6 = false; break _b7; }
+        _t8_bindingPattern = c[i] as BindingPatternNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "bindingPattern", bindingPattern: _t8_bindingPattern! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   {
-    const _t7 = i; let _t8 = true;
-    _b9: {
-      if (!isLit(c, i, src, "=", "$punct")) { _t8 = false; break _b9; }
+    const _t9 = i; let _t10 = true;
+    _b11: {
+      if (!__lit(c, i, src, "=", "$punct")) { _t10 = false; break _b11; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t8 = false; break _b9; }
+      if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
       expr = c[i] as ExprNode;
       i++;
     }
-    if (!_t8) i = _t7;
+    if (!_t10) i = _t9;
   }
   if (i !== c.length) return null;
-  return { arm: "seq", ident, bindingPattern, expr };
+  return { arm: "seq", alt: alt!, expr };
 }
 
 export function matchBinding(n: BindingNode, src: string): BindingMatch {
@@ -3191,48 +3257,51 @@ export function matchBinding(n: BindingNode, src: string): BindingMatch {
 }
 
 export type ForBindingMatch =
-  | { arm: "seq"; ident?: CstLeaf; bindingPattern?: BindingPatternNode; expr?: ExprNode };
+  | { arm: "seq"; alt: { branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }; expr?: ExprNode };
 
 function _ForBinding$seq(c: readonly CstChild[], src: string): ForBindingMatch | null {
-  let ident: (CstLeaf) | undefined;
-  let bindingPattern: (BindingPatternNode) | undefined;
+  let alt: ({ branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_ident: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Ident"))) { _t2 = false; break _b3; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t2 = false; break _b3; }
+        _t4_ident = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "ident", ident: _t4_ident! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "BindingPattern")) { _t5 = false; break _b6; }
-        bindingPattern = c[i] as BindingPatternNode;
+      let _t8_bindingPattern: (BindingPatternNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "BindingPattern")) { _t6 = false; break _b7; }
+        _t8_bindingPattern = c[i] as BindingPatternNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "bindingPattern", bindingPattern: _t8_bindingPattern! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   {
-    const _t7 = i; let _t8 = true;
-    _b9: {
-      if (!isLit(c, i, src, "=", "$punct")) { _t8 = false; break _b9; }
+    const _t9 = i; let _t10 = true;
+    _b11: {
+      if (!__lit(c, i, src, "=", "$punct")) { _t10 = false; break _b11; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t8 = false; break _b9; }
+      if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
       expr = c[i] as ExprNode;
       i++;
     }
-    if (!_t8) i = _t7;
+    if (!_t10) i = _t9;
   }
   if (i !== c.length) return null;
-  return { arm: "seq", ident, bindingPattern, expr };
+  return { arm: "seq", alt: alt!, expr };
 }
 
 export function matchForBinding(n: ForBindingNode, src: string): ForBindingMatch {
@@ -3261,22 +3330,16 @@ export function matchForBinding(n: ForBindingNode, src: string): ForBindingMatch
 }
 
 export type ParamMatch =
-  | { arm: "decoratorExpr"; decoratorExpr?: DecoratorExprNode; ident?: CstLeaf; expr?: ExprNode; bindingPattern?: BindingPatternNode; expr2?: ExprNode; ident2?: CstLeaf; bindingPattern2?: BindingPatternNode; expr3?: ExprNode };
+  | { arm: "decoratorExpr"; decoratorExpr?: DecoratorExprNode; alt: { branch: "ident"; ident: CstLeaf; expr?: ExprNode } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode; expr?: ExprNode } | { branch: "spread"; alt: { branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }; expr?: ExprNode } };
 
 function _Param$decoratorExpr(c: readonly CstChild[], src: string): ParamMatch | null {
   let decoratorExpr: (DecoratorExprNode) | undefined;
-  let ident: (CstLeaf) | undefined;
-  let expr: (ExprNode) | undefined;
-  let bindingPattern: (BindingPatternNode) | undefined;
-  let expr2: (ExprNode) | undefined;
-  let ident2: (CstLeaf) | undefined;
-  let bindingPattern2: (BindingPatternNode) | undefined;
-  let expr3: (ExprNode) | undefined;
+  let alt: ({ branch: "ident"; ident: CstLeaf; expr?: ExprNode } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode; expr?: ExprNode } | { branch: "spread"; alt: { branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }; expr?: ExprNode }) | undefined;
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
       decoratorExpr = c[i] as DecoratorExprNode;
       i++;
     }
@@ -3285,90 +3348,103 @@ function _Param$decoratorExpr(c: readonly CstChild[], src: string): ParamMatch |
   {
     let _t3 = false;
     if (!_t3) {
+      let _t7_ident: (CstLeaf) | undefined;
+      let _t7_expr: (ExprNode) | undefined;
       const _t4 = i; let _t5 = true;
       _b6: {
-        if (!(isTok(c, i, "Ident"))) { _t5 = false; break _b6; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t5 = false; break _b6; }
+        _t7_ident = c[i] as CstLeaf;
         i++;
         {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!isLit(c, i, src, "=", "$punct")) { _t8 = false; break _b9; }
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!__lit(c, i, src, "=", "$punct")) { _t9 = false; break _b10; }
             i++;
-            if (!isNodeOf(c, i, "Expr")) { _t8 = false; break _b9; }
-            expr = c[i] as ExprNode;
+            if (!__nodeOf(c, i, "Expr")) { _t9 = false; break _b10; }
+            _t7_expr = c[i] as ExprNode;
             i++;
           }
-          if (!_t8) i = _t7;
+          if (!_t9) i = _t8;
         }
       }
-      if (_t5) _t3 = true; else i = _t4;
+      if (_t5) { _t3 = true; alt = ({ branch: "ident", ident: _t7_ident!, expr: _t7_expr }) as typeof alt; }
+      else i = _t4;
     }
     if (!_t3) {
-      const _t10 = i; let _t11 = true;
-      _b12: {
-        if (!isNodeOf(c, i, "BindingPattern")) { _t11 = false; break _b12; }
-        bindingPattern = c[i] as BindingPatternNode;
+      let _t14_bindingPattern: (BindingPatternNode) | undefined;
+      let _t14_expr: (ExprNode) | undefined;
+      const _t11 = i; let _t12 = true;
+      _b13: {
+        if (!__nodeOf(c, i, "BindingPattern")) { _t12 = false; break _b13; }
+        _t14_bindingPattern = c[i] as BindingPatternNode;
         i++;
         {
-          const _t13 = i; let _t14 = true;
-          _b15: {
-            if (!isLit(c, i, src, "=", "$punct")) { _t14 = false; break _b15; }
+          const _t15 = i; let _t16 = true;
+          _b17: {
+            if (!__lit(c, i, src, "=", "$punct")) { _t16 = false; break _b17; }
             i++;
-            if (!isNodeOf(c, i, "Expr")) { _t14 = false; break _b15; }
-            expr2 = c[i] as ExprNode;
+            if (!__nodeOf(c, i, "Expr")) { _t16 = false; break _b17; }
+            _t14_expr = c[i] as ExprNode;
             i++;
           }
-          if (!_t14) i = _t13;
+          if (!_t16) i = _t15;
         }
       }
-      if (_t11) _t3 = true; else i = _t10;
+      if (_t12) { _t3 = true; alt = ({ branch: "bindingPattern", bindingPattern: _t14_bindingPattern!, expr: _t14_expr }) as typeof alt; }
+      else i = _t11;
     }
     if (!_t3) {
-      const _t16 = i; let _t17 = true;
-      _b18: {
-        if (!isLit(c, i, src, "...", "$punct")) { _t17 = false; break _b18; }
+      let _t21_alt: ({ branch: "ident"; ident: CstLeaf } | { branch: "bindingPattern"; bindingPattern: BindingPatternNode }) | undefined;
+      let _t21_expr: (ExprNode) | undefined;
+      const _t18 = i; let _t19 = true;
+      _b20: {
+        if (!__lit(c, i, src, "...", "$punct")) { _t19 = false; break _b20; }
         i++;
         {
-          let _t19 = false;
-          if (!_t19) {
-            const _t20 = i; let _t21 = true;
-            _b22: {
-              if (!(isTok(c, i, "Ident"))) { _t21 = false; break _b22; }
-              ident2 = c[i] as CstLeaf;
-              i++;
-            }
-            if (_t21) _t19 = true; else i = _t20;
-          }
-          if (!_t19) {
+          let _t22 = false;
+          if (!_t22) {
+            let _t26__t21_ident: (CstLeaf) | undefined;
             const _t23 = i; let _t24 = true;
             _b25: {
-              if (!isNodeOf(c, i, "BindingPattern")) { _t24 = false; break _b25; }
-              bindingPattern2 = c[i] as BindingPatternNode;
+              if (!(__tok(c, i, "Ident"))) { _t24 = false; break _b25; }
+              _t26__t21_ident = c[i] as CstLeaf;
               i++;
             }
-            if (_t24) _t19 = true; else i = _t23;
+            if (_t24) { _t22 = true; _t21_alt = ({ branch: "ident", ident: _t26__t21_ident! }) as typeof _t21_alt; }
+            else i = _t23;
           }
-          if (!_t19) { _t17 = false; break _b18; }
+          if (!_t22) {
+            let _t30__t21_bindingPattern: (BindingPatternNode) | undefined;
+            const _t27 = i; let _t28 = true;
+            _b29: {
+              if (!__nodeOf(c, i, "BindingPattern")) { _t28 = false; break _b29; }
+              _t30__t21_bindingPattern = c[i] as BindingPatternNode;
+              i++;
+            }
+            if (_t28) { _t22 = true; _t21_alt = ({ branch: "bindingPattern", bindingPattern: _t30__t21_bindingPattern! }) as typeof _t21_alt; }
+            else i = _t27;
+          }
+          if (!_t22) { _t19 = false; break _b20; }
         }
         {
-          const _t26 = i; let _t27 = true;
-          _b28: {
-            if (!isLit(c, i, src, "=", "$punct")) { _t27 = false; break _b28; }
+          const _t31 = i; let _t32 = true;
+          _b33: {
+            if (!__lit(c, i, src, "=", "$punct")) { _t32 = false; break _b33; }
             i++;
-            if (!isNodeOf(c, i, "Expr")) { _t27 = false; break _b28; }
-            expr3 = c[i] as ExprNode;
+            if (!__nodeOf(c, i, "Expr")) { _t32 = false; break _b33; }
+            _t21_expr = c[i] as ExprNode;
             i++;
           }
-          if (!_t27) i = _t26;
+          if (!_t32) i = _t31;
         }
       }
-      if (_t17) _t3 = true; else i = _t16;
+      if (_t19) { _t3 = true; alt = ({ branch: "spread", alt: _t21_alt!, expr: _t21_expr }) as typeof alt; }
+      else i = _t18;
     }
     if (!_t3) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr", decoratorExpr, ident, expr, bindingPattern, expr2, ident2, bindingPattern2, expr3 };
+  return { arm: "decoratorExpr", decoratorExpr, alt: alt! };
 }
 
 export function matchParam(n: ParamNode, src: string): ParamMatch {
@@ -3405,128 +3481,110 @@ export function matchParam(n: ParamNode, src: string): ParamMatch {
 }
 
 export type ForHeadMatch =
-  | { arm: "let_"; forBinding: (ForBindingNode)[]; expr?: ExprNode; expr2: (ExprNode)[]; expr3?: ExprNode; expr4: (ExprNode)[]; in_Kw?: "in" | "of"; expr5?: ExprNode }
+  | { arm: "let_"; alt: { branch: "let_" } | { branch: "const_" } | { branch: "var_" } | { branch: "using" } | { branch: "await_" }; forBinding: (ForBindingNode)[]; alt2: { branch: "semi"; expr?: ExprNode; expr2: (ExprNode)[]; expr3?: ExprNode; expr4: (ExprNode)[] } | { branch: "in_"; in_Kw: "in" | "of"; expr: ExprNode } }
   | { arm: "seq"; expr?: ExprNode; expr2: (ExprNode)[]; expr3?: ExprNode; expr4: (ExprNode)[]; expr5?: ExprNode; expr6: (ExprNode)[] }
   | { arm: "expr"; expr: ExprNode; in_Kw: "in" | "of"; expr2: ExprNode };
 
 function _ForHead$let_(c: readonly CstChild[], src: string): ForHeadMatch | null {
+  let alt: ({ branch: "let_" } | { branch: "const_" } | { branch: "var_" } | { branch: "using" } | { branch: "await_" }) | undefined;
   const forBinding: (ForBindingNode)[] = [];
-  let expr: (ExprNode) | undefined;
-  const expr2: (ExprNode)[] = [];
-  let expr3: (ExprNode) | undefined;
-  const expr4: (ExprNode)[] = [];
-  let in_Kw: ("in" | "of") | undefined;
-  let expr5: (ExprNode) | undefined;
+  let alt2: ({ branch: "semi"; expr?: ExprNode; expr2: (ExprNode)[]; expr3?: ExprNode; expr4: (ExprNode)[] } | { branch: "in_"; in_Kw: "in" | "of"; expr: ExprNode }) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isLit(c, i, src, "let", "$keyword")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, "let", "$keyword")) { _t2 = false; break _b3; }
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "let_" }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isLit(c, i, src, "const", "$keyword")) { _t5 = false; break _b6; }
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__lit(c, i, src, "const", "$keyword")) { _t6 = false; break _b7; }
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "const_" }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!isLit(c, i, src, "var", "$keyword")) { _t8 = false; break _b9; }
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!__lit(c, i, src, "var", "$keyword")) { _t10 = false; break _b11; }
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
-    }
-    if (!_t0) {
-      const _t10 = i; let _t11 = true;
-      _b12: {
-        if (!isLit(c, i, src, "using", "$keyword")) { _t11 = false; break _b12; }
-        i++;
-      }
-      if (_t11) _t0 = true; else i = _t10;
+      if (_t10) { _t0 = true; alt = ({ branch: "var_" }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) {
       const _t13 = i; let _t14 = true;
       _b15: {
-        if (!isLit(c, i, src, "await", "$keyword")) { _t14 = false; break _b15; }
-        i++;
-        if (!isLit(c, i, src, "using", "$keyword")) { _t14 = false; break _b15; }
+        if (!__lit(c, i, src, "using", "$keyword")) { _t14 = false; break _b15; }
         i++;
       }
-      if (_t14) _t0 = true; else i = _t13;
+      if (_t14) { _t0 = true; alt = ({ branch: "using" }) as typeof alt; }
+      else i = _t13;
+    }
+    if (!_t0) {
+      const _t17 = i; let _t18 = true;
+      _b19: {
+        if (!__lit(c, i, src, "await", "$keyword")) { _t18 = false; break _b19; }
+        i++;
+        if (!__lit(c, i, src, "using", "$keyword")) { _t18 = false; break _b19; }
+        i++;
+      }
+      if (_t18) { _t0 = true; alt = ({ branch: "await_" }) as typeof alt; }
+      else i = _t17;
     }
     if (!_t0) return null;
   }
   {
-    const _t16 = i; let _t19 = true;
-    _b20: {
-      if (!isNodeOf(c, i, "ForBinding")) { _t19 = false; break _b20; }
+    const _t21 = i; let _t24 = true;
+    _b25: {
+      if (!__nodeOf(c, i, "ForBinding")) { _t24 = false; break _b25; }
       forBinding.push(c[i] as ForBindingNode);
       i++;
     }
-    if (!_t19) { i = _t16; }
+    if (!_t24) { i = _t21; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
-      const _t162 = i; let _t17 = true;
-      _b18: {
-        if (!isNodeOf(c, i, "ForBinding")) { _t17 = false; break _b18; }
+      const _t212 = i; let _t22 = true;
+      _b23: {
+        if (!__nodeOf(c, i, "ForBinding")) { _t22 = false; break _b23; }
         forBinding.push(c[i] as ForBindingNode);
         i++;
       }
-      if (!_t17) { i = _t162; break; }
+      if (!_t22) { i = _t212; break; }
     }
   }
   {
-    let _t21 = false;
-    if (!_t21) {
-      const _t22 = i; let _t23 = true;
-      _b24: {
-        if (!isLit(c, i, src, ";", "$punct")) { _t23 = false; break _b24; }
-        i++;
-        {
-          const _t25 = i; let _t26 = true;
-          _b27: {
-            if (!isNodeOf(c, i, "Expr")) { _t26 = false; break _b27; }
-            expr = c[i] as ExprNode;
-            i++;
-            for (;;) {
-              const _t28 = i; let _t29 = true;
-              _b30: {
-                if (!isLit(c, i, src, ",", "$punct")) { _t29 = false; break _b30; }
-                i++;
-                if (!isNodeOf(c, i, "Expr")) { _t29 = false; break _b30; }
-                expr2.push(c[i] as ExprNode);
-                i++;
-              }
-              if (!_t29) { i = _t28; break; }
-              if (i === _t28) break;
-            }
-          }
-          if (!_t26) i = _t25;
-        }
-        if (!isLit(c, i, src, ";", "$punct")) { _t23 = false; break _b24; }
+    let _t26 = false;
+    if (!_t26) {
+      let _t30_expr: (ExprNode) | undefined;
+      const _t30_expr2: (ExprNode)[] = [];
+      let _t30_expr3: (ExprNode) | undefined;
+      const _t30_expr4: (ExprNode)[] = [];
+      const _t27 = i; let _t28 = true;
+      _b29: {
+        if (!__lit(c, i, src, ";", "$punct")) { _t28 = false; break _b29; }
         i++;
         {
           const _t31 = i; let _t32 = true;
           _b33: {
-            if (!isNodeOf(c, i, "Expr")) { _t32 = false; break _b33; }
-            expr3 = c[i] as ExprNode;
+            if (!__nodeOf(c, i, "Expr")) { _t32 = false; break _b33; }
+            _t30_expr = c[i] as ExprNode;
             i++;
             for (;;) {
               const _t34 = i; let _t35 = true;
               _b36: {
-                if (!isLit(c, i, src, ",", "$punct")) { _t35 = false; break _b36; }
+                if (!__lit(c, i, src, ",", "$punct")) { _t35 = false; break _b36; }
                 i++;
-                if (!isNodeOf(c, i, "Expr")) { _t35 = false; break _b36; }
-                expr4.push(c[i] as ExprNode);
+                if (!__nodeOf(c, i, "Expr")) { _t35 = false; break _b36; }
+                _t30_expr2.push(c[i] as ExprNode);
                 i++;
               }
               if (!_t35) { i = _t34; break; }
@@ -3535,25 +3593,52 @@ function _ForHead$let_(c: readonly CstChild[], src: string): ForHeadMatch | null
           }
           if (!_t32) i = _t31;
         }
-      }
-      if (_t23) _t21 = true; else i = _t22;
-    }
-    if (!_t21) {
-      const _t37 = i; let _t38 = true;
-      _b39: {
-        if (!(isLit(c, i, src, "in", "$keyword") || isLit(c, i, src, "of", "$keyword"))) { _t38 = false; break _b39; }
-        in_Kw = src.slice(c[i].offset, c[i].end) as "in" | "of";
+        if (!__lit(c, i, src, ";", "$punct")) { _t28 = false; break _b29; }
         i++;
-        if (!isNodeOf(c, i, "Expr")) { _t38 = false; break _b39; }
-        expr5 = c[i] as ExprNode;
+        {
+          const _t37 = i; let _t38 = true;
+          _b39: {
+            if (!__nodeOf(c, i, "Expr")) { _t38 = false; break _b39; }
+            _t30_expr3 = c[i] as ExprNode;
+            i++;
+            for (;;) {
+              const _t40 = i; let _t41 = true;
+              _b42: {
+                if (!__lit(c, i, src, ",", "$punct")) { _t41 = false; break _b42; }
+                i++;
+                if (!__nodeOf(c, i, "Expr")) { _t41 = false; break _b42; }
+                _t30_expr4.push(c[i] as ExprNode);
+                i++;
+              }
+              if (!_t41) { i = _t40; break; }
+              if (i === _t40) break;
+            }
+          }
+          if (!_t38) i = _t37;
+        }
+      }
+      if (_t28) { _t26 = true; alt2 = ({ branch: "semi", expr: _t30_expr, expr2: _t30_expr2, expr3: _t30_expr3, expr4: _t30_expr4 }) as typeof alt2; }
+      else i = _t27;
+    }
+    if (!_t26) {
+      let _t46_in_Kw: ("in" | "of") | undefined;
+      let _t46_expr: (ExprNode) | undefined;
+      const _t43 = i; let _t44 = true;
+      _b45: {
+        if (!(__lit(c, i, src, "in", "$keyword") || __lit(c, i, src, "of", "$keyword"))) { _t44 = false; break _b45; }
+        _t46_in_Kw = src.slice(c[i].offset, c[i].end) as "in" | "of";
+        i++;
+        if (!__nodeOf(c, i, "Expr")) { _t44 = false; break _b45; }
+        _t46_expr = c[i] as ExprNode;
         i++;
       }
-      if (_t38) _t21 = true; else i = _t37;
+      if (_t44) { _t26 = true; alt2 = ({ branch: "in_", in_Kw: _t46_in_Kw!, expr: _t46_expr! }) as typeof alt2; }
+      else i = _t43;
     }
-    if (!_t21) return null;
+    if (!_t26) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "let_", forBinding, expr, expr2, expr3, expr4, in_Kw, expr5 };
+  return { arm: "let_", alt: alt!, forBinding, alt2: alt2! };
 }
 
 function _ForHead$seq(c: readonly CstChild[], src: string): ForHeadMatch | null {
@@ -3567,15 +3652,15 @@ function _ForHead$seq(c: readonly CstChild[], src: string): ForHeadMatch | null 
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr = c[i] as ExprNode;
       i++;
       for (;;) {
         const _t3 = i; let _t4 = true;
         _b5: {
-          if (!isLit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
+          if (!__lit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
           i++;
-          if (!isNodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
+          if (!__nodeOf(c, i, "Expr")) { _t4 = false; break _b5; }
           expr2.push(c[i] as ExprNode);
           i++;
         }
@@ -3585,20 +3670,20 @@ function _ForHead$seq(c: readonly CstChild[], src: string): ForHeadMatch | null 
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, ";", "$punct")) return null;
+  if (!__lit(c, i, src, ";", "$punct")) return null;
   i++;
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isNodeOf(c, i, "Expr")) { _t7 = false; break _b8; }
+      if (!__nodeOf(c, i, "Expr")) { _t7 = false; break _b8; }
       expr3 = c[i] as ExprNode;
       i++;
       for (;;) {
         const _t9 = i; let _t10 = true;
         _b11: {
-          if (!isLit(c, i, src, ",", "$punct")) { _t10 = false; break _b11; }
+          if (!__lit(c, i, src, ",", "$punct")) { _t10 = false; break _b11; }
           i++;
-          if (!isNodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
+          if (!__nodeOf(c, i, "Expr")) { _t10 = false; break _b11; }
           expr4.push(c[i] as ExprNode);
           i++;
         }
@@ -3608,20 +3693,20 @@ function _ForHead$seq(c: readonly CstChild[], src: string): ForHeadMatch | null 
     }
     if (!_t7) i = _t6;
   }
-  if (!isLit(c, i, src, ";", "$punct")) return null;
+  if (!__lit(c, i, src, ";", "$punct")) return null;
   i++;
   {
     const _t12 = i; let _t13 = true;
     _b14: {
-      if (!isNodeOf(c, i, "Expr")) { _t13 = false; break _b14; }
+      if (!__nodeOf(c, i, "Expr")) { _t13 = false; break _b14; }
       expr5 = c[i] as ExprNode;
       i++;
       for (;;) {
         const _t15 = i; let _t16 = true;
         _b17: {
-          if (!isLit(c, i, src, ",", "$punct")) { _t16 = false; break _b17; }
+          if (!__lit(c, i, src, ",", "$punct")) { _t16 = false; break _b17; }
           i++;
-          if (!isNodeOf(c, i, "Expr")) { _t16 = false; break _b17; }
+          if (!__nodeOf(c, i, "Expr")) { _t16 = false; break _b17; }
           expr6.push(c[i] as ExprNode);
           i++;
         }
@@ -3640,13 +3725,13 @@ function _ForHead$expr(c: readonly CstChild[], src: string): ForHeadMatch | null
   let in_Kw: ("in" | "of") | undefined;
   let expr2: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
-  if (!(isLit(c, i, src, "in", "$keyword") || isLit(c, i, src, "of", "$keyword"))) return null;
+  if (!(__lit(c, i, src, "in", "$keyword") || __lit(c, i, src, "of", "$keyword"))) return null;
   in_Kw = src.slice(c[i].offset, c[i].end) as "in" | "of";
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr2 = c[i] as ExprNode;
   i++;
   if (i !== c.length) return null;
@@ -3708,24 +3793,24 @@ function _SwitchCase$case_(c: readonly CstChild[], src: string): SwitchCaseMatch
   let expr: (ExprNode) | undefined;
   const expr2: (ExprNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "case", "$keyword")) return null;
+  if (!__lit(c, i, src, "case", "$keyword")) return null;
   i++;
-  if (!isNodeOf(c, i, "Expr")) return null;
+  if (!__nodeOf(c, i, "Expr")) return null;
   expr = c[i] as ExprNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr2.push(c[i] as ExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "case_", expr: expr!, expr2 };
@@ -3733,9 +3818,9 @@ function _SwitchCase$case_(c: readonly CstChild[], src: string): SwitchCaseMatch
 
 function _SwitchCase$default_(c: readonly CstChild[], src: string): SwitchCaseMatch | null {
   let i = 0;
-  if (!isLit(c, i, src, "default", "$keyword")) return null;
+  if (!__lit(c, i, src, "default", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "default_" };
@@ -3744,7 +3829,7 @@ function _SwitchCase$default_(c: readonly CstChild[], src: string): SwitchCaseMa
 function _SwitchCase$stmt(c: readonly CstChild[], src: string): SwitchCaseMatch | null {
   let stmt: (StmtNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Stmt")) return null;
+  if (!__nodeOf(c, i, "Stmt")) return null;
   stmt = c[i] as StmtNode;
   i++;
   if (i !== c.length) return null;
@@ -3781,16 +3866,17 @@ export function matchSwitchCase(n: SwitchCaseNode, src: string): SwitchCaseMatch
 }
 
 export type DeclMatch =
-  | { arm: "async"; ident: CstLeaf; param: (ParamNode)[]; block: BlockNode }
-  | { arm: "decoratorExpr"; decoratorExpr: (DecoratorExprNode)[]; ident: CstLeaf; classHeritage?: ClassHeritageNode; classMember: (ClassMemberNode)[] }
-  | { arm: "export_"; decl?: DeclNode; stmt?: StmtNode }
-  | { arm: "export_2"; ident?: CstLeaf; param: (ParamNode)[]; block?: BlockNode; expr?: ExprNode }
-  | { arm: "export_3"; string?: CstLeaf; ident?: CstLeaf; string2?: CstLeaf }
-  | { arm: "export_4"; importSpecifier: (ImportSpecifierNode)[]; string?: CstLeaf }
-  | { arm: "import_"; importClause?: ImportClauseNode; string?: CstLeaf; ident?: CstLeaf; expr?: ExprNode; string2?: CstLeaf }
-  | { arm: "decoratorExpr2"; decoratorExpr: (DecoratorExprNode)[]; decl?: DeclNode; stmt?: StmtNode };
+  | { arm: "async"; asyncTok?: CstLeaf; ident: CstLeaf; param: (ParamNode)[]; block: BlockNode }
+  | { arm: "decoratorExpr"; decoratorExpr: (DecoratorExprNode)[]; ident: CstLeaf; classHeritage?: ClassHeritageNode; extendsTok?: CstLeaf; classMember: (ClassMemberNode)[] }
+  | { arm: "export_"; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } }
+  | { arm: "export_2"; alt: { branch: "async"; asyncTok?: CstLeaf; ident?: CstLeaf; param: (ParamNode)[]; block: BlockNode } | { branch: "expr"; expr: ExprNode } }
+  | { arm: "export_3"; alt: { branch: "from"; string: CstLeaf } | { branch: "as"; ident: CstLeaf; string: CstLeaf } }
+  | { arm: "export_4"; importSpecifier: (ImportSpecifierNode)[]; string?: CstLeaf; fromTok?: CstLeaf }
+  | { arm: "import_"; alt: { branch: "importClause"; importClause: ImportClauseNode; string: CstLeaf } | { branch: "ident"; ident: CstLeaf; expr: ExprNode } | { branch: "string"; string: CstLeaf } }
+  | { arm: "decoratorExpr2"; decoratorExpr: (DecoratorExprNode)[]; alt: { branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode } };
 
 function _Decl$async(c: readonly CstChild[], src: string): DeclMatch | null {
+  let asyncTok: (CstLeaf) | undefined;
   let ident: (CstLeaf) | undefined;
   const param: (ParamNode)[] = [];
   let block: (BlockNode) | undefined;
@@ -3798,328 +3884,344 @@ function _Decl$async(c: readonly CstChild[], src: string): DeclMatch | null {
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "async", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "async", "$keyword")) { _t1 = false; break _b2; }
+      asyncTok = c[i] as CstLeaf;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isLit(c, i, src, "function", "$keyword")) return null;
+  if (!__lit(c, i, src, "function", "$keyword")) return null;
   i++;
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, "*", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, "*", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
   }
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t6 = i; let _t9 = true;
     _b10: {
-      if (!isNodeOf(c, i, "Param")) { _t9 = false; break _b10; }
+      if (!__nodeOf(c, i, "Param")) { _t9 = false; break _b10; }
       param.push(c[i] as ParamNode);
       i++;
     }
     if (!_t9) { i = _t6; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t62 = i; let _t7 = true;
       _b8: {
-        if (!isNodeOf(c, i, "Param")) { _t7 = false; break _b8; }
+        if (!__nodeOf(c, i, "Param")) { _t7 = false; break _b8; }
         param.push(c[i] as ParamNode);
         i++;
       }
       if (!_t7) { i = _t62; break; }
     }
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Block")) return null;
+  if (!__nodeOf(c, i, "Block")) return null;
   block = c[i] as BlockNode;
   i++;
   if (i !== c.length) return null;
-  return { arm: "async", ident: ident!, param, block: block! };
+  return { arm: "async", asyncTok, ident: ident!, param, block: block! };
 }
 
 function _Decl$decoratorExpr(c: readonly CstChild[], src: string): DeclMatch | null {
   const decoratorExpr: (DecoratorExprNode)[] = [];
   let ident: (CstLeaf) | undefined;
   let classHeritage: (ClassHeritageNode) | undefined;
+  let extendsTok: (CstLeaf) | undefined;
   const classMember: (ClassMemberNode)[] = [];
   let i = 0;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
       decoratorExpr.push(c[i] as DecoratorExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, "class", "$keyword")) return null;
+  if (!__lit(c, i, src, "class", "$keyword")) return null;
   i++;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, "extends", "$keyword")) { _t4 = false; break _b5; }
+      extendsTok = c[i] as CstLeaf;
       i++;
-      if (!isNodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "ClassHeritage")) { _t4 = false; break _b5; }
       classHeritage = c[i] as ClassHeritageNode;
       i++;
     }
     if (!_t4) i = _t3;
   }
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   for (;;) {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isNodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
+      if (!__nodeOf(c, i, "ClassMember")) { _t7 = false; break _b8; }
       classMember.push(c[i] as ClassMemberNode);
       i++;
     }
     if (!_t7) { i = _t6; break; }
     if (i === _t6) break;
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, classHeritage, classMember };
+  return { arm: "decoratorExpr", decoratorExpr, ident: ident!, classHeritage, extendsTok, classMember };
 }
 
 function _Decl$export_(c: readonly CstChild[], src: string): DeclMatch | null {
-  let decl: (DeclNode) | undefined;
-  let stmt: (StmtNode) | undefined;
+  let alt: ({ branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "export", "$keyword")) return null;
+  if (!__lit(c, i, src, "export", "$keyword")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_decl: (DeclNode) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isNodeOf(c, i, "Decl")) { _t2 = false; break _b3; }
-        decl = c[i] as DeclNode;
+        if (!__nodeOf(c, i, "Decl")) { _t2 = false; break _b3; }
+        _t4_decl = c[i] as DeclNode;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "decl", decl: _t4_decl! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "Stmt")) { _t5 = false; break _b6; }
-        stmt = c[i] as StmtNode;
+      let _t8_stmt: (StmtNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "Stmt")) { _t6 = false; break _b7; }
+        _t8_stmt = c[i] as StmtNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "stmt", stmt: _t8_stmt! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "export_", decl, stmt };
+  return { arm: "export_", alt: alt! };
 }
 
 function _Decl$export_2(c: readonly CstChild[], src: string): DeclMatch | null {
-  let ident: (CstLeaf) | undefined;
-  const param: (ParamNode)[] = [];
-  let block: (BlockNode) | undefined;
-  let expr: (ExprNode) | undefined;
+  let alt: ({ branch: "async"; asyncTok?: CstLeaf; ident?: CstLeaf; param: (ParamNode)[]; block: BlockNode } | { branch: "expr"; expr: ExprNode }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "export", "$keyword")) return null;
+  if (!__lit(c, i, src, "export", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "default", "$keyword")) return null;
+  if (!__lit(c, i, src, "default", "$keyword")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_asyncTok: (CstLeaf) | undefined;
+      let _t4_ident: (CstLeaf) | undefined;
+      const _t4_param: (ParamNode)[] = [];
+      let _t4_block: (BlockNode) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
         {
-          const _t4 = i; let _t5 = true;
-          _b6: {
-            if (!isLit(c, i, src, "async", "$keyword")) { _t5 = false; break _b6; }
+          const _t5 = i; let _t6 = true;
+          _b7: {
+            if (!__lit(c, i, src, "async", "$keyword")) { _t6 = false; break _b7; }
+            _t4_asyncTok = c[i] as CstLeaf;
             i++;
           }
-          if (!_t5) i = _t4;
+          if (!_t6) i = _t5;
         }
-        if (!isLit(c, i, src, "function", "$keyword")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, "function", "$keyword")) { _t2 = false; break _b3; }
         i++;
         {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!isLit(c, i, src, "*", "$punct")) { _t8 = false; break _b9; }
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!__lit(c, i, src, "*", "$punct")) { _t9 = false; break _b10; }
             i++;
           }
-          if (!_t8) i = _t7;
+          if (!_t9) i = _t8;
         }
         {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!(isTok(c, i, "Ident"))) { _t11 = false; break _b12; }
-            ident = c[i] as CstLeaf;
+          const _t11 = i; let _t12 = true;
+          _b13: {
+            if (!(__tok(c, i, "Ident"))) { _t12 = false; break _b13; }
+            _t4_ident = c[i] as CstLeaf;
             i++;
           }
-          if (!_t11) i = _t10;
+          if (!_t12) i = _t11;
         }
-        if (!isLit(c, i, src, "(", "$punct")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, "(", "$punct")) { _t2 = false; break _b3; }
         i++;
         {
-          const _t13 = i; let _t16 = true;
-          _b17: {
-            if (!isNodeOf(c, i, "Param")) { _t16 = false; break _b17; }
-            param.push(c[i] as ParamNode);
+          const _t14 = i; let _t17 = true;
+          _b18: {
+            if (!__nodeOf(c, i, "Param")) { _t17 = false; break _b18; }
+            _t4_param.push(c[i] as ParamNode);
             i++;
           }
-          if (!_t16) { i = _t13; }
+          if (!_t17) { i = _t14; }
           else for (;;) {
-            if (!isLit(c, i, src, ",", "$punct")) break;
+            if (!__lit(c, i, src, ",", "$punct")) break;
             i++;
-            const _t132 = i; let _t14 = true;
-            _b15: {
-              if (!isNodeOf(c, i, "Param")) { _t14 = false; break _b15; }
-              param.push(c[i] as ParamNode);
+            const _t142 = i; let _t15 = true;
+            _b16: {
+              if (!__nodeOf(c, i, "Param")) { _t15 = false; break _b16; }
+              _t4_param.push(c[i] as ParamNode);
               i++;
             }
-            if (!_t14) { i = _t132; break; }
+            if (!_t15) { i = _t142; break; }
           }
         }
-        if (!isLit(c, i, src, ")", "$punct")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, ")", "$punct")) { _t2 = false; break _b3; }
         i++;
-        if (!isNodeOf(c, i, "Block")) { _t2 = false; break _b3; }
-        block = c[i] as BlockNode;
+        if (!__nodeOf(c, i, "Block")) { _t2 = false; break _b3; }
+        _t4_block = c[i] as BlockNode;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "async", asyncTok: _t4_asyncTok, ident: _t4_ident, param: _t4_param, block: _t4_block! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t18 = i; let _t19 = true;
-      _b20: {
-        if (!isNodeOf(c, i, "Expr")) { _t19 = false; break _b20; }
-        expr = c[i] as ExprNode;
+      let _t22_expr: (ExprNode) | undefined;
+      const _t19 = i; let _t20 = true;
+      _b21: {
+        if (!__nodeOf(c, i, "Expr")) { _t20 = false; break _b21; }
+        _t22_expr = c[i] as ExprNode;
         i++;
         {
-          const _t21 = i; let _t22 = true;
-          _b23: {
-            if (!isLit(c, i, src, ";", "$punct")) { _t22 = false; break _b23; }
+          const _t23 = i; let _t24 = true;
+          _b25: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t24 = false; break _b25; }
             i++;
           }
-          if (!_t22) i = _t21;
+          if (!_t24) i = _t23;
         }
       }
-      if (_t19) _t0 = true; else i = _t18;
+      if (_t20) { _t0 = true; alt = ({ branch: "expr", expr: _t22_expr! }) as typeof alt; }
+      else i = _t19;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "export_2", ident, param, block, expr };
+  return { arm: "export_2", alt: alt! };
 }
 
 function _Decl$export_3(c: readonly CstChild[], src: string): DeclMatch | null {
-  let string: (CstLeaf) | undefined;
-  let ident: (CstLeaf) | undefined;
-  let string2: (CstLeaf) | undefined;
+  let alt: ({ branch: "from"; string: CstLeaf } | { branch: "as"; ident: CstLeaf; string: CstLeaf }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "export", "$keyword")) return null;
+  if (!__lit(c, i, src, "export", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "*", "$punct")) return null;
+  if (!__lit(c, i, src, "*", "$punct")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_string: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isLit(c, i, src, "from", "$keyword")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, "from", "$keyword")) { _t2 = false; break _b3; }
         i++;
-        if (!(isTok(c, i, "String"))) { _t2 = false; break _b3; }
-        string = c[i] as CstLeaf;
+        if (!(__tok(c, i, "String"))) { _t2 = false; break _b3; }
+        _t4_string = c[i] as CstLeaf;
         i++;
         {
-          const _t4 = i; let _t5 = true;
-          _b6: {
-            if (!isLit(c, i, src, ";", "$punct")) { _t5 = false; break _b6; }
+          const _t5 = i; let _t6 = true;
+          _b7: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t6 = false; break _b7; }
             i++;
           }
-          if (!_t5) i = _t4;
+          if (!_t6) i = _t5;
         }
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "from", string: _t4_string! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!isLit(c, i, src, "as", "$keyword")) { _t8 = false; break _b9; }
+      let _t11_ident: (CstLeaf) | undefined;
+      let _t11_string: (CstLeaf) | undefined;
+      const _t8 = i; let _t9 = true;
+      _b10: {
+        if (!__lit(c, i, src, "as", "$keyword")) { _t9 = false; break _b10; }
         i++;
-        if (!(isTok(c, i, "Ident"))) { _t8 = false; break _b9; }
-        ident = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Ident"))) { _t9 = false; break _b10; }
+        _t11_ident = c[i] as CstLeaf;
         i++;
-        if (!isLit(c, i, src, "from", "$keyword")) { _t8 = false; break _b9; }
+        if (!__lit(c, i, src, "from", "$keyword")) { _t9 = false; break _b10; }
         i++;
-        if (!(isTok(c, i, "String"))) { _t8 = false; break _b9; }
-        string2 = c[i] as CstLeaf;
+        if (!(__tok(c, i, "String"))) { _t9 = false; break _b10; }
+        _t11_string = c[i] as CstLeaf;
         i++;
         {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!isLit(c, i, src, ";", "$punct")) { _t11 = false; break _b12; }
+          const _t12 = i; let _t13 = true;
+          _b14: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t13 = false; break _b14; }
             i++;
           }
-          if (!_t11) i = _t10;
+          if (!_t13) i = _t12;
         }
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t9) { _t0 = true; alt = ({ branch: "as", ident: _t11_ident!, string: _t11_string! }) as typeof alt; }
+      else i = _t8;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "export_3", string, ident, string2 };
+  return { arm: "export_3", alt: alt! };
 }
 
 function _Decl$export_4(c: readonly CstChild[], src: string): DeclMatch | null {
   const importSpecifier: (ImportSpecifierNode)[] = [];
   let string: (CstLeaf) | undefined;
+  let fromTok: (CstLeaf) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "export", "$keyword")) return null;
+  if (!__lit(c, i, src, "export", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "ImportSpecifier")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "ImportSpecifier")) { _t3 = false; break _b4; }
       importSpecifier.push(c[i] as ImportSpecifierNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "ImportSpecifier")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "ImportSpecifier")) { _t1 = false; break _b2; }
         importSpecifier.push(c[i] as ImportSpecifierNode);
         i++;
       }
       if (!_t1) { i = _t02; break; }
     }
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   {
     const _t5 = i; let _t6 = true;
     _b7: {
-      if (!isLit(c, i, src, "from", "$keyword")) { _t6 = false; break _b7; }
+      if (!__lit(c, i, src, "from", "$keyword")) { _t6 = false; break _b7; }
+      fromTok = c[i] as CstLeaf;
       i++;
-      if (!(isTok(c, i, "String"))) { _t6 = false; break _b7; }
+      if (!(__tok(c, i, "String"))) { _t6 = false; break _b7; }
       string = c[i] as CstLeaf;
       i++;
     }
@@ -4128,134 +4230,141 @@ function _Decl$export_4(c: readonly CstChild[], src: string): DeclMatch | null {
   {
     const _t8 = i; let _t9 = true;
     _b10: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t9 = false; break _b10; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t9 = false; break _b10; }
       i++;
     }
     if (!_t9) i = _t8;
   }
   if (i !== c.length) return null;
-  return { arm: "export_4", importSpecifier, string };
+  return { arm: "export_4", importSpecifier, string, fromTok };
 }
 
 function _Decl$import_(c: readonly CstChild[], src: string): DeclMatch | null {
-  let importClause: (ImportClauseNode) | undefined;
-  let string: (CstLeaf) | undefined;
-  let ident: (CstLeaf) | undefined;
-  let expr: (ExprNode) | undefined;
-  let string2: (CstLeaf) | undefined;
+  let alt: ({ branch: "importClause"; importClause: ImportClauseNode; string: CstLeaf } | { branch: "ident"; ident: CstLeaf; expr: ExprNode } | { branch: "string"; string: CstLeaf }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "import", "$keyword")) return null;
+  if (!__lit(c, i, src, "import", "$keyword")) return null;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_importClause: (ImportClauseNode) | undefined;
+      let _t4_string: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isNodeOf(c, i, "ImportClause")) { _t2 = false; break _b3; }
-        importClause = c[i] as ImportClauseNode;
+        if (!__nodeOf(c, i, "ImportClause")) { _t2 = false; break _b3; }
+        _t4_importClause = c[i] as ImportClauseNode;
         i++;
-        if (!isLit(c, i, src, "from", "$keyword")) { _t2 = false; break _b3; }
+        if (!__lit(c, i, src, "from", "$keyword")) { _t2 = false; break _b3; }
         i++;
-        if (!(isTok(c, i, "String"))) { _t2 = false; break _b3; }
-        string = c[i] as CstLeaf;
+        if (!(__tok(c, i, "String"))) { _t2 = false; break _b3; }
+        _t4_string = c[i] as CstLeaf;
         i++;
         {
-          const _t4 = i; let _t5 = true;
-          _b6: {
-            if (!isLit(c, i, src, ";", "$punct")) { _t5 = false; break _b6; }
+          const _t5 = i; let _t6 = true;
+          _b7: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t6 = false; break _b7; }
             i++;
           }
-          if (!_t5) i = _t4;
+          if (!_t6) i = _t5;
         }
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "importClause", importClause: _t4_importClause!, string: _t4_string! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Ident"))) { _t8 = false; break _b9; }
-        ident = c[i] as CstLeaf;
+      let _t11_ident: (CstLeaf) | undefined;
+      let _t11_expr: (ExprNode) | undefined;
+      const _t8 = i; let _t9 = true;
+      _b10: {
+        if (!(__tok(c, i, "Ident"))) { _t9 = false; break _b10; }
+        _t11_ident = c[i] as CstLeaf;
         i++;
-        if (!isLit(c, i, src, "=", "$punct")) { _t8 = false; break _b9; }
+        if (!__lit(c, i, src, "=", "$punct")) { _t9 = false; break _b10; }
         i++;
-        if (!isNodeOf(c, i, "Expr")) { _t8 = false; break _b9; }
-        expr = c[i] as ExprNode;
+        if (!__nodeOf(c, i, "Expr")) { _t9 = false; break _b10; }
+        _t11_expr = c[i] as ExprNode;
         i++;
         {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!isLit(c, i, src, ";", "$punct")) { _t11 = false; break _b12; }
+          const _t12 = i; let _t13 = true;
+          _b14: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t13 = false; break _b14; }
             i++;
           }
-          if (!_t11) i = _t10;
+          if (!_t13) i = _t12;
         }
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t9) { _t0 = true; alt = ({ branch: "ident", ident: _t11_ident!, expr: _t11_expr! }) as typeof alt; }
+      else i = _t8;
     }
     if (!_t0) {
-      const _t13 = i; let _t14 = true;
-      _b15: {
-        if (!(isTok(c, i, "String"))) { _t14 = false; break _b15; }
-        string2 = c[i] as CstLeaf;
+      let _t18_string: (CstLeaf) | undefined;
+      const _t15 = i; let _t16 = true;
+      _b17: {
+        if (!(__tok(c, i, "String"))) { _t16 = false; break _b17; }
+        _t18_string = c[i] as CstLeaf;
         i++;
         {
-          const _t16 = i; let _t17 = true;
-          _b18: {
-            if (!isLit(c, i, src, ";", "$punct")) { _t17 = false; break _b18; }
+          const _t19 = i; let _t20 = true;
+          _b21: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t20 = false; break _b21; }
             i++;
           }
-          if (!_t17) i = _t16;
+          if (!_t20) i = _t19;
         }
       }
-      if (_t14) _t0 = true; else i = _t13;
+      if (_t16) { _t0 = true; alt = ({ branch: "string", string: _t18_string! }) as typeof alt; }
+      else i = _t15;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "import_", importClause, string, ident, expr, string2 };
+  return { arm: "import_", alt: alt! };
 }
 
 function _Decl$decoratorExpr2(c: readonly CstChild[], src: string): DeclMatch | null {
   const decoratorExpr: (DecoratorExprNode)[] = [];
-  let decl: (DeclNode) | undefined;
-  let stmt: (StmtNode) | undefined;
+  let alt: ({ branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode }) | undefined;
   let i = 0;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "DecoratorExpr")) { _t1 = false; break _b2; }
       decoratorExpr.push(c[i] as DecoratorExprNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, "export", "$keyword")) return null;
+  if (!__lit(c, i, src, "export", "$keyword")) return null;
   i++;
   {
     let _t3 = false;
     if (!_t3) {
+      let _t7_decl: (DeclNode) | undefined;
       const _t4 = i; let _t5 = true;
       _b6: {
-        if (!isNodeOf(c, i, "Decl")) { _t5 = false; break _b6; }
-        decl = c[i] as DeclNode;
+        if (!__nodeOf(c, i, "Decl")) { _t5 = false; break _b6; }
+        _t7_decl = c[i] as DeclNode;
         i++;
       }
-      if (_t5) _t3 = true; else i = _t4;
+      if (_t5) { _t3 = true; alt = ({ branch: "decl", decl: _t7_decl! }) as typeof alt; }
+      else i = _t4;
     }
     if (!_t3) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!isNodeOf(c, i, "Stmt")) { _t8 = false; break _b9; }
-        stmt = c[i] as StmtNode;
+      let _t11_stmt: (StmtNode) | undefined;
+      const _t8 = i; let _t9 = true;
+      _b10: {
+        if (!__nodeOf(c, i, "Stmt")) { _t9 = false; break _b10; }
+        _t11_stmt = c[i] as StmtNode;
         i++;
       }
-      if (_t8) _t3 = true; else i = _t7;
+      if (_t9) { _t3 = true; alt = ({ branch: "stmt", stmt: _t11_stmt! }) as typeof alt; }
+      else i = _t8;
     }
     if (!_t3) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "decoratorExpr2", decoratorExpr, decl, stmt };
+  return { arm: "decoratorExpr2", decoratorExpr, alt: alt! };
 }
 
 export function matchDecl(n: DeclNode, src: string): DeclMatch {
@@ -4308,14 +4417,14 @@ export type ClassMemberMatch =
   | { arm: "decoratorExpr"; decoratorExpr: DecoratorExprNode }
   | { arm: "constructor"; param: (ParamNode)[]; block: BlockNode }
   | { arm: "static_"; block: BlockNode }
-  | { arm: "static_2"; static_Kw: ("static" | "accessor" | "async")[]; memberName?: MemberNameNode; param: (ParamNode)[]; block?: BlockNode; getKw?: "get" | "set"; memberName2?: MemberNameNode; param2: (ParamNode)[]; block2?: BlockNode; memberName3?: MemberNameNode; param3: (ParamNode)[]; block3?: BlockNode; expr?: ExprNode }
+  | { arm: "static_2"; static_Kw: ("static" | "accessor" | "async")[]; alt: { branch: "star"; memberName: MemberNameNode; param: (ParamNode)[]; block?: BlockNode } | { branch: "get"; getKw: "get" | "set"; memberName: MemberNameNode; param: (ParamNode)[]; block?: BlockNode } | { branch: "memberName"; memberName: MemberNameNode; alt: { branch: "paren"; param: (ParamNode)[]; block?: BlockNode } | { branch: "seq"; expr?: ExprNode } } }
   | { arm: "memberName"; memberName: MemberNameNode; expr?: ExprNode }
   | { arm: "memberName2"; memberName: MemberNameNode; param: (ParamNode)[]; block?: BlockNode };
 
 function _ClassMember$decoratorExpr(c: readonly CstChild[], src: string): ClassMemberMatch | null {
   let decoratorExpr: (DecoratorExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "DecoratorExpr")) return null;
+  if (!__nodeOf(c, i, "DecoratorExpr")) return null;
   decoratorExpr = c[i] as DecoratorExprNode;
   i++;
   if (i !== c.length) return null;
@@ -4326,39 +4435,39 @@ function _ClassMember$constructor(c: readonly CstChild[], src: string): ClassMem
   const param: (ParamNode)[] = [];
   let block: (BlockNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "constructor", "$keyword")) return null;
+  if (!__lit(c, i, src, "constructor", "$keyword")) return null;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "Param")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "Param")) { _t3 = false; break _b4; }
       param.push(c[i] as ParamNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "Param")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "Param")) { _t1 = false; break _b2; }
         param.push(c[i] as ParamNode);
         i++;
       }
       if (!_t1) { i = _t02; break; }
     }
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
-  if (!isNodeOf(c, i, "Block")) return null;
+  if (!__nodeOf(c, i, "Block")) return null;
   block = c[i] as BlockNode;
   i++;
   {
     const _t5 = i; let _t6 = true;
     _b7: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t6 = false; break _b7; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t6 = false; break _b7; }
       i++;
     }
     if (!_t6) i = _t5;
@@ -4370,9 +4479,9 @@ function _ClassMember$constructor(c: readonly CstChild[], src: string): ClassMem
 function _ClassMember$static_(c: readonly CstChild[], src: string): ClassMemberMatch | null {
   let block: (BlockNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "static", "$keyword")) return null;
+  if (!__lit(c, i, src, "static", "$keyword")) return null;
   i++;
-  if (!isNodeOf(c, i, "Block")) return null;
+  if (!__nodeOf(c, i, "Block")) return null;
   block = c[i] as BlockNode;
   i++;
   if (i !== c.length) return null;
@@ -4381,22 +4490,12 @@ function _ClassMember$static_(c: readonly CstChild[], src: string): ClassMemberM
 
 function _ClassMember$static_2(c: readonly CstChild[], src: string): ClassMemberMatch | null {
   const static_Kw: ("static" | "accessor" | "async")[] = [];
-  let memberName: (MemberNameNode) | undefined;
-  const param: (ParamNode)[] = [];
-  let block: (BlockNode) | undefined;
-  let getKw: ("get" | "set") | undefined;
-  let memberName2: (MemberNameNode) | undefined;
-  const param2: (ParamNode)[] = [];
-  let block2: (BlockNode) | undefined;
-  let memberName3: (MemberNameNode) | undefined;
-  const param3: (ParamNode)[] = [];
-  let block3: (BlockNode) | undefined;
-  let expr: (ExprNode) | undefined;
+  let alt: ({ branch: "star"; memberName: MemberNameNode; param: (ParamNode)[]; block?: BlockNode } | { branch: "get"; getKw: "get" | "set"; memberName: MemberNameNode; param: (ParamNode)[]; block?: BlockNode } | { branch: "memberName"; memberName: MemberNameNode; alt: { branch: "paren"; param: (ParamNode)[]; block?: BlockNode } | { branch: "seq"; expr?: ExprNode } }) | undefined;
   let i = 0;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isLit(c, i, src, "static", "$keyword") || isLit(c, i, src, "accessor", "$keyword") || isLit(c, i, src, "async", "$keyword"))) { _t1 = false; break _b2; }
+      if (!(__lit(c, i, src, "static", "$keyword") || __lit(c, i, src, "accessor", "$keyword") || __lit(c, i, src, "async", "$keyword"))) { _t1 = false; break _b2; }
       static_Kw.push(src.slice(c[i].offset, c[i].end) as "static" | "accessor" | "async");
       i++;
     }
@@ -4406,220 +4505,237 @@ function _ClassMember$static_2(c: readonly CstChild[], src: string): ClassMember
   {
     let _t3 = false;
     if (!_t3) {
+      let _t7_memberName: (MemberNameNode) | undefined;
+      const _t7_param: (ParamNode)[] = [];
+      let _t7_block: (BlockNode) | undefined;
       const _t4 = i; let _t5 = true;
       _b6: {
-        if (!isLit(c, i, src, "*", "$punct")) { _t5 = false; break _b6; }
+        if (!__lit(c, i, src, "*", "$punct")) { _t5 = false; break _b6; }
         i++;
-        if (!isNodeOf(c, i, "MemberName")) { _t5 = false; break _b6; }
-        memberName = c[i] as MemberNameNode;
+        if (!__nodeOf(c, i, "MemberName")) { _t5 = false; break _b6; }
+        _t7_memberName = c[i] as MemberNameNode;
         i++;
-        if (!isLit(c, i, src, "(", "$punct")) { _t5 = false; break _b6; }
+        if (!__lit(c, i, src, "(", "$punct")) { _t5 = false; break _b6; }
         i++;
         {
-          const _t7 = i; let _t10 = true;
-          _b11: {
-            if (!isNodeOf(c, i, "Param")) { _t10 = false; break _b11; }
-            param.push(c[i] as ParamNode);
+          const _t8 = i; let _t11 = true;
+          _b12: {
+            if (!__nodeOf(c, i, "Param")) { _t11 = false; break _b12; }
+            _t7_param.push(c[i] as ParamNode);
             i++;
           }
-          if (!_t10) { i = _t7; }
+          if (!_t11) { i = _t8; }
           else for (;;) {
-            if (!isLit(c, i, src, ",", "$punct")) break;
+            if (!__lit(c, i, src, ",", "$punct")) break;
             i++;
-            const _t72 = i; let _t8 = true;
-            _b9: {
-              if (!isNodeOf(c, i, "Param")) { _t8 = false; break _b9; }
-              param.push(c[i] as ParamNode);
+            const _t82 = i; let _t9 = true;
+            _b10: {
+              if (!__nodeOf(c, i, "Param")) { _t9 = false; break _b10; }
+              _t7_param.push(c[i] as ParamNode);
               i++;
             }
-            if (!_t8) { i = _t72; break; }
+            if (!_t9) { i = _t82; break; }
           }
         }
-        if (!isLit(c, i, src, ")", "$punct")) { _t5 = false; break _b6; }
+        if (!__lit(c, i, src, ")", "$punct")) { _t5 = false; break _b6; }
         i++;
         {
-          const _t12 = i; let _t13 = true;
-          _b14: {
-            if (!isNodeOf(c, i, "Block")) { _t13 = false; break _b14; }
-            block = c[i] as BlockNode;
+          const _t13 = i; let _t14 = true;
+          _b15: {
+            if (!__nodeOf(c, i, "Block")) { _t14 = false; break _b15; }
+            _t7_block = c[i] as BlockNode;
             i++;
           }
-          if (!_t13) i = _t12;
+          if (!_t14) i = _t13;
         }
         {
-          const _t15 = i; let _t16 = true;
-          _b17: {
-            if (!isLit(c, i, src, ";", "$punct")) { _t16 = false; break _b17; }
+          const _t16 = i; let _t17 = true;
+          _b18: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t17 = false; break _b18; }
             i++;
           }
-          if (!_t16) i = _t15;
+          if (!_t17) i = _t16;
         }
       }
-      if (_t5) _t3 = true; else i = _t4;
+      if (_t5) { _t3 = true; alt = ({ branch: "star", memberName: _t7_memberName!, param: _t7_param, block: _t7_block }) as typeof alt; }
+      else i = _t4;
     }
     if (!_t3) {
-      const _t18 = i; let _t19 = true;
-      _b20: {
-        if (!(isLit(c, i, src, "get", "$keyword") || isLit(c, i, src, "set", "$keyword"))) { _t19 = false; break _b20; }
-        getKw = src.slice(c[i].offset, c[i].end) as "get" | "set";
+      let _t22_getKw: ("get" | "set") | undefined;
+      let _t22_memberName: (MemberNameNode) | undefined;
+      const _t22_param: (ParamNode)[] = [];
+      let _t22_block: (BlockNode) | undefined;
+      const _t19 = i; let _t20 = true;
+      _b21: {
+        if (!(__lit(c, i, src, "get", "$keyword") || __lit(c, i, src, "set", "$keyword"))) { _t20 = false; break _b21; }
+        _t22_getKw = src.slice(c[i].offset, c[i].end) as "get" | "set";
         i++;
-        if (!isNodeOf(c, i, "MemberName")) { _t19 = false; break _b20; }
-        memberName2 = c[i] as MemberNameNode;
+        if (!__nodeOf(c, i, "MemberName")) { _t20 = false; break _b21; }
+        _t22_memberName = c[i] as MemberNameNode;
         i++;
-        if (!isLit(c, i, src, "(", "$punct")) { _t19 = false; break _b20; }
+        if (!__lit(c, i, src, "(", "$punct")) { _t20 = false; break _b21; }
         i++;
         {
-          const _t21 = i; let _t22 = true;
-          _b23: {
+          const _t23 = i; let _t24 = true;
+          _b25: {
             {
-              const _t24 = i; let _t27 = true;
-              _b28: {
-                if (!isNodeOf(c, i, "Param")) { _t27 = false; break _b28; }
-                param2.push(c[i] as ParamNode);
+              const _t26 = i; let _t29 = true;
+              _b30: {
+                if (!__nodeOf(c, i, "Param")) { _t29 = false; break _b30; }
+                _t22_param.push(c[i] as ParamNode);
                 i++;
               }
-              if (!_t27) { i = _t24; }
+              if (!_t29) { i = _t26; }
               else for (;;) {
-                if (!isLit(c, i, src, ",", "$punct")) break;
+                if (!__lit(c, i, src, ",", "$punct")) break;
                 i++;
-                const _t242 = i; let _t25 = true;
-                _b26: {
-                  if (!isNodeOf(c, i, "Param")) { _t25 = false; break _b26; }
-                  param2.push(c[i] as ParamNode);
+                const _t262 = i; let _t27 = true;
+                _b28: {
+                  if (!__nodeOf(c, i, "Param")) { _t27 = false; break _b28; }
+                  _t22_param.push(c[i] as ParamNode);
                   i++;
                 }
-                if (!_t25) { i = _t242; break; }
+                if (!_t27) { i = _t262; break; }
               }
             }
           }
-          if (!_t22) i = _t21;
+          if (!_t24) i = _t23;
         }
-        if (!isLit(c, i, src, ")", "$punct")) { _t19 = false; break _b20; }
+        if (!__lit(c, i, src, ")", "$punct")) { _t20 = false; break _b21; }
         i++;
         {
-          const _t29 = i; let _t30 = true;
-          _b31: {
-            if (!isNodeOf(c, i, "Block")) { _t30 = false; break _b31; }
-            block2 = c[i] as BlockNode;
+          const _t31 = i; let _t32 = true;
+          _b33: {
+            if (!__nodeOf(c, i, "Block")) { _t32 = false; break _b33; }
+            _t22_block = c[i] as BlockNode;
             i++;
           }
-          if (!_t30) i = _t29;
+          if (!_t32) i = _t31;
         }
         {
-          const _t32 = i; let _t33 = true;
-          _b34: {
-            if (!isLit(c, i, src, ";", "$punct")) { _t33 = false; break _b34; }
+          const _t34 = i; let _t35 = true;
+          _b36: {
+            if (!__lit(c, i, src, ";", "$punct")) { _t35 = false; break _b36; }
             i++;
           }
-          if (!_t33) i = _t32;
+          if (!_t35) i = _t34;
         }
       }
-      if (_t19) _t3 = true; else i = _t18;
+      if (_t20) { _t3 = true; alt = ({ branch: "get", getKw: _t22_getKw!, memberName: _t22_memberName!, param: _t22_param, block: _t22_block }) as typeof alt; }
+      else i = _t19;
     }
     if (!_t3) {
-      const _t35 = i; let _t36 = true;
-      _b37: {
-        if (!isNodeOf(c, i, "MemberName")) { _t36 = false; break _b37; }
-        memberName3 = c[i] as MemberNameNode;
+      let _t40_memberName: (MemberNameNode) | undefined;
+      let _t40_alt: ({ branch: "paren"; param: (ParamNode)[]; block?: BlockNode } | { branch: "seq"; expr?: ExprNode }) | undefined;
+      const _t37 = i; let _t38 = true;
+      _b39: {
+        if (!__nodeOf(c, i, "MemberName")) { _t38 = false; break _b39; }
+        _t40_memberName = c[i] as MemberNameNode;
         i++;
         {
-          let _t38 = false;
-          if (!_t38) {
-            const _t39 = i; let _t40 = true;
-            _b41: {
-              if (!isLit(c, i, src, "(", "$punct")) { _t40 = false; break _b41; }
+          let _t41 = false;
+          if (!_t41) {
+            const _t45__t40_param: (ParamNode)[] = [];
+            let _t45__t40_block: (BlockNode) | undefined;
+            const _t42 = i; let _t43 = true;
+            _b44: {
+              if (!__lit(c, i, src, "(", "$punct")) { _t43 = false; break _b44; }
               i++;
               {
-                const _t42 = i; let _t45 = true;
-                _b46: {
-                  if (!isNodeOf(c, i, "Param")) { _t45 = false; break _b46; }
-                  param3.push(c[i] as ParamNode);
+                const _t46 = i; let _t49 = true;
+                _b50: {
+                  if (!__nodeOf(c, i, "Param")) { _t49 = false; break _b50; }
+                  _t45__t40_param.push(c[i] as ParamNode);
                   i++;
                 }
-                if (!_t45) { i = _t42; }
+                if (!_t49) { i = _t46; }
                 else for (;;) {
-                  if (!isLit(c, i, src, ",", "$punct")) break;
+                  if (!__lit(c, i, src, ",", "$punct")) break;
                   i++;
-                  const _t422 = i; let _t43 = true;
-                  _b44: {
-                    if (!isNodeOf(c, i, "Param")) { _t43 = false; break _b44; }
-                    param3.push(c[i] as ParamNode);
+                  const _t462 = i; let _t47 = true;
+                  _b48: {
+                    if (!__nodeOf(c, i, "Param")) { _t47 = false; break _b48; }
+                    _t45__t40_param.push(c[i] as ParamNode);
                     i++;
                   }
-                  if (!_t43) { i = _t422; break; }
+                  if (!_t47) { i = _t462; break; }
                 }
               }
-              if (!isLit(c, i, src, ")", "$punct")) { _t40 = false; break _b41; }
+              if (!__lit(c, i, src, ")", "$punct")) { _t43 = false; break _b44; }
               i++;
               {
-                const _t47 = i; let _t48 = true;
-                _b49: {
-                  if (!isNodeOf(c, i, "Block")) { _t48 = false; break _b49; }
-                  block3 = c[i] as BlockNode;
+                const _t51 = i; let _t52 = true;
+                _b53: {
+                  if (!__nodeOf(c, i, "Block")) { _t52 = false; break _b53; }
+                  _t45__t40_block = c[i] as BlockNode;
                   i++;
                 }
-                if (!_t48) i = _t47;
+                if (!_t52) i = _t51;
               }
               {
-                const _t50 = i; let _t51 = true;
-                _b52: {
-                  if (!isLit(c, i, src, ";", "$punct")) { _t51 = false; break _b52; }
+                const _t54 = i; let _t55 = true;
+                _b56: {
+                  if (!__lit(c, i, src, ";", "$punct")) { _t55 = false; break _b56; }
                   i++;
                 }
-                if (!_t51) i = _t50;
+                if (!_t55) i = _t54;
               }
             }
-            if (_t40) _t38 = true; else i = _t39;
+            if (_t43) { _t41 = true; _t40_alt = ({ branch: "paren", param: _t45__t40_param, block: _t45__t40_block }) as typeof _t40_alt; }
+            else i = _t42;
           }
-          if (!_t38) {
-            const _t53 = i; let _t54 = true;
-            _b55: {
+          if (!_t41) {
+            let _t60__t40_expr: (ExprNode) | undefined;
+            const _t57 = i; let _t58 = true;
+            _b59: {
               {
-                const _t56 = i; let _t57 = true;
-                _b58: {
-                  if (!isLit(c, i, src, "=", "$punct")) { _t57 = false; break _b58; }
+                const _t61 = i; let _t62 = true;
+                _b63: {
+                  if (!__lit(c, i, src, "=", "$punct")) { _t62 = false; break _b63; }
                   i++;
-                  if (!isNodeOf(c, i, "Expr")) { _t57 = false; break _b58; }
-                  expr = c[i] as ExprNode;
+                  if (!__nodeOf(c, i, "Expr")) { _t62 = false; break _b63; }
+                  _t60__t40_expr = c[i] as ExprNode;
                   i++;
                 }
-                if (!_t57) i = _t56;
+                if (!_t62) i = _t61;
               }
               {
-                const _t59 = i; let _t60 = true;
-                _b61: {
-                  if (!isLit(c, i, src, ";", "$punct")) { _t60 = false; break _b61; }
+                const _t64 = i; let _t65 = true;
+                _b66: {
+                  if (!__lit(c, i, src, ";", "$punct")) { _t65 = false; break _b66; }
                   i++;
                 }
-                if (!_t60) i = _t59;
+                if (!_t65) i = _t64;
               }
             }
-            if (_t54) _t38 = true; else i = _t53;
+            if (_t58) { _t41 = true; _t40_alt = ({ branch: "seq", expr: _t60__t40_expr }) as typeof _t40_alt; }
+            else i = _t57;
           }
-          if (!_t38) { _t36 = false; break _b37; }
+          if (!_t41) { _t38 = false; break _b39; }
         }
       }
-      if (_t36) _t3 = true; else i = _t35;
+      if (_t38) { _t3 = true; alt = ({ branch: "memberName", memberName: _t40_memberName!, alt: _t40_alt! }) as typeof alt; }
+      else i = _t37;
     }
     if (!_t3) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "static_2", static_Kw, memberName, param, block, getKw, memberName2, param2, block2, memberName3, param3, block3, expr };
+  return { arm: "static_2", static_Kw, alt: alt! };
 }
 
 function _ClassMember$memberName(c: readonly CstChild[], src: string): ClassMemberMatch | null {
   let memberName: (MemberNameNode) | undefined;
   let expr: (ExprNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MemberName")) return null;
+  if (!__nodeOf(c, i, "MemberName")) return null;
   memberName = c[i] as MemberNameNode;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "=", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "=", "$punct")) { _t1 = false; break _b2; }
       i++;
-      if (!isNodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Expr")) { _t1 = false; break _b2; }
       expr = c[i] as ExprNode;
       i++;
     }
@@ -4628,7 +4744,7 @@ function _ClassMember$memberName(c: readonly CstChild[], src: string): ClassMemb
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
@@ -4642,37 +4758,37 @@ function _ClassMember$memberName2(c: readonly CstChild[], src: string): ClassMem
   const param: (ParamNode)[] = [];
   let block: (BlockNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MemberName")) return null;
+  if (!__nodeOf(c, i, "MemberName")) return null;
   memberName = c[i] as MemberNameNode;
   i++;
-  if (!isLit(c, i, src, "(", "$punct")) return null;
+  if (!__lit(c, i, src, "(", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "Param")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "Param")) { _t3 = false; break _b4; }
       param.push(c[i] as ParamNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "Param")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "Param")) { _t1 = false; break _b2; }
         param.push(c[i] as ParamNode);
         i++;
       }
       if (!_t1) { i = _t02; break; }
     }
   }
-  if (!isLit(c, i, src, ")", "$punct")) return null;
+  if (!__lit(c, i, src, ")", "$punct")) return null;
   i++;
   {
     const _t5 = i; let _t6 = true;
     _b7: {
-      if (!isNodeOf(c, i, "Block")) { _t6 = false; break _b7; }
+      if (!__nodeOf(c, i, "Block")) { _t6 = false; break _b7; }
       block = c[i] as BlockNode;
       i++;
     }
@@ -4681,7 +4797,7 @@ function _ClassMember$memberName2(c: readonly CstChild[], src: string): ClassMem
   {
     const _t8 = i; let _t9 = true;
     _b10: {
-      if (!isLit(c, i, src, ";", "$punct")) { _t9 = false; break _b10; }
+      if (!__lit(c, i, src, ";", "$punct")) { _t9 = false; break _b10; }
       i++;
     }
     if (!_t9) i = _t8;
@@ -4739,67 +4855,70 @@ export function matchClassMember(n: ClassMemberNode, src: string): ClassMemberMa
 }
 
 export type ImportClauseMatch =
-  | { arm: "ident"; ident: CstLeaf; importSpecifier: (ImportSpecifierNode)[]; ident2?: CstLeaf }
+  | { arm: "ident"; ident: CstLeaf; alt?: { branch: "brace"; importSpecifier: (ImportSpecifierNode)[] } | { branch: "star"; ident: CstLeaf } }
   | { arm: "brace"; importSpecifier: (ImportSpecifierNode)[] }
   | { arm: "star"; ident: CstLeaf };
 
 function _ImportClause$ident(c: readonly CstChild[], src: string): ImportClauseMatch | null {
   let ident: (CstLeaf) | undefined;
-  const importSpecifier: (ImportSpecifierNode)[] = [];
-  let ident2: (CstLeaf) | undefined;
+  let alt: ({ branch: "brace"; importSpecifier: (ImportSpecifierNode)[] } | { branch: "star"; ident: CstLeaf }) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t1 = false; break _b2; }
       i++;
       {
         let _t3 = false;
         if (!_t3) {
+          const _t7_importSpecifier: (ImportSpecifierNode)[] = [];
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!isLit(c, i, src, "{", "$punct")) { _t5 = false; break _b6; }
+            if (!__lit(c, i, src, "{", "$punct")) { _t5 = false; break _b6; }
             i++;
             {
-              const _t7 = i; let _t10 = true;
-              _b11: {
-                if (!isNodeOf(c, i, "ImportSpecifier")) { _t10 = false; break _b11; }
-                importSpecifier.push(c[i] as ImportSpecifierNode);
+              const _t8 = i; let _t11 = true;
+              _b12: {
+                if (!__nodeOf(c, i, "ImportSpecifier")) { _t11 = false; break _b12; }
+                _t7_importSpecifier.push(c[i] as ImportSpecifierNode);
                 i++;
               }
-              if (!_t10) { i = _t7; }
+              if (!_t11) { i = _t8; }
               else for (;;) {
-                if (!isLit(c, i, src, ",", "$punct")) break;
+                if (!__lit(c, i, src, ",", "$punct")) break;
                 i++;
-                const _t72 = i; let _t8 = true;
-                _b9: {
-                  if (!isNodeOf(c, i, "ImportSpecifier")) { _t8 = false; break _b9; }
-                  importSpecifier.push(c[i] as ImportSpecifierNode);
+                const _t82 = i; let _t9 = true;
+                _b10: {
+                  if (!__nodeOf(c, i, "ImportSpecifier")) { _t9 = false; break _b10; }
+                  _t7_importSpecifier.push(c[i] as ImportSpecifierNode);
                   i++;
                 }
-                if (!_t8) { i = _t72; break; }
+                if (!_t9) { i = _t82; break; }
               }
             }
-            if (!isLit(c, i, src, "}", "$punct")) { _t5 = false; break _b6; }
+            if (!__lit(c, i, src, "}", "$punct")) { _t5 = false; break _b6; }
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt = ({ branch: "brace", importSpecifier: _t7_importSpecifier }) as typeof alt; }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t12 = i; let _t13 = true;
-          _b14: {
-            if (!isLit(c, i, src, "*", "$punct")) { _t13 = false; break _b14; }
+          let _t16_ident: (CstLeaf) | undefined;
+          const _t13 = i; let _t14 = true;
+          _b15: {
+            if (!__lit(c, i, src, "*", "$punct")) { _t14 = false; break _b15; }
             i++;
-            if (!isLit(c, i, src, "as", "$keyword")) { _t13 = false; break _b14; }
+            if (!__lit(c, i, src, "as", "$keyword")) { _t14 = false; break _b15; }
             i++;
-            if (!(isTok(c, i, "Ident"))) { _t13 = false; break _b14; }
-            ident2 = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Ident"))) { _t14 = false; break _b15; }
+            _t16_ident = c[i] as CstLeaf;
             i++;
           }
-          if (_t13) _t3 = true; else i = _t12;
+          if (_t14) { _t3 = true; alt = ({ branch: "star", ident: _t16_ident! }) as typeof alt; }
+          else i = _t13;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -4807,35 +4926,35 @@ function _ImportClause$ident(c: readonly CstChild[], src: string): ImportClauseM
     if (!_t1) i = _t0;
   }
   if (i !== c.length) return null;
-  return { arm: "ident", ident: ident!, importSpecifier, ident2 };
+  return { arm: "ident", ident: ident!, alt };
 }
 
 function _ImportClause$brace(c: readonly CstChild[], src: string): ImportClauseMatch | null {
   const importSpecifier: (ImportSpecifierNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t3 = true;
     _b4: {
-      if (!isNodeOf(c, i, "ImportSpecifier")) { _t3 = false; break _b4; }
+      if (!__nodeOf(c, i, "ImportSpecifier")) { _t3 = false; break _b4; }
       importSpecifier.push(c[i] as ImportSpecifierNode);
       i++;
     }
     if (!_t3) { i = _t0; }
     else for (;;) {
-      if (!isLit(c, i, src, ",", "$punct")) break;
+      if (!__lit(c, i, src, ",", "$punct")) break;
       i++;
       const _t02 = i; let _t1 = true;
       _b2: {
-        if (!isNodeOf(c, i, "ImportSpecifier")) { _t1 = false; break _b2; }
+        if (!__nodeOf(c, i, "ImportSpecifier")) { _t1 = false; break _b2; }
         importSpecifier.push(c[i] as ImportSpecifierNode);
         i++;
       }
       if (!_t1) { i = _t02; break; }
     }
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "brace", importSpecifier };
@@ -4844,11 +4963,11 @@ function _ImportClause$brace(c: readonly CstChild[], src: string): ImportClauseM
 function _ImportClause$star(c: readonly CstChild[], src: string): ImportClauseMatch | null {
   let ident: (CstLeaf) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "*", "$punct")) return null;
+  if (!__lit(c, i, src, "*", "$punct")) return null;
   i++;
-  if (!isLit(c, i, src, "as", "$keyword")) return null;
+  if (!__lit(c, i, src, "as", "$keyword")) return null;
   i++;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -4885,28 +5004,30 @@ export function matchImportClause(n: ImportClauseNode, src: string): ImportClaus
 }
 
 export type ImportSpecifierMatch =
-  | { arm: "ident"; ident: CstLeaf; ident2?: CstLeaf };
+  | { arm: "ident"; ident: CstLeaf; ident2?: CstLeaf; asTok?: CstLeaf };
 
 function _ImportSpecifier$ident(c: readonly CstChild[], src: string): ImportSpecifierMatch | null {
   let ident: (CstLeaf) | undefined;
   let ident2: (CstLeaf) | undefined;
+  let asTok: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Ident"))) return null;
+  if (!(__tok(c, i, "Ident"))) return null;
   ident = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "as", "$keyword")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "as", "$keyword")) { _t1 = false; break _b2; }
+      asTok = c[i] as CstLeaf;
       i++;
-      if (!(isTok(c, i, "Ident"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Ident"))) { _t1 = false; break _b2; }
       ident2 = c[i] as CstLeaf;
       i++;
     }
     if (!_t1) i = _t0;
   }
   if (i !== c.length) return null;
-  return { arm: "ident", ident: ident!, ident2 };
+  return { arm: "ident", ident: ident!, ident2, asTok };
 }
 
 export function matchImportSpecifier(n: ImportSpecifierNode, src: string): ImportSpecifierMatch {
@@ -4931,11 +5052,10 @@ export function matchImportSpecifier(n: ImportSpecifierNode, src: string): Impor
 }
 
 export type ProgramMatch =
-  | { arm: "decl"; decl: (DeclNode)[]; stmt: (StmtNode)[] };
+  | { arm: "decl"; alt: ({ branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode })[] };
 
 function _Program$decl(c: readonly CstChild[], src: string): ProgramMatch | null {
-  const decl: (DeclNode)[] = [];
-  const stmt: (StmtNode)[] = [];
+  const alt: ({ branch: "decl"; decl: DeclNode } | { branch: "stmt"; stmt: StmtNode })[] = [];
   let i = 0;
   for (;;) {
     const _t0 = i; let _t1 = true;
@@ -4943,22 +5063,26 @@ function _Program$decl(c: readonly CstChild[], src: string): ProgramMatch | null
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_decl: (DeclNode) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!isNodeOf(c, i, "Decl")) { _t5 = false; break _b6; }
-            decl.push(c[i] as DeclNode);
+            if (!__nodeOf(c, i, "Decl")) { _t5 = false; break _b6; }
+            _t7_decl = c[i] as DeclNode;
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt.push({ branch: "decl", decl: _t7_decl! } as never); }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!isNodeOf(c, i, "Stmt")) { _t8 = false; break _b9; }
-            stmt.push(c[i] as StmtNode);
+          let _t11_stmt: (StmtNode) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!__nodeOf(c, i, "Stmt")) { _t9 = false; break _b10; }
+            _t11_stmt = c[i] as StmtNode;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t9) { _t3 = true; alt.push({ branch: "stmt", stmt: _t11_stmt! } as never); }
+          else i = _t8;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -4967,7 +5091,7 @@ function _Program$decl(c: readonly CstChild[], src: string): ProgramMatch | null
     if (i === _t0) break;
   }
   if (i !== c.length) return null;
-  return { arm: "decl", decl, stmt };
+  return { arm: "decl", alt };
 }
 
 export function matchProgram(n: ProgramNode, src: string): ProgramMatch {

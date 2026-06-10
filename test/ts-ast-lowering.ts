@@ -518,16 +518,20 @@ function lowerStmt(n: CstNode): Ast {
     case 'break_': return ast('BreakStatement', n.offset, n.end, m.ident ? [ast('Identifier', m.ident.offset, m.ident.end)] : []);
     case 'continue_': return ast('ContinueStatement', n.offset, n.end, m.ident ? [ast('Identifier', m.ident.offset, m.ident.end)] : []);
     case 'try_': {
+      // catchTok/finallyTok carry the keyword anchors (no children scan), and the
+      // catch binding arrives as a tagged sub-union instead of flattened optionals.
       const kids: Ast[] = [lowerBlock(m.block)];
-      const catchIdx = findText(c, 'catch');
-      if (catchIdx >= 0 && m.block2) {
+      if (m.catchTok && m.block2) {
         const catchKids: Ast[] = [];
-        if (m.param) catchKids.push(ast('VariableDeclaration', m.param.offset, m.param.end, [lowerBindingTarget(m.param)]));
+        const target = m.alt?.branch === 'param' ? m.alt.param : m.alt?.branch === 'bindingPattern' ? m.alt.bindingPattern : undefined;
+        if (target) {
+          const t = 'rule' in target && target.rule === 'BindingPattern' ? lowerBindingPattern(target) : lowerBindingTarget(target);
+          catchKids.push(ast('VariableDeclaration', target.offset, target.end, [t]));
+        }
         catchKids.push(lowerBlock(m.block2));
-        kids.push(ast('CatchClause', c[catchIdx].offset, m.block2.end, catchKids));
+        kids.push(ast('CatchClause', m.catchTok.offset, m.block2.end, catchKids));
       }
-      const lastBlock = m.block3 ?? (catchIdx < 0 ? m.block2 : undefined);
-      if (lastBlock) kids.push(lowerBlock(lastBlock));
+      if (m.finallyTok) kids.push(lowerBlock(m.block3 ?? m.block2!));   // finally block: block3 with a catch, block2 without
       return ast('TryStatement', n.offset, n.end, kids);
     }
     case 'ident': return ast('LabeledStatement', n.offset, n.end, [ast('Identifier', m.ident.offset, m.ident.end), lowerStmt(m.stmt)]);

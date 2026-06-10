@@ -25,20 +25,21 @@ import { isKeywordLiteral } from './grammar-utils.ts';
 type Card = 'one' | 'opt' | 'many';
 
 interface Capture {
-  name: string;
+  name: string;    // local slot (branch rendering prefixes it)
+  field: string;   // result-object / type key — frozen at plan time
   tsType: string;
   card: Card;
 }
 
 type Step =
-  | { kind: 'lit'; text: string; tt: '$keyword' | '$punct' }
+  | { kind: 'lit'; text: string; tt: '$keyword' | '$punct'; cap?: Capture }
   | { kind: 'litAlt'; texts: string[]; tt: ('$keyword' | '$punct')[]; cap?: Capture }
   | { kind: 'tok'; name: string; template: boolean; cap?: Capture }
   | { kind: 'node'; rule: string; cap?: Capture }
   | { kind: 'opt'; min1: boolean; body: Step[] }      // min1=true → '+' (first iteration required)
   | { kind: 'many'; body: Step[] }                     // zero-or-more loop after any required first
   | { kind: 'sep'; element: Step[]; delimiter: string; delimTt: '$keyword' | '$punct' }
-  | { kind: 'branches'; branches: Step[][] };
+  | { kind: 'branches'; cap: Capture; branches: { tag: string; steps: Step[]; captures: Capture[] }[] };
 
 interface ArmPlan {
   name: string;
@@ -61,7 +62,8 @@ const PUNCT_NAMES: Record<string, string> = {
 function lowerFirst(s: string): string { return s.charAt(0).toLowerCase() + s.slice(1); }
 function sanitizeIdent(s: string): string {
   const cleaned = s.replace(/[^A-Za-z0-9_$]/g, '_');
-  const base = /^[0-9]/.test(cleaned) ? '_' + cleaned : cleaned;
+  let base = /^[0-9]/.test(cleaned) ? '_' + cleaned : cleaned;
+  if (base.startsWith('__')) base = 'f' + base;   // '__' is reserved for the emitted helpers
   return RESERVED.has(base) ? base + '_' : base;
 }
 
@@ -126,10 +128,10 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     return plans;
 
     function selfCap(nm: string): Step {
-      return { kind: 'node', rule: self, cap: { name: nm, tsType: nodeType(self), card: 'one' } };
+      return { kind: 'node', rule: self, cap: { name: nm, field: nm, tsType: nodeType(self), card: 'one' } };
     }
     function opLeafCap(nm: string): Step {
-      return { kind: 'tok', name: '$operator', template: false, cap: { name: nm, tsType: 'CstLeaf', card: 'one' } };
+      return { kind: 'tok', name: '$operator', template: false, cap: { name: nm, field: nm, tsType: 'CstLeaf', card: 'one' } };
     }
     function opPlan(name: string, steps: Step[], _self: string): ArmPlan {
       const captures = steps.map(s => (s as { cap: Capture }).cap);
@@ -141,7 +143,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     let nm = sanitizeIdent(base);
     if (used.has(nm)) { let k = 2; while (used.has(nm + k)) k++; nm = nm + k; }
     used.add(nm);
-    const cap = { name: nm, tsType, card };
+    const cap = { name: nm, field: nm, tsType, card };
     captures.push(cap);
     return cap;
   }
@@ -206,6 +208,13 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         const inner: Step[] = [];
         const innerCard: Card = it.kind === '?' ? (card === 'many' ? 'many' : 'opt') : 'many';
         pushSteps(inner, it.body, captures, used, innerCard);
+        // A $keyword literal LEADING an optional group marks the group's presence and
+        // carries its position (the 'catch'/'else'/'finally' anchors consumers need) —
+        // capture it as <kw>Tok.
+        const lead = inner[0];
+        if (it.kind === '?' && lead !== undefined && lead.kind === 'lit' && lead.tt === '$keyword' && lead.cap === undefined) {
+          lead.cap = addCap(captures, used, lead.text + 'Tok', 'CstLeaf', innerCard);
+        }
         if (it.kind === '?') steps.push({ kind: 'opt', min1: false, body: inner });
         else if (it.kind === '*') steps.push({ kind: 'many', body: inner });
         else { // '+'
@@ -230,14 +239,28 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
           });
           return;
         }
-        // Structural alternation: ordered branches; branch captures become optional.
-        const branches: Step[][] = [];
+        // Structural alternation: ordered branches, each a tagged mini-plan with its
+        // OWN captures — the parent gets ONE field holding a per-branch sub-union
+        // ({ branch: 'eq', expr } | { branch: 'empty' } | …), so consumers switch on
+        // m.field.branch instead of probing flattened optionals.
+        const tagSet = new Set<string>();
+        const branches: { tag: string; steps: Step[]; captures: Capture[] }[] = [];
         for (const b of it.items) {
           const bs: Step[] = [];
-          pushSteps(bs, b, captures, used, card === 'many' ? 'many' : 'opt');
-          branches.push(bs);
+          const bCaps: Capture[] = [];
+          const bUsed = new Set<string>();
+          pushSteps(bs, b, bCaps, bUsed, 'one');
+          let tag = bs.length === 0 ? 'empty' : sanitizeIdent(nameFrom(b.type === 'seq' ? b.items : [b], 8));
+          if (tagSet.has(tag)) { let k = 2; while (tagSet.has(tag + k)) k++; tag = tag + k; }
+          tagSet.add(tag);
+          branches.push({ tag, steps: bs, captures: bCaps });
         }
-        steps.push({ kind: 'branches', branches });
+        const unionTs = branches.map(b => {
+          const fields = b.captures.map(cp => `${cp.field}${cp.card === 'opt' ? '?' : ''}: ${cp.card === 'many' ? `(${cp.tsType})[]` : cp.tsType}`);
+          return `{ branch: ${J(b.tag)}${fields.length ? '; ' + fields.join('; ') : ''} }`;
+        }).join(' | ');
+        const cap = addCap(captures, used, 'alt', unionTs, card);
+        steps.push({ kind: 'branches', cap, branches });
         return;
       }
       case 'sep': {
@@ -258,7 +281,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         case 'opt': return { ...s, body: cloneSteps(s.body) };
         case 'many': return { ...s, body: cloneSteps(s.body) };
         case 'sep': return { ...s, element: cloneSteps(s.element) };
-        case 'branches': return { ...s, branches: s.branches.map(cloneSteps) };
+        case 'branches': return { ...s, branches: s.branches.map(b => ({ ...b, steps: cloneSteps(b.steps) })) };
         default: return s;
       }
     });
@@ -285,8 +308,8 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     renderSteps(plan.steps, w, '  ', () => `return null;`);
     w(`  if (i !== c.length) return null;`);
     const fields = plan.captures.map(c => {
-      if (c.card === 'one') return `${c.name}: ${c.name}!`;
-      return c.name;
+      if (c.card === 'one') return `${c.field}: ${c.name}!`;
+      return c.field === c.name ? c.name : `${c.field}: ${c.name}`;
     });
     w(`  return { arm: ${J(plan.name)}${fields.length ? ', ' + fields.join(', ') : ''} };`);
     emit(`function ${fn}(c: readonly CstChild[], src: string): ${matchTypeName(rule.name)} | null {`);
@@ -301,13 +324,14 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   }
 
   function litCond(text: string, tt: string): string {
-    return `isLit(c, i, src, ${J(text)}, ${J(tt)})`;
+    return `__lit(c, i, src, ${J(text)}, ${J(tt)})`;
   }
 
   function renderStep(st: Step, w: (s: string) => void, ind: string, fail: () => string): void {
     switch (st.kind) {
       case 'lit':
         w(`${ind}if (!${litCond(st.text, st.tt)}) ${fail()}`);
+        if (st.cap) assign(st.cap, `c[i] as CstLeaf`, w, ind);
         w(`${ind}i++;`);
         return;
       case 'litAlt': {
@@ -319,15 +343,15 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       }
       case 'tok': {
         const cond = st.template
-          ? `isTok(c, i, ${J(st.name)}) || isNodeOf(c, i, '$template')`
-          : `isTok(c, i, ${J(st.name)})`;
+          ? `__tok(c, i, ${J(st.name)}) || __nodeOf(c, i, '$template')`
+          : `__tok(c, i, ${J(st.name)})`;
         w(`${ind}if (!(${cond})) ${fail()}`);
         if (st.cap) assign(st.cap, `c[i] as ${st.cap.tsType}`, w, ind);
         w(`${ind}i++;`);
         return;
       }
       case 'node':
-        w(`${ind}if (!isNodeOf(c, i, ${J(st.rule)})) ${fail()}`);
+        w(`${ind}if (!__nodeOf(c, i, ${J(st.rule)})) ${fail()}`);
         if (st.cap) assign(st.cap, `c[i] as ${st.cap.tsType}`, w, ind);
         w(`${ind}i++;`);
         return;
@@ -390,16 +414,28 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         w(`${ind}{`);
         w(`${ind}  let ${done} = false;`);
         for (const b of st.branches) {
-          if (b.length === 0) { w(`${ind}  if (!${done}) ${done} = true;   // empty branch always matches`); continue; }
+          if (b.steps.length === 0) {
+            w(`${ind}  if (!${done}) { ${done} = true; ${assignExpr(st.cap, `{ branch: ${J(b.tag)} }`)} }`);
+            continue;
+          }
           const save = tmp();
           const ok = tmp();
           const lbl = tmp().replace('_t', '_b');
+          // branch-local capture temps, prefixed to avoid cross-branch collisions
+          const pfx = tmp() + '_';
+          const renamed = b.captures.map(cp => ({ ...cp, name: pfx + cp.name }));
           w(`${ind}  if (!${done}) {`);
+          for (const cp of renamed) {
+            if (cp.card === 'many') w(`${ind}    const ${cp.name}: (${cp.tsType})[] = [];`);
+            else w(`${ind}    let ${cp.name}: (${cp.tsType}) | undefined;`);
+          }
           w(`${ind}    const ${save} = i; let ${ok} = true;`);
           w(`${ind}    ${lbl}: {`);
-          renderSteps(b, w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`);
+          renderSteps(renameCaps(b.steps, pfx), w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`);
           w(`${ind}    }`);
-          w(`${ind}    if (${ok}) ${done} = true; else i = ${save};`);
+          const fields = renamed.map(cp => `${cp.field}: ${cp.name}${cp.card === 'one' ? '!' : ''}`);
+          w(`${ind}    if (${ok}) { ${done} = true; ${assignExpr(st.cap, `{ branch: ${J(b.tag)}${fields.length ? ', ' + fields.join(', ') : ''} }`)} }`);
+          w(`${ind}    else i = ${save};`);
           w(`${ind}  }`);
         }
         w(`${ind}  if (!${done}) ${fail()}`);
@@ -412,6 +448,22 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   function assign(cap: Capture, expr: string, w: (s: string) => void, ind: string): void {
     if (cap.card === 'many') w(`${ind}${cap.name}.push(${expr});`);
     else w(`${ind}${cap.name} = ${expr};`);
+  }
+  function assignExpr(cap: Capture, expr: string): string {
+    return cap.card === 'many' ? `${cap.name}.push(${expr} as never);` : `${cap.name} = (${expr}) as typeof ${cap.name};`;
+  }
+  // Re-point a branch's steps at the prefixed temp captures (shallow per-step clone).
+  function renameCaps(steps: Step[], pfx: string): Step[] {
+    const re = (cp: Capture | undefined): Capture | undefined => (cp ? { ...cp, name: pfx + cp.name } : undefined);
+    return steps.map(st => {
+      switch (st.kind) {
+        case 'lit': case 'litAlt': case 'tok': case 'node': return { ...st, cap: re(st.cap) } as Step;
+        case 'opt': return { ...st, body: renameCaps(st.body, pfx) };
+        case 'many': return { ...st, body: renameCaps(st.body, pfx) };
+        case 'sep': return { ...st, element: renameCaps(st.element, pfx) };
+        case 'branches': return { ...st, cap: re(st.cap)!, branches: st.branches.map(b => ({ ...b, steps: renameCaps(b.steps, pfx), captures: b.captures.map(cp => ({ ...cp, name: pfx + cp.name })) })) };
+      }
+    });
   }
 
   function matchTypeName(rule: string): string { return `${sanitizeIdent(rule)}Match`; }
@@ -458,9 +510,9 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         case 'branches': {
           let anyEmpty = false;
           for (const b of st.branches) {
-            const a = firstAdmit(b);
+            const a = firstAdmit(b.steps);
             for (const k of a.keys) keys.add(k);
-            if (a.canEmpty || b.length === 0) anyEmpty = true;
+            if (a.canEmpty || b.steps.length === 0) anyEmpty = true;
           }
           if (!anyEmpty) return { keys, canEmpty: false };
           continue;
@@ -484,7 +536,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     const unionMembers = plans.map(p => {
       const fields = p.captures.map(c => {
         const t = c.card === 'many' ? `(${c.tsType})[]` : c.tsType;
-        return `${c.name}${c.card === 'opt' ? '?' : ''}: ${t}`;
+        return `${c.field}${c.card === 'opt' ? '?' : ''}: ${t}`;
       });
       return `{ arm: ${J(p.name)}${fields.length ? '; ' + fields.join('; ') : ''} }`;
     });
@@ -655,15 +707,15 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   header.push(`/* eslint-disable */`);
   header.push(`import type { ${[...usedIfaces].sort().join(', ')} } from ${J(importFrom)};`);
   header.push(``);
-  header.push(`const isLit = (c: readonly CstChild[], i: number, src: string, text: string, tt: string): boolean => {`);
+  header.push(`const __lit = (c: readonly CstChild[], i: number, src: string, text: string, tt: string): boolean => {`);
   header.push(`  const k = c[i] as CstLeaf | undefined;`);
   header.push(`  return k !== undefined && k.tokenType === tt && k.end - k.offset === text.length && src.startsWith(text, k.offset);`);
   header.push(`};`);
-  header.push(`const isTok = (c: readonly CstChild[], i: number, name: string): boolean => {`);
+  header.push(`const __tok = (c: readonly CstChild[], i: number, name: string): boolean => {`);
   header.push(`  const k = c[i] as CstLeaf | undefined;`);
   header.push(`  return k !== undefined && k.tokenType === name;`);
   header.push(`};`);
-  header.push(`const isNodeOf = (c: readonly CstChild[], i: number, rule: string): boolean => {`);
+  header.push(`const __nodeOf = (c: readonly CstChild[], i: number, rule: string): boolean => {`);
   header.push(`  const k = c[i] as { rule?: string } | undefined;`);
   header.push(`  return k !== undefined && k.rule === rule;`);
   header.push(`};`);

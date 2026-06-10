@@ -2,15 +2,15 @@
 /* eslint-disable */
 import type { AttrNode, CstChild, CstLeaf, DocumentNode, ElementNode, NodeNode } from "./vue.cst-types.ts";
 
-const isLit = (c: readonly CstChild[], i: number, src: string, text: string, tt: string): boolean => {
+const __lit = (c: readonly CstChild[], i: number, src: string, text: string, tt: string): boolean => {
   const k = c[i] as CstLeaf | undefined;
   return k !== undefined && k.tokenType === tt && k.end - k.offset === text.length && src.startsWith(text, k.offset);
 };
-const isTok = (c: readonly CstChild[], i: number, name: string): boolean => {
+const __tok = (c: readonly CstChild[], i: number, name: string): boolean => {
   const k = c[i] as CstLeaf | undefined;
   return k !== undefined && k.tokenType === name;
 };
-const isNodeOf = (c: readonly CstChild[], i: number, rule: string): boolean => {
+const __nodeOf = (c: readonly CstChild[], i: number, rule: string): boolean => {
   const k = c[i] as { rule?: string } | undefined;
   return k !== undefined && k.rule === rule;
 };
@@ -25,15 +25,15 @@ function _Element$lt(c: readonly CstChild[], src: string): ElementMatch | null {
   let voidName: (CstLeaf) | undefined;
   const attr: (AttrNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "<", "$punct")) return null;
+  if (!__lit(c, i, src, "<", "$punct")) return null;
   i++;
-  if (!(isTok(c, i, "VoidName"))) return null;
+  if (!(__tok(c, i, "VoidName"))) return null;
   voidName = c[i] as CstLeaf;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Attr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Attr")) { _t1 = false; break _b2; }
       attr.push(c[i] as AttrNode);
       i++;
     }
@@ -43,12 +43,12 @@ function _Element$lt(c: readonly CstChild[], src: string): ElementMatch | null {
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, "/", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, "/", "$punct")) { _t4 = false; break _b5; }
       i++;
     }
     if (!_t4) i = _t3;
   }
-  if (!isLit(c, i, src, ">", "$punct")) return null;
+  if (!__lit(c, i, src, ">", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "lt", voidName: voidName!, attr };
@@ -58,24 +58,24 @@ function _Element$lt2(c: readonly CstChild[], src: string): ElementMatch | null 
   let name: (CstLeaf) | undefined;
   const attr: (AttrNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "<", "$punct")) return null;
+  if (!__lit(c, i, src, "<", "$punct")) return null;
   i++;
-  if (!(isTok(c, i, "Name"))) return null;
+  if (!(__tok(c, i, "Name"))) return null;
   name = c[i] as CstLeaf;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Attr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Attr")) { _t1 = false; break _b2; }
       attr.push(c[i] as AttrNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, "/", "$punct")) return null;
+  if (!__lit(c, i, src, "/", "$punct")) return null;
   i++;
-  if (!isLit(c, i, src, ">", "$punct")) return null;
+  if (!__lit(c, i, src, ">", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "lt2", name: name!, attr };
@@ -87,41 +87,41 @@ function _Element$lt3(c: readonly CstChild[], src: string): ElementMatch | null 
   const node: (NodeNode)[] = [];
   let name2: (CstLeaf) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "<", "$punct")) return null;
+  if (!__lit(c, i, src, "<", "$punct")) return null;
   i++;
-  if (!(isTok(c, i, "Name"))) return null;
+  if (!(__tok(c, i, "Name"))) return null;
   name = c[i] as CstLeaf;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Attr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Attr")) { _t1 = false; break _b2; }
       attr.push(c[i] as AttrNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, ">", "$punct")) return null;
+  if (!__lit(c, i, src, ">", "$punct")) return null;
   i++;
   for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isNodeOf(c, i, "Node")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "Node")) { _t4 = false; break _b5; }
       node.push(c[i] as NodeNode);
       i++;
     }
     if (!_t4) { i = _t3; break; }
     if (i === _t3) break;
   }
-  if (!isLit(c, i, src, "<", "$punct")) return null;
+  if (!__lit(c, i, src, "<", "$punct")) return null;
   i++;
-  if (!isLit(c, i, src, "/", "$punct")) return null;
+  if (!__lit(c, i, src, "/", "$punct")) return null;
   i++;
-  if (!(isTok(c, i, "Name"))) return null;
+  if (!(__tok(c, i, "Name"))) return null;
   name2 = c[i] as CstLeaf;
   i++;
-  if (!isLit(c, i, src, ">", "$punct")) return null;
+  if (!__lit(c, i, src, ">", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "lt3", name: name!, attr, node, name2: name2! };
@@ -132,24 +132,24 @@ function _Element$lt4(c: readonly CstChild[], src: string): ElementMatch | null 
   const attr: (AttrNode)[] = [];
   let rawText: (CstLeaf) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "<", "$punct")) return null;
+  if (!__lit(c, i, src, "<", "$punct")) return null;
   i++;
-  if (!(isTok(c, i, "Name"))) return null;
+  if (!(__tok(c, i, "Name"))) return null;
   name = c[i] as CstLeaf;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Attr")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Attr")) { _t1 = false; break _b2; }
       attr.push(c[i] as AttrNode);
       i++;
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!isLit(c, i, src, ">", "$punct")) return null;
+  if (!__lit(c, i, src, ">", "$punct")) return null;
   i++;
-  if (!(isTok(c, i, "RawText"))) return null;
+  if (!(__tok(c, i, "RawText"))) return null;
   rawText = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -181,50 +181,54 @@ export function matchElement(n: ElementNode, src: string): ElementMatch {
 }
 
 export type AttrMatch =
-  | { arm: "name"; name: CstLeaf; attrValue?: CstLeaf; name2?: CstLeaf; unquotedValue?: CstLeaf };
+  | { arm: "name"; name: CstLeaf; alt?: { branch: "attrValue"; attrValue: CstLeaf } | { branch: "name"; name: CstLeaf } | { branch: "unquotedValue"; unquotedValue: CstLeaf } };
 
 function _Attr$name(c: readonly CstChild[], src: string): AttrMatch | null {
   let name: (CstLeaf) | undefined;
-  let attrValue: (CstLeaf) | undefined;
-  let name2: (CstLeaf) | undefined;
-  let unquotedValue: (CstLeaf) | undefined;
+  let alt: ({ branch: "attrValue"; attrValue: CstLeaf } | { branch: "name"; name: CstLeaf } | { branch: "unquotedValue"; unquotedValue: CstLeaf }) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Name"))) return null;
+  if (!(__tok(c, i, "Name"))) return null;
   name = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, "=", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, "=", "$punct")) { _t1 = false; break _b2; }
       i++;
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_attrValue: (CstLeaf) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!(isTok(c, i, "AttrValue"))) { _t5 = false; break _b6; }
-            attrValue = c[i] as CstLeaf;
+            if (!(__tok(c, i, "AttrValue"))) { _t5 = false; break _b6; }
+            _t7_attrValue = c[i] as CstLeaf;
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt = ({ branch: "attrValue", attrValue: _t7_attrValue! }) as typeof alt; }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!(isTok(c, i, "Name"))) { _t8 = false; break _b9; }
-            name2 = c[i] as CstLeaf;
+          let _t11_name: (CstLeaf) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!(__tok(c, i, "Name"))) { _t9 = false; break _b10; }
+            _t11_name = c[i] as CstLeaf;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t9) { _t3 = true; alt = ({ branch: "name", name: _t11_name! }) as typeof alt; }
+          else i = _t8;
         }
         if (!_t3) {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!(isTok(c, i, "UnquotedValue"))) { _t11 = false; break _b12; }
-            unquotedValue = c[i] as CstLeaf;
+          let _t15_unquotedValue: (CstLeaf) | undefined;
+          const _t12 = i; let _t13 = true;
+          _b14: {
+            if (!(__tok(c, i, "UnquotedValue"))) { _t13 = false; break _b14; }
+            _t15_unquotedValue = c[i] as CstLeaf;
             i++;
           }
-          if (_t11) _t3 = true; else i = _t10;
+          if (_t13) { _t3 = true; alt = ({ branch: "unquotedValue", unquotedValue: _t15_unquotedValue! }) as typeof alt; }
+          else i = _t12;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -232,7 +236,7 @@ function _Attr$name(c: readonly CstChild[], src: string): AttrMatch | null {
     if (!_t1) i = _t0;
   }
   if (i !== c.length) return null;
-  return { arm: "name", name: name!, attrValue, name2, unquotedValue };
+  return { arm: "name", name: name!, alt };
 }
 
 export function matchAttr(n: AttrNode, src: string): AttrMatch {
@@ -265,7 +269,7 @@ export type NodeMatch =
 function _Node$element(c: readonly CstChild[], src: string): NodeMatch | null {
   let element: (ElementNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Element")) return null;
+  if (!__nodeOf(c, i, "Element")) return null;
   element = c[i] as ElementNode;
   i++;
   if (i !== c.length) return null;
@@ -275,7 +279,7 @@ function _Node$element(c: readonly CstChild[], src: string): NodeMatch | null {
 function _Node$comment(c: readonly CstChild[], src: string): NodeMatch | null {
   let comment: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Comment"))) return null;
+  if (!(__tok(c, i, "Comment"))) return null;
   comment = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -285,7 +289,7 @@ function _Node$comment(c: readonly CstChild[], src: string): NodeMatch | null {
 function _Node$rawText(c: readonly CstChild[], src: string): NodeMatch | null {
   let rawText: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "RawText"))) return null;
+  if (!(__tok(c, i, "RawText"))) return null;
   rawText = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -295,7 +299,7 @@ function _Node$rawText(c: readonly CstChild[], src: string): NodeMatch | null {
 function _Node$text(c: readonly CstChild[], src: string): NodeMatch | null {
   let text: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Text"))) return null;
+  if (!(__tok(c, i, "Text"))) return null;
   text = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -336,12 +340,10 @@ export function matchNode(n: NodeNode, src: string): NodeMatch {
 }
 
 export type DocumentMatch =
-  | { arm: "element"; element: (ElementNode)[]; comment: (CstLeaf)[]; text: (CstLeaf)[] };
+  | { arm: "element"; alt: ({ branch: "element"; element: ElementNode } | { branch: "comment"; comment: CstLeaf } | { branch: "text"; text: CstLeaf })[] };
 
 function _Document$element(c: readonly CstChild[], src: string): DocumentMatch | null {
-  const element: (ElementNode)[] = [];
-  const comment: (CstLeaf)[] = [];
-  const text: (CstLeaf)[] = [];
+  const alt: ({ branch: "element"; element: ElementNode } | { branch: "comment"; comment: CstLeaf } | { branch: "text"; text: CstLeaf })[] = [];
   let i = 0;
   for (;;) {
     const _t0 = i; let _t1 = true;
@@ -349,31 +351,37 @@ function _Document$element(c: readonly CstChild[], src: string): DocumentMatch |
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_element: (ElementNode) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!isNodeOf(c, i, "Element")) { _t5 = false; break _b6; }
-            element.push(c[i] as ElementNode);
+            if (!__nodeOf(c, i, "Element")) { _t5 = false; break _b6; }
+            _t7_element = c[i] as ElementNode;
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt.push({ branch: "element", element: _t7_element! } as never); }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!(isTok(c, i, "Comment"))) { _t8 = false; break _b9; }
-            comment.push(c[i] as CstLeaf);
+          let _t11_comment: (CstLeaf) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!(__tok(c, i, "Comment"))) { _t9 = false; break _b10; }
+            _t11_comment = c[i] as CstLeaf;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t9) { _t3 = true; alt.push({ branch: "comment", comment: _t11_comment! } as never); }
+          else i = _t8;
         }
         if (!_t3) {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!(isTok(c, i, "Text"))) { _t11 = false; break _b12; }
-            text.push(c[i] as CstLeaf);
+          let _t15_text: (CstLeaf) | undefined;
+          const _t12 = i; let _t13 = true;
+          _b14: {
+            if (!(__tok(c, i, "Text"))) { _t13 = false; break _b14; }
+            _t15_text = c[i] as CstLeaf;
             i++;
           }
-          if (_t11) _t3 = true; else i = _t10;
+          if (_t13) { _t3 = true; alt.push({ branch: "text", text: _t15_text! } as never); }
+          else i = _t12;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -382,7 +390,7 @@ function _Document$element(c: readonly CstChild[], src: string): DocumentMatch |
     if (i === _t0) break;
   }
   if (i !== c.length) return null;
-  return { arm: "element", element, comment, text };
+  return { arm: "element", alt };
 }
 
 export function matchDocument(n: DocumentNode, src: string): DocumentMatch {

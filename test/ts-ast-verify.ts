@@ -106,6 +106,8 @@ const SNIPPETS: [string, string][] = [
   ['for-classic', 'for (let i = 0; i < n; i++) { f(i); }'],
   ['while-do', 'while (a) { b(); } do { c(); } while (d);'],
   ['try', 'try { f(); } catch (e) { g(e); } finally { h(); }'],
+  ['try-finally-only', 'try { f(); } finally { h(); }'],
+  ['try-catch-pattern', 'try { f(); } catch ({ message }) { g(message); }'],
   ['switch', 'switch (x) { case 1: f(); break; default: g(); }'],
   ['object', 'const o = { a, b: 1, "c": 2, [k]: 3, m() { return 1; } };'],
   ['array-spread', 'const xs = [1, , 2, ...rest];'],

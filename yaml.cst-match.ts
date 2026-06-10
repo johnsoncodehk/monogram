@@ -2,15 +2,15 @@
 /* eslint-disable */
 import type { AfterDocEndNode, AliasOrKeyedNode, BlockKeyNode, BlockKeyScalarNode, BlockSequenceNode, CollectionContentNode, ContentNodeNode, CstChild, CstLeaf, DocFoldNode, EmptyKeyMappingNode, ExplicitDocBodyNode, ExplicitEntryNode, ExplicitMappingNode, FlowExplicitNode, FlowMapEntryNode, FlowMappingNode, FlowNodeNode, FlowSeqEntryNode, FlowSeqKeyNode, FlowSequenceNode, IndentedValueNodeNode, InlineDocNodeNode, MapEntryNoEmptyNode, MapEntryNode, MapInlineContentNode, MapInlineScalarNode, MapValueNode, MapValueNodeNode, MapValueNodeScalarNode, MapValueScalarNode, MappingFromFlowNode, MappingFromScalarNode, MappingOrScalarNode, NextDocNode, NodeNode, PropertyNode, ScalarNode, SeqInlineContentNode, SeqItemNode, SeqValueNodeNode, StreamNode, ValueNode } from "./yaml.cst-types.ts";
 
-const isLit = (c: readonly CstChild[], i: number, src: string, text: string, tt: string): boolean => {
+const __lit = (c: readonly CstChild[], i: number, src: string, text: string, tt: string): boolean => {
   const k = c[i] as CstLeaf | undefined;
   return k !== undefined && k.tokenType === tt && k.end - k.offset === text.length && src.startsWith(text, k.offset);
 };
-const isTok = (c: readonly CstChild[], i: number, name: string): boolean => {
+const __tok = (c: readonly CstChild[], i: number, name: string): boolean => {
   const k = c[i] as CstLeaf | undefined;
   return k !== undefined && k.tokenType === name;
 };
-const isNodeOf = (c: readonly CstChild[], i: number, rule: string): boolean => {
+const __nodeOf = (c: readonly CstChild[], i: number, rule: string): boolean => {
   const k = c[i] as { rule?: string } | undefined;
   return k !== undefined && k.rule === rule;
 };
@@ -23,13 +23,13 @@ function _Property$anchor(c: readonly CstChild[], src: string): PropertyMatch | 
   let anchor: (CstLeaf) | undefined;
   let tag: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Anchor"))) return null;
+  if (!(__tok(c, i, "Anchor"))) return null;
   anchor = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Tag"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Tag"))) { _t1 = false; break _b2; }
       tag = c[i] as CstLeaf;
       i++;
     }
@@ -43,13 +43,13 @@ function _Property$tag(c: readonly CstChild[], src: string): PropertyMatch | nul
   let tag: (CstLeaf) | undefined;
   let anchor: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Tag"))) return null;
+  if (!(__tok(c, i, "Tag"))) return null;
   tag = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Anchor"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Anchor"))) { _t1 = false; break _b2; }
       anchor = c[i] as CstLeaf;
       i++;
     }
@@ -97,7 +97,7 @@ export type ContentNodeMatch =
 function _ContentNode$blockSequence(c: readonly CstChild[], src: string): ContentNodeMatch | null {
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -107,7 +107,7 @@ function _ContentNode$blockSequence(c: readonly CstChild[], src: string): Conten
 function _ContentNode$explicitMapping(c: readonly CstChild[], src: string): ContentNodeMatch | null {
   let explicitMapping: (ExplicitMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "ExplicitMapping")) return null;
+  if (!__nodeOf(c, i, "ExplicitMapping")) return null;
   explicitMapping = c[i] as ExplicitMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -117,7 +117,7 @@ function _ContentNode$explicitMapping(c: readonly CstChild[], src: string): Cont
 function _ContentNode$emptyKeyMapping(c: readonly CstChild[], src: string): ContentNodeMatch | null {
   let emptyKeyMapping: (EmptyKeyMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "EmptyKeyMapping")) return null;
+  if (!__nodeOf(c, i, "EmptyKeyMapping")) return null;
   emptyKeyMapping = c[i] as EmptyKeyMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -127,7 +127,7 @@ function _ContentNode$emptyKeyMapping(c: readonly CstChild[], src: string): Cont
 function _ContentNode$flowMapping(c: readonly CstChild[], src: string): ContentNodeMatch | null {
   let flowMapping: (FlowMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowMapping")) return null;
+  if (!__nodeOf(c, i, "FlowMapping")) return null;
   flowMapping = c[i] as FlowMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -137,7 +137,7 @@ function _ContentNode$flowMapping(c: readonly CstChild[], src: string): ContentN
 function _ContentNode$flowSequence(c: readonly CstChild[], src: string): ContentNodeMatch | null {
   let flowSequence: (FlowSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowSequence")) return null;
+  if (!__nodeOf(c, i, "FlowSequence")) return null;
   flowSequence = c[i] as FlowSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -147,7 +147,7 @@ function _ContentNode$flowSequence(c: readonly CstChild[], src: string): Content
 function _ContentNode$mappingFromFlow(c: readonly CstChild[], src: string): ContentNodeMatch | null {
   let mappingFromFlow: (MappingFromFlowNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MappingFromFlow")) return null;
+  if (!__nodeOf(c, i, "MappingFromFlow")) return null;
   mappingFromFlow = c[i] as MappingFromFlowNode;
   i++;
   if (i !== c.length) return null;
@@ -157,7 +157,7 @@ function _ContentNode$mappingFromFlow(c: readonly CstChild[], src: string): Cont
 function _ContentNode$aliasOrKeyed(c: readonly CstChild[], src: string): ContentNodeMatch | null {
   let aliasOrKeyed: (AliasOrKeyedNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "AliasOrKeyed")) return null;
+  if (!__nodeOf(c, i, "AliasOrKeyed")) return null;
   aliasOrKeyed = c[i] as AliasOrKeyedNode;
   i++;
   if (i !== c.length) return null;
@@ -167,7 +167,7 @@ function _ContentNode$aliasOrKeyed(c: readonly CstChild[], src: string): Content
 function _ContentNode$mappingOrScalar(c: readonly CstChild[], src: string): ContentNodeMatch | null {
   let mappingOrScalar: (MappingOrScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MappingOrScalar")) return null;
+  if (!__nodeOf(c, i, "MappingOrScalar")) return null;
   mappingOrScalar = c[i] as MappingOrScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -224,31 +224,19 @@ export function matchContentNode(n: ContentNodeNode, src: string): ContentNodeMa
 }
 
 export type NodeMatch =
-  | { arm: "anchor"; anchor?: CstLeaf; tag?: CstLeaf; indent?: CstLeaf; node?: NodeNode; dedent?: CstLeaf; newline?: CstLeaf; node2?: NodeNode; blockSequence?: BlockSequenceNode; explicitMapping?: ExplicitMappingNode; emptyKeyMapping?: EmptyKeyMappingNode; mappingFromFlow?: MappingFromFlowNode; flowMapping?: FlowMappingNode; flowSequence?: FlowSequenceNode; aliasOrKeyed?: AliasOrKeyedNode; mappingOrScalar?: MappingOrScalarNode }
-  | { arm: "tag"; tag: CstLeaf; anchor: CstLeaf; indent?: CstLeaf; node?: NodeNode; dedent?: CstLeaf; newline?: CstLeaf; node2?: NodeNode; blockSequence?: BlockSequenceNode; explicitMapping?: ExplicitMappingNode; emptyKeyMapping?: EmptyKeyMappingNode; mappingFromFlow?: MappingFromFlowNode; flowMapping?: FlowMappingNode; flowSequence?: FlowSequenceNode; aliasOrKeyed?: AliasOrKeyedNode; mappingOrScalar?: MappingOrScalarNode }
+  | { arm: "anchor"; anchor?: CstLeaf; tag?: CstLeaf; alt?: { branch: "indent"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf } | { branch: "newline"; newline: CstLeaf; node: NodeNode } | { branch: "blockSequence"; blockSequence: BlockSequenceNode } | { branch: "explicitMapping"; explicitMapping: ExplicitMappingNode } | { branch: "emptyKeyMapping"; emptyKeyMapping: EmptyKeyMappingNode } | { branch: "mappingFromFlow"; mappingFromFlow: MappingFromFlowNode } | { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "aliasOrKeyed"; aliasOrKeyed: AliasOrKeyedNode } | { branch: "mappingOrScalar"; mappingOrScalar: MappingOrScalarNode } }
+  | { arm: "tag"; tag: CstLeaf; anchor: CstLeaf; alt?: { branch: "indent"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf } | { branch: "newline"; newline: CstLeaf; node: NodeNode } | { branch: "blockSequence"; blockSequence: BlockSequenceNode } | { branch: "explicitMapping"; explicitMapping: ExplicitMappingNode } | { branch: "emptyKeyMapping"; emptyKeyMapping: EmptyKeyMappingNode } | { branch: "mappingFromFlow"; mappingFromFlow: MappingFromFlowNode } | { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "aliasOrKeyed"; aliasOrKeyed: AliasOrKeyedNode } | { branch: "mappingOrScalar"; mappingOrScalar: MappingOrScalarNode } }
   | { arm: "blockSequence"; blockSequence: BlockSequenceNode };
 
 function _Node$anchor(c: readonly CstChild[], src: string): NodeMatch | null {
   let anchor: (CstLeaf) | undefined;
   let tag: (CstLeaf) | undefined;
-  let indent: (CstLeaf) | undefined;
-  let node: (NodeNode) | undefined;
-  let dedent: (CstLeaf) | undefined;
-  let newline: (CstLeaf) | undefined;
-  let node2: (NodeNode) | undefined;
-  let blockSequence: (BlockSequenceNode) | undefined;
-  let explicitMapping: (ExplicitMappingNode) | undefined;
-  let emptyKeyMapping: (EmptyKeyMappingNode) | undefined;
-  let mappingFromFlow: (MappingFromFlowNode) | undefined;
-  let flowMapping: (FlowMappingNode) | undefined;
-  let flowSequence: (FlowSequenceNode) | undefined;
-  let aliasOrKeyed: (AliasOrKeyedNode) | undefined;
-  let mappingOrScalar: (MappingOrScalarNode) | undefined;
+  let alt: ({ branch: "indent"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf } | { branch: "newline"; newline: CstLeaf; node: NodeNode } | { branch: "blockSequence"; blockSequence: BlockSequenceNode } | { branch: "explicitMapping"; explicitMapping: ExplicitMappingNode } | { branch: "emptyKeyMapping"; emptyKeyMapping: EmptyKeyMappingNode } | { branch: "mappingFromFlow"; mappingFromFlow: MappingFromFlowNode } | { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "aliasOrKeyed"; aliasOrKeyed: AliasOrKeyedNode } | { branch: "mappingOrScalar"; mappingOrScalar: MappingOrScalarNode }) | undefined;
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Anchor"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Anchor"))) { _t1 = false; break _b2; }
       anchor = c[i] as CstLeaf;
       i++;
     }
@@ -257,7 +245,7 @@ function _Node$anchor(c: readonly CstChild[], src: string): NodeMatch | null {
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!(isTok(c, i, "Tag"))) { _t4 = false; break _b5; }
+      if (!(__tok(c, i, "Tag"))) { _t4 = false; break _b5; }
       tag = c[i] as CstLeaf;
       i++;
     }
@@ -269,103 +257,126 @@ function _Node$anchor(c: readonly CstChild[], src: string): NodeMatch | null {
       {
         let _t9 = false;
         if (!_t9) {
+          let _t13_indent: (CstLeaf) | undefined;
+          let _t13_node: (NodeNode) | undefined;
+          let _t13_dedent: (CstLeaf) | undefined;
           const _t10 = i; let _t11 = true;
           _b12: {
-            if (!(isTok(c, i, "Indent"))) { _t11 = false; break _b12; }
-            indent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Indent"))) { _t11 = false; break _b12; }
+            _t13_indent = c[i] as CstLeaf;
             i++;
-            if (!isNodeOf(c, i, "Node")) { _t11 = false; break _b12; }
-            node = c[i] as NodeNode;
+            if (!__nodeOf(c, i, "Node")) { _t11 = false; break _b12; }
+            _t13_node = c[i] as NodeNode;
             i++;
-            if (!(isTok(c, i, "Dedent"))) { _t11 = false; break _b12; }
-            dedent = c[i] as CstLeaf;
-            i++;
-          }
-          if (_t11) _t9 = true; else i = _t10;
-        }
-        if (!_t9) {
-          const _t13 = i; let _t14 = true;
-          _b15: {
-            if (!(isTok(c, i, "Newline"))) { _t14 = false; break _b15; }
-            newline = c[i] as CstLeaf;
-            i++;
-            if (!isNodeOf(c, i, "Node")) { _t14 = false; break _b15; }
-            node2 = c[i] as NodeNode;
+            if (!(__tok(c, i, "Dedent"))) { _t11 = false; break _b12; }
+            _t13_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t14) _t9 = true; else i = _t13;
+          if (_t11) { _t9 = true; alt = ({ branch: "indent", indent: _t13_indent!, node: _t13_node!, dedent: _t13_dedent! }) as typeof alt; }
+          else i = _t10;
         }
         if (!_t9) {
-          const _t16 = i; let _t17 = true;
-          _b18: {
-            if (!isNodeOf(c, i, "BlockSequence")) { _t17 = false; break _b18; }
-            blockSequence = c[i] as BlockSequenceNode;
+          let _t17_newline: (CstLeaf) | undefined;
+          let _t17_node: (NodeNode) | undefined;
+          const _t14 = i; let _t15 = true;
+          _b16: {
+            if (!(__tok(c, i, "Newline"))) { _t15 = false; break _b16; }
+            _t17_newline = c[i] as CstLeaf;
+            i++;
+            if (!__nodeOf(c, i, "Node")) { _t15 = false; break _b16; }
+            _t17_node = c[i] as NodeNode;
             i++;
           }
-          if (_t17) _t9 = true; else i = _t16;
+          if (_t15) { _t9 = true; alt = ({ branch: "newline", newline: _t17_newline!, node: _t17_node! }) as typeof alt; }
+          else i = _t14;
         }
         if (!_t9) {
-          const _t19 = i; let _t20 = true;
-          _b21: {
-            if (!isNodeOf(c, i, "ExplicitMapping")) { _t20 = false; break _b21; }
-            explicitMapping = c[i] as ExplicitMappingNode;
+          let _t21_blockSequence: (BlockSequenceNode) | undefined;
+          const _t18 = i; let _t19 = true;
+          _b20: {
+            if (!__nodeOf(c, i, "BlockSequence")) { _t19 = false; break _b20; }
+            _t21_blockSequence = c[i] as BlockSequenceNode;
             i++;
           }
-          if (_t20) _t9 = true; else i = _t19;
+          if (_t19) { _t9 = true; alt = ({ branch: "blockSequence", blockSequence: _t21_blockSequence! }) as typeof alt; }
+          else i = _t18;
         }
         if (!_t9) {
+          let _t25_explicitMapping: (ExplicitMappingNode) | undefined;
           const _t22 = i; let _t23 = true;
           _b24: {
-            if (!isNodeOf(c, i, "EmptyKeyMapping")) { _t23 = false; break _b24; }
-            emptyKeyMapping = c[i] as EmptyKeyMappingNode;
+            if (!__nodeOf(c, i, "ExplicitMapping")) { _t23 = false; break _b24; }
+            _t25_explicitMapping = c[i] as ExplicitMappingNode;
             i++;
           }
-          if (_t23) _t9 = true; else i = _t22;
+          if (_t23) { _t9 = true; alt = ({ branch: "explicitMapping", explicitMapping: _t25_explicitMapping! }) as typeof alt; }
+          else i = _t22;
         }
         if (!_t9) {
-          const _t25 = i; let _t26 = true;
-          _b27: {
-            if (!isNodeOf(c, i, "MappingFromFlow")) { _t26 = false; break _b27; }
-            mappingFromFlow = c[i] as MappingFromFlowNode;
+          let _t29_emptyKeyMapping: (EmptyKeyMappingNode) | undefined;
+          const _t26 = i; let _t27 = true;
+          _b28: {
+            if (!__nodeOf(c, i, "EmptyKeyMapping")) { _t27 = false; break _b28; }
+            _t29_emptyKeyMapping = c[i] as EmptyKeyMappingNode;
             i++;
           }
-          if (_t26) _t9 = true; else i = _t25;
+          if (_t27) { _t9 = true; alt = ({ branch: "emptyKeyMapping", emptyKeyMapping: _t29_emptyKeyMapping! }) as typeof alt; }
+          else i = _t26;
         }
         if (!_t9) {
-          const _t28 = i; let _t29 = true;
-          _b30: {
-            if (!isNodeOf(c, i, "FlowMapping")) { _t29 = false; break _b30; }
-            flowMapping = c[i] as FlowMappingNode;
+          let _t33_mappingFromFlow: (MappingFromFlowNode) | undefined;
+          const _t30 = i; let _t31 = true;
+          _b32: {
+            if (!__nodeOf(c, i, "MappingFromFlow")) { _t31 = false; break _b32; }
+            _t33_mappingFromFlow = c[i] as MappingFromFlowNode;
             i++;
           }
-          if (_t29) _t9 = true; else i = _t28;
+          if (_t31) { _t9 = true; alt = ({ branch: "mappingFromFlow", mappingFromFlow: _t33_mappingFromFlow! }) as typeof alt; }
+          else i = _t30;
         }
         if (!_t9) {
-          const _t31 = i; let _t32 = true;
-          _b33: {
-            if (!isNodeOf(c, i, "FlowSequence")) { _t32 = false; break _b33; }
-            flowSequence = c[i] as FlowSequenceNode;
-            i++;
-          }
-          if (_t32) _t9 = true; else i = _t31;
-        }
-        if (!_t9) {
+          let _t37_flowMapping: (FlowMappingNode) | undefined;
           const _t34 = i; let _t35 = true;
           _b36: {
-            if (!isNodeOf(c, i, "AliasOrKeyed")) { _t35 = false; break _b36; }
-            aliasOrKeyed = c[i] as AliasOrKeyedNode;
+            if (!__nodeOf(c, i, "FlowMapping")) { _t35 = false; break _b36; }
+            _t37_flowMapping = c[i] as FlowMappingNode;
             i++;
           }
-          if (_t35) _t9 = true; else i = _t34;
+          if (_t35) { _t9 = true; alt = ({ branch: "flowMapping", flowMapping: _t37_flowMapping! }) as typeof alt; }
+          else i = _t34;
         }
         if (!_t9) {
-          const _t37 = i; let _t38 = true;
-          _b39: {
-            if (!isNodeOf(c, i, "MappingOrScalar")) { _t38 = false; break _b39; }
-            mappingOrScalar = c[i] as MappingOrScalarNode;
+          let _t41_flowSequence: (FlowSequenceNode) | undefined;
+          const _t38 = i; let _t39 = true;
+          _b40: {
+            if (!__nodeOf(c, i, "FlowSequence")) { _t39 = false; break _b40; }
+            _t41_flowSequence = c[i] as FlowSequenceNode;
             i++;
           }
-          if (_t38) _t9 = true; else i = _t37;
+          if (_t39) { _t9 = true; alt = ({ branch: "flowSequence", flowSequence: _t41_flowSequence! }) as typeof alt; }
+          else i = _t38;
+        }
+        if (!_t9) {
+          let _t45_aliasOrKeyed: (AliasOrKeyedNode) | undefined;
+          const _t42 = i; let _t43 = true;
+          _b44: {
+            if (!__nodeOf(c, i, "AliasOrKeyed")) { _t43 = false; break _b44; }
+            _t45_aliasOrKeyed = c[i] as AliasOrKeyedNode;
+            i++;
+          }
+          if (_t43) { _t9 = true; alt = ({ branch: "aliasOrKeyed", aliasOrKeyed: _t45_aliasOrKeyed! }) as typeof alt; }
+          else i = _t42;
+        }
+        if (!_t9) {
+          let _t49_mappingOrScalar: (MappingOrScalarNode) | undefined;
+          const _t46 = i; let _t47 = true;
+          _b48: {
+            if (!__nodeOf(c, i, "MappingOrScalar")) { _t47 = false; break _b48; }
+            _t49_mappingOrScalar = c[i] as MappingOrScalarNode;
+            i++;
+          }
+          if (_t47) { _t9 = true; alt = ({ branch: "mappingOrScalar", mappingOrScalar: _t49_mappingOrScalar! }) as typeof alt; }
+          else i = _t46;
         }
         if (!_t9) { _t7 = false; break _b8; }
       }
@@ -373,30 +384,18 @@ function _Node$anchor(c: readonly CstChild[], src: string): NodeMatch | null {
     if (!_t7) i = _t6;
   }
   if (i !== c.length) return null;
-  return { arm: "anchor", anchor, tag, indent, node, dedent, newline, node2, blockSequence, explicitMapping, emptyKeyMapping, mappingFromFlow, flowMapping, flowSequence, aliasOrKeyed, mappingOrScalar };
+  return { arm: "anchor", anchor, tag, alt };
 }
 
 function _Node$tag(c: readonly CstChild[], src: string): NodeMatch | null {
   let tag: (CstLeaf) | undefined;
   let anchor: (CstLeaf) | undefined;
-  let indent: (CstLeaf) | undefined;
-  let node: (NodeNode) | undefined;
-  let dedent: (CstLeaf) | undefined;
-  let newline: (CstLeaf) | undefined;
-  let node2: (NodeNode) | undefined;
-  let blockSequence: (BlockSequenceNode) | undefined;
-  let explicitMapping: (ExplicitMappingNode) | undefined;
-  let emptyKeyMapping: (EmptyKeyMappingNode) | undefined;
-  let mappingFromFlow: (MappingFromFlowNode) | undefined;
-  let flowMapping: (FlowMappingNode) | undefined;
-  let flowSequence: (FlowSequenceNode) | undefined;
-  let aliasOrKeyed: (AliasOrKeyedNode) | undefined;
-  let mappingOrScalar: (MappingOrScalarNode) | undefined;
+  let alt: ({ branch: "indent"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf } | { branch: "newline"; newline: CstLeaf; node: NodeNode } | { branch: "blockSequence"; blockSequence: BlockSequenceNode } | { branch: "explicitMapping"; explicitMapping: ExplicitMappingNode } | { branch: "emptyKeyMapping"; emptyKeyMapping: EmptyKeyMappingNode } | { branch: "mappingFromFlow"; mappingFromFlow: MappingFromFlowNode } | { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "aliasOrKeyed"; aliasOrKeyed: AliasOrKeyedNode } | { branch: "mappingOrScalar"; mappingOrScalar: MappingOrScalarNode }) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Tag"))) return null;
+  if (!(__tok(c, i, "Tag"))) return null;
   tag = c[i] as CstLeaf;
   i++;
-  if (!(isTok(c, i, "Anchor"))) return null;
+  if (!(__tok(c, i, "Anchor"))) return null;
   anchor = c[i] as CstLeaf;
   i++;
   {
@@ -405,103 +404,126 @@ function _Node$tag(c: readonly CstChild[], src: string): NodeMatch | null {
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_indent: (CstLeaf) | undefined;
+          let _t7_node: (NodeNode) | undefined;
+          let _t7_dedent: (CstLeaf) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!(isTok(c, i, "Indent"))) { _t5 = false; break _b6; }
-            indent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Indent"))) { _t5 = false; break _b6; }
+            _t7_indent = c[i] as CstLeaf;
             i++;
-            if (!isNodeOf(c, i, "Node")) { _t5 = false; break _b6; }
-            node = c[i] as NodeNode;
+            if (!__nodeOf(c, i, "Node")) { _t5 = false; break _b6; }
+            _t7_node = c[i] as NodeNode;
             i++;
-            if (!(isTok(c, i, "Dedent"))) { _t5 = false; break _b6; }
-            dedent = c[i] as CstLeaf;
-            i++;
-          }
-          if (_t5) _t3 = true; else i = _t4;
-        }
-        if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!(isTok(c, i, "Newline"))) { _t8 = false; break _b9; }
-            newline = c[i] as CstLeaf;
-            i++;
-            if (!isNodeOf(c, i, "Node")) { _t8 = false; break _b9; }
-            node2 = c[i] as NodeNode;
+            if (!(__tok(c, i, "Dedent"))) { _t5 = false; break _b6; }
+            _t7_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t5) { _t3 = true; alt = ({ branch: "indent", indent: _t7_indent!, node: _t7_node!, dedent: _t7_dedent! }) as typeof alt; }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!isNodeOf(c, i, "BlockSequence")) { _t11 = false; break _b12; }
-            blockSequence = c[i] as BlockSequenceNode;
+          let _t11_newline: (CstLeaf) | undefined;
+          let _t11_node: (NodeNode) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!(__tok(c, i, "Newline"))) { _t9 = false; break _b10; }
+            _t11_newline = c[i] as CstLeaf;
+            i++;
+            if (!__nodeOf(c, i, "Node")) { _t9 = false; break _b10; }
+            _t11_node = c[i] as NodeNode;
             i++;
           }
-          if (_t11) _t3 = true; else i = _t10;
+          if (_t9) { _t3 = true; alt = ({ branch: "newline", newline: _t11_newline!, node: _t11_node! }) as typeof alt; }
+          else i = _t8;
         }
         if (!_t3) {
-          const _t13 = i; let _t14 = true;
-          _b15: {
-            if (!isNodeOf(c, i, "ExplicitMapping")) { _t14 = false; break _b15; }
-            explicitMapping = c[i] as ExplicitMappingNode;
+          let _t15_blockSequence: (BlockSequenceNode) | undefined;
+          const _t12 = i; let _t13 = true;
+          _b14: {
+            if (!__nodeOf(c, i, "BlockSequence")) { _t13 = false; break _b14; }
+            _t15_blockSequence = c[i] as BlockSequenceNode;
             i++;
           }
-          if (_t14) _t3 = true; else i = _t13;
+          if (_t13) { _t3 = true; alt = ({ branch: "blockSequence", blockSequence: _t15_blockSequence! }) as typeof alt; }
+          else i = _t12;
         }
         if (!_t3) {
+          let _t19_explicitMapping: (ExplicitMappingNode) | undefined;
           const _t16 = i; let _t17 = true;
           _b18: {
-            if (!isNodeOf(c, i, "EmptyKeyMapping")) { _t17 = false; break _b18; }
-            emptyKeyMapping = c[i] as EmptyKeyMappingNode;
+            if (!__nodeOf(c, i, "ExplicitMapping")) { _t17 = false; break _b18; }
+            _t19_explicitMapping = c[i] as ExplicitMappingNode;
             i++;
           }
-          if (_t17) _t3 = true; else i = _t16;
+          if (_t17) { _t3 = true; alt = ({ branch: "explicitMapping", explicitMapping: _t19_explicitMapping! }) as typeof alt; }
+          else i = _t16;
         }
         if (!_t3) {
-          const _t19 = i; let _t20 = true;
-          _b21: {
-            if (!isNodeOf(c, i, "MappingFromFlow")) { _t20 = false; break _b21; }
-            mappingFromFlow = c[i] as MappingFromFlowNode;
+          let _t23_emptyKeyMapping: (EmptyKeyMappingNode) | undefined;
+          const _t20 = i; let _t21 = true;
+          _b22: {
+            if (!__nodeOf(c, i, "EmptyKeyMapping")) { _t21 = false; break _b22; }
+            _t23_emptyKeyMapping = c[i] as EmptyKeyMappingNode;
             i++;
           }
-          if (_t20) _t3 = true; else i = _t19;
+          if (_t21) { _t3 = true; alt = ({ branch: "emptyKeyMapping", emptyKeyMapping: _t23_emptyKeyMapping! }) as typeof alt; }
+          else i = _t20;
         }
         if (!_t3) {
-          const _t22 = i; let _t23 = true;
-          _b24: {
-            if (!isNodeOf(c, i, "FlowMapping")) { _t23 = false; break _b24; }
-            flowMapping = c[i] as FlowMappingNode;
+          let _t27_mappingFromFlow: (MappingFromFlowNode) | undefined;
+          const _t24 = i; let _t25 = true;
+          _b26: {
+            if (!__nodeOf(c, i, "MappingFromFlow")) { _t25 = false; break _b26; }
+            _t27_mappingFromFlow = c[i] as MappingFromFlowNode;
             i++;
           }
-          if (_t23) _t3 = true; else i = _t22;
+          if (_t25) { _t3 = true; alt = ({ branch: "mappingFromFlow", mappingFromFlow: _t27_mappingFromFlow! }) as typeof alt; }
+          else i = _t24;
         }
         if (!_t3) {
-          const _t25 = i; let _t26 = true;
-          _b27: {
-            if (!isNodeOf(c, i, "FlowSequence")) { _t26 = false; break _b27; }
-            flowSequence = c[i] as FlowSequenceNode;
-            i++;
-          }
-          if (_t26) _t3 = true; else i = _t25;
-        }
-        if (!_t3) {
+          let _t31_flowMapping: (FlowMappingNode) | undefined;
           const _t28 = i; let _t29 = true;
           _b30: {
-            if (!isNodeOf(c, i, "AliasOrKeyed")) { _t29 = false; break _b30; }
-            aliasOrKeyed = c[i] as AliasOrKeyedNode;
+            if (!__nodeOf(c, i, "FlowMapping")) { _t29 = false; break _b30; }
+            _t31_flowMapping = c[i] as FlowMappingNode;
             i++;
           }
-          if (_t29) _t3 = true; else i = _t28;
+          if (_t29) { _t3 = true; alt = ({ branch: "flowMapping", flowMapping: _t31_flowMapping! }) as typeof alt; }
+          else i = _t28;
         }
         if (!_t3) {
-          const _t31 = i; let _t32 = true;
-          _b33: {
-            if (!isNodeOf(c, i, "MappingOrScalar")) { _t32 = false; break _b33; }
-            mappingOrScalar = c[i] as MappingOrScalarNode;
+          let _t35_flowSequence: (FlowSequenceNode) | undefined;
+          const _t32 = i; let _t33 = true;
+          _b34: {
+            if (!__nodeOf(c, i, "FlowSequence")) { _t33 = false; break _b34; }
+            _t35_flowSequence = c[i] as FlowSequenceNode;
             i++;
           }
-          if (_t32) _t3 = true; else i = _t31;
+          if (_t33) { _t3 = true; alt = ({ branch: "flowSequence", flowSequence: _t35_flowSequence! }) as typeof alt; }
+          else i = _t32;
+        }
+        if (!_t3) {
+          let _t39_aliasOrKeyed: (AliasOrKeyedNode) | undefined;
+          const _t36 = i; let _t37 = true;
+          _b38: {
+            if (!__nodeOf(c, i, "AliasOrKeyed")) { _t37 = false; break _b38; }
+            _t39_aliasOrKeyed = c[i] as AliasOrKeyedNode;
+            i++;
+          }
+          if (_t37) { _t3 = true; alt = ({ branch: "aliasOrKeyed", aliasOrKeyed: _t39_aliasOrKeyed! }) as typeof alt; }
+          else i = _t36;
+        }
+        if (!_t3) {
+          let _t43_mappingOrScalar: (MappingOrScalarNode) | undefined;
+          const _t40 = i; let _t41 = true;
+          _b42: {
+            if (!__nodeOf(c, i, "MappingOrScalar")) { _t41 = false; break _b42; }
+            _t43_mappingOrScalar = c[i] as MappingOrScalarNode;
+            i++;
+          }
+          if (_t41) { _t3 = true; alt = ({ branch: "mappingOrScalar", mappingOrScalar: _t43_mappingOrScalar! }) as typeof alt; }
+          else i = _t40;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -509,13 +531,13 @@ function _Node$tag(c: readonly CstChild[], src: string): NodeMatch | null {
     if (!_t1) i = _t0;
   }
   if (i !== c.length) return null;
-  return { arm: "tag", tag: tag!, anchor: anchor!, indent, node, dedent, newline, node2, blockSequence, explicitMapping, emptyKeyMapping, mappingFromFlow, flowMapping, flowSequence, aliasOrKeyed, mappingOrScalar };
+  return { arm: "tag", tag: tag!, anchor: anchor!, alt };
 }
 
 function _Node$blockSequence(c: readonly CstChild[], src: string): NodeMatch | null {
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -591,135 +613,147 @@ export function matchNode(n: NodeNode, src: string): NodeMatch {
 }
 
 export type MappingOrScalarMatch =
-  | { arm: "num"; num?: CstLeaf; boolNull?: CstLeaf; plain?: CstLeaf; indent: CstLeaf; num2?: CstLeaf; boolNull2?: CstLeaf; plain2?: CstLeaf; newline: (CstLeaf)[]; num3: (CstLeaf)[]; boolNull3: (CstLeaf)[]; plain3: (CstLeaf)[]; dedent: CstLeaf }
+  | { arm: "num"; alt: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; indent: CstLeaf; alt2: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; newline: (CstLeaf)[]; alt3: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf })[]; dedent: CstLeaf }
   | { arm: "blockKeyScalar"; blockKeyScalar: BlockKeyScalarNode; mapValueScalar?: MapValueScalarNode; newline: (CstLeaf)[]; mapEntry: (MapEntryNode)[] }
   | { arm: "scalar"; scalar: ScalarNode };
 
 function _MappingOrScalar$num(c: readonly CstChild[], src: string): MappingOrScalarMatch | null {
-  let num: (CstLeaf) | undefined;
-  let boolNull: (CstLeaf) | undefined;
-  let plain: (CstLeaf) | undefined;
+  let alt: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   let indent: (CstLeaf) | undefined;
-  let num2: (CstLeaf) | undefined;
-  let boolNull2: (CstLeaf) | undefined;
-  let plain2: (CstLeaf) | undefined;
+  let alt2: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   const newline: (CstLeaf)[] = [];
-  const num3: (CstLeaf)[] = [];
-  const boolNull3: (CstLeaf)[] = [];
-  const plain3: (CstLeaf)[] = [];
+  const alt3: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf })[] = [];
   let dedent: (CstLeaf) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_num: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Num"))) { _t2 = false; break _b3; }
-        num = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t2 = false; break _b3; }
+        _t4_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "num", num: _t4_num! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "BoolNull"))) { _t5 = false; break _b6; }
-        boolNull = c[i] as CstLeaf;
+      let _t8_boolNull: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "BoolNull"))) { _t6 = false; break _b7; }
+        _t8_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "boolNull", boolNull: _t8_boolNull! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Plain"))) { _t8 = false; break _b9; }
-        plain = c[i] as CstLeaf;
+      let _t12_plain: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Plain"))) { _t10 = false; break _b11; }
+        _t12_plain = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "plain", plain: _t12_plain! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
   {
-    let _t10 = false;
-    if (!_t10) {
-      const _t11 = i; let _t12 = true;
-      _b13: {
-        if (!(isTok(c, i, "Num"))) { _t12 = false; break _b13; }
-        num2 = c[i] as CstLeaf;
-        i++;
-      }
-      if (_t12) _t10 = true; else i = _t11;
-    }
-    if (!_t10) {
+    let _t13 = false;
+    if (!_t13) {
+      let _t17_num: (CstLeaf) | undefined;
       const _t14 = i; let _t15 = true;
       _b16: {
-        if (!(isTok(c, i, "BoolNull"))) { _t15 = false; break _b16; }
-        boolNull2 = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t15 = false; break _b16; }
+        _t17_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t15) _t10 = true; else i = _t14;
+      if (_t15) { _t13 = true; alt2 = ({ branch: "num", num: _t17_num! }) as typeof alt2; }
+      else i = _t14;
     }
-    if (!_t10) {
-      const _t17 = i; let _t18 = true;
-      _b19: {
-        if (!(isTok(c, i, "Plain"))) { _t18 = false; break _b19; }
-        plain2 = c[i] as CstLeaf;
+    if (!_t13) {
+      let _t21_boolNull: (CstLeaf) | undefined;
+      const _t18 = i; let _t19 = true;
+      _b20: {
+        if (!(__tok(c, i, "BoolNull"))) { _t19 = false; break _b20; }
+        _t21_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t18) _t10 = true; else i = _t17;
+      if (_t19) { _t13 = true; alt2 = ({ branch: "boolNull", boolNull: _t21_boolNull! }) as typeof alt2; }
+      else i = _t18;
     }
-    if (!_t10) return null;
+    if (!_t13) {
+      let _t25_plain: (CstLeaf) | undefined;
+      const _t22 = i; let _t23 = true;
+      _b24: {
+        if (!(__tok(c, i, "Plain"))) { _t23 = false; break _b24; }
+        _t25_plain = c[i] as CstLeaf;
+        i++;
+      }
+      if (_t23) { _t13 = true; alt2 = ({ branch: "plain", plain: _t25_plain! }) as typeof alt2; }
+      else i = _t22;
+    }
+    if (!_t13) return null;
   }
   for (;;) {
-    const _t20 = i; let _t21 = true;
-    _b22: {
-      if (!(isTok(c, i, "Newline"))) { _t21 = false; break _b22; }
+    const _t26 = i; let _t27 = true;
+    _b28: {
+      if (!(__tok(c, i, "Newline"))) { _t27 = false; break _b28; }
       newline.push(c[i] as CstLeaf);
       i++;
       {
-        let _t23 = false;
-        if (!_t23) {
-          const _t24 = i; let _t25 = true;
-          _b26: {
-            if (!(isTok(c, i, "Num"))) { _t25 = false; break _b26; }
-            num3.push(c[i] as CstLeaf);
-            i++;
-          }
-          if (_t25) _t23 = true; else i = _t24;
-        }
-        if (!_t23) {
-          const _t27 = i; let _t28 = true;
-          _b29: {
-            if (!(isTok(c, i, "BoolNull"))) { _t28 = false; break _b29; }
-            boolNull3.push(c[i] as CstLeaf);
-            i++;
-          }
-          if (_t28) _t23 = true; else i = _t27;
-        }
-        if (!_t23) {
+        let _t29 = false;
+        if (!_t29) {
+          let _t33_num: (CstLeaf) | undefined;
           const _t30 = i; let _t31 = true;
           _b32: {
-            if (!(isTok(c, i, "Plain"))) { _t31 = false; break _b32; }
-            plain3.push(c[i] as CstLeaf);
+            if (!(__tok(c, i, "Num"))) { _t31 = false; break _b32; }
+            _t33_num = c[i] as CstLeaf;
             i++;
           }
-          if (_t31) _t23 = true; else i = _t30;
+          if (_t31) { _t29 = true; alt3.push({ branch: "num", num: _t33_num! } as never); }
+          else i = _t30;
         }
-        if (!_t23) { _t21 = false; break _b22; }
+        if (!_t29) {
+          let _t37_boolNull: (CstLeaf) | undefined;
+          const _t34 = i; let _t35 = true;
+          _b36: {
+            if (!(__tok(c, i, "BoolNull"))) { _t35 = false; break _b36; }
+            _t37_boolNull = c[i] as CstLeaf;
+            i++;
+          }
+          if (_t35) { _t29 = true; alt3.push({ branch: "boolNull", boolNull: _t37_boolNull! } as never); }
+          else i = _t34;
+        }
+        if (!_t29) {
+          let _t41_plain: (CstLeaf) | undefined;
+          const _t38 = i; let _t39 = true;
+          _b40: {
+            if (!(__tok(c, i, "Plain"))) { _t39 = false; break _b40; }
+            _t41_plain = c[i] as CstLeaf;
+            i++;
+          }
+          if (_t39) { _t29 = true; alt3.push({ branch: "plain", plain: _t41_plain! } as never); }
+          else i = _t38;
+        }
+        if (!_t29) { _t27 = false; break _b28; }
       }
     }
-    if (!_t21) { i = _t20; break; }
-    if (i === _t20) break;
+    if (!_t27) { i = _t26; break; }
+    if (i === _t26) break;
   }
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
-  return { arm: "num", num, boolNull, plain, indent: indent!, num2, boolNull2, plain2, newline, num3, boolNull3, plain3, dedent: dedent! };
+  return { arm: "num", alt: alt!, indent: indent!, alt2: alt2!, newline, alt3, dedent: dedent! };
 }
 
 function _MappingOrScalar$blockKeyScalar(c: readonly CstChild[], src: string): MappingOrScalarMatch | null {
@@ -728,15 +762,15 @@ function _MappingOrScalar$blockKeyScalar(c: readonly CstChild[], src: string): M
   const newline: (CstLeaf)[] = [];
   const mapEntry: (MapEntryNode)[] = [];
   let i = 0;
-  if (!isNodeOf(c, i, "BlockKeyScalar")) return null;
+  if (!__nodeOf(c, i, "BlockKeyScalar")) return null;
   blockKeyScalar = c[i] as BlockKeyScalarNode;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
       mapValueScalar = c[i] as MapValueScalarNode;
       i++;
     }
@@ -745,10 +779,10 @@ function _MappingOrScalar$blockKeyScalar(c: readonly CstChild[], src: string): M
   for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!(isTok(c, i, "Newline"))) { _t4 = false; break _b5; }
+      if (!(__tok(c, i, "Newline"))) { _t4 = false; break _b5; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!isNodeOf(c, i, "MapEntry")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "MapEntry")) { _t4 = false; break _b5; }
       mapEntry.push(c[i] as MapEntryNode);
       i++;
     }
@@ -762,7 +796,7 @@ function _MappingOrScalar$blockKeyScalar(c: readonly CstChild[], src: string): M
 function _MappingOrScalar$scalar(c: readonly CstChild[], src: string): MappingOrScalarMatch | null {
   let scalar: (ScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Scalar")) return null;
+  if (!__nodeOf(c, i, "Scalar")) return null;
   scalar = c[i] as ScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -815,18 +849,18 @@ function _AliasOrKeyed$alias(c: readonly CstChild[], src: string): AliasOrKeyedM
   const newline: (CstLeaf)[] = [];
   const mapEntry: (MapEntryNode)[] = [];
   let i = 0;
-  if (!(isTok(c, i, "Alias"))) return null;
+  if (!(__tok(c, i, "Alias"))) return null;
   alias = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isLit(c, i, src, ":", "$punct")) { _t1 = false; break _b2; }
+      if (!__lit(c, i, src, ":", "$punct")) { _t1 = false; break _b2; }
       i++;
       {
         const _t3 = i; let _t4 = true;
         _b5: {
-          if (!isNodeOf(c, i, "MapValueScalar")) { _t4 = false; break _b5; }
+          if (!__nodeOf(c, i, "MapValueScalar")) { _t4 = false; break _b5; }
           mapValueScalar = c[i] as MapValueScalarNode;
           i++;
         }
@@ -835,10 +869,10 @@ function _AliasOrKeyed$alias(c: readonly CstChild[], src: string): AliasOrKeyedM
       for (;;) {
         const _t6 = i; let _t7 = true;
         _b8: {
-          if (!(isTok(c, i, "Newline"))) { _t7 = false; break _b8; }
+          if (!(__tok(c, i, "Newline"))) { _t7 = false; break _b8; }
           newline.push(c[i] as CstLeaf);
           i++;
-          if (!isNodeOf(c, i, "MapEntry")) { _t7 = false; break _b8; }
+          if (!__nodeOf(c, i, "MapEntry")) { _t7 = false; break _b8; }
           mapEntry.push(c[i] as MapEntryNode);
           i++;
         }
@@ -876,7 +910,7 @@ export function matchAliasOrKeyed(n: AliasOrKeyedNode, src: string): AliasOrKeye
 export type BlockKeyMatch =
   | { arm: "property"; property?: PropertyNode; blockKeyScalar: BlockKeyScalarNode }
   | { arm: "alias"; alias: CstLeaf }
-  | { arm: "property2"; property?: PropertyNode; flowMapping?: FlowMappingNode; flowSequence?: FlowSequenceNode };
+  | { arm: "property2"; property?: PropertyNode; alt: { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } };
 
 function _BlockKey$property(c: readonly CstChild[], src: string): BlockKeyMatch | null {
   let property: (PropertyNode) | undefined;
@@ -885,13 +919,13 @@ function _BlockKey$property(c: readonly CstChild[], src: string): BlockKeyMatch 
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Property")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Property")) { _t1 = false; break _b2; }
       property = c[i] as PropertyNode;
       i++;
     }
     if (!_t1) i = _t0;
   }
-  if (!isNodeOf(c, i, "BlockKeyScalar")) return null;
+  if (!__nodeOf(c, i, "BlockKeyScalar")) return null;
   blockKeyScalar = c[i] as BlockKeyScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -901,7 +935,7 @@ function _BlockKey$property(c: readonly CstChild[], src: string): BlockKeyMatch 
 function _BlockKey$alias(c: readonly CstChild[], src: string): BlockKeyMatch | null {
   let alias: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Alias"))) return null;
+  if (!(__tok(c, i, "Alias"))) return null;
   alias = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -910,13 +944,12 @@ function _BlockKey$alias(c: readonly CstChild[], src: string): BlockKeyMatch | n
 
 function _BlockKey$property2(c: readonly CstChild[], src: string): BlockKeyMatch | null {
   let property: (PropertyNode) | undefined;
-  let flowMapping: (FlowMappingNode) | undefined;
-  let flowSequence: (FlowSequenceNode) | undefined;
+  let alt: ({ branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode }) | undefined;
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Property")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Property")) { _t1 = false; break _b2; }
       property = c[i] as PropertyNode;
       i++;
     }
@@ -925,27 +958,31 @@ function _BlockKey$property2(c: readonly CstChild[], src: string): BlockKeyMatch
   {
     let _t3 = false;
     if (!_t3) {
+      let _t7_flowMapping: (FlowMappingNode) | undefined;
       const _t4 = i; let _t5 = true;
       _b6: {
-        if (!isNodeOf(c, i, "FlowMapping")) { _t5 = false; break _b6; }
-        flowMapping = c[i] as FlowMappingNode;
+        if (!__nodeOf(c, i, "FlowMapping")) { _t5 = false; break _b6; }
+        _t7_flowMapping = c[i] as FlowMappingNode;
         i++;
       }
-      if (_t5) _t3 = true; else i = _t4;
+      if (_t5) { _t3 = true; alt = ({ branch: "flowMapping", flowMapping: _t7_flowMapping! }) as typeof alt; }
+      else i = _t4;
     }
     if (!_t3) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!isNodeOf(c, i, "FlowSequence")) { _t8 = false; break _b9; }
-        flowSequence = c[i] as FlowSequenceNode;
+      let _t11_flowSequence: (FlowSequenceNode) | undefined;
+      const _t8 = i; let _t9 = true;
+      _b10: {
+        if (!__nodeOf(c, i, "FlowSequence")) { _t9 = false; break _b10; }
+        _t11_flowSequence = c[i] as FlowSequenceNode;
         i++;
       }
-      if (_t8) _t3 = true; else i = _t7;
+      if (_t9) { _t3 = true; alt = ({ branch: "flowSequence", flowSequence: _t11_flowSequence! }) as typeof alt; }
+      else i = _t8;
     }
     if (!_t3) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "property2", property, flowMapping, flowSequence };
+  return { arm: "property2", property, alt: alt! };
 }
 
 export function matchBlockKey(n: BlockKeyNode, src: string): BlockKeyMatch {
@@ -987,20 +1024,18 @@ export function matchBlockKey(n: BlockKeyNode, src: string): BlockKeyMatch {
 }
 
 export type ExplicitEntryMatch =
-  | { arm: "question"; mapValue?: MapValueNode; newline?: CstLeaf; mapValue2?: MapValueNode; mapValue3?: MapValueNode };
+  | { arm: "question"; mapValue?: MapValueNode; alt?: { branch: "newline"; newline: CstLeaf; mapValue?: MapValueNode } | { branch: "colon"; mapValue?: MapValueNode } };
 
 function _ExplicitEntry$question(c: readonly CstChild[], src: string): ExplicitEntryMatch | null {
   let mapValue: (MapValueNode) | undefined;
-  let newline: (CstLeaf) | undefined;
-  let mapValue2: (MapValueNode) | undefined;
-  let mapValue3: (MapValueNode) | undefined;
+  let alt: ({ branch: "newline"; newline: CstLeaf; mapValue?: MapValueNode } | { branch: "colon"; mapValue?: MapValueNode }) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "?", "$punct")) return null;
+  if (!__lit(c, i, src, "?", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "MapValue")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "MapValue")) { _t1 = false; break _b2; }
       mapValue = c[i] as MapValueNode;
       i++;
     }
@@ -1012,41 +1047,46 @@ function _ExplicitEntry$question(c: readonly CstChild[], src: string): ExplicitE
       {
         let _t6 = false;
         if (!_t6) {
+          let _t10_newline: (CstLeaf) | undefined;
+          let _t10_mapValue: (MapValueNode) | undefined;
           const _t7 = i; let _t8 = true;
           _b9: {
-            if (!(isTok(c, i, "Newline"))) { _t8 = false; break _b9; }
-            newline = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Newline"))) { _t8 = false; break _b9; }
+            _t10_newline = c[i] as CstLeaf;
             i++;
-            if (!isLit(c, i, src, ":", "$punct")) { _t8 = false; break _b9; }
+            if (!__lit(c, i, src, ":", "$punct")) { _t8 = false; break _b9; }
             i++;
             {
-              const _t10 = i; let _t11 = true;
-              _b12: {
-                if (!isNodeOf(c, i, "MapValue")) { _t11 = false; break _b12; }
-                mapValue2 = c[i] as MapValueNode;
+              const _t11 = i; let _t12 = true;
+              _b13: {
+                if (!__nodeOf(c, i, "MapValue")) { _t12 = false; break _b13; }
+                _t10_mapValue = c[i] as MapValueNode;
                 i++;
               }
-              if (!_t11) i = _t10;
+              if (!_t12) i = _t11;
             }
           }
-          if (_t8) _t6 = true; else i = _t7;
+          if (_t8) { _t6 = true; alt = ({ branch: "newline", newline: _t10_newline!, mapValue: _t10_mapValue }) as typeof alt; }
+          else i = _t7;
         }
         if (!_t6) {
-          const _t13 = i; let _t14 = true;
-          _b15: {
-            if (!isLit(c, i, src, ":", "$punct")) { _t14 = false; break _b15; }
+          let _t17_mapValue: (MapValueNode) | undefined;
+          const _t14 = i; let _t15 = true;
+          _b16: {
+            if (!__lit(c, i, src, ":", "$punct")) { _t15 = false; break _b16; }
             i++;
             {
-              const _t16 = i; let _t17 = true;
-              _b18: {
-                if (!isNodeOf(c, i, "MapValue")) { _t17 = false; break _b18; }
-                mapValue3 = c[i] as MapValueNode;
+              const _t18 = i; let _t19 = true;
+              _b20: {
+                if (!__nodeOf(c, i, "MapValue")) { _t19 = false; break _b20; }
+                _t17_mapValue = c[i] as MapValueNode;
                 i++;
               }
-              if (!_t17) i = _t16;
+              if (!_t19) i = _t18;
             }
           }
-          if (_t14) _t6 = true; else i = _t13;
+          if (_t15) { _t6 = true; alt = ({ branch: "colon", mapValue: _t17_mapValue }) as typeof alt; }
+          else i = _t14;
         }
         if (!_t6) { _t4 = false; break _b5; }
       }
@@ -1054,7 +1094,7 @@ function _ExplicitEntry$question(c: readonly CstChild[], src: string): ExplicitE
     if (!_t4) i = _t3;
   }
   if (i !== c.length) return null;
-  return { arm: "question", mapValue, newline, mapValue2, mapValue3 };
+  return { arm: "question", mapValue, alt };
 }
 
 export function matchExplicitEntry(n: ExplicitEntryNode, src: string): ExplicitEntryMatch {
@@ -1087,15 +1127,15 @@ function _MapEntry$blockKey(c: readonly CstChild[], src: string): MapEntryMatch 
   let blockKey: (BlockKeyNode) | undefined;
   let mapValueScalar: (MapValueScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "BlockKey")) return null;
+  if (!__nodeOf(c, i, "BlockKey")) return null;
   blockKey = c[i] as BlockKeyNode;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
       mapValueScalar = c[i] as MapValueScalarNode;
       i++;
     }
@@ -1108,7 +1148,7 @@ function _MapEntry$blockKey(c: readonly CstChild[], src: string): MapEntryMatch 
 function _MapEntry$explicitEntry(c: readonly CstChild[], src: string): MapEntryMatch | null {
   let explicitEntry: (ExplicitEntryNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "ExplicitEntry")) return null;
+  if (!__nodeOf(c, i, "ExplicitEntry")) return null;
   explicitEntry = c[i] as ExplicitEntryNode;
   i++;
   if (i !== c.length) return null;
@@ -1118,12 +1158,12 @@ function _MapEntry$explicitEntry(c: readonly CstChild[], src: string): MapEntryM
 function _MapEntry$colon(c: readonly CstChild[], src: string): MapEntryMatch | null {
   let mapValueScalar: (MapValueScalarNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
       mapValueScalar = c[i] as MapValueScalarNode;
       i++;
     }
@@ -1170,15 +1210,15 @@ function _MapEntryNoEmpty$blockKey(c: readonly CstChild[], src: string): MapEntr
   let blockKey: (BlockKeyNode) | undefined;
   let mapValueScalar: (MapValueScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "BlockKey")) return null;
+  if (!__nodeOf(c, i, "BlockKey")) return null;
   blockKey = c[i] as BlockKeyNode;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
       mapValueScalar = c[i] as MapValueScalarNode;
       i++;
     }
@@ -1191,7 +1231,7 @@ function _MapEntryNoEmpty$blockKey(c: readonly CstChild[], src: string): MapEntr
 function _MapEntryNoEmpty$explicitEntry(c: readonly CstChild[], src: string): MapEntryNoEmptyMatch | null {
   let explicitEntry: (ExplicitEntryNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "ExplicitEntry")) return null;
+  if (!__nodeOf(c, i, "ExplicitEntry")) return null;
   explicitEntry = c[i] as ExplicitEntryNode;
   i++;
   if (i !== c.length) return null;
@@ -1231,16 +1271,16 @@ function _ExplicitMapping$explicitEntry(c: readonly CstChild[], src: string): Ex
   const newline: (CstLeaf)[] = [];
   const mapEntry: (MapEntryNode)[] = [];
   let i = 0;
-  if (!isNodeOf(c, i, "ExplicitEntry")) return null;
+  if (!__nodeOf(c, i, "ExplicitEntry")) return null;
   explicitEntry = c[i] as ExplicitEntryNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Newline"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Newline"))) { _t1 = false; break _b2; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!isNodeOf(c, i, "MapEntry")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "MapEntry")) { _t1 = false; break _b2; }
       mapEntry.push(c[i] as MapEntryNode);
       i++;
     }
@@ -1280,12 +1320,12 @@ function _EmptyKeyMapping$colon(c: readonly CstChild[], src: string): EmptyKeyMa
   const newline: (CstLeaf)[] = [];
   const mapEntryNoEmpty: (MapEntryNoEmptyNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
       mapValueScalar = c[i] as MapValueScalarNode;
       i++;
     }
@@ -1294,10 +1334,10 @@ function _EmptyKeyMapping$colon(c: readonly CstChild[], src: string): EmptyKeyMa
   for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!(isTok(c, i, "Newline"))) { _t4 = false; break _b5; }
+      if (!(__tok(c, i, "Newline"))) { _t4 = false; break _b5; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!isNodeOf(c, i, "MapEntryNoEmpty")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "MapEntryNoEmpty")) { _t4 = false; break _b5; }
       mapEntryNoEmpty.push(c[i] as MapEntryNoEmptyNode);
       i++;
     }
@@ -1330,83 +1370,87 @@ export function matchEmptyKeyMapping(n: EmptyKeyMappingNode, src: string): Empty
 }
 
 export type ValueMatch =
-  | { arm: "indent"; indent: CstLeaf; num?: CstLeaf; boolNull?: CstLeaf; plain?: CstLeaf; newline: (CstLeaf)[]; plain2: (CstLeaf)[]; dedent: CstLeaf }
+  | { arm: "indent"; indent: CstLeaf; alt: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; newline: (CstLeaf)[]; plain: (CstLeaf)[]; dedent: CstLeaf }
   | { arm: "indent2"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf }
   | { arm: "seqValueNode"; seqValueNode: SeqValueNodeNode };
 
 function _Value$indent(c: readonly CstChild[], src: string): ValueMatch | null {
   let indent: (CstLeaf) | undefined;
-  let num: (CstLeaf) | undefined;
-  let boolNull: (CstLeaf) | undefined;
-  let plain: (CstLeaf) | undefined;
+  let alt: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   const newline: (CstLeaf)[] = [];
-  const plain2: (CstLeaf)[] = [];
+  const plain: (CstLeaf)[] = [];
   let dedent: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_num: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Num"))) { _t2 = false; break _b3; }
-        num = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t2 = false; break _b3; }
+        _t4_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "num", num: _t4_num! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "BoolNull"))) { _t5 = false; break _b6; }
-        boolNull = c[i] as CstLeaf;
+      let _t8_boolNull: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "BoolNull"))) { _t6 = false; break _b7; }
+        _t8_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "boolNull", boolNull: _t8_boolNull! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Plain"))) { _t8 = false; break _b9; }
-        plain = c[i] as CstLeaf;
+      let _t12_plain: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Plain"))) { _t10 = false; break _b11; }
+        _t12_plain = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "plain", plain: _t12_plain! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
   {
-    const _t10 = i; let _t11 = true;
-    _b12: {
-      if (!(isTok(c, i, "Newline"))) { _t11 = false; break _b12; }
-      newline.push(c[i] as CstLeaf);
-      i++;
-      if (!(isTok(c, i, "Plain"))) { _t11 = false; break _b12; }
-      plain2.push(c[i] as CstLeaf);
-      i++;
-    }
-    if (!_t11) return null;
-  }
-  for (;;) {
     const _t13 = i; let _t14 = true;
     _b15: {
-      if (!(isTok(c, i, "Newline"))) { _t14 = false; break _b15; }
+      if (!(__tok(c, i, "Newline"))) { _t14 = false; break _b15; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!(isTok(c, i, "Plain"))) { _t14 = false; break _b15; }
-      plain2.push(c[i] as CstLeaf);
+      if (!(__tok(c, i, "Plain"))) { _t14 = false; break _b15; }
+      plain.push(c[i] as CstLeaf);
       i++;
     }
-    if (!_t14) { i = _t13; break; }
-    if (i === _t13) break;
+    if (!_t14) return null;
   }
-  if (!(isTok(c, i, "Dedent"))) return null;
+  for (;;) {
+    const _t16 = i; let _t17 = true;
+    _b18: {
+      if (!(__tok(c, i, "Newline"))) { _t17 = false; break _b18; }
+      newline.push(c[i] as CstLeaf);
+      i++;
+      if (!(__tok(c, i, "Plain"))) { _t17 = false; break _b18; }
+      plain.push(c[i] as CstLeaf);
+      i++;
+    }
+    if (!_t17) { i = _t16; break; }
+    if (i === _t16) break;
+  }
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
-  return { arm: "indent", indent: indent!, num, boolNull, plain, newline, plain2, dedent: dedent! };
+  return { arm: "indent", indent: indent!, alt: alt!, newline, plain, dedent: dedent! };
 }
 
 function _Value$indent2(c: readonly CstChild[], src: string): ValueMatch | null {
@@ -1414,13 +1458,13 @@ function _Value$indent2(c: readonly CstChild[], src: string): ValueMatch | null 
   let node: (NodeNode) | undefined;
   let dedent: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Node")) return null;
+  if (!__nodeOf(c, i, "Node")) return null;
   node = c[i] as NodeNode;
   i++;
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1430,7 +1474,7 @@ function _Value$indent2(c: readonly CstChild[], src: string): ValueMatch | null 
 function _Value$seqValueNode(c: readonly CstChild[], src: string): ValueMatch | null {
   let seqValueNode: (SeqValueNodeNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "SeqValueNode")) return null;
+  if (!__nodeOf(c, i, "SeqValueNode")) return null;
   seqValueNode = c[i] as SeqValueNodeNode;
   i++;
   if (i !== c.length) return null;
@@ -1464,8 +1508,8 @@ export function matchValue(n: ValueNode, src: string): ValueMatch {
 }
 
 export type MapValueMatch =
-  | { arm: "num"; num?: CstLeaf; boolNull?: CstLeaf; plain?: CstLeaf; indent: CstLeaf; num2?: CstLeaf; boolNull2?: CstLeaf; plain2?: CstLeaf; newline: (CstLeaf)[]; num3: (CstLeaf)[]; boolNull3: (CstLeaf)[]; plain3: (CstLeaf)[]; dedent: CstLeaf }
-  | { arm: "indent"; indent: CstLeaf; num?: CstLeaf; boolNull?: CstLeaf; plain?: CstLeaf; newline: (CstLeaf)[]; plain2: (CstLeaf)[]; dedent: CstLeaf }
+  | { arm: "num"; alt: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; indent: CstLeaf; alt2: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; newline: (CstLeaf)[]; alt3: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf })[]; dedent: CstLeaf }
+  | { arm: "indent"; indent: CstLeaf; alt: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; newline: (CstLeaf)[]; plain: (CstLeaf)[]; dedent: CstLeaf }
   | { arm: "indent2"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf }
   | { arm: "indent3"; indent: CstLeaf; property: PropertyNode; dedent: CstLeaf; contentNode: ContentNodeNode }
   | { arm: "indent4"; indent: CstLeaf; property: PropertyNode; dedent: CstLeaf; newline: CstLeaf; blockSequence: BlockSequenceNode }
@@ -1474,205 +1518,221 @@ export type MapValueMatch =
   | { arm: "mapValueNode"; mapValueNode: MapValueNodeNode };
 
 function _MapValue$num(c: readonly CstChild[], src: string): MapValueMatch | null {
-  let num: (CstLeaf) | undefined;
-  let boolNull: (CstLeaf) | undefined;
-  let plain: (CstLeaf) | undefined;
+  let alt: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   let indent: (CstLeaf) | undefined;
-  let num2: (CstLeaf) | undefined;
-  let boolNull2: (CstLeaf) | undefined;
-  let plain2: (CstLeaf) | undefined;
+  let alt2: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   const newline: (CstLeaf)[] = [];
-  const num3: (CstLeaf)[] = [];
-  const boolNull3: (CstLeaf)[] = [];
-  const plain3: (CstLeaf)[] = [];
+  const alt3: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf })[] = [];
   let dedent: (CstLeaf) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_num: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Num"))) { _t2 = false; break _b3; }
-        num = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t2 = false; break _b3; }
+        _t4_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "num", num: _t4_num! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "BoolNull"))) { _t5 = false; break _b6; }
-        boolNull = c[i] as CstLeaf;
+      let _t8_boolNull: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "BoolNull"))) { _t6 = false; break _b7; }
+        _t8_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "boolNull", boolNull: _t8_boolNull! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Plain"))) { _t8 = false; break _b9; }
-        plain = c[i] as CstLeaf;
+      let _t12_plain: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Plain"))) { _t10 = false; break _b11; }
+        _t12_plain = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "plain", plain: _t12_plain! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
   {
-    let _t10 = false;
-    if (!_t10) {
-      const _t11 = i; let _t12 = true;
-      _b13: {
-        if (!(isTok(c, i, "Num"))) { _t12 = false; break _b13; }
-        num2 = c[i] as CstLeaf;
-        i++;
-      }
-      if (_t12) _t10 = true; else i = _t11;
-    }
-    if (!_t10) {
+    let _t13 = false;
+    if (!_t13) {
+      let _t17_num: (CstLeaf) | undefined;
       const _t14 = i; let _t15 = true;
       _b16: {
-        if (!(isTok(c, i, "BoolNull"))) { _t15 = false; break _b16; }
-        boolNull2 = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t15 = false; break _b16; }
+        _t17_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t15) _t10 = true; else i = _t14;
+      if (_t15) { _t13 = true; alt2 = ({ branch: "num", num: _t17_num! }) as typeof alt2; }
+      else i = _t14;
     }
-    if (!_t10) {
-      const _t17 = i; let _t18 = true;
-      _b19: {
-        if (!(isTok(c, i, "Plain"))) { _t18 = false; break _b19; }
-        plain2 = c[i] as CstLeaf;
+    if (!_t13) {
+      let _t21_boolNull: (CstLeaf) | undefined;
+      const _t18 = i; let _t19 = true;
+      _b20: {
+        if (!(__tok(c, i, "BoolNull"))) { _t19 = false; break _b20; }
+        _t21_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t18) _t10 = true; else i = _t17;
+      if (_t19) { _t13 = true; alt2 = ({ branch: "boolNull", boolNull: _t21_boolNull! }) as typeof alt2; }
+      else i = _t18;
     }
-    if (!_t10) return null;
+    if (!_t13) {
+      let _t25_plain: (CstLeaf) | undefined;
+      const _t22 = i; let _t23 = true;
+      _b24: {
+        if (!(__tok(c, i, "Plain"))) { _t23 = false; break _b24; }
+        _t25_plain = c[i] as CstLeaf;
+        i++;
+      }
+      if (_t23) { _t13 = true; alt2 = ({ branch: "plain", plain: _t25_plain! }) as typeof alt2; }
+      else i = _t22;
+    }
+    if (!_t13) return null;
   }
   for (;;) {
-    const _t20 = i; let _t21 = true;
-    _b22: {
-      if (!(isTok(c, i, "Newline"))) { _t21 = false; break _b22; }
+    const _t26 = i; let _t27 = true;
+    _b28: {
+      if (!(__tok(c, i, "Newline"))) { _t27 = false; break _b28; }
       newline.push(c[i] as CstLeaf);
       i++;
       {
-        let _t23 = false;
-        if (!_t23) {
-          const _t24 = i; let _t25 = true;
-          _b26: {
-            if (!(isTok(c, i, "Num"))) { _t25 = false; break _b26; }
-            num3.push(c[i] as CstLeaf);
-            i++;
-          }
-          if (_t25) _t23 = true; else i = _t24;
-        }
-        if (!_t23) {
-          const _t27 = i; let _t28 = true;
-          _b29: {
-            if (!(isTok(c, i, "BoolNull"))) { _t28 = false; break _b29; }
-            boolNull3.push(c[i] as CstLeaf);
-            i++;
-          }
-          if (_t28) _t23 = true; else i = _t27;
-        }
-        if (!_t23) {
+        let _t29 = false;
+        if (!_t29) {
+          let _t33_num: (CstLeaf) | undefined;
           const _t30 = i; let _t31 = true;
           _b32: {
-            if (!(isTok(c, i, "Plain"))) { _t31 = false; break _b32; }
-            plain3.push(c[i] as CstLeaf);
+            if (!(__tok(c, i, "Num"))) { _t31 = false; break _b32; }
+            _t33_num = c[i] as CstLeaf;
             i++;
           }
-          if (_t31) _t23 = true; else i = _t30;
+          if (_t31) { _t29 = true; alt3.push({ branch: "num", num: _t33_num! } as never); }
+          else i = _t30;
         }
-        if (!_t23) { _t21 = false; break _b22; }
+        if (!_t29) {
+          let _t37_boolNull: (CstLeaf) | undefined;
+          const _t34 = i; let _t35 = true;
+          _b36: {
+            if (!(__tok(c, i, "BoolNull"))) { _t35 = false; break _b36; }
+            _t37_boolNull = c[i] as CstLeaf;
+            i++;
+          }
+          if (_t35) { _t29 = true; alt3.push({ branch: "boolNull", boolNull: _t37_boolNull! } as never); }
+          else i = _t34;
+        }
+        if (!_t29) {
+          let _t41_plain: (CstLeaf) | undefined;
+          const _t38 = i; let _t39 = true;
+          _b40: {
+            if (!(__tok(c, i, "Plain"))) { _t39 = false; break _b40; }
+            _t41_plain = c[i] as CstLeaf;
+            i++;
+          }
+          if (_t39) { _t29 = true; alt3.push({ branch: "plain", plain: _t41_plain! } as never); }
+          else i = _t38;
+        }
+        if (!_t29) { _t27 = false; break _b28; }
       }
     }
-    if (!_t21) { i = _t20; break; }
-    if (i === _t20) break;
+    if (!_t27) { i = _t26; break; }
+    if (i === _t26) break;
   }
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
-  return { arm: "num", num, boolNull, plain, indent: indent!, num2, boolNull2, plain2, newline, num3, boolNull3, plain3, dedent: dedent! };
+  return { arm: "num", alt: alt!, indent: indent!, alt2: alt2!, newline, alt3, dedent: dedent! };
 }
 
 function _MapValue$indent(c: readonly CstChild[], src: string): MapValueMatch | null {
   let indent: (CstLeaf) | undefined;
-  let num: (CstLeaf) | undefined;
-  let boolNull: (CstLeaf) | undefined;
-  let plain: (CstLeaf) | undefined;
+  let alt: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   const newline: (CstLeaf)[] = [];
-  const plain2: (CstLeaf)[] = [];
+  const plain: (CstLeaf)[] = [];
   let dedent: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_num: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Num"))) { _t2 = false; break _b3; }
-        num = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t2 = false; break _b3; }
+        _t4_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "num", num: _t4_num! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "BoolNull"))) { _t5 = false; break _b6; }
-        boolNull = c[i] as CstLeaf;
+      let _t8_boolNull: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "BoolNull"))) { _t6 = false; break _b7; }
+        _t8_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "boolNull", boolNull: _t8_boolNull! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Plain"))) { _t8 = false; break _b9; }
-        plain = c[i] as CstLeaf;
+      let _t12_plain: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Plain"))) { _t10 = false; break _b11; }
+        _t12_plain = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "plain", plain: _t12_plain! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
   {
-    const _t10 = i; let _t11 = true;
-    _b12: {
-      if (!(isTok(c, i, "Newline"))) { _t11 = false; break _b12; }
-      newline.push(c[i] as CstLeaf);
-      i++;
-      if (!(isTok(c, i, "Plain"))) { _t11 = false; break _b12; }
-      plain2.push(c[i] as CstLeaf);
-      i++;
-    }
-    if (!_t11) return null;
-  }
-  for (;;) {
     const _t13 = i; let _t14 = true;
     _b15: {
-      if (!(isTok(c, i, "Newline"))) { _t14 = false; break _b15; }
+      if (!(__tok(c, i, "Newline"))) { _t14 = false; break _b15; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!(isTok(c, i, "Plain"))) { _t14 = false; break _b15; }
-      plain2.push(c[i] as CstLeaf);
+      if (!(__tok(c, i, "Plain"))) { _t14 = false; break _b15; }
+      plain.push(c[i] as CstLeaf);
       i++;
     }
-    if (!_t14) { i = _t13; break; }
-    if (i === _t13) break;
+    if (!_t14) return null;
   }
-  if (!(isTok(c, i, "Dedent"))) return null;
+  for (;;) {
+    const _t16 = i; let _t17 = true;
+    _b18: {
+      if (!(__tok(c, i, "Newline"))) { _t17 = false; break _b18; }
+      newline.push(c[i] as CstLeaf);
+      i++;
+      if (!(__tok(c, i, "Plain"))) { _t17 = false; break _b18; }
+      plain.push(c[i] as CstLeaf);
+      i++;
+    }
+    if (!_t17) { i = _t16; break; }
+    if (i === _t16) break;
+  }
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
-  return { arm: "indent", indent: indent!, num, boolNull, plain, newline, plain2, dedent: dedent! };
+  return { arm: "indent", indent: indent!, alt: alt!, newline, plain, dedent: dedent! };
 }
 
 function _MapValue$indent2(c: readonly CstChild[], src: string): MapValueMatch | null {
@@ -1680,13 +1740,13 @@ function _MapValue$indent2(c: readonly CstChild[], src: string): MapValueMatch |
   let node: (NodeNode) | undefined;
   let dedent: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Node")) return null;
+  if (!__nodeOf(c, i, "Node")) return null;
   node = c[i] as NodeNode;
   i++;
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -1699,16 +1759,16 @@ function _MapValue$indent3(c: readonly CstChild[], src: string): MapValueMatch |
   let dedent: (CstLeaf) | undefined;
   let contentNode: (ContentNodeNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "ContentNode")) return null;
+  if (!__nodeOf(c, i, "ContentNode")) return null;
   contentNode = c[i] as ContentNodeNode;
   i++;
   if (i !== c.length) return null;
@@ -1722,19 +1782,19 @@ function _MapValue$indent4(c: readonly CstChild[], src: string): MapValueMatch |
   let newline: (CstLeaf) | undefined;
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
-  if (!(isTok(c, i, "Newline"))) return null;
+  if (!(__tok(c, i, "Newline"))) return null;
   newline = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -1746,13 +1806,13 @@ function _MapValue$property(c: readonly CstChild[], src: string): MapValueMatch 
   let newline: (CstLeaf) | undefined;
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
-  if (!(isTok(c, i, "Newline"))) return null;
+  if (!(__tok(c, i, "Newline"))) return null;
   newline = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -1763,10 +1823,10 @@ function _MapValue$newline(c: readonly CstChild[], src: string): MapValueMatch |
   let newline: (CstLeaf) | undefined;
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Newline"))) return null;
+  if (!(__tok(c, i, "Newline"))) return null;
   newline = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -1776,7 +1836,7 @@ function _MapValue$newline(c: readonly CstChild[], src: string): MapValueMatch |
 function _MapValue$mapValueNode(c: readonly CstChild[], src: string): MapValueMatch | null {
   let mapValueNode: (MapValueNodeNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MapValueNode")) return null;
+  if (!__nodeOf(c, i, "MapValueNode")) return null;
   mapValueNode = c[i] as MapValueNodeNode;
   i++;
   if (i !== c.length) return null;
@@ -1832,8 +1892,8 @@ export function matchMapValue(n: MapValueNode, src: string): MapValueMatch {
 }
 
 export type MapValueScalarMatch =
-  | { arm: "num"; num?: CstLeaf; boolNull?: CstLeaf; plain?: CstLeaf; indent: CstLeaf; num2?: CstLeaf; boolNull2?: CstLeaf; plain2?: CstLeaf; newline: (CstLeaf)[]; num3: (CstLeaf)[]; boolNull3: (CstLeaf)[]; plain3: (CstLeaf)[]; dedent: CstLeaf }
-  | { arm: "indent"; indent: CstLeaf; num?: CstLeaf; boolNull?: CstLeaf; plain?: CstLeaf; newline: (CstLeaf)[]; plain2: (CstLeaf)[]; dedent: CstLeaf }
+  | { arm: "num"; alt: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; indent: CstLeaf; alt2: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; newline: (CstLeaf)[]; alt3: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf })[]; dedent: CstLeaf }
+  | { arm: "indent"; indent: CstLeaf; alt: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; newline: (CstLeaf)[]; plain: (CstLeaf)[]; dedent: CstLeaf }
   | { arm: "indent2"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf }
   | { arm: "indent3"; indent: CstLeaf; property: PropertyNode; dedent: CstLeaf; contentNode: ContentNodeNode }
   | { arm: "indent4"; indent: CstLeaf; property: PropertyNode; dedent: CstLeaf; newline: CstLeaf; blockSequence: BlockSequenceNode }
@@ -1842,205 +1902,221 @@ export type MapValueScalarMatch =
   | { arm: "mapValueNodeScalar"; mapValueNodeScalar: MapValueNodeScalarNode };
 
 function _MapValueScalar$num(c: readonly CstChild[], src: string): MapValueScalarMatch | null {
-  let num: (CstLeaf) | undefined;
-  let boolNull: (CstLeaf) | undefined;
-  let plain: (CstLeaf) | undefined;
+  let alt: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   let indent: (CstLeaf) | undefined;
-  let num2: (CstLeaf) | undefined;
-  let boolNull2: (CstLeaf) | undefined;
-  let plain2: (CstLeaf) | undefined;
+  let alt2: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   const newline: (CstLeaf)[] = [];
-  const num3: (CstLeaf)[] = [];
-  const boolNull3: (CstLeaf)[] = [];
-  const plain3: (CstLeaf)[] = [];
+  const alt3: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf })[] = [];
   let dedent: (CstLeaf) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_num: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Num"))) { _t2 = false; break _b3; }
-        num = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t2 = false; break _b3; }
+        _t4_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "num", num: _t4_num! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "BoolNull"))) { _t5 = false; break _b6; }
-        boolNull = c[i] as CstLeaf;
+      let _t8_boolNull: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "BoolNull"))) { _t6 = false; break _b7; }
+        _t8_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "boolNull", boolNull: _t8_boolNull! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Plain"))) { _t8 = false; break _b9; }
-        plain = c[i] as CstLeaf;
+      let _t12_plain: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Plain"))) { _t10 = false; break _b11; }
+        _t12_plain = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "plain", plain: _t12_plain! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
   {
-    let _t10 = false;
-    if (!_t10) {
-      const _t11 = i; let _t12 = true;
-      _b13: {
-        if (!(isTok(c, i, "Num"))) { _t12 = false; break _b13; }
-        num2 = c[i] as CstLeaf;
-        i++;
-      }
-      if (_t12) _t10 = true; else i = _t11;
-    }
-    if (!_t10) {
+    let _t13 = false;
+    if (!_t13) {
+      let _t17_num: (CstLeaf) | undefined;
       const _t14 = i; let _t15 = true;
       _b16: {
-        if (!(isTok(c, i, "BoolNull"))) { _t15 = false; break _b16; }
-        boolNull2 = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t15 = false; break _b16; }
+        _t17_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t15) _t10 = true; else i = _t14;
+      if (_t15) { _t13 = true; alt2 = ({ branch: "num", num: _t17_num! }) as typeof alt2; }
+      else i = _t14;
     }
-    if (!_t10) {
-      const _t17 = i; let _t18 = true;
-      _b19: {
-        if (!(isTok(c, i, "Plain"))) { _t18 = false; break _b19; }
-        plain2 = c[i] as CstLeaf;
+    if (!_t13) {
+      let _t21_boolNull: (CstLeaf) | undefined;
+      const _t18 = i; let _t19 = true;
+      _b20: {
+        if (!(__tok(c, i, "BoolNull"))) { _t19 = false; break _b20; }
+        _t21_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t18) _t10 = true; else i = _t17;
+      if (_t19) { _t13 = true; alt2 = ({ branch: "boolNull", boolNull: _t21_boolNull! }) as typeof alt2; }
+      else i = _t18;
     }
-    if (!_t10) return null;
+    if (!_t13) {
+      let _t25_plain: (CstLeaf) | undefined;
+      const _t22 = i; let _t23 = true;
+      _b24: {
+        if (!(__tok(c, i, "Plain"))) { _t23 = false; break _b24; }
+        _t25_plain = c[i] as CstLeaf;
+        i++;
+      }
+      if (_t23) { _t13 = true; alt2 = ({ branch: "plain", plain: _t25_plain! }) as typeof alt2; }
+      else i = _t22;
+    }
+    if (!_t13) return null;
   }
   for (;;) {
-    const _t20 = i; let _t21 = true;
-    _b22: {
-      if (!(isTok(c, i, "Newline"))) { _t21 = false; break _b22; }
+    const _t26 = i; let _t27 = true;
+    _b28: {
+      if (!(__tok(c, i, "Newline"))) { _t27 = false; break _b28; }
       newline.push(c[i] as CstLeaf);
       i++;
       {
-        let _t23 = false;
-        if (!_t23) {
-          const _t24 = i; let _t25 = true;
-          _b26: {
-            if (!(isTok(c, i, "Num"))) { _t25 = false; break _b26; }
-            num3.push(c[i] as CstLeaf);
-            i++;
-          }
-          if (_t25) _t23 = true; else i = _t24;
-        }
-        if (!_t23) {
-          const _t27 = i; let _t28 = true;
-          _b29: {
-            if (!(isTok(c, i, "BoolNull"))) { _t28 = false; break _b29; }
-            boolNull3.push(c[i] as CstLeaf);
-            i++;
-          }
-          if (_t28) _t23 = true; else i = _t27;
-        }
-        if (!_t23) {
+        let _t29 = false;
+        if (!_t29) {
+          let _t33_num: (CstLeaf) | undefined;
           const _t30 = i; let _t31 = true;
           _b32: {
-            if (!(isTok(c, i, "Plain"))) { _t31 = false; break _b32; }
-            plain3.push(c[i] as CstLeaf);
+            if (!(__tok(c, i, "Num"))) { _t31 = false; break _b32; }
+            _t33_num = c[i] as CstLeaf;
             i++;
           }
-          if (_t31) _t23 = true; else i = _t30;
+          if (_t31) { _t29 = true; alt3.push({ branch: "num", num: _t33_num! } as never); }
+          else i = _t30;
         }
-        if (!_t23) { _t21 = false; break _b22; }
+        if (!_t29) {
+          let _t37_boolNull: (CstLeaf) | undefined;
+          const _t34 = i; let _t35 = true;
+          _b36: {
+            if (!(__tok(c, i, "BoolNull"))) { _t35 = false; break _b36; }
+            _t37_boolNull = c[i] as CstLeaf;
+            i++;
+          }
+          if (_t35) { _t29 = true; alt3.push({ branch: "boolNull", boolNull: _t37_boolNull! } as never); }
+          else i = _t34;
+        }
+        if (!_t29) {
+          let _t41_plain: (CstLeaf) | undefined;
+          const _t38 = i; let _t39 = true;
+          _b40: {
+            if (!(__tok(c, i, "Plain"))) { _t39 = false; break _b40; }
+            _t41_plain = c[i] as CstLeaf;
+            i++;
+          }
+          if (_t39) { _t29 = true; alt3.push({ branch: "plain", plain: _t41_plain! } as never); }
+          else i = _t38;
+        }
+        if (!_t29) { _t27 = false; break _b28; }
       }
     }
-    if (!_t21) { i = _t20; break; }
-    if (i === _t20) break;
+    if (!_t27) { i = _t26; break; }
+    if (i === _t26) break;
   }
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
-  return { arm: "num", num, boolNull, plain, indent: indent!, num2, boolNull2, plain2, newline, num3, boolNull3, plain3, dedent: dedent! };
+  return { arm: "num", alt: alt!, indent: indent!, alt2: alt2!, newline, alt3, dedent: dedent! };
 }
 
 function _MapValueScalar$indent(c: readonly CstChild[], src: string): MapValueScalarMatch | null {
   let indent: (CstLeaf) | undefined;
-  let num: (CstLeaf) | undefined;
-  let boolNull: (CstLeaf) | undefined;
-  let plain: (CstLeaf) | undefined;
+  let alt: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   const newline: (CstLeaf)[] = [];
-  const plain2: (CstLeaf)[] = [];
+  const plain: (CstLeaf)[] = [];
   let dedent: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_num: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Num"))) { _t2 = false; break _b3; }
-        num = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t2 = false; break _b3; }
+        _t4_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "num", num: _t4_num! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "BoolNull"))) { _t5 = false; break _b6; }
-        boolNull = c[i] as CstLeaf;
+      let _t8_boolNull: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "BoolNull"))) { _t6 = false; break _b7; }
+        _t8_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "boolNull", boolNull: _t8_boolNull! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Plain"))) { _t8 = false; break _b9; }
-        plain = c[i] as CstLeaf;
+      let _t12_plain: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Plain"))) { _t10 = false; break _b11; }
+        _t12_plain = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "plain", plain: _t12_plain! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
   {
-    const _t10 = i; let _t11 = true;
-    _b12: {
-      if (!(isTok(c, i, "Newline"))) { _t11 = false; break _b12; }
-      newline.push(c[i] as CstLeaf);
-      i++;
-      if (!(isTok(c, i, "Plain"))) { _t11 = false; break _b12; }
-      plain2.push(c[i] as CstLeaf);
-      i++;
-    }
-    if (!_t11) return null;
-  }
-  for (;;) {
     const _t13 = i; let _t14 = true;
     _b15: {
-      if (!(isTok(c, i, "Newline"))) { _t14 = false; break _b15; }
+      if (!(__tok(c, i, "Newline"))) { _t14 = false; break _b15; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!(isTok(c, i, "Plain"))) { _t14 = false; break _b15; }
-      plain2.push(c[i] as CstLeaf);
+      if (!(__tok(c, i, "Plain"))) { _t14 = false; break _b15; }
+      plain.push(c[i] as CstLeaf);
       i++;
     }
-    if (!_t14) { i = _t13; break; }
-    if (i === _t13) break;
+    if (!_t14) return null;
   }
-  if (!(isTok(c, i, "Dedent"))) return null;
+  for (;;) {
+    const _t16 = i; let _t17 = true;
+    _b18: {
+      if (!(__tok(c, i, "Newline"))) { _t17 = false; break _b18; }
+      newline.push(c[i] as CstLeaf);
+      i++;
+      if (!(__tok(c, i, "Plain"))) { _t17 = false; break _b18; }
+      plain.push(c[i] as CstLeaf);
+      i++;
+    }
+    if (!_t17) { i = _t16; break; }
+    if (i === _t16) break;
+  }
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
-  return { arm: "indent", indent: indent!, num, boolNull, plain, newline, plain2, dedent: dedent! };
+  return { arm: "indent", indent: indent!, alt: alt!, newline, plain, dedent: dedent! };
 }
 
 function _MapValueScalar$indent2(c: readonly CstChild[], src: string): MapValueScalarMatch | null {
@@ -2048,13 +2124,13 @@ function _MapValueScalar$indent2(c: readonly CstChild[], src: string): MapValueS
   let node: (NodeNode) | undefined;
   let dedent: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Node")) return null;
+  if (!__nodeOf(c, i, "Node")) return null;
   node = c[i] as NodeNode;
   i++;
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -2067,16 +2143,16 @@ function _MapValueScalar$indent3(c: readonly CstChild[], src: string): MapValueS
   let dedent: (CstLeaf) | undefined;
   let contentNode: (ContentNodeNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "ContentNode")) return null;
+  if (!__nodeOf(c, i, "ContentNode")) return null;
   contentNode = c[i] as ContentNodeNode;
   i++;
   if (i !== c.length) return null;
@@ -2090,19 +2166,19 @@ function _MapValueScalar$indent4(c: readonly CstChild[], src: string): MapValueS
   let newline: (CstLeaf) | undefined;
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
-  if (!(isTok(c, i, "Newline"))) return null;
+  if (!(__tok(c, i, "Newline"))) return null;
   newline = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -2114,13 +2190,13 @@ function _MapValueScalar$property(c: readonly CstChild[], src: string): MapValue
   let newline: (CstLeaf) | undefined;
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
-  if (!(isTok(c, i, "Newline"))) return null;
+  if (!(__tok(c, i, "Newline"))) return null;
   newline = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -2131,10 +2207,10 @@ function _MapValueScalar$newline(c: readonly CstChild[], src: string): MapValueS
   let newline: (CstLeaf) | undefined;
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Newline"))) return null;
+  if (!(__tok(c, i, "Newline"))) return null;
   newline = c[i] as CstLeaf;
   i++;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -2144,7 +2220,7 @@ function _MapValueScalar$newline(c: readonly CstChild[], src: string): MapValueS
 function _MapValueScalar$mapValueNodeScalar(c: readonly CstChild[], src: string): MapValueScalarMatch | null {
   let mapValueNodeScalar: (MapValueNodeScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MapValueNodeScalar")) return null;
+  if (!__nodeOf(c, i, "MapValueNodeScalar")) return null;
   mapValueNodeScalar = c[i] as MapValueNodeScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -2200,55 +2276,58 @@ export function matchMapValueScalar(n: MapValueScalarNode, src: string): MapValu
 }
 
 export type IndentedValueNodeMatch =
-  | { arm: "property"; property: PropertyNode; indent?: CstLeaf; indentedValueNode?: IndentedValueNodeNode; dedent?: CstLeaf; collectionContent?: CollectionContentNode }
+  | { arm: "property"; property: PropertyNode; alt: { branch: "indent"; indent: CstLeaf; indentedValueNode: IndentedValueNodeNode; dedent: CstLeaf } | { branch: "collectionContent"; collectionContent: CollectionContentNode } }
   | { arm: "contentNode"; contentNode: ContentNodeNode };
 
 function _IndentedValueNode$property(c: readonly CstChild[], src: string): IndentedValueNodeMatch | null {
   let property: (PropertyNode) | undefined;
-  let indent: (CstLeaf) | undefined;
-  let indentedValueNode: (IndentedValueNodeNode) | undefined;
-  let dedent: (CstLeaf) | undefined;
-  let collectionContent: (CollectionContentNode) | undefined;
+  let alt: ({ branch: "indent"; indent: CstLeaf; indentedValueNode: IndentedValueNodeNode; dedent: CstLeaf } | { branch: "collectionContent"; collectionContent: CollectionContentNode }) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_indent: (CstLeaf) | undefined;
+      let _t4_indentedValueNode: (IndentedValueNodeNode) | undefined;
+      let _t4_dedent: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Indent"))) { _t2 = false; break _b3; }
-        indent = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Indent"))) { _t2 = false; break _b3; }
+        _t4_indent = c[i] as CstLeaf;
         i++;
-        if (!isNodeOf(c, i, "IndentedValueNode")) { _t2 = false; break _b3; }
-        indentedValueNode = c[i] as IndentedValueNodeNode;
+        if (!__nodeOf(c, i, "IndentedValueNode")) { _t2 = false; break _b3; }
+        _t4_indentedValueNode = c[i] as IndentedValueNodeNode;
         i++;
-        if (!(isTok(c, i, "Dedent"))) { _t2 = false; break _b3; }
-        dedent = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Dedent"))) { _t2 = false; break _b3; }
+        _t4_dedent = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "indent", indent: _t4_indent!, indentedValueNode: _t4_indentedValueNode!, dedent: _t4_dedent! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "CollectionContent")) { _t5 = false; break _b6; }
-        collectionContent = c[i] as CollectionContentNode;
+      let _t8_collectionContent: (CollectionContentNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "CollectionContent")) { _t6 = false; break _b7; }
+        _t8_collectionContent = c[i] as CollectionContentNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "collectionContent", collectionContent: _t8_collectionContent! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "property", property: property!, indent, indentedValueNode, dedent, collectionContent };
+  return { arm: "property", property: property!, alt: alt! };
 }
 
 function _IndentedValueNode$contentNode(c: readonly CstChild[], src: string): IndentedValueNodeMatch | null {
   let contentNode: (ContentNodeNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "ContentNode")) return null;
+  if (!__nodeOf(c, i, "ContentNode")) return null;
   contentNode = c[i] as ContentNodeNode;
   i++;
   if (i !== c.length) return null;
@@ -2291,7 +2370,7 @@ export type CollectionContentMatch =
 function _CollectionContent$blockSequence(c: readonly CstChild[], src: string): CollectionContentMatch | null {
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -2301,7 +2380,7 @@ function _CollectionContent$blockSequence(c: readonly CstChild[], src: string): 
 function _CollectionContent$explicitMapping(c: readonly CstChild[], src: string): CollectionContentMatch | null {
   let explicitMapping: (ExplicitMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "ExplicitMapping")) return null;
+  if (!__nodeOf(c, i, "ExplicitMapping")) return null;
   explicitMapping = c[i] as ExplicitMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -2311,7 +2390,7 @@ function _CollectionContent$explicitMapping(c: readonly CstChild[], src: string)
 function _CollectionContent$flowMapping(c: readonly CstChild[], src: string): CollectionContentMatch | null {
   let flowMapping: (FlowMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowMapping")) return null;
+  if (!__nodeOf(c, i, "FlowMapping")) return null;
   flowMapping = c[i] as FlowMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -2321,7 +2400,7 @@ function _CollectionContent$flowMapping(c: readonly CstChild[], src: string): Co
 function _CollectionContent$flowSequence(c: readonly CstChild[], src: string): CollectionContentMatch | null {
   let flowSequence: (FlowSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowSequence")) return null;
+  if (!__nodeOf(c, i, "FlowSequence")) return null;
   flowSequence = c[i] as FlowSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -2331,7 +2410,7 @@ function _CollectionContent$flowSequence(c: readonly CstChild[], src: string): C
 function _CollectionContent$mappingFromFlow(c: readonly CstChild[], src: string): CollectionContentMatch | null {
   let mappingFromFlow: (MappingFromFlowNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MappingFromFlow")) return null;
+  if (!__nodeOf(c, i, "MappingFromFlow")) return null;
   mappingFromFlow = c[i] as MappingFromFlowNode;
   i++;
   if (i !== c.length) return null;
@@ -2341,7 +2420,7 @@ function _CollectionContent$mappingFromFlow(c: readonly CstChild[], src: string)
 function _CollectionContent$mappingFromScalar(c: readonly CstChild[], src: string): CollectionContentMatch | null {
   let mappingFromScalar: (MappingFromScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MappingFromScalar")) return null;
+  if (!__nodeOf(c, i, "MappingFromScalar")) return null;
   mappingFromScalar = c[i] as MappingFromScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -2398,15 +2477,15 @@ function _MappingFromScalar$blockKeyScalar(c: readonly CstChild[], src: string):
   const newline: (CstLeaf)[] = [];
   const mapEntry: (MapEntryNode)[] = [];
   let i = 0;
-  if (!isNodeOf(c, i, "BlockKeyScalar")) return null;
+  if (!__nodeOf(c, i, "BlockKeyScalar")) return null;
   blockKeyScalar = c[i] as BlockKeyScalarNode;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "MapValueScalar")) { _t1 = false; break _b2; }
       mapValueScalar = c[i] as MapValueScalarNode;
       i++;
     }
@@ -2415,10 +2494,10 @@ function _MappingFromScalar$blockKeyScalar(c: readonly CstChild[], src: string):
   for (;;) {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!(isTok(c, i, "Newline"))) { _t4 = false; break _b5; }
+      if (!(__tok(c, i, "Newline"))) { _t4 = false; break _b5; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!isNodeOf(c, i, "MapEntry")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "MapEntry")) { _t4 = false; break _b5; }
       mapEntry.push(c[i] as MapEntryNode);
       i++;
     }
@@ -2451,11 +2530,10 @@ export function matchMappingFromScalar(n: MappingFromScalarNode, src: string): M
 }
 
 export type MappingFromFlowMatch =
-  | { arm: "flowMapping"; flowMapping?: FlowMappingNode; flowSequence?: FlowSequenceNode; mapValueScalar?: MapValueScalarNode; newline: (CstLeaf)[]; mapEntry: (MapEntryNode)[] };
+  | { arm: "flowMapping"; alt: { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode }; mapValueScalar?: MapValueScalarNode; newline: (CstLeaf)[]; mapEntry: (MapEntryNode)[] };
 
 function _MappingFromFlow$flowMapping(c: readonly CstChild[], src: string): MappingFromFlowMatch | null {
-  let flowMapping: (FlowMappingNode) | undefined;
-  let flowSequence: (FlowSequenceNode) | undefined;
+  let alt: ({ branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode }) | undefined;
   let mapValueScalar: (MapValueScalarNode) | undefined;
   const newline: (CstLeaf)[] = [];
   const mapEntry: (MapEntryNode)[] = [];
@@ -2463,51 +2541,55 @@ function _MappingFromFlow$flowMapping(c: readonly CstChild[], src: string): Mapp
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_flowMapping: (FlowMappingNode) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isNodeOf(c, i, "FlowMapping")) { _t2 = false; break _b3; }
-        flowMapping = c[i] as FlowMappingNode;
+        if (!__nodeOf(c, i, "FlowMapping")) { _t2 = false; break _b3; }
+        _t4_flowMapping = c[i] as FlowMappingNode;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "flowMapping", flowMapping: _t4_flowMapping! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "FlowSequence")) { _t5 = false; break _b6; }
-        flowSequence = c[i] as FlowSequenceNode;
+      let _t8_flowSequence: (FlowSequenceNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "FlowSequence")) { _t6 = false; break _b7; }
+        _t8_flowSequence = c[i] as FlowSequenceNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "flowSequence", flowSequence: _t8_flowSequence! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) return null;
   }
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
-    const _t7 = i; let _t8 = true;
-    _b9: {
-      if (!isNodeOf(c, i, "MapValueScalar")) { _t8 = false; break _b9; }
+    const _t9 = i; let _t10 = true;
+    _b11: {
+      if (!__nodeOf(c, i, "MapValueScalar")) { _t10 = false; break _b11; }
       mapValueScalar = c[i] as MapValueScalarNode;
       i++;
     }
-    if (!_t8) i = _t7;
+    if (!_t10) i = _t9;
   }
   for (;;) {
-    const _t10 = i; let _t11 = true;
-    _b12: {
-      if (!(isTok(c, i, "Newline"))) { _t11 = false; break _b12; }
+    const _t12 = i; let _t13 = true;
+    _b14: {
+      if (!(__tok(c, i, "Newline"))) { _t13 = false; break _b14; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!isNodeOf(c, i, "MapEntry")) { _t11 = false; break _b12; }
+      if (!__nodeOf(c, i, "MapEntry")) { _t13 = false; break _b14; }
       mapEntry.push(c[i] as MapEntryNode);
       i++;
     }
-    if (!_t11) { i = _t10; break; }
-    if (i === _t10) break;
+    if (!_t13) { i = _t12; break; }
+    if (i === _t12) break;
   }
   if (i !== c.length) return null;
-  return { arm: "flowMapping", flowMapping, flowSequence, mapValueScalar, newline, mapEntry };
+  return { arm: "flowMapping", alt: alt!, mapValueScalar, newline, mapEntry };
 }
 
 export function matchMappingFromFlow(n: MappingFromFlowNode, src: string): MappingFromFlowMatch {
@@ -2536,17 +2618,14 @@ export function matchMappingFromFlow(n: MappingFromFlowNode, src: string): Mappi
 }
 
 export type MapValueNodeMatch =
-  | { arm: "property"; property: PropertyNode; indent?: CstLeaf; indentedValueNode?: IndentedValueNodeNode; dedent?: CstLeaf; mapInlineContent?: MapInlineContentNode }
+  | { arm: "property"; property: PropertyNode; alt?: { branch: "indent"; indent: CstLeaf; indentedValueNode: IndentedValueNodeNode; dedent: CstLeaf } | { branch: "mapInlineContent"; mapInlineContent: MapInlineContentNode } }
   | { arm: "mapInlineContent"; mapInlineContent: MapInlineContentNode };
 
 function _MapValueNode$property(c: readonly CstChild[], src: string): MapValueNodeMatch | null {
   let property: (PropertyNode) | undefined;
-  let indent: (CstLeaf) | undefined;
-  let indentedValueNode: (IndentedValueNodeNode) | undefined;
-  let dedent: (CstLeaf) | undefined;
-  let mapInlineContent: (MapInlineContentNode) | undefined;
+  let alt: ({ branch: "indent"; indent: CstLeaf; indentedValueNode: IndentedValueNodeNode; dedent: CstLeaf } | { branch: "mapInlineContent"; mapInlineContent: MapInlineContentNode }) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
   {
@@ -2555,28 +2634,34 @@ function _MapValueNode$property(c: readonly CstChild[], src: string): MapValueNo
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_indent: (CstLeaf) | undefined;
+          let _t7_indentedValueNode: (IndentedValueNodeNode) | undefined;
+          let _t7_dedent: (CstLeaf) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!(isTok(c, i, "Indent"))) { _t5 = false; break _b6; }
-            indent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Indent"))) { _t5 = false; break _b6; }
+            _t7_indent = c[i] as CstLeaf;
             i++;
-            if (!isNodeOf(c, i, "IndentedValueNode")) { _t5 = false; break _b6; }
-            indentedValueNode = c[i] as IndentedValueNodeNode;
+            if (!__nodeOf(c, i, "IndentedValueNode")) { _t5 = false; break _b6; }
+            _t7_indentedValueNode = c[i] as IndentedValueNodeNode;
             i++;
-            if (!(isTok(c, i, "Dedent"))) { _t5 = false; break _b6; }
-            dedent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Dedent"))) { _t5 = false; break _b6; }
+            _t7_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt = ({ branch: "indent", indent: _t7_indent!, indentedValueNode: _t7_indentedValueNode!, dedent: _t7_dedent! }) as typeof alt; }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!isNodeOf(c, i, "MapInlineContent")) { _t8 = false; break _b9; }
-            mapInlineContent = c[i] as MapInlineContentNode;
+          let _t11_mapInlineContent: (MapInlineContentNode) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!__nodeOf(c, i, "MapInlineContent")) { _t9 = false; break _b10; }
+            _t11_mapInlineContent = c[i] as MapInlineContentNode;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t9) { _t3 = true; alt = ({ branch: "mapInlineContent", mapInlineContent: _t11_mapInlineContent! }) as typeof alt; }
+          else i = _t8;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -2584,13 +2669,13 @@ function _MapValueNode$property(c: readonly CstChild[], src: string): MapValueNo
     if (!_t1) i = _t0;
   }
   if (i !== c.length) return null;
-  return { arm: "property", property: property!, indent, indentedValueNode, dedent, mapInlineContent };
+  return { arm: "property", property: property!, alt };
 }
 
 function _MapValueNode$mapInlineContent(c: readonly CstChild[], src: string): MapValueNodeMatch | null {
   let mapInlineContent: (MapInlineContentNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MapInlineContent")) return null;
+  if (!__nodeOf(c, i, "MapInlineContent")) return null;
   mapInlineContent = c[i] as MapInlineContentNode;
   i++;
   if (i !== c.length) return null;
@@ -2631,7 +2716,7 @@ export type MapInlineContentMatch =
 function _MapInlineContent$flowMapping(c: readonly CstChild[], src: string): MapInlineContentMatch | null {
   let flowMapping: (FlowMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowMapping")) return null;
+  if (!__nodeOf(c, i, "FlowMapping")) return null;
   flowMapping = c[i] as FlowMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -2641,7 +2726,7 @@ function _MapInlineContent$flowMapping(c: readonly CstChild[], src: string): Map
 function _MapInlineContent$flowSequence(c: readonly CstChild[], src: string): MapInlineContentMatch | null {
   let flowSequence: (FlowSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowSequence")) return null;
+  if (!__nodeOf(c, i, "FlowSequence")) return null;
   flowSequence = c[i] as FlowSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -2651,7 +2736,7 @@ function _MapInlineContent$flowSequence(c: readonly CstChild[], src: string): Ma
 function _MapInlineContent$alias(c: readonly CstChild[], src: string): MapInlineContentMatch | null {
   let alias: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Alias"))) return null;
+  if (!(__tok(c, i, "Alias"))) return null;
   alias = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -2661,7 +2746,7 @@ function _MapInlineContent$alias(c: readonly CstChild[], src: string): MapInline
 function _MapInlineContent$mappingOrScalar(c: readonly CstChild[], src: string): MapInlineContentMatch | null {
   let mappingOrScalar: (MappingOrScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MappingOrScalar")) return null;
+  if (!__nodeOf(c, i, "MappingOrScalar")) return null;
   mappingOrScalar = c[i] as MappingOrScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -2702,17 +2787,14 @@ export function matchMapInlineContent(n: MapInlineContentNode, src: string): Map
 }
 
 export type MapValueNodeScalarMatch =
-  | { arm: "property"; property: PropertyNode; indent?: CstLeaf; indentedValueNode?: IndentedValueNodeNode; dedent?: CstLeaf; mapInlineScalar?: MapInlineScalarNode }
+  | { arm: "property"; property: PropertyNode; alt?: { branch: "indent"; indent: CstLeaf; indentedValueNode: IndentedValueNodeNode; dedent: CstLeaf } | { branch: "mapInlineScalar"; mapInlineScalar: MapInlineScalarNode } }
   | { arm: "mapInlineScalar"; mapInlineScalar: MapInlineScalarNode };
 
 function _MapValueNodeScalar$property(c: readonly CstChild[], src: string): MapValueNodeScalarMatch | null {
   let property: (PropertyNode) | undefined;
-  let indent: (CstLeaf) | undefined;
-  let indentedValueNode: (IndentedValueNodeNode) | undefined;
-  let dedent: (CstLeaf) | undefined;
-  let mapInlineScalar: (MapInlineScalarNode) | undefined;
+  let alt: ({ branch: "indent"; indent: CstLeaf; indentedValueNode: IndentedValueNodeNode; dedent: CstLeaf } | { branch: "mapInlineScalar"; mapInlineScalar: MapInlineScalarNode }) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
   {
@@ -2721,28 +2803,34 @@ function _MapValueNodeScalar$property(c: readonly CstChild[], src: string): MapV
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_indent: (CstLeaf) | undefined;
+          let _t7_indentedValueNode: (IndentedValueNodeNode) | undefined;
+          let _t7_dedent: (CstLeaf) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!(isTok(c, i, "Indent"))) { _t5 = false; break _b6; }
-            indent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Indent"))) { _t5 = false; break _b6; }
+            _t7_indent = c[i] as CstLeaf;
             i++;
-            if (!isNodeOf(c, i, "IndentedValueNode")) { _t5 = false; break _b6; }
-            indentedValueNode = c[i] as IndentedValueNodeNode;
+            if (!__nodeOf(c, i, "IndentedValueNode")) { _t5 = false; break _b6; }
+            _t7_indentedValueNode = c[i] as IndentedValueNodeNode;
             i++;
-            if (!(isTok(c, i, "Dedent"))) { _t5 = false; break _b6; }
-            dedent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Dedent"))) { _t5 = false; break _b6; }
+            _t7_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt = ({ branch: "indent", indent: _t7_indent!, indentedValueNode: _t7_indentedValueNode!, dedent: _t7_dedent! }) as typeof alt; }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!isNodeOf(c, i, "MapInlineScalar")) { _t8 = false; break _b9; }
-            mapInlineScalar = c[i] as MapInlineScalarNode;
+          let _t11_mapInlineScalar: (MapInlineScalarNode) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!__nodeOf(c, i, "MapInlineScalar")) { _t9 = false; break _b10; }
+            _t11_mapInlineScalar = c[i] as MapInlineScalarNode;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t9) { _t3 = true; alt = ({ branch: "mapInlineScalar", mapInlineScalar: _t11_mapInlineScalar! }) as typeof alt; }
+          else i = _t8;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -2750,13 +2838,13 @@ function _MapValueNodeScalar$property(c: readonly CstChild[], src: string): MapV
     if (!_t1) i = _t0;
   }
   if (i !== c.length) return null;
-  return { arm: "property", property: property!, indent, indentedValueNode, dedent, mapInlineScalar };
+  return { arm: "property", property: property!, alt };
 }
 
 function _MapValueNodeScalar$mapInlineScalar(c: readonly CstChild[], src: string): MapValueNodeScalarMatch | null {
   let mapInlineScalar: (MapInlineScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MapInlineScalar")) return null;
+  if (!__nodeOf(c, i, "MapInlineScalar")) return null;
   mapInlineScalar = c[i] as MapInlineScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -2792,13 +2880,13 @@ export type MapInlineScalarMatch =
   | { arm: "flowMapping"; flowMapping: FlowMappingNode }
   | { arm: "flowSequence"; flowSequence: FlowSequenceNode }
   | { arm: "alias"; alias: CstLeaf }
-  | { arm: "num"; num?: CstLeaf; boolNull?: CstLeaf; plain?: CstLeaf; indent: CstLeaf; num2?: CstLeaf; boolNull2?: CstLeaf; plain2?: CstLeaf; newline: (CstLeaf)[]; num3: (CstLeaf)[]; boolNull3: (CstLeaf)[]; plain3: (CstLeaf)[]; dedent: CstLeaf }
+  | { arm: "num"; alt: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; indent: CstLeaf; alt2: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; newline: (CstLeaf)[]; alt3: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf })[]; dedent: CstLeaf }
   | { arm: "scalar"; scalar: ScalarNode };
 
 function _MapInlineScalar$flowMapping(c: readonly CstChild[], src: string): MapInlineScalarMatch | null {
   let flowMapping: (FlowMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowMapping")) return null;
+  if (!__nodeOf(c, i, "FlowMapping")) return null;
   flowMapping = c[i] as FlowMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -2808,7 +2896,7 @@ function _MapInlineScalar$flowMapping(c: readonly CstChild[], src: string): MapI
 function _MapInlineScalar$flowSequence(c: readonly CstChild[], src: string): MapInlineScalarMatch | null {
   let flowSequence: (FlowSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowSequence")) return null;
+  if (!__nodeOf(c, i, "FlowSequence")) return null;
   flowSequence = c[i] as FlowSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -2818,7 +2906,7 @@ function _MapInlineScalar$flowSequence(c: readonly CstChild[], src: string): Map
 function _MapInlineScalar$alias(c: readonly CstChild[], src: string): MapInlineScalarMatch | null {
   let alias: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Alias"))) return null;
+  if (!(__tok(c, i, "Alias"))) return null;
   alias = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -2826,136 +2914,148 @@ function _MapInlineScalar$alias(c: readonly CstChild[], src: string): MapInlineS
 }
 
 function _MapInlineScalar$num(c: readonly CstChild[], src: string): MapInlineScalarMatch | null {
-  let num: (CstLeaf) | undefined;
-  let boolNull: (CstLeaf) | undefined;
-  let plain: (CstLeaf) | undefined;
+  let alt: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   let indent: (CstLeaf) | undefined;
-  let num2: (CstLeaf) | undefined;
-  let boolNull2: (CstLeaf) | undefined;
-  let plain2: (CstLeaf) | undefined;
+  let alt2: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
   const newline: (CstLeaf)[] = [];
-  const num3: (CstLeaf)[] = [];
-  const boolNull3: (CstLeaf)[] = [];
-  const plain3: (CstLeaf)[] = [];
+  const alt3: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf })[] = [];
   let dedent: (CstLeaf) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_num: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Num"))) { _t2 = false; break _b3; }
-        num = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t2 = false; break _b3; }
+        _t4_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "num", num: _t4_num! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "BoolNull"))) { _t5 = false; break _b6; }
-        boolNull = c[i] as CstLeaf;
+      let _t8_boolNull: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "BoolNull"))) { _t6 = false; break _b7; }
+        _t8_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "boolNull", boolNull: _t8_boolNull! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Plain"))) { _t8 = false; break _b9; }
-        plain = c[i] as CstLeaf;
+      let _t12_plain: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Plain"))) { _t10 = false; break _b11; }
+        _t12_plain = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "plain", plain: _t12_plain! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
-  if (!(isTok(c, i, "Indent"))) return null;
+  if (!(__tok(c, i, "Indent"))) return null;
   indent = c[i] as CstLeaf;
   i++;
   {
-    let _t10 = false;
-    if (!_t10) {
-      const _t11 = i; let _t12 = true;
-      _b13: {
-        if (!(isTok(c, i, "Num"))) { _t12 = false; break _b13; }
-        num2 = c[i] as CstLeaf;
-        i++;
-      }
-      if (_t12) _t10 = true; else i = _t11;
-    }
-    if (!_t10) {
+    let _t13 = false;
+    if (!_t13) {
+      let _t17_num: (CstLeaf) | undefined;
       const _t14 = i; let _t15 = true;
       _b16: {
-        if (!(isTok(c, i, "BoolNull"))) { _t15 = false; break _b16; }
-        boolNull2 = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t15 = false; break _b16; }
+        _t17_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t15) _t10 = true; else i = _t14;
+      if (_t15) { _t13 = true; alt2 = ({ branch: "num", num: _t17_num! }) as typeof alt2; }
+      else i = _t14;
     }
-    if (!_t10) {
-      const _t17 = i; let _t18 = true;
-      _b19: {
-        if (!(isTok(c, i, "Plain"))) { _t18 = false; break _b19; }
-        plain2 = c[i] as CstLeaf;
+    if (!_t13) {
+      let _t21_boolNull: (CstLeaf) | undefined;
+      const _t18 = i; let _t19 = true;
+      _b20: {
+        if (!(__tok(c, i, "BoolNull"))) { _t19 = false; break _b20; }
+        _t21_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t18) _t10 = true; else i = _t17;
+      if (_t19) { _t13 = true; alt2 = ({ branch: "boolNull", boolNull: _t21_boolNull! }) as typeof alt2; }
+      else i = _t18;
     }
-    if (!_t10) return null;
+    if (!_t13) {
+      let _t25_plain: (CstLeaf) | undefined;
+      const _t22 = i; let _t23 = true;
+      _b24: {
+        if (!(__tok(c, i, "Plain"))) { _t23 = false; break _b24; }
+        _t25_plain = c[i] as CstLeaf;
+        i++;
+      }
+      if (_t23) { _t13 = true; alt2 = ({ branch: "plain", plain: _t25_plain! }) as typeof alt2; }
+      else i = _t22;
+    }
+    if (!_t13) return null;
   }
   for (;;) {
-    const _t20 = i; let _t21 = true;
-    _b22: {
-      if (!(isTok(c, i, "Newline"))) { _t21 = false; break _b22; }
+    const _t26 = i; let _t27 = true;
+    _b28: {
+      if (!(__tok(c, i, "Newline"))) { _t27 = false; break _b28; }
       newline.push(c[i] as CstLeaf);
       i++;
       {
-        let _t23 = false;
-        if (!_t23) {
-          const _t24 = i; let _t25 = true;
-          _b26: {
-            if (!(isTok(c, i, "Num"))) { _t25 = false; break _b26; }
-            num3.push(c[i] as CstLeaf);
-            i++;
-          }
-          if (_t25) _t23 = true; else i = _t24;
-        }
-        if (!_t23) {
-          const _t27 = i; let _t28 = true;
-          _b29: {
-            if (!(isTok(c, i, "BoolNull"))) { _t28 = false; break _b29; }
-            boolNull3.push(c[i] as CstLeaf);
-            i++;
-          }
-          if (_t28) _t23 = true; else i = _t27;
-        }
-        if (!_t23) {
+        let _t29 = false;
+        if (!_t29) {
+          let _t33_num: (CstLeaf) | undefined;
           const _t30 = i; let _t31 = true;
           _b32: {
-            if (!(isTok(c, i, "Plain"))) { _t31 = false; break _b32; }
-            plain3.push(c[i] as CstLeaf);
+            if (!(__tok(c, i, "Num"))) { _t31 = false; break _b32; }
+            _t33_num = c[i] as CstLeaf;
             i++;
           }
-          if (_t31) _t23 = true; else i = _t30;
+          if (_t31) { _t29 = true; alt3.push({ branch: "num", num: _t33_num! } as never); }
+          else i = _t30;
         }
-        if (!_t23) { _t21 = false; break _b22; }
+        if (!_t29) {
+          let _t37_boolNull: (CstLeaf) | undefined;
+          const _t34 = i; let _t35 = true;
+          _b36: {
+            if (!(__tok(c, i, "BoolNull"))) { _t35 = false; break _b36; }
+            _t37_boolNull = c[i] as CstLeaf;
+            i++;
+          }
+          if (_t35) { _t29 = true; alt3.push({ branch: "boolNull", boolNull: _t37_boolNull! } as never); }
+          else i = _t34;
+        }
+        if (!_t29) {
+          let _t41_plain: (CstLeaf) | undefined;
+          const _t38 = i; let _t39 = true;
+          _b40: {
+            if (!(__tok(c, i, "Plain"))) { _t39 = false; break _b40; }
+            _t41_plain = c[i] as CstLeaf;
+            i++;
+          }
+          if (_t39) { _t29 = true; alt3.push({ branch: "plain", plain: _t41_plain! } as never); }
+          else i = _t38;
+        }
+        if (!_t29) { _t27 = false; break _b28; }
       }
     }
-    if (!_t21) { i = _t20; break; }
-    if (i === _t20) break;
+    if (!_t27) { i = _t26; break; }
+    if (i === _t26) break;
   }
-  if (!(isTok(c, i, "Dedent"))) return null;
+  if (!(__tok(c, i, "Dedent"))) return null;
   dedent = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
-  return { arm: "num", num, boolNull, plain, indent: indent!, num2, boolNull2, plain2, newline, num3, boolNull3, plain3, dedent: dedent! };
+  return { arm: "num", alt: alt!, indent: indent!, alt2: alt2!, newline, alt3, dedent: dedent! };
 }
 
 function _MapInlineScalar$scalar(c: readonly CstChild[], src: string): MapInlineScalarMatch | null {
   let scalar: (ScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Scalar")) return null;
+  if (!__nodeOf(c, i, "Scalar")) return null;
   scalar = c[i] as ScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -3008,17 +3108,14 @@ export function matchMapInlineScalar(n: MapInlineScalarNode, src: string): MapIn
 }
 
 export type SeqValueNodeMatch =
-  | { arm: "property"; property: PropertyNode; indent?: CstLeaf; indentedValueNode?: IndentedValueNodeNode; dedent?: CstLeaf; seqInlineContent?: SeqInlineContentNode }
+  | { arm: "property"; property: PropertyNode; alt?: { branch: "indent"; indent: CstLeaf; indentedValueNode: IndentedValueNodeNode; dedent: CstLeaf } | { branch: "seqInlineContent"; seqInlineContent: SeqInlineContentNode } }
   | { arm: "seqInlineContent"; seqInlineContent: SeqInlineContentNode };
 
 function _SeqValueNode$property(c: readonly CstChild[], src: string): SeqValueNodeMatch | null {
   let property: (PropertyNode) | undefined;
-  let indent: (CstLeaf) | undefined;
-  let indentedValueNode: (IndentedValueNodeNode) | undefined;
-  let dedent: (CstLeaf) | undefined;
-  let seqInlineContent: (SeqInlineContentNode) | undefined;
+  let alt: ({ branch: "indent"; indent: CstLeaf; indentedValueNode: IndentedValueNodeNode; dedent: CstLeaf } | { branch: "seqInlineContent"; seqInlineContent: SeqInlineContentNode }) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
   {
@@ -3027,28 +3124,34 @@ function _SeqValueNode$property(c: readonly CstChild[], src: string): SeqValueNo
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_indent: (CstLeaf) | undefined;
+          let _t7_indentedValueNode: (IndentedValueNodeNode) | undefined;
+          let _t7_dedent: (CstLeaf) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!(isTok(c, i, "Indent"))) { _t5 = false; break _b6; }
-            indent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Indent"))) { _t5 = false; break _b6; }
+            _t7_indent = c[i] as CstLeaf;
             i++;
-            if (!isNodeOf(c, i, "IndentedValueNode")) { _t5 = false; break _b6; }
-            indentedValueNode = c[i] as IndentedValueNodeNode;
+            if (!__nodeOf(c, i, "IndentedValueNode")) { _t5 = false; break _b6; }
+            _t7_indentedValueNode = c[i] as IndentedValueNodeNode;
             i++;
-            if (!(isTok(c, i, "Dedent"))) { _t5 = false; break _b6; }
-            dedent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Dedent"))) { _t5 = false; break _b6; }
+            _t7_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt = ({ branch: "indent", indent: _t7_indent!, indentedValueNode: _t7_indentedValueNode!, dedent: _t7_dedent! }) as typeof alt; }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!isNodeOf(c, i, "SeqInlineContent")) { _t8 = false; break _b9; }
-            seqInlineContent = c[i] as SeqInlineContentNode;
+          let _t11_seqInlineContent: (SeqInlineContentNode) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!__nodeOf(c, i, "SeqInlineContent")) { _t9 = false; break _b10; }
+            _t11_seqInlineContent = c[i] as SeqInlineContentNode;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t9) { _t3 = true; alt = ({ branch: "seqInlineContent", seqInlineContent: _t11_seqInlineContent! }) as typeof alt; }
+          else i = _t8;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -3056,13 +3159,13 @@ function _SeqValueNode$property(c: readonly CstChild[], src: string): SeqValueNo
     if (!_t1) i = _t0;
   }
   if (i !== c.length) return null;
-  return { arm: "property", property: property!, indent, indentedValueNode, dedent, seqInlineContent };
+  return { arm: "property", property: property!, alt };
 }
 
 function _SeqValueNode$seqInlineContent(c: readonly CstChild[], src: string): SeqValueNodeMatch | null {
   let seqInlineContent: (SeqInlineContentNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "SeqInlineContent")) return null;
+  if (!__nodeOf(c, i, "SeqInlineContent")) return null;
   seqInlineContent = c[i] as SeqInlineContentNode;
   i++;
   if (i !== c.length) return null;
@@ -3105,7 +3208,7 @@ export type SeqInlineContentMatch =
 function _SeqInlineContent$blockSequence(c: readonly CstChild[], src: string): SeqInlineContentMatch | null {
   let blockSequence: (BlockSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "BlockSequence")) return null;
+  if (!__nodeOf(c, i, "BlockSequence")) return null;
   blockSequence = c[i] as BlockSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -3115,7 +3218,7 @@ function _SeqInlineContent$blockSequence(c: readonly CstChild[], src: string): S
 function _SeqInlineContent$emptyKeyMapping(c: readonly CstChild[], src: string): SeqInlineContentMatch | null {
   let emptyKeyMapping: (EmptyKeyMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "EmptyKeyMapping")) return null;
+  if (!__nodeOf(c, i, "EmptyKeyMapping")) return null;
   emptyKeyMapping = c[i] as EmptyKeyMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -3125,7 +3228,7 @@ function _SeqInlineContent$emptyKeyMapping(c: readonly CstChild[], src: string):
 function _SeqInlineContent$flowMapping(c: readonly CstChild[], src: string): SeqInlineContentMatch | null {
   let flowMapping: (FlowMappingNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowMapping")) return null;
+  if (!__nodeOf(c, i, "FlowMapping")) return null;
   flowMapping = c[i] as FlowMappingNode;
   i++;
   if (i !== c.length) return null;
@@ -3135,7 +3238,7 @@ function _SeqInlineContent$flowMapping(c: readonly CstChild[], src: string): Seq
 function _SeqInlineContent$flowSequence(c: readonly CstChild[], src: string): SeqInlineContentMatch | null {
   let flowSequence: (FlowSequenceNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowSequence")) return null;
+  if (!__nodeOf(c, i, "FlowSequence")) return null;
   flowSequence = c[i] as FlowSequenceNode;
   i++;
   if (i !== c.length) return null;
@@ -3145,7 +3248,7 @@ function _SeqInlineContent$flowSequence(c: readonly CstChild[], src: string): Se
 function _SeqInlineContent$alias(c: readonly CstChild[], src: string): SeqInlineContentMatch | null {
   let alias: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Alias"))) return null;
+  if (!(__tok(c, i, "Alias"))) return null;
   alias = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3155,7 +3258,7 @@ function _SeqInlineContent$alias(c: readonly CstChild[], src: string): SeqInline
 function _SeqInlineContent$mappingOrScalar(c: readonly CstChild[], src: string): SeqInlineContentMatch | null {
   let mappingOrScalar: (MappingOrScalarNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "MappingOrScalar")) return null;
+  if (!__nodeOf(c, i, "MappingOrScalar")) return null;
   mappingOrScalar = c[i] as MappingOrScalarNode;
   i++;
   if (i !== c.length) return null;
@@ -3211,16 +3314,16 @@ function _BlockSequence$seqItem(c: readonly CstChild[], src: string): BlockSeque
   const newline: (CstLeaf)[] = [];
   const seqItem2: (SeqItemNode)[] = [];
   let i = 0;
-  if (!isNodeOf(c, i, "SeqItem")) return null;
+  if (!__nodeOf(c, i, "SeqItem")) return null;
   seqItem = c[i] as SeqItemNode;
   i++;
   for (;;) {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Newline"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Newline"))) { _t1 = false; break _b2; }
       newline.push(c[i] as CstLeaf);
       i++;
-      if (!isNodeOf(c, i, "SeqItem")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "SeqItem")) { _t1 = false; break _b2; }
       seqItem2.push(c[i] as SeqItemNode);
       i++;
     }
@@ -3258,12 +3361,12 @@ export type SeqItemMatch =
 function _SeqItem$dash(c: readonly CstChild[], src: string): SeqItemMatch | null {
   let value: (ValueNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "-", "$punct")) return null;
+  if (!__lit(c, i, src, "-", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Value")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Value")) { _t1 = false; break _b2; }
       value = c[i] as ValueNode;
       i++;
     }
@@ -3295,19 +3398,16 @@ export function matchSeqItem(n: SeqItemNode, src: string): SeqItemMatch {
 }
 
 export type FlowNodeMatch =
-  | { arm: "property"; property?: PropertyNode; flowMapping?: FlowMappingNode; flowSequence?: FlowSequenceNode; alias?: CstLeaf; scalar?: ScalarNode };
+  | { arm: "property"; property?: PropertyNode; alt?: { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "alias"; alias: CstLeaf } | { branch: "scalar"; scalar: ScalarNode } };
 
 function _FlowNode$property(c: readonly CstChild[], src: string): FlowNodeMatch | null {
   let property: (PropertyNode) | undefined;
-  let flowMapping: (FlowMappingNode) | undefined;
-  let flowSequence: (FlowSequenceNode) | undefined;
-  let alias: (CstLeaf) | undefined;
-  let scalar: (ScalarNode) | undefined;
+  let alt: ({ branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "alias"; alias: CstLeaf } | { branch: "scalar"; scalar: ScalarNode }) | undefined;
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Property")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Property")) { _t1 = false; break _b2; }
       property = c[i] as PropertyNode;
       i++;
     }
@@ -3319,40 +3419,48 @@ function _FlowNode$property(c: readonly CstChild[], src: string): FlowNodeMatch 
       {
         let _t6 = false;
         if (!_t6) {
+          let _t10_flowMapping: (FlowMappingNode) | undefined;
           const _t7 = i; let _t8 = true;
           _b9: {
-            if (!isNodeOf(c, i, "FlowMapping")) { _t8 = false; break _b9; }
-            flowMapping = c[i] as FlowMappingNode;
+            if (!__nodeOf(c, i, "FlowMapping")) { _t8 = false; break _b9; }
+            _t10_flowMapping = c[i] as FlowMappingNode;
             i++;
           }
-          if (_t8) _t6 = true; else i = _t7;
+          if (_t8) { _t6 = true; alt = ({ branch: "flowMapping", flowMapping: _t10_flowMapping! }) as typeof alt; }
+          else i = _t7;
         }
         if (!_t6) {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!isNodeOf(c, i, "FlowSequence")) { _t11 = false; break _b12; }
-            flowSequence = c[i] as FlowSequenceNode;
+          let _t14_flowSequence: (FlowSequenceNode) | undefined;
+          const _t11 = i; let _t12 = true;
+          _b13: {
+            if (!__nodeOf(c, i, "FlowSequence")) { _t12 = false; break _b13; }
+            _t14_flowSequence = c[i] as FlowSequenceNode;
             i++;
           }
-          if (_t11) _t6 = true; else i = _t10;
+          if (_t12) { _t6 = true; alt = ({ branch: "flowSequence", flowSequence: _t14_flowSequence! }) as typeof alt; }
+          else i = _t11;
         }
         if (!_t6) {
-          const _t13 = i; let _t14 = true;
-          _b15: {
-            if (!(isTok(c, i, "Alias"))) { _t14 = false; break _b15; }
-            alias = c[i] as CstLeaf;
+          let _t18_alias: (CstLeaf) | undefined;
+          const _t15 = i; let _t16 = true;
+          _b17: {
+            if (!(__tok(c, i, "Alias"))) { _t16 = false; break _b17; }
+            _t18_alias = c[i] as CstLeaf;
             i++;
           }
-          if (_t14) _t6 = true; else i = _t13;
+          if (_t16) { _t6 = true; alt = ({ branch: "alias", alias: _t18_alias! }) as typeof alt; }
+          else i = _t15;
         }
         if (!_t6) {
-          const _t16 = i; let _t17 = true;
-          _b18: {
-            if (!isNodeOf(c, i, "Scalar")) { _t17 = false; break _b18; }
-            scalar = c[i] as ScalarNode;
+          let _t22_scalar: (ScalarNode) | undefined;
+          const _t19 = i; let _t20 = true;
+          _b21: {
+            if (!__nodeOf(c, i, "Scalar")) { _t20 = false; break _b21; }
+            _t22_scalar = c[i] as ScalarNode;
             i++;
           }
-          if (_t17) _t6 = true; else i = _t16;
+          if (_t20) { _t6 = true; alt = ({ branch: "scalar", scalar: _t22_scalar! }) as typeof alt; }
+          else i = _t19;
         }
         if (!_t6) { _t4 = false; break _b5; }
       }
@@ -3360,7 +3468,7 @@ function _FlowNode$property(c: readonly CstChild[], src: string): FlowNodeMatch 
     if (!_t4) i = _t3;
   }
   if (i !== c.length) return null;
-  return { arm: "property", property, flowMapping, flowSequence, alias, scalar };
+  return { arm: "property", property, alt };
 }
 
 export function matchFlowNode(n: FlowNodeNode, src: string): FlowNodeMatch {
@@ -3407,12 +3515,12 @@ export type FlowExplicitMatch =
 function _FlowExplicit$question(c: readonly CstChild[], src: string): FlowExplicitMatch | null {
   let flowNode: (FlowNodeNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "?", "$punct")) return null;
+  if (!__lit(c, i, src, "?", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "FlowNode")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "FlowNode")) { _t1 = false; break _b2; }
       flowNode = c[i] as FlowNodeNode;
       i++;
     }
@@ -3454,7 +3562,7 @@ function _FlowMapEntry$flowExplicit(c: readonly CstChild[], src: string): FlowMa
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "FlowExplicit")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "FlowExplicit")) { _t1 = false; break _b2; }
       flowExplicit = c[i] as FlowExplicitNode;
       i++;
     }
@@ -3463,7 +3571,7 @@ function _FlowMapEntry$flowExplicit(c: readonly CstChild[], src: string): FlowMa
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isNodeOf(c, i, "FlowNode")) { _t4 = false; break _b5; }
+      if (!__nodeOf(c, i, "FlowNode")) { _t4 = false; break _b5; }
       flowNode = c[i] as FlowNodeNode;
       i++;
     }
@@ -3472,12 +3580,12 @@ function _FlowMapEntry$flowExplicit(c: readonly CstChild[], src: string): FlowMa
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isLit(c, i, src, ":", "$punct")) { _t7 = false; break _b8; }
+      if (!__lit(c, i, src, ":", "$punct")) { _t7 = false; break _b8; }
       i++;
       {
         const _t9 = i; let _t10 = true;
         _b11: {
-          if (!isNodeOf(c, i, "FlowNode")) { _t10 = false; break _b11; }
+          if (!__nodeOf(c, i, "FlowNode")) { _t10 = false; break _b11; }
           flowNode2 = c[i] as FlowNodeNode;
           i++;
         }
@@ -3527,20 +3635,20 @@ function _FlowMapping$brace(c: readonly CstChild[], src: string): FlowMappingMat
   let flowMapEntry: (FlowMapEntryNode) | undefined;
   const flowMapEntry2: (FlowMapEntryNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "{", "$punct")) return null;
+  if (!__lit(c, i, src, "{", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "FlowMapEntry")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "FlowMapEntry")) { _t1 = false; break _b2; }
       flowMapEntry = c[i] as FlowMapEntryNode;
       i++;
       for (;;) {
         const _t3 = i; let _t4 = true;
         _b5: {
-          if (!isLit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
+          if (!__lit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
           i++;
-          if (!isNodeOf(c, i, "FlowMapEntry")) { _t4 = false; break _b5; }
+          if (!__nodeOf(c, i, "FlowMapEntry")) { _t4 = false; break _b5; }
           flowMapEntry2.push(c[i] as FlowMapEntryNode);
           i++;
         }
@@ -3553,12 +3661,12 @@ function _FlowMapping$brace(c: readonly CstChild[], src: string): FlowMappingMat
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t7 = false; break _b8; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t7 = false; break _b8; }
       i++;
     }
     if (!_t7) i = _t6;
   }
-  if (!isLit(c, i, src, "}", "$punct")) return null;
+  if (!__lit(c, i, src, "}", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "brace", flowMapEntry, flowMapEntry2 };
@@ -3595,15 +3703,15 @@ function _FlowSeqEntry$flowSeqKey(c: readonly CstChild[], src: string): FlowSeqE
   let flowSeqKey: (FlowSeqKeyNode) | undefined;
   let flowNode: (FlowNodeNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowSeqKey")) return null;
+  if (!__nodeOf(c, i, "FlowSeqKey")) return null;
   flowSeqKey = c[i] as FlowSeqKeyNode;
   i++;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "FlowNode")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "FlowNode")) { _t1 = false; break _b2; }
       flowNode = c[i] as FlowNodeNode;
       i++;
     }
@@ -3617,12 +3725,12 @@ function _FlowSeqEntry$question(c: readonly CstChild[], src: string): FlowSeqEnt
   let flowNode: (FlowNodeNode) | undefined;
   let flowNode2: (FlowNodeNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, "?", "$punct")) return null;
+  if (!__lit(c, i, src, "?", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "FlowNode")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "FlowNode")) { _t1 = false; break _b2; }
       flowNode = c[i] as FlowNodeNode;
       i++;
     }
@@ -3631,12 +3739,12 @@ function _FlowSeqEntry$question(c: readonly CstChild[], src: string): FlowSeqEnt
   {
     const _t3 = i; let _t4 = true;
     _b5: {
-      if (!isLit(c, i, src, ":", "$punct")) { _t4 = false; break _b5; }
+      if (!__lit(c, i, src, ":", "$punct")) { _t4 = false; break _b5; }
       i++;
       {
         const _t6 = i; let _t7 = true;
         _b8: {
-          if (!isNodeOf(c, i, "FlowNode")) { _t7 = false; break _b8; }
+          if (!__nodeOf(c, i, "FlowNode")) { _t7 = false; break _b8; }
           flowNode2 = c[i] as FlowNodeNode;
           i++;
         }
@@ -3652,12 +3760,12 @@ function _FlowSeqEntry$question(c: readonly CstChild[], src: string): FlowSeqEnt
 function _FlowSeqEntry$colon(c: readonly CstChild[], src: string): FlowSeqEntryMatch | null {
   let flowNode: (FlowNodeNode) | undefined;
   let i = 0;
-  if (!isLit(c, i, src, ":", "$punct")) return null;
+  if (!__lit(c, i, src, ":", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "FlowNode")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "FlowNode")) { _t1 = false; break _b2; }
       flowNode = c[i] as FlowNodeNode;
       i++;
     }
@@ -3670,7 +3778,7 @@ function _FlowSeqEntry$colon(c: readonly CstChild[], src: string): FlowSeqEntryM
 function _FlowSeqEntry$flowNode(c: readonly CstChild[], src: string): FlowSeqEntryMatch | null {
   let flowNode: (FlowNodeNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "FlowNode")) return null;
+  if (!__nodeOf(c, i, "FlowNode")) return null;
   flowNode = c[i] as FlowNodeNode;
   i++;
   if (i !== c.length) return null;
@@ -3711,21 +3819,17 @@ export function matchFlowSeqEntry(n: FlowSeqEntryNode, src: string): FlowSeqEntr
 }
 
 export type FlowSeqKeyMatch =
-  | { arm: "property"; property?: PropertyNode; flowMapping?: FlowMappingNode; flowSequence?: FlowSequenceNode; dQuoteKey?: CstLeaf; sQuoteKey?: CstLeaf; key?: CstLeaf }
+  | { arm: "property"; property?: PropertyNode; alt: { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "dQuoteKey"; dQuoteKey: CstLeaf } | { branch: "sQuoteKey"; sQuoteKey: CstLeaf } | { branch: "key"; key: CstLeaf } }
   | { arm: "alias"; alias: CstLeaf };
 
 function _FlowSeqKey$property(c: readonly CstChild[], src: string): FlowSeqKeyMatch | null {
   let property: (PropertyNode) | undefined;
-  let flowMapping: (FlowMappingNode) | undefined;
-  let flowSequence: (FlowSequenceNode) | undefined;
-  let dQuoteKey: (CstLeaf) | undefined;
-  let sQuoteKey: (CstLeaf) | undefined;
-  let key: (CstLeaf) | undefined;
+  let alt: ({ branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "dQuoteKey"; dQuoteKey: CstLeaf } | { branch: "sQuoteKey"; sQuoteKey: CstLeaf } | { branch: "key"; key: CstLeaf }) | undefined;
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "Property")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "Property")) { _t1 = false; break _b2; }
       property = c[i] as PropertyNode;
       i++;
     }
@@ -3734,60 +3838,70 @@ function _FlowSeqKey$property(c: readonly CstChild[], src: string): FlowSeqKeyMa
   {
     let _t3 = false;
     if (!_t3) {
+      let _t7_flowMapping: (FlowMappingNode) | undefined;
       const _t4 = i; let _t5 = true;
       _b6: {
-        if (!isNodeOf(c, i, "FlowMapping")) { _t5 = false; break _b6; }
-        flowMapping = c[i] as FlowMappingNode;
+        if (!__nodeOf(c, i, "FlowMapping")) { _t5 = false; break _b6; }
+        _t7_flowMapping = c[i] as FlowMappingNode;
         i++;
       }
-      if (_t5) _t3 = true; else i = _t4;
+      if (_t5) { _t3 = true; alt = ({ branch: "flowMapping", flowMapping: _t7_flowMapping! }) as typeof alt; }
+      else i = _t4;
     }
     if (!_t3) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!isNodeOf(c, i, "FlowSequence")) { _t8 = false; break _b9; }
-        flowSequence = c[i] as FlowSequenceNode;
+      let _t11_flowSequence: (FlowSequenceNode) | undefined;
+      const _t8 = i; let _t9 = true;
+      _b10: {
+        if (!__nodeOf(c, i, "FlowSequence")) { _t9 = false; break _b10; }
+        _t11_flowSequence = c[i] as FlowSequenceNode;
         i++;
       }
-      if (_t8) _t3 = true; else i = _t7;
+      if (_t9) { _t3 = true; alt = ({ branch: "flowSequence", flowSequence: _t11_flowSequence! }) as typeof alt; }
+      else i = _t8;
     }
     if (!_t3) {
-      const _t10 = i; let _t11 = true;
-      _b12: {
-        if (!(isTok(c, i, "DQuoteKey"))) { _t11 = false; break _b12; }
-        dQuoteKey = c[i] as CstLeaf;
+      let _t15_dQuoteKey: (CstLeaf) | undefined;
+      const _t12 = i; let _t13 = true;
+      _b14: {
+        if (!(__tok(c, i, "DQuoteKey"))) { _t13 = false; break _b14; }
+        _t15_dQuoteKey = c[i] as CstLeaf;
         i++;
       }
-      if (_t11) _t3 = true; else i = _t10;
+      if (_t13) { _t3 = true; alt = ({ branch: "dQuoteKey", dQuoteKey: _t15_dQuoteKey! }) as typeof alt; }
+      else i = _t12;
     }
     if (!_t3) {
-      const _t13 = i; let _t14 = true;
-      _b15: {
-        if (!(isTok(c, i, "SQuoteKey"))) { _t14 = false; break _b15; }
-        sQuoteKey = c[i] as CstLeaf;
-        i++;
-      }
-      if (_t14) _t3 = true; else i = _t13;
-    }
-    if (!_t3) {
+      let _t19_sQuoteKey: (CstLeaf) | undefined;
       const _t16 = i; let _t17 = true;
       _b18: {
-        if (!(isTok(c, i, "Key"))) { _t17 = false; break _b18; }
-        key = c[i] as CstLeaf;
+        if (!(__tok(c, i, "SQuoteKey"))) { _t17 = false; break _b18; }
+        _t19_sQuoteKey = c[i] as CstLeaf;
         i++;
       }
-      if (_t17) _t3 = true; else i = _t16;
+      if (_t17) { _t3 = true; alt = ({ branch: "sQuoteKey", sQuoteKey: _t19_sQuoteKey! }) as typeof alt; }
+      else i = _t16;
+    }
+    if (!_t3) {
+      let _t23_key: (CstLeaf) | undefined;
+      const _t20 = i; let _t21 = true;
+      _b22: {
+        if (!(__tok(c, i, "Key"))) { _t21 = false; break _b22; }
+        _t23_key = c[i] as CstLeaf;
+        i++;
+      }
+      if (_t21) { _t3 = true; alt = ({ branch: "key", key: _t23_key! }) as typeof alt; }
+      else i = _t20;
     }
     if (!_t3) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "property", property, flowMapping, flowSequence, dQuoteKey, sQuoteKey, key };
+  return { arm: "property", property, alt: alt! };
 }
 
 function _FlowSeqKey$alias(c: readonly CstChild[], src: string): FlowSeqKeyMatch | null {
   let alias: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Alias"))) return null;
+  if (!(__tok(c, i, "Alias"))) return null;
   alias = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3846,20 +3960,20 @@ function _FlowSequence$bracket(c: readonly CstChild[], src: string): FlowSequenc
   let flowSeqEntry: (FlowSeqEntryNode) | undefined;
   const flowSeqEntry2: (FlowSeqEntryNode)[] = [];
   let i = 0;
-  if (!isLit(c, i, src, "[", "$punct")) return null;
+  if (!__lit(c, i, src, "[", "$punct")) return null;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "FlowSeqEntry")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "FlowSeqEntry")) { _t1 = false; break _b2; }
       flowSeqEntry = c[i] as FlowSeqEntryNode;
       i++;
       for (;;) {
         const _t3 = i; let _t4 = true;
         _b5: {
-          if (!isLit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
+          if (!__lit(c, i, src, ",", "$punct")) { _t4 = false; break _b5; }
           i++;
-          if (!isNodeOf(c, i, "FlowSeqEntry")) { _t4 = false; break _b5; }
+          if (!__nodeOf(c, i, "FlowSeqEntry")) { _t4 = false; break _b5; }
           flowSeqEntry2.push(c[i] as FlowSeqEntryNode);
           i++;
         }
@@ -3872,12 +3986,12 @@ function _FlowSequence$bracket(c: readonly CstChild[], src: string): FlowSequenc
   {
     const _t6 = i; let _t7 = true;
     _b8: {
-      if (!isLit(c, i, src, ",", "$punct")) { _t7 = false; break _b8; }
+      if (!__lit(c, i, src, ",", "$punct")) { _t7 = false; break _b8; }
       i++;
     }
     if (!_t7) i = _t6;
   }
-  if (!isLit(c, i, src, "]", "$punct")) return null;
+  if (!__lit(c, i, src, "]", "$punct")) return null;
   i++;
   if (i !== c.length) return null;
   return { arm: "bracket", flowSeqEntry, flowSeqEntry2 };
@@ -3918,7 +4032,7 @@ export type ScalarMatch =
 function _Scalar$dQuoteKey(c: readonly CstChild[], src: string): ScalarMatch | null {
   let dQuoteKey: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "DQuoteKey"))) return null;
+  if (!(__tok(c, i, "DQuoteKey"))) return null;
   dQuoteKey = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3928,7 +4042,7 @@ function _Scalar$dQuoteKey(c: readonly CstChild[], src: string): ScalarMatch | n
 function _Scalar$sQuoteKey(c: readonly CstChild[], src: string): ScalarMatch | null {
   let sQuoteKey: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "SQuoteKey"))) return null;
+  if (!(__tok(c, i, "SQuoteKey"))) return null;
   sQuoteKey = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3938,7 +4052,7 @@ function _Scalar$sQuoteKey(c: readonly CstChild[], src: string): ScalarMatch | n
 function _Scalar$dQuote(c: readonly CstChild[], src: string): ScalarMatch | null {
   let dQuote: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "DQuote"))) return null;
+  if (!(__tok(c, i, "DQuote"))) return null;
   dQuote = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3948,7 +4062,7 @@ function _Scalar$dQuote(c: readonly CstChild[], src: string): ScalarMatch | null
 function _Scalar$sQuote(c: readonly CstChild[], src: string): ScalarMatch | null {
   let sQuote: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "SQuote"))) return null;
+  if (!(__tok(c, i, "SQuote"))) return null;
   sQuote = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3958,7 +4072,7 @@ function _Scalar$sQuote(c: readonly CstChild[], src: string): ScalarMatch | null
 function _Scalar$blockScalar(c: readonly CstChild[], src: string): ScalarMatch | null {
   let blockScalar: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "BlockScalar"))) return null;
+  if (!(__tok(c, i, "BlockScalar"))) return null;
   blockScalar = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3968,7 +4082,7 @@ function _Scalar$blockScalar(c: readonly CstChild[], src: string): ScalarMatch |
 function _Scalar$key(c: readonly CstChild[], src: string): ScalarMatch | null {
   let key: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Key"))) return null;
+  if (!(__tok(c, i, "Key"))) return null;
   key = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3978,7 +4092,7 @@ function _Scalar$key(c: readonly CstChild[], src: string): ScalarMatch | null {
 function _Scalar$num(c: readonly CstChild[], src: string): ScalarMatch | null {
   let num: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Num"))) return null;
+  if (!(__tok(c, i, "Num"))) return null;
   num = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3988,7 +4102,7 @@ function _Scalar$num(c: readonly CstChild[], src: string): ScalarMatch | null {
 function _Scalar$boolNull(c: readonly CstChild[], src: string): ScalarMatch | null {
   let boolNull: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "BoolNull"))) return null;
+  if (!(__tok(c, i, "BoolNull"))) return null;
   boolNull = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -3998,7 +4112,7 @@ function _Scalar$boolNull(c: readonly CstChild[], src: string): ScalarMatch | nu
 function _Scalar$plain(c: readonly CstChild[], src: string): ScalarMatch | null {
   let plain: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Plain"))) return null;
+  if (!(__tok(c, i, "Plain"))) return null;
   plain = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -4069,7 +4183,7 @@ export type BlockKeyScalarMatch =
 function _BlockKeyScalar$dQuoteKey(c: readonly CstChild[], src: string): BlockKeyScalarMatch | null {
   let dQuoteKey: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "DQuoteKey"))) return null;
+  if (!(__tok(c, i, "DQuoteKey"))) return null;
   dQuoteKey = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -4079,7 +4193,7 @@ function _BlockKeyScalar$dQuoteKey(c: readonly CstChild[], src: string): BlockKe
 function _BlockKeyScalar$sQuoteKey(c: readonly CstChild[], src: string): BlockKeyScalarMatch | null {
   let sQuoteKey: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "SQuoteKey"))) return null;
+  if (!(__tok(c, i, "SQuoteKey"))) return null;
   sQuoteKey = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -4089,7 +4203,7 @@ function _BlockKeyScalar$sQuoteKey(c: readonly CstChild[], src: string): BlockKe
 function _BlockKeyScalar$key(c: readonly CstChild[], src: string): BlockKeyScalarMatch | null {
   let key: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Key"))) return null;
+  if (!(__tok(c, i, "Key"))) return null;
   key = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -4099,7 +4213,7 @@ function _BlockKeyScalar$key(c: readonly CstChild[], src: string): BlockKeyScala
 function _BlockKeyScalar$num(c: readonly CstChild[], src: string): BlockKeyScalarMatch | null {
   let num: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Num"))) return null;
+  if (!(__tok(c, i, "Num"))) return null;
   num = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -4109,7 +4223,7 @@ function _BlockKeyScalar$num(c: readonly CstChild[], src: string): BlockKeyScala
 function _BlockKeyScalar$boolNull(c: readonly CstChild[], src: string): BlockKeyScalarMatch | null {
   let boolNull: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "BoolNull"))) return null;
+  if (!(__tok(c, i, "BoolNull"))) return null;
   boolNull = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -4119,7 +4233,7 @@ function _BlockKeyScalar$boolNull(c: readonly CstChild[], src: string): BlockKey
 function _BlockKeyScalar$plain(c: readonly CstChild[], src: string): BlockKeyScalarMatch | null {
   let plain: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Plain"))) return null;
+  if (!(__tok(c, i, "Plain"))) return null;
   plain = c[i] as CstLeaf;
   i++;
   if (i !== c.length) return null;
@@ -4168,328 +4282,374 @@ export function matchBlockKeyScalar(n: BlockKeyScalarNode, src: string): BlockKe
 }
 
 export type DocFoldMatch =
-  | { arm: "num"; num?: CstLeaf; boolNull?: CstLeaf; plain?: CstLeaf; newline: (CstLeaf)[]; plain2: (CstLeaf)[]; yamlDirective: (CstLeaf)[]; directive: (CstLeaf)[]; indent: (CstLeaf)[]; plain3: (CstLeaf)[]; yamlDirective2: (CstLeaf)[]; directive2: (CstLeaf)[]; newline2: (CstLeaf)[]; plain4: (CstLeaf)[]; yamlDirective3: (CstLeaf)[]; directive3: (CstLeaf)[]; dedent: (CstLeaf)[] };
+  | { arm: "num"; alt: { branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }; alt2: ({ branch: "newline"; newline: CstLeaf; alt: { branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf } } | { branch: "indent"; indent: CstLeaf; alt: { branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf }; newline: (CstLeaf)[]; alt2: ({ branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf })[]; dedent: CstLeaf })[] };
 
 function _DocFold$num(c: readonly CstChild[], src: string): DocFoldMatch | null {
-  let num: (CstLeaf) | undefined;
-  let boolNull: (CstLeaf) | undefined;
-  let plain: (CstLeaf) | undefined;
-  const newline: (CstLeaf)[] = [];
-  const plain2: (CstLeaf)[] = [];
-  const yamlDirective: (CstLeaf)[] = [];
-  const directive: (CstLeaf)[] = [];
-  const indent: (CstLeaf)[] = [];
-  const plain3: (CstLeaf)[] = [];
-  const yamlDirective2: (CstLeaf)[] = [];
-  const directive2: (CstLeaf)[] = [];
-  const newline2: (CstLeaf)[] = [];
-  const plain4: (CstLeaf)[] = [];
-  const yamlDirective3: (CstLeaf)[] = [];
-  const directive3: (CstLeaf)[] = [];
-  const dedent: (CstLeaf)[] = [];
+  let alt: ({ branch: "num"; num: CstLeaf } | { branch: "boolNull"; boolNull: CstLeaf } | { branch: "plain"; plain: CstLeaf }) | undefined;
+  const alt2: ({ branch: "newline"; newline: CstLeaf; alt: { branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf } } | { branch: "indent"; indent: CstLeaf; alt: { branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf }; newline: (CstLeaf)[]; alt2: ({ branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf })[]; dedent: CstLeaf })[] = [];
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_num: (CstLeaf) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!(isTok(c, i, "Num"))) { _t2 = false; break _b3; }
-        num = c[i] as CstLeaf;
+        if (!(__tok(c, i, "Num"))) { _t2 = false; break _b3; }
+        _t4_num = c[i] as CstLeaf;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "num", num: _t4_num! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!(isTok(c, i, "BoolNull"))) { _t5 = false; break _b6; }
-        boolNull = c[i] as CstLeaf;
+      let _t8_boolNull: (CstLeaf) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!(__tok(c, i, "BoolNull"))) { _t6 = false; break _b7; }
+        _t8_boolNull = c[i] as CstLeaf;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "boolNull", boolNull: _t8_boolNull! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Plain"))) { _t8 = false; break _b9; }
-        plain = c[i] as CstLeaf;
+      let _t12_plain: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Plain"))) { _t10 = false; break _b11; }
+        _t12_plain = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "plain", plain: _t12_plain! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) return null;
   }
   {
-    const _t10 = i; let _t11 = true;
-    _b12: {
+    const _t13 = i; let _t14 = true;
+    _b15: {
       {
-        let _t13 = false;
-        if (!_t13) {
-          const _t14 = i; let _t15 = true;
-          _b16: {
-            if (!(isTok(c, i, "Newline"))) { _t15 = false; break _b16; }
-            newline.push(c[i] as CstLeaf);
+        let _t16 = false;
+        if (!_t16) {
+          let _t20_newline: (CstLeaf) | undefined;
+          let _t20_alt: ({ branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf }) | undefined;
+          const _t17 = i; let _t18 = true;
+          _b19: {
+            if (!(__tok(c, i, "Newline"))) { _t18 = false; break _b19; }
+            _t20_newline = c[i] as CstLeaf;
             i++;
             {
-              let _t17 = false;
-              if (!_t17) {
-                const _t18 = i; let _t19 = true;
-                _b20: {
-                  if (!(isTok(c, i, "Plain"))) { _t19 = false; break _b20; }
-                  plain2.push(c[i] as CstLeaf);
+              let _t21 = false;
+              if (!_t21) {
+                let _t25__t20_plain: (CstLeaf) | undefined;
+                const _t22 = i; let _t23 = true;
+                _b24: {
+                  if (!(__tok(c, i, "Plain"))) { _t23 = false; break _b24; }
+                  _t25__t20_plain = c[i] as CstLeaf;
                   i++;
                 }
-                if (_t19) _t17 = true; else i = _t18;
+                if (_t23) { _t21 = true; _t20_alt = ({ branch: "plain", plain: _t25__t20_plain! }) as typeof _t20_alt; }
+                else i = _t22;
               }
-              if (!_t17) {
-                const _t21 = i; let _t22 = true;
-                _b23: {
-                  if (!(isTok(c, i, "YamlDirective"))) { _t22 = false; break _b23; }
-                  yamlDirective.push(c[i] as CstLeaf);
+              if (!_t21) {
+                let _t29__t20_yamlDirective: (CstLeaf) | undefined;
+                const _t26 = i; let _t27 = true;
+                _b28: {
+                  if (!(__tok(c, i, "YamlDirective"))) { _t27 = false; break _b28; }
+                  _t29__t20_yamlDirective = c[i] as CstLeaf;
                   i++;
                 }
-                if (_t22) _t17 = true; else i = _t21;
+                if (_t27) { _t21 = true; _t20_alt = ({ branch: "yamlDirective", yamlDirective: _t29__t20_yamlDirective! }) as typeof _t20_alt; }
+                else i = _t26;
               }
-              if (!_t17) {
-                const _t24 = i; let _t25 = true;
-                _b26: {
-                  if (!(isTok(c, i, "Directive"))) { _t25 = false; break _b26; }
-                  directive.push(c[i] as CstLeaf);
+              if (!_t21) {
+                let _t33__t20_directive: (CstLeaf) | undefined;
+                const _t30 = i; let _t31 = true;
+                _b32: {
+                  if (!(__tok(c, i, "Directive"))) { _t31 = false; break _b32; }
+                  _t33__t20_directive = c[i] as CstLeaf;
                   i++;
                 }
-                if (_t25) _t17 = true; else i = _t24;
+                if (_t31) { _t21 = true; _t20_alt = ({ branch: "directive", directive: _t33__t20_directive! }) as typeof _t20_alt; }
+                else i = _t30;
               }
-              if (!_t17) { _t15 = false; break _b16; }
+              if (!_t21) { _t18 = false; break _b19; }
             }
           }
-          if (_t15) _t13 = true; else i = _t14;
+          if (_t18) { _t16 = true; alt2.push({ branch: "newline", newline: _t20_newline!, alt: _t20_alt! } as never); }
+          else i = _t17;
         }
-        if (!_t13) {
-          const _t27 = i; let _t28 = true;
-          _b29: {
-            if (!(isTok(c, i, "Indent"))) { _t28 = false; break _b29; }
-            indent.push(c[i] as CstLeaf);
+        if (!_t16) {
+          let _t37_indent: (CstLeaf) | undefined;
+          let _t37_alt: ({ branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf }) | undefined;
+          const _t37_newline: (CstLeaf)[] = [];
+          const _t37_alt2: ({ branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf })[] = [];
+          let _t37_dedent: (CstLeaf) | undefined;
+          const _t34 = i; let _t35 = true;
+          _b36: {
+            if (!(__tok(c, i, "Indent"))) { _t35 = false; break _b36; }
+            _t37_indent = c[i] as CstLeaf;
             i++;
             {
-              let _t30 = false;
-              if (!_t30) {
-                const _t31 = i; let _t32 = true;
-                _b33: {
-                  if (!(isTok(c, i, "Plain"))) { _t32 = false; break _b33; }
-                  plain3.push(c[i] as CstLeaf);
+              let _t38 = false;
+              if (!_t38) {
+                let _t42__t37_plain: (CstLeaf) | undefined;
+                const _t39 = i; let _t40 = true;
+                _b41: {
+                  if (!(__tok(c, i, "Plain"))) { _t40 = false; break _b41; }
+                  _t42__t37_plain = c[i] as CstLeaf;
                   i++;
                 }
-                if (_t32) _t30 = true; else i = _t31;
+                if (_t40) { _t38 = true; _t37_alt = ({ branch: "plain", plain: _t42__t37_plain! }) as typeof _t37_alt; }
+                else i = _t39;
               }
-              if (!_t30) {
-                const _t34 = i; let _t35 = true;
-                _b36: {
-                  if (!(isTok(c, i, "YamlDirective"))) { _t35 = false; break _b36; }
-                  yamlDirective2.push(c[i] as CstLeaf);
+              if (!_t38) {
+                let _t46__t37_yamlDirective: (CstLeaf) | undefined;
+                const _t43 = i; let _t44 = true;
+                _b45: {
+                  if (!(__tok(c, i, "YamlDirective"))) { _t44 = false; break _b45; }
+                  _t46__t37_yamlDirective = c[i] as CstLeaf;
                   i++;
                 }
-                if (_t35) _t30 = true; else i = _t34;
+                if (_t44) { _t38 = true; _t37_alt = ({ branch: "yamlDirective", yamlDirective: _t46__t37_yamlDirective! }) as typeof _t37_alt; }
+                else i = _t43;
               }
-              if (!_t30) {
-                const _t37 = i; let _t38 = true;
-                _b39: {
-                  if (!(isTok(c, i, "Directive"))) { _t38 = false; break _b39; }
-                  directive2.push(c[i] as CstLeaf);
+              if (!_t38) {
+                let _t50__t37_directive: (CstLeaf) | undefined;
+                const _t47 = i; let _t48 = true;
+                _b49: {
+                  if (!(__tok(c, i, "Directive"))) { _t48 = false; break _b49; }
+                  _t50__t37_directive = c[i] as CstLeaf;
                   i++;
                 }
-                if (_t38) _t30 = true; else i = _t37;
+                if (_t48) { _t38 = true; _t37_alt = ({ branch: "directive", directive: _t50__t37_directive! }) as typeof _t37_alt; }
+                else i = _t47;
               }
-              if (!_t30) { _t28 = false; break _b29; }
+              if (!_t38) { _t35 = false; break _b36; }
             }
             for (;;) {
-              const _t40 = i; let _t41 = true;
-              _b42: {
-                if (!(isTok(c, i, "Newline"))) { _t41 = false; break _b42; }
-                newline2.push(c[i] as CstLeaf);
+              const _t51 = i; let _t52 = true;
+              _b53: {
+                if (!(__tok(c, i, "Newline"))) { _t52 = false; break _b53; }
+                _t37_newline.push(c[i] as CstLeaf);
                 i++;
                 {
-                  let _t43 = false;
-                  if (!_t43) {
-                    const _t44 = i; let _t45 = true;
-                    _b46: {
-                      if (!(isTok(c, i, "Plain"))) { _t45 = false; break _b46; }
-                      plain4.push(c[i] as CstLeaf);
+                  let _t54 = false;
+                  if (!_t54) {
+                    let _t58__t37_plain: (CstLeaf) | undefined;
+                    const _t55 = i; let _t56 = true;
+                    _b57: {
+                      if (!(__tok(c, i, "Plain"))) { _t56 = false; break _b57; }
+                      _t58__t37_plain = c[i] as CstLeaf;
                       i++;
                     }
-                    if (_t45) _t43 = true; else i = _t44;
+                    if (_t56) { _t54 = true; _t37_alt2.push({ branch: "plain", plain: _t58__t37_plain! } as never); }
+                    else i = _t55;
                   }
-                  if (!_t43) {
-                    const _t47 = i; let _t48 = true;
-                    _b49: {
-                      if (!(isTok(c, i, "YamlDirective"))) { _t48 = false; break _b49; }
-                      yamlDirective3.push(c[i] as CstLeaf);
+                  if (!_t54) {
+                    let _t62__t37_yamlDirective: (CstLeaf) | undefined;
+                    const _t59 = i; let _t60 = true;
+                    _b61: {
+                      if (!(__tok(c, i, "YamlDirective"))) { _t60 = false; break _b61; }
+                      _t62__t37_yamlDirective = c[i] as CstLeaf;
                       i++;
                     }
-                    if (_t48) _t43 = true; else i = _t47;
+                    if (_t60) { _t54 = true; _t37_alt2.push({ branch: "yamlDirective", yamlDirective: _t62__t37_yamlDirective! } as never); }
+                    else i = _t59;
                   }
-                  if (!_t43) {
-                    const _t50 = i; let _t51 = true;
-                    _b52: {
-                      if (!(isTok(c, i, "Directive"))) { _t51 = false; break _b52; }
-                      directive3.push(c[i] as CstLeaf);
+                  if (!_t54) {
+                    let _t66__t37_directive: (CstLeaf) | undefined;
+                    const _t63 = i; let _t64 = true;
+                    _b65: {
+                      if (!(__tok(c, i, "Directive"))) { _t64 = false; break _b65; }
+                      _t66__t37_directive = c[i] as CstLeaf;
                       i++;
                     }
-                    if (_t51) _t43 = true; else i = _t50;
+                    if (_t64) { _t54 = true; _t37_alt2.push({ branch: "directive", directive: _t66__t37_directive! } as never); }
+                    else i = _t63;
                   }
-                  if (!_t43) { _t41 = false; break _b42; }
+                  if (!_t54) { _t52 = false; break _b53; }
                 }
               }
-              if (!_t41) { i = _t40; break; }
-              if (i === _t40) break;
+              if (!_t52) { i = _t51; break; }
+              if (i === _t51) break;
             }
-            if (!(isTok(c, i, "Dedent"))) { _t28 = false; break _b29; }
-            dedent.push(c[i] as CstLeaf);
+            if (!(__tok(c, i, "Dedent"))) { _t35 = false; break _b36; }
+            _t37_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t28) _t13 = true; else i = _t27;
+          if (_t35) { _t16 = true; alt2.push({ branch: "indent", indent: _t37_indent!, alt: _t37_alt!, newline: _t37_newline, alt2: _t37_alt2, dedent: _t37_dedent! } as never); }
+          else i = _t34;
         }
-        if (!_t13) { _t11 = false; break _b12; }
+        if (!_t16) { _t14 = false; break _b15; }
       }
     }
-    if (!_t11) return null;
+    if (!_t14) return null;
   }
   for (;;) {
-    const _t53 = i; let _t54 = true;
-    _b55: {
+    const _t67 = i; let _t68 = true;
+    _b69: {
       {
-        let _t56 = false;
-        if (!_t56) {
-          const _t57 = i; let _t58 = true;
-          _b59: {
-            if (!(isTok(c, i, "Newline"))) { _t58 = false; break _b59; }
-            newline.push(c[i] as CstLeaf);
+        let _t70 = false;
+        if (!_t70) {
+          let _t74_newline: (CstLeaf) | undefined;
+          let _t74_alt: ({ branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf }) | undefined;
+          const _t71 = i; let _t72 = true;
+          _b73: {
+            if (!(__tok(c, i, "Newline"))) { _t72 = false; break _b73; }
+            _t74_newline = c[i] as CstLeaf;
             i++;
             {
-              let _t60 = false;
-              if (!_t60) {
-                const _t61 = i; let _t62 = true;
-                _b63: {
-                  if (!(isTok(c, i, "Plain"))) { _t62 = false; break _b63; }
-                  plain2.push(c[i] as CstLeaf);
+              let _t75 = false;
+              if (!_t75) {
+                let _t79__t74_plain: (CstLeaf) | undefined;
+                const _t76 = i; let _t77 = true;
+                _b78: {
+                  if (!(__tok(c, i, "Plain"))) { _t77 = false; break _b78; }
+                  _t79__t74_plain = c[i] as CstLeaf;
                   i++;
                 }
-                if (_t62) _t60 = true; else i = _t61;
+                if (_t77) { _t75 = true; _t74_alt = ({ branch: "plain", plain: _t79__t74_plain! }) as typeof _t74_alt; }
+                else i = _t76;
               }
-              if (!_t60) {
-                const _t64 = i; let _t65 = true;
-                _b66: {
-                  if (!(isTok(c, i, "YamlDirective"))) { _t65 = false; break _b66; }
-                  yamlDirective.push(c[i] as CstLeaf);
-                  i++;
-                }
-                if (_t65) _t60 = true; else i = _t64;
-              }
-              if (!_t60) {
-                const _t67 = i; let _t68 = true;
-                _b69: {
-                  if (!(isTok(c, i, "Directive"))) { _t68 = false; break _b69; }
-                  directive.push(c[i] as CstLeaf);
-                  i++;
-                }
-                if (_t68) _t60 = true; else i = _t67;
-              }
-              if (!_t60) { _t58 = false; break _b59; }
-            }
-          }
-          if (_t58) _t56 = true; else i = _t57;
-        }
-        if (!_t56) {
-          const _t70 = i; let _t71 = true;
-          _b72: {
-            if (!(isTok(c, i, "Indent"))) { _t71 = false; break _b72; }
-            indent.push(c[i] as CstLeaf);
-            i++;
-            {
-              let _t73 = false;
-              if (!_t73) {
-                const _t74 = i; let _t75 = true;
-                _b76: {
-                  if (!(isTok(c, i, "Plain"))) { _t75 = false; break _b76; }
-                  plain3.push(c[i] as CstLeaf);
-                  i++;
-                }
-                if (_t75) _t73 = true; else i = _t74;
-              }
-              if (!_t73) {
-                const _t77 = i; let _t78 = true;
-                _b79: {
-                  if (!(isTok(c, i, "YamlDirective"))) { _t78 = false; break _b79; }
-                  yamlDirective2.push(c[i] as CstLeaf);
-                  i++;
-                }
-                if (_t78) _t73 = true; else i = _t77;
-              }
-              if (!_t73) {
+              if (!_t75) {
+                let _t83__t74_yamlDirective: (CstLeaf) | undefined;
                 const _t80 = i; let _t81 = true;
                 _b82: {
-                  if (!(isTok(c, i, "Directive"))) { _t81 = false; break _b82; }
-                  directive2.push(c[i] as CstLeaf);
+                  if (!(__tok(c, i, "YamlDirective"))) { _t81 = false; break _b82; }
+                  _t83__t74_yamlDirective = c[i] as CstLeaf;
                   i++;
                 }
-                if (_t81) _t73 = true; else i = _t80;
+                if (_t81) { _t75 = true; _t74_alt = ({ branch: "yamlDirective", yamlDirective: _t83__t74_yamlDirective! }) as typeof _t74_alt; }
+                else i = _t80;
               }
-              if (!_t73) { _t71 = false; break _b72; }
+              if (!_t75) {
+                let _t87__t74_directive: (CstLeaf) | undefined;
+                const _t84 = i; let _t85 = true;
+                _b86: {
+                  if (!(__tok(c, i, "Directive"))) { _t85 = false; break _b86; }
+                  _t87__t74_directive = c[i] as CstLeaf;
+                  i++;
+                }
+                if (_t85) { _t75 = true; _t74_alt = ({ branch: "directive", directive: _t87__t74_directive! }) as typeof _t74_alt; }
+                else i = _t84;
+              }
+              if (!_t75) { _t72 = false; break _b73; }
+            }
+          }
+          if (_t72) { _t70 = true; alt2.push({ branch: "newline", newline: _t74_newline!, alt: _t74_alt! } as never); }
+          else i = _t71;
+        }
+        if (!_t70) {
+          let _t91_indent: (CstLeaf) | undefined;
+          let _t91_alt: ({ branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf }) | undefined;
+          const _t91_newline: (CstLeaf)[] = [];
+          const _t91_alt2: ({ branch: "plain"; plain: CstLeaf } | { branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf })[] = [];
+          let _t91_dedent: (CstLeaf) | undefined;
+          const _t88 = i; let _t89 = true;
+          _b90: {
+            if (!(__tok(c, i, "Indent"))) { _t89 = false; break _b90; }
+            _t91_indent = c[i] as CstLeaf;
+            i++;
+            {
+              let _t92 = false;
+              if (!_t92) {
+                let _t96__t91_plain: (CstLeaf) | undefined;
+                const _t93 = i; let _t94 = true;
+                _b95: {
+                  if (!(__tok(c, i, "Plain"))) { _t94 = false; break _b95; }
+                  _t96__t91_plain = c[i] as CstLeaf;
+                  i++;
+                }
+                if (_t94) { _t92 = true; _t91_alt = ({ branch: "plain", plain: _t96__t91_plain! }) as typeof _t91_alt; }
+                else i = _t93;
+              }
+              if (!_t92) {
+                let _t100__t91_yamlDirective: (CstLeaf) | undefined;
+                const _t97 = i; let _t98 = true;
+                _b99: {
+                  if (!(__tok(c, i, "YamlDirective"))) { _t98 = false; break _b99; }
+                  _t100__t91_yamlDirective = c[i] as CstLeaf;
+                  i++;
+                }
+                if (_t98) { _t92 = true; _t91_alt = ({ branch: "yamlDirective", yamlDirective: _t100__t91_yamlDirective! }) as typeof _t91_alt; }
+                else i = _t97;
+              }
+              if (!_t92) {
+                let _t104__t91_directive: (CstLeaf) | undefined;
+                const _t101 = i; let _t102 = true;
+                _b103: {
+                  if (!(__tok(c, i, "Directive"))) { _t102 = false; break _b103; }
+                  _t104__t91_directive = c[i] as CstLeaf;
+                  i++;
+                }
+                if (_t102) { _t92 = true; _t91_alt = ({ branch: "directive", directive: _t104__t91_directive! }) as typeof _t91_alt; }
+                else i = _t101;
+              }
+              if (!_t92) { _t89 = false; break _b90; }
             }
             for (;;) {
-              const _t83 = i; let _t84 = true;
-              _b85: {
-                if (!(isTok(c, i, "Newline"))) { _t84 = false; break _b85; }
-                newline2.push(c[i] as CstLeaf);
+              const _t105 = i; let _t106 = true;
+              _b107: {
+                if (!(__tok(c, i, "Newline"))) { _t106 = false; break _b107; }
+                _t91_newline.push(c[i] as CstLeaf);
                 i++;
                 {
-                  let _t86 = false;
-                  if (!_t86) {
-                    const _t87 = i; let _t88 = true;
-                    _b89: {
-                      if (!(isTok(c, i, "Plain"))) { _t88 = false; break _b89; }
-                      plain4.push(c[i] as CstLeaf);
+                  let _t108 = false;
+                  if (!_t108) {
+                    let _t112__t91_plain: (CstLeaf) | undefined;
+                    const _t109 = i; let _t110 = true;
+                    _b111: {
+                      if (!(__tok(c, i, "Plain"))) { _t110 = false; break _b111; }
+                      _t112__t91_plain = c[i] as CstLeaf;
                       i++;
                     }
-                    if (_t88) _t86 = true; else i = _t87;
+                    if (_t110) { _t108 = true; _t91_alt2.push({ branch: "plain", plain: _t112__t91_plain! } as never); }
+                    else i = _t109;
                   }
-                  if (!_t86) {
-                    const _t90 = i; let _t91 = true;
-                    _b92: {
-                      if (!(isTok(c, i, "YamlDirective"))) { _t91 = false; break _b92; }
-                      yamlDirective3.push(c[i] as CstLeaf);
+                  if (!_t108) {
+                    let _t116__t91_yamlDirective: (CstLeaf) | undefined;
+                    const _t113 = i; let _t114 = true;
+                    _b115: {
+                      if (!(__tok(c, i, "YamlDirective"))) { _t114 = false; break _b115; }
+                      _t116__t91_yamlDirective = c[i] as CstLeaf;
                       i++;
                     }
-                    if (_t91) _t86 = true; else i = _t90;
+                    if (_t114) { _t108 = true; _t91_alt2.push({ branch: "yamlDirective", yamlDirective: _t116__t91_yamlDirective! } as never); }
+                    else i = _t113;
                   }
-                  if (!_t86) {
-                    const _t93 = i; let _t94 = true;
-                    _b95: {
-                      if (!(isTok(c, i, "Directive"))) { _t94 = false; break _b95; }
-                      directive3.push(c[i] as CstLeaf);
+                  if (!_t108) {
+                    let _t120__t91_directive: (CstLeaf) | undefined;
+                    const _t117 = i; let _t118 = true;
+                    _b119: {
+                      if (!(__tok(c, i, "Directive"))) { _t118 = false; break _b119; }
+                      _t120__t91_directive = c[i] as CstLeaf;
                       i++;
                     }
-                    if (_t94) _t86 = true; else i = _t93;
+                    if (_t118) { _t108 = true; _t91_alt2.push({ branch: "directive", directive: _t120__t91_directive! } as never); }
+                    else i = _t117;
                   }
-                  if (!_t86) { _t84 = false; break _b85; }
+                  if (!_t108) { _t106 = false; break _b107; }
                 }
               }
-              if (!_t84) { i = _t83; break; }
-              if (i === _t83) break;
+              if (!_t106) { i = _t105; break; }
+              if (i === _t105) break;
             }
-            if (!(isTok(c, i, "Dedent"))) { _t71 = false; break _b72; }
-            dedent.push(c[i] as CstLeaf);
+            if (!(__tok(c, i, "Dedent"))) { _t89 = false; break _b90; }
+            _t91_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t71) _t56 = true; else i = _t70;
+          if (_t89) { _t70 = true; alt2.push({ branch: "indent", indent: _t91_indent!, alt: _t91_alt!, newline: _t91_newline, alt2: _t91_alt2, dedent: _t91_dedent! } as never); }
+          else i = _t88;
         }
-        if (!_t56) { _t54 = false; break _b55; }
+        if (!_t70) { _t68 = false; break _b69; }
       }
     }
-    if (!_t54) { i = _t53; break; }
-    if (i === _t53) break;
+    if (!_t68) { i = _t67; break; }
+    if (i === _t67) break;
   }
   if (i !== c.length) return null;
-  return { arm: "num", num, boolNull, plain, newline, plain2, yamlDirective, directive, indent, plain3, yamlDirective2, directive2, newline2, plain4, yamlDirective3, directive3, dedent };
+  return { arm: "num", alt: alt!, alt2 };
 }
 
 export function matchDocFold(n: DocFoldNode, src: string): DocFoldMatch {
@@ -4522,28 +4682,15 @@ export function matchDocFold(n: DocFoldNode, src: string): DocFoldMatch {
 }
 
 export type InlineDocNodeMatch =
-  | { arm: "property"; property: PropertyNode; indent?: CstLeaf; docFold?: DocFoldNode; dedent?: CstLeaf; indent2?: CstLeaf; node?: NodeNode; dedent2?: CstLeaf; newline?: CstLeaf; docFold2?: DocFoldNode; newline2?: CstLeaf; node2?: NodeNode; flowMapping?: FlowMappingNode; flowSequence?: FlowSequenceNode; alias?: CstLeaf; scalar?: ScalarNode }
+  | { arm: "property"; property: PropertyNode; alt?: { branch: "indent"; indent: CstLeaf; docFold: DocFoldNode; dedent: CstLeaf } | { branch: "indent2"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf } | { branch: "newline"; newline: CstLeaf; docFold: DocFoldNode } | { branch: "newline2"; newline: CstLeaf; node: NodeNode } | { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "alias"; alias: CstLeaf } | { branch: "scalar"; scalar: ScalarNode } }
   | { arm: "docFold"; docFold: DocFoldNode }
-  | { arm: "flowMapping"; flowMapping?: FlowMappingNode; flowSequence?: FlowSequenceNode; alias?: CstLeaf; scalar?: ScalarNode };
+  | { arm: "flowMapping"; alt: { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "alias"; alias: CstLeaf } | { branch: "scalar"; scalar: ScalarNode } };
 
 function _InlineDocNode$property(c: readonly CstChild[], src: string): InlineDocNodeMatch | null {
   let property: (PropertyNode) | undefined;
-  let indent: (CstLeaf) | undefined;
-  let docFold: (DocFoldNode) | undefined;
-  let dedent: (CstLeaf) | undefined;
-  let indent2: (CstLeaf) | undefined;
-  let node: (NodeNode) | undefined;
-  let dedent2: (CstLeaf) | undefined;
-  let newline: (CstLeaf) | undefined;
-  let docFold2: (DocFoldNode) | undefined;
-  let newline2: (CstLeaf) | undefined;
-  let node2: (NodeNode) | undefined;
-  let flowMapping: (FlowMappingNode) | undefined;
-  let flowSequence: (FlowSequenceNode) | undefined;
-  let alias: (CstLeaf) | undefined;
-  let scalar: (ScalarNode) | undefined;
+  let alt: ({ branch: "indent"; indent: CstLeaf; docFold: DocFoldNode; dedent: CstLeaf } | { branch: "indent2"; indent: CstLeaf; node: NodeNode; dedent: CstLeaf } | { branch: "newline"; newline: CstLeaf; docFold: DocFoldNode } | { branch: "newline2"; newline: CstLeaf; node: NodeNode } | { branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "alias"; alias: CstLeaf } | { branch: "scalar"; scalar: ScalarNode }) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "Property")) return null;
+  if (!__nodeOf(c, i, "Property")) return null;
   property = c[i] as PropertyNode;
   i++;
   {
@@ -4552,94 +4699,116 @@ function _InlineDocNode$property(c: readonly CstChild[], src: string): InlineDoc
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_indent: (CstLeaf) | undefined;
+          let _t7_docFold: (DocFoldNode) | undefined;
+          let _t7_dedent: (CstLeaf) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!(isTok(c, i, "Indent"))) { _t5 = false; break _b6; }
-            indent = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Indent"))) { _t5 = false; break _b6; }
+            _t7_indent = c[i] as CstLeaf;
             i++;
-            if (!isNodeOf(c, i, "DocFold")) { _t5 = false; break _b6; }
-            docFold = c[i] as DocFoldNode;
+            if (!__nodeOf(c, i, "DocFold")) { _t5 = false; break _b6; }
+            _t7_docFold = c[i] as DocFoldNode;
             i++;
-            if (!(isTok(c, i, "Dedent"))) { _t5 = false; break _b6; }
-            dedent = c[i] as CstLeaf;
-            i++;
-          }
-          if (_t5) _t3 = true; else i = _t4;
-        }
-        if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!(isTok(c, i, "Indent"))) { _t8 = false; break _b9; }
-            indent2 = c[i] as CstLeaf;
-            i++;
-            if (!isNodeOf(c, i, "Node")) { _t8 = false; break _b9; }
-            node = c[i] as NodeNode;
-            i++;
-            if (!(isTok(c, i, "Dedent"))) { _t8 = false; break _b9; }
-            dedent2 = c[i] as CstLeaf;
+            if (!(__tok(c, i, "Dedent"))) { _t5 = false; break _b6; }
+            _t7_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t5) { _t3 = true; alt = ({ branch: "indent", indent: _t7_indent!, docFold: _t7_docFold!, dedent: _t7_dedent! }) as typeof alt; }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!(isTok(c, i, "Newline"))) { _t11 = false; break _b12; }
-            newline = c[i] as CstLeaf;
+          let _t11_indent: (CstLeaf) | undefined;
+          let _t11_node: (NodeNode) | undefined;
+          let _t11_dedent: (CstLeaf) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!(__tok(c, i, "Indent"))) { _t9 = false; break _b10; }
+            _t11_indent = c[i] as CstLeaf;
             i++;
-            if (!isNodeOf(c, i, "DocFold")) { _t11 = false; break _b12; }
-            docFold2 = c[i] as DocFoldNode;
+            if (!__nodeOf(c, i, "Node")) { _t9 = false; break _b10; }
+            _t11_node = c[i] as NodeNode;
+            i++;
+            if (!(__tok(c, i, "Dedent"))) { _t9 = false; break _b10; }
+            _t11_dedent = c[i] as CstLeaf;
             i++;
           }
-          if (_t11) _t3 = true; else i = _t10;
+          if (_t9) { _t3 = true; alt = ({ branch: "indent2", indent: _t11_indent!, node: _t11_node!, dedent: _t11_dedent! }) as typeof alt; }
+          else i = _t8;
         }
         if (!_t3) {
-          const _t13 = i; let _t14 = true;
-          _b15: {
-            if (!(isTok(c, i, "Newline"))) { _t14 = false; break _b15; }
-            newline2 = c[i] as CstLeaf;
+          let _t15_newline: (CstLeaf) | undefined;
+          let _t15_docFold: (DocFoldNode) | undefined;
+          const _t12 = i; let _t13 = true;
+          _b14: {
+            if (!(__tok(c, i, "Newline"))) { _t13 = false; break _b14; }
+            _t15_newline = c[i] as CstLeaf;
             i++;
-            if (!isNodeOf(c, i, "Node")) { _t14 = false; break _b15; }
-            node2 = c[i] as NodeNode;
+            if (!__nodeOf(c, i, "DocFold")) { _t13 = false; break _b14; }
+            _t15_docFold = c[i] as DocFoldNode;
             i++;
           }
-          if (_t14) _t3 = true; else i = _t13;
+          if (_t13) { _t3 = true; alt = ({ branch: "newline", newline: _t15_newline!, docFold: _t15_docFold! }) as typeof alt; }
+          else i = _t12;
         }
         if (!_t3) {
+          let _t19_newline: (CstLeaf) | undefined;
+          let _t19_node: (NodeNode) | undefined;
           const _t16 = i; let _t17 = true;
           _b18: {
-            if (!isNodeOf(c, i, "FlowMapping")) { _t17 = false; break _b18; }
-            flowMapping = c[i] as FlowMappingNode;
+            if (!(__tok(c, i, "Newline"))) { _t17 = false; break _b18; }
+            _t19_newline = c[i] as CstLeaf;
+            i++;
+            if (!__nodeOf(c, i, "Node")) { _t17 = false; break _b18; }
+            _t19_node = c[i] as NodeNode;
             i++;
           }
-          if (_t17) _t3 = true; else i = _t16;
+          if (_t17) { _t3 = true; alt = ({ branch: "newline2", newline: _t19_newline!, node: _t19_node! }) as typeof alt; }
+          else i = _t16;
         }
         if (!_t3) {
-          const _t19 = i; let _t20 = true;
-          _b21: {
-            if (!isNodeOf(c, i, "FlowSequence")) { _t20 = false; break _b21; }
-            flowSequence = c[i] as FlowSequenceNode;
+          let _t23_flowMapping: (FlowMappingNode) | undefined;
+          const _t20 = i; let _t21 = true;
+          _b22: {
+            if (!__nodeOf(c, i, "FlowMapping")) { _t21 = false; break _b22; }
+            _t23_flowMapping = c[i] as FlowMappingNode;
             i++;
           }
-          if (_t20) _t3 = true; else i = _t19;
+          if (_t21) { _t3 = true; alt = ({ branch: "flowMapping", flowMapping: _t23_flowMapping! }) as typeof alt; }
+          else i = _t20;
         }
         if (!_t3) {
-          const _t22 = i; let _t23 = true;
-          _b24: {
-            if (!(isTok(c, i, "Alias"))) { _t23 = false; break _b24; }
-            alias = c[i] as CstLeaf;
+          let _t27_flowSequence: (FlowSequenceNode) | undefined;
+          const _t24 = i; let _t25 = true;
+          _b26: {
+            if (!__nodeOf(c, i, "FlowSequence")) { _t25 = false; break _b26; }
+            _t27_flowSequence = c[i] as FlowSequenceNode;
             i++;
           }
-          if (_t23) _t3 = true; else i = _t22;
+          if (_t25) { _t3 = true; alt = ({ branch: "flowSequence", flowSequence: _t27_flowSequence! }) as typeof alt; }
+          else i = _t24;
         }
         if (!_t3) {
-          const _t25 = i; let _t26 = true;
-          _b27: {
-            if (!isNodeOf(c, i, "Scalar")) { _t26 = false; break _b27; }
-            scalar = c[i] as ScalarNode;
+          let _t31_alias: (CstLeaf) | undefined;
+          const _t28 = i; let _t29 = true;
+          _b30: {
+            if (!(__tok(c, i, "Alias"))) { _t29 = false; break _b30; }
+            _t31_alias = c[i] as CstLeaf;
             i++;
           }
-          if (_t26) _t3 = true; else i = _t25;
+          if (_t29) { _t3 = true; alt = ({ branch: "alias", alias: _t31_alias! }) as typeof alt; }
+          else i = _t28;
+        }
+        if (!_t3) {
+          let _t35_scalar: (ScalarNode) | undefined;
+          const _t32 = i; let _t33 = true;
+          _b34: {
+            if (!__nodeOf(c, i, "Scalar")) { _t33 = false; break _b34; }
+            _t35_scalar = c[i] as ScalarNode;
+            i++;
+          }
+          if (_t33) { _t3 = true; alt = ({ branch: "scalar", scalar: _t35_scalar! }) as typeof alt; }
+          else i = _t32;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
@@ -4647,13 +4816,13 @@ function _InlineDocNode$property(c: readonly CstChild[], src: string): InlineDoc
     if (!_t1) i = _t0;
   }
   if (i !== c.length) return null;
-  return { arm: "property", property: property!, indent, docFold, dedent, indent2, node, dedent2, newline, docFold2, newline2, node2, flowMapping, flowSequence, alias, scalar };
+  return { arm: "property", property: property!, alt };
 }
 
 function _InlineDocNode$docFold(c: readonly CstChild[], src: string): InlineDocNodeMatch | null {
   let docFold: (DocFoldNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "DocFold")) return null;
+  if (!__nodeOf(c, i, "DocFold")) return null;
   docFold = c[i] as DocFoldNode;
   i++;
   if (i !== c.length) return null;
@@ -4661,53 +4830,58 @@ function _InlineDocNode$docFold(c: readonly CstChild[], src: string): InlineDocN
 }
 
 function _InlineDocNode$flowMapping(c: readonly CstChild[], src: string): InlineDocNodeMatch | null {
-  let flowMapping: (FlowMappingNode) | undefined;
-  let flowSequence: (FlowSequenceNode) | undefined;
-  let alias: (CstLeaf) | undefined;
-  let scalar: (ScalarNode) | undefined;
+  let alt: ({ branch: "flowMapping"; flowMapping: FlowMappingNode } | { branch: "flowSequence"; flowSequence: FlowSequenceNode } | { branch: "alias"; alias: CstLeaf } | { branch: "scalar"; scalar: ScalarNode }) | undefined;
   let i = 0;
   {
     let _t0 = false;
     if (!_t0) {
+      let _t4_flowMapping: (FlowMappingNode) | undefined;
       const _t1 = i; let _t2 = true;
       _b3: {
-        if (!isNodeOf(c, i, "FlowMapping")) { _t2 = false; break _b3; }
-        flowMapping = c[i] as FlowMappingNode;
+        if (!__nodeOf(c, i, "FlowMapping")) { _t2 = false; break _b3; }
+        _t4_flowMapping = c[i] as FlowMappingNode;
         i++;
       }
-      if (_t2) _t0 = true; else i = _t1;
+      if (_t2) { _t0 = true; alt = ({ branch: "flowMapping", flowMapping: _t4_flowMapping! }) as typeof alt; }
+      else i = _t1;
     }
     if (!_t0) {
-      const _t4 = i; let _t5 = true;
-      _b6: {
-        if (!isNodeOf(c, i, "FlowSequence")) { _t5 = false; break _b6; }
-        flowSequence = c[i] as FlowSequenceNode;
+      let _t8_flowSequence: (FlowSequenceNode) | undefined;
+      const _t5 = i; let _t6 = true;
+      _b7: {
+        if (!__nodeOf(c, i, "FlowSequence")) { _t6 = false; break _b7; }
+        _t8_flowSequence = c[i] as FlowSequenceNode;
         i++;
       }
-      if (_t5) _t0 = true; else i = _t4;
+      if (_t6) { _t0 = true; alt = ({ branch: "flowSequence", flowSequence: _t8_flowSequence! }) as typeof alt; }
+      else i = _t5;
     }
     if (!_t0) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!(isTok(c, i, "Alias"))) { _t8 = false; break _b9; }
-        alias = c[i] as CstLeaf;
+      let _t12_alias: (CstLeaf) | undefined;
+      const _t9 = i; let _t10 = true;
+      _b11: {
+        if (!(__tok(c, i, "Alias"))) { _t10 = false; break _b11; }
+        _t12_alias = c[i] as CstLeaf;
         i++;
       }
-      if (_t8) _t0 = true; else i = _t7;
+      if (_t10) { _t0 = true; alt = ({ branch: "alias", alias: _t12_alias! }) as typeof alt; }
+      else i = _t9;
     }
     if (!_t0) {
-      const _t10 = i; let _t11 = true;
-      _b12: {
-        if (!isNodeOf(c, i, "Scalar")) { _t11 = false; break _b12; }
-        scalar = c[i] as ScalarNode;
+      let _t16_scalar: (ScalarNode) | undefined;
+      const _t13 = i; let _t14 = true;
+      _b15: {
+        if (!__nodeOf(c, i, "Scalar")) { _t14 = false; break _b15; }
+        _t16_scalar = c[i] as ScalarNode;
         i++;
       }
-      if (_t11) _t0 = true; else i = _t10;
+      if (_t14) { _t0 = true; alt = ({ branch: "scalar", scalar: _t16_scalar! }) as typeof alt; }
+      else i = _t13;
     }
     if (!_t0) return null;
   }
   if (i !== c.length) return null;
-  return { arm: "flowMapping", flowMapping, flowSequence, alias, scalar };
+  return { arm: "flowMapping", alt: alt! };
 }
 
 export function matchInlineDocNode(n: InlineDocNodeNode, src: string): InlineDocNodeMatch {
@@ -4752,23 +4926,22 @@ export function matchInlineDocNode(n: InlineDocNodeNode, src: string): InlineDoc
 }
 
 export type ExplicitDocBodyMatch =
-  | { arm: "newline"; newline: CstLeaf; indent?: CstLeaf; docFold?: DocFoldNode; node?: NodeNode; dedent?: CstLeaf }
+  | { arm: "newline"; newline: CstLeaf; indent?: CstLeaf; alt?: { branch: "docFold"; docFold: DocFoldNode } | { branch: "node"; node: NodeNode }; dedent?: CstLeaf }
   | { arm: "inlineDocNode"; inlineDocNode: InlineDocNodeNode };
 
 function _ExplicitDocBody$newline(c: readonly CstChild[], src: string): ExplicitDocBodyMatch | null {
   let newline: (CstLeaf) | undefined;
   let indent: (CstLeaf) | undefined;
-  let docFold: (DocFoldNode) | undefined;
-  let node: (NodeNode) | undefined;
+  let alt: ({ branch: "docFold"; docFold: DocFoldNode } | { branch: "node"; node: NodeNode }) | undefined;
   let dedent: (CstLeaf) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "Newline"))) return null;
+  if (!(__tok(c, i, "Newline"))) return null;
   newline = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Indent"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Indent"))) { _t1 = false; break _b2; }
       indent = c[i] as CstLeaf;
       i++;
     }
@@ -4780,22 +4953,26 @@ function _ExplicitDocBody$newline(c: readonly CstChild[], src: string): Explicit
       {
         let _t6 = false;
         if (!_t6) {
+          let _t10_docFold: (DocFoldNode) | undefined;
           const _t7 = i; let _t8 = true;
           _b9: {
-            if (!isNodeOf(c, i, "DocFold")) { _t8 = false; break _b9; }
-            docFold = c[i] as DocFoldNode;
+            if (!__nodeOf(c, i, "DocFold")) { _t8 = false; break _b9; }
+            _t10_docFold = c[i] as DocFoldNode;
             i++;
           }
-          if (_t8) _t6 = true; else i = _t7;
+          if (_t8) { _t6 = true; alt = ({ branch: "docFold", docFold: _t10_docFold! }) as typeof alt; }
+          else i = _t7;
         }
         if (!_t6) {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!isNodeOf(c, i, "Node")) { _t11 = false; break _b12; }
-            node = c[i] as NodeNode;
+          let _t14_node: (NodeNode) | undefined;
+          const _t11 = i; let _t12 = true;
+          _b13: {
+            if (!__nodeOf(c, i, "Node")) { _t12 = false; break _b13; }
+            _t14_node = c[i] as NodeNode;
             i++;
           }
-          if (_t11) _t6 = true; else i = _t10;
+          if (_t12) { _t6 = true; alt = ({ branch: "node", node: _t14_node! }) as typeof alt; }
+          else i = _t11;
         }
         if (!_t6) { _t4 = false; break _b5; }
       }
@@ -4803,22 +4980,22 @@ function _ExplicitDocBody$newline(c: readonly CstChild[], src: string): Explicit
     if (!_t4) i = _t3;
   }
   {
-    const _t13 = i; let _t14 = true;
-    _b15: {
-      if (!(isTok(c, i, "Dedent"))) { _t14 = false; break _b15; }
+    const _t15 = i; let _t16 = true;
+    _b17: {
+      if (!(__tok(c, i, "Dedent"))) { _t16 = false; break _b17; }
       dedent = c[i] as CstLeaf;
       i++;
     }
-    if (!_t14) i = _t13;
+    if (!_t16) i = _t15;
   }
   if (i !== c.length) return null;
-  return { arm: "newline", newline: newline!, indent, docFold, node, dedent };
+  return { arm: "newline", newline: newline!, indent, alt, dedent };
 }
 
 function _ExplicitDocBody$inlineDocNode(c: readonly CstChild[], src: string): ExplicitDocBodyMatch | null {
   let inlineDocNode: (InlineDocNodeNode) | undefined;
   let i = 0;
-  if (!isNodeOf(c, i, "InlineDocNode")) return null;
+  if (!__nodeOf(c, i, "InlineDocNode")) return null;
   inlineDocNode = c[i] as InlineDocNodeNode;
   i++;
   if (i !== c.length) return null;
@@ -4851,12 +5028,11 @@ export function matchExplicitDocBody(n: ExplicitDocBodyNode, src: string): Expli
 }
 
 export type AfterDocEndMatch =
-  | { arm: "seq"; yamlDirective: (CstLeaf)[]; directive: (CstLeaf)[]; newline: (CstLeaf)[]; docStart: CstLeaf; explicitDocBody?: ExplicitDocBodyNode }
-  | { arm: "indent"; indent?: CstLeaf; docFold?: DocFoldNode; node?: NodeNode; dedent?: CstLeaf };
+  | { arm: "seq"; alt: ({ branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf })[]; newline: (CstLeaf)[]; docStart: CstLeaf; explicitDocBody?: ExplicitDocBodyNode }
+  | { arm: "indent"; indent?: CstLeaf; alt: { branch: "docFold"; docFold: DocFoldNode } | { branch: "node"; node: NodeNode }; dedent?: CstLeaf };
 
 function _AfterDocEnd$seq(c: readonly CstChild[], src: string): AfterDocEndMatch | null {
-  const yamlDirective: (CstLeaf)[] = [];
-  const directive: (CstLeaf)[] = [];
+  const alt: ({ branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf })[] = [];
   const newline: (CstLeaf)[] = [];
   let docStart: (CstLeaf) | undefined;
   let explicitDocBody: (ExplicitDocBodyNode) | undefined;
@@ -4867,64 +5043,67 @@ function _AfterDocEnd$seq(c: readonly CstChild[], src: string): AfterDocEndMatch
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_yamlDirective: (CstLeaf) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!(isTok(c, i, "YamlDirective"))) { _t5 = false; break _b6; }
-            yamlDirective.push(c[i] as CstLeaf);
+            if (!(__tok(c, i, "YamlDirective"))) { _t5 = false; break _b6; }
+            _t7_yamlDirective = c[i] as CstLeaf;
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt.push({ branch: "yamlDirective", yamlDirective: _t7_yamlDirective! } as never); }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!(isTok(c, i, "Directive"))) { _t8 = false; break _b9; }
-            directive.push(c[i] as CstLeaf);
+          let _t11_directive: (CstLeaf) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!(__tok(c, i, "Directive"))) { _t9 = false; break _b10; }
+            _t11_directive = c[i] as CstLeaf;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t9) { _t3 = true; alt.push({ branch: "directive", directive: _t11_directive! } as never); }
+          else i = _t8;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
       {
-        const _t10 = i; let _t11 = true;
-        _b12: {
-          if (!(isTok(c, i, "Newline"))) { _t11 = false; break _b12; }
+        const _t12 = i; let _t13 = true;
+        _b14: {
+          if (!(__tok(c, i, "Newline"))) { _t13 = false; break _b14; }
           newline.push(c[i] as CstLeaf);
           i++;
         }
-        if (!_t11) i = _t10;
+        if (!_t13) i = _t12;
       }
     }
     if (!_t1) { i = _t0; break; }
     if (i === _t0) break;
   }
-  if (!(isTok(c, i, "DocStart"))) return null;
+  if (!(__tok(c, i, "DocStart"))) return null;
   docStart = c[i] as CstLeaf;
   i++;
   {
-    const _t13 = i; let _t14 = true;
-    _b15: {
-      if (!isNodeOf(c, i, "ExplicitDocBody")) { _t14 = false; break _b15; }
+    const _t15 = i; let _t16 = true;
+    _b17: {
+      if (!__nodeOf(c, i, "ExplicitDocBody")) { _t16 = false; break _b17; }
       explicitDocBody = c[i] as ExplicitDocBodyNode;
       i++;
     }
-    if (!_t14) i = _t13;
+    if (!_t16) i = _t15;
   }
   if (i !== c.length) return null;
-  return { arm: "seq", yamlDirective, directive, newline, docStart: docStart!, explicitDocBody };
+  return { arm: "seq", alt, newline, docStart: docStart!, explicitDocBody };
 }
 
 function _AfterDocEnd$indent(c: readonly CstChild[], src: string): AfterDocEndMatch | null {
   let indent: (CstLeaf) | undefined;
-  let docFold: (DocFoldNode) | undefined;
-  let node: (NodeNode) | undefined;
+  let alt: ({ branch: "docFold"; docFold: DocFoldNode } | { branch: "node"; node: NodeNode }) | undefined;
   let dedent: (CstLeaf) | undefined;
   let i = 0;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Indent"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Indent"))) { _t1 = false; break _b2; }
       indent = c[i] as CstLeaf;
       i++;
     }
@@ -4933,36 +5112,40 @@ function _AfterDocEnd$indent(c: readonly CstChild[], src: string): AfterDocEndMa
   {
     let _t3 = false;
     if (!_t3) {
+      let _t7_docFold: (DocFoldNode) | undefined;
       const _t4 = i; let _t5 = true;
       _b6: {
-        if (!isNodeOf(c, i, "DocFold")) { _t5 = false; break _b6; }
-        docFold = c[i] as DocFoldNode;
+        if (!__nodeOf(c, i, "DocFold")) { _t5 = false; break _b6; }
+        _t7_docFold = c[i] as DocFoldNode;
         i++;
       }
-      if (_t5) _t3 = true; else i = _t4;
+      if (_t5) { _t3 = true; alt = ({ branch: "docFold", docFold: _t7_docFold! }) as typeof alt; }
+      else i = _t4;
     }
     if (!_t3) {
-      const _t7 = i; let _t8 = true;
-      _b9: {
-        if (!isNodeOf(c, i, "Node")) { _t8 = false; break _b9; }
-        node = c[i] as NodeNode;
+      let _t11_node: (NodeNode) | undefined;
+      const _t8 = i; let _t9 = true;
+      _b10: {
+        if (!__nodeOf(c, i, "Node")) { _t9 = false; break _b10; }
+        _t11_node = c[i] as NodeNode;
         i++;
       }
-      if (_t8) _t3 = true; else i = _t7;
+      if (_t9) { _t3 = true; alt = ({ branch: "node", node: _t11_node! }) as typeof alt; }
+      else i = _t8;
     }
     if (!_t3) return null;
   }
   {
-    const _t10 = i; let _t11 = true;
-    _b12: {
-      if (!(isTok(c, i, "Dedent"))) { _t11 = false; break _b12; }
+    const _t12 = i; let _t13 = true;
+    _b14: {
+      if (!(__tok(c, i, "Dedent"))) { _t13 = false; break _b14; }
       dedent = c[i] as CstLeaf;
       i++;
     }
-    if (!_t11) i = _t10;
+    if (!_t13) i = _t12;
   }
   if (i !== c.length) return null;
-  return { arm: "indent", indent, docFold, node, dedent };
+  return { arm: "indent", indent, alt: alt!, dedent };
 }
 
 export function matchAfterDocEnd(n: AfterDocEndNode, src: string): AfterDocEndMatch {
@@ -5014,13 +5197,13 @@ function _NextDoc$docStart(c: readonly CstChild[], src: string): NextDocMatch | 
   let docStart: (CstLeaf) | undefined;
   let explicitDocBody: (ExplicitDocBodyNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "DocStart"))) return null;
+  if (!(__tok(c, i, "DocStart"))) return null;
   docStart = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!isNodeOf(c, i, "ExplicitDocBody")) { _t1 = false; break _b2; }
+      if (!__nodeOf(c, i, "ExplicitDocBody")) { _t1 = false; break _b2; }
       explicitDocBody = c[i] as ExplicitDocBodyNode;
       i++;
     }
@@ -5035,19 +5218,19 @@ function _NextDoc$docEnd(c: readonly CstChild[], src: string): NextDocMatch | nu
   let newline: (CstLeaf) | undefined;
   let afterDocEnd: (AfterDocEndNode) | undefined;
   let i = 0;
-  if (!(isTok(c, i, "DocEnd"))) return null;
+  if (!(__tok(c, i, "DocEnd"))) return null;
   docEnd = c[i] as CstLeaf;
   i++;
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Newline"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Newline"))) { _t1 = false; break _b2; }
       newline = c[i] as CstLeaf;
       i++;
       {
         const _t3 = i; let _t4 = true;
         _b5: {
-          if (!isNodeOf(c, i, "AfterDocEnd")) { _t4 = false; break _b5; }
+          if (!__nodeOf(c, i, "AfterDocEnd")) { _t4 = false; break _b5; }
           afterDocEnd = c[i] as AfterDocEndNode;
           i++;
         }
@@ -5086,12 +5269,11 @@ export function matchNextDoc(n: NextDocNode, src: string): NextDocMatch {
 }
 
 export type StreamMatch =
-  | { arm: "seq"; yamlDirective: (CstLeaf)[]; directive: (CstLeaf)[]; newline: (CstLeaf)[]; docStart?: CstLeaf; explicitDocBody?: ExplicitDocBodyNode; newline2: (CstLeaf)[]; nextDoc: (NextDocNode)[]; newline3?: CstLeaf; docEnd?: CstLeaf; newline4?: CstLeaf }
-  | { arm: "indent"; indent?: CstLeaf; docFold?: DocFoldNode; node?: NodeNode; dedent?: CstLeaf; newline: (CstLeaf)[]; nextDoc: (NextDocNode)[]; newline2?: CstLeaf; docEnd?: CstLeaf; newline3?: CstLeaf };
+  | { arm: "seq"; alt: ({ branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf })[]; newline: (CstLeaf)[]; docStart?: CstLeaf; explicitDocBody?: ExplicitDocBodyNode; newline2: (CstLeaf)[]; nextDoc: (NextDocNode)[]; newline3?: CstLeaf; docEnd?: CstLeaf; newline4?: CstLeaf }
+  | { arm: "indent"; indent?: CstLeaf; alt?: { branch: "docFold"; docFold: DocFoldNode } | { branch: "node"; node: NodeNode }; dedent?: CstLeaf; newline: (CstLeaf)[]; nextDoc: (NextDocNode)[]; newline2?: CstLeaf; docEnd?: CstLeaf; newline3?: CstLeaf };
 
 function _Stream$seq(c: readonly CstChild[], src: string): StreamMatch | null {
-  const yamlDirective: (CstLeaf)[] = [];
-  const directive: (CstLeaf)[] = [];
+  const alt: ({ branch: "yamlDirective"; yamlDirective: CstLeaf } | { branch: "directive"; directive: CstLeaf })[] = [];
   const newline: (CstLeaf)[] = [];
   let docStart: (CstLeaf) | undefined;
   let explicitDocBody: (ExplicitDocBodyNode) | undefined;
@@ -5107,147 +5289,154 @@ function _Stream$seq(c: readonly CstChild[], src: string): StreamMatch | null {
       {
         let _t3 = false;
         if (!_t3) {
+          let _t7_yamlDirective: (CstLeaf) | undefined;
           const _t4 = i; let _t5 = true;
           _b6: {
-            if (!(isTok(c, i, "YamlDirective"))) { _t5 = false; break _b6; }
-            yamlDirective.push(c[i] as CstLeaf);
+            if (!(__tok(c, i, "YamlDirective"))) { _t5 = false; break _b6; }
+            _t7_yamlDirective = c[i] as CstLeaf;
             i++;
           }
-          if (_t5) _t3 = true; else i = _t4;
+          if (_t5) { _t3 = true; alt.push({ branch: "yamlDirective", yamlDirective: _t7_yamlDirective! } as never); }
+          else i = _t4;
         }
         if (!_t3) {
-          const _t7 = i; let _t8 = true;
-          _b9: {
-            if (!(isTok(c, i, "Directive"))) { _t8 = false; break _b9; }
-            directive.push(c[i] as CstLeaf);
+          let _t11_directive: (CstLeaf) | undefined;
+          const _t8 = i; let _t9 = true;
+          _b10: {
+            if (!(__tok(c, i, "Directive"))) { _t9 = false; break _b10; }
+            _t11_directive = c[i] as CstLeaf;
             i++;
           }
-          if (_t8) _t3 = true; else i = _t7;
+          if (_t9) { _t3 = true; alt.push({ branch: "directive", directive: _t11_directive! } as never); }
+          else i = _t8;
         }
         if (!_t3) { _t1 = false; break _b2; }
       }
       {
-        const _t10 = i; let _t11 = true;
-        _b12: {
-          if (!(isTok(c, i, "Newline"))) { _t11 = false; break _b12; }
+        const _t12 = i; let _t13 = true;
+        _b14: {
+          if (!(__tok(c, i, "Newline"))) { _t13 = false; break _b14; }
           newline.push(c[i] as CstLeaf);
           i++;
         }
-        if (!_t11) i = _t10;
+        if (!_t13) i = _t12;
       }
     }
     if (!_t1) return null;
   }
   for (;;) {
-    const _t13 = i; let _t14 = true;
-    _b15: {
+    const _t15 = i; let _t16 = true;
+    _b17: {
       {
-        let _t16 = false;
-        if (!_t16) {
-          const _t17 = i; let _t18 = true;
-          _b19: {
-            if (!(isTok(c, i, "YamlDirective"))) { _t18 = false; break _b19; }
-            yamlDirective.push(c[i] as CstLeaf);
+        let _t18 = false;
+        if (!_t18) {
+          let _t22_yamlDirective: (CstLeaf) | undefined;
+          const _t19 = i; let _t20 = true;
+          _b21: {
+            if (!(__tok(c, i, "YamlDirective"))) { _t20 = false; break _b21; }
+            _t22_yamlDirective = c[i] as CstLeaf;
             i++;
           }
-          if (_t18) _t16 = true; else i = _t17;
+          if (_t20) { _t18 = true; alt.push({ branch: "yamlDirective", yamlDirective: _t22_yamlDirective! } as never); }
+          else i = _t19;
         }
-        if (!_t16) {
-          const _t20 = i; let _t21 = true;
-          _b22: {
-            if (!(isTok(c, i, "Directive"))) { _t21 = false; break _b22; }
-            directive.push(c[i] as CstLeaf);
+        if (!_t18) {
+          let _t26_directive: (CstLeaf) | undefined;
+          const _t23 = i; let _t24 = true;
+          _b25: {
+            if (!(__tok(c, i, "Directive"))) { _t24 = false; break _b25; }
+            _t26_directive = c[i] as CstLeaf;
             i++;
           }
-          if (_t21) _t16 = true; else i = _t20;
+          if (_t24) { _t18 = true; alt.push({ branch: "directive", directive: _t26_directive! } as never); }
+          else i = _t23;
         }
-        if (!_t16) { _t14 = false; break _b15; }
+        if (!_t18) { _t16 = false; break _b17; }
       }
       {
-        const _t23 = i; let _t24 = true;
-        _b25: {
-          if (!(isTok(c, i, "Newline"))) { _t24 = false; break _b25; }
+        const _t27 = i; let _t28 = true;
+        _b29: {
+          if (!(__tok(c, i, "Newline"))) { _t28 = false; break _b29; }
           newline.push(c[i] as CstLeaf);
           i++;
         }
-        if (!_t24) i = _t23;
+        if (!_t28) i = _t27;
       }
     }
-    if (!_t14) { i = _t13; break; }
-    if (i === _t13) break;
+    if (!_t16) { i = _t15; break; }
+    if (i === _t15) break;
   }
   {
-    const _t26 = i; let _t27 = true;
-    _b28: {
-      if (!(isTok(c, i, "DocStart"))) { _t27 = false; break _b28; }
+    const _t30 = i; let _t31 = true;
+    _b32: {
+      if (!(__tok(c, i, "DocStart"))) { _t31 = false; break _b32; }
       docStart = c[i] as CstLeaf;
       i++;
       {
-        const _t29 = i; let _t30 = true;
-        _b31: {
-          if (!isNodeOf(c, i, "ExplicitDocBody")) { _t30 = false; break _b31; }
+        const _t33 = i; let _t34 = true;
+        _b35: {
+          if (!__nodeOf(c, i, "ExplicitDocBody")) { _t34 = false; break _b35; }
           explicitDocBody = c[i] as ExplicitDocBodyNode;
           i++;
         }
-        if (!_t30) i = _t29;
+        if (!_t34) i = _t33;
       }
       for (;;) {
-        const _t32 = i; let _t33 = true;
-        _b34: {
+        const _t36 = i; let _t37 = true;
+        _b38: {
           {
-            const _t35 = i; let _t36 = true;
-            _b37: {
-              if (!(isTok(c, i, "Newline"))) { _t36 = false; break _b37; }
+            const _t39 = i; let _t40 = true;
+            _b41: {
+              if (!(__tok(c, i, "Newline"))) { _t40 = false; break _b41; }
               newline2.push(c[i] as CstLeaf);
               i++;
             }
-            if (!_t36) i = _t35;
+            if (!_t40) i = _t39;
           }
-          if (!isNodeOf(c, i, "NextDoc")) { _t33 = false; break _b34; }
+          if (!__nodeOf(c, i, "NextDoc")) { _t37 = false; break _b38; }
           nextDoc.push(c[i] as NextDocNode);
           i++;
         }
-        if (!_t33) { i = _t32; break; }
-        if (i === _t32) break;
+        if (!_t37) { i = _t36; break; }
+        if (i === _t36) break;
       }
       {
-        const _t38 = i; let _t39 = true;
-        _b40: {
-          if (!(isTok(c, i, "Newline"))) { _t39 = false; break _b40; }
+        const _t42 = i; let _t43 = true;
+        _b44: {
+          if (!(__tok(c, i, "Newline"))) { _t43 = false; break _b44; }
           newline3 = c[i] as CstLeaf;
           i++;
         }
-        if (!_t39) i = _t38;
+        if (!_t43) i = _t42;
       }
       {
-        const _t41 = i; let _t42 = true;
-        _b43: {
-          if (!(isTok(c, i, "DocEnd"))) { _t42 = false; break _b43; }
+        const _t45 = i; let _t46 = true;
+        _b47: {
+          if (!(__tok(c, i, "DocEnd"))) { _t46 = false; break _b47; }
           docEnd = c[i] as CstLeaf;
           i++;
         }
-        if (!_t42) i = _t41;
+        if (!_t46) i = _t45;
       }
       {
-        const _t44 = i; let _t45 = true;
-        _b46: {
-          if (!(isTok(c, i, "Newline"))) { _t45 = false; break _b46; }
+        const _t48 = i; let _t49 = true;
+        _b50: {
+          if (!(__tok(c, i, "Newline"))) { _t49 = false; break _b50; }
           newline4 = c[i] as CstLeaf;
           i++;
         }
-        if (!_t45) i = _t44;
+        if (!_t49) i = _t48;
       }
     }
-    if (!_t27) i = _t26;
+    if (!_t31) i = _t30;
   }
   if (i !== c.length) return null;
-  return { arm: "seq", yamlDirective, directive, newline, docStart, explicitDocBody, newline2, nextDoc, newline3, docEnd, newline4 };
+  return { arm: "seq", alt, newline, docStart, explicitDocBody, newline2, nextDoc, newline3, docEnd, newline4 };
 }
 
 function _Stream$indent(c: readonly CstChild[], src: string): StreamMatch | null {
   let indent: (CstLeaf) | undefined;
-  let docFold: (DocFoldNode) | undefined;
-  let node: (NodeNode) | undefined;
+  let alt: ({ branch: "docFold"; docFold: DocFoldNode } | { branch: "node"; node: NodeNode }) | undefined;
   let dedent: (CstLeaf) | undefined;
   const newline: (CstLeaf)[] = [];
   const nextDoc: (NextDocNode)[] = [];
@@ -5258,7 +5447,7 @@ function _Stream$indent(c: readonly CstChild[], src: string): StreamMatch | null
   {
     const _t0 = i; let _t1 = true;
     _b2: {
-      if (!(isTok(c, i, "Indent"))) { _t1 = false; break _b2; }
+      if (!(__tok(c, i, "Indent"))) { _t1 = false; break _b2; }
       indent = c[i] as CstLeaf;
       i++;
     }
@@ -5270,22 +5459,26 @@ function _Stream$indent(c: readonly CstChild[], src: string): StreamMatch | null
       {
         let _t6 = false;
         if (!_t6) {
+          let _t10_docFold: (DocFoldNode) | undefined;
           const _t7 = i; let _t8 = true;
           _b9: {
-            if (!isNodeOf(c, i, "DocFold")) { _t8 = false; break _b9; }
-            docFold = c[i] as DocFoldNode;
+            if (!__nodeOf(c, i, "DocFold")) { _t8 = false; break _b9; }
+            _t10_docFold = c[i] as DocFoldNode;
             i++;
           }
-          if (_t8) _t6 = true; else i = _t7;
+          if (_t8) { _t6 = true; alt = ({ branch: "docFold", docFold: _t10_docFold! }) as typeof alt; }
+          else i = _t7;
         }
         if (!_t6) {
-          const _t10 = i; let _t11 = true;
-          _b12: {
-            if (!isNodeOf(c, i, "Node")) { _t11 = false; break _b12; }
-            node = c[i] as NodeNode;
+          let _t14_node: (NodeNode) | undefined;
+          const _t11 = i; let _t12 = true;
+          _b13: {
+            if (!__nodeOf(c, i, "Node")) { _t12 = false; break _b13; }
+            _t14_node = c[i] as NodeNode;
             i++;
           }
-          if (_t11) _t6 = true; else i = _t10;
+          if (_t12) { _t6 = true; alt = ({ branch: "node", node: _t14_node! }) as typeof alt; }
+          else i = _t11;
         }
         if (!_t6) { _t4 = false; break _b5; }
       }
@@ -5293,62 +5486,62 @@ function _Stream$indent(c: readonly CstChild[], src: string): StreamMatch | null
     if (!_t4) i = _t3;
   }
   {
-    const _t13 = i; let _t14 = true;
-    _b15: {
-      if (!(isTok(c, i, "Dedent"))) { _t14 = false; break _b15; }
+    const _t15 = i; let _t16 = true;
+    _b17: {
+      if (!(__tok(c, i, "Dedent"))) { _t16 = false; break _b17; }
       dedent = c[i] as CstLeaf;
       i++;
     }
-    if (!_t14) i = _t13;
+    if (!_t16) i = _t15;
   }
   for (;;) {
-    const _t16 = i; let _t17 = true;
-    _b18: {
+    const _t18 = i; let _t19 = true;
+    _b20: {
       {
-        const _t19 = i; let _t20 = true;
-        _b21: {
-          if (!(isTok(c, i, "Newline"))) { _t20 = false; break _b21; }
+        const _t21 = i; let _t22 = true;
+        _b23: {
+          if (!(__tok(c, i, "Newline"))) { _t22 = false; break _b23; }
           newline.push(c[i] as CstLeaf);
           i++;
         }
-        if (!_t20) i = _t19;
+        if (!_t22) i = _t21;
       }
-      if (!isNodeOf(c, i, "NextDoc")) { _t17 = false; break _b18; }
+      if (!__nodeOf(c, i, "NextDoc")) { _t19 = false; break _b20; }
       nextDoc.push(c[i] as NextDocNode);
       i++;
     }
-    if (!_t17) { i = _t16; break; }
-    if (i === _t16) break;
+    if (!_t19) { i = _t18; break; }
+    if (i === _t18) break;
   }
   {
-    const _t22 = i; let _t23 = true;
-    _b24: {
-      if (!(isTok(c, i, "Newline"))) { _t23 = false; break _b24; }
+    const _t24 = i; let _t25 = true;
+    _b26: {
+      if (!(__tok(c, i, "Newline"))) { _t25 = false; break _b26; }
       newline2 = c[i] as CstLeaf;
       i++;
     }
-    if (!_t23) i = _t22;
+    if (!_t25) i = _t24;
   }
   {
-    const _t25 = i; let _t26 = true;
-    _b27: {
-      if (!(isTok(c, i, "DocEnd"))) { _t26 = false; break _b27; }
+    const _t27 = i; let _t28 = true;
+    _b29: {
+      if (!(__tok(c, i, "DocEnd"))) { _t28 = false; break _b29; }
       docEnd = c[i] as CstLeaf;
       i++;
     }
-    if (!_t26) i = _t25;
+    if (!_t28) i = _t27;
   }
   {
-    const _t28 = i; let _t29 = true;
-    _b30: {
-      if (!(isTok(c, i, "Newline"))) { _t29 = false; break _b30; }
+    const _t30 = i; let _t31 = true;
+    _b32: {
+      if (!(__tok(c, i, "Newline"))) { _t31 = false; break _b32; }
       newline3 = c[i] as CstLeaf;
       i++;
     }
-    if (!_t29) i = _t28;
+    if (!_t31) i = _t30;
   }
   if (i !== c.length) return null;
-  return { arm: "indent", indent, docFold, node, dedent, newline, nextDoc, newline2, docEnd, newline3 };
+  return { arm: "indent", indent, alt, dedent, newline, nextDoc, newline2, docEnd, newline3 };
 }
 
 export function matchStream(n: StreamNode, src: string): StreamMatch {
