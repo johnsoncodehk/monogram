@@ -234,19 +234,10 @@ function lowerExpr(n: CstNode): Ast {
 
 function lowerPrimaryLeaf(k: CstLeaf): Ast {
   switch (k.tokenType) {
-    case 'Ident': {
-      // PAIN(19): `this`/`true`/`null`… arrive as plain Ident leaves, NOT $keyword —
-      // the bare-identifier nud and the keyword-literal alternative both match one
-      // token, the tie goes to whichever alternative comes FIRST in the grammar, and
-      // that choice is invisible in the tree. The consumer must re-classify by text.
-      const t = text(k);
-      if (t === 'this') return ast('ThisKeyword', k.offset, k.end);
-      if (t === 'super') return ast('SuperKeyword', k.offset, k.end);
-      if (t === 'true') return ast('TrueKeyword', k.offset, k.end);
-      if (t === 'false') return ast('FalseKeyword', k.offset, k.end);
-      if (t === 'null') return ast('NullKeyword', k.offset, k.end);
-      return ast('Identifier', k.offset, k.end);
-    }
+    case 'Ident': return ast('Identifier', k.offset, k.end);
+    // (PAIN(19) RESOLVED at the grammar: the keyword-valued literal alternatives now
+    // precede the bare-identifier nud, so `this`/`true`/… arrive as $keyword leaves
+    // and the $keyword case below handles them — no text re-classification.)
     case 'Number': case 'HexNumber': case 'OctalNumber': case 'BinaryNumber':
       return ast('NumericLiteral', k.offset, k.end);
     case 'BigInt': return ast('BigIntLiteral', k.offset, k.end);

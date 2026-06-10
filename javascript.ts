@@ -264,12 +264,16 @@ const Expr = rule($ => [
   // role (see notReservedExpr). This kills the bare-identifier fallback for keywords like
   // `catch`/`throw` and the prefix operators `void`/`typeof`/`delete`, so `catch(x){}`
   // with no `try`, `void ;`, and `throw ;` are rejected as TS does.
+  // Keyword-valued literals come BEFORE the bare-identifier nud: a longest-match TIE
+  // (both are one token) goes to the first-listed alternative, so listing the literals
+  // first makes `this`/`true`/… arrive as $keyword leaves — the tree records what the
+  // word IS instead of the bare-identifier fallback winning the tie and stamping Ident.
+  'true', 'false', 'null', 'undefined', 'this', 'super',
   [notReservedExpr, Ident],
   Number_,
   String_,
   Template,
   Regex_,
-  'true', 'false', 'null', 'undefined', 'this', 'super',
   [$, op, $],
   [prefix, $],
   [$, postfix],

@@ -1666,17 +1666,17 @@ export function matchTypeofRef(n: TypeofRefNode, src: string): TypeofRefMatch {
 }
 
 export type ExprMatch =
-  | { arm: "ident"; ident: CstLeaf }
-  | { arm: "number"; number: CstLeaf }
-  | { arm: "string"; string: CstLeaf }
-  | { arm: "template"; template: CstLeaf | $templateNode }
-  | { arm: "regex"; regex: CstLeaf }
   | { arm: "true_" }
   | { arm: "false_" }
   | { arm: "null_" }
   | { arm: "undefined" }
   | { arm: "this_" }
   | { arm: "super_" }
+  | { arm: "ident"; ident: CstLeaf }
+  | { arm: "number"; number: CstLeaf }
+  | { arm: "string"; string: CstLeaf }
+  | { arm: "template"; template: CstLeaf | $templateNode }
+  | { arm: "regex"; regex: CstLeaf }
   | { arm: "spread"; expr: ExprNode }
   | { arm: "led_lt"; left: ExprNode; type: (TypeNode)[]; expr: (ExprNode)[]; template?: CstLeaf | $templateNode }
   | { arm: "led_lt2"; left: ExprNode; type: (TypeNode)[] }
@@ -1713,6 +1713,54 @@ export type ExprMatch =
   | { arm: "binaryOp"; left: ExprNode; op: CstLeaf; right: ExprNode }
   | { arm: "prefixOp"; op: CstLeaf; operand: ExprNode }
   | { arm: "postfixOp"; operand: ExprNode; op: CstLeaf };
+
+function _Expr$true_(c: readonly CstChild[], src: string): ExprMatch | null {
+  let i = 0;
+  if (!isLit(c, i, src, "true", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "true_" };
+}
+
+function _Expr$false_(c: readonly CstChild[], src: string): ExprMatch | null {
+  let i = 0;
+  if (!isLit(c, i, src, "false", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "false_" };
+}
+
+function _Expr$null_(c: readonly CstChild[], src: string): ExprMatch | null {
+  let i = 0;
+  if (!isLit(c, i, src, "null", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "null_" };
+}
+
+function _Expr$undefined(c: readonly CstChild[], src: string): ExprMatch | null {
+  let i = 0;
+  if (!isLit(c, i, src, "undefined", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "undefined" };
+}
+
+function _Expr$this_(c: readonly CstChild[], src: string): ExprMatch | null {
+  let i = 0;
+  if (!isLit(c, i, src, "this", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "this_" };
+}
+
+function _Expr$super_(c: readonly CstChild[], src: string): ExprMatch | null {
+  let i = 0;
+  if (!isLit(c, i, src, "super", "$keyword")) return null;
+  i++;
+  if (i !== c.length) return null;
+  return { arm: "super_" };
+}
 
 function _Expr$ident(c: readonly CstChild[], src: string): ExprMatch | null {
   let ident: (CstLeaf) | undefined;
@@ -1762,54 +1810,6 @@ function _Expr$regex(c: readonly CstChild[], src: string): ExprMatch | null {
   i++;
   if (i !== c.length) return null;
   return { arm: "regex", regex: regex! };
-}
-
-function _Expr$true_(c: readonly CstChild[], src: string): ExprMatch | null {
-  let i = 0;
-  if (!isLit(c, i, src, "true", "$keyword")) return null;
-  i++;
-  if (i !== c.length) return null;
-  return { arm: "true_" };
-}
-
-function _Expr$false_(c: readonly CstChild[], src: string): ExprMatch | null {
-  let i = 0;
-  if (!isLit(c, i, src, "false", "$keyword")) return null;
-  i++;
-  if (i !== c.length) return null;
-  return { arm: "false_" };
-}
-
-function _Expr$null_(c: readonly CstChild[], src: string): ExprMatch | null {
-  let i = 0;
-  if (!isLit(c, i, src, "null", "$keyword")) return null;
-  i++;
-  if (i !== c.length) return null;
-  return { arm: "null_" };
-}
-
-function _Expr$undefined(c: readonly CstChild[], src: string): ExprMatch | null {
-  let i = 0;
-  if (!isLit(c, i, src, "undefined", "$keyword")) return null;
-  i++;
-  if (i !== c.length) return null;
-  return { arm: "undefined" };
-}
-
-function _Expr$this_(c: readonly CstChild[], src: string): ExprMatch | null {
-  let i = 0;
-  if (!isLit(c, i, src, "this", "$keyword")) return null;
-  i++;
-  if (i !== c.length) return null;
-  return { arm: "this_" };
-}
-
-function _Expr$super_(c: readonly CstChild[], src: string): ExprMatch | null {
-  let i = 0;
-  if (!isLit(c, i, src, "super", "$keyword")) return null;
-  i++;
-  if (i !== c.length) return null;
-  return { arm: "super_" };
 }
 
 function _Expr$spread(c: readonly CstChild[], src: string): ExprMatch | null {
