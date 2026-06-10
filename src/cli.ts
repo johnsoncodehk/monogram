@@ -5,6 +5,7 @@ import { generateLanguageConfig } from './gen-vscode-config.ts';
 import { generateTreeSitter } from './gen-treesitter.ts';
 import { generateMonarch } from './gen-monarch.ts';
 import { generateAstTypes } from './gen-ast-types.ts';
+import { generateCstMatch } from './gen-cst-match.ts';
 import type { CstGrammar, RuleExpr } from './types.ts';
 import { tokenPatternSource } from './token-pattern.ts';
 
@@ -113,6 +114,9 @@ emit(`${langName}.monarch.json`, JSON.stringify(generateMonarch(grammar), null, 
 
 // CST node types (TypeScript) — generic over rules, fine for markup too.
 emit(`${langName}.cst-types.ts`, generateAstTypes(grammar));
+
+// Per-arm CST destructurers (value-level sibling of the types above).
+emit(`${langName}.cst-match.ts`, generateCstMatch(grammar, `./${langName}.cst-types.ts`));
 
 function formatExpr(expr: RuleExpr): string {
   switch (expr.type) {

@@ -7,6 +7,7 @@
 // Deliberately NOT complete: unlowered constructs throw Unlowered (the verify driver
 // counts them) — the goal is an honest pain inventory, not a shipped frontend.
 import type { CstChild, CstLeaf, CstNode } from '../src/gen-parser.ts';
+import { matchStmt } from '../typescript.cst-match.ts';
 
 export type Ast = { kind: string; pos: number; end: number; children: Ast[] };
 const ast = (kind: string, pos: number, end: number, children: Ast[] = []): Ast => ({ kind, pos, end, children });
@@ -491,127 +492,102 @@ function lowerBindingElement(n: CstNode): Ast {
 }
 
 // ── Statements ──
+// lowerStmt consumes the GENERATED per-arm destructurer (typescript.cst-match.ts):
+// the arm discrimination and field extraction that the first version of this file
+// hand-probed (and got wrong in places — see PAIN 3/5/7) now comes from the grammar.
+// A few arms still reach into n.children for the positions of uncaptured structural
+// keywords ('catch', the switch '{') — a noted destructurer gap.
 function lowerStmt(n: CstNode): Ast {
+  const m = matchStmt(n as never, SRC);
   const c = n.children;
-  const h = c[0];
-
-  if (isNode(h)) {
-    if (h.rule === 'Block') return lowerBlock(h);
-    if (h.rule === 'Expr') {
-      // expression statement (with optional ';')
-      return ast('ExpressionStatement', n.offset, n.end, [lowerExpr(h)]);
+  switch (m.arm) {
+    case 'block': return lowerBlock(m.block);
+    case 'let_': case 'await_': {
+      const decls = ('binding' in m ? m.binding : []).map(lowerBinding);
+      const list = ast('VariableDeclarationList', n.offset, decls.length ? decls[decls.length - 1].end : n.end, decls);
+      return ast('VariableStatement', n.offset, n.end, [list]);
     }
-    if (h.rule === 'Decl') return lowerDecl(h);
+    case 'if_': {
+      const kids = [lowerExpr(m.expr), lowerStmt(m.stmt)];
+      if (m.stmt2) kids.push(lowerStmt(m.stmt2));
+      return ast('IfStatement', n.offset, n.end, kids);
+    }
+    case 'for_': return lowerFor(n, c);
+    case 'while_': return ast('WhileStatement', n.offset, n.end, [lowerExpr(m.expr), lowerStmt(m.stmt)]);
+    case 'do_': return ast('DoStatement', n.offset, n.end, [lowerStmt(m.stmt), lowerExpr(m.expr)]);
+    case 'switch_': {
+      const disc = lowerExpr(m.expr);
+      const clauses = groupSwitchClauses(m.switchCase);
+      const caseBlockStart = findText(c, '{');
+      const cb = ast('CaseBlock', caseBlockStart >= 0 ? c[caseBlockStart].offset : n.offset, n.end, clauses);
+      return ast('SwitchStatement', n.offset, n.end, [disc, cb]);
+    }
+    case 'return_': return ast('ReturnStatement', n.offset, n.end, m.expr ? [lowerExpr(m.expr)] : []);
+    case 'throw_': return ast('ThrowStatement', n.offset, n.end, [lowerExpr(m.expr)]);
+    case 'break_': return ast('BreakStatement', n.offset, n.end, m.ident ? [ast('Identifier', m.ident.offset, m.ident.end)] : []);
+    case 'continue_': return ast('ContinueStatement', n.offset, n.end, m.ident ? [ast('Identifier', m.ident.offset, m.ident.end)] : []);
+    case 'try_': {
+      const kids: Ast[] = [lowerBlock(m.block)];
+      const catchIdx = findText(c, 'catch');
+      if (catchIdx >= 0 && m.block2) {
+        const catchKids: Ast[] = [];
+        if (m.param) catchKids.push(ast('VariableDeclaration', m.param.offset, m.param.end, [lowerBindingTarget(m.param)]));
+        catchKids.push(lowerBlock(m.block2));
+        kids.push(ast('CatchClause', c[catchIdx].offset, m.block2.end, catchKids));
+      }
+      const lastBlock = m.block3 ?? (catchIdx < 0 ? m.block2 : undefined);
+      if (lastBlock) kids.push(lowerBlock(lastBlock));
+      return ast('TryStatement', n.offset, n.end, kids);
+    }
+    case 'ident': return ast('LabeledStatement', n.offset, n.end, [ast('Identifier', m.ident.offset, m.ident.end), lowerStmt(m.stmt)]);
+    case 'semi': return ast('EmptyStatement', n.offset, n.end);
+    case 'debugger_': return ast('DebuggerStatement', n.offset, n.end);
+    case 'with_': return ast('WithStatement', n.offset, n.end, [lowerExpr(m.expr), lowerStmt(m.stmt)]);
+    case 'decl': return lowerDecl(m.decl);
+    case 'expr': return ast('ExpressionStatement', n.offset, n.end, [lowerExpr(m.expr)]);
+    default: {
+      const never_: never = m;
+      throw new Unlowered(`Stmt arm ${(never_ as { arm: string }).arm}`, n.offset);
+    }
   }
+}
 
-  if (isLeaf(h)) {
-    const t = text(h);
-    switch (t) {
-      case 'const': case 'let': case 'var': {
-        // PAIN(8): tsc wraps declarations in VariableStatement → VariableDeclarationList
-        // → VariableDeclaration, with the List's span starting AT the keyword and the
-        // declaration flavor (const/let/var) encoded as FLAGS, not a child. Reconstructing
-        // tsc's exact node nesting (and spans!) from the flat CST arm is consumer work.
-        const decls = rules(c, 'Binding').map(lowerBinding);
-        const list = ast('VariableDeclarationList', n.offset, decls.length ? decls[decls.length - 1].end : n.end, decls);
-        return ast('VariableStatement', n.offset, n.end, [list]);
-      }
-      case 'if': {
-        const cond = findRule(c, 'Expr')!;
-        const stmts = rules(c, 'Stmt');
-        const kids = [lowerExpr(cond), ...stmts.map(lowerStmt)];
-        return ast('IfStatement', n.offset, n.end, kids);
-      }
-      case 'return': {
-        const e = findRule(c, 'Expr');
-        return ast('ReturnStatement', n.offset, n.end, e ? [lowerExpr(e)] : []);
-      }
-      case 'throw': {
-        const e = findRule(c, 'Expr');
-        return ast('ThrowStatement', n.offset, n.end, e ? [lowerExpr(e)] : []);
-      }
-      case 'while': {
-        return ast('WhileStatement', n.offset, n.end, [lowerExpr(findRule(c, 'Expr')!), lowerStmt(findRule(c, 'Stmt')!)]);
-      }
-      case 'do': {
-        return ast('DoStatement', n.offset, n.end, [lowerStmt(findRule(c, 'Stmt')!), lowerExpr(findRule(c, 'Expr')!)]);
-      }
-      case 'for': return lowerFor(n, c);
-      case 'break': return ast('BreakStatement', n.offset, n.end);
-      case 'continue': return ast('ContinueStatement', n.offset, n.end);
-      case 'try': {
-        const blocks = rules(c, 'Block');
-        const kids: Ast[] = [lowerBlock(blocks[0])];
-        const catchIdx = findText(c, 'catch');
-        if (catchIdx >= 0) {
-          const param = findRule(c, 'Param');
-          const catchKids: Ast[] = [];
-          if (param) catchKids.push(ast('VariableDeclaration', param.offset, param.end, [lowerBindingTarget(param)]));
-          catchKids.push(lowerBlock(blocks[1]));
-          kids.push(ast('CatchClause', (c[catchIdx] as CstLeaf).offset, blocks[1].end, catchKids));
-        }
-        const finallyIdx = findText(c, 'finally');
-        if (finallyIdx >= 0) kids.push(lowerBlock(blocks[blocks.length - 1]));
-        return ast('TryStatement', n.offset, n.end, kids);
-      }
-      case 'switch': {
-        // PAIN(15): the CST's switch shape is the WORST consumer experience met in this
-        // exercise. Each case line is a SEPARATE flat SwitchCase node (["case" Expr ":"]
-        // with NO statements), the clause's statements arrive as FOLLOWING
-        // SwitchCase[Stmt] siblings, and `default: stmt` is parsed as a LABELED
-        // STATEMENT named 'default' inside a SwitchCase. The consumer must re-group the
-        // run into clauses and re-interpret the label — none of tsc's CaseClause
-        // nesting exists in the tree.
-        const disc = lowerExpr(findRule(c, 'Expr')!);
-        const flat = rules(c, 'SwitchCase');
-        const clauses: Ast[] = [];
-        let cur: { kind: string; start: number; openEnd: number; head: Ast[]; stmts: Ast[] } | null = null;
-        const flush = () => {
-          if (!cur) return;
-          const end = cur.stmts.length ? cur.stmts[cur.stmts.length - 1].end : cur.openEnd;
-          clauses.push(ast(cur.kind, cur.start, end, [...cur.head, ...cur.stmts]));
-          cur = null;
-        };
-        for (const sc of flat) {
-          const scc = sc.children;
-          if (leafIs(scc[0], 'case')) {
-            flush();
-            cur = { kind: 'CaseClause', start: sc.offset, openEnd: sc.end, head: [lowerExpr(findRule(scc, 'Expr')!)], stmts: [] };
-            // statements may follow the ':' INSIDE the same SwitchCase
-            cur.stmts.push(...rules(scc, 'Stmt').map(lowerStmt));
-          } else if (leafIs(scc[0], 'default')) {
-            flush();
-            cur = { kind: 'DefaultClause', start: sc.offset, openEnd: sc.end, head: [], stmts: rules(scc, 'Stmt').map(lowerStmt) };
-          } else if (ruleIs(scc[0], 'Stmt')) {
-            // `default: stmt` parses as a labeled statement — unwrap it into a DefaultClause.
-            const st = scc[0];
-            const sl = st.children;
-            if (isLeaf(sl[0]) && text(sl[0]) === 'default' && leafIs(sl[1], ':') && ruleIs(sl[2], 'Stmt')) {
-              flush();
-              cur = { kind: 'DefaultClause', start: st.offset, openEnd: st.end, head: [], stmts: [lowerStmt(sl[2])] };
-            } else if (cur) {
-              cur.stmts.push(lowerStmt(st));
-            } else {
-              throw new Unlowered('switch statements before any clause', sc.offset);
-            }
-          } else {
-            throw new Unlowered('SwitchCase shape', sc.offset);
-          }
-        }
+// PAIN(15) regrouping, now over the typed SwitchCase nodes from the destructurer.
+function groupSwitchClauses(flat: CstNode[]): Ast[] {
+  const clauses: Ast[] = [];
+  let cur: { kind: string; start: number; openEnd: number; head: Ast[]; stmts: Ast[] } | null = null;
+  const flush = () => {
+    if (!cur) return;
+    const end = cur.stmts.length ? cur.stmts[cur.stmts.length - 1].end : cur.openEnd;
+    clauses.push(ast(cur.kind, cur.start, end, [...cur.head, ...cur.stmts]));
+    cur = null;
+  };
+  for (const sc of flat) {
+    const scc = sc.children;
+    if (leafIs(scc[0], 'case')) {
+      flush();
+      cur = { kind: 'CaseClause', start: sc.offset, openEnd: sc.end, head: [lowerExpr(findRule(scc, 'Expr')!)], stmts: [] };
+      cur.stmts.push(...rules(scc, 'Stmt').map(lowerStmt));
+    } else if (leafIs(scc[0], 'default')) {
+      flush();
+      cur = { kind: 'DefaultClause', start: sc.offset, openEnd: sc.end, head: [], stmts: rules(scc, 'Stmt').map(lowerStmt) };
+    } else if (ruleIs(scc[0], 'Stmt')) {
+      const st = scc[0];
+      const sl = st.children;
+      if (isLeaf(sl[0]) && text(sl[0]) === 'default' && leafIs(sl[1], ':') && ruleIs(sl[2], 'Stmt')) {
         flush();
-        const caseBlockStart = findText(c, '{');
-        const cb = ast('CaseBlock', caseBlockStart >= 0 ? c[caseBlockStart].offset : n.offset, n.end, clauses);
-        return ast('SwitchStatement', n.offset, n.end, [disc, cb]);
+        cur = { kind: 'DefaultClause', start: st.offset, openEnd: st.end, head: [], stmts: [lowerStmt(sl[2])] };
+      } else if (cur) {
+        cur.stmts.push(lowerStmt(st));
+      } else {
+        throw new Unlowered('switch statements before any clause', sc.offset);
       }
-      case ';': return ast('EmptyStatement', n.offset, n.end);
-      case 'debugger': return ast('DebuggerStatement', n.offset, n.end);
-    }
-    // labeled statement: [Ident ':' Stmt]
-    if (h.tokenType === 'Ident' && leafIs(c[1], ':') && ruleIs(c[2], 'Stmt')) {
-      return ast('LabeledStatement', n.offset, n.end, [ast('Identifier', h.offset, h.end), lowerStmt(c[2])]);
+    } else {
+      throw new Unlowered('SwitchCase shape', sc.offset);
     }
   }
-  throw new Unlowered(`Stmt shape [${c.map((x) => (isLeaf(x) ? JSON.stringify(text(x)) : x.rule)).join(' ')}]`, n.offset);
+  flush();
+  return clauses;
 }
 
 function lowerBindingTarget(n: CstNode): Ast {
