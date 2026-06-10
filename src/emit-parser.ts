@@ -2768,11 +2768,43 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
       }
       rowNF[Ai] = csA + ki + 1;
     }
-    for (let k = ki + 1; k < nA; k++) {
-      const e = kids[csA + k];
-      if (e < 0) kids[csA + k] = ~(((((~e) >>> 2) + tokD) << 2) | ((~e) & 3));
-      else if (kidTokRel[csA + k] >= 0) { kidTokRel[csA + k] += tokD; kidRel[csA + k] += chrD; }
-      // (end-relative kids past the boundary auto-shift via the length update below)
+    // Suffix kids: a PURE-container ancestor (interior = element rows only, leaves
+    // only as a trailing run) gets the same end-relative band as D — without it, a
+    // deep edit under a giant flat list pays an O(suffix) eager walk per keystroke
+    // (measured: 0.6ms median on the 9MB body as ancestor). Mixed-content ancestors
+    // (interleaved leaves can't sign-encode inside the packed entry) keep the eager
+    // walk; their kid counts are the grammar's non-list shapes.
+    if (SURG_ELEM[rowRule[Ai]] >= 0) {
+      const bndA = csA + ki + 1;
+      const nfA2 = rowNF[Ai];
+      const kidsEndA = csA + nA;
+      if (nfA2 > bndA) {
+        const hi = nfA2 < kidsEndA ? nfA2 : kidsEndA;
+        for (let k = bndA; k < hi; k++) {
+          const e = kids[k];
+          if (e < 0) { if (tokD !== 0) kids[k] = ~(((((~e) >>> 2) + tokD) << 2) | ((~e) & 3)); }
+          else {
+            const v = kidTokRel[k];
+            if (v >= 0) { kidTokRel[k] = v - rowTokLen[Ai] - 1; kidRel[k] -= rowLen[Ai] + 1; }
+          }
+        }
+      }
+      if (tokD !== 0) {
+        const tlFrom = nfA2 > bndA ? (nfA2 < kidsEndA ? nfA2 : kidsEndA) : bndA;
+        for (let k = kidsEndA - 1; k >= tlFrom; k--) {
+          const e = kids[k];
+          if (e >= 0) break;
+          kids[k] = ~(((((~e) >>> 2) + tokD) << 2) | ((~e) & 3));
+        }
+      }
+      rowNF[Ai] = bndA;
+    } else {
+      for (let k = ki + 1; k < nA; k++) {
+        const e = kids[csA + k];
+        if (e < 0) kids[csA + k] = ~(((((~e) >>> 2) + tokD) << 2) | ((~e) & 3));
+        else if (kidTokRel[csA + k] >= 0) { kidTokRel[csA + k] += tokD; kidRel[csA + k] += chrD; }
+        // (end-relative kids past the boundary auto-shift via the length update below)
+      }
     }
     rowTokLen[Ai] += tokD;
     if (rowTokLen[Ai] > 0) rowLen[Ai] = tend(surgBase[i] + rowTokLen[Ai] - 1) - toff(surgBase[i]);
