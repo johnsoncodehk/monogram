@@ -125,6 +125,16 @@ const SYNTH: Array<[string, string[]]> = [
   ['const x = f(1, 2;', ["16:expected ')'"]],
   ['function g() { return 1;', ["24:expected '}'"]],
   ['if (x { y(); }', ["6:expected ')'"]],
+  // missing NONTERMINALS (the tsc "Expression expected" analog): required rule
+  // refs failing inside the bar window mint a zero-width $missing carrying the
+  // rule identity — committed optionals ('= Expr' after the real '='), operator
+  // rhs, mixfix arms, and list elements after a real separator all synthesize
+  ['const a = ;', ['10:expected Expr']],
+  ['const x = a + ;', ['14:expected Expr']],
+  ['const a = -;', ['11:expected Expr']],
+  ['x ? y : ;', ['8:expected Expr']],
+  ['a, ;', ['3:expected Expr']],
+  ["f(1, ;", ["5:expected Expr", "5:expected ')'"]],
 ];
 let synthN = 0;
 for (const [text, want] of SYNTH) {

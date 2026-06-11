@@ -950,9 +950,11 @@ class Emitter {
     const fn = this.matchFn(body);
     if (kind === '?') {
       // Try once; on failure the helper restored pos/scn itself. The probe guard
-      // keeps token synthesis out of OPTIONAL paths — missing tokens are only
-      // inserted where a failure would propagate (required items), tsc-style.
-      return `probing++; ${fn}(); probing--;`;
+      // keeps synthesis out of UNCOMMITTED optional paths, tsc-style: before the
+      // group consumes a real token its failure is free (no synthesis); once it
+      // has consumed (pos > probeBase) the group is committed — 'const a = ;'
+      // must synthesize the initializer Expr, not drop the whole '= Expr' group.
+      return `{ const _pb = probeBase; probeBase = pos; ${fn}(); probeBase = _pb; }`;
     }
     // Run-extension: after an iteration whose element was ADOPTED from the old tree,
     // bulk-adopt its following old siblings (runExtend) instead of re-entering the
@@ -970,9 +972,15 @@ class Emitter {
     const ext = runId >= 0 ? `\n  if (adoptRunPos === pos) runExtend(${runId});` : '';
     const recFirst = this.quantRecoverFirst(body);
     const csFn = recFirst !== null ? this.membershipFn(recFirst) : 'null';
+    // The element's LEADING token is the loop's continuation decision — its
+    // failure is a normal list end, so synthesis is suppressed until the element
+    // commits (consumes past the iteration start): rep(seq(',', Expr)) must not
+    // mint a phantom ',' to keep the list going, but once the real ',' is there
+    // a missing Expr synthesizes (tsc list-element semantics). Same commitment
+    // device as the optional-probe guard, staged inline (hot loop — no closure).
     const failFor = (beforeV: string, bsnV: string) => recFirst !== null
-      ? `if (!${fn}()) { if (!recovering || !recoverSkip(${csFn}, ${closerT})) break; continue; }\n  if (recovering && pos === ${beforeV}) { scn = ${bsnV}; if (!recoverSkip(${csFn}, ${closerT})) break; continue; }`
-      : `if (!${fn}()) break;`;
+      ? `const ${beforeV}_pb = probeBase; probeBase = pos; const ${beforeV}_ok = ${fn}(); probeBase = ${beforeV}_pb;\n  if (!${beforeV}_ok) { if (!recovering || !recoverSkip(${csFn}, ${closerT})) break; continue; }\n  if (recovering && pos === ${beforeV}) { scn = ${bsnV}; if (!recoverSkip(${csFn}, ${closerT})) break; continue; }`
+      : `const ${beforeV}_pb = probeBase; probeBase = pos; const ${beforeV}_ok = ${fn}(); probeBase = ${beforeV}_pb;\n  if (!${beforeV}_ok) break;`;
     if (kind === '*') {
       const before = this.id(), bsn = this.id();
       return [
@@ -1020,7 +1028,11 @@ class Emitter {
     if (!fs || fs.size === 0) return '';
     // ruleMightStart: true iff some key in fs matches peek(); guard = NOT that. The set
     // is baked as a per-set membership fn over two byte tables (see membershipFn).
-    return `!${this.membershipFn(fs)}(pos)`;
+    // Recovering runs skip the guard: at a bar the next token is exactly what CANNOT
+    // start the rule, and the missing-nonterminal hook lives inside parseRuleEntry —
+    // a pre-call rejection would silence it ('a, ;' must mint the Expr, not end the
+    // list). Strict pays one global read only when the guard would fail anyway.
+    return `(!${this.membershipFn(fs)}(pos) && !recovering)`;
   }
 
   // Deep per-alternative dispatch condition (mirrors gen-parser.ts altMightStart): the
@@ -1812,7 +1824,7 @@ function matchKwLit(kw) {
   // keyword), so the old k >= K_NAMED_MIN guard was redundant — one int compare.
   if (pos >= cap || tkT[pos] !== kw) return recovering ? missTok(kw) : false;
   scPush(~((pos << 2) | 1));
-  if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+  if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
   return true;
 }
 // Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
@@ -1823,7 +1835,7 @@ function matchPuLit(pu) {
   // redundant — one int compare. The '>'-split lives only in matchPuLitGT ('>' sites).
   if (pos >= cap || tkT[pos] !== pu) return recovering ? missTok(pu) : false;
   scPush(~(pos << 2));
-  if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+  if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
   return true;
 }
 function matchPuLitGT(pu) {
@@ -1831,7 +1843,7 @@ function matchPuLitGT(pu) {
   const off = toff(pos);
   if (tkT[pos] === pu) {
     scPush(~(pos << 2));
-    if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+    if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
     return true;
   }
   // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>': shift the
@@ -1876,7 +1888,7 @@ function matchPuLitGT(pu) {
     // wholly BEFORE the splice point (token pos is being consumed right now), and the
     // carried memo was just cleared, so nothing reachable references shifted indices.
     scPush(~(pos << 2));
-    if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+    if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
     return true;
   }
   return recovering ? missTok(pu) : false;
@@ -1896,7 +1908,7 @@ function matchLiteral(value) {
 function matchTokK(nameKind) {
   if (pos >= cap || tkK[pos] !== nameKind) return recovering ? missTok(-nameKind) : false;
   scPush(~(pos << 2));
-  if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+  if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
   return true;
 }
 
@@ -1908,13 +1920,13 @@ function parseTemplateExpr() {
   const k = tkK[pos];
   if (k === K_TPL_TOKEN) {
     scPush(~(pos << 2));
-    if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+    if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
     return true;
   }
   if (k === K_TEMPLATE_HEAD) {
     const mark = scn;
     scPush(~(pos << 2));
-    if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+    if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
     const interpRule = currentPrattContext ?? EXPR_RULE;
     while (true) {
       RULES[interpRule]();
@@ -1922,12 +1934,12 @@ function parseTemplateExpr() {
       const nk = tkK[pos];
       if (nk === K_TEMPLATE_MIDDLE) {
         scPush(~(pos << 2));
-        if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
         continue;
       }
       if (nk === K_TEMPLATE_TAIL) {
         scPush(~(pos << 2));
-        if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
+        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
         break;
       }
       break;
@@ -2118,8 +2130,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`      const info = PREFIX_BY_T[tkT[pos]];`);
       e.emit(`      if (info) {`);
       e.emit(`        scPush(~((pos << 2) | 2));`);
-      e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }`);
-      e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
+      e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
+      e.emit(`        let rhs = ${ruleFn}_pratt(info.rbp);`);
+      e.emit(`        if (rhs < 0 && recovering) rhs = missRule(${rid});`);
       e.emit(`        if (rhs >= 0 && pos > bestNudPos) { scPush(rhs); lhs = finishNode(${rid}, mark); bestNudPos = pos; }`);
       e.emit(`      }`);
       e.emit(`    }`);
@@ -2188,7 +2201,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`      if (info.position === 'postfix') {`);
   e.emit(`        if (!tailClosed) {`);
   e.emit(`          scPush(~((pos << 2) | 2));`);
-  e.emit(`          if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }`);
+  e.emit(`          if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
   e.emit(`          lhs = finishWrap(${rid}, lhs, ledMark);`);
   e.emit(`          tailClosed = true; matched = true;`);
   e.emit(`        }`);
@@ -2202,8 +2215,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`          }`);
   e.emit(`        }`);
   e.emit(`        scPush(~((pos << 2) | 2));`);
-  e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }`);
-  e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
+  e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
+  e.emit(`        let rhs = ${ruleFn}_pratt(info.rbp);`);
+  e.emit(`        if (rhs < 0 && recovering) rhs = missRule(${rid});`);
   e.emit(`        if (rhs >= 0) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); matched = true; }`);
   e.emit(`        else { pos = ledSaved; scn = ledMark; }`);
   e.emit(`      }`);
@@ -2230,7 +2244,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`function led_${sn}_${i}() {`);
       e.emit(`  const _save = pos; const _sn = scn;`);
       e.emit(e.matchInto({ type: 'seq', items: led.items.slice(0, -1) } as RuleExpr, 'pos = _save; scn = _sn; return false;'));
-      e.emit(`  const _rhs = ${ruleFn}_pratt(${lp.rhsBp});`);
+      e.emit(`  let _rhs = ${ruleFn}_pratt(${lp.rhsBp});`);
+      e.emit(`  if (_rhs < 0 && recovering) _rhs = missRule(${rid});`);
       e.emit(`  if (_rhs < 0) { pos = _save; scn = _sn; return false; }`);
       e.emit(`  scPush(_rhs);`);
       e.emit(`  return true;`);
@@ -2352,9 +2367,12 @@ function parseRuleEntry(idx, rid, name, core) {
       if (id >= 0) {
         // refresh the reused root's transient BUILD coordinates to the current stream
         // (its green internals are position-independent; only the attachment point —
-        // what the enclosing finishNode reads — must be current).
+        // what the enclosing finishNode reads — must be current). start can be tokN
+        // for a zero-width synthesized row minted AT EOF — toff(tokN) reads past the
+        // token columns (stale slots from a longer previous document), so use the
+        // same EOF guard offset() uses.
         absTok[id] = start;
-        absChar[id] = toff(start);
+        absChar[id] = start < tokN ? toff(start) : (tokN > 0 ? tend(tokN - 1) : 0);
         scPush(id);
         return true;
       }
@@ -2417,6 +2435,7 @@ function parseRuleEntry(idx, rid, name, core) {
     suppressCur = prevSup;
     if (recKey >= 0) recRunning.delete(recKey);
   }
+  if (result < 0 && recovering) result = missRule(rid);
   if (!mySup && !capped) {
     if (me === undefined || me.length < tokN + 1) {
       me = new Array(tokN + 1);
@@ -2776,6 +2795,10 @@ let recoverFree = false;   // iteration-cap fallback: fire at any failure (still
 // zero-width elements (hooked elements are non-nullable — only synthesis can make
 // them zero-width).
 let probing = 0;
+// Innermost ACTIVE optional-probe start (-1 = none). Synthesis inside an optional
+// group is allowed only once the group consumed past this (committed) — failures
+// of an uncommitted probe are ordinary "the optional thing isn't there".
+let probeBase = -1;
 function missAt(p2) {
   for (let i = 0; i < recoverBars.length; i++) {
     const b = recoverBars[i];
@@ -2785,13 +2808,25 @@ function missAt(p2) {
   return false;
 }
 function missTok(t) {
-  if (probing !== 0 || recoverFree || !missAt(pos)) return false;
+  if (probing !== 0 || pos <= probeBase || recoverFree || !missAt(pos)) return false;
   const id = finishNode(RID_MISSING, scn);
-  rowStart[id] = t;   // expected identity: >0 literal int, <0 named token kind.
+  rowStart[id] = t;   // expected identity: >0 literal int, <0 named token kind,
+                      // >= RULE_MISS_BASE a missing NONTERMINAL (rid offset).
                       // A zero-kid row never dereferences its kids base, so the
                       // slot is free storage.
   scPush(id);
   return true;
+}
+// Missing-NONTERMINAL synthesis (the tsc "Expression expected" analog): a REQUIRED
+// rule reference failing inside the bar window stands in as a zero-width $missing
+// row carrying the rule identity. Same purity rules as missTok. Returns the node
+// id (not pushed — call sites differ) or -1.
+const RULE_MISS_BASE = 1 << 20;
+function missRule(rid) {
+  if (probing !== 0 || pos <= probeBase || recoverFree || !missAt(pos)) return -1;
+  const id = finishNode(RID_MISSING, scn);
+  rowStart[id] = RULE_MISS_BASE + rid;
+  return id;
 }
 // Monotone count of recovery FIRES (winning or losing arms alike): a rule whose
 // parse window saw any fire may have probed LESS than a strict parse would (the
@@ -2809,7 +2844,7 @@ let recFires = 0;
 function collectErrRows(id, charBase, tokBase) {
   if (rowRule[id] === RID_MISSING) {
     const t = rowStart[id];
-    docPar.push({ offset: charBase, end: charBase, message: "expected '" + (t > 0 ? LIT_NAMES[t] : (K_NAMES[-t] ?? '?')) + "'" });
+    docPar.push({ offset: charBase, end: charBase, message: t >= RULE_MISS_BASE ? 'expected ' + RULE_NAMES[t - RULE_MISS_BASE] : "expected '" + (t > 0 ? LIT_NAMES[t] : (K_NAMES[-t] ?? '?')) + "'" });
     return;
   }
   if (rowRule[id] === RID_ERROR) {
