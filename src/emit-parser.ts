@@ -924,7 +924,7 @@ class Emitter {
         }
         const save = this.id(), sn = this.id(), fn = this.matchFn(expr.body), m = this.id();
         return [
-          `{ const ${save} = pos; const ${sn} = scn; const ${m} = ${fn}(); pos = ${save}; scn = ${sn};`,
+          `{ const ${save} = pos; const ${sn} = scn; probing++; const ${m} = ${fn}(); probing--; pos = ${save}; scn = ${sn};`,
           `  if (${m}) { ${onFail} } }`,
         ].join('\n');
       }
@@ -949,8 +949,10 @@ class Emitter {
   private matchQuantifierInto(body: RuleExpr, kind: '*' | '+' | '?', onFail: string, closerT = -1): string {
     const fn = this.matchFn(body);
     if (kind === '?') {
-      // Try once; on failure the helper restored pos/scn itself.
-      return `${fn}();`;
+      // Try once; on failure the helper restored pos/scn itself. The probe guard
+      // keeps token synthesis out of OPTIONAL paths — missing tokens are only
+      // inserted where a failure would propagate (required items), tsc-style.
+      return `probing++; ${fn}(); probing--;`;
     }
     // Run-extension: after an iteration whose element was ADOPTED from the old tree,
     // bulk-adopt its following old siblings (runExtend) instead of re-entering the
@@ -968,16 +970,16 @@ class Emitter {
     const ext = runId >= 0 ? `\n  if (adoptRunPos === pos) runExtend(${runId});` : '';
     const recFirst = this.quantRecoverFirst(body);
     const csFn = recFirst !== null ? this.membershipFn(recFirst) : 'null';
-    const fail = recFirst !== null
-      ? `if (!${fn}()) { if (!recovering || !recoverSkip(${csFn}, ${closerT})) break; continue; }`
+    const failFor = (beforeV: string, bsnV: string) => recFirst !== null
+      ? `if (!${fn}()) { if (!recovering || !recoverSkip(${csFn}, ${closerT})) break; continue; }\n  if (recovering && pos === ${beforeV}) { scn = ${bsnV}; if (!recoverSkip(${csFn}, ${closerT})) break; continue; }`
       : `if (!${fn}()) break;`;
     if (kind === '*') {
       const before = this.id(), bsn = this.id();
       return [
         `while (true) {`,
         `  const ${before} = pos; const ${bsn} = scn;`,
-        `  ${fail}`,
-        `  if (pos === ${before} && scn === ${bsn}) break;` + ext,
+        `  ${failFor(before, bsn)}`,
+        `  if (pos === ${before}) { scn = ${bsn}; break; }` + ext,
         `}`,
       ].join('\n');
     }
@@ -987,8 +989,8 @@ class Emitter {
       `if (!${fn}()) { ${onFail} }`,
       `while (true) {`,
       `  const ${before} = pos; const ${bsn} = scn;`,
-      `  ${fail}`,
-      `  if (pos === ${before} && scn === ${bsn}) break;` + ext,
+      `  ${failFor(before, bsn)}`,
+      `  if (pos === ${before}) { scn = ${bsn}; break; }` + ext,
       `}`,
     ].join('\n');
   }
@@ -1001,7 +1003,7 @@ class Emitter {
     return [
       `if (${fn}()) {`,
       `  while (true) {`,
-      `    const _ds = pos; if (!${this.matchLiteralCall(delimiter)}) { pos = _ds; break; }`,
+      `    const _ds = pos; probing++; const _dm = ${this.matchLiteralCall(delimiter)}; probing--; if (!_dm) { pos = _ds; break; }`,
       `    if (!${fn}()) break;`,
       `  }`,
       `}`,
@@ -1389,9 +1391,17 @@ export function emitParser(grammar: CstGrammar): string {
   e.emit(`const ENTRY = ${J(entry)};`);
   // Rule-name table: rowRule stores the index; '$template' takes the slot after the
   // declared rules (parseTemplateExpr's synthetic node).
-  e.emit(`const RULE_NAMES = ${J([...grammar.rules.map(r => r.name), '$template', '$error'])};`);
+  e.emit(`const RULE_NAMES = ${J([...grammar.rules.map(r => r.name), '$template', '$error', '$missing'])};`);
   e.emit(`const RID_TEMPLATE = ${grammar.rules.length};`);
   e.emit(`const RID_ERROR = ${grammar.rules.length + 1};`);
+  e.emit(`const RID_MISSING = ${grammar.rules.length + 2};`);
+  {
+    // literal-int → text (for "expected 'x'" diagnostics on $missing rows)
+    const inv: string[] = [];
+    for (const [txt, t] of a.symtab.kwLitKind) inv[t] = txt;
+    for (const [txt, t] of a.symtab.puLitKind) inv[t] = txt;
+    e.emit(`const LIT_NAMES = ${J(Array.from(inv, (x) => x ?? ''))};`);
+  }
   // (recovery sync closers are threaded per-loop from the enclosing seq — see
   // quantFollowT; a global closer table froze top-level recovery at any ']'.)
   e.emit(`const prattRuleNames = new Set(${J([...a.prattRules])});`);
@@ -1694,7 +1704,7 @@ function finishNode(rid, mark) {
   }
   rowRule[id] = rid; rowLen[id] = myEnd - myOff; rowCount[id] = n;
   rowTokLen[id] = myTokEnd - myTok;
-  rowExt[id] = maxPos - myTok;
+  rowExt[id] = frameMax - myTok;
   rowOK[id] = 0;
   rowKC[id] = 0;
   rowNF[id] = 0x7fffffff;
@@ -1705,7 +1715,7 @@ function finishNode(rid, mark) {
     const ke = rowStart[id] + rowCount[id];
     for (let i2 = rowStart[id]; i2 < ke; i2++) {
       const e2 = kids[i2];
-      if (e2 >= 0 && (rowRM[e2] !== 0 || rowRule[e2] === RID_ERROR)) { rowRM[id] = 1; break; }
+      if (e2 >= 0 && (rowRM[e2] !== 0 || rowRule[e2] >= RID_ERROR)) { rowRM[id] = 1; break; }
     }
   }
   absChar[id] = myOff; absTok[id] = myTok;
@@ -1740,7 +1750,7 @@ function finishWrap(rid, lhsId, mark) {
   rowRule[id] = rid; rowLen[id] = myEnd - myOff;
   rowStart[id] = ks; rowCount[id] = n + 1;
   rowTokLen[id] = myTokEnd - myTok;
-  rowExt[id] = maxPos - myTok;
+  rowExt[id] = frameMax - myTok;
   rowOK[id] = 0;
   rowKC[id] = 0;
   rowNF[id] = 0x7fffffff;
@@ -1751,7 +1761,7 @@ function finishWrap(rid, lhsId, mark) {
     const ke = rowStart[id] + rowCount[id];
     for (let i2 = rowStart[id]; i2 < ke; i2++) {
       const e2 = kids[i2];
-      if (e2 >= 0 && (rowRM[e2] !== 0 || rowRule[e2] === RID_ERROR)) { rowRM[id] = 1; break; }
+      if (e2 >= 0 && (rowRM[e2] !== 0 || rowRule[e2] >= RID_ERROR)) { rowRM[id] = 1; break; }
     }
   }
   absChar[id] = myOff; absTok[id] = myTok;
@@ -1762,6 +1772,13 @@ function finishWrap(rid, lhsId, mark) {
 // ── per-parse state (module-level closures, reset by parse()) ──
 let pos = 0;
 let maxPos = 0;
+// Frame-LOCAL advance watermark: reach of the CURRENT rule frame (reset to the
+// frame's start at parseRuleEntry, folded back into the parent on exit). Keeps
+// rowExt/memo watermarks EXACT — the global maxPos contaminates them with probes
+// from earlier siblings, and recovery-bar minting (bar = strict-fail maxPos) must
+// be identical between a fresh parse and an adoption re-run. frameMax <= maxPos
+// always, so the hot advance pays one extra compare only at frontier breaches.
+let frameMax = 0;
 let memoNode = [];
 let memoEnd = [];
 let memoExt = [];   // per-entry lookahead extent (see parseRuleEntry)
@@ -1793,9 +1810,9 @@ function offset() {
 function matchKwLit(kw) {
   // A kw-range t can only come from a named token (template spans never intern to a
   // keyword), so the old k >= K_NAMED_MIN guard was redundant — one int compare.
-  if (pos >= cap || tkT[pos] !== kw) return false;
+  if (pos >= cap || tkT[pos] !== kw) return recovering ? missTok(kw) : false;
   scPush(~((pos << 2) | 1));
-  if (++pos > maxPos) maxPos = pos;
+  if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
   return true;
 }
 // Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
@@ -1804,9 +1821,9 @@ function matchKwLit(kw) {
 function matchPuLit(pu) {
   // A pu-range t can only come from a punct token, so the old k === K_PUNCT guard was
   // redundant — one int compare. The '>'-split lives only in matchPuLitGT ('>' sites).
-  if (pos >= cap || tkT[pos] !== pu) return false;
+  if (pos >= cap || tkT[pos] !== pu) return recovering ? missTok(pu) : false;
   scPush(~(pos << 2));
-  if (++pos > maxPos) maxPos = pos;
+  if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
   return true;
 }
 function matchPuLitGT(pu) {
@@ -1814,7 +1831,7 @@ function matchPuLitGT(pu) {
   const off = toff(pos);
   if (tkT[pos] === pu) {
     scPush(~(pos << 2));
-    if (++pos > maxPos) maxPos = pos;
+    if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
     return true;
   }
   // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>': shift the
@@ -1859,10 +1876,10 @@ function matchPuLitGT(pu) {
     // wholly BEFORE the splice point (token pos is being consumed right now), and the
     // carried memo was just cleared, so nothing reachable references shifted indices.
     scPush(~(pos << 2));
-    if (++pos > maxPos) maxPos = pos;
+    if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
     return true;
   }
-  return false;
+  return recovering ? missTok(pu) : false;
 }
 // Generic matchLiteral kept for any unspecialized site: classify value via the baked
 // tables (no per-call isKeywordLiteral / string compares) and delegate.
@@ -1877,9 +1894,9 @@ function matchLiteral(value) {
 // (No named-token kind equals K_NAMED_FALLBACK, so an unforeseen type never matches.)
 // The materialized tokenType is type-derived (kind 0) — name needs no baking here.
 function matchTokK(nameKind) {
-  if (pos >= cap || tkK[pos] !== nameKind) return false;
+  if (pos >= cap || tkK[pos] !== nameKind) return recovering ? missTok(-nameKind) : false;
   scPush(~(pos << 2));
-  if (++pos > maxPos) maxPos = pos;
+  if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
   return true;
 }
 
@@ -1891,13 +1908,13 @@ function parseTemplateExpr() {
   const k = tkK[pos];
   if (k === K_TPL_TOKEN) {
     scPush(~(pos << 2));
-    if (++pos > maxPos) maxPos = pos;
+    if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
     return true;
   }
   if (k === K_TEMPLATE_HEAD) {
     const mark = scn;
     scPush(~(pos << 2));
-    if (++pos > maxPos) maxPos = pos;
+    if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
     const interpRule = currentPrattContext ?? EXPR_RULE;
     while (true) {
       RULES[interpRule]();
@@ -1905,12 +1922,12 @@ function parseTemplateExpr() {
       const nk = tkK[pos];
       if (nk === K_TEMPLATE_MIDDLE) {
         scPush(~(pos << 2));
-        if (++pos > maxPos) maxPos = pos;
+        if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
         continue;
       }
       if (nk === K_TEMPLATE_TAIL) {
         scPush(~(pos << 2));
-        if (++pos > maxPos) maxPos = pos;
+        if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }
         break;
       }
       break;
@@ -2053,6 +2070,9 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
     if (contMix[i]) {
       e.emit(`      if (!ok) { pos = contSaved; scn = contMark; ok = matchMixfixLed_${sanitize(rule.name)}_cont_${i}(); }`);
     }
+    // A zero-width continuation is possible only via token synthesis (a strict one
+    // would never terminate this loop) — discard it or the loop spins.
+    e.emit(`      if (ok && pos === contSaved) { scn = contMark; ok = false; }`);
     e.emit(`      if (ok) {`);
     e.emit(`        node = finishWrap(${rid}, node, contMark);`);
     e.emit(`        continue outer;`);
@@ -2098,7 +2118,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`      const info = PREFIX_BY_T[tkT[pos]];`);
       e.emit(`      if (info) {`);
       e.emit(`        scPush(~((pos << 2) | 2));`);
-      e.emit(`        if (++pos > maxPos) maxPos = pos;`);
+      e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }`);
       e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
       e.emit(`        if (rhs >= 0 && pos > bestNudPos) { scPush(rhs); lhs = finishNode(${rid}, mark); bestNudPos = pos; }`);
       e.emit(`      }`);
@@ -2148,6 +2168,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       if (meta.mixfix[i]) {
         e.emit(`      if (!ok) { pos = ledSaved; scn = ledMark; ok = matchMixfixLed_${sn}_led_${i}(); }`);
       }
+      // Zero-width LED = synthetic-only (see the continuation loop note) — discard.
+      e.emit(`      if (ok && pos === ledSaved) { scn = ledMark; ok = false; }`);
       e.emit(`      if (ok) {`);
       e.emit(`        lhs = finishWrap(${rid}, lhs, ledMark);`);
       if (meta.tailClosing[i]) e.emit(`        tailClosed = true;`);
@@ -2166,7 +2188,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`      if (info.position === 'postfix') {`);
   e.emit(`        if (!tailClosed) {`);
   e.emit(`          scPush(~((pos << 2) | 2));`);
-  e.emit(`          if (++pos > maxPos) maxPos = pos;`);
+  e.emit(`          if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }`);
   e.emit(`          lhs = finishWrap(${rid}, lhs, ledMark);`);
   e.emit(`          tailClosed = true; matched = true;`);
   e.emit(`        }`);
@@ -2180,7 +2202,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`          }`);
   e.emit(`        }`);
   e.emit(`        scPush(~((pos << 2) | 2));`);
-  e.emit(`        if (++pos > maxPos) maxPos = pos;`);
+  e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; } }`);
   e.emit(`        const rhs = ${ruleFn}_pratt(info.rbp);`);
   e.emit(`        if (rhs >= 0) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); matched = true; }`);
   e.emit(`        else { pos = ledSaved; scn = ledMark; }`);
@@ -2325,7 +2347,7 @@ function parseRuleEntry(idx, rid, name, core) {
       // the gap keeps the stale entry alive. A guaranteed batch no-op: the watermark is
       // monotone and was already ≥ this value when the entry was stored.
       const ex = mx[start];
-      if (ex > maxPos) maxPos = ex;
+      if (ex > frameMax) { frameMax = ex; if (ex > maxPos) maxPos = ex; }
       const id = mn[start];
       if (id >= 0) {
         // refresh the reused root's transient BUILD coordinates to the current stream
@@ -2348,7 +2370,7 @@ function parseRuleEntry(idx, rid, name, core) {
       if (aid >= 0) {
         pos = start + rowTokLen[aid];
         const ext = start + rowExt[aid];
-        if (ext > maxPos) maxPos = ext;
+        if (ext > frameMax) { frameMax = ext; if (ext > maxPos) maxPos = ext; }
         absTok[aid] = start;
         absChar[aid] = toff(start);
         if (adoptHitP >= 0) {
@@ -2368,23 +2390,32 @@ function parseRuleEntry(idx, rid, name, core) {
         }
         me[start] = pos;
         mn[start] = aid;
-        mx[start] = maxPos;
+        mx[start] = ext;
         mg[start] = memoGenCur;
         scPush(aid);
         return true;
       }
     }
   }
+  let recKey = -1;
+  if (recovering) {
+    recKey = idx * (tokN + 1) + start;
+    if (recRunning.has(recKey)) return false;
+    recRunning.add(recKey);
+  }
   const prevContext = currentPrattContext;
   currentPrattContext = name;
   const prevSup = suppressCur;
   suppressCur = mySup;
+  const fm0 = frameMax;
+  frameMax = start;
   let result;
   try {
     result = core(0);
   } finally {
     currentPrattContext = prevContext;
     suppressCur = prevSup;
+    if (recKey >= 0) recRunning.delete(recKey);
   }
   if (!mySup && !capped) {
     if (me === undefined || me.length < tokN + 1) {
@@ -2399,7 +2430,7 @@ function parseRuleEntry(idx, rid, name, core) {
     }
     me[start] = pos;
     mn[start] = result;
-    mx[start] = maxPos;
+    mx[start] = frameMax;
     mg[start] = memoGenCur;   // the TRUE probe watermark — the +2 read slack (stop token,
                           // SECOND-token dispatch) is applied at INVALIDATION time
     if (result >= 0) {
@@ -2413,11 +2444,12 @@ function parseRuleEntry(idx, rid, name, core) {
       // covers recovering-built rows: a fire that cut a losing arm short is still
       // bounded by the recorded probes, so no mode stamp is needed for adoption —
       // rowRM stays purely structural for the diagnostics walk.)
-      const re = maxPos - start;
+      const re = frameMax - start;
       if (re > rowExt[result]) rowExt[result] = re;
     }
 
   }
+  if (fm0 > frameMax) frameMax = fm0;
   if (result >= 0) { scPush(result); return true; }
   return false;
 }
@@ -2544,6 +2576,8 @@ function farthest(errPos) {
 function runParse(entryRule) {
   pos = 0;
   maxPos = 0;
+  frameMax = 0;
+  recRunning.clear();
   parseLimit = -1;
   cap = tokN;
   currentPrattContext = null;
@@ -2565,7 +2599,7 @@ function runParse(entryRule) {
     const mark = scn;
     const from = pos;
     while (pos < tokN) { scPush(~(pos << 2)); pos++; }
-    if (pos > maxPos) maxPos = pos;
+    if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
     docDiags.push({ offset: from < tokN ? toff(from) : 0, end: tokN > 0 ? tend(tokN - 1) : 0, message: 'no parse' });
     scPush(finishNode(RID_ERROR, mark));
   }
@@ -2578,7 +2612,7 @@ function runParse(entryRule) {
     const mark = scn;
     const from = pos;
     while (pos < tokN) { scPush(~(pos << 2)); pos++; }
-    if (pos > maxPos) maxPos = pos;
+    if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
     docDiags.push({ offset: toff(from), end: tend(tokN - 1), message: "unexpected '" + tokTextAt(from) + "' after successful parse" });
     scPush(finishNode(RID_ERROR, mark));
     scPush(finishNode(RID_ERROR, 0));
@@ -2663,7 +2697,7 @@ function adoptSeek(q, rid) {
       let xid = e, xb = cb;
       for (;;) {
         if (rowOK[xid] !== 0 && rowRule[xid] === rid
-            && (recovering || rowRM[xid] === 0)
+            && rowRM[xid] === 0
             && (q + rowExt[xid] + 2 <= adoptDmgStart || q >= adoptDmgOldEnd)) {
           return xid;
         }
@@ -2721,7 +2755,44 @@ function lexMsg(g) {
 // pass re-runs (adoption keeps re-runs cheap). Bars are text-determined, so fresh
 // and incremental recovering parses are byte-identical by construction.
 let recoverBars = [];
+// (rule, pos) frames currently ON THE STACK during a recovering run. Token
+// synthesis makes zero-width matches possible, so a rule can re-enter itself at
+// the SAME position through a synthesized leading token — an unbounded recursion
+// no grammar check can rule out. A re-entered (rule, pos) frame fails (PEG cycle
+// semantics): only zero-width synthesis can build such a cycle, so a real parse
+// never sees the refusal. Strict runs never consult this (zero hot-path cost).
+const recRunning = new Set();
 let recoverFree = false;   // iteration-cap fallback: fire at any failure (still deterministic)
+// Missing-token synthesis (the tsc parseExpected analog): at a bar-adjacent failure
+// of a REQUIRED literal/token match, materialize a zero-width $missing row instead
+// of failing the construct — the structure completes (a call keeps its Call shape
+// with the ')' marked missing) and the diagnostic reads "expected 'x'". The firing
+// condition is a PURE FUNCTION of (position, bar list): pos within a fixed window
+// below a bar — no counters, no maxPos (a global budget threads non-local state
+// through the parse and desynchronizes adopted regions; the first attempt at this
+// proved it with the cross-grammar gate). probing>0 marks failure-tolerated probes
+// (not(), sep delimiters, optionals) where synthesis would flip semantics. The
+// zero-width spin is killed structurally: recovering repetition loops DISCARD
+// zero-width elements (hooked elements are non-nullable — only synthesis can make
+// them zero-width).
+let probing = 0;
+function missAt(p2) {
+  for (let i = 0; i < recoverBars.length; i++) {
+    const b = recoverBars[i];
+    if (b > p2 + 2) break;
+    if (p2 <= b && b <= p2 + 2) return true;
+  }
+  return false;
+}
+function missTok(t) {
+  if (probing !== 0 || recoverFree || !missAt(pos)) return false;
+  const id = finishNode(RID_MISSING, scn);
+  rowStart[id] = t;   // expected identity: >0 literal int, <0 named token kind.
+                      // A zero-kid row never dereferences its kids base, so the
+                      // slot is free storage.
+  scPush(id);
+  return true;
+}
 // Monotone count of recovery FIRES (winning or losing arms alike): a rule whose
 // parse window saw any fire may have probed LESS than a strict parse would (the
 // fire ends a losing arm's exploration early), so its stored watermark cannot be
@@ -2736,6 +2807,11 @@ let recFires = 0;
 // spine (rowRM propagates structurally at finishNode): O(error paths), no global
 // walk, no per-candidate bookkeeping — losing-arm rows are simply unreachable.
 function collectErrRows(id, charBase, tokBase) {
+  if (rowRule[id] === RID_MISSING) {
+    const t = rowStart[id];
+    docPar.push({ offset: charBase, end: charBase, message: "expected '" + (t > 0 ? LIT_NAMES[t] : (K_NAMES[-t] ?? '?')) + "'" });
+    return;
+  }
   if (rowRule[id] === RID_ERROR) {
     if (rowCount[id] > 0) {
       const fe = kids[rowStart[id]];
@@ -2747,7 +2823,7 @@ function collectErrRows(id, charBase, tokBase) {
   const cs = rowStart[id], n = rowCount[id];
   for (let i = 0; i < n; i++) {
     const e = kids[cs + i];
-    if (e >= 0 && (rowRM[e] !== 0 || rowRule[e] === RID_ERROR)) {
+    if (e >= 0 && (rowRM[e] !== 0 || rowRule[e] >= RID_ERROR)) {
       collectErrRows(e, charBase + kcr(id, cs + i), tokBase + ktr(id, cs + i));
     }
   }
@@ -2756,7 +2832,7 @@ function collectErrRows(id, charBase, tokBase) {
 // diagnostics (fresh survivors + adopted rowRM subtrees), ordered by offset.
 function settleDiags() {
   docPar.length = 0;
-  if (lastRoot >= 0 && (rowRM[lastRoot] !== 0 || rowRule[lastRoot] === RID_ERROR)) {
+  if (lastRoot >= 0 && (rowRM[lastRoot] !== 0 || rowRule[lastRoot] >= RID_ERROR)) {
     collectErrRows(lastRoot, rootCharBase, rootTokBase);
   }
   rebuildDiagView();
@@ -2805,7 +2881,7 @@ function recoverSkip(canStart, closerT) {
       && !(canStart !== null && canStart(pos))) {
     scPush(~(pos << 2)); pos++;
   }
-  if (pos > maxPos) maxPos = pos;
+  if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
   recFires++;
   scPush(finishNode(RID_ERROR, mark));
   return true;
@@ -2829,13 +2905,13 @@ function runExtend(rid) {
   let oq = adoptRunOq;
   let nq = pos;
   const sfx = oq >= adoptDmgOldEnd;   // past the damage: monotone, no per-member ext check
-  let mp = maxPos;
+  let mp = frameMax;
   while (i < csEnd) {
     const e = kids[i];
     if (e < 0) break;
     if (pb + ktr(P, i) !== oq) break;
     if (rowRule[e] !== rid || rowOK[e] === 0) break;
-    if (!recovering && rowRM[e] !== 0) break;
+    if (rowRM[e] !== 0) break;
     const tl = rowTokLen[e];
     if (tl === 0) break;
     const ex = rowExt[e];
@@ -2847,7 +2923,7 @@ function runExtend(rid) {
     nq += tl; oq += tl;
     i++;
   }
-  if (mp > maxPos) maxPos = mp;
+  if (mp > frameMax) { frameMax = mp; if (mp > maxPos) maxPos = mp; }
   pos = nq;
 }
 
@@ -2882,6 +2958,11 @@ function rowKCof(id) {
 }
 function trySurgery(dmgA, dmgB, tokD, chrD) {
   if (adoptRoot < 0) return -1;
+  // a recovery-made tree cannot take a strict splice: kept siblings would carry
+  // $error/$missing rows into a "successful" strict pass, freezing the OLD text's
+  // recovery shape instead of re-deriving it for the new text (rowRM reaches the
+  // root structurally, so this is the exact tree-wide test)
+  if (rowRM[adoptRoot] !== 0 || rowRule[adoptRoot] >= RID_ERROR) return -1;
   // the whole-file token math must close, or the shape changed beyond a splice
   if (adoptRootTok + rowTokLen[adoptRoot] + tokD !== tokN) return -1;
   // 1. descend along single-affected-row kids, recording the path
@@ -2951,7 +3032,7 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
   pos = Da < Db
     ? Dbase + (kids[csD + Da] < 0 ? (~kids[csD + Da]) >>> 2 : ktr(D, csD + Da))
     : dmgA;
-  maxPos = pos; scn = 0; parseLimit = -1; cap = tokN;
+  maxPos = pos; frameMax = pos; scn = 0; parseLimit = -1; cap = tokN;
   currentPrattContext = null; suppressNext = null; suppressCur = null;
   const genAt = memoGenCur;
   const fn = RULE_FN_BY_ID[elem];
@@ -3574,6 +3655,10 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     // iteration. Lex diagnostics are re-seeded into every attempt (the window was
     // lexed once; only the parse re-runs).
     const lexRecovered = recovering;
+    // a lex-recovered first run IS a recovery run — adoption stays off for the
+    // same reason as in the bar iteration below (and rowRM rows would otherwise
+    // replay the OLD text's recovery shape as a fake strict success)
+    if (lexRecovered) adoptRoot = -1;
     const lexSnap = docLex.slice();
     try {
       root = runParse(entryRule);
@@ -3590,10 +3675,15 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
       }
       recovering = false;
     } catch (e) {
-      // total edit: re-run the SAME spliced stream under the bar discipline —
-      // adoption applies on every attempt (rows that parse strictly are mode-
-      // neutral), so re-runs stay O(damage)-ish
+      // total edit: re-run the SAME spliced stream under the bar discipline.
+      // Adoption is OFF for every recovery run: bars are minted from each failed
+      // run's maxPos, and a row recorded under a recovering frame carries that
+      // run's bar-dependent probe reach — replaying it would make the next bar a
+      // function of the OLD bar history instead of (text, bars). Attempt 0 runs
+      // with no bars (behaviorally strict, adoption-free) and re-derives the true
+      // strict frontier, so every attempt is byte-equal to the fresh side's.
       recovering = true;
+      adoptRoot = -1;
       const bars = [];
       let done = false;
       try {
@@ -3708,6 +3798,7 @@ export function createParser() {
           }
           if (!done) {
             recoverFree = true;
+          adoptRoot = -1;   // free-fire decisions are non-local: adoption would desync
             try {
               docLex.length = 0;
               root = parseCore(source, entryRule);

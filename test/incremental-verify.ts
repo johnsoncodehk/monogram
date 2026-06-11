@@ -97,6 +97,15 @@ function diffChange(a: string, b: string): Edit {
 }
 
 const GLUE: Array<[string, string]> = [
+  // recovery-protocol pins (cross-grammar-gate finds): bar minting must be
+  // adoption-invariant — a pre-edit RECOVERY tree must not leak its probe reaches
+  // (frameMax exactness), its rows (surgery/adoption refusal), or its shape (the
+  // lex-recovered first run) into the edited re-parse
+  ['class za {" z', 'zlass za {" z'],
+  ['funtionzaaz( a z { }', 'funtiznzaaz( a z { }'],
+  ['function \\u{0} ( (aa ) { }', 'functionx \\u{0} ( (aa ) { }'],
+  ['const x = f(1, 2);', 'const x = f(1, 2;'],
+  ['function g() { return 1; }', 'function g() { return 1;'],
   ['const a = 1;\nconst b = 2;\n', 'const a = 1;\nconst bx = 2;\n'],
   ['let a = b; let c = 1;\n', 'let a = b1; let c = 1;\n'],
   ['if (a = b) { f(); }\n', 'if (a == b) { f(); }\n'],

@@ -70,6 +70,11 @@ const INVALID: string[] = [
   'if (a { b(); }\nconst tail = 3;\n',
   '@@@@\n',
   '}{)(\n',
+  // session-found shapes: bar-ladder degeneracies, lex-recovered docs, glued junk
+  'class za {" z',
+  'funtionzaaz( a z { }',
+  'function \\u{0} ( (aa ) { }',
+  'functio aa (z az x1<) {  }',
 ];
 let invalidN = 0;
 for (const text of INVALID) {
@@ -112,7 +117,30 @@ let typedOk = 0;
   if (c.errors.length !== 0) bad('completed statement still reports errors');
 }
 
-console.log(`recovery: valid ${validN}/${VALID.length} ≡ strict+clean · invalid ${invalidN}/${INVALID.length} total+deterministic · typing ${typedOk}/${TYPED.length} keystrokes ≡ fresh`);
+// ── 4. missing-token synthesis: tsc-style "expected 'x'" diagnostics with the
+// structure PRESERVED (a zero-width $missing leaf closes the construct instead of
+// an $error absorbing the rest). Exact-match pins — quality must not regress to
+// absorption silently.
+const SYNTH: Array<[string, string[]]> = [
+  ['const x = f(1, 2;', ["16:expected ')'"]],
+  ['function g() { return 1;', ["24:expected '}'"]],
+  ['if (x { y(); }', ["6:expected ')'"]],
+];
+let synthN = 0;
+for (const [text, want] of SYNTH) {
+  const c = p.parse(text);
+  const got = c.errors.map((g) => g.offset + ':' + g.message);
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    bad(`synthesis on «${text}»: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+    continue;
+  }
+  let missing = 0;
+  p.visit(c, { enter(id: number) { if (p.tree.ruleNameOf(id) === '$missing') missing++; } });
+  if (missing === 0) { bad(`synthesis on «${text}»: no $missing node in the tree`); continue; }
+  synthN++;
+}
+
+console.log(`recovery: valid ${validN}/${VALID.length} ≡ strict+clean · invalid ${invalidN}/${INVALID.length} total+deterministic · typing ${typedOk}/${TYPED.length} keystrokes ≡ fresh · synthesis ${synthN}/${SYNTH.length} exact`);
 if (fails > 0) {
   console.error('✗ total-parsing contract violated');
   process.exit(1);
