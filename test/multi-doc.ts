@@ -33,7 +33,7 @@ let textB = `(function () {\n${mk('beta', 300)}})();\n`;
 let seed = 0x51C0FFEE;
 const rand = () => ((seed = (seed * 48271) % 0x7fffffff) / 0x7fffffff);
 const randInt = (n: number) => Math.floor(rand() * n);
-const INS = ['x', '1', ' + q', '.m', '(/*c*/)', '"s"'];
+const INS = ['x', '1', ' + q', '.m', '(/*c*/)', '"s"', ';'];
 function mutate(text: string): { next: string; edit: Edit } {
   switch (randInt(3)) {
     case 0: {

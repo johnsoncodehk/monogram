@@ -35,7 +35,7 @@ let seedState = 0x2F6E2B1;
 const rand = () => ((seedState = (seedState * 48271) % 0x7fffffff) / 0x7fffffff);
 const randInt = (n: number) => Math.floor(rand() * n);
 
-const INSERTS = ['x', '_v', '42', ' + y', '.m', '()', ' /*c*/ ', '"s"', 'await ', '!', '?'];
+const INSERTS = ['x', '_v', '42', ' + y', '.m', '()', ' /*c*/ ', '"s"', 'await ', '!', '?', ';', '; '];
 const STMTS = ['const q9 = 1;\n', 'function g9(a) { return a; }\n', 'if (x9) { y9(); }\n', '// note\n', 'type T9 = string | number;\n'];
 
 // Mutations return the edit RANGE too, so half the steps can exercise the edits
@@ -105,6 +105,10 @@ const GLUE: Array<[string, string]> = [
   ['const t = a + b;\n', 'const t = a ++ b;\n'],
   ['const u = x<y>(z);\n', 'const u = x<y>>(z);\n'],
   ['f(a, b);\ng(c);\n', 'f(a, bc);\ng(c);\n'],
+  // expression-splitting ';' injections (structure breaks, not appended garbage)
+  ['const x = a + b;\n', 'const x = a; + b;\n'],
+  ['const y = (a + b) * c;\n', 'const y = (a +; b) * c;\n'],
+  ['const z = obj.m(1).n;\n', 'const z = obj.m(;1).n;\n'],
 ];
 
 let steps = 0, equal = 0, withErrors = 0, mismatch = 0;
