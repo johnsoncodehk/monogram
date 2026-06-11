@@ -1884,6 +1884,8 @@ function matchPuLitGT(pu) {
     if (parseLimit < 0) cap = tokN;
     // Token indices shifted: drop the per-rule memo arrays (recreated lazily at the new size).
     memoGenCur++;   // positions shifted mid-parse: every stamped entry is stale
+    memoRecFloor = 0x7fffffff;   // including across attempts: pre-split positions
+                                 // can never be revalidated against the new stream
     // GREEN tree: no kids/scratch fixup — every completed row and scratch entry lies
     // wholly BEFORE the splice point (token pos is being consumed right now), and the
     // carried memo was just cleared, so nothing reachable references shifted indices.
@@ -2343,7 +2345,6 @@ function parseRuleEntry(idx, rid, name, core) {
   suppressNext = null;
   const capped = parseLimit >= 0;
   const start = pos;
-  const rf0 = recFires;
   // Capture the arrays together: a '>'-splice inside core() detaches them via
   // fill(undefined), and the store below must then write into the DETACHED arrays
   // (i.e. be discarded), exactly like the old per-rule Map did.
@@ -2351,9 +2352,19 @@ function parseRuleEntry(idx, rid, name, core) {
   let mn = memoNode[idx];
   let mx = memoExt[idx];
   let mg = memoGen[idx];
-  if (!mySup && !capped && me !== undefined && mg[start] === memoGenCur) {
+  const mgs = me !== undefined ? mg[start] : 0;
+  // Entry validity: its own generation (negative = cycle-tainted, own-generation
+  // only, and whoever reuses it inherits the taint), or — across recovery attempts
+  // of one sequence — any earlier attempt's entry whose probe window is bar-free
+  // (strict, context-free behavior; see memoRecFloor) and untainted.
+  if (!mySup && !capped && me !== undefined && (mgs === memoGenCur
+    || (recovering && (mgs === -memoGenCur
+      || (mgs >= memoRecFloor && mgs < memoGenCur && !recoverFree && barFreeWin(start, mx[start])))))) {
     const e = me[start];
     if (e !== undefined) {
+      if (mgs !== memoGenCur) {
+        if (mgs < 0) cycleMinSerial = 0; else mg[start] = memoGenCur;
+      }
       pos = e;
       // The jump SEMANTICALLY reads everything the stored parse read: keep the advance
       // watermark ≥ the entry's watermark, or an ENCLOSING rule that completes right
@@ -2418,10 +2429,18 @@ function parseRuleEntry(idx, rid, name, core) {
     }
   }
   let recKey = -1;
+  let mySerial = 0;
   if (recovering) {
     recKey = idx * (tokN + 1) + start;
-    if (recRunning.has(recKey)) return false;
-    recRunning.add(recKey);
+    const rs = recRunning.get(recKey);
+    if (rs !== undefined) {
+      // PEG cycle refusal — record which frame it leans on: every open frame
+      // entered after that one now holds a context-dependent partial result.
+      if (rs < cycleMinSerial) cycleMinSerial = rs;
+      return false;
+    }
+    mySerial = ++recSerial;
+    recRunning.set(recKey, mySerial);
   }
   const prevContext = currentPrattContext;
   currentPrattContext = name;
@@ -2429,6 +2448,8 @@ function parseRuleEntry(idx, rid, name, core) {
   suppressCur = mySup;
   const fm0 = frameMax;
   frameMax = start;
+  const cm0 = cycleMinSerial;
+  if (recKey >= 0) cycleMinSerial = 0x7fffffff;
   let result;
   try {
     result = core(0);
@@ -2436,6 +2457,14 @@ function parseRuleEntry(idx, rid, name, core) {
     currentPrattContext = prevContext;
     suppressCur = prevSup;
     if (recKey >= 0) recRunning.delete(recKey);
+  }
+  let tainted = false;
+  if (recKey >= 0) {
+    // Tainted iff some cycle refusal inside this frame leaned on an ancestor of
+    // the frame itself (entered strictly before it). Fold the minimum outward:
+    // a refusal that taints this frame taints every enclosing one too.
+    tainted = cycleMinSerial < mySerial;
+    if (cm0 < cycleMinSerial) cycleMinSerial = cm0;
   }
   if (result < 0 && recovering) result = missRule(rid);
   if (!mySup && !capped) {
@@ -2451,9 +2480,9 @@ function parseRuleEntry(idx, rid, name, core) {
     }
     me[start] = pos;
     mn[start] = result;
-    mx[start] = frameMax;
-    mg[start] = memoGenCur;   // the TRUE probe watermark — the +2 read slack (stop token,
-                          // SECOND-token dispatch) is applied at INVALIDATION time
+    mx[start] = frameMax;     // the TRUE probe watermark — the +2 read slack (stop token,
+                              // SECOND-token dispatch) is applied at INVALIDATION time
+    mg[start] = tainted ? -memoGenCur : memoGenCur;
     if (result >= 0) {
       rowOK[result] = 1;
       // The row's OWN watermark freezes at finishNode — for a Pratt rule that is
@@ -2599,6 +2628,8 @@ function runParse(entryRule) {
   maxPos = 0;
   frameMax = 0;
   recRunning.clear();
+  recSerial = 0;
+  cycleMinSerial = 0x7fffffff;
   parseLimit = -1;
   cap = tokN;
   currentPrattContext = null;
@@ -2776,13 +2807,41 @@ function lexMsg(g) {
 // pass re-runs (adoption keeps re-runs cheap). Bars are text-determined, so fresh
 // and incremental recovering parses are byte-identical by construction.
 let recoverBars = [];
-// (rule, pos) frames currently ON THE STACK during a recovering run. Token
-// synthesis makes zero-width matches possible, so a rule can re-enter itself at
-// the SAME position through a synthesized leading token — an unbounded recursion
-// no grammar check can rule out. A re-entered (rule, pos) frame fails (PEG cycle
-// semantics): only zero-width synthesis can build such a cycle, so a real parse
-// never sees the refusal. Strict runs never consult this (zero hot-path cost).
-const recRunning = new Set();
+// (rule, pos) frames currently ON THE STACK during a recovering run, keyed to
+// their entry SERIAL. Token synthesis makes zero-width matches possible, so a rule
+// can re-enter itself at the SAME position through a synthesized leading token —
+// an unbounded recursion no grammar check can rule out. A re-entered (rule, pos)
+// frame fails (PEG cycle semantics). Recovering runs also open the first-token
+// dispatch guards, so a guard-free ref chain can cycle at one position WITHOUT any
+// synthesis — the refusal then depends on which frames are on the stack, i.e. the
+// failing result is a function of the frame's ANCESTORS, not of the text alone.
+// Strict runs never consult this (zero hot-path cost).
+const recRunning = new Map();
+let recSerial = 0;
+// Minimum entry-serial referenced by any cycle refusal during the current frame's
+// core (0x7fffffff = none). A refusal leaning on a frame entered BEFORE the current
+// one (serial < the frame's own) taints the frame: its memo entry is valid only
+// where the same ancestors are guaranteed — within its own generation — never
+// across attempts. Internal cycles (both ends inside the frame) replay from the
+// window text alone and do not taint.
+let cycleMinSerial = 0x7fffffff;
+// First memo generation of the CURRENT recovery attempt sequence (0x7fffffff =
+// none active). Attempts in one sequence parse the SAME token stream under a
+// monotonically growing bar list, so an entry from an earlier attempt is valid in
+// a later one iff its probe window saw NO bars — no bars means no synthesis and no
+// skip arming (both require a window bar), and the open dispatch guards only add
+// non-consuming probes, so the frame behaved strictly: a pure function of the
+// window text, stable under any bar list that stays out of the window.
+let memoRecFloor = 0x7fffffff;
+function barFreeWin(s, m) {
+  const hi = m + 2;
+  for (let i = 0; i < recoverBars.length; i++) {
+    const b = recoverBars[i];
+    if (b > hi) break;
+    if (b >= s) return false;
+  }
+  return true;
+}
 let recoverFree = false;   // iteration-cap fallback: fire at any failure (still deterministic)
 // Missing-token synthesis (the tsc parseExpected analog): at a bar-adjacent failure
 // of a REQUIRED literal/token match, materialize a zero-width $missing row instead
@@ -2830,12 +2889,6 @@ function missRule(rid) {
   rowStart[id] = RULE_MISS_BASE + rid;
   return id;
 }
-// Monotone count of recovery FIRES (winning or losing arms alike): a rule whose
-// parse window saw any fire may have probed LESS than a strict parse would (the
-// fire ends a losing arm's exploration early), so its stored watermark cannot be
-// trusted by a STRICT adoption — rowRM marks it (structural error containment is
-// propagated separately at finishNode).
-let recFires = 0;
 
 // Collect $error rows under an adopted recovery-made subtree: offset/end from the
 // row spans, the message re-derived from the first absorbed token — byte-identical
@@ -2948,7 +3001,6 @@ function recoverSkip(canStart, closerT, from0, reach) {
     scPush(~(pos << 2)); pos++;
   }
   if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
-  recFires++;
   scPush(finishNode(RID_ERROR, mark));
   return true;
 }
@@ -3751,6 +3803,8 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
       recovering = true;
       const bars = [];
       let done = false;
+      memoRecFloor = memoGenCur + 1;   // attempts share the stream: bar-free-window
+                                       // entries survive across them (see decl)
       try {
         for (let attempt = 0; attempt < 32 && !done; attempt++) {
           try {
@@ -3792,6 +3846,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
       } finally {
         recovering = false;
         recoverBars = [];
+        memoRecFloor = 0x7fffffff;
       }
       lastRoot = root;
       lastRootTok = rootTokBase;
@@ -3851,6 +3906,9 @@ export function createParser() {
         recovering = true;
         const bars = [];
         let done = false;
+        // NO cross-attempt survival here: parseCore resets the arena cursor per
+        // attempt (only parseEdited carries it), so an earlier attempt's rows are
+        // clobbered — a surviving entry would point at overwritten rows.
         try {
           for (let attempt = 0; attempt < 32 && !done; attempt++) {
             try {
@@ -3881,6 +3939,7 @@ export function createParser() {
         } finally {
           recovering = false;
           recoverBars = [];
+          memoRecFloor = 0x7fffffff;
         }
         settleDiags();
       }
