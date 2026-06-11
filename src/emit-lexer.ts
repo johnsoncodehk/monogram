@@ -312,6 +312,10 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`        while (wndPtr < altN && (altOff[wndPtr] < 0 ? altOff[wndPtr] + srcLenP1 : altOff[wndPtr]) + wndDelta < off) { if (altPd[wndPtr] < dmgMinOld) dmgMinOld = altPd[wndPtr]; wndPtr++; }`);
   emit(`        if (wndPtr < altN && (altOff[wndPtr] < 0 ? altOff[wndPtr] + srcLenP1 : altOff[wndPtr]) + wndDelta === off && altK[wndPtr] === k && altT[wndPtr] === t`);
   emit(`            && (altEnd[wndPtr] < 0 ? altEnd[wndPtr] + srcLenP1 : altEnd[wndPtr]) + wndDelta === end`);
+  emit(`            // the candidate's LEADING-TRIVIA flags must match too: the gap before`);
+  emit(`            // it may sit inside the edit (newline removed/added without moving any`);
+  emit(`            // token bytes), and parsers read these flags (sameLine / commentBefore)`);
+  emit(`            && altFl[wndPtr] === tkFl[tokN - 1]`);
   emit(`            && templateStack.length === 0 && altDp[wndPtr] === 0`);
   emit(`            && LX_PFXV[t] === 0 && LX_PARENKW[t] === 0`);
   emit(`            && !(k === K_PUNCT && (t === ${tLParen} || t === ${tRParen}))) {`);
