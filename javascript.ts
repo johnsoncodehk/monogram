@@ -190,7 +190,9 @@ export const notReserved = not(alt(
 // (`interface I extends { }` reads `{` as the body, `extends A extends B`,
 // `extends Foo?.Bar` — all parse-accepted by tsc through the identifier fallback).
 export const notReservedExpr = not(alt(
-  'case', 'catch', 'class', 'delete', 'enum', 'throw', 'typeof', 'void',
+  'break', 'case', 'catch', 'class', 'continue', 'debugger', 'delete', 'do',
+  'else', 'enum', 'finally', 'for', 'if', 'return', 'switch', 'throw', 'try',
+  'typeof', 'void', 'while', 'with',
 ));
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
@@ -385,14 +387,18 @@ const ForHead = rule($ => {
     // ForBinding gives a no-`in` initializer so `for (var a = 1 in xs)` parses.
     [alt('let', 'const', 'var', 'using', ['await', 'using']), sep(ForBinding, ','), alt(
       cTail,
-      [alt('in', 'of'), Expr],
+      // the for-in OBJECT is a full Expression (comma included: `for (a in b, c)`);
+      // for-of takes an AssignmentExpression - no comma (tsc rejects `for (x of a, b)`)
+      ['in', Expr, many(',', Expr)],
+      ['of', Expr],
     )],
     [opt(Expr, many(',', Expr)), ...cTail],   // C-style, no declaration: `for (i=0; …; …)` / `for (;;)`
     // for-in/of, no declaration: `for (x of xs)`. The target Expr parses in a no-`in`
     // context (same exclude as binding initializers): the `in` belongs to the for-head,
     // not to an in-LED inside the target — without it `for (key in obj)` swallowed the
     // `in`, the arm failed, and the statement fell back to a CALL parse `for(...)`.
-    [exclude('in', Expr), alt('in', 'of'), Expr],
+    [exclude('in', Expr), 'in', Expr, many(',', Expr)],
+    [exclude('in', Expr), 'of', Expr],
   ];
 });
 

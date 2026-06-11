@@ -155,7 +155,7 @@ module.exports = grammar({
 
     param: $ => seq(optional($.decorator_expr), choice(seq($.ident, optional(seq("=", $.expr))), seq($.binding_pattern, optional(seq("=", $.expr))), seq("...", choice($.ident, $.binding_pattern), optional(seq("=", $.expr))))),
 
-    for_head: $ => choice(seq(choice("let", "const", "var", "using", seq("await", "using")), optional(seq($.for_binding, repeat(seq(",", $.for_binding)), optional(","))), choice(seq(";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq(choice("in", "of"), $.expr))), seq(optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq($.expr, choice("in", "of"), $.expr)),
+    for_head: $ => choice(seq(choice("let", "const", "var", "using", seq("await", "using")), optional(seq($.for_binding, repeat(seq(",", $.for_binding)), optional(","))), choice(seq(";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq("in", $.expr, repeat(seq(",", $.expr))), seq("of", $.expr))), seq(optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq($.expr, "in", $.expr, repeat(seq(",", $.expr))), seq($.expr, "of", $.expr)),
 
     switch_case: $ => choice(seq("case", $.expr, repeat(seq(",", $.expr)), ":"), seq("default", ":"), $.stmt),
 
