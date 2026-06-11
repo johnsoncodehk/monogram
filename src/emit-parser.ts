@@ -979,7 +979,7 @@ class Emitter {
     // a missing Expr synthesizes (tsc list-element semantics). Same commitment
     // device as the optional-probe guard, staged inline (hot loop — no closure).
     const failFor = (beforeV: string, bsnV: string) => recFirst !== null
-      ? `const ${beforeV}_pb = probeBase; probeBase = pos; const ${beforeV}_ok = ${fn}(); probeBase = ${beforeV}_pb;\n  if (!${beforeV}_ok) { if (!recovering || !recoverSkip(${csFn}, ${closerT})) break; continue; }\n  if (recovering && pos === ${beforeV}) { scn = ${bsnV}; if (!recoverSkip(${csFn}, ${closerT})) break; continue; }`
+      ? `const ${beforeV}_pb = probeBase; probeBase = pos; const ${beforeV}_fm = frameMax; frameMax = pos; const ${beforeV}_ok = ${fn}(); probeBase = ${beforeV}_pb; const ${beforeV}_re = frameMax; if (${beforeV}_fm > frameMax) frameMax = ${beforeV}_fm;\n  if (!${beforeV}_ok) { if (!recovering || !recoverSkip(${csFn}, ${closerT}, ${beforeV}, ${beforeV}_re)) break; continue; }\n  if (recovering && pos === ${beforeV}) { scn = ${bsnV}; if (!recoverSkip(${csFn}, ${closerT}, ${beforeV}, ${beforeV}_re)) break; continue; }`
       : `const ${beforeV}_pb = probeBase; probeBase = pos; const ${beforeV}_ok = ${fn}(); probeBase = ${beforeV}_pb;\n  if (!${beforeV}_ok) break;`;
     if (kind === '*') {
       const before = this.id(), bsn = this.id();
@@ -2385,7 +2385,9 @@ function parseRuleEntry(idx, rid, name, core) {
       : start >= adoptDmgOldEnd + adoptDelta ? start - adoptDelta : -1;
     if (q >= 0) {
       const aid = adoptSeek(q, rid);
-      if (aid >= 0) {
+      if (aid >= 0 && recovering && !barsWindowEq(start, q, rowExt[aid])) {
+        // bar context differs from the build run — parse this window for real
+      } else if (aid >= 0) {
         pos = start + rowTokLen[aid];
         const ext = start + rowExt[aid];
         if (ext > frameMax) { frameMax = ext; if (ext > maxPos) maxPos = ext; }
@@ -2611,7 +2613,7 @@ function runParse(entryRule) {
     return er;
   }
   if (!RULES[entry]()) {
-    if (!recovering || !recoverArmed()) {
+    if (!recovering || !recoverArmed(pos, maxPos)) {
       const hasTok = pos < cap;
       throw new Error('Parse error at offset ' + (hasTok ? toff(pos) : 0) + ': unexpected ' + (hasTok ? "'" + tokTextAt(pos) + "'" : 'end of input') + farthest(pos));
     }
@@ -2623,7 +2625,7 @@ function runParse(entryRule) {
     scPush(finishNode(RID_ERROR, mark));
   }
   if (pos < tokN) {
-    if (!recovering || !recoverArmed()) {
+    if (!recovering || !recoverArmed(pos, maxPos)) {
       throw new Error('Parse error at offset ' + toff(pos) + ": unexpected '" + tokTextAt(pos) + "' after successful parse" + farthest(pos));
     }
     // absorb the unconsumed tail and WRAP [root, tail] — only non-repetition entry
@@ -2716,7 +2718,7 @@ function adoptSeek(q, rid) {
       let xid = e, xb = cb;
       for (;;) {
         if (rowOK[xid] !== 0 && rowRule[xid] === rid
-            && rowRM[xid] === 0
+            && (recovering || rowRM[xid] === 0)
             && (q + rowExt[xid] + 2 <= adoptDmgStart || q >= adoptDmgOldEnd)) {
           return xid;
         }
@@ -2848,12 +2850,19 @@ function collectErrRows(id, charBase, tokBase) {
     return;
   }
   if (rowRule[id] === RID_ERROR) {
-    if (rowCount[id] > 0) {
-      const fe = kids[rowStart[id]];
+    const fe = rowCount[id] > 0 ? kids[rowStart[id]] : 0;
+    if (fe < 0) {
+      // plain absorb: kids are raw tokens — the message quotes the first one
       const ft = tokBase + ((~fe) >>> 2);
       docPar.push({ offset: charBase, end: charBase + rowLen[id], message: "unexpected '" + docText(toff(ft), tend(ft)) + "'" });
+      return;
     }
-    return;
+    // WRAPPER shape (the runParse leftover net wraps [partial-root, tail-$error]):
+    // the first kid is a NODE — decoding it as a token leaf reads a garbage column
+    // (the message then quotes text from an unrelated offset, and differently per
+    // text layer). Fall through to the generic descent: each kid derives its own
+    // diagnostics, the tail $error quoting its real first token.
+    if (rowCount[id] === 0) return;
   }
   const cs = rowStart[id], n = rowCount[id];
   for (let i = 0; i < n; i++) {
@@ -2887,23 +2896,45 @@ function rebuildDiagView() {
 // repetition ends PAST a bar stay silent (pos > bar), and the runParse safety net
 // obeys the same discipline (an ungated net would absorb on the FIRST bar-less
 // attempt and pre-empt the whole iteration).
-function recoverArmed() {
+// Bar list that built lastRoot (that run's token coords); null = free-fire built
+// (free-fire decisions are not bar-pure — such a tree is never adoptable while
+// recovering). Strict trees carry [].
+let lastBars = [];
+// A row replays identically in a recovering run iff its window sees the SAME bars
+// (shifted) the build run saw there — every recovery decision (hook arming,
+// missTok/missRule, the cycle sentinel) is position-pure, so window text + window
+// bars determine the frame's behavior completely.
+function barsWindowEq(s, q, ext) {
+  if (lastBars === null) return false;
+  const hiN = s + ext + 2, hiO = q + ext + 2;
+  let i = 0, j = 0;
+  while (i < recoverBars.length && recoverBars[i] < s) i++;
+  while (j < lastBars.length && lastBars[j] < q) j++;
+  for (;;) {
+    const a = i < recoverBars.length && recoverBars[i] <= hiN ? recoverBars[i] - s : -1;
+    const b = j < lastBars.length && lastBars[j] <= hiO ? lastBars[j] - q : -1;
+    if (a !== b) return false;
+    if (a === -1) return true;
+    i++; j++;
+  }
+}
+function recoverArmed(from, reach) {
+  // armed iff THE FAILING ELEMENT is stuck at a bar: it starts at/before the bar
+  // and its OWN farthest probe sits ON it (+2 read slack). The reach is the
+  // element's frame-local watermark, NOT the global maxPos — a global frontier
+  // parked on a far bar must not arm unrelated loops (position-PURITY: every
+  // recovery decision inside a row is a function of the row's window text and
+  // the bars inside that window, which is what makes recovering adoption sound).
   if (recoverFree) return true;
   for (let i = 0; i < recoverBars.length; i++) {
     const b = recoverBars[i];
-    // armed iff parsing is STUCK AT the bar right now: the failing element starts
-    // at/before it and the farthest probe sits ON it (+2 read slack). maxPos is
-    // globally monotone, so without the upper window every loop at pos <= bar
-    // would arm once anything ever probed past the bar (measured: a fire at
-    // pos=214 absorbing 8000 tokens). Once a fire absorbs past the bar, maxPos
-    // leaves the window and lower loops stay silent.
-    if (pos <= b && b <= maxPos && maxPos <= b + 2) return true;
-    if (b > maxPos) break;
+    if (from <= b && b <= reach && reach <= b + 2) return true;
+    if (b > reach) break;
   }
   return false;
 }
-function recoverSkip(canStart, closerT) {
-  if (!recoverArmed()) return false;
+function recoverSkip(canStart, closerT, from0, reach) {
+  if (!recoverArmed(from0, reach)) return false;
   if (pos >= cap) return false;
   if (closerT >= 0 && tkK[pos] === K_PUNCT && tkT[pos] === closerT) return false;
   const mark = scn;
@@ -2946,7 +2977,8 @@ function runExtend(rid) {
     if (e < 0) break;
     if (pb + ktr(P, i) !== oq) break;
     if (rowRule[e] !== rid || rowOK[e] === 0) break;
-    if (rowRM[e] !== 0) break;
+    if (!recovering && rowRM[e] !== 0) break;
+    if (recovering && !barsWindowEq(nq, oq, rowExt[e])) break;
     const tl = rowTokLen[e];
     if (tl === 0) break;
     const ex = rowExt[e];
@@ -3333,7 +3365,7 @@ function saveDoc(d) {
   d.docDiags = docDiags; d.docLex = docLex; d.docPar = docPar;
   d.docPieces = docPieces; d.docPieceOff = docPieceOff; d.docLen = docLen; d.docFlat = docFlat; d.docCur = docCur;
   d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
-  d.lastRoot = lastRoot; d.lastRootTok = lastRootTok;
+  d.lastRoot = lastRoot; d.lastRootTok = lastRootTok; d.lastBars = lastBars;
 ${e.soa ? '  d.parenCachePos = parenCachePos; d.parenCacheStack = parenCacheStack;' : ''}
   d.altK = altK; d.altT = altT; d.altOff = altOff; d.altEnd = altEnd; d.altFl = altFl;
   d.altDp = altDp; d.altPd = altPd; d.altCap = altCap; d.altN = altN;
@@ -3351,7 +3383,7 @@ function loadDoc(d) {
   docDiags = d.docDiags; docLex = d.docLex; docPar = d.docPar;
   docPieces = d.docPieces; docPieceOff = d.docPieceOff; docLen = d.docLen; docFlat = d.docFlat; docCur = d.docCur;
   rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
-  lastRoot = d.lastRoot; lastRootTok = d.lastRootTok;
+  lastRoot = d.lastRoot; lastRootTok = d.lastRootTok; lastBars = d.lastBars;
 ${e.soa ? '  parenCachePos = d.parenCachePos; parenCacheStack = d.parenCacheStack;' : ''}
   altK = d.altK; altT = d.altT; altOff = d.altOff; altEnd = d.altEnd; altFl = d.altFl;
   altDp = d.altDp; altPd = d.altPd; altCap = d.altCap; altN = d.altN;
@@ -3444,6 +3476,7 @@ function totalNet(e) {
   const root = finishNode(RID_ERROR, 0);
   lastRoot = root;
   lastRootTok = 0;
+  lastBars = null;
   rootCharBase = 0;
   rootTokBase = 0;
   return root;
@@ -3679,6 +3712,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     rootTokBase = adoptRootTok;
     lastRoot = sroot;
     lastRootTok = adoptRootTok;
+    lastBars = [];
     shiftDiags(cs, ceOld, charDelta);
     return sroot;
   }
@@ -3690,10 +3724,6 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     // iteration. Lex diagnostics are re-seeded into every attempt (the window was
     // lexed once; only the parse re-runs).
     const lexRecovered = recovering;
-    // a lex-recovered first run IS a recovery run — adoption stays off for the
-    // same reason as in the bar iteration below (and rowRM rows would otherwise
-    // replay the OLD text's recovery shape as a fake strict success)
-    if (lexRecovered) adoptRoot = -1;
     const lexSnap = docLex.slice();
     try {
       root = runParse(entryRule);
@@ -3703,22 +3733,22 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
         // is valid) survive with their shifted positions
         docPar.length = 0;
         rebuildDiagView();
+        lastBars = [];
       } else {
         lastRoot = root;
         lastRootTok = rootTokBase;
+        lastBars = [];
         settleDiags();
       }
       recovering = false;
     } catch (e) {
       // total edit: re-run the SAME spliced stream under the bar discipline.
-      // Adoption is OFF for every recovery run: bars are minted from each failed
-      // run's maxPos, and a row recorded under a recovering frame carries that
-      // run's bar-dependent probe reach — replaying it would make the next bar a
-      // function of the OLD bar history instead of (text, bars). Attempt 0 runs
-      // with no bars (behaviorally strict, adoption-free) and re-derives the true
-      // strict frontier, so every attempt is byte-equal to the fresh side's.
+      // Adoption stays LIVE under the bars-window predicate: a row whose window
+      // saw the same (shifted) bars in the build run replays identically — all
+      // recovery decisions are position-pure — so each attempt is byte-equal to
+      // the fresh side's while reusing every row whose bar context matches.
+      // Attempt 0 (no bars) adopts only where the build run was also bar-free.
       recovering = true;
-      adoptRoot = -1;
       const bars = [];
       let done = false;
       try {
@@ -3734,6 +3764,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
             scn = 0;
             root = runParse(entryRule);
             done = true;
+            lastBars = bars.slice();
           } catch (e2) {
             let b = maxPos;
             if (bars.length > 0 && b <= bars[bars.length - 1]) b = bars[bars.length - 1] + 1;
@@ -3742,6 +3773,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
         }
         if (!done) {
           recoverFree = true;
+          lastBars = null;
           try {
             docLex.length = 0;
             for (let i = 0; i < lexSnap.length; i++) docLex.push(lexSnap[i]);
@@ -3810,6 +3842,7 @@ export function createParser() {
       let root;
       try {
         root = parseCore(source, entryRule);
+        lastBars = [];
       } catch (e) {
         // total parse: the strict pass rejected — iterate recovery under the bar
         // discipline (see recoverBars); the iteration cap degrades to free-fire,
@@ -3825,6 +3858,7 @@ export function createParser() {
               recoverBars = bars;
               root = parseCore(source, entryRule);
               done = true;
+              lastBars = bars.slice();
             } catch (e2) {
               let b = maxPos;
               if (bars.length > 0 && b <= bars[bars.length - 1]) b = bars[bars.length - 1] + 1;
@@ -3833,7 +3867,8 @@ export function createParser() {
           }
           if (!done) {
             recoverFree = true;
-          adoptRoot = -1;   // free-fire decisions are non-local: adoption would desync
+            lastBars = null;
+            adoptRoot = -1;   // free-fire decisions are non-local: adoption would desync
             try {
               docLex.length = 0;
               root = parseCore(source, entryRule);
