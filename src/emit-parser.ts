@@ -1979,12 +1979,15 @@ function parseTemplateExpr() {
   }
   if (k === K_TEMPLATE_HEAD) {
     const mark = scn;
+    const save = pos;
     scPush(~(pos << 2));
     if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
     const interpRule = currentPrattContext ?? EXPR_RULE;
+    // a head COMMITS to the full chain: every substitution must hold an
+    // expression and every span must continue (middle) or close (tail) — an
+    // unterminated template is a parse failure, not a shorter match
     while (true) {
-      RULES[interpRule]();
-      if (pos >= cap) break;
+      if (!RULES[interpRule]() || pos >= cap) { pos = save; scn = mark; return false; }
       const nk = tkK[pos];
       if (nk === K_TEMPLATE_MIDDLE) {
         scPush(~(pos << 2));
@@ -1996,7 +1999,7 @@ function parseTemplateExpr() {
         if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
         break;
       }
-      break;
+      pos = save; scn = mark; return false;
     }
     scPush(finishNode(RID_TEMPLATE, mark));
     return true;

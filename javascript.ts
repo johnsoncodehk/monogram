@@ -176,14 +176,16 @@ export const notReserved = not(alt(
 // `null`, …), and TS's own error-recovery tolerates several reserved words sliding into
 // the bare-identifier fallback inside otherwise-valid files (e.g. `export default …`,
 // undeclared `for (x in …)`, `class … extends (e)`, a decorator before `export`). The
-// words below have NO such role: they are the prefix operators `void`/`typeof`/`delete`
-// (which must take an operand) plus the `catch`/`throw` keywords and `enum`. Forbidding
-// the bare-identifier fallback for exactly these rejects `catch(x){}` with no `try`,
-// `void ;`/`typeof ;`/`delete ;` (operatorless prefix op), and `throw ;` — while leaving
-// every valid expression (and TS's recovery cases) untouched. Verified: widening this
-// set to other reserved words regresses valid code; these five are the FN-safe maximum.
+// words below have NO such role: the prefix operators `void`/`typeof`/`delete` (which
+// must take an operand), the `catch`/`throw` keywords, `enum`, and `case` (a bare
+// `case` expression let `case 1 y();` inside a switch parse as three statements).
+// Forbidding the bare-identifier fallback for exactly these rejects `catch(x){}` with
+// no `try`, `void ;`/`typeof ;`/`delete ;` (operatorless prefix op), `throw ;`, and a
+// colon-less `case` — while leaving every valid expression (and TS's recovery cases)
+// untouched. Verified per the conformance matrix's FN=0 gate: widening this set to
+// other reserved words regresses valid code; these are the FN-safe maximum.
 export const notReservedExpr = not(alt(
-  'catch', 'delete', 'enum', 'throw', 'typeof', 'void',
+  'case', 'catch', 'delete', 'enum', 'throw', 'typeof', 'void',
 ));
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──

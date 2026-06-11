@@ -846,14 +846,19 @@ export function createParser(grammar: CstGrammar) {
       }
       if (tok.type === '$templateHead') {
         const children: CstChild[] = [];
+        const save = pos;
         if (++pos > maxPos) maxPos = pos;
         children.push({ tokenType: '$templateHead', offset: tok.offset, end: tok.offset + tok.text.length });
         const interpRule = currentPrattContext ?? findExprRule();
+        // a head COMMITS to the full chain: every substitution must hold an
+        // expression and every span must continue (middle) or close (tail) — an
+        // unterminated template is a parse failure, not a shorter match
         while (true) {
           const exprNode = parseRule(interpRule);
-          if (exprNode) children.push(exprNode);
+          if (!exprNode) { pos = save; return null; }
+          children.push(exprNode);
           const next = peek();
-          if (!next) break;
+          if (!next) { pos = save; return null; }
           if (next.type === '$templateMiddle') {
             if (++pos > maxPos) maxPos = pos;
             children.push({ tokenType: '$templateMiddle', offset: next.offset, end: next.offset + next.text.length });
@@ -864,10 +869,11 @@ export function createParser(grammar: CstGrammar) {
             children.push({ tokenType: '$templateTail', offset: next.offset, end: next.offset + next.text.length });
             break;
           }
-          break;
+          pos = save;
+          return null;
         }
-        const startOff = children.length > 0 ? childOffset(children[0]) : offset();
-        const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
+        const startOff = childOffset(children[0]);
+        const endOff = childEnd(children[children.length - 1]);
         return { rule: '$template', children, offset: startOff, end: endOff };
       }
       return null;
