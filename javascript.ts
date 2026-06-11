@@ -465,10 +465,11 @@ const Modifier = alt('static', 'accessor', 'async');
 const callTail = ['(', sep(Param, ','), ')', opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
   ';',   // SemicolonClassElement: `class C { ; }`
-  DecoratorExpr,
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
-  ['static', Block],
+  [many(DecoratorExpr), 'static', Block],   // decorated static block parses (decorators on it are a SEMANTIC error)
+  // decorators PREFIX a member, before any modifier (see typescript.ts)
   [
+    many(DecoratorExpr),
     many(Modifier),
     alt(
       ['*', MemberName, ...callTail],                                          // generator method

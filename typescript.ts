@@ -478,10 +478,13 @@ const Modifier = alt('public', 'private', 'protected', 'static', 'abstract', 're
 const callTail = ['(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
   ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
-  DecoratorExpr,
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
-  ['static', Block],
+  [many(DecoratorExpr), 'static', Block],   // decorated static block parses (decorators on it are a SEMANTIC error)
+  // decorators PREFIX a member, before any modifier — tsc parse-rejects
+  // `public @dec method()` ("Decorators are not valid here") and an orphan
+  // `@dec` with no member, which a standalone sibling alternative tolerated
   [
+    many(DecoratorExpr),
     many(Modifier),
     alt(
       ['*', MemberName, opt('?'), opt(TypeParams), ...callTail],               // generator method
