@@ -227,6 +227,23 @@ The **only-Monogram** wins above are all disambiguations that are *TextMate-expr
 
 "TextMate can't express X" is not a guess or an assertion; it is a claim to be **proven from the model**. TextMate is a line-oriented matcher whose only cross-line memory is a finite stack of scope contexts, so a proof exhibits an X whose correct highlighting provably needs memory that model lacks — unbounded lookback to a token that is not an enclosing context. A failed *attempt* to derive a pattern is not such a proof: a cleverer pattern may exist, and most "impossible for TextMate" folklore is exactly this error — the multiline / nested-generic cases turn out TM-expressible once a parser supplies the pattern, which is why the derived grammar gets them right. Where a construct provably exceeds the model, Monogram's **tree-sitter** target — a real parser over the whole tree — resolves it.
 
+### Total parsing under edits — measured against tsc and tree-sitter
+
+The handle API (`createParser()`) is **total**: every text yields a tree plus `cst.errors`, with tsc-grade diagnostics (`expected ',' or ']'` where every listed token is *provably* still accepted at that position, `to match this '('` related info, zero-width `$missing` nodes that keep a call's shape when its `)` is missing). Two structural guarantees back it:
+
+- **The valid path is byte-identical to the strict parser** — recovery runs only after a strict pass has rejected, so error tolerance costs valid input nothing, by construction.
+- **Every edited re-parse is byte-identical to a fresh parse** of the same text — tree *and* errors, broken states included, held exact by generative edit scripts across all seven grammars in CI (`test/incremental-grammars.ts`).
+
+One 9 MB TypeScript document, identical single-character edit scripts (`test/head-to-head.ts`, node v24, Apple silicon; ✎ = per keystroke, median):
+
+| engine | fresh parse | valid ✎ | breaking ✎ | while-broken ✎ | fixing ✎ |
+|---|---:|---:|---:|---:|---:|
+| **Monogram** | **177 ms** | 0.37 ms | 13.0 ms | **0.21 ms** | 1.0 ms |
+| tsc `updateSourceFile` | 212 ms | 37 ms | 13.3 ms | 13.6 ms | 14.1 ms |
+| tree-sitter (official) | 458 ms | **0.20 ms** | **0.26 ms** | 0.31 ms | **0.20 ms** |
+
+Monogram beats tsc on every phase (valid typing ~100×, while-broken ~60×) and beats or matches tree-sitter everywhere except the two **transition** edits (break/fix), where the strict-first architecture pays one adoption-assisted strict pass to *prove* the text rejects before recovering — the price of the byte-identity guarantees above, and the open lever.
+
 ## What you get
 
 From one grammar definition (a small TypeScript combinator API), five outputs are **fully functional**:
