@@ -2706,7 +2706,8 @@ function lexMsg(g) {
   if (g.kind === 0) return "Unexpected character at offset " + g.offset + ": '" + g.ch + "'";
   if (g.kind === 1) return 'Invalid escape sequence in template at offset ' + g.offset;
   if (g.kind === 2) return 'Unterminated template literal at offset ' + g.offset;
-  return "Invalid identifier escape at offset " + g.offset + ": '" + g.ch + "'";
+  if (g.kind === 3) return "Invalid identifier escape at offset " + g.offset + ": '" + g.ch + "'";
+  return g.ch;   // kind 4: a verbatim engine message (the totality net)
 }
 // ── Recovery BARS: the discipline that keeps recovery equivalence-safe ──
 // A repetition element fails constantly during ORDINARY parsing (a statement list
@@ -3317,10 +3318,12 @@ function shiftDiags(a, b, delta) {
 // API still never crashes. Zero-width $error root + the thrown message as the
 // diagnostic; the next successful parse/edit resumes normal service.
 function totalNet(e) {
-  docDiags.length = 0;
+  // the message lives in the SOURCE layer (docLex kind 4) — a later settle rebuilds
+  // the view from the sources, and a view-only push would be wiped by it
   docLex.length = 0;
   docPar.length = 0;
-  docDiags.push({ offset: 0, end: 0, message: String(e && e.message ? e.message : e) });
+  docLex.push({ offset: 0, end: 0, kind: 4, ch: String(e && e.message ? e.message : e) });
+  rebuildDiagView();
   scn = 0;
   const root = finishNode(RID_ERROR, 0);
   lastRoot = root;
@@ -3412,6 +3415,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   let R0;
   const preLexN = docLex.length;   // persisted lexer diags; the window's own
                                    // emissions land after this index
+  lexDiagBase = preLexN;
   {
     let wHi = ceNew + 4096;
     for (;;) {
@@ -3514,6 +3518,9 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   tkText = altText; tkText.length = 0;
   altK = oK; altT = oT; altOff = oOff; altEnd = oEnd; altFl = oFl;
   altText = oText;
+  docLex.length = 0;   // a FULL relex re-derives all lexer diagnostics (none, for
+                       // the recovery-blind fallback lexer) — persisted entries
+                       // from an earlier totality-net edit would go stale
   lexInto(flattenDoc());
   const nN = tokN;
   const charDelta = docLen - oldLen;

@@ -109,6 +109,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`const LEX_RETRY = { retry: true };`);
   emit(`let lexWindowMore = false;`);
   emit(`let lexSrcBase = 0;`);
+  emit(`let lexDiagBase = 0;   // docLex floor for the current window (its own emissions sit above)`);
   emit(`const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;`);
   emit(`const LX_UNI_CONT = /[$\\u200c\\u200d\\p{ID_Continue}]+/uy;`);
   emit(`const LX_UNI_FULL = /^[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/u;`);
@@ -288,7 +289,10 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
   emit(`  while (pos < n) {`);
-  emit(`    if (wndHit >= 0) { tokN--; return wndHit; }`);
+  emit(`    // resync retracts the duplicated token push — and any lexer diagnostics
+    // emitted FOR it (the old stream's persisted entry survives via the shift;
+    // keeping the window's copy too double-reports the same character)`);
+  emit(`    if (wndHit >= 0) { tokN--; while (docLex.length > lexDiagBase && docLex[docLex.length - 1].offset >= tkOff[tokN]) docLex.length--; return wndHit; }`);
   emit(`    const cc = source.charCodeAt(pos);`);
   emit(`    // whitespace: ASCII \\s run by char loop; a non-ASCII candidate falls back to the regex`);
   emit(`    if (cc === 32 || (cc >= 9 && cc <= 13)) {`);
@@ -538,7 +542,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`    }`);
   emit(`    throw new Error("Unexpected character at offset " + pos + ": '" + source[pos] + "'");`);
   emit(`  }`);
-  emit(`  if (wndHit >= 0) { tokN--; return wndHit; }`);
+  emit(`  if (wndHit >= 0) { tokN--; while (docLex.length > lexDiagBase && docLex[docLex.length - 1].offset >= tkOff[tokN]) docLex.length--; return wndHit; }`);
   emit(`  return hasMore ? -2 : -1;`);
   emit(`}`);
   emit(`// Windowed-relex restart anchor: the last token B ending at/before the damage`);
