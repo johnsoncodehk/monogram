@@ -604,6 +604,7 @@ function analyze(grammar: CstGrammar) {
   // is >= NAMED_MIN (behaves as "a named token" for the keyword-by-text branch) yet
   // collides with NO real token-name kind (so matchToken(name) never false-matches it).
   const KIND_NAMED_FALLBACK = nextKind;
+  typeKind.set('$error', KIND_NAMED_FALLBACK);
   const symtab = {
     KIND_PUNCT, KIND_TEMPLATE_HEAD, KIND_NAMED_MIN, KIND_NAMED_FALLBACK,
     typeKind, kwLitKind, puLitKind, classifyKey,
@@ -614,6 +615,7 @@ function analyze(grammar: CstGrammar) {
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nullableRules, firstSets, symtab, qualKeys,
+    exprFirst, exprNullable,
   };
 }
 
@@ -715,7 +717,7 @@ class Emitter {
   // The run-extension target of a repetition: when the body unwraps to a plain ref of
   // a rule that routes through parseRuleEntry (pratt / left-rec / spine), its rule id;
   // else -1 (the loop gets no extension hook — adoption stays element-by-element).
-  quantRunRuleId(body: RuleExpr): number {
+  quantRunInfo(body: RuleExpr): { rid: number; name: string } | null {
     const a = this.a;
     let expr = body;
     while (true) {
@@ -726,10 +728,52 @@ class Emitter {
       }
       break;
     }
-    if (expr.type !== 'ref' || !a.ruleByName.has(expr.name)) return -1;
+    if (expr.type !== 'ref' || !a.ruleByName.has(expr.name)) return null;
     const name = expr.name;
-    if (!(a.prattRules.has(name) || a.leftRecSet.has(name) || this.spineSet().has(name))) return -1;
-    return a.grammar.rules.findIndex(r => r.name === name);
+    if (!(a.prattRules.has(name) || a.leftRecSet.has(name) || this.spineSet().has(name))) return null;
+    const rid = a.grammar.rules.findIndex(r => r.name === name);
+    return rid >= 0 ? { rid, name } : null;
+  }
+  quantRunRuleId(body: RuleExpr): number {
+    const info = this.quantRunInfo(body);
+    return info === null ? -1 : info.rid;
+  }
+  // Recovery hooks stay at SPINE-SHAPED repetitions (a plain rule ref or an
+  // alt of rule refs — statement/member lists): hooking expression-internal
+  // repetitions lets a bar-armed absorption fire inside longest-match arm probing,
+  // which distorts arm selection and cascades (measured: 273 errors for one broken
+  // identifier). An unhooked inner failure escalates to the nearest hooked list,
+  // which absorbs at statement granularity.
+  quantRecoverFirst(body: RuleExpr): Set<string> | null {
+    const a = this.a;
+    const unwrap = (x: RuleExpr): RuleExpr => {
+      while (true) {
+        if (x.type === 'group' && !(x.suppress && x.suppress.length)) { x = x.body; continue; }
+        if (x.type === 'seq') {
+          const real = x.items.filter(it => it.type !== 'op' && it.type !== 'prefix' && it.type !== 'postfix');
+          if (real.length === 1) { x = real[0]; continue; }
+        }
+        return x;
+      }
+    };
+    const expr = unwrap(body);
+    const refFirst = (x: RuleExpr): Set<string> | null => {
+      if (x.type !== 'ref' || !a.ruleByName.has(x.name)) return null;
+      if (a.nullableRules.has(x.name)) return null;
+      const fs = a.firstSets.get(x.name);
+      return fs && fs.size > 0 ? fs : null;
+    };
+    if (expr.type === 'ref') return refFirst(expr);
+    if (expr.type === 'alt') {
+      const u = new Set<string>();
+      for (const item of expr.items) {
+        const fs = refFirst(unwrap(item));
+        if (fs === null) return null;
+        for (const k of fs) u.add(k);
+      }
+      return u.size > 0 ? u : null;
+    }
+    return null;
   }
 
   /**
@@ -832,9 +876,15 @@ class Emitter {
         // flattened inline too — its failure restores to the SAME save point (the whole
         // matcher fn's _save), exactly like matchSeq's single saved/restore.
         const parts: string[] = [];
-        for (const item of expr.items) {
+        for (let i = 0; i < expr.items.length; i++) {
+          const item = expr.items[i];
           if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
+          if (item.type === 'quantifier') {
+            const nx = expr.items[i + 1];
+            this.quantFollowT = nx !== undefined && nx.type === 'literal' ? this.litT(nx.value) : -1;
+          }
           parts.push(this.matchInto(item, onFail));
+          this.quantFollowT = -1;
         }
         return parts.join('\n');
       }
@@ -851,7 +901,11 @@ class Emitter {
         return lines.join('\n');
       }
       case 'quantifier':
-        return this.matchQuantifierInto(expr.body, expr.kind, onFail);
+        {
+          const closerT = this.quantFollowT;
+          this.quantFollowT = -1;
+          return this.matchQuantifierInto(expr.body, expr.kind, onFail, closerT);
+        }
       case 'group': {
         // A suppress-carrying group stages the LED-connector exclusion for the next
         // parseRule, then matches its body (same as matchExpr 'group').
@@ -890,7 +944,9 @@ class Emitter {
 
   // Quantifier: body is matched via a helper fn (pushes + boolean), so the loop here
   // uses `return`/`break` only against ITS OWN while — no nested-loop hazard.
-  private matchQuantifierInto(body: RuleExpr, kind: '*' | '+' | '?', onFail: string): string {
+  private quantFollowT = -1;
+  litT(value: string): number { return -1; }   // bound by emitParser to the punct-literal table
+  private matchQuantifierInto(body: RuleExpr, kind: '*' | '+' | '?', onFail: string, closerT = -1): string {
     const fn = this.matchFn(body);
     if (kind === '?') {
       // Try once; on failure the helper restored pos/scn itself.
@@ -901,14 +957,26 @@ class Emitter {
     // rule machinery once per element. Only loops over a parseRuleEntry-routed rule
     // get the hook, and runExtend re-checks rid + generation, so an inner rule's
     // adoption can never feed elements into an outer loop.
-    const runId = this.quantRunRuleId(body);
+    //
+    // The same loops are the RECOVERY sync points: in recovering mode (second pass,
+    // entered only after the strict parse rejected) a failing element absorbs tokens
+    // into an $error node up to the element's FIRST set / a closer / EOF and the
+    // loop continues — strict-mode behavior is byte-identical (the hook is gated on
+    // `recovering`, and a SUCCEEDING rule parses identically in both modes).
+    const runInfo = this.quantRunInfo(body);
+    const runId = runInfo === null ? -1 : runInfo.rid;
     const ext = runId >= 0 ? `\n  if (adoptRunPos === pos) runExtend(${runId});` : '';
+    const recFirst = this.quantRecoverFirst(body);
+    const csFn = recFirst !== null ? this.membershipFn(recFirst) : 'null';
+    const fail = recFirst !== null
+      ? `if (!${fn}()) { if (!recovering || !recoverSkip(${csFn}, ${closerT})) break; continue; }`
+      : `if (!${fn}()) break;`;
     if (kind === '*') {
       const before = this.id(), bsn = this.id();
       return [
         `while (true) {`,
         `  const ${before} = pos; const ${bsn} = scn;`,
-        `  if (!${fn}()) break;`,
+        `  ${fail}`,
         `  if (pos === ${before} && scn === ${bsn}) break;` + ext,
         `}`,
       ].join('\n');
@@ -919,7 +987,7 @@ class Emitter {
       `if (!${fn}()) { ${onFail} }`,
       `while (true) {`,
       `  const ${before} = pos; const ${bsn} = scn;`,
-      `  if (!${fn}()) break;`,
+      `  ${fail}`,
       `  if (pos === ${before} && scn === ${bsn}) break;` + ext,
       `}`,
     ].join('\n');
@@ -1214,6 +1282,7 @@ class Emitter {
 export function emitParser(grammar: CstGrammar): string {
   const a = analyze(grammar);
   const e = new Emitter(a);
+  e.litT = (v: string) => a.symtab.puLitKind.get(v) ?? -1;
   const entry = findEntryRule(grammar);
 
   // Grammar-lite for the lexer: ONLY what createLexer reads (tokens, precs, the
@@ -1320,8 +1389,11 @@ export function emitParser(grammar: CstGrammar): string {
   e.emit(`const ENTRY = ${J(entry)};`);
   // Rule-name table: rowRule stores the index; '$template' takes the slot after the
   // declared rules (parseTemplateExpr's synthetic node).
-  e.emit(`const RULE_NAMES = ${J([...grammar.rules.map(r => r.name), '$template'])};`);
+  e.emit(`const RULE_NAMES = ${J([...grammar.rules.map(r => r.name), '$template', '$error'])};`);
   e.emit(`const RID_TEMPLATE = ${grammar.rules.length};`);
+  e.emit(`const RID_ERROR = ${grammar.rules.length + 1};`);
+  // (recovery sync closers are threaded per-loop from the enclosing seq — see
+  // quantFollowT; a global closer table froze top-level recovery at any ']'.)
   e.emit(`const prattRuleNames = new Set(${J([...a.prattRules])});`);
   // The expression rule the template-interpolation fallback (findExprRule) picks:
   // first pratt rule that isn't Type, in declaration order. Bake the resolved name.
@@ -1527,6 +1599,12 @@ let rowKC = new Uint8Array(8192);
 // eagerly). rowNF = first kid index (absolute, like rowStart) that may hold an
 // end-relative value; batch parses never flip, so the decode branch never fires.
 let rowNF = new Int32Array(8192).fill(0x7fffffff);
+// recovery-made bit: the row was memoized during a RECOVERING parse while recovery
+// candidates were being created under it — its subtree may contain $error rows, so
+// a STRICT pass must not adopt it (an adopted error region would let a strict pass
+// 'succeed' over broken text and wipe its diagnostics). Recovering passes adopt
+// these rows freely.
+let rowRM = new Uint8Array(8192);
 function ktr(p, k) { const v = kidTokRel[k]; return v < 0 ? v + rowTokLen[p] + 1 : v; }
 function kcr(p, k) { const v = kidRel[k]; return v < 0 ? v + rowLen[p] + 1 : v; }
 // transient BUILD coordinates (absolute), valid for rows completed in the current
@@ -1561,6 +1639,7 @@ function growRows() {
   const ok = new Uint8Array(rowCap); ok.set(rowOK); rowOK = ok;
   const kc = new Uint8Array(rowCap); kc.set(rowKC); rowKC = kc;
   const nf = new Int32Array(rowCap).fill(0x7fffffff); nf.set(rowNF.subarray(0, nodeN)); rowNF = nf;
+  const rm = new Uint8Array(rowCap); rm.set(rowRM.subarray(0, nodeN)); rowRM = rm;
   const ac = new Int32Array(rowCap); ac.set(absChar); absChar = ac;
   const at = new Int32Array(rowCap); at.set(absTok); absTok = at;
 }
@@ -1619,6 +1698,16 @@ function finishNode(rid, mark) {
   rowOK[id] = 0;
   rowKC[id] = 0;
   rowNF[id] = 0x7fffffff;
+  rowRM[id] = 0;
+  // recovery-made propagation: STRUCTURAL — a row contains an error iff a kid is an
+  // $error row or itself recovery-made. Batch parses never enter the branch.
+  if (recovering) {
+    const ke = rowStart[id] + rowCount[id];
+    for (let i2 = rowStart[id]; i2 < ke; i2++) {
+      const e2 = kids[i2];
+      if (e2 >= 0 && (rowRM[e2] !== 0 || rowRule[e2] === RID_ERROR)) { rowRM[id] = 1; break; }
+    }
+  }
   absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
   return id;
@@ -1655,6 +1744,16 @@ function finishWrap(rid, lhsId, mark) {
   rowOK[id] = 0;
   rowKC[id] = 0;
   rowNF[id] = 0x7fffffff;
+  rowRM[id] = 0;
+  // recovery-made propagation: STRUCTURAL — a row contains an error iff a kid is an
+  // $error row or itself recovery-made. Batch parses never enter the branch.
+  if (recovering) {
+    const ke = rowStart[id] + rowCount[id];
+    for (let i2 = rowStart[id]; i2 < ke; i2++) {
+      const e2 = kids[i2];
+      if (e2 >= 0 && (rowRM[e2] !== 0 || rowRule[e2] === RID_ERROR)) { rowRM[id] = 1; break; }
+    }
+  }
   absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
   return id;
@@ -1726,6 +1825,12 @@ function matchPuLitGT(pu) {
     ${e.soa ? '' : 'const restText = tkText[pos].slice(1);'}
     if (tokN === tkCap) growTok();
     parenCachePos = -1;
+    // token indices shift past this point: the OLD-TREE adoption mapping
+    // (adoptDmg*/adoptDelta, frozen at edit start) is no longer valid — turn
+    // adoption off for the remainder of this parse (the '>' split is rare; the
+    // memo generation bump below already isolates the memo)
+    adoptRoot = -1;
+    adoptRunPos = -1;
     tkK.copyWithin(pos + 1, pos, tokN);
     tkT.copyWithin(pos + 1, pos, tokN);
     tkOff.copyWithin(pos + 1, pos, tokN);
@@ -2201,6 +2306,7 @@ function parseRuleEntry(idx, rid, name, core) {
   suppressNext = null;
   const capped = parseLimit >= 0;
   const start = pos;
+  const rf0 = recFires;
   // Capture the arrays together: a '>'-splice inside core() detaches them via
   // fill(undefined), and the store below must then write into the DETACHED arrays
   // (i.e. be discarded), exactly like the old per-rule Map did.
@@ -2296,7 +2402,10 @@ function parseRuleEntry(idx, rid, name, core) {
     mx[start] = maxPos;
     mg[start] = memoGenCur;   // the TRUE probe watermark — the +2 read slack (stop token,
                           // SECOND-token dispatch) is applied at INVALIDATION time
-    if (result >= 0) rowOK[result] = 1;
+    if (result >= 0) {
+      rowOK[result] = 1;
+      if (recovering && recFires !== rf0) rowRM[result] = 1;
+    }
 
   }
   if (result >= 0) { scPush(result); return true; }
@@ -2439,11 +2548,30 @@ function runParse(entryRule) {
     return er;
   }
   if (!RULES[entry]()) {
-    const hasTok = pos < cap;
-    throw new Error('Parse error at offset ' + (hasTok ? toff(pos) : 0) + ': unexpected ' + (hasTok ? "'" + tokTextAt(pos) + "'" : 'end of input') + farthest(pos));
+    if (!recovering || !recoverArmed()) {
+      const hasTok = pos < cap;
+      throw new Error('Parse error at offset ' + (hasTok ? toff(pos) : 0) + ': unexpected ' + (hasTok ? "'" + tokTextAt(pos) + "'" : 'end of input') + farthest(pos));
+    }
+    const mark = scn;
+    const from = pos;
+    while (pos < tokN) { scPush(~(pos << 2)); pos++; }
+    if (pos > maxPos) maxPos = pos;
+    docDiags.push({ offset: from < tokN ? toff(from) : 0, end: tokN > 0 ? tend(tokN - 1) : 0, message: 'no parse' });
+    scPush(finishNode(RID_ERROR, mark));
   }
   if (pos < tokN) {
-    throw new Error('Parse error at offset ' + toff(pos) + ": unexpected '" + tokTextAt(pos) + "' after successful parse" + farthest(pos));
+    if (!recovering || !recoverArmed()) {
+      throw new Error('Parse error at offset ' + toff(pos) + ": unexpected '" + tokTextAt(pos) + "' after successful parse" + farthest(pos));
+    }
+    // absorb the unconsumed tail and WRAP [root, tail] — only non-repetition entry
+    // rules can get here (a rep entry absorbs at its own level)
+    const mark = scn;
+    const from = pos;
+    while (pos < tokN) { scPush(~(pos << 2)); pos++; }
+    if (pos > maxPos) maxPos = pos;
+    docDiags.push({ offset: toff(from), end: tend(tokN - 1), message: "unexpected '" + tokTextAt(from) + "' after successful parse" });
+    scPush(finishNode(RID_ERROR, mark));
+    scPush(finishNode(RID_ERROR, 0));
   }
   const rootId = sc[--scn];
   rootCharBase = absChar[rootId]; rootTokBase = absTok[rootId];
@@ -2453,14 +2581,7 @@ function runParse(entryRule) {
 // Source of the last COMPLETED parse — the token columns, arena and memo describe it.
 // null whenever the module state is not a coherent snapshot (no parse yet, or the last
 // attempt threw), so parseEdited falls back to a full parse.
-// Coherent-edit-base flag: false after a rejected attempt (the next edit falls
-// back to a full re-parse of the document text).
-let lastOk = false;
-// Pieces snapshot of the LIVE tree's text (survives a rejected edit): the reject
-// path re-lexes it so the handle keeps reading the previous tree. The document
-// pieces above advance on EVERY edit, accepted or rejected — the editor's buffer
-// applied the change regardless, and later coordinates are against it.
-let treePieces = null;
+
 // the LAST parse root's absolute coordinates (the descent origin — see visit/toObject)
 let rootCharBase = 0;
 let rootTokBase = 0;
@@ -2532,6 +2653,7 @@ function adoptSeek(q, rid) {
       let xid = e, xb = cb;
       for (;;) {
         if (rowOK[xid] !== 0 && rowRule[xid] === rid
+            && (recovering || rowRM[xid] === 0)
             && (q + rowExt[xid] + 2 <= adoptDmgStart || q >= adoptDmgOldEnd)) {
           return xid;
         }
@@ -2548,6 +2670,136 @@ function adoptSeek(q, rid) {
     adoptPath.push(id); adoptBase.push(base);
   }
 }
+// ── Error recovery (the TOTAL second pass) ──
+// parse/edit never crash on input: the strict pass runs first (valid inputs take it
+// exclusively — byte-identical trees, full PEG alternative exploration), and only a
+// strict REJECT re-parses with the recovering flag set. Failing elements absorb
+// tokens into $error rows (their leaves keep the CST text-tiling invariant); what
+// went wrong lands in docDiags — the cst.errors field.
+let recovering = false;
+// cst.errors — a VIEW rebuilt per parse/edit from two sources (array identity is
+// stable; contents are spliced in place):
+//   docLex: STRUCTURED lexer diagnostics (kind + position), persistent across edits
+//     (shifted like any suffix span; the damage window's re-lex replaces its range).
+//     Messages are FORMATTED at settle time with the CURRENT offset — a stored
+//     message string would embed a stale offset after shifts.
+//   parser diagnostics: derived from the TREE — fresh $error rows via the surviving
+//     recovery candidates, ADOPTED ones by walking the rowRM-marked subtrees that
+//     adoption reused this pass (a recovering pass adopts error regions wholesale,
+//     so per-pass collection alone would silently drop their diagnostics). docPar
+//     keeps the formatted result for the paths that do not re-parse (surgery).
+let docDiags = [];
+let docLex = [];
+let docPar = [];
+
+function lexMsg(g) {
+  if (g.kind === 0) return "Unexpected character at offset " + g.offset + ": '" + g.ch + "'";
+  if (g.kind === 1) return 'Invalid escape sequence in template at offset ' + g.offset;
+  if (g.kind === 2) return 'Unterminated template literal at offset ' + g.offset;
+  return "Invalid identifier escape at offset " + g.offset + ": '" + g.ch + "'";
+}
+// ── Recovery BARS: the discipline that keeps recovery equivalence-safe ──
+// A repetition element fails constantly during ORDINARY parsing (a statement list
+// legitimately ends at 'case'; a losing longest-match arm fails mid-probe). Letting
+// recovery fire at any failure absorbs valid text and RESCUES losing arms — and the
+// incremental side, which adopts strictly-parsed rows instead of re-probing them,
+// would diverge from a fresh recovering parse. Recovery therefore only fires at
+// positions a STRICT pass has proven to fail: each attempt runs strictly except at
+// the ordered bar list (fire when probing reaches the bar, then disarm); a failure
+// past the last bar aborts the attempt, appends the new farthest-fail bar, and the
+// pass re-runs (adoption keeps re-runs cheap). Bars are text-determined, so fresh
+// and incremental recovering parses are byte-identical by construction.
+let recoverBars = [];
+let recoverFree = false;   // iteration-cap fallback: fire at any failure (still deterministic)
+// Monotone count of recovery FIRES (winning or losing arms alike): a rule whose
+// parse window saw any fire may have probed LESS than a strict parse would (the
+// fire ends a losing arm's exploration early), so its stored watermark cannot be
+// trusted by a STRICT adoption — rowRM marks it (structural error containment is
+// propagated separately at finishNode).
+let recFires = 0;
+
+// Collect $error rows under an adopted recovery-made subtree: offset/end from the
+// row spans, the message re-derived from the first absorbed token — byte-identical
+// to what recoverSkip emitted when the row was built.
+// Collect every $error row in the FINAL tree by descending only the recovery-made
+// spine (rowRM propagates structurally at finishNode): O(error paths), no global
+// walk, no per-candidate bookkeeping — losing-arm rows are simply unreachable.
+function collectErrRows(id, charBase, tokBase) {
+  if (rowRule[id] === RID_ERROR) {
+    if (rowCount[id] > 0) {
+      const fe = kids[rowStart[id]];
+      const ft = tokBase + ((~fe) >>> 2);
+      docPar.push({ offset: charBase, end: charBase + rowLen[id], message: "unexpected '" + docText(toff(ft), tend(ft)) + "'" });
+    }
+    return;
+  }
+  const cs = rowStart[id], n = rowCount[id];
+  for (let i = 0; i < n; i++) {
+    const e = kids[cs + i];
+    if (e >= 0 && (rowRM[e] !== 0 || rowRule[e] === RID_ERROR)) {
+      collectErrRows(e, charBase + kcr(id, cs + i), tokBase + ktr(id, cs + i));
+    }
+  }
+}
+// Rebuild the cst.errors view: formatted lexer diagnostics + tree-derived parser
+// diagnostics (fresh survivors + adopted rowRM subtrees), ordered by offset.
+function settleDiags() {
+  docPar.length = 0;
+  if (lastRoot >= 0 && (rowRM[lastRoot] !== 0 || rowRule[lastRoot] === RID_ERROR)) {
+    collectErrRows(lastRoot, rootCharBase, rootTokBase);
+  }
+  rebuildDiagView();
+}
+function rebuildDiagView() {
+  docDiags.length = 0;
+  for (let i = 0; i < docLex.length; i++) {
+    const g = docLex[i];
+    docDiags.push({ offset: g.offset, end: g.end, message: lexMsg(g) });
+  }
+  for (let i = 0; i < docPar.length; i++) docDiags.push(docPar[i]);
+  docDiags.sort((x, y) => x.offset - y.offset);
+}
+// Armed iff some bar lies in [pos, maxPos]: the failing element started at/before a
+// proven fail point and probing reached it. STATELESS — a losing longest-match arm
+// may fire and be discarded without consuming anything (backtrack-safe), legitimate
+// repetition ends PAST a bar stay silent (pos > bar), and the runParse safety net
+// obeys the same discipline (an ungated net would absorb on the FIRST bar-less
+// attempt and pre-empt the whole iteration).
+function recoverArmed() {
+  if (recoverFree) return true;
+  for (let i = 0; i < recoverBars.length; i++) {
+    const b = recoverBars[i];
+    // armed iff parsing is STUCK AT the bar right now: the failing element starts
+    // at/before it and the farthest probe sits ON it (+2 read slack). maxPos is
+    // globally monotone, so without the upper window every loop at pos <= bar
+    // would arm once anything ever probed past the bar (measured: a fire at
+    // pos=214 absorbing 8000 tokens). Once a fire absorbs past the bar, maxPos
+    // leaves the window and lower loops stay silent.
+    if (pos <= b && b <= maxPos && maxPos <= b + 2) return true;
+    if (b > maxPos) break;
+  }
+  return false;
+}
+function recoverSkip(canStart, closerT) {
+  if (!recoverArmed()) return false;
+  if (pos >= cap) return false;
+  if (closerT >= 0 && tkK[pos] === K_PUNCT && tkT[pos] === closerT) return false;
+  const mark = scn;
+  const from = pos;
+  // the offending token is consumed unconditionally (it may well be IN the
+  // element's FIRST set — the element failed past it), then run to a sync point
+  scPush(~(pos << 2)); pos++;
+  while (pos < cap
+      && !(closerT >= 0 && tkK[pos] === K_PUNCT && tkT[pos] === closerT)
+      && !(canStart !== null && canStart(pos))) {
+    scPush(~(pos << 2)); pos++;
+  }
+  if (pos > maxPos) maxPos = pos;
+  recFires++;
+  scPush(finishNode(RID_ERROR, mark));
+  return true;
+}
+
 // Run-extension: a repetition whose element was just ADOPTED bulk-adopts the
 // following OLD SIBLINGS in one tight loop — whole-statement reuse without
 // re-entering parseRuleEntry/adoptSeek once per element. Soundness: each member
@@ -2572,6 +2824,7 @@ function runExtend(rid) {
     if (e < 0) break;
     if (pb + ktr(P, i) !== oq) break;
     if (rowRule[e] !== rid || rowOK[e] === 0) break;
+    if (!recovering && rowRM[e] !== 0) break;
     const tl = rowTokLen[e];
     if (tl === 0) break;
     const ex = rowExt[e];
@@ -2730,8 +2983,19 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
     const ks = kidN;
     for (let k = 0; k < Da; k++) {
       kids[ks + k] = kids[csD + k];
-      kidRel[ks + k] = kidRel[csD + k];
-      kidTokRel[ks + k] = kidTokRel[csD + k];
+      // NORMALIZE prefix rels to absolute while copying: the boundary remap below
+      // puts rowNF at the suffix start, so an end-relative value surviving in the
+      // copied prefix would never flip down again — its decode would drift by every
+      // later length update (lengths are still the OLD ones here, so the decode
+      // bias matches the encoding)
+      const vtr = kidTokRel[csD + k];
+      if (vtr < 0) {
+        kidTokRel[ks + k] = vtr + rowTokLen[D] + 1;
+        kidRel[ks + k] = kidRel[csD + k] + rowLen[D] + 1;
+      } else {
+        kidRel[ks + k] = kidRel[csD + k];
+        kidTokRel[ks + k] = vtr;
+      }
     }
     for (let k = 0; k < f; k++) {
       const id = sc[k];
@@ -2915,12 +3179,13 @@ function makeDoc() {
     rowStart: new Int32Array(8192), rowCount: new Int32Array(8192), rowExt: new Int32Array(8192),
     rowOK: new Uint8Array(8192), rowKC: new Uint8Array(8192),
     rowNF: new Int32Array(8192).fill(0x7fffffff),
+    rowRM: new Uint8Array(8192),
     absChar: new Int32Array(8192), absTok: new Int32Array(8192),
     rowCap: 8192, nodeN: 0,
     kids: new Int32Array(16384), kidRel: new Int32Array(16384), kidTokRel: new Int32Array(16384),
     kidCap: 16384, kidN: 0,
     memoNode: [], memoEnd: [], memoExt: [], memoGen: [], memoGenCur: 0,
-    lastOk: false, treePieces: null,
+    docDiags: [], docLex: [], docPar: [],
     docPieces: null, docPieceOff: null, docLen: 0, docFlat: null, docCur: 0,
     rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0,
 ${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : ''}
@@ -2933,12 +3198,12 @@ function saveDoc(d) {
   d.tkDp = tkDp; d.tkPd = tkPd; d.tkCap = tkCap; d.tokN = tokN;
   d.srcLenP1 = srcLenP1; d.negFrom = negFrom;
   d.rowRule = rowRule; d.rowLen = rowLen; d.rowTokLen = rowTokLen; d.rowStart = rowStart;
-  d.rowCount = rowCount; d.rowExt = rowExt; d.rowOK = rowOK; d.rowKC = rowKC; d.rowNF = rowNF;
+  d.rowCount = rowCount; d.rowExt = rowExt; d.rowOK = rowOK; d.rowKC = rowKC; d.rowNF = rowNF; d.rowRM = rowRM;
   d.absChar = absChar; d.absTok = absTok; d.rowCap = rowCap; d.nodeN = nodeN;
   d.kids = kids; d.kidRel = kidRel; d.kidTokRel = kidTokRel; d.kidCap = kidCap; d.kidN = kidN;
   d.memoNode = memoNode; d.memoEnd = memoEnd; d.memoExt = memoExt; d.memoGen = memoGen;
   d.memoGenCur = memoGenCur;
-  d.lastOk = lastOk; d.treePieces = treePieces;
+  d.docDiags = docDiags; d.docLex = docLex; d.docPar = docPar;
   d.docPieces = docPieces; d.docPieceOff = docPieceOff; d.docLen = docLen; d.docFlat = docFlat; d.docCur = docCur;
   d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
   d.lastRoot = lastRoot; d.lastRootTok = lastRootTok;
@@ -2951,12 +3216,12 @@ function loadDoc(d) {
   tkDp = d.tkDp; tkPd = d.tkPd; tkCap = d.tkCap; tokN = d.tokN;
   srcLenP1 = d.srcLenP1; negFrom = d.negFrom;
   rowRule = d.rowRule; rowLen = d.rowLen; rowTokLen = d.rowTokLen; rowStart = d.rowStart;
-  rowCount = d.rowCount; rowExt = d.rowExt; rowOK = d.rowOK; rowKC = d.rowKC; rowNF = d.rowNF;
+  rowCount = d.rowCount; rowExt = d.rowExt; rowOK = d.rowOK; rowKC = d.rowKC; rowNF = d.rowNF; rowRM = d.rowRM;
   absChar = d.absChar; absTok = d.absTok; rowCap = d.rowCap; nodeN = d.nodeN;
   kids = d.kids; kidRel = d.kidRel; kidTokRel = d.kidTokRel; kidCap = d.kidCap; kidN = d.kidN;
   memoNode = d.memoNode; memoEnd = d.memoEnd; memoExt = d.memoExt; memoGen = d.memoGen;
   memoGenCur = d.memoGenCur;
-  lastOk = d.lastOk; treePieces = d.treePieces;
+  docDiags = d.docDiags; docLex = d.docLex; docPar = d.docPar;
   docPieces = d.docPieces; docPieceOff = d.docPieceOff; docLen = d.docLen; docFlat = d.docFlat; docCur = d.docCur;
   rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
   lastRoot = d.lastRoot; lastRootTok = d.lastRootTok;
@@ -2987,7 +3252,6 @@ function swapBuffers() {
 ${e.soa ? '' : 'let altText = [];'}
 
 function parseCore(source, entryRule) {
-  lastOk = false;
   adoptRoot = -1;
   adoptRunPos = -1;
   lexInto(source);
@@ -3003,9 +3267,25 @@ function parseCore(source, entryRule) {
   const root = runParse(entryRule);
   lastRoot = root;
   lastRootTok = rootTokBase;
-  lastOk = true;
-  treePieces = docPieces.slice();
   return root;
+}
+
+// In-place diagnostic shift for a LOCALLY-strict edit (surgery): diags before the
+// damage stay, diags at/after the old damage end ride the char delta, overlapping
+// ones drop (their region re-parsed strictly). Splices in place — cst.errors IS
+// this array.
+// Parser-diag shift for the LOCALLY-strict paths (surgery / strict success): the
+// LEXER list is maintained by the window block (which already dropped the re-lexed
+// range and shifted the suffix — shifting here would double-apply the delta).
+function shiftDiags(a, b, delta) {
+  let w = 0;
+  for (let i = 0; i < docPar.length; i++) {
+    const g = docPar[i];
+    if (g.end <= a) docPar[w++] = g;
+    else if (g.offset >= b) { g.offset += delta; g.end += delta; docPar[w++] = g; }
+  }
+  docPar.length = w;
+  rebuildDiagView();
 }
 
 // ── Incremental re-parse ──
@@ -3023,30 +3303,30 @@ function parseCore(source, entryRule) {
 // until then. Lexing is FULL-FILE by design: the lexer carries cross-token state
 // (template nesting, regex context, markup modes), full lexing is a small share of a
 // parse, and the diff is what localizes the damage — not the lexer.
-function editCore(entryRule, edits) {
-  try {
-    return editCoreRun(entryRule, edits);
-  } catch (e) {
-    // REJECTED edit: the splice (and any '>' splits of the failed attempt) already
-    // rewrote the token columns to the rejected text, and the append-mode fallback
-    // may have grown the arena — but the live tree's ROWS are untouched. Re-lexing
-    // the live tree's source restores every read path (leaf spans, visit, next
-    // edit's restart anchors); O(n) on the reject path only.
-    if (treePieces !== null) {
-      // restore the token columns to the LIVE TREE's text — but the DOCUMENT text
-      // must stay on the rejected content (lexInto/tokenize resets the doc layer
-      // as a side effect, so save it around the re-lex)
-      const kP = docPieces, kO = docPieceOff, kL = docLen, kF = docFlat;
-      lexInto(treePieces.join(''));
-      docPieces = kP; docPieceOff = kO; docLen = kL; docFlat = kF; docCur = 0;
-      lastOk = false;
-    }
-    throw e;
-  }
+// Last-resort totality net: a layer without recovery support threw — the handle
+// API still never crashes. Zero-width $error root + the thrown message as the
+// diagnostic; the next successful parse/edit resumes normal service.
+function totalNet(e) {
+  docDiags.length = 0;
+  docLex.length = 0;
+  docPar.length = 0;
+  docDiags.push({ offset: 0, end: 0, message: String(e && e.message ? e.message : e) });
+  scn = 0;
+  const root = finishNode(RID_ERROR, 0);
+  lastRoot = root;
+  lastRootTok = 0;
+  rootCharBase = 0;
+  rootTokBase = 0;
+  return root;
 }
-function editCoreRun(entryRule, edits) {
+function apiMisuse(msg) {
+  const e = new Error(msg);
+  e.apiMisuse = true;
+  return e;
+}
+function editCore(entryRule, edits) {
   if (edits === undefined || edits.length === 0) {
-    throw new Error('edit() requires the changes: [{ start, end, text }] (LSP-style - each edit in the coordinates of the document AFTER the preceding edits in the array)');
+    throw apiMisuse('edit() requires the changes: [{ start, end, text }] (LSP-style - each edit in the coordinates of the document AFTER the preceding edits in the array)');
   }
   // The engine owns the document text: the new source is BUILT from the changes,
   // so "the ranges do not match the text" is unrepresentable. Each edit is applied
@@ -3055,7 +3335,7 @@ function editCoreRun(entryRule, edits) {
   // coordinates, the old end recovered through the total delta. V8 cons strings
   // make the slice+concat construction cheap; the flat-string cost, where a read
   // path needs one, is the same the caller would have paid building the text.
-  if (docPieces === null) throw new Error('edit() before parse(): no document');
+  if (docPieces === null) throw apiMisuse('edit() before parse(): no document');
   const oldLen = docLen;
   {
     let dS = 0x7fffffff;
@@ -3064,7 +3344,7 @@ function editCoreRun(entryRule, edits) {
       const ed = edits[i];
       const start = ed.start, end = ed.end, text = ed.text;
       if (!(start >= 0 && start <= end && end <= docLen) || typeof text !== 'string') {
-        throw new Error('edit() change #' + i + ' out of range: [' + start + ', ' + end + ') of ' + docLen);
+        throw apiMisuse('edit() change #' + i + ' out of range: [' + start + ', ' + end + ') of ' + docLen);
       }
       applyChange(start, end, text);
       const newEnd = start + text.length;
@@ -3076,29 +3356,7 @@ function editCoreRun(entryRule, edits) {
     editDmgS = dS;
     editDmgE = dE;
   }
-  if (!lastOk) {
-    // No coherent edit base (a previous attempt rejected): full re-parse in APPEND
-    // mode — parseCore would reset the arena and destroy the live tree the handle
-    // still exposes if THIS parse rejects too. parse() is the only compaction point.
-    const whole = flattenDoc();
-    lexInto(whole);
-    if (memoEnd.length !== MEMO_RULES) {
-      memoNode = new Array(MEMO_RULES);
-      memoEnd = new Array(MEMO_RULES);
-      memoExt = new Array(MEMO_RULES);
-      memoGen = new Array(MEMO_RULES);
-    }
-    memoGenCur++;
-    adoptRoot = -1;
-    adoptRunPos = -1;
-    const root = runParse(entryRule);
-    lastRoot = root;
-    lastRootTok = rootTokBase;
-    lastOk = true;
-    treePieces = docPieces.slice();
-    return root;
-  }
-  lastOk = false;
+
 ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // Damage envelope from the composed changes: prefix coordinates are shared, the
   // old end comes back through the total delta.
@@ -3110,7 +3368,16 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // Restart anchor: the last token B ending at/before the damage whose recorded
   // depths are zero and whose shape carries no cross-token lexer flag (')' control-
   // head, postfix-ambiguous op). B = -1 restarts at the file head — always sound.
-  const B = findRestart(cs);
+  //
+  // RECOVERED streams add a constraint a strict stream never has: a lexer
+  // diagnostic marks a point whose tokenization can COUPLE BACKWARD to a later
+  // edit (a dangling quote pairs with a newly typed one, re-lexing everything
+  // between), so the window must start below the EARLIEST such point before the
+  // damage. Forward coupling needs no guard — the resync equality only accepts
+  // exact re-agreement with the old stream.
+  let anchorCs = cs;
+  for (let i = 0; i < docLex.length; i++) if (docLex[i].offset < anchorCs) anchorCs = docLex[i].offset;
+  const B = findRestart(anchorCs);
   const initParens = reconstructParensCached(B);
   const oN = tokN;
   // first old token at/after the damage end — the resync search floor
@@ -3133,16 +3400,23 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // an absolute bias; -2 = ran off the window end before resyncing — re-materialize
   // a larger window and retry (the common case fits the first one).
   let R0;
+  const preLexN = docLex.length;   // persisted lexer diags; the window's own
+                                   // emissions land after this index
   {
     let wHi = ceNew + 4096;
     for (;;) {
       if (wHi > docLen) wHi = docLen;
       const windowStr = docText(startOff, wHi);
+      docLex.length = preLexN;     // an aborted attempt re-lexes: drop its pushes
       tokN = 0;
       try {
         R0 = lexCore(windowStr, 0, B >= 0 ? altK[B] : -1, B >= 0 ? altT[B] : 0, r0, ceNew, charDelta, cs, initParens.slice(), startOff, wHi < docLen);
       } catch (e2) {
-        if (e2 !== LEX_RETRY) throw e2;
+        if (e2 !== LEX_RETRY) {
+          if (recovering) throw e2;        // a recovering lexer never throws — a bug
+          recovering = true;               // lex error: the rest of this edit runs in
+          continue;                        // the recovering pass (parse included)
+        }
         R0 = -2;
       }
       if (R0 !== -2) break;
@@ -3153,6 +3427,26 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   const R = R0 >= 0 ? R0 : oN;
   swapBuffers();              // live = OLD stream again; window sits in the alt buffers
   tokN = oN;
+  // Persisted lexer diagnostics (AFTER the swap-back — toff must decode the OLD
+  // columns, not the spare window set): entries inside the re-lexed range are
+  // superseded by the window's own emissions (queued at [preLexN..)); suffix
+  // entries ride the char delta; prefix entries are untouched.
+  {
+    const wndLo = startOff;
+    const wndHiOld = R < oN ? toff(R) : oldLen;
+    let w2 = 0;
+    for (let i = 0; i < preLexN; i++) {
+      const g = docLex[i];
+      if (g.end <= wndLo) docLex[w2++] = g;
+      else if (g.offset >= wndHiOld) { g.offset += charDelta; g.end += charDelta; docLex[w2++] = g; }
+    }
+    // window emissions sit at [preLexN..) in CURRENT coordinates — never shifted;
+    // compact them down after the kept prefix
+    if (w2 < preLexN) {
+      for (let i = preLexN; i < docLex.length; i++) docLex[w2++] = docLex[i];
+      docLex.length = w2;
+    }
+  }
   // EOF-relative maintenance: move the negative-zone boundary to THIS edit's suffix
   // start R. Tokens dropping out of the suffix ([negFrom, R)) flip back to absolute
   // (they sit at/before the damage now — EOF-unstable); tokens entering it
@@ -3245,25 +3539,97 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   adoptPath.length = 0;
   adoptBase.length = 0;
   adoptRunPos = -1;
-  const sroot = trySurgery(p, dOldEnd, tokenDelta, charDelta);
+  const sroot = recovering ? -1 : trySurgery(p, dOldEnd, tokenDelta, charDelta);
   if (sroot >= 0) {
     adoptRoot = -1;
     rootCharBase = toff(adoptRootTok);
     rootTokBase = adoptRootTok;
     lastRoot = sroot;
     lastRootTok = adoptRootTok;
-    lastOk = true;
-    treePieces = docPieces.slice();
+    shiftDiags(cs, ceOld, charDelta);
     return sroot;
   }
-  const root = runParse(entryRule);
+  let root;
+  {
+    // recovering may already be true here (the window relex recovered a lex error
+    // and pushed its diagnostics): the first attempt then runs with EMPTY bars —
+    // strict at the repetition level — and a parse failure flows into the same bar
+    // iteration. Lex diagnostics are re-seeded into every attempt (the window was
+    // lexed once; only the parse re-runs).
+    const lexRecovered = recovering;
+    const lexSnap = docLex.slice();
+    try {
+      root = runParse(entryRule);
+      if (!lexRecovered) {
+        // a strict full pass proves the document free of PARSE errors; persisted
+        // lexer diagnostics (e.g. an invalid escape outside the damage — its token
+        // is valid) survive with their shifted positions
+        docPar.length = 0;
+        rebuildDiagView();
+      } else {
+        lastRoot = root;
+        lastRootTok = rootTokBase;
+        settleDiags();
+      }
+      recovering = false;
+    } catch (e) {
+      // total edit: re-run the SAME spliced stream under the bar discipline —
+      // adoption applies on every attempt (rows that parse strictly are mode-
+      // neutral), so re-runs stay O(damage)-ish
+      recovering = true;
+      const bars = [];
+      let done = false;
+      try {
+        for (let attempt = 0; attempt < 32 && !done; attempt++) {
+          try {
+            docLex.length = 0;
+            for (let i = 0; i < lexSnap.length; i++) docLex.push(lexSnap[i]);
+            recoverBars = bars;
+            memoGenCur++;
+            adoptPath.length = 0;
+            adoptBase.length = 0;
+            adoptRunPos = -1;
+            scn = 0;
+            root = runParse(entryRule);
+            done = true;
+          } catch (e2) {
+            let b = maxPos;
+            if (bars.length > 0 && b <= bars[bars.length - 1]) b = bars[bars.length - 1] + 1;
+            bars.push(b);
+          }
+        }
+        if (!done) {
+          recoverFree = true;
+          try {
+            docLex.length = 0;
+            for (let i = 0; i < lexSnap.length; i++) docLex.push(lexSnap[i]);
+            memoGenCur++;
+            adoptPath.length = 0;
+            adoptBase.length = 0;
+            adoptRunPos = -1;
+            scn = 0;
+            root = runParse(entryRule);
+          } catch (e3) {
+            root = totalNet(e3);
+          } finally {
+            recoverFree = false;
+          }
+        }
+      } finally {
+        recovering = false;
+        recoverBars = [];
+      }
+      lastRoot = root;
+      lastRootTok = rootTokBase;
+      settleDiags();
+    }
+  }
   adoptRoot = -1;
   lastRoot = root;
   lastRootTok = rootTokBase;
-  lastOk = true;
-  treePieces = docPieces.slice();
   return root;
 }
+
 
 export { tokenize };
 // ── Module-level API: the DEFAULT document (one shared session; tokenize and the
@@ -3295,14 +3661,62 @@ export function createParser() {
     parse(source, entryRule) {
       activate(d);
       entryUsed = entryRule;
-      gen++;   // re-opening resets the arena: old handles die even if THIS parse rejects
-      const root = parseCore(source, entryRule);
-      return { d, gen, root };
+      gen++;   // re-opening resets the arena: old handles die regardless of outcome
+      docDiags.length = 0;
+      docLex.length = 0;
+      docPar.length = 0;
+      let root;
+      try {
+        root = parseCore(source, entryRule);
+      } catch (e) {
+        // total parse: the strict pass rejected — iterate recovery under the bar
+        // discipline (see recoverBars); the iteration cap degrades to free-fire,
+        // and a recovery-blind layer (fallback lexers) degrades to the zero-width
+        // $error root. Never a crash.
+        recovering = true;
+        const bars = [];
+        let done = false;
+        try {
+          for (let attempt = 0; attempt < 32 && !done; attempt++) {
+            try {
+              docLex.length = 0;
+              recoverBars = bars;
+              root = parseCore(source, entryRule);
+              done = true;
+            } catch (e2) {
+              let b = maxPos;
+              if (bars.length > 0 && b <= bars[bars.length - 1]) b = bars[bars.length - 1] + 1;
+              bars.push(b);
+            }
+          }
+          if (!done) {
+            recoverFree = true;
+            try {
+              docLex.length = 0;
+              root = parseCore(source, entryRule);
+            } catch (e3) {
+              root = totalNet(e3);
+            } finally {
+              recoverFree = false;
+            }
+          }
+        } finally {
+          recovering = false;
+          recoverBars = [];
+        }
+        settleDiags();
+      }
+      return { d, gen, root, errors: docDiags };
     },
     edit(cst, edits) {
       chk(cst);
       activate(d);
-      cst.root = editCore(entryUsed, edits);
+      try {
+        cst.root = editCore(entryUsed, edits);
+      } catch (e) {
+        if (e instanceof RangeError || (e && e.apiMisuse)) throw e;
+        cst.root = totalNet(e);
+      }
     },
     visit(cst, fns) { chk(cst); activate(d); return visitCore(cst.root, fns); },
     tree: view,

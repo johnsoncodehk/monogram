@@ -108,6 +108,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// resync: suffix-zone equality makes a cut token's END mismatch the old one)`);
   emit(`const LEX_RETRY = { retry: true };`);
   emit(`let lexWindowMore = false;`);
+  emit(`let lexSrcBase = 0;`);
   emit(`const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;`);
   emit(`const LX_UNI_CONT = /[$\\u200c\\u200d\\p{ID_Continue}]+/uy;`);
   emit(`const LX_UNI_FULL = /^[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/u;`);
@@ -175,6 +176,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`}`);
   if (templateToken) {
     emit(`function lexTplSpan(source, pos, validateEscapes) {`);
+    emit(`  const tplFrom = pos;`);
     emit(`  while (pos < source.length) {`);
     emit(`    if (${startsWithExpr('source', 'pos', tplInterpOpen)}) return { endsWithInterp: true, end: pos + ${tplInterpOpen.length} };`);
     emit(`    if (source.charCodeAt(pos) === 92) {`);
@@ -182,7 +184,11 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       emit(`      if (validateEscapes) {`);
       emit(`        LX_TPL_ESC.lastIndex = pos;`);
       emit(`        const m = LX_TPL_ESC.exec(source);`);
-      emit(`        if (!m) { if (lexWindowMore) throw LEX_RETRY; throw new Error('Invalid escape sequence in template at offset ' + pos); }`);
+      emit(`        if (!m) {`);
+      emit(`          if (lexWindowMore) throw LEX_RETRY;`);
+      emit(`          if (recovering) { docLex.push({ offset: pos + lexSrcBase, end: pos + lexSrcBase + 1, kind: 1, ch: '' }); pos += 1; continue; }`);
+      emit(`          throw new Error('Invalid escape sequence in template at offset ' + pos);`);
+      emit(`        }`);
       emit(`        pos += m[0].length;`);
       emit(`      } else { pos += 2; }`);
     } else {
@@ -194,6 +200,10 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`    pos++;`);
     emit(`  }`);
     emit(`  if (lexWindowMore) throw LEX_RETRY;`);
+    emit(`  if (recovering) {`);
+    emit(`    docLex.push({ offset: tplFrom + lexSrcBase, end: source.length + lexSrcBase, kind: 2, ch: '' });`);
+    emit(`    return { endsWithInterp: false, end: source.length };`);
+    emit(`  }`);
     emit(`  throw new Error('Unterminated template literal at offset ' + pos);`);
     emit(`}`);
   }
@@ -223,6 +233,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`function lexCore(source, startPos, pvK, pvT, wndPtr0, wndMinOff, wndDelta, wndCs, initParens, srcBase, hasMore) {`);
   emit(`  if (srcBase === undefined) srcBase = 0;`);
   emit(`  lexWindowMore = hasMore === true;`);
+  emit(`  lexSrcBase = srcBase;`);
   emit(`  const n = source.length;`);
   emit(`  let pos = startPos;`);
   emit(`  let pendingNl = false;`);
@@ -370,7 +381,11 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`${ind}  if (m !== null) {`);
     if (m.identLike) {
       const plen = (identPrefixByName.get(m.name) ?? '').length;
-      emit(`${ind}    if (!lexIdentValid(m[0], ${plen})) { if (lexWindowMore) throw LEX_RETRY; throw new Error("Invalid identifier escape at offset " + pos + ": '" + m[0] + "'"); }`);
+      emit(`${ind}    if (!lexIdentValid(m[0], ${plen})) {`);
+      emit(`${ind}      if (lexWindowMore) throw LEX_RETRY;`);
+      emit(`${ind}      if (!recovering) throw new Error("Invalid identifier escape at offset " + pos + ": '" + m[0] + "'");`);
+      emit(`${ind}      docLex.push({ offset: pos + lexSrcBase, end: pos + lexSrcBase + m[0].length, kind: 3, ch: m[0] });`);
+      emit(`${ind}    }`);
     }
     if (m.skip) {
       emit(`${ind}    if (m[0].includes('\\n')) pendingNl = true;`);
@@ -515,6 +530,12 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
     emit(`    }`);
   }
   emit(`    if (lexWindowMore) throw LEX_RETRY;`);
+  emit(`    if (recovering) {`);
+  emit(`      docLex.push({ offset: pos + srcBase, end: pos + srcBase + 1, kind: 0, ch: source[pos] });`);
+  emit(`      tkPush(${st.KIND_NAMED_FALLBACK}, 0, pos, pos + 1);`);
+  emit(`      pos += 1;`);
+  emit(`      continue;`);
+  emit(`    }`);
   emit(`    throw new Error("Unexpected character at offset " + pos + ": '" + source[pos] + "'");`);
   emit(`  }`);
   emit(`  if (wndHit >= 0) { tokN--; return wndHit; }`);
