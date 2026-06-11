@@ -177,15 +177,20 @@ export const notReserved = not(alt(
 // the bare-identifier fallback inside otherwise-valid files (e.g. `export default …`,
 // undeclared `for (x in …)`, `class … extends (e)`, a decorator before `export`). The
 // words below have NO such role: the prefix operators `void`/`typeof`/`delete` (which
-// must take an operand), the `catch`/`throw` keywords, `enum`, and `case` (a bare
-// `case` expression let `case 1 y();` inside a switch parse as three statements).
-// Forbidding the bare-identifier fallback for exactly these rejects `catch(x){}` with
-// no `try`, `void ;`/`typeof ;`/`delete ;` (operatorless prefix op), `throw ;`, and a
-// colon-less `case` — while leaving every valid expression (and TS's recovery cases)
-// untouched. Verified per the conformance matrix's FN=0 gate: widening this set to
-// other reserved words regresses valid code; these are the FN-safe maximum.
+// must take an operand), the `catch`/`throw` keywords, `enum`, `case` (a bare `case`
+// expression let `case 1 y();` inside a switch parse as three statements), and
+// `class` (a valid class expression always out-matches the bare-identifier fallback,
+// so forbidding the fallback only rejects broken classes — `class extends D ;` with
+// no body parsed as three statements). Forbidding the bare-identifier fallback for
+// exactly these rejects `catch(x){}` with no `try`, `void ;`/`typeof ;`/`delete ;`
+// (operatorless prefix op), `throw ;`, a colon-less `case`, and a body-less `class`
+// — while leaving every valid expression (and TS's recovery cases) untouched.
+// Verified by a zero-flip accept/reject scan over the conformance corpus; widening
+// further regresses: `extends` is load-bearing for tsc's tolerated heritage shapes
+// (`interface I extends { }` reads `{` as the body, `extends A extends B`,
+// `extends Foo?.Bar` — all parse-accepted by tsc through the identifier fallback).
 export const notReservedExpr = not(alt(
-  'case', 'catch', 'delete', 'enum', 'throw', 'typeof', 'void',
+  'case', 'catch', 'class', 'delete', 'enum', 'throw', 'typeof', 'void',
 ));
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──

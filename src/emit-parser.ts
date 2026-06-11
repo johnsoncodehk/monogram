@@ -1772,14 +1772,20 @@ function finishNode(rid, mark) {
   rowKC[id] = 0;
   rowNF[id] = 0x7fffffff;
   rowRM[id] = 0;
-  // recovery-made propagation: STRUCTURAL — a row contains an error iff a kid is an
-  // $error row or itself recovery-made. Batch parses never enter the branch.
+  // recovery-made propagation: STRUCTURAL, bitwise — bit 1: a kid is (or contains)
+  // an $error row; bit 2: a kid's result is context-tainted (the cycle sentinel)
+  // and must not be reused outside its own parse. Batch parses never enter this.
   if (recovering) {
     const ke = rowStart[id] + rowCount[id];
+    let rm = 0;
     for (let i2 = rowStart[id]; i2 < ke; i2++) {
       const e2 = kids[i2];
-      if (e2 >= 0 && (rowRM[e2] !== 0 || rowRule[e2] >= RID_ERROR)) { rowRM[id] = 1; break; }
+      if (e2 >= 0) {
+        rm |= rowRM[e2] | (rowRule[e2] >= RID_ERROR ? 1 : 0);
+        if (rm === 3) break;
+      }
     }
+    rowRM[id] = rm;
   }
   absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
@@ -1818,14 +1824,20 @@ function finishWrap(rid, lhsId, mark) {
   rowKC[id] = 0;
   rowNF[id] = 0x7fffffff;
   rowRM[id] = 0;
-  // recovery-made propagation: STRUCTURAL — a row contains an error iff a kid is an
-  // $error row or itself recovery-made. Batch parses never enter the branch.
+  // recovery-made propagation: STRUCTURAL, bitwise — bit 1: a kid is (or contains)
+  // an $error row; bit 2: a kid's result is context-tainted (the cycle sentinel)
+  // and must not be reused outside its own parse. Batch parses never enter this.
   if (recovering) {
     const ke = rowStart[id] + rowCount[id];
+    let rm = 0;
     for (let i2 = rowStart[id]; i2 < ke; i2++) {
       const e2 = kids[i2];
-      if (e2 >= 0 && (rowRM[e2] !== 0 || rowRule[e2] >= RID_ERROR)) { rowRM[id] = 1; break; }
+      if (e2 >= 0) {
+        rm |= rowRM[e2] | (rowRule[e2] >= RID_ERROR ? 1 : 0);
+        if (rm === 3) break;
+      }
     }
+    rowRM[id] = rm;
   }
   absChar[id] = myOff; absTok[id] = myTok;
   scn = mark;
@@ -2587,6 +2599,10 @@ function parseRuleEntry(idx, rid, name, core) {
     mg[start] = tainted ? -memoGenCur : memoGenCur;
     if (result >= 0) {
       rowOK[result] = 1;
+      // a context-tainted result (cycle refusal leaning on an ancestor) is also
+      // untrustworthy as a ROW: stamp rowRM bit 2 so adoption refuses it — the
+      // memo stamp alone only protects the entry, not the row adoptSeek can find
+      if (tainted) rowRM[result] |= 2;
       // The row's OWN watermark freezes at finishNode — for a Pratt rule that is
       // BEFORE the failed LED extension arms run (the NUD/shorter row survives the
       // longest-match), so rowExt under-records the rule's true probe extent and a
@@ -2851,7 +2867,7 @@ function adoptSeek(q, rid) {
       let xid = e, xb = cb;
       for (;;) {
         if (rowOK[xid] !== 0 && rowRule[xid] === rid
-            && (recovering || rowRM[xid] === 0)
+            && ((recovering ? rowRM[xid] & 2 : rowRM[xid]) === 0)
             && (q + rowExt[xid] + 2 <= adoptDmgStart || q >= adoptDmgOldEnd)) {
           return xid;
         }
@@ -3039,7 +3055,7 @@ function collectErrRows(id, charBase, tokBase) {
   const cs = rowStart[id], n = rowCount[id];
   for (let i = 0; i < n; i++) {
     const e = kids[cs + i];
-    if (e >= 0 && (rowRM[e] !== 0 || rowRule[e] >= RID_ERROR)) {
+    if (e >= 0 && ((rowRM[e] & 1) !== 0 || rowRule[e] >= RID_ERROR)) {
       if (rowRule[e] === RID_MISSING) {
         // a missing CLOSER names its matched opener (tsc's "to match this '('"):
         // PAIR_OPEN holds the grammar-derived structural pair, and the opener leaf
@@ -3072,7 +3088,7 @@ function collectErrRows(id, charBase, tokBase) {
 // diagnostics (fresh survivors + adopted rowRM subtrees), ordered by offset.
 function settleDiags() {
   docPar.length = 0;
-  if (lastRoot >= 0 && (rowRM[lastRoot] !== 0 || rowRule[lastRoot] >= RID_ERROR)) {
+  if (lastRoot >= 0 && ((rowRM[lastRoot] & 1) !== 0 || rowRule[lastRoot] >= RID_ERROR)) {
     collectErrRows(lastRoot, rootCharBase, rootTokBase);
   }
   rebuildDiagView();
@@ -3172,7 +3188,7 @@ function runExtend(rid) {
     if (e < 0) break;
     if (pb + ktr(P, i) !== oq) break;
     if (rowRule[e] !== rid || rowOK[e] === 0) break;
-    if (!recovering && rowRM[e] !== 0) break;
+    if ((recovering ? rowRM[e] & 2 : rowRM[e]) !== 0) break;
     if (recovering && !barsWindowEq(nq, oq, rowExt[e])) break;
     const tl = rowTokLen[e];
     if (tl === 0) break;
