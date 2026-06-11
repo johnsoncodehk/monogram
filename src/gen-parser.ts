@@ -1484,13 +1484,27 @@ export function createParser(grammar: CstGrammar) {
 
   // API parity with the emitted engine's handle surface: edit() re-parses and
   // updates the SAME tree object in place (the handle is the document's tree —
-  // edit returns nothing, exactly like the emitted engine; no reuse here).
-  const edit = (cst: { rule: string; children: unknown[]; offset: number; end: number }, source: string): void => {
-    const next = parse(source) as typeof cst;
+  // edit returns nothing, exactly like the emitted engine; no reuse here), and
+  // both are TOTAL: input errors land in the errors field, never a throw. The
+  // interpreter has no recovery machinery, so an invalid text degrades to a
+  // zero-width $error root plus the strict diagnostic.
+  type Cst = { rule: string; children: unknown[]; offset: number; end: number; errors?: { offset: number; end: number; message: string }[] };
+  const parseTotal = (source: string): Cst => {
+    try {
+      const t = parse(source) as Cst;
+      t.errors = [];
+      return t;
+    } catch (e) {
+      return { rule: '$error', children: [], offset: 0, end: 0, errors: [{ offset: 0, end: 0, message: (e as Error).message }] };
+    }
+  };
+  const edit = (cst: Cst, source: string): void => {
+    const next = parseTotal(source);
     cst.rule = next.rule; cst.children = next.children;
     cst.offset = next.offset; cst.end = next.end;
+    cst.errors = next.errors;
   };
-  return { parse, edit, tokenize, profCounts };
+  return { parse, parseTotal, edit, tokenize, profCounts };
 }
 
 // ── Helpers ──

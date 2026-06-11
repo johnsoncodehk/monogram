@@ -23,6 +23,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'cst-match-totality', args: ['test/cst-match-totality.ts'] },
   { group: 'core', name: 'incremental-verify', args: ['test/incremental-verify.ts'] },
   { group: 'core', name: 'multi-doc', args: ['test/multi-doc.ts'] },
+  { group: 'core', name: 'recovery', args: ['test/recovery.ts'] },
   { group: 'core', name: 'issue-cases', args: ['test/test-issues.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },

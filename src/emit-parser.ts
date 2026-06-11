@@ -2404,7 +2404,17 @@ function parseRuleEntry(idx, rid, name, core) {
                           // SECOND-token dispatch) is applied at INVALIDATION time
     if (result >= 0) {
       rowOK[result] = 1;
-      if (recovering && recFires !== rf0) rowRM[result] = 1;
+      // The row's OWN watermark freezes at finishNode — for a Pratt rule that is
+      // BEFORE the failed LED extension arms run (the NUD/shorter row survives the
+      // longest-match), so rowExt under-records the rule's true probe extent and a
+      // later edit inside a failed arm's reads would not invalidate an adoption.
+      // The memo watermark (maxPos at exit) is the truth — write it back to the
+      // row, where adoption can see it after the memo generation dies. (This also
+      // covers recovering-built rows: a fire that cut a losing arm short is still
+      // bounded by the recorded probes, so no mode stamp is needed for adoption —
+      // rowRM stays purely structural for the diagnostics walk.)
+      const re = maxPos - start;
+      if (re > rowExt[result]) rowExt[result] = re;
     }
 
   }
