@@ -118,6 +118,8 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`let lexResyncPd = 0;`);
   emit(`let altSuffMin = null;`);
   emit(`let altSuffMinBuf = null;`);
+  emit(`// ')' pops that found an empty stack, in THIS lexCore call's token indices`);
+  emit(`let lexEmptyPops = [];`);
   emit(`// Min OLD-stream paren depth over the tokens inside the damage itself (set by the`);
   emit(`// caller before the window lex): the old-side trajectory min starts from here.`);
   emit(`let wndOldMin0 = 0x7fffffff;`);
@@ -268,6 +270,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  const parenHeadStack = initParens !== undefined && initParens !== null ? initParens : [];`);
   emit(`  let wndPtr = wndPtr0;`);
   emit(`  let wndHit = -1;`);
+  emit(`  lexEmptyPops.length = 0;`);
   emit(`  // Trajectory minimums since the point the two lexes diverge (the damage start;`);
   emit(`  // before it, identical bytes from an identical anchor state give identical`);
   emit(`  // tokens and stack ops). An entry at depth <= BOTH mins was open at the`);
@@ -318,8 +321,17 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`            wndHit = wndPtr;`);
   emit(`            lexResyncPd = 0;`);
   emit(`          } else {`);
-  emit(`            if (altSuffMin === null) buildAltSuffMin(wndPtr0);`);
-  emit(`            if (altSuffMin[wndPtr + 1] >= q) {`);
+  emit(`            // shifted: q = 0 needs only "no pop-on-empty beyond the candidate"`);
+  emit(`            // (the doc-level list is ascending - one end check); q > 0 needs the`);
+  emit(`            // full suffix minimum, built lazily once per edit`);
+  emit(`            let okTail;`);
+  emit(`            if (q === 0) {`);
+  emit(`              okTail = docEmptyPops.length === 0 || docEmptyPops[docEmptyPops.length - 1] <= wndPtr;`);
+  emit(`            } else {`);
+  emit(`              if (altSuffMin === null) buildAltSuffMin(wndPtr0);`);
+  emit(`              okTail = altSuffMin[wndPtr + 1] >= q;`);
+  emit(`            }`);
+  emit(`            if (okTail) {`);
   emit(`              wndHit = wndPtr;`);
   emit(`              lexResyncPd = pd - q;`);
   emit(`            }`);
@@ -461,7 +473,8 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       emit(`${ind}  parenHeadStack.push(_ph);`);
       emit(`${ind}  extraFl = _ph ? 8 : 0; }`);
     } else if (lit === ')') {
-      emit(`${ind}lastCloseWasParenHead = parenHeadStack.pop() ?? false;`);
+      emit(`${ind}if (parenHeadStack.length === 0) { lastCloseWasParenHead = false; lexEmptyPops.push(tokN); }`);
+      emit(`${ind}else lastCloseWasParenHead = parenHeadStack.pop();`);
     }
     if (regexCtx?.postfixAfterValueTexts?.includes(lit)) {
       emit(`${ind}lastBangWasPostfix = prevIsValue();`);

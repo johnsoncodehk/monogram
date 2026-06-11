@@ -238,11 +238,11 @@ One 9 MB TypeScript document, identical single-character edit scripts (`test/hea
 
 | engine | fresh parse | valid ✎ | breaking ✎ | while-broken ✎ | fixing ✎ |
 |---|---:|---:|---:|---:|---:|
-| **Monogram** | **177 ms** | 0.37 ms | 13.0 ms | **0.21 ms** | 1.0 ms |
-| tsc `updateSourceFile` | 212 ms | 37 ms | 13.3 ms | 13.6 ms | 14.1 ms |
-| tree-sitter (official) | 458 ms | **0.20 ms** | **0.26 ms** | 0.31 ms | **0.20 ms** |
+| **Monogram** | **167 ms** | 0.37 ms | 12 ms | **0.22 ms** | 2.2 ms |
+| tsc `updateSourceFile` | 207 ms | 35 ms | 12.0 ms | 11.9 ms | 11.9 ms |
+| tree-sitter (official) | 430 ms | **0.18 ms** | **0.29 ms** | 0.30 ms | **0.22 ms** |
 
-Monogram beats tsc on every phase (valid typing ~100×, while-broken ~60×) and beats or matches tree-sitter everywhere except the two **transition** edits (break/fix). Profiling attributes those almost entirely to lexer-layer suffix bookkeeping on a first-touch 4.5 MB cursor jump (a one-time table allocation plus EOF-relative re-basing of the token columns) — the parser passes themselves measure under 1 ms, and repeated break/fix transitions at one cursor position settle to ~2 ms.
+Monogram beats tsc on every phase (valid typing ~100×, while-broken ~50×) and beats or matches tree-sitter everywhere except the two **transition** edits (break/fix). Profiling attributes those almost entirely to the bench's 4.5 MB cursor jump: token-column offsets are EOF-relative-biased so that local typing never rewrites the suffix (that is what makes the valid keystroke 0.37 ms), and the bias boundary moves with the cursor — a far jump pays once, proportional to the jump distance, then repeated break/fix transitions at that position settle to **~1.6–2 ms** (the parser passes measure under 1 ms of that).
 
 ## What you get
 

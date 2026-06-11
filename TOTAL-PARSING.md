@@ -141,10 +141,10 @@ Corollaries, each carrying one optimization:
   prefix of the final list, so one check against the final list covers every
   attempt. The spliced tree keeps its bar list, suffix bars shifted.
 
-**Known caveat (open).** Taint is tracked on memo entries, not on rows: a
-tainted frame's *successful* row is still adoptable by `adoptSeek`. No gate
-has constructed a divergence through this path; the candidate fix is a taint
-bit on `rowRM` propagated like error containment.
+Taint is tracked on rows as well as memo entries: a tainted frame's row
+carries `rowRM` bit 2, propagated structurally like error containment, and
+recovering adoption / run extension refuse it — a context-dependent result is
+never reused outside the parse that computed it.
 
 ## Lexer resync under depth shifts
 
@@ -167,7 +167,11 @@ reads):
   shift δ — the splice re-bases the adopted depth records by δ, restoring true
   absolute depths (`(`-head bits are local facts of their own neighbors and
   stay valid). This is what makes a paren-balance-changing edit O(window)
-  instead of a relex-to-EOF.
+  instead of a relex-to-EOF. The dominant candidate depth is 0 (statement
+  boundaries), where the condition collapses to "no pop-on-empty beyond the
+  candidate" — answered O(1) from an ascending doc-level list of pop-on-empty
+  token indices (almost always empty) instead of an O(suffix) min-build; only
+  depth > 0 candidates build the suffix minimum, lazily once per edit.
 
 ## Diagnostics are data, derived from the tree
 
@@ -194,19 +198,20 @@ messages from the current token columns. Two derived enrichments:
 
 | phase | Monogram | tsc `updateSourceFile` | tree-sitter |
 |---|---:|---:|---:|
-| fresh parse | **177 ms** | 212 ms | 458 ms |
-| valid keystroke | 0.37 ms | 37 ms | **0.20 ms** |
-| breaking edit | 13 ms | 13.3 ms | **0.26 ms** |
-| while-broken keystroke | **0.21 ms** | 13.6 ms | 0.31 ms |
-| fixing edit | 1.0 ms | 14.1 ms | **0.20 ms** |
+| fresh parse | **167 ms** | 207 ms | 430 ms |
+| valid keystroke | 0.37 ms | 35 ms | **0.18 ms** |
+| breaking edit | 12 ms | 12.0 ms | **0.29 ms** |
+| while-broken keystroke | **0.22 ms** | 11.9 ms | 0.30 ms |
+| fixing edit | 2.2 ms | 11.9 ms | **0.22 ms** |
 
 (`test/head-to-head.ts`.) The transition rows measure a first-touch 4.5 MB
-cursor jump: profiling splits the 13 ms into lexer-layer suffix bookkeeping
-(a one-time suffix-min allocation plus EOF-relative re-basing of the token
-columns across the jump) with the strict-fail pass at 0.35 ms and the
-recovery attempts at 0.6 ms; repeated break/fix transitions at one cursor
-position settle to ~2 ms. The remaining gap to tree-sitter is array-storage
-suffix splicing, not parsing.
+cursor jump: token offsets are EOF-relative-biased so local typing never
+rewrites the suffix (the 0.37 ms valid keystroke), and the bias boundary
+moves with the cursor — a far jump pays once, proportional to the distance.
+Repeated break/fix transitions at one position settle to ~1.6–2 ms, of
+which the strict-fail pass is 0.23 ms and the recovery attempts 0.46 ms;
+the raw 7-column suffix memmove measures 0.07 ms, so the residual is spread
+bookkeeping, not a storage floor.
 
 Error-report agreement with tsc's parser on the conformance files it rejects
 (`test/recovery-conformance.ts`, ±8 chars): recall 59.1%, precision 82.4%,

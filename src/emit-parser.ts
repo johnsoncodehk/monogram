@@ -1950,6 +1950,7 @@ function matchPuLitGT(pu, vs) {
     memoGenCur++;   // positions shifted mid-parse: every stamped entry is stale
     memoRecFloor = 0x7fffffff;   // including across attempts: pre-split positions
                                  // can never be revalidated against the new stream
+    for (let _ep = docEmptyPops.length - 1; _ep >= 0 && docEmptyPops[_ep] >= pos; _ep--) docEmptyPops[_ep]++;
     // GREEN tree: no kids/scratch fixup — every completed row and scratch entry lies
     // wholly BEFORE the splice point (token pos is being consumed right now), and the
     // carried memo was just cleared, so nothing reachable references shifted indices.
@@ -2719,7 +2720,8 @@ function visitCore(entry, fns, charBase, tokBase) {
 
 // Parse to the ARENA: returns the root node id.
 function lexInto(source) {
-${e.soa ? `  tokenize(source);` : String.raw`  docPieces = [source]; docPieceOff = [0]; docLen = source.length; docFlat = source; docCur = 0;
+${e.soa ? `  tokenize(source);
+  docEmptyPops = lexEmptyPops.slice();` : String.raw`  docPieces = [source]; docPieceOff = [0]; docLen = source.length; docFlat = source; docCur = 0;
   const _toks = tokenize(source);
   const _n = _toks.length;
   while (tkCap < _n + 1) growTok();
@@ -3108,6 +3110,12 @@ function rebuildDiagView() {
 // repetition ends PAST a bar stay silent (pos > bar), and the runParse safety net
 // obeys the same discipline (an ungated net would absorb on the FIRST bar-less
 // attempt and pre-empt the whole iteration).
+// Token indices of ')' pops that found an EMPTY paren stack, ascending (the lexer
+// appends as it lexes; the window splice recomposes). Almost always empty — a
+// stray closer beyond balance. The shifted lexer resync's dominant q=0 case needs
+// exactly one fact about the whole old suffix ("no pop-on-empty beyond the
+// candidate"), which this list answers O(1) instead of an O(suffix) min-build.
+let docEmptyPops = [];
 // Bar list that built lastRoot (that run's token coords); null = free-fire built
 // (free-fire decisions are not bar-pure — such a tree is never adoptable while
 // recovering). Strict trees carry [].
@@ -3597,7 +3605,7 @@ function makeDoc() {
     memoNode: [], memoEnd: [], memoExt: [], memoGen: [], memoGenCur: 0,
     docDiags: [], docLex: [], docPar: [],
     docPieces: null, docPieceOff: null, docLen: 0, docFlat: null, docCur: 0,
-    rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0,
+    rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0, docEmptyPops: [],
 ${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : ''}
     altK: null, altT: null, altOff: null, altEnd: null, altFl: null, altDp: null, altPd: null,
     altCap: 0, altN: 0,
@@ -3616,7 +3624,7 @@ function saveDoc(d) {
   d.docDiags = docDiags; d.docLex = docLex; d.docPar = docPar;
   d.docPieces = docPieces; d.docPieceOff = docPieceOff; d.docLen = docLen; d.docFlat = docFlat; d.docCur = docCur;
   d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
-  d.lastRoot = lastRoot; d.lastRootTok = lastRootTok; d.lastBars = lastBars;
+  d.lastRoot = lastRoot; d.lastRootTok = lastRootTok; d.lastBars = lastBars; d.docEmptyPops = docEmptyPops;
 ${e.soa ? '  d.parenCachePos = parenCachePos; d.parenCacheStack = parenCacheStack;' : ''}
   d.altK = altK; d.altT = altT; d.altOff = altOff; d.altEnd = altEnd; d.altFl = altFl;
   d.altDp = altDp; d.altPd = altPd; d.altCap = altCap; d.altN = altN;
@@ -3634,7 +3642,7 @@ function loadDoc(d) {
   docDiags = d.docDiags; docLex = d.docLex; docPar = d.docPar;
   docPieces = d.docPieces; docPieceOff = d.docPieceOff; docLen = d.docLen; docFlat = d.docFlat; docCur = d.docCur;
   rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
-  lastRoot = d.lastRoot; lastRootTok = d.lastRootTok; lastBars = d.lastBars;
+  lastRoot = d.lastRoot; lastRootTok = d.lastRootTok; lastBars = d.lastBars; docEmptyPops = d.docEmptyPops;
 ${e.soa ? '  parenCachePos = d.parenCachePos; parenCacheStack = d.parenCacheStack;' : ''}
   altK = d.altK; altT = d.altT; altOff = d.altOff; altEnd = d.altEnd; altFl = d.altFl;
   altDp = d.altDp; altPd = d.altPd; altCap = d.altCap; altN = d.altN;
@@ -3932,6 +3940,15 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   if (R0 >= 0 && lexResyncPd !== 0) {
     for (let i = B + 1 + W; i < nN; i++) tkPd[i] += lexResyncPd;
     lexResyncPd = 0;
+  }
+  // recompose the pop-on-empty index list: kept prefix + the window's own
+  // (window-relative + B+1) + kept suffix riding the token delta
+  {
+    const nep = [];
+    for (let i = 0; i < docEmptyPops.length && docEmptyPops[i] <= B; i++) nep.push(docEmptyPops[i]);
+    for (let i = 0; i < lexEmptyPops.length; i++) nep.push(lexEmptyPops[i] + B + 1);
+    for (let i = 0; i < docEmptyPops.length; i++) { const v = docEmptyPops[i]; if (v >= R) nep.push(v + tokenDelta); }
+    docEmptyPops = nep;
   }
   const nN2 = nN;` : String.raw`  // (fallback-lexer grammars keep the full-relex + token-diff path)
   const oK = tkK, oT = tkT, oOff = tkOff, oEnd = tkEnd, oFl = tkFl, oN = tokN;
