@@ -3599,6 +3599,16 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   { let lo = 0, hi = oN;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (toff(mid) < ceOld) lo = mid + 1; else hi = mid; }
     r0 = lo; }
+  // Old-side trajectory floor across the damage itself: min recorded paren depth of
+  // the OLD tokens inside [damage start, damage end) - the lexes diverge at the
+  // damage start, and the resync's fast tier needs the old min from that point on.
+  {
+    let lo = 0, hi = r0;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (toff(mid) < cs) lo = mid + 1; else hi = mid; }
+    let m = 0x7fffffff;
+    for (let i = lo; i < r0; i++) if (tkPd[i] < m) m = tkPd[i];
+    wndOldMin0 = m;
+  }
   // Lex the window into the spare buffers (the old stream stays live for resync).
   if (altK === null || altCap < tkCap) {
     altK = new tkK.constructor(tkCap); altT = new tkT.constructor(tkCap);
@@ -3607,6 +3617,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     altCap = tkCap;
   }
   altN = oN;
+  altSuffMin = null;          // the old-suffix min-depth cache follows the alt stream
   swapBuffers();              // live = scratch, alt = OLD stream
   tokN = 0;
   const startOff = B >= 0 ? (altEnd[B] < 0 ? altEnd[B] + srcLenP1 : altEnd[B]) : 0;
@@ -3706,6 +3717,13 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   negFrom = B + 1 + W;
   srcLenP1 = newLen + 1;
   tokN = nN;
+  // a SHIFTED resync adopted the suffix at a different absolute paren depth: re-base
+  // the adopted depth records to the new truth ('(' head bits are unchanged - an
+  // entry's head-ness is a local fact of its own neighbors)
+  if (R0 >= 0 && lexResyncPd !== 0) {
+    for (let i = B + 1 + W; i < nN; i++) tkPd[i] += lexResyncPd;
+    lexResyncPd = 0;
+  }
   const nN2 = nN;` : String.raw`  // (fallback-lexer grammars keep the full-relex + token-diff path)
   const oK = tkK, oT = tkT, oOff = tkOff, oEnd = tkEnd, oFl = tkFl, oN = tokN;
   const oText = tkText;
