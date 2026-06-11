@@ -242,7 +242,7 @@ One 9 MB TypeScript document, identical single-character edit scripts (`test/hea
 | tsc `updateSourceFile` | 212 ms | 37 ms | 13.3 ms | 13.6 ms | 14.1 ms |
 | tree-sitter (official) | 458 ms | **0.20 ms** | **0.26 ms** | 0.31 ms | **0.20 ms** |
 
-Monogram beats tsc on every phase (valid typing ~100×, while-broken ~60×) and beats or matches tree-sitter everywhere except the two **transition** edits (break/fix), where the strict-first architecture pays one adoption-assisted strict pass to *prove* the text rejects before recovering — the price of the byte-identity guarantees above, and the open lever.
+Monogram beats tsc on every phase (valid typing ~100×, while-broken ~60×) and beats or matches tree-sitter everywhere except the two **transition** edits (break/fix). Profiling attributes those almost entirely to lexer-layer suffix bookkeeping on a first-touch 4.5 MB cursor jump (a one-time table allocation plus EOF-relative re-basing of the token columns) — the parser passes themselves measure under 1 ms, and repeated break/fix transitions at one cursor position settle to ~2 ms.
 
 ## What you get
 

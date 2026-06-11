@@ -200,9 +200,13 @@ messages from the current token columns. Two derived enrichments:
 | while-broken keystroke | **0.21 ms** | 13.6 ms | 0.31 ms |
 | fixing edit | 1.0 ms | 14.1 ms | **0.20 ms** |
 
-(`test/head-to-head.ts`.) The transition rows are the open lever: the
-strict-first architecture pays one adoption-assisted strict pass to *prove*
-rejection before recovering — the price of guarantees 2 and 3.
+(`test/head-to-head.ts`.) The transition rows measure a first-touch 4.5 MB
+cursor jump: profiling splits the 13 ms into lexer-layer suffix bookkeeping
+(a one-time suffix-min allocation plus EOF-relative re-basing of the token
+columns across the jump) with the strict-fail pass at 0.35 ms and the
+recovery attempts at 0.6 ms; repeated break/fix transitions at one cursor
+position settle to ~2 ms. The remaining gap to tree-sitter is array-storage
+suffix splicing, not parsing.
 
 Error-report agreement with tsc's parser on the conformance files it rejects
 (`test/recovery-conformance.ts`, ±8 chars): recall 59.1%, precision 82.4%,
