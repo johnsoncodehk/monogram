@@ -476,13 +476,15 @@ const ClassMember = rule($ => [
       [alt('get', 'set'), MemberName, '(', opt(sep(Param, ',')), ')', opt(Block), opt(';')],  // accessor
       [MemberName, alt(
         [...callTail],                                                         // method (requires `(`)
-        [opt('=', Expr), opt(';')],                                            // field (all-optional → catch-all)
+        // field catch-all; a ';'-less field must not be followed by a same-line
+        // decorator (see typescript.ts)
+        [opt('=', Expr), alt([';'], [not([sameLine, Decorator])])],
       )],
     ),
   ],
   // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
   // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('=', Expr), opt(';')],
+  [MemberName, opt('=', Expr), alt([';'], [not([sameLine, Decorator])])],
   [MemberName, '(', sep(Param, ','), ')', opt(Block), opt(';')],
 ]);
 

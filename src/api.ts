@@ -187,10 +187,11 @@ class ExcludeNode {
 }
 class NotNode {
   readonly __kind = 'not' as const;
-  // Zero-width negative lookahead over a single element (wrap a sequence in a
-  // group/alt if needed). Matches nothing; succeeds only when `item` can't match.
-  readonly item: Element;
-  constructor(item: Element) { this.item = item; }
+  // Zero-width negative lookahead over an element, or an array (a seq, like
+  // everywhere else in the rule DSL). Matches nothing; succeeds only when
+  // `item` can't match.
+  readonly item: Element | Element[];
+  constructor(item: Element | Element[]) { this.item = item; }
 }
 
 type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode;
@@ -224,7 +225,7 @@ export function exclude(connectors: string | string[], ...items: Element[]): Exc
 
 // Zero-width negative lookahead: `not(x)` matches nothing and succeeds only when
 // `x` would NOT match here.
-export function not(item: Element): NotNode {
+export function not(item: Element | Element[]): NotNode {
   return new NotNode(item);
 }
 
@@ -326,7 +327,11 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
     };
   }
   if (el instanceof NotNode) {
-    return { type: 'not', body: toRuleExpr(el.item, names) };
+    // an array is a seq here like everywhere else in the rule DSL
+    const body = Array.isArray(el.item)
+      ? { type: 'seq' as const, items: el.item.map(i => toRuleExpr(i, names)) }
+      : toRuleExpr(el.item, names);
+    return { type: 'not', body };
   }
   const marker = el as Marker;
   if (marker.__kind === 'op') return { type: 'op' };

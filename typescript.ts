@@ -492,13 +492,17 @@ const ClassMember = rule($ => [
       ['[', Ident, ':', Type, ']', ':', Type, opt(';')],                        // index signature
       [MemberName, alt(
         [opt('?'), opt(TypeParams), ...callTail],                              // method (requires `(`)
-        [opt('!'), opt('?'), opt(':', Type), opt('=', Expr), opt(';')],         // field (all-optional → catch-all)
+        // field (all-optional → catch-all). A field NOT ended by ';' must not be
+        // followed by a SAME-LINE decorator: tsc reads that '@' as belonging to
+        // THIS property ("Decorators must precede the name and all keywords") —
+        // `x @dec y()` and `x = 1 @dec y()` reject, `x; @dec` and newline accept
+        [opt('!'), opt('?'), opt(':', Type), opt('=', Expr), alt([';'], [not([sameLine, Decorator])])],
       )],
     ),
   ],
   // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
   // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', Expr), opt(';')],
+  [MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', Expr), alt([';'], [not([sameLine, Decorator])])],
   [MemberName, opt('?'), opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')],
 ]);
 
