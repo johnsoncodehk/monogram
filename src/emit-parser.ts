@@ -3077,11 +3077,25 @@ function rowKCof(id) {
 }
 function trySurgery(dmgA, dmgB, tokD, chrD) {
   if (adoptRoot < 0) return -1;
-  // a recovery-made tree cannot take a strict splice: kept siblings would carry
-  // $error/$missing rows into a "successful" strict pass, freezing the OLD text's
-  // recovery shape instead of re-deriving it for the new text (rowRM reaches the
-  // root structurally, so this is the exact tree-wide test)
-  if (rowRM[adoptRoot] !== 0 || rowRule[adoptRoot] >= RID_ERROR) return -1;
+  if (rowRule[adoptRoot] >= RID_ERROR) return -1;
+  // A recovery-made tree (rowRM root) CAN take a strict splice when the edit
+  // provably commutes with every recovery decision: decisions are position-pure
+  // functions of (window text, window bars), so if no bar window touches the
+  // damage or the re-parsed span (second check after the re-parse, when the span's
+  // probe reach is known), no decision changes - kept rows replay identically at
+  // shifted positions, and a fresh recovering parse behaves strictly across the
+  // span, exactly like the strict re-parse below (its first possible fire inside
+  // the span would need a bar at/below the probe reach + 2). Bars adjacent to the
+  // damage are unmappable across the token delta; free-fire trees (lastBars null)
+  // are not window-pure - both refuse.
+  const recTree = rowRM[adoptRoot] !== 0;
+  if (recTree) {
+    if (lastBars === null) return -1;
+    for (let i = 0; i < lastBars.length; i++) {
+      const b = lastBars[i];
+      if (b + 2 >= dmgA && b <= dmgB + 2) return -1;
+    }
+  }
   // the whole-file token math must close, or the shape changed beyond a splice
   if (adoptRootTok + rowTokLen[adoptRoot] + tokD !== tokN) return -1;
   // 1. descend along single-affected-row kids, recording the path
@@ -3143,6 +3157,10 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
   if (L < 0) return -1;
   const D = surgX[L], Dbase = surgBase[L], Da = surgA[L];
   const Db = surgB[L];
+  // recovered trees use the length += chrD update below, which needs the node's
+  // char base unchanged; at Dbase >= dmgA the base token was re-lexed and its
+  // start may have moved
+  if (recTree && Dbase >= dmgA) return -1;
   const elem = SURG_ELEM[rowRule[D]];
   const csD = rowStart[D], nD = rowCount[D];
   const DendNew = Dbase + rowTokLen[D] + tokD;
@@ -3151,6 +3169,7 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
   pos = Da < Db
     ? Dbase + (kids[csD + Da] < 0 ? (~kids[csD + Da]) >>> 2 : ktr(D, csD + Da))
     : dmgA;
+  const s0 = pos;
   maxPos = pos; frameMax = pos; scn = 0; parseLimit = -1; cap = tokN;
   currentPrattContext = null; suppressNext = null; suppressCur = null;
   const genAt = memoGenCur;
@@ -3175,6 +3194,15 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
     const pp = pos;
     if (!fn()) return -1;
     if (memoGenCur !== genAt || pos === pp) return -1;
+  }
+  if (recTree) {
+    // the strict re-parse stands for the fresh recovering parse of this span only
+    // if no bar window touches anything it read (probes included)
+    for (let i = 0; i < lastBars.length; i++) {
+      const b = lastBars[i];
+      const bn = b < dmgA ? b : b + tokD;
+      if (bn + 2 >= s0 && bn <= maxPos + 2) return -1;
+    }
   }
   // 4. POINT OF NO RETURN — splice D's kid range, shift suffix rels, patch the path
   const f = scn;
@@ -3269,14 +3297,20 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
     }
   }
   rowNF[D] = bnd;
+  // A node whose token end lies strictly beyond the damage keeps its char end
+  // shape: every end-determining coordinate (last real token, or a trailing
+  // zero-width $missing kid's anchor - finishNode takes the LAST KID's end, which
+  // a zero-width row can push past the last real token) sits in the suffix and
+  // shifts by exactly chrD. Only a node ENDING at/inside the damage derives its
+  // length from the token columns: a pure-trivia edit can sit at a node's token
+  // BOUNDARY (between its last token and the next sibling's first), token-inside
+  // but char-outside - the gap belongs to no node, and tend/toff give the exact
+  // new span. No zero-width kid can end such a node: zero-width rows live at
+  // bars, and bars adjacent to the damage were refused above.
+  const keepEndD = Dbase + rowTokLen[D] > dmgB;
   rowTokLen[D] += tokD;
-  // Derive the char length from the token columns rather than adding chrD: a pure-
-  // trivia edit can sit at a node's token BOUNDARY (between its last token and the
-  // next sibling's first), token-inside but char-outside — the gap belongs to no
-  // node. tend/toff give the exact new span; when suffix tokens exist inside the
-  // node the delta equals chrD (so the suffix-kid rel adds and the end-relative
-  // bias-cancel stay consistent), and when they don't there are no suffix kids.
-  if (rowTokLen[D] > 0) rowLen[D] = tend(Dbase + rowTokLen[D] - 1) - toff(Dbase);
+  if (keepEndD) rowLen[D] += chrD;
+  else if (rowTokLen[D] > 0) rowLen[D] = tend(Dbase + rowTokLen[D] - 1) - toff(Dbase);
   {
     let x = rowExt[D] + (tokD > 0 ? tokD : 0);
     const fw = maxPos - Dbase;
@@ -3350,8 +3384,10 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
         // (end-relative kids past the boundary auto-shift via the length update below)
       }
     }
+    const keepEndA = surgBase[i] + rowTokLen[Ai] > dmgB;   // see rowLen[D] above
     rowTokLen[Ai] += tokD;
-    if (rowTokLen[Ai] > 0) rowLen[Ai] = tend(surgBase[i] + rowTokLen[Ai] - 1) - toff(surgBase[i]);
+    if (keepEndA) rowLen[Ai] += chrD;
+    else if (rowTokLen[Ai] > 0) rowLen[Ai] = tend(surgBase[i] + rowTokLen[Ai] - 1) - toff(surgBase[i]);
     {
       let x = rowExt[Ai] + (tokD > 0 ? tokD : 0);
       const cw = ktr(Ai, csA + ki) + rowExt[surgX[i + 1]];
@@ -3782,7 +3818,11 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     rootTokBase = adoptRootTok;
     lastRoot = sroot;
     lastRootTok = adoptRootTok;
-    lastBars = [];
+    // the spliced tree keeps its bar list (surgery proved the edit clear of every
+    // bar window) - suffix bars ride the token delta like everything else
+    if (lastBars !== null) {
+      for (let i = 0; i < lastBars.length; i++) if (lastBars[i] >= dOldEnd) lastBars[i] += tokenDelta;
+    }
     shiftDiags(cs, ceOld, charDelta);
     return sroot;
   }
