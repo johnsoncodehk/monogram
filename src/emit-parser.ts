@@ -3450,7 +3450,11 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
   // but char-outside - the gap belongs to no node, and tend/toff give the exact
   // new span. No zero-width kid can end such a node: zero-width rows live at
   // bars, and bars adjacent to the damage were refused above.
-  const keepEndD = Dbase + rowTokLen[D] > dmgB;
+  // ... and only while the node's char BASE is unchanged (a base token at/inside
+  // the damage was re-lexed and may have moved - leading trivia inserted at a
+  // node's very start shifts base and end together, leaving the LENGTH alone,
+  // which is exactly what the token derivation computes)
+  const keepEndD = Dbase + rowTokLen[D] > dmgB && Dbase < dmgA;
   rowTokLen[D] += tokD;
   if (keepEndD) rowLen[D] += chrD;
   else if (rowTokLen[D] > 0) rowLen[D] = tend(Dbase + rowTokLen[D] - 1) - toff(Dbase);
@@ -3527,7 +3531,7 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
         // (end-relative kids past the boundary auto-shift via the length update below)
       }
     }
-    const keepEndA = surgBase[i] + rowTokLen[Ai] > dmgB;   // see rowLen[D] above
+    const keepEndA = surgBase[i] + rowTokLen[Ai] > dmgB && surgBase[i] < dmgA;   // see rowLen[D] above
     rowTokLen[Ai] += tokD;
     if (keepEndA) rowLen[Ai] += chrD;
     else if (rowTokLen[Ai] > 0) rowLen[Ai] = tend(surgBase[i] + rowTokLen[Ai] - 1) - toff(surgBase[i]);

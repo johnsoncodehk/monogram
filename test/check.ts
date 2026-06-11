@@ -25,6 +25,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'multi-doc', args: ['test/multi-doc.ts'] },
   { group: 'core', name: 'recovery', args: ['test/recovery.ts'] },
   { group: 'core', name: 'incremental-grammars', args: ['test/incremental-grammars.ts'] },
+  { group: 'core', name: 'exhaustive-edits', args: ['test/exhaustive-edits.ts'] },
   { group: 'core', name: 'issue-cases', args: ['test/test-issues.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },
