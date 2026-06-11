@@ -20,7 +20,7 @@ const grammar = (await import('../typescript.ts')).default;
 const emPath = '/tmp/emitted-recovery.mjs';
 writeFileSync(emPath, emitParser(grammar));
 type Edit = { start: number; end: number; text: string };
-type Diag = { offset: number; end: number; message: string };
+type Diag = { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } };
 type Cst = { root: number; errors: Diag[] };
 type Parser = { parse(s: string): Cst; edit(cst: Cst, edits: Edit[]): void; visit(cst: Cst, fns: object): void; tree: import('./emitted-obj.ts').TreeView };
 type Em = {
@@ -122,9 +122,14 @@ let typedOk = 0;
 // an $error absorbing the rest). Exact-match pins — quality must not regress to
 // absorption silently.
 const SYNTH: Array<[string, string[]]> = [
-  ['const x = f(1, 2;', ["16:expected ')'"]],
-  ['function g() { return 1;', ["24:expected '}'"]],
-  ['if (x { y(); }', ["6:expected ')'"]],
+  // viable-set messages: every listed literal is PROVABLY still accepted at the
+  // position (trailing comma is legal, so ',' joins ')' — tsc's single "')'
+  // expected" under-reports); the related info names the matched opener
+  ['const x = f(1, 2;', ["16:expected ')' @11:to match this '('"]],
+  ['function g() { return 1;', ["24:expected '}' @13:to match this '{'"]],
+  ['if (x { y(); }', ["6:expected ',' or ')' @3:to match this '('"]],
+  ['const y = [1, ;', ["14:expected ',' or ']' @10:to match this '['"]],
+  ['const t = obj[i;', ["15:expected ']' @13:to match this '['"]],
   // missing NONTERMINALS (the tsc "Expression expected" analog): required rule
   // refs failing inside the bar window mint a zero-width $missing carrying the
   // rule identity — committed optionals ('= Expr' after the real '='), operator
@@ -134,12 +139,13 @@ const SYNTH: Array<[string, string[]]> = [
   ['const a = -;', ['11:expected Expr']],
   ['x ? y : ;', ['8:expected Expr']],
   ['a, ;', ['3:expected Expr']],
-  ["f(1, ;", ["5:expected Expr", "5:expected ')'"]],
+  ["f(1, ;", ["5:expected Expr", "5:expected ')' @1:to match this '('"]],
 ];
 let synthN = 0;
 for (const [text, want] of SYNTH) {
   const c = p.parse(text);
-  const got = c.errors.map((g) => g.offset + ':' + g.message);
+  const got = c.errors.map((g) => g.offset + ':' + g.message
+    + (g.related ? ` @${g.related.offset}:${g.related.message}` : ''));
   if (JSON.stringify(got) !== JSON.stringify(want)) {
     bad(`synthesis on «${text}»: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
     continue;

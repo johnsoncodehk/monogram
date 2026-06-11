@@ -853,7 +853,9 @@ class Emitter {
     const a = this.a;
     switch (expr.type) {
       case 'literal': {
-        return `if (!${this.matchLiteralCall(expr.value)}) { ${onFail} }`;
+        const vs = this.vsetNext;
+        this.vsetNext = 0;
+        return `if (!${this.matchLiteralCall(expr.value, vs)}) { ${onFail} }`;
       }
       case 'ref': {
         if (a.tokenNames.has(expr.name)) {
@@ -883,6 +885,7 @@ class Emitter {
             const nx = expr.items[i + 1];
             this.quantFollowT = nx !== undefined && nx.type === 'literal' ? this.litT(nx.value) : -1;
           }
+          if (item.type === 'literal') this.vsetNext = this.vsetFor(expr.items, i);
           parts.push(this.matchInto(item, onFail));
           this.quantFollowT = -1;
         }
@@ -946,6 +949,51 @@ class Emitter {
   // uses `return`/`break` only against ITS OWN while — no nested-loop hazard.
   private quantFollowT = -1;
   litT(value: string): number { return -1; }   // bound by emitParser to the punct-literal table
+
+  // ── Viable-set companions (diagnostics) ──
+  // For a REQUIRED literal C in a seq, the literals PROVABLY still accepted when
+  // C's matcher fails: walking backward from C, a repetition ('*'/'+') is always
+  // re-enterable so its nullable-prefix-reachable literals stay viable; nullable
+  // one-shot items ('?' optionals, nullable groups, sep, zero-width markers) are
+  // crossed but contribute nothing (they may already have consumed their match);
+  // the first non-nullable item stops the walk. "expected ',' or ']'" therefore
+  // never names an impossible continuation — unlike a static FIRST union, which
+  // after `[1, 2` would still claim an expression. Each distinct message gets one
+  // id, threaded through the matcher into the $missing row (settle decodes it).
+  private vsetNext = 0;
+  vsetMsgs: string[] = [''];
+  private vsetIds = new Map<string, number>();
+  private nullPrefixLits(x: RuleExpr, acc: Set<string>): boolean {   // → nullable (crossable)?
+    switch (x.type) {
+      case 'literal': acc.add(x.value); return false;
+      case 'seq': { for (const it of x.items) if (!this.nullPrefixLits(it, acc)) return false; return true; }
+      case 'group': return this.nullPrefixLits(x.body, acc);
+      case 'quantifier': { this.nullPrefixLits(x.body, acc); return x.kind !== '+'; }
+      case 'alt': { let all = true; for (const it of x.items) if (!this.nullPrefixLits(it, acc)) all = false; return all; }
+      case 'ref': return false;   // conservative: treat rules as non-nullable
+      case 'sep': return true;
+      default: return true;       // zero-width markers / Pratt position markers
+    }
+  }
+  private vsetFor(items: RuleExpr[], k: number): number {
+    const item = items[k];
+    if (item.type !== 'literal') return 0;
+    const comp = new Set<string>();
+    for (let j = k - 1; j >= 0; j--) {
+      const pj = items[j];
+      if (pj.type === 'op' || pj.type === 'prefix' || pj.type === 'postfix') continue;
+      if (pj.type === 'quantifier' && pj.kind !== '?') { this.nullPrefixLits(pj.body, comp); continue; }
+      if (pj.type === 'quantifier' || pj.type === 'sep' || pj.type === 'not' || pj.type === 'sameLine' || pj.type === 'noCommentBefore') continue;
+      if (pj.type === 'group' && this.nullPrefixLits(pj.body, new Set())) continue;
+      break;
+    }
+    comp.delete(item.value);
+    if (comp.size === 0) return 0;
+    const msg = [...comp, item.value].map(v => "'" + v + "'").join(' or ');
+    let id = this.vsetIds.get(msg);
+    if (id === undefined) { id = this.vsetMsgs.length; this.vsetMsgs.push(msg); this.vsetIds.set(msg, id); }
+    return id;
+  }
   private matchQuantifierInto(body: RuleExpr, kind: '*' | '+' | '?', onFail: string, closerT = -1): string {
     const fn = this.matchFn(body);
     if (kind === '?') {
@@ -1276,10 +1324,13 @@ class Emitter {
   // ── Lever 1 emit helpers ──
   // Specialized literal matcher call: keyword → matchKwLit, punct → matchPuLit, each
   // with the value's baked int (so the runtime does int compares, not string work).
-  matchLiteralCall(value: string): string {
+  // vs > 0 = this call site's viable-set id (companion literals provably still
+  // accepted when the match fails — threaded into the synthesized $missing row).
+  matchLiteralCall(value: string, vs = 0): string {
     const d = this.a.symtab.classifyKey(value);
-    if (d.kind === 'kw') return `matchKwLit(${d.t})`;
-    if (d.kind === 'punct') return value === '>' ? `matchPuLitGT(${d.t})` : `matchPuLit(${d.t})`;
+    const va = vs > 0 ? `, ${vs}` : '';
+    if (d.kind === 'kw') return `matchKwLit(${d.t}${va})`;
+    if (d.kind === 'punct') return value === '>' ? `matchPuLitGT(${d.t}${va})` : `matchPuLit(${d.t}${va})`;
     // A literal key that classifies as a token-name (a token name used as a literal):
     // unreachable for real grammars, but stay safe via the generic matchLiteral.
     return `matchLiteral(${J(value)})`;
@@ -1819,10 +1870,11 @@ function offset() {
 // Keyword literal: the interpreter required tok.type !== '' && tokenNames.has(tok.type)
 // && tok.text === value. With interned kinds that is tok.k >= K_NAMED_MIN (a declared
 // token name; '' is PUNCT, templates are below NAMED_MIN) && tok.t === KW(value).
-function matchKwLit(kw) {
+function matchKwLit(kw, vs) {
   // A kw-range t can only come from a named token (template spans never intern to a
   // keyword), so the old k >= K_NAMED_MIN guard was redundant — one int compare.
-  if (pos >= cap || tkT[pos] !== kw) return recovering ? missTok(kw) : false;
+  // vs (optional) = the call site's viable-set id, threaded into the $missing row.
+  if (pos >= cap || tkT[pos] !== kw) return recovering ? missTok(kw, vs) : false;
   scPush(~((pos << 2) | 1));
   if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
   return true;
@@ -1830,15 +1882,15 @@ function matchKwLit(kw) {
 // Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
 // tok.t === PU(value) is the exact-text fast path; the splice handles a longer
 // gt-led token matching the gt key. value/pu are baked by the caller.
-function matchPuLit(pu) {
+function matchPuLit(pu, vs) {
   // A pu-range t can only come from a punct token, so the old k === K_PUNCT guard was
   // redundant — one int compare. The '>'-split lives only in matchPuLitGT ('>' sites).
-  if (pos >= cap || tkT[pos] !== pu) return recovering ? missTok(pu) : false;
+  if (pos >= cap || tkT[pos] !== pu) return recovering ? missTok(pu, vs) : false;
   scPush(~(pos << 2));
   if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
   return true;
 }
-function matchPuLitGT(pu) {
+function matchPuLitGT(pu, vs) {
   if (pos >= cap) return false;
   const off = toff(pos);
   if (tkT[pos] === pu) {
@@ -1893,7 +1945,7 @@ function matchPuLitGT(pu) {
     if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
     return true;
   }
-  return recovering ? missTok(pu) : false;
+  return recovering ? missTok(pu, vs) : false;
 }
 // Generic matchLiteral kept for any unspecialized site: classify value via the baked
 // tables (no per-call isKeywordLiteral / string compares) and delegate.
@@ -2003,6 +2055,53 @@ function emitRuleFns(e: Emitter, a: ReturnType<typeof analyze>) {
   });
   e.emit(`const SURG_ELEM = new Int32Array([${surg.join(',')}]);`);
   e.emit(`const RULE_FN_BY_ID = [${a.grammar.rules.map(r => ruleFn(r.name)).join(', ')}];`);
+  {
+    // Paired-opener table for diagnostics: for each literal C, intersect — across
+    // every seq occurrence of C that has preceding literals in its sequencing scope
+    // (transparent groups inlined; quantifier/alt/not bodies are separate scopes) —
+    // the SETS of those preceding literals. A unique survivor is C's structural
+    // opener: ')' keeps '(' through if/while/call alike (interior separators like
+    // the index signature's ':' vary per shape and intersect away), while ','/':'
+    // themselves intersect to nothing. No bracket list is hardcoded. Used to attach
+    // "to match this 'x'" related info to "expected 'C'" $missing diagnostics; the
+    // sibling scan at collect time self-guards (no opener leaf in the row, no info).
+    const tOfLit = (txt: string) => (isKeywordLiteral(txt) ? a.symtab.kwLitKind.get(txt) : a.symtab.puLitKind.get(txt)) ?? 0;
+    const inter = new Map<number, number[]>();   // closer t → intersection, nearest-last order
+    const walk = (x: RuleExpr, acc: number[] | null): void => {
+      switch (x.type) {
+        case 'seq': { const sc = acc ?? []; for (const it of x.items) walk(it, sc); return; }
+        case 'group': walk(x.body, acc); return;
+        case 'literal': {
+          const c = tOfLit(x.value);
+          if (c <= 0) return;
+          if (acc !== null && acc.length > 0) {
+            const prev = inter.get(c);
+            if (prev === undefined) inter.set(c, acc.filter(o => o !== c));
+            else inter.set(c, prev.filter(o => acc.includes(o)));
+          }
+          if (acc !== null) acc.push(c);
+          return;
+        }
+        // quantifier/alt contents physically FOLLOW the scope's earlier literals
+        // (an arm of `seq('[', alt(...), ']')` sits after the '['), so they inherit
+        // a COPY of the accumulator; nothing leaks back out (which arm matched, or
+        // whether the quantifier matched at all, is unknowable statically).
+        case 'quantifier': walk(x.body, acc === null ? null : [...acc]); return;
+        case 'alt': for (const it of x.items) walk(it, acc === null ? null : [...acc]); return;
+        case 'not': return;
+        default: return;   // refs / zero-width markers neither pair nor reset
+      }
+    };
+    for (const rule of a.grammar.rules) walk(rule.body, null);
+    const n = a.symtab.kwLitKind.size + a.symtab.puLitKind.size + 1;
+    const arr = new Array(n).fill(0);
+    for (const [c, set] of inter) if (set.length === 1) arr[c] = set[0];
+    e.emit(`const PAIR_OPEN = new Int32Array([${arr.join(',')}]);`);
+  }
+  // Viable-set messages, registered per CALL SITE during the rule emission above
+  // (see vsetFor): id → " or "-joined alternatives, decoded from the $missing
+  // row's packed rowStart at settle.
+  e.emit(`const VSETS = ${J(e.vsetMsgs)};`);
 }
 
 // Non-recursive rule: longest-match over alts (mirrors parseNonRec). A better arm is
@@ -2868,11 +2967,14 @@ function missAt(p2) {
   }
   return false;
 }
-function missTok(t) {
+function missTok(t, vs) {
   if (probing !== 0 || pos <= probeBase || recoverFree || !missAt(pos)) return false;
   const id = finishNode(RID_MISSING, scn);
-  rowStart[id] = t;   // expected identity: >0 literal int, <0 named token kind,
-                      // >= RULE_MISS_BASE a missing NONTERMINAL (rid offset).
+  rowStart[id] = vs ? t | (vs << 21) : t;
+                      // expected identity: >0 literal int, <0 named token kind,
+                      // >= RULE_MISS_BASE a missing NONTERMINAL (rid offset);
+                      // bits 21+ carry the call site's viable-set id when the
+                      // grammar proves companion literals still accepted here.
                       // A zero-kid row never dereferences its kids base, so the
                       // slot is free storage.
   scPush(id);
@@ -2896,10 +2998,24 @@ function missRule(rid) {
 // Collect every $error row in the FINAL tree by descending only the recovery-made
 // spine (rowRM propagates structurally at finishNode): O(error paths), no global
 // walk, no per-candidate bookkeeping — losing-arm rows are simply unreachable.
+// Decode a $missing row's packed expected identity (see missTok): bits 21+ carry
+// the call site's viable-set id; bit 20 marks a missing nonterminal; else a plain
+// literal int (>0) or a named token kind (<0).
+function missLit(v) {
+  if (v >= 1 << 21) return v & 0xFFFFF;
+  return v > 0 && v < RULE_MISS_BASE ? v : 0;
+}
+function missEntry(v, kb) {
+  let message;
+  if (v >= 1 << 21) message = 'expected ' + VSETS[v >>> 21];
+  else if (v >= RULE_MISS_BASE) message = 'expected ' + RULE_NAMES[v - RULE_MISS_BASE];
+  else if (v > 0) message = "expected '" + LIT_NAMES[v] + "'";
+  else message = "expected '" + (K_NAMES[-v] ?? '?') + "'";
+  return { offset: kb, end: kb, message };
+}
 function collectErrRows(id, charBase, tokBase) {
   if (rowRule[id] === RID_MISSING) {
-    const t = rowStart[id];
-    docPar.push({ offset: charBase, end: charBase, message: t >= RULE_MISS_BASE ? 'expected ' + RULE_NAMES[t - RULE_MISS_BASE] : "expected '" + (t > 0 ? LIT_NAMES[t] : (K_NAMES[-t] ?? '?')) + "'" });
+    docPar.push(missEntry(rowStart[id], charBase));
     return;
   }
   if (rowRule[id] === RID_ERROR) {
@@ -2921,6 +3037,30 @@ function collectErrRows(id, charBase, tokBase) {
   for (let i = 0; i < n; i++) {
     const e = kids[cs + i];
     if (e >= 0 && (rowRM[e] !== 0 || rowRule[e] >= RID_ERROR)) {
+      if (rowRule[e] === RID_MISSING) {
+        // a missing CLOSER names its matched opener (tsc's "to match this '('"):
+        // PAIR_OPEN holds the grammar-derived structural pair, and the opener leaf
+        // — if the construct really matched one — sits among the earlier siblings
+        const entry = missEntry(rowStart[e], charBase + kcr(id, cs + i));
+        // a missing CLOSER names its matched opener (tsc's "to match this '('"):
+        // PAIR_OPEN holds the grammar-derived structural pair, and the opener leaf
+        // — if the construct really matched one — sits among the earlier siblings
+        const lt = missLit(rowStart[e]);
+        if (lt > 0 && PAIR_OPEN[lt] !== 0) {
+          for (let j = i - 1; j >= 0; j--) {
+            const ee = kids[cs + j];
+            if (ee < 0) {
+              const tk = tokBase + ((~ee) >>> 2);
+              if (tkT[tk] === PAIR_OPEN[lt]) {
+                entry.related = { offset: toff(tk), end: tend(tk), message: "to match this '" + LIT_NAMES[PAIR_OPEN[lt]] + "'" };
+                break;
+              }
+            }
+          }
+        }
+        docPar.push(entry);
+        continue;
+      }
       collectErrRows(e, charBase + kcr(id, cs + i), tokBase + ktr(id, cs + i));
     }
   }
@@ -3528,8 +3668,18 @@ function shiftDiags(a, b, delta) {
   let w = 0;
   for (let i = 0; i < docPar.length; i++) {
     const g = docPar[i];
-    if (g.end <= a) docPar[w++] = g;
-    else if (g.offset >= b) { g.offset += delta; g.end += delta; docPar[w++] = g; }
+    if (g.end <= a) { /* kept as is */ }
+    else if (g.offset >= b) { g.offset += delta; g.end += delta; }
+    else continue;
+    // the related anchor (the matched opener) shifts on its own coordinates — it
+    // can sit on the other side of the damage from its diagnostic
+    const r = g.related;
+    if (r !== undefined) {
+      if (r.end <= a) { /* kept */ }
+      else if (r.offset >= b) { r.offset += delta; r.end += delta; }
+      else g.related = undefined;   // its token was edited: stale
+    }
+    docPar[w++] = g;
   }
   docPar.length = w;
   rebuildDiagView();
