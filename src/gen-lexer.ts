@@ -304,6 +304,7 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
   const kNewlineModeTok = kOf(newline?.token ?? null);
   const kIndentTok = kOf(indent?.indentToken ?? null), kDedentTok = kOf(indent?.dedentToken ?? null), kIndentNewlineTok = kOf(indent?.newlineToken ?? null);
   const kBlockScalarTok = kOf(indent?.blockScalar?.token ?? null);
+  const kRawBlockTok = kOf(indent?.rawBlock?.token ?? null);
   const kPlainCont = kOf(plainContinuationTokenName);
   const tColon = puLitOf.get(':') ?? 0;
 
@@ -343,6 +344,14 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
   // denoted, so the "newline-or-EOF" alternation is unchanged.
   const blockScalarSig = /[|>](?:[1-9][+-]?|[+-][1-9]?|[+-]|)[ \t]*(?:(?<=[ \t])#[^\n]*)?(?:\r?\n|$)/y;
   if (indent?.blockScalar) indentTokenNames.add(indent.blockScalar.token);
+  // Raw content blocks: a line-TRAILING introducer (e.g. Pug-style `tag:mode` at end of a line)
+  // whose SIGNATURE must match from the introducer char through end-of-line. Sticky, like
+  // blockScalarSig. `introChar` is the first char of the signature's match (a cheap pre-filter).
+  const rawBlockSig = indent?.rawBlock
+    ? new RegExp(indent.rawBlock.signature ?? ':(?:[A-Za-z][A-Za-z0-9-]*)?[ \\t]*(?:\\r?\\n|$)', 'y')
+    : null;
+  const rawBlockChar = indent?.rawBlock?.introChar ?? ':';
+  if (indent?.rawBlock) indentTokenNames.add(indent.rawBlock.token);
   // Col-0 strings (`---`/`...`) that always end a block scalar — a document boundary outranks
   // indentation — and, when one heads the introducer's line, mark a document-ROOT scalar.
   const blockScalarDocMarkers = indent?.blockScalar?.documentMarkers ?? [];
@@ -684,7 +693,10 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
             throw new Error(`Tab character used in indentation at offset ${p}`);
           }
         }
-        if (lineComment && source.startsWith(lineComment, p)) {             // comment-only line — ignored
+        if (lineComment && source.startsWith(lineComment, p)
+            // commentExcept: a comment introducer immediately followed by this string is NOT a
+            // comment line (e.g. `//` strip-comments vs `//!` doc-comments) — fall through to tokens.
+            && !(indent?.commentExcept && source.startsWith(indent.commentExcept, p + lineComment.length))) {
           let e = p; while (e < source.length && source[e] !== '\n') e++;
           pos = e; pendingComment = true; continue;                         // next iteration consumes the newline
         }
@@ -904,6 +916,58 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
         continue;
       }
 
+      // ── Raw content block: a line-TRAILING `:mode` introducer (per
+      // indent.rawBlock.signature, matched at this position through end of line) captures all
+      // following lines more indented than the introducer's line as ONE verbatim token (blank
+      // lines included). The introducer must be GLUED to preceding line content (`script:`,
+      // `article:md`) or sit at the line lead (`:md` — implicit element). The analogue of the
+      // YAML block scalar above, but introduced at line END rather than by a leading `|`/`>`. ──
+      if (indent?.rawBlock && flowDepth === 0 && rawBlockSig && source[pos] === rawBlockChar
+          && ((rawBlockSig.lastIndex = pos), rawBlockSig.test(source))) {
+        let lineBegin = pos; while (lineBegin > 0 && source[lineBegin - 1] !== '\n') lineBegin--;
+        const beforeText = source.slice(lineBegin, pos);
+        // GLUED means: the introducer follows the line's tag-head/attrs with NO top-level
+        // whitespace anywhere before it (whitespace inside balanced parens/quotes is fine —
+        // `div(a="1" b):md`). A trailing colon after inline TEXT (`label Size:`) has a
+        // top-level space, so it stays text and never opens a raw block.
+        const glued = beforeText.length > 0 && /\S/.test(beforeText) && (() => {
+          let depth = 0, quote = '';
+          const lead = beforeText.match(/^[ \t]*/)![0].length;   // leading indentation is fine
+          for (let i = lead; i < beforeText.length; i++) {
+            const ch = beforeText[i];
+            if (quote) { if (ch === quote) quote = ''; continue; }
+            if (ch === '"' || ch === "'" || ch === '`') quote = ch;
+            else if (ch === '(') depth++;
+            else if (ch === ')') depth = Math.max(0, depth - 1);
+            else if ((ch === ' ' || ch === '\t') && depth === 0) return false;
+          }
+          return true;
+        })();
+        const atLead = /^[ \t]*$/.test(beforeText);
+        if (glued || atLead) {
+          const startPos = pos;
+          const parent = indentStack[indentStack.length - 1];
+          let p = pos; while (p < source.length && source[p] !== '\n') p++; if (p < source.length) p++;  // skip the header line
+          while (p < source.length) {
+            let q = p, c = 0;
+            while (q < source.length && source[q] === ' ') { q++; c++; }
+            if (q >= source.length) { p = q; break; }
+            if (source[q] === '\n' || source[q] === '\r') {                 // blank line — part of the block
+              p = q + 1; if (source[q] === '\r' && source[p] === '\n') p++;
+              continue;
+            }
+            if (c > parent) {                                               // content line — more indented than the introducer's line
+              let e = q; while (e < source.length && source[e] !== '\n') e++; p = e < source.length ? e + 1 : e;
+            }
+            else break;                                                     // dedent → the raw block ends
+          }
+          push(mkNamed(indent.rawBlock.token, source.slice(startPos, p), startPos, kRawBlockTok));
+          pos = p;
+          lineStart = true;
+          continue;
+        }
+      }
+
       // Close an interpolation hole (interpClose at baseline depth) → resume the template span.
       if (templateStack.length > 0 && source.startsWith(tplInterpClose, pos)) {
         const depth = templateStack[templateStack.length - 1];
@@ -982,7 +1046,10 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
       // the separator — emit it as the `:` punctuation literal here. Gated on flow (block-context `:`
       // separators are handled by the KEY-position lookaheads). yaml-test-suite 5MUD / 5T43 / 9MMW
       // / C2DT / K3WX (quoted key) and the flow-collection-key cohort.
-      if (indent && flowDepth > 0 && source[pos] === ':') {
+      // flowColonSeparator: false disables the YAML `"key":value` / `}: value` flow
+      // separator carve-out, for indentation grammars with `:name`-shaped tokens that
+      // may legally follow a quoted value or a flow-close delimiter.
+      if (indent && indent.flowColonSeparator !== false && flowDepth > 0 && source[pos] === ':') {
         const prevTok = tokens[tokens.length - 1];
         if (prevTok && (stringTokenNames.has(prevTok.type) || (prevTok.type === '' && flowCloseSet.has(prevTok.text)))) {
           push(mkPu(':', pos, tColon));
