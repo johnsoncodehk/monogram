@@ -285,7 +285,7 @@ function analyze(grammar: CstGrammar) {
             if (kws) pending = pending ? new Set([...pending, ...kws]) : kws;
             continue;
           }
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'adjacent' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) {
@@ -306,7 +306,7 @@ function analyze(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();
+      case 'not': case 'sameLine': case 'adjacent': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -365,7 +365,7 @@ function analyze(grammar: CstGrammar) {
         const acc = new Set<string>();
         for (const item of e.items) {
           if (item.type === 'prefix') return null;
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'adjacent' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
           const f = exprFirstPlain(item);
           if (f === null) return null;
           for (const k of f) acc.add(k);
@@ -383,7 +383,7 @@ function analyze(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirstPlain(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();
+      case 'not': case 'sameLine': case 'adjacent': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();
       case 'sep': return exprFirstPlain(e.element);
       default: return null;
     }
@@ -407,7 +407,7 @@ function analyze(grammar: CstGrammar) {
     const acc = new Set<string>();
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'adjacent' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
       if (item.type === 'op' || item.type === 'postfix') { for (const k of opKeys) acc.add(k); return acc; }
       if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
       const f = exprFirstPlain(item);
@@ -420,7 +420,7 @@ function analyze(grammar: CstGrammar) {
   function suffixNullable(items: RuleExpr[], j: number): boolean {
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'adjacent' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
       if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
       if (!exprNullable(item)) return false;
     }
@@ -438,7 +438,7 @@ function analyze(grammar: CstGrammar) {
         const items = e.items;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
-          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'adjacent' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
           let isec: Sec;
           let itemNullable: boolean;
           if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
@@ -490,7 +490,7 @@ function analyze(grammar: CstGrammar) {
         if (sec.len1) acc.add(e.delimiter);
         return { s: acc, len1: sec.len1 };
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+      case 'not': case 'sameLine': case 'adjacent': case 'noCommentBefore': case 'noMultilineFlowBefore':
         return { s: new Set(), len1: false };
       case 'op': case 'prefix': case 'postfix':
         return { s: new Set(), len1: true };
@@ -876,6 +876,8 @@ class Emitter {
       }
       case 'sameLine':
         return `if (!(pos < cap && (tkFl[pos] & 1) === 0)) { ${onFail} }`;
+      case 'adjacent':
+        return `if (!(pos > 0 && pos < cap && toff(pos) === tend(pos - 1))) { ${onFail} }`;
       case 'noCommentBefore':
         return `if (!(pos < cap && (tkFl[pos] & 2) === 0)) { ${onFail} }`;
       case 'noMultilineFlowBefore':

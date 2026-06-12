@@ -147,6 +147,8 @@ interface GrammarJsContext {
    *  bare literals in the flow rules are swapped for refs to the scanner token (renderExpr). Empty for
    *  non-flow grammars. See flowSyntheticTokens. */
   flowLiteralTokens: Map<string, string>;
+  /** The adjacency-glued attribute-list opener that gets a dedicated IMMEDIATE scanner token (or null). */
+  immediateFlowOpen: { char: string; sym: string; ruleName: string } | null;
   /** Non-start rules whose body can derive the empty string. tree-sitter rejects these, so their
    *  bodies are made non-empty and every reference to them is wrapped in optional() (ε-elimination,
    *  see makeNonEmpty / wrapNullableRefs). Empty for grammars with no nullable non-start rules. */
@@ -183,6 +185,30 @@ function hasMarker(expr: RuleExpr): boolean {
  * so a bare marker here renders to a harmless `blank()` (it never actually
  * appears outside a Pratt rule in practice).
  */
+// Render an element that must be GLUED to the preceding token (an `adjacent` payload) as a
+// tree-sitter IMMEDIATE token — `token.immediate` matches only with no `extras`/whitespace before
+// it. A glued token keeps its node name via `alias`; a glued rule (e.g. an attribute list) is
+// inlined with its leading terminal made immediate, so a space before it ejects it from the head.
+function renderImmediate(expr: RuleExpr, ctx: GrammarJsContext): string {
+  if (expr.type === 'group') return renderImmediate(expr.body, ctx);
+  if (expr.type === 'alt') return `choice(${expr.items.map(i => renderImmediate(i, ctx)).join(', ')})`;
+  if (expr.type === 'literal' && !ctx.flowLiteralTokens.has(expr.value)) return `token.immediate(${jsString(expr.value)})`;
+  if (expr.type === 'ref') {
+    if (ctx.tokenNames.has(expr.name)) {
+      const tok = ctx.grammar.tokens.find(t => t.name === expr.name);
+      if (tok) {
+        const src = tok.blockPattern ? tokenPatternSource({ pattern: tok.blockPattern } as any) : tokenPatternSource(tok);
+        const snake = ctx.tokenSnake.get(expr.name) ?? toSnake(expr.name);
+        return `alias(token.immediate(${jsRegexLiteral(sanitizeTreeSitterRegex(src))}), $.${snake})`;
+      }
+    }
+  }
+  // Rule refs (e.g. an attribute list) and flow-scanner literals can't be made immediate without
+  // fighting tree-sitter's external scanner, so they render normally — selector gluing (the main
+  // highlighting win) is enforced; attribute-list gluing is left to the parser/TextMate layers.
+  return renderExpr(expr, ctx);
+}
+
 function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
   switch (expr.type) {
     case 'literal': {
@@ -207,7 +233,15 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       return ref;
     }
     case 'seq': {
-      const parts = expr.items.map(i => renderExpr(i, ctx)).filter(p => p !== 'blank()');
+      const parts: string[] = [];
+      for (let i = 0; i < expr.items.length; i++) {
+        const it = expr.items[i];
+        // `adjacent` requires the NEXT element be glued to the previous token: tree-sitter
+        // expresses that with an immediate token (no `extras`/whitespace before it).
+        if (it.type === 'adjacent' && expr.items[i + 1]) { parts.push(renderImmediate(expr.items[i + 1], ctx)); i++; continue; }
+        const r = renderExpr(it, ctx);
+        if (r !== 'blank()') parts.push(r);
+      }
       if (parts.length === 0) return 'blank()';
       if (parts.length === 1) return parts[0];
       return `seq(${parts.join(', ')})`;
@@ -223,7 +257,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       return `repeat1(${body})`;
     }
     case 'group':
-      return renderExpr(expr.body, ctx);
+      return expr.tsPrec !== undefined ? `prec.dynamic(${expr.tsPrec}, ${renderExpr(expr.body, ctx)})` : renderExpr(expr.body, ctx);
     case 'not':
       // Zero-width negative lookahead: not expressible in a tree-sitter CFG, and
       // it consumes nothing, so it drops to a no-op (the surrounding choice keeps
@@ -233,6 +267,10 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       // Zero-width "no LineTerminator here" assertion — tree-sitter handles this
       // class of restriction with an external scanner, not the CFG; as a CFG node
       // it consumes nothing, so render a no-op.
+      return 'blank()';
+    case 'adjacent':
+      // Zero-width "glued to previous token" assertion -- scanner-level (tree-sitter immediate
+      // token); a no-op in the CFG, like sameLine.
       return 'blank()';
     case 'noCommentBefore':
       // Zero-width "no comment before" assertion (YAML plain-scalar fold) — like `sameLine`,
@@ -460,12 +498,14 @@ function makeNonEmpty(e: RuleExpr, nn: Set<string>): RuleExpr | null {
 /** Build a single rule's body string (Pratt or plain). */
 function buildRuleBody(rule: RuleDecl, ctx: GrammarJsContext): string {
   if (ctx.prattRules.has(rule.name)) return buildPrattRule(rule, ctx);
+  const imm = ctx.immediateFlowOpen;
+  const base = (imm && rule.name === imm.ruleName) ? swapFirstFlowOpen(rule.body, imm.char, imm.sym) : rule.body;
   const nn = ctx.nullableNonStart;
   if (nn.size > 0) {
-    const body = nn.has(rule.name) ? (makeNonEmpty(rule.body, nn) ?? rule.body) : wrapNullableRefs(rule.body, nn);
+    const body = nn.has(rule.name) ? (makeNonEmpty(base, nn) ?? base) : wrapNullableRefs(base, nn);
     return renderExpr(body, ctx);
   }
-  return renderExpr(rule.body, ctx);
+  return renderExpr(base, ctx);
 }
 
 // ── Token rules ──────────────────────────────────────────────────────────────
@@ -635,6 +675,8 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
   //    be a RULE or a TOKEN (e.g. YAML's `key`/`plain` are tokens that conflict on a trailing `:`), so
   //    both name sets count — `$.key` is a valid conflict symbol whether key is a rule or a token.
   const tokenSnakes = new Set(ctx.tokenSnake.values());
+  // 0. Grammar-DECLARED conflicts (CstGrammar.conflicts) — names mapped to their snake symbols.
+  for (const tuple of (g.conflicts ?? [])) push(tuple.map(n => ctx.ruleSnake.get(n) ?? ctx.tokenSnake.get(n) ?? toSnake(n)));
   for (const tuple of LR_CONFLICT_CLOSURE) {
     if (tuple.every(r => ruleSnakes.has(r) || tokenSnakes.has(r))) push(tuple);
   }
@@ -774,6 +816,54 @@ function planPlainScalarTokens(grammar: CstGrammar): { plain?: string; key?: str
 const FLOW_CHAR_NAMES: Record<string, string> = {
   '[': 'lbracket', ']': 'rbracket', '{': 'lbrace', '}': 'rbrace', '(': 'lparen', ')': 'rparen',
 };
+// When a grammar uses `adjacent` to glue an attribute-list rule to a tag head, tree-sitter cannot
+// keep the list's opening flow bracket glued: the external scanner skips whitespace before emitting it
+// (so `p (x)` would parse as an attribute list). We give that opener a dedicated IMMEDIATE flow token
+// the scanner emits BEFORE its whitespace-skip — so it only matches when nothing precedes it; the
+// regular (whitespace-permitting) flow token still serves text. Returns null unless the shape is present.
+function adjacentAttrFlowOpen(grammar: CstGrammar): { char: string; sym: string; ruleName: string } | null {
+  const flowOpen = new Set(grammar.indent?.flowOpen ?? []);
+  if (!flowOpen.size) return null;
+  const tokenNames = new Set(grammar.tokens.map(t => t.name));
+  const firstFlowOpen = (e: RuleExpr | undefined): string | null => {
+    if (!e) return null;
+    if (e.type === 'literal') return flowOpen.has(e.value) ? e.value : null;
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) { const c = firstFlowOpen(i); if (c) return c; } return null; }
+    if (e.type === 'quantifier' || e.type === 'group') return firstFlowOpen(e.body);
+    return null;
+  };
+  let found: { char: string; sym: string; ruleName: string } | null = null;
+  const walk = (e: RuleExpr | undefined): void => {
+    if (!e || found) return;
+    if (e.type === 'seq') for (let i = 0; i + 1 < e.items.length; i++) {
+      if (e.items[i].type !== 'adjacent') continue;
+      const nxt = e.items[i + 1];
+      if (nxt.type !== 'ref' || tokenNames.has(nxt.name)) continue;
+      const r = grammar.rules.find(x => x.name === nxt.name);
+      const c = r && firstFlowOpen(r.body);
+      if (c) { found = { char: c, sym: `_flow_${FLOW_CHAR_NAMES[c] ?? 'u' + c.charCodeAt(0)}_immediate`, ruleName: nxt.name }; return; }
+    }
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) walk(i); return; }
+    if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return walk(e.body);
+    if (e.type === 'sep') return walk(e.element);
+  };
+  for (const r of grammar.rules) walk(r.body);
+  return found;
+}
+// Replace the FIRST flow-open literal of a rule body with a ref to the immediate scanner token.
+function swapFirstFlowOpen(e: RuleExpr, char: string, immSym: string): RuleExpr {
+  if (e.type === 'alt') return { ...e, items: e.items.map(i => swapFirstFlowOpen(i, char, immSym)) };
+  const done = { v: false };
+  const rec = (x: RuleExpr): RuleExpr => {
+    if (done.v) return x;
+    if (x.type === 'literal' && x.value === char) { done.v = true; return { type: 'ref', name: immSym }; }
+    if (x.type === 'seq') return { ...x, items: x.items.map(rec) };
+    if (x.type === 'quantifier' || x.type === 'group') return { ...x, body: rec(x.body) };
+    return x;
+  };
+  return rec(e);
+}
+
 function flowSyntheticTokens(grammar: CstGrammar): { sym: string; char: string; open: boolean }[] {
   const ind = grammar.indent;
   if (!ind || !(ind.flowOpen?.length || ind.flowClose?.length)) return [];
@@ -835,6 +925,8 @@ function planScannerTokens(grammar: CstGrammar): Map<string, string> {
     // (a TRUE return). The synthetic name IS the snake symbol; the matching literal in the flow rules is
     // swapped for a ref to it in renderExpr. Appended last so the scalar-token positions are unchanged.
     for (const { sym } of flowSyntheticTokens(grammar)) map.set(sym, sym);
+    const _imm = adjacentAttrFlowOpen(grammar);
+    if (_imm) map.set(_imm.sym, _imm.sym);
     // Document markers (`---` / `...`) stay INTERNAL tokens (NOT added here). Their IR is
     // `literal + a sep look-ahead`; tree-sitter's token() DFA drops the look-ahead, leaving a bare
     // `---`/`...`. That is fine: the external scalar scanner CLAIMS a non-marker glyph (`---foo`) as a
@@ -860,7 +952,10 @@ function externalSymbols(ctx: GrammarJsContext): string[] {
   const syms = [...ctx.scannerTokenFor.values()];
   if (ctx.templatePlan) syms.push(ctx.templatePlan.charsSnake);
   for (const ip of ctx.interpolationPlans) syms.push(ip.charsSnake);
-  return syms;
+  // A token that is BOTH a template literal AND declares interpolation regions yields the same
+  // `<rule>_chars` scanner symbol from templatePlan and interpolationPlans — dedup so the enum /
+  // externals don't redeclare it (first occurrence wins, preserving order). Inert when distinct.
+  return [...new Set(syms)];
 }
 
 // ── Markup tree-sitter (HTML/Vue), v1 ──
@@ -1045,7 +1140,7 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
 
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
-    flowLiteralTokens,
+    flowLiteralTokens, immediateFlowOpen: adjacentAttrFlowOpen(grammar),
     nullableNonStart,
     templatePlan,
     interpolationPlans,
@@ -1958,6 +2053,7 @@ function buildIndentScannerC(grammar: CstGrammar, ctx: GrammarJsContext, grammar
   // order they were registered in ctx.scannerTokenFor (so the enum / grammar.js externals positions
   // agree). Built by flowSyntheticTokens(grammar) and shared with the grammar.js side.
   const flowTokens = flowSyntheticTokens(grammar); // [{ sym, char, open }]
+  const imm = adjacentAttrFlowOpen(grammar); // immediate (glued) attr-list opener, or null
 
   // DOCUMENT MARKERS (`---` / `...`) — INTERNAL tokens; the external scalar scanner only CLAIMS a non-
   // marker glyph as plain and DECLINES a true (sep-bounded) marker so the internal token lexes it.
@@ -2391,7 +2487,12 @@ ${hasFlow ? `
   // at those positions the flow token isn't valid and we fall through. Skip inline space/tab first (the
   // flow newline skip above already ran when in flow; in block a newline still drives the indent logic).
   {
-    while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') skip(lexer);
+    ${imm ? `if (lexer->lookahead == ${charLit(imm.char)} && valid_symbols[${imm.sym.toUpperCase()}]) {
+      advance(lexer); lexer->mark_end(lexer); lexer->result_symbol = ${imm.sym.toUpperCase()};
+      if (s->flow_depth < UINT16_MAX) s->flow_depth++;
+      s->started = true;${hasCompact ? ' s->at_line_lead = false;' : ''} return true;
+    }
+    ` : ''}    while (lexer->lookahead == ' ' || lexer->lookahead == '\\t') skip(lexer);
     int32_t fc = lexer->lookahead;
 ${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym.toUpperCase()}]) {
       advance(lexer); lexer->mark_end(lexer); lexer->result_symbol = ${t.sym.toUpperCase()};

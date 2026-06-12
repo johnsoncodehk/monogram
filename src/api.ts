@@ -92,6 +92,7 @@ export function rule(def: RuleBody, opts?: RuleOptions): RuleRef {
 
 interface OpMarker { readonly __kind: 'op' }
 interface SameLineMarker { readonly __kind: 'sameLine' }
+interface AdjacentMarker { readonly __kind: 'adjacent' }
 interface NoCommentMarker { readonly __kind: 'noCommentBefore' }
 interface NoMultilineFlowMarker { readonly __kind: 'noMultilineFlowBefore' }
 interface PrefixSlot {
@@ -106,12 +107,19 @@ interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[] }
 interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[] }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
 
-type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker;
+type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | AdjacentMarker | NoCommentMarker | NoMultilineFlowMarker;
 
 export const op: OpMarker = { __kind: 'op' };
 
 // Zero-width "no LineTerminator here" assertion (see RuleExpr 'sameLine').
 export const sameLine: SameLineMarker = { __kind: 'sameLine' };
+
+// Zero-width "the next token is glued to the previous one" assertion: succeeds
+// only when the next token starts exactly where the previous token ended, with
+// NO skipped whitespace or comment between them. Lets a grammar require a
+// selector/attr-list be adjacent to its tag head (`div.card` ✓, `div .card` is
+// text) — see RuleExpr 'adjacent'.
+export const adjacent: AdjacentMarker = { __kind: 'adjacent' };
 
 // Zero-width "no comment was skipped before the next token" assertion (indentation grammars). A
 // comment ENDS a plain scalar in YAML, so a multi-line plain fold guards each continuation line
@@ -193,7 +201,15 @@ class NotNode {
   constructor(item: Element) { this.item = item; }
 }
 
-type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode;
+class TsPrecNode {
+  // tree-sitter `prec.dynamic` wrapper. Transparent everywhere EXCEPT gen-treesitter (renders the
+  // body unchanged) — it only steers tree-sitter GLR conflict resolution (e.g. prefer an element line
+  // over the catch-all text line), mirroring the interpreted parser ordered-choice priority.
+  readonly __kind = "tsprec";
+  readonly prec; readonly items;
+  constructor(prec, items) { this.prec = prec; this.items = items; }
+}
+type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | TsPrecNode;
 
 export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
@@ -220,6 +236,13 @@ export function alt(...items: Alternative[]): AltNode {
 // a top-level `in`, leaving it for the enclosing rule.
 export function exclude(connectors: string | string[], ...items: Element[]): ExcludeNode {
   return new ExcludeNode(typeof connectors === 'string' ? [connectors] : connectors, items);
+}
+
+// tree-sitter `prec.dynamic(prec, …)`: steers GLR conflict resolution only (inert for every other
+// generator, which see a transparent group). Used to encode ordered-choice priority (e.g. an element
+// line outranks the catch-all text line) where tree-sitter's GLR would otherwise pick either.
+export function tsPrecDynamic(prec: number, ...items: Element[]): TsPrecNode {
+  return new TsPrecNode(prec, items);
 }
 
 // Zero-width negative lookahead: `not(x)` matches nothing and succeeds only when
@@ -311,6 +334,12 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
       : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body, suppress: el.connectors };
   }
+  if (el instanceof TsPrecNode) {
+    const body = el.items.length === 1
+      ? toRuleExpr(el.items[0], names)
+      : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body, tsPrec: el.prec };
+  }
   if (el instanceof AltNode) {
     // A branch may be a single element or a sequence (array → seq).
     return {
@@ -333,6 +362,7 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
   if (marker.__kind === 'prefix') return { type: 'prefix' };
   if (marker.__kind === 'postfix') return { type: 'postfix' };
   if (marker.__kind === 'sameLine') return { type: 'sameLine' };
+  if (marker.__kind === 'adjacent') return { type: 'adjacent' };
   if (marker.__kind === 'noCommentBefore') return { type: 'noCommentBefore' };
   if (marker.__kind === 'noMultilineFlowBefore') return { type: 'noMultilineFlowBefore' };
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
@@ -358,6 +388,8 @@ interface GrammarConfig {
   tokens: Record<string, TokenRef>;
   prec?: PrecLevelDef[];
   ledPrec?: LedPrec[];
+  /** tree-sitter `conflicts` (rule/token names) — declared structural ambiguities the GLR runtime keeps both interpretations of. Inert for non-tree-sitter generators. */
+  conflicts?: string[][];
   rules: Record<string, RuleRef>;
   scopes?: Record<string, string[]>;
   entry: RuleRef;
@@ -444,5 +476,5 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     }
   }
 
-  return { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
+  return { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, conflicts: config.conflicts };
 }

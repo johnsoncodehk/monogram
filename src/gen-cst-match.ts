@@ -177,7 +177,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       return isKeywordLiteral(v) ? v : (PUNCT_NAMES[v] ?? 'p' + [...v].map(c => c.charCodeAt(0)).join('_'));
     }
     if (first.type === 'ref') return lowerFirst(first.name);
-    if (first.type === 'not' || first.type === 'sameLine' || first.type === 'noCommentBefore' || first.type === 'noMultilineFlowBefore') {
+    if (first.type === 'not' || first.type === 'sameLine' || first.type === 'adjacent' || first.type === 'noCommentBefore' || first.type === 'noMultilineFlowBefore') {
       return nameFrom(items.slice(1), fuel - 1);   // zero-width: name by what follows
     }
     if (first.type === 'alt') {
@@ -194,7 +194,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   // (inside opt → 'opt', inside many/sep → 'many') applied to captures.
   function pushSteps(steps: Step[], it: RuleExpr, captures: Capture[], used: Set<string>, card: Card): void {
     switch (it.type) {
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+      case 'not': case 'sameLine': case 'adjacent': case 'noCommentBefore': case 'noMultilineFlowBefore':
         return;   // zero-width: no children
       case 'literal':
         steps.push({ kind: 'lit', text: it.value, tt: ttOf(it.value) });

@@ -419,7 +419,7 @@ export type RuleExpr =
   | { type: 'literal'; value: string }
   | { type: 'ref'; name: string }
   | { type: 'quantifier'; body: RuleExpr; kind: '*' | '+' | '?' }
-  | { type: 'group'; body: RuleExpr; suppress?: string[] }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; tsPrec?: number }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
@@ -433,6 +433,11 @@ export type RuleExpr =
   // which must not follow a line terminator. Non-consuming → invisible to other
   // generators (they treat it as a no-op marker).
   | { type: 'sameLine' }
+  // Zero-width "glued to the previous token" assertion: matches (consuming nothing) iff the next
+  // token starts exactly where the previous one ended, with no skipped whitespace/comment between.
+  // Lets a grammar require adjacency (`div.card` ✓, `div .card` is text). Like `sameLine`,
+  // non-consuming → invisible to other generators (a no-op marker).
+  | { type: 'adjacent' }
   // Zero-width "no comment was skipped before the next token" assertion (indentation grammars):
   // matches (consuming nothing) iff the next token is not flagged `commentBefore`. Encodes YAML's
   // rule that a comment ENDS a plain scalar, so a multi-line fold cannot cross a comment. Like
@@ -466,6 +471,7 @@ export interface CstGrammar {
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue); absent for token-stream languages
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML); absent → byte-identical token stream
   newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack); absent → byte-identical token stream
+  conflicts?: string[][];  // declared tree-sitter conflicts (rule/token names); merged into deriveConflicts. Inert elsewhere.
   expressionRule?: string;  // name of the rule that produces an EXPRESSION; lets gen-tm derive a `#expression` sub-grammar (for expression-only embeds, e.g. Vue `{{ }}`)
   // Extra TextMate grammars that just RE-EXPOSE this one under another scopeName (thin
   // `{scopeName, patterns:[{include: <this.scopeName>}]}` wrappers). HTML declares

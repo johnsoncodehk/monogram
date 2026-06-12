@@ -19,6 +19,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },
   { group: 'core', name: 'refactor-guard', args: ['test/refactor-guard.ts'] },
   { group: 'core', name: 'cst-text-invariant', args: ['test/cst-text-invariant.ts'] },
+  { group: 'core', name: 'adjacent', args: ['test/adjacent.ts'] },
   { group: 'conformance', name: 'ts-ast-structure', args: ['test/ts-ast-verify.ts'] },
   { group: 'core', name: 'cst-match-totality', args: ['test/cst-match-totality.ts'] },
   { group: 'core', name: 'incremental-verify', args: ['test/incremental-verify.ts'] },

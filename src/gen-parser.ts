@@ -506,7 +506,7 @@ export function createParser(grammar: CstGrammar) {
         const acc = new Set<string>();
         for (const item of e.items) {
           if (item.type === 'prefix') return null;               // prefix op → any operator token: give up
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;  // non-consuming here
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'adjacent') continue;  // non-consuming here
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) acc.add(k);
@@ -524,7 +524,7 @@ export function createParser(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();  // zero-width: contributes no FIRST tokens
+      case 'not': case 'sameLine': case 'adjacent': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();  // zero-width: contributes no FIRST tokens
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -606,7 +606,7 @@ export function createParser(grammar: CstGrammar) {
     const acc = new Set<string>();
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'adjacent') continue;
       if (item.type === 'op' || item.type === 'postfix') { for (const k of secOpKeys) acc.add(k); return acc; }
       if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
       const f = exprFirst(item);
@@ -619,7 +619,7 @@ export function createParser(grammar: CstGrammar) {
   function suffixNullable(items: RuleExpr[], j: number): boolean {
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'adjacent') continue;
       if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
       if (!exprNullable(item)) return false;
     }
@@ -637,7 +637,7 @@ export function createParser(grammar: CstGrammar) {
         const items = e.items;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
-          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'adjacent') continue;
           let isec: Sec;
           let itemNullable: boolean;
           if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
@@ -689,7 +689,7 @@ export function createParser(grammar: CstGrammar) {
         if (sec.len1) acc.add(e.delimiter);
         return { s: acc, len1: sec.len1 };
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+      case 'not': case 'sameLine': case 'adjacent': case 'noCommentBefore': case 'noMultilineFlowBefore':
         return { s: new Set(), len1: false };
       case 'op': case 'prefix': case 'postfix':
         return { s: new Set(), len1: true };
@@ -1238,6 +1238,17 @@ export function createParser(grammar: CstGrammar) {
           // continue onto, so the assertion fails (nothing same-line follows).
           const tok = peek();
           return tok && !tok.newlineBefore ? [] : null;
+        }
+        case 'adjacent': {
+          // Zero-width "glued to the previous token": succeed (no children) iff
+          // the next token starts exactly where the previous token ended, with no
+          // skipped whitespace/comment between (skip tokens are not in the stream,
+          // so a gap in offsets means something was skipped). At the start of the
+          // stream there is no previous token, so the assertion fails.
+          const tok = peek();
+          if (!tok || pos === 0) return null;
+          const prev = tokens[pos - 1];
+          return prev && tok.offset === prev.offset + prev.text.length ? [] : null;
         }
         case 'noCommentBefore': {
           // Zero-width "no comment was skipped before the next token": succeed (no children) iff the

@@ -367,6 +367,175 @@ function findContextualPatterns(
   return patterns;
 }
 
+
+// ── NMBL adjacency-aware tag head (indentation grammars using the `adjacent` marker) ──
+// The flat token-soup highlighter cannot tell `div.card` (a tag with a class) from
+// `div .card` (the tag `div` then the text `.card`), and it mis-scopes attribute
+// names and interior text as tags. When the grammar uses the `adjacent` assertion
+// (a brand-new marker — so non-NMBL grammars are untouched), replace the flat
+// tag-head/attr token includes with a structured, line-anchored `begin`/`end`
+// context: a tag head consumes glued `#id`/`.class` and a glued attribute list, and
+// ENDS at the first whitespace — so anything after a space falls through to plain text.
+function grammarUsesAdjacent(grammar: CstGrammar): boolean {
+  const walk = (e: RuleExpr | undefined): boolean => {
+    if (!e) return false;
+    if (e.type === 'adjacent') return true;
+    if (e.type === 'seq' || e.type === 'alt') return e.items.some(walk);
+    if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return walk(e.body);
+    if (e.type === 'sep') return walk(e.element);
+    return false;
+  };
+  return grammar.rules.some(r => walk(r.body));
+}
+
+function applyAdjacentTagHead(
+  grammar: CstGrammar,
+  repository: Record<string, TmPattern>,
+  topPatterns: { include: string }[],
+): void {
+  if (!grammarUsesAdjacent(grammar)) return;
+  const tokenNames = new Set(grammar.tokens.map(t => t.name));
+  const isToken = (n: string) => tokenNames.has(n);
+  const tokByName = new Map(grammar.tokens.map(t => [t.name, t]));
+  const ruleByName = new Map(grammar.rules.map(r => [r.name, r]));
+  const repoKey = (n: string) => n.toLowerCase();
+  const has = (k: string) => k in repository;
+  const scopeOfKey = (k: string) => repository[k]?.name ?? '';
+
+  // Direct token refs in a subtree (does NOT cross rule refs).
+  const directTokenRefs = (e: RuleExpr | undefined, out: Set<string>): void => {
+    if (!e) return;
+    if (e.type === 'ref') { if (isToken(e.name)) out.add(e.name); return; }
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) directTokenRefs(i, out); return; }
+    if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return directTokenRefs(e.body, out);
+    if (e.type === 'sep') return directTokenRefs(e.element, out);
+  };
+  const directRuleRefs = (e: RuleExpr | undefined, out: Set<string>): void => {
+    if (!e) return;
+    if (e.type === 'ref') { if (!isToken(e.name)) out.add(e.name); return; }
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) directRuleRefs(i, out); return; }
+    if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return directRuleRefs(e.body, out);
+    if (e.type === 'sep') return directRuleRefs(e.element, out);
+  };
+  // Token refs reachable from a rule, following rule refs (cycle-guarded).
+  const reachableTokens = (ruleName: string, out: Set<string>, seen = new Set<string>()): void => {
+    if (seen.has(ruleName)) return; seen.add(ruleName);
+    const r = ruleByName.get(ruleName); if (!r) return;
+    const toks = new Set<string>(); directTokenRefs(r.body, toks); for (const t of toks) out.add(t);
+    const rules = new Set<string>(); directRuleRefs(r.body, rules); for (const rr of rules) reachableTokens(rr, out, seen);
+  };
+
+  // Discover the tag-head shape from `adjacent` markers: a glued `[adjacent, <token(s)>]` →
+  // glued SELECTORS (preceding token-refs in the seq are head LEAD tokens); `[adjacent, <rule>]`
+  // → the ATTRIBUTE-LIST rule.
+  const selectorTokens = new Set<string>();
+  const leadTokens = new Set<string>();
+  const attrRuleNames = new Set<string>();
+  const classifyGlued = (after: RuleExpr | undefined, leads: string[]): void => {
+    if (!after) return;
+    const toks = new Set<string>(); directTokenRefs(after, toks);
+    const rules = new Set<string>(); directRuleRefs(after, rules);
+    if (toks.size) { for (const t of toks) selectorTokens.add(t); for (const l of leads) leadTokens.add(l); }
+    for (const r of rules) attrRuleNames.add(r);
+  };
+  const gluedPayload = (e: RuleExpr): RuleExpr | null =>
+    ((e.type === 'quantifier' || e.type === 'group') && e.body && e.body.type === 'seq'
+      && e.body.items[0]?.type === 'adjacent') ? (e.body.items[1] ?? e.body) : null;
+  const walkSeq = (items: RuleExpr[]): void => {
+    const leads: string[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.type === 'adjacent') { classifyGlued(items[i + 1], leads.slice()); continue; }
+      const payload = gluedPayload(it);
+      if (payload) { classifyGlued(payload, leads.slice()); continue; }
+      const refs = new Set<string>(); directTokenRefs(it, refs); for (const r of refs) leads.push(r);
+    }
+  };
+  const walk = (e: RuleExpr | undefined): void => {
+    if (!e) return;
+    if (e.type === 'seq') walkSeq(e.items);
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) walk(i); return; }
+    if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return walk(e.body);
+    if (e.type === 'sep') return walk(e.element);
+  };
+  for (const r of grammar.rules) walk(r.body);
+  if (!selectorTokens.size && !attrRuleNames.size) return;   // not the tag-head shape
+
+  // Block-expansion operator, if any: a `[literal, selfRef]` anywhere (`li > a`).
+  let blockOp = '';
+  for (const r of grammar.rules) {
+    const find = (e: RuleExpr | undefined): void => {
+      if (!e) return;
+      if (e.type === 'seq') for (let i = 0; i + 1 < e.items.length; i++) {
+        const a = e.items[i], b = e.items[i + 1];
+        if (a.type === 'literal' && b.type === 'ref' && b.name === r.name) blockOp = a.value;
+      }
+      if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) find(i); return; }
+      if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return find(e.body);
+      if (e.type === 'sep') return find(e.element);
+    };
+    find(r.body);
+  }
+
+  // Attribute-list context: derive delimiters + ALL reachable inner token includes.
+  const punctName = repository['punctuation']?.name ?? `punctuation.${grammar.name ?? 'lang'}`;
+  let attrInclude: { include: string } | null = null;
+  const attrTokenKeys = new Set<string>();
+  for (const rn of attrRuleNames) {
+    const ar = ruleByName.get(rn); if (!ar) continue;
+    const toks = new Set<string>(); reachableTokens(rn, toks);
+    for (const t of toks) attrTokenKeys.add(repoKey(t));
+    const alts = ar.body.type === 'alt' ? ar.body.items : [ar.body];
+    let open = '(', close = ')';
+    for (const a of alts) {
+      const its = a.type === 'seq' ? a.items : [a];
+      const lits = its.filter(x => x.type === 'literal').map(x => (x as { value: string }).value);
+      if (lits.length >= 2) { open = lits[0]; close = lits[lits.length - 1]; }
+    }
+    const inner = [...toks].map(repoKey).filter(has).map(k => ({ include: `#${k}` }));
+    repository['attrlist'] = {
+      begin: escapeRegex(open),
+      beginCaptures: { '0': { name: punctName } },
+      end: escapeRegex(close),
+      endCaptures: { '0': { name: punctName } },
+      patterns: [...inner, { include: '#punctuation' }],
+    };
+    attrInclude = { include: '#attrlist' };
+    break;
+  }
+
+  // Tag head: a begin LOOKAHEAD built from the head tokens' own patterns, opening only at a real
+  // head start (line lead, or right after a block-expansion operator). Ends at the first
+  // whitespace/EOL — so glued selectors/attrs stay in, and anything after a space is plain text.
+  const headNames = [...leadTokens, ...selectorTokens];
+  const headKeys = headNames.map(repoKey).filter(has);
+  if (!headKeys.length) return;
+  const headPats = headNames.map(n => tokByName.get(n)).filter((t): t is TokenDecl => !!t).map(t => tokenPatternSource(t));
+  const lookahead = headPats.length ? `(?=(?:${headPats.join('|')}))` : '';
+  const lead = blockOp ? `(?:^[ \\t]*|(?<=${escapeRegex(blockOp)})[ \\t]*)` : `^[ \\t]*`;
+  repository['taghead'] = {
+    begin: `${lead}${lookahead}`,
+    end: `(?=[ \\t]|$)`,
+    patterns: [...headKeys.map(k => ({ include: `#${k}` })), ...(attrInclude ? [attrInclude] : [])],
+  };
+
+  // Top level: drop the flat head/attr `match`-style includes (now only inside the structured
+  // contexts); KEEP delimited (begin/end) string tokens and comments — they never mis-scope
+  // interior text. Insert `#taghead` ahead of the text/punctuation includes.
+  const drop = new Set<string>();
+  for (const k of [...headKeys, ...attrTokenKeys]) {
+    if (!has(k)) continue;
+    const sc = scopeOfKey(k);
+    if (sc.startsWith('comment') || repository[k]?.begin) continue;   // comments + delimited strings stay
+    drop.add(k);
+  }
+  const kept = topPatterns.filter(p => !drop.has((p.include ?? '').replace(/^#/, '')));
+  let at = kept.findIndex(p => /^#(textchunk|punctuation|dqstring|sqstring|template|txt)$/.test(p.include ?? ''));
+  if (at < 0) at = kept.length;
+  kept.splice(at, 0, { include: '#taghead' });
+  topPatterns.length = 0;
+  topPatterns.push(...kept);
+}
 // ── Type annotation detection ──
 
 /**
@@ -413,7 +582,7 @@ function deriveBindingCloseBrackets(grammar: CstGrammar, identName: string | und
     if (!expr) return false;
     if (expr.type === 'ref') return expr.name === name;
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(i => directRef(i, name));
-    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine' || expr.type === 'adjacent') {
       return directRef((expr as { body?: RuleExpr }).body, name);
     }
     if (expr.type === 'sep') return directRef((expr as { element: RuleExpr }).element, name);
@@ -428,7 +597,7 @@ function deriveBindingCloseBrackets(grammar: CstGrammar, identName: string | und
       for (const it of expr.items) if (it.type === 'ref') nameSubstitutes.add(it.name);
     }
     if (expr.type === 'seq' || expr.type === 'alt') for (const i of expr.items) scan(i);
-    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine' || expr.type === 'adjacent') {
       scan((expr as { body?: RuleExpr }).body);
     }
     if (expr.type === 'sep') scan((expr as { element: RuleExpr }).element);
@@ -499,7 +668,7 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
     if (!expr) return;
     if (expr.type === 'seq') scanSeq(expr.items);
     if (expr.type === 'seq' || expr.type === 'alt') for (const i of expr.items) walk(i);
-    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine' || expr.type === 'adjacent') {
       walk((expr as { body?: RuleExpr }).body);
     }
     if (expr.type === 'sep') walk((expr as { element: RuleExpr }).element);
@@ -514,7 +683,7 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
     if (!expr) return false;
     if (expr.type === 'ref') return !typeRuleNames.has(expr.name);
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(wrapsExpr);
-    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine' || expr.type === 'adjacent') {
       return wrapsExpr((expr as { body?: RuleExpr }).body);
     }
     if (expr.type === 'sep') return wrapsExpr((expr as { element: RuleExpr }).element);
@@ -3154,7 +3323,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
       // Zero-width guards (`not(...)` / `sameLine` / `noCommentBefore` / `noMultilineFlowBefore`)
       // consume no token, so they can sit between the keyword and the name (e.g. `'type' not(reserved)
       // Ident`) without changing the `keyword name` highlight pattern — skip past them.
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') {
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'adjacent' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') {
         nameIdx++;
         continue;
       }
@@ -4326,7 +4495,7 @@ function ruleIsNullable(e: RuleExpr, byName: Map<string, RuleExpr>, seen = new S
     case 'alt': return e.items.some(i => ruleIsNullable(i, byName, seen));
     case 'quantifier': return e.kind === '*' || e.kind === '?';
     case 'group': return ruleIsNullable(e.body, byName, seen);
-    case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return true;  // zero-width assertions
+    case 'not': case 'sameLine': case 'adjacent': case 'noCommentBefore': case 'noMultilineFlowBefore': return true;  // zero-width assertions
     case 'ref': { if (seen.has(e.name)) return false; seen.add(e.name); const b = byName.get(e.name); return b ? ruleIsNullable(b, byName, seen) : false; }
     default: return false;                                     // literal / token / op / prefix / postfix / sep
   }
@@ -8226,6 +8395,8 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // embedded-start case (YAML inside a Markdown fence). Tokenisation of every construct is unchanged
   // — the wrapper only adds the persistent `\G` anchor the block scalar needs. Gated to grammars that
   // actually emit a block scalar so non-indentation languages (TS/HTML/…) stay byte-identical.
+  applyAdjacentTagHead(grammar, repository, orderedPatterns);
+
   let finalPatterns: ({ include: string } | TmPattern)[] = orderedPatterns;
   if (grammar.indent?.blockScalar) {
     finalPatterns = [

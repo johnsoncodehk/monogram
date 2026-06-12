@@ -323,6 +323,136 @@ function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
 
 // ── Main generator ──
 
+function applyAdjacentTagHeadMonarch(grammar: CstGrammar, tokenizer: Record<string, MonarchRule[]>): void {
+  const usesAdjacent = (() => {
+    const w = (e: RuleExpr | undefined): boolean => !e ? false
+      : e.type === 'adjacent' ? true
+      : (e.type === 'seq' || e.type === 'alt') ? e.items.some(w)
+      : (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') ? w(e.body)
+      : e.type === 'sep' ? w(e.element) : false;
+    return grammar.rules.some(r => w(r.body));
+  })();
+  if (!usesAdjacent) return;
+
+  const tokenNames = new Set(grammar.tokens.map(t => t.name));
+  const isTok = (n: string) => tokenNames.has(n);
+  const tokByName = new Map(grammar.tokens.map(t => [t.name, t]));
+  const ruleByName = new Map(grammar.rules.map(r => [r.name, r]));
+  const directTokens = (e: RuleExpr | undefined, out: Set<string>): void => {
+    if (!e) return;
+    if (e.type === 'ref') { if (isTok(e.name)) out.add(e.name); return; }
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) directTokens(i, out); return; }
+    if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return directTokens(e.body, out);
+    if (e.type === 'sep') return directTokens(e.element, out);
+  };
+  const directRules = (e: RuleExpr | undefined, out: Set<string>): void => {
+    if (!e) return;
+    if (e.type === 'ref') { if (!isTok(e.name)) out.add(e.name); return; }
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) directRules(i, out); return; }
+    if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return directRules(e.body, out);
+    if (e.type === 'sep') return directRules(e.element, out);
+  };
+  const reachableTokens = (rn: string, out: Set<string>, seen = new Set<string>()): void => {
+    if (seen.has(rn)) return; seen.add(rn);
+    const r = ruleByName.get(rn); if (!r) return;
+    const t = new Set<string>(); directTokens(r.body, t); for (const x of t) out.add(x);
+    const rr = new Set<string>(); directRules(r.body, rr); for (const x of rr) reachableTokens(x, out, seen);
+  };
+
+  const selectorTokens = new Set<string>(), leadTokens = new Set<string>(), attrRules = new Set<string>();
+  const glued = (after: RuleExpr | undefined, leads: string[]) => {
+    if (!after) return;
+    const t = new Set<string>(); directTokens(after, t);
+    const r = new Set<string>(); directRules(after, r);
+    if (t.size) { for (const x of t) selectorTokens.add(x); for (const l of leads) leadTokens.add(l); }
+    for (const x of r) attrRules.add(x);
+  };
+  const payload = (e: RuleExpr): RuleExpr | null =>
+    ((e.type === 'quantifier' || e.type === 'group') && e.body && e.body.type === 'seq' && e.body.items[0]?.type === 'adjacent')
+      ? (e.body.items[1] ?? e.body) : null;
+  const walkSeq = (items: RuleExpr[]) => {
+    const leads: string[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.type === 'adjacent') { glued(items[i + 1], leads.slice()); continue; }
+      const p = payload(it); if (p) { glued(p, leads.slice()); continue; }
+      const t = new Set<string>(); directTokens(it, t); for (const x of t) leads.push(x);
+    }
+  };
+  const walk = (e: RuleExpr | undefined) => {
+    if (!e) return;
+    if (e.type === 'seq') walkSeq(e.items);
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) walk(i); return; }
+    if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') return walk(e.body);
+    if (e.type === 'sep') return walk(e.element);
+  };
+  for (const r of grammar.rules) walk(r.body);
+  if (!selectorTokens.size) return;
+
+  // Prefer Monaco-native tag-head tokens (tag/attribute.name) over the coarse generic mapping
+  // (which folds every `entity.*` to `identifier`), so the tag head highlights per-part.
+  const monarchScope = (sc: string): string =>
+    sc.startsWith("entity.name.tag") ? "tag"
+    : sc.startsWith("entity.other.attribute-name") ? "attribute.name"
+    : sc.startsWith("support.class") ? "tag"
+    : scopeToMonarch(sc);
+  const scopeOf = (t: TokenDecl) => monarchScope(t.scope ?? classifyTokenScope(t));
+  const pat = (n: string) => { const t = tokByName.get(n); return t ? tokenPatternSource(t).replace(/^\^/, '') : ''; };
+
+  // Continuation selectors (stay in the head); plus the glued attribute list.
+  const headRules: MonarchRule[] = [];
+  for (const n of selectorTokens) { const t = tokByName.get(n); if (t) headRules.push([pat(n), scopeOf(t)]); }
+
+  let attrInclude = false;
+  for (const rn of attrRules) {
+    const ar = ruleByName.get(rn); if (!ar) continue;
+    const alts = ar.body.type === 'alt' ? ar.body.items : [ar.body];
+    let open = '(', close = ')';
+    for (const a of alts) { const its = a.type === 'seq' ? a.items : [a];
+      const lits = its.filter(x => x.type === 'literal').map(x => (x as { value: string }).value);
+      if (lits.length >= 2) { open = lits[0]; close = lits[lits.length - 1]; } }
+    const toks = new Set<string>(); reachableTokens(rn, toks);
+    const inner: MonarchRule[] = [];
+    for (const n of toks) { const t = tokByName.get(n); if (t) inner.push([pat(n), scopeOf(t)]); }
+    tokenizer['adj_attrlist'] = [
+      ...inner,
+      ['[ \\t]+', 'white'],
+      [escapeRegex(close), { token: 'delimiter.parenthesis', next: '@pop' }],
+    ];
+    headRules.push([escapeRegex(open), { token: 'delimiter.parenthesis', next: '@adj_attrlist' }]);
+    attrInclude = true;
+    break;
+  }
+
+  // The tag-head state: glued selectors/attrs stay; a space or EOL ENDS the head (resetting to
+  // root via @popall through the body state) so anything after a space is plain text.
+  tokenizer['adj_taghead'] = [
+    ...headRules,
+    ['[ \\t]+', { token: 'white', next: '@adj_tagbody' }],
+    ['$', { token: '', next: '@popall' }],
+    ['.', { token: '', next: '@adj_tagbody' }],
+  ];
+  tokenizer['adj_tagbody'] = [
+    ['[^\\n]+', { token: '', next: '@popall' }],
+    ['$', { token: '', next: '@popall' }],
+  ];
+
+  // root DISPATCHES the first token of each line: a head-lead (tag/selector) opens the tag head;
+  // anything else routes to @adj_linebody — the normal line content, but WITHOUT the head-lead rules
+  // and resetting at EOL via @popall. So a tag-name-like word later on a NON-element line (e.g. pipe
+  // text `| word`) is never taken as a tag. (Monarch has no line-start anchor, so we anchor via the
+  // per-line @popall reset + a one-shot dispatch.)
+  const oldRoot = (tokenizer['root'] ?? []).slice();
+  const leadRules: MonarchRule[] = [];
+  for (const n of [...leadTokens, ...selectorTokens]) {
+    const t = tokByName.get(n); if (!t) continue;
+    leadRules.push([pat(n), { token: scopeOf(t), next: '@adj_taghead' }]);
+  }
+  tokenizer['adj_linebody'] = [...oldRoot, ['$', { token: '', next: '@popall' }]];
+  tokenizer['root'] = [...leadRules, ['(?=.)', { token: '', next: '@adj_linebody' }]];
+}
+
+
 export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
   if (grammar.markup) return generateMarkupMonarch(grammar);
   const { scopeOverrides } = grammar;
@@ -796,6 +926,8 @@ export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
     if (angle) interpExprBody.push(['[<>]', comparisonTok]);
     tokenizer['interpExprBody'] = interpExprBody;
   }
+
+  applyAdjacentTagHeadMonarch(grammar, tokenizer);
 
   return {
     defaultToken: 'invalid',
