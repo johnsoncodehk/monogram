@@ -462,11 +462,16 @@ const TypeParam = rule($ => {
   // second is the name). Longest-match picks among:
   const tail = [opt('extends', Type), opt('=', Type)];
   const mod = alt('const', 'in', 'out', 'public', 'private', 'protected', 'readonly');
-  const name = alt(Ident, 'in', 'out');  // a name may itself be a contextual variance keyword
+  // The type-param NAME is `notReserved, Ident`: `in` LEXES as an Ident, so an un-guarded
+  // Ident would wrongly accept it as the name — but `in` is a reserved word there (tsc
+  // rejects `<in>`/`<in in>`/`<out in>` "'in' is a reserved word"). `notReserved` forbids
+  // `in` while allowing `out` and the other contextual keywords; `in` stays a variance
+  // modifier (`<in T>`/`<in out>`/`<in out T>` parse). Guards arm 1's name too.
+  const name = [notReserved, Ident];
   return [
-    [many1(mod), Ident, ...tail],  // modifier soup + real-ident name: `<const in T>`, `<in T>`
-    [mod, name, ...tail],          // single modifier + in/out-named param: `<in in>`, `<out out>`
-    [name, ...tail],               // bare name, incl. `<in>`, `<out>`: `<T>`, `<in = any>`
+    [many1(mod), ...name, ...tail],  // modifier soup + name: `<const in T>`, `<in T>`, `<in out T>`
+    [mod, ...name, ...tail],         // single modifier + name: `<out out>`, `<in out>`
+    [...name, ...tail],              // bare name: `<T>`, `<out>` (NOT `<in>`)
   ];
 });
 
