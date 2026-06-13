@@ -145,6 +145,70 @@ for (const name of GRAMMARS) {
   }
 }
 
+// ── Targeted [Await]/[Yield] fork edit class ────────────────────────────────────────
+// Flipping `async`/`*` on an enclosing function changes the RULE IDENTITY of its body
+// (Block -> Block$A / Block$Y / Block$AY) — exactly what the build-time name-fork must
+// survive incrementally. A body row keys on its forked rid, so an async-toggle FAR from a
+// body statement must re-parse the body under the new family rather than reuse a
+// cross-family row, and a surgery-eligible in-body keystroke must re-run the body
+// statement's rule (Stmt$A, …) with the right ambient context. The random mutator above
+// only hits these by luck; this scripts them. Each step stays edit≡fresh + self-consistent.
+const FORK_DOCS = [
+  'async function f(g) {\n  let x = await g();\n  return x;\n}\n',
+  'function* gen() {\n  yield 1;\n  let y = 2;\n  return y;\n}\n',
+  'const h = async (a) => {\n  await a;\n  return a;\n};\n',
+  'class C {\n  async m() { await this.x; }\n  *g() { yield 1; }\n  plain() { let await = 1; return await; }\n}\n',
+  'async function* ag() {\n  yield await next();\n  for (let i = 0; i < 3; i++) { await tick(); }\n}\n',
+];
+// each op replaces the FIRST occurrence of `find` (skipped if absent in the current text)
+const FORK_SCRIPT: [string, string][] = [
+  ['async function', 'function'],          // drop async: enclosing body Block$A -> Block
+  ['{\n  let', '{\n  let q = 0;\n  let'],   // surgery-path keystroke inside the now-sync body
+  ['function', 'async function'],          // re-add async: body Block -> Block$A
+  ['function*', 'function'],               // drop generator star: body Block$Y -> Block
+  ['async (a)', 'async (a, b)'],           // edit an async arrow's parameter list
+  ['await ', 'await  '],                   // touch an await operand site
+  ['yield 1', 'yield 1 + 1'],              // edit a yield operand inside a generator body
+  ['async m()', 'm()'],                    // class: drop a method's async
+  ['*g()', 'g()'],                         // class: drop a method's generator star
+];
+function replaceOnce(text: string, find: string, repl: string): { next: string; edit: Edit } | null {
+  const at = text.indexOf(find);
+  if (at < 0) return null;
+  return { next: text.slice(0, at) + repl + text.slice(at + find.length), edit: { start: at, end: at + find.length, text: repl } };
+}
+for (const name of ['javascript', 'typescript']) {
+  const em = (await import(`/tmp/emitted-incr-${name}.mjs?v=` + process.pid)) as Em;
+  const session = em.createParser();
+  const fresh = em.createParser();
+  for (const doc of FORK_DOCS) {
+    let text = doc;
+    let cst: Cst;
+    try { cst = session.parse(text); } catch (e) { fails++; failures.push(`${name} fork-doc: parse THREW: ${(e as Error).message.slice(0, 60)}`); continue; }
+    for (const [find, repl] of FORK_SCRIPT) {
+      const m = replaceOnce(text, find, repl);
+      if (!m) continue;
+      totalSteps++;
+      let fc: Cst;
+      try { session.edit(cst, [m.edit]); fc = fresh.parse(m.next); }
+      catch (e) { fails++; if (failures.length < 10) failures.push(`${name} fork "${find}": THREW ${(e as Error).message.slice(0, 70)}`); break; }
+      if (fc.errors.length > 0) totalErr++;
+      const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fc, fns))) + JSON.stringify(fc.errors);
+      const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns))) + JSON.stringify(cst.errors);
+      if (a !== b) {
+        fails++;
+        let i = 0; while (i < a.length && a[i] === b[i]) i++;
+        if (failures.length < 10) failures.push(`${name} fork "${find}"->"${repl}": edit ≠ fresh @${i}\n      fresh: …${a.slice(Math.max(0, i - 40), i + 60)}…\n      inc:   …${b.slice(Math.max(0, i - 40), i + 60)}…`);
+        break;
+      }
+      const sc = selfConsistent(session, cst);
+      if (sc !== null) { fails++; if (failures.length < 10) failures.push(`${name} fork "${find}": SELF-INCONSISTENT ${sc}`); break; }
+      totalEqual++;
+      text = m.next;
+    }
+  }
+}
+
 console.log(`incremental-grammars: ${totalEqual}/${totalSteps} steps equal+consistent across ${GRAMMARS.length} grammars (${totalErr} recovered with errors)`);
 for (const s of failures) console.log('  ✗ ' + s);
 if (fails > 0) {
