@@ -14,7 +14,7 @@ const grammar = (await import('../typescript.ts')).default;
 const emPath = '/tmp/emitted-incremental.mjs';
 writeFileSync(emPath, emitParser(grammar));
 type Edit = { start: number; end: number; text: string };
-type Cst = { root: number };
+type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };
 type Parser = {
   parse(s: string): Cst;
   edit(cst: Cst, edits: Edit[]): void;
@@ -28,14 +28,14 @@ type Em = {
   createParser(): Parser;
 };
 const session = ((await import(emPath + '?session=' + process.pid)) as Em).createParser();
-const fresh = (await import(emPath + '?fresh=' + process.pid)) as Em;
+const freshP = ((await import(emPath + '?fresh=' + process.pid)) as Em).createParser();
 
 // Deterministic LCG so failures replay.
 let seedState = 0x2F6E2B1;
 const rand = () => ((seedState = (seedState * 48271) % 0x7fffffff) / 0x7fffffff);
 const randInt = (n: number) => Math.floor(rand() * n);
 
-const INSERTS = ['x', '_v', '42', ' + y', '.m', '()', ' /*c*/ ', '"s"', 'await ', '!', '?'];
+const INSERTS = ['x', '_v', '42', ' + y', '.m', '()', ' /*c*/ ', '"s"', 'await ', '!', '?', ';', '; '];
 const STMTS = ['const q9 = 1;\n', 'function g9(a) { return a; }\n', 'if (x9) { y9(); }\n', '// note\n', 'type T9 = string | number;\n'];
 
 // Mutations return the edit RANGE too, so half the steps can exercise the edits
@@ -97,6 +97,15 @@ function diffChange(a: string, b: string): Edit {
 }
 
 const GLUE: Array<[string, string]> = [
+  // recovery-protocol pins (cross-grammar-gate finds): bar minting must be
+  // adoption-invariant — a pre-edit RECOVERY tree must not leak its probe reaches
+  // (frameMax exactness), its rows (surgery/adoption refusal), or its shape (the
+  // lex-recovered first run) into the edited re-parse
+  ['class za {" z', 'zlass za {" z'],
+  ['funtionzaaz( a z { }', 'funtiznzaaz( a z { }'],
+  ['function \\u{0} ( (aa ) { }', 'functionx \\u{0} ( (aa ) { }'],
+  ['const x = f(1, 2);', 'const x = f(1, 2;'],
+  ['function g() { return 1; }', 'function g() { return 1;'],
   ['const a = 1;\nconst b = 2;\n', 'const a = 1;\nconst bx = 2;\n'],
   ['let a = b; let c = 1;\n', 'let a = b1; let c = 1;\n'],
   ['if (a = b) { f(); }\n', 'if (a == b) { f(); }\n'],
@@ -105,28 +114,26 @@ const GLUE: Array<[string, string]> = [
   ['const t = a + b;\n', 'const t = a ++ b;\n'],
   ['const u = x<y>(z);\n', 'const u = x<y>>(z);\n'],
   ['f(a, b);\ng(c);\n', 'f(a, bc);\ng(c);\n'],
+  // expression-splitting ';' injections (structure breaks, not appended garbage)
+  ['const x = a + b;\n', 'const x = a; + b;\n'],
+  ['const y = (a + b) * c;\n', 'const y = (a +; b) * c;\n'],
+  ['const z = obj.m(1).n;\n', 'const z = obj.m(;1).n;\n'],
 ];
 
-let steps = 0, equal = 0, bothReject = 0, mismatch = 0;
+let steps = 0, equal = 0, withErrors = 0, mismatch = 0;
 let tInc = 0, tFresh = 0;
 const failures: string[] = [];
 
 for (const [base, edited] of GLUE) {
   steps++;
   const c0 = session.parse(base);
-  let fe: string | null = null, ie: string | null = null;
-  let fr = -1;
-  try { fr = fresh.parse(edited); } catch (e) { fe = (e as Error).message; }
-  try { session.edit(c0, [diffChange(base, edited)]); } catch (e) { ie = (e as Error).message; }
-  if (fe !== null || ie !== null) {
-    if ((fe === null) !== (ie === null)) { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: fresh ${fe ? 'reject' : 'accept'} / incremental ${ie ? 'reject' : 'accept'}`); }
-    else bothReject++;
-    continue;
-  }
-  const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fr, fns)));
-  const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(c0, fns)));
+  session.edit(c0, [diffChange(base, edited)]);
+  const fc = freshP.parse(edited);
+  if (fc.errors.length > 0) withErrors++;
+  const a = JSON.stringify(objectify(freshP.tree, (fns) => freshP.visit(fc, fns))) + JSON.stringify(fc.errors);
+  const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(c0, fns))) + JSON.stringify(c0.errors);
   if (a === b) equal++;
-  else { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: tree diverges`); }
+  else { mismatch++; if (failures.length < 5) failures.push(`glue «${edited.slice(0, 30)}»: tree/errors diverge`); }
 }
 
 for (const f of FILES) {
@@ -135,55 +142,31 @@ for (const f of FILES) {
   for (let k = 0; k < STEPS; k++) {
     const { next, edit } = mutate(text);
     steps++;
-    let freshRoot = -1, freshErr: string | null = null;
+    // parse/edit are TOTAL: syntax-breaking steps produce error trees compared
+    // exactly like valid ones (tree AND the errors field, byte-identical)
     const tf0 = performance.now();
-    try { freshRoot = fresh.parse(next); } catch (e) { freshErr = (e as Error).message; }
+    const fc = freshP.parse(next);
     const tf1 = performance.now();
-    let incErr: string | null = null;
     const ti0 = performance.now();
-    try { session.edit(cst, [edit]); } catch (e) { incErr = (e as Error).message; }
+    session.edit(cst, [edit]);
     const ti1 = performance.now();
-    if (freshErr !== null || incErr !== null) {
-      if ((freshErr === null) !== (incErr === null)) {
-        mismatch++;
-        if (failures.length < 5) failures.push(`${f.split('/').pop()} step ${k}: fresh ${freshErr ? 'reject' : 'accept'} / incremental ${incErr ? 'reject' : 'accept'}\n    fresh: ${freshErr ?? '-'}\n    inc:   ${incErr ?? '-'}`);
-      } else bothReject++;
-      // REJECTED text: the handle stays on the previous tree, but the DOCUMENT
-      // advances (editor-buffer model — the buffer applied the change regardless,
-      // and the engine's docSrc tracks it). Model the editor's UNDO: revert via a
-      // diff edit in the rejected text's coordinates; it must be accepted and
-      // byte-identical to a fresh parse of the restored text.
-      try {
-        session.edit(cst, [diffChange(next, text)]);
-        const rfr = fresh.parse(text);
-        const ra = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(rfr, fns)));
-        const rb = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns)));
-        if (ra !== rb) {
-          mismatch++;
-          if (failures.length < 5) failures.push(`${f.split('/').pop()} step ${k}: REVERT tree diverges`);
-        }
-      } catch (e2) {
-        mismatch++;
-        if (failures.length < 5) failures.push(`${f.split('/').pop()} step ${k}: revert rejected: ${(e2 as Error).message.slice(0, 50)}`);
-      }
-      continue;
-    }
+    if (fc.errors.length > 0) withErrors++;
     tFresh += tf1 - tf0; tInc += ti1 - ti0;
-    const a = JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(freshRoot, fns)));
-    const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns)));
+    const a = JSON.stringify(objectify(freshP.tree, (fns) => freshP.visit(fc, fns))) + JSON.stringify(fc.errors);
+    const b = JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns))) + JSON.stringify(cst.errors);
     if (a === b) equal++;
     else {
       mismatch++;
       if (failures.length < 5) {
         let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
-        failures.push(`${f.split('/').pop()} step ${k}: tree diverges @${i}\n    fresh: …${a.slice(Math.max(0, i - 50), i + 50)}…\n    inc:   …${b.slice(Math.max(0, i - 50), i + 50)}…`);
+        failures.push(`${f.split('/').pop()} step ${k}: tree/errors diverge @${i}\n    fresh: …${a.slice(Math.max(0, i - 50), i + 50)}…\n    inc:   …${b.slice(Math.max(0, i - 50), i + 50)}…`);
       }
     }
     text = next;
   }
 }
 
-console.log(`incremental ≡ fresh: ${equal} equal · ${bothReject} both-reject · ${mismatch} MISMATCH  (${steps} steps over ${FILES.length} files)`);
+console.log(`incremental ≡ fresh: ${equal} equal (${withErrors} recovered with errors) · ${mismatch} MISMATCH  (${steps} steps over ${FILES.length} files)`);
 if (tInc > 0) console.log(`time: incremental ${tInc.toFixed(1)}ms vs fresh ${tFresh.toFixed(1)}ms → ${(tFresh / tInc).toFixed(2)}× faster on accepted edits`);
 for (const s of failures) console.log('  ✗ ' + s);
 if (mismatch > 0) {

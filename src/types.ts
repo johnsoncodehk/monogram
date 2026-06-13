@@ -419,14 +419,23 @@ export type RuleExpr =
   | { type: 'literal'; value: string }
   | { type: 'ref'; name: string }
   | { type: 'quantifier'; body: RuleExpr; kind: '*' | '+' | '?' }
-  | { type: 'group'; body: RuleExpr; suppress?: string[] }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  // `ctxMode` marks a subtree as [Await]/[Yield] context (the spec's grammar parameter):
+  // the await-yield-fork build transform reads it to name-fork the body-reachable rule
+  // closure into $A/$Y/$AY families. Every OTHER consumer treats this exactly like a
+  // plain transparent group (recurse into `body`), so the marker is invisible outside
+  // the fork transform.
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset' }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
   // list in expression position is only a bare instantiation when it isn't
   // followed by something that starts an expression). Non-consuming → invisible
   // to highlighting / AST shape / other generators.
-  | { type: 'not'; body: RuleExpr }
+  // `reservable`: this is the bare-identifier reserved-word guard (notReservedExpr).
+  // The await-yield-fork transform, when cloning a rule into the $A/$Y/$AY family,
+  // adds that family's context keyword(s) to the inner alt — so `await`/`yield` lose
+  // their identifier reading inside an async/generator body. Invisible elsewhere.
+  | { type: 'not'; body: RuleExpr; reservable?: boolean }
   // Zero-width "no LineTerminator here" assertion: matches (consuming nothing)
   // iff the NEXT token is on the same line (no preceding newline). Encodes
   // ECMAScript/TS restricted productions like an array/indexed-access type's `[`,
@@ -453,6 +462,12 @@ export interface RuleDecl {
   name: string;
   body: RuleExpr;
   flags: string[];
+  // Set by the await-yield-fork transform on a generated [Await]/[Yield] family clone:
+  // the BASE rule name this fork collapses to for every DERIVED artifact (green-node
+  // type, AST type union, TM scope, tree-sitter rule, cst-match dispatch). The emitted
+  // parser keeps the distinct `name` for its memo/adoption rule identity, but reports
+  // `canon` as the node's rule name so trees stay byte-identical to the base grammar.
+  canon?: string;
 }
 
 export interface CstGrammar {

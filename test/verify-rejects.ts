@@ -35,7 +35,7 @@ function ourReach(msg: string): number | null {
 }
 
 const files = (await allTsFiles(baseDir)).sort();
-let agree = 0, early = 0, unknown = 0;
+let agree = 0, early = 0, unknown = 0, oracleCrash = 0;
 const earlies: { file: string; ourReach: number; tsFirst: number; ctx: string }[] = [];
 
 for (const file of files) {
@@ -44,7 +44,15 @@ for (const file of files) {
   let msg = '';
   try { parse(code); continue; } catch (e: any) { msg = e.message; }  // only files we FAIL
 
-  const sf = ts.createSourceFile('t.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  // the oracle itself can die on malformed input (e.g. a Debug.assert inside
+  // tsc's `await using` paths) — a crashed oracle has no verdict, count + skip
+  let sf;
+  try {
+    sf = ts.createSourceFile('t.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  } catch {
+    oracleCrash++;
+    continue;
+  }
   const diags = (sf as any).parseDiagnostics ?? [];
   if (diags.length === 0) continue;            // that's a REAL gap, handled elsewhere
 
@@ -64,6 +72,7 @@ console.log(`Single-file error-tests we fail: ${agree + early + unknown}`);
 console.log(`  AGREE (reach >= TS first error - ${SLACK}) : ${agree}  ← rejected for the right reason`);
 console.log(`  EARLY (bail before TS's error)            : ${early}  ← hidden gap: valid code we can't parse`);
 console.log(`  UNKNOWN (no offset in our error)          : ${unknown}`);
+if (oracleCrash > 0) console.log(`  ORACLE-CRASH (tsc threw; no verdict)      : ${oracleCrash}`);
 if (earlies.length) {
   console.log(`\n===== EARLY (hidden gaps) =====`);
   earlies.sort((a, b) => (a.tsFirst - a.ourReach) - (b.tsFirst - b.ourReach));

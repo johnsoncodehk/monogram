@@ -1,6 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { createLexer, type Token } from './gen-lexer.ts';
+import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── CST output ──
 
@@ -36,6 +37,9 @@ export function getText(node: { offset: number; end: number }, source: string): 
 }
 
 export function createParser(grammar: CstGrammar) {
+  // [Await]/[Yield] fork — same rule-identity space as the emitted parser (no-op
+  // without ctx markers). Keeps the interp ≡ emit equivalence the gates compare.
+  grammar = withAwaitYield(grammar);
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
   // The lexer is a separate stage, built from the same grammar (token defs + lexer hints).
@@ -846,14 +850,19 @@ export function createParser(grammar: CstGrammar) {
       }
       if (tok.type === '$templateHead') {
         const children: CstChild[] = [];
+        const save = pos;
         if (++pos > maxPos) maxPos = pos;
         children.push({ tokenType: '$templateHead', offset: tok.offset, end: tok.offset + tok.text.length });
         const interpRule = currentPrattContext ?? findExprRule();
+        // a head COMMITS to the full chain: every substitution must hold an
+        // expression and every span must continue (middle) or close (tail) — an
+        // unterminated template is a parse failure, not a shorter match
         while (true) {
           const exprNode = parseRule(interpRule);
-          if (exprNode) children.push(exprNode);
+          if (!exprNode) { pos = save; return null; }
+          children.push(exprNode);
           const next = peek();
-          if (!next) break;
+          if (!next) { pos = save; return null; }
           if (next.type === '$templateMiddle') {
             if (++pos > maxPos) maxPos = pos;
             children.push({ tokenType: '$templateMiddle', offset: next.offset, end: next.offset + next.text.length });
@@ -864,10 +873,11 @@ export function createParser(grammar: CstGrammar) {
             children.push({ tokenType: '$templateTail', offset: next.offset, end: next.offset + next.text.length });
             break;
           }
-          break;
+          pos = save;
+          return null;
         }
-        const startOff = children.length > 0 ? childOffset(children[0]) : offset();
-        const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
+        const startOff = childOffset(children[0]);
+        const endOff = childEnd(children[children.length - 1]);
         return { rule: '$template', children, offset: startOff, end: endOff };
       }
       return null;
@@ -950,7 +960,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          bestNode = { rule: rule.name, children, offset: startOff, end: endOff };
+          bestNode = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestPos = pos;
         }
       }
@@ -978,7 +988,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestAtomPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          node = { rule: rule.name, children, offset: startOff, end: endOff };
+          node = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestAtomPos = pos;
         }
       }
@@ -1002,7 +1012,7 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             node = {
-              rule: rule.name,
+              rule: (rule.canon ?? rule.name),
               children: [node, ...children],
               offset: node.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : node.end,
@@ -1044,7 +1054,7 @@ export function createParser(grammar: CstGrammar) {
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
               const rhs = parsePratt(rule, info.rbp);
               if (rhs && pos > bestNudPos) {
-                lhs = { rule: rule.name, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
+                lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 bestNudPos = pos;
               }
             }
@@ -1056,7 +1066,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestNudPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          lhs = { rule: rule.name, children, offset: startOff, end: endOff };
+          lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestNudPos = pos;
         }
       }
@@ -1114,7 +1124,7 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             lhs = {
-              rule: rule.name,
+              rule: (rule.canon ?? rule.name),
               children: [lhs, ...children],
               offset: lhs.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end,
@@ -1137,7 +1147,7 @@ export function createParser(grammar: CstGrammar) {
             if (!tailClosed) {                                   // can't postfix an update expr (`a++ --`)
               if (++pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
-              lhs = { rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
+              lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
               tailClosed = true;
               matched = true;
             }
@@ -1160,7 +1170,7 @@ export function createParser(grammar: CstGrammar) {
             const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
             const rhs = parsePratt(rule, info.rbp);
             if (rhs) {
-              lhs = { rule: rule.name, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
               matched = true;
             } else {
               pos = ledSaved;
@@ -1484,13 +1494,27 @@ export function createParser(grammar: CstGrammar) {
 
   // API parity with the emitted engine's handle surface: edit() re-parses and
   // updates the SAME tree object in place (the handle is the document's tree —
-  // edit returns nothing, exactly like the emitted engine; no reuse here).
-  const edit = (cst: { rule: string; children: unknown[]; offset: number; end: number }, source: string): void => {
-    const next = parse(source) as typeof cst;
+  // edit returns nothing, exactly like the emitted engine; no reuse here), and
+  // both are TOTAL: input errors land in the errors field, never a throw. The
+  // interpreter has no recovery machinery, so an invalid text degrades to a
+  // zero-width $error root plus the strict diagnostic.
+  type Cst = { rule: string; children: unknown[]; offset: number; end: number; errors?: { offset: number; end: number; message: string }[] };
+  const parseTotal = (source: string): Cst => {
+    try {
+      const t = parse(source) as Cst;
+      t.errors = [];
+      return t;
+    } catch (e) {
+      return { rule: '$error', children: [], offset: 0, end: 0, errors: [{ offset: 0, end: 0, message: (e as Error).message }] };
+    }
+  };
+  const edit = (cst: Cst, source: string): void => {
+    const next = parseTotal(source);
     cst.rule = next.rule; cst.children = next.children;
     cst.offset = next.offset; cst.end = next.end;
+    cst.errors = next.errors;
   };
-  return { parse, edit, tokenize, profCounts };
+  return { parse, parseTotal, edit, tokenize, profCounts };
 }
 
 // ── Helpers ──

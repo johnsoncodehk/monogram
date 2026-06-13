@@ -127,6 +127,9 @@
       "include": "#extends-typekw"
     },
     {
+      "include": "#unique-typekw"
+    },
+    {
       "include": "#as-typekw"
     },
     {
@@ -166,9 +169,6 @@
       "include": "#scope-keyword-operator-expression-infer"
     },
     {
-      "include": "#scope-keyword-operator-expression-as"
-    },
-    {
       "include": "#scope-keyword-operator-expression-satisfies"
     },
     {
@@ -203,9 +203,6 @@
     },
     {
       "include": "#scope-storage-modifier"
-    },
-    {
-      "include": "#scope-storage-modifier-accessibility"
     },
     {
       "include": "#scope-keyword-other-extends"
@@ -453,7 +450,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bexport)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bexport)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.ts"
@@ -465,7 +462,7 @@
           "name": "punctuation.definition.string.begin.regexp.ts"
         }
       },
-      "end": "(/)([gimsuydv]*)",
+      "end": "(/)([a-z]*)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.string.end.regexp.ts"
@@ -2400,7 +2397,7 @@
           "name": "keyword.operator.expression.keyof.ts"
         }
       },
-      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -2415,7 +2412,22 @@
           "name": "keyword.other.extends.extends.ts"
         }
       },
-      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "patterns": [
+        {
+          "include": "#type"
+        }
+      ]
+    },
+    "unique-typekw": {
+      "name": "meta.type.unique.ts",
+      "begin": "\\b(unique)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.unique.ts"
+        }
+      },
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -2424,13 +2436,13 @@
     },
     "as-typekw": {
       "name": "meta.type.as.ts",
-      "begin": "\\b(as)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
+      "begin": "\\b(as)\\b",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.expression.as.ts"
         }
       },
-      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -2445,7 +2457,7 @@
           "name": "keyword.other.extends.implements.ts"
         }
       },
-      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -2460,7 +2472,7 @@
           "name": "keyword.operator.expression.satisfies.ts"
         }
       },
-      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -2504,7 +2516,7 @@
       ]
     },
     "scope-keyword-operator-expression": {
-      "match": "\\b(typeof|new|void|instanceof|delete)\\b",
+      "match": "\\b(typeof|new|void|as|instanceof|delete)\\b",
       "name": "keyword.operator.expression.ts"
     },
     "scope-keyword-operator-expression-is": {
@@ -2523,20 +2535,12 @@
       "match": "\\b(infer)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
       "name": "keyword.operator.expression.ts"
     },
-    "scope-keyword-operator-expression-as": {
-      "match": "\\b(as)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
-      "name": "keyword.operator.expression.ts"
-    },
     "scope-keyword-operator-expression-satisfies": {
       "match": "\\b(satisfies)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$)",
       "name": "keyword.operator.expression.ts"
     },
     "scope-storage-modifier": {
-      "match": "\\b(readonly|async|static|declare)\\b",
-      "name": "storage.modifier.ts"
-    },
-    "scope-storage-modifier-accessibility": {
-      "match": "\\b(abstract|public|private|protected|override|accessor)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
+      "match": "\\b(readonly|abstract|async|public|private|protected|static|override|accessor|declare)\\b",
       "name": "storage.modifier.ts"
     },
     "scope-keyword-other-extends": {
@@ -2556,7 +2560,7 @@
       "name": "constant.language.null.ts"
     },
     "scope-support-type-primitive": {
-      "match": "\\b(void|symbol|string|number|boolean|object|bigint|any|unknown|never)\\b",
+      "match": "\\b(void|string|number|boolean|object|symbol|bigint|any|unknown|never)\\b",
       "name": "support.type.primitive.ts"
     },
     "scope-keyword-other": {
@@ -2628,11 +2632,11 @@
       "name": "storage.type.enum.ts"
     },
     "scope-storage-type-namespace": {
-      "match": "\\b(namespace|module)\\b",
+      "match": "\\b(module|namespace)\\b",
       "name": "storage.type.namespace.ts"
     },
     "scope-support-variable": {
-      "match": "\\b(module|console|window|document|process|require|exports|global|globalThis)\\b",
+      "match": "\\b(module|global|console|window|document|process|require|exports|globalThis)\\b",
       "name": "support.variable.ts"
     },
     "scope-keyword-control-from-from": {
@@ -2961,9 +2965,6 @@
           "include": "#scope-keyword-operator-expression-infer"
         },
         {
-          "include": "#scope-keyword-operator-expression-as"
-        },
-        {
           "include": "#scope-keyword-operator-expression-satisfies"
         },
         {
@@ -3157,9 +3158,6 @@
           "include": "#scope-keyword-operator-expression-infer"
         },
         {
-          "include": "#scope-keyword-operator-expression-as"
-        },
-        {
           "include": "#scope-keyword-operator-expression-satisfies"
         },
         {
@@ -3246,7 +3244,7 @@
     },
     "regex": {
       "name": "string.regexp.ts",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bin)|(?<=\\bas)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bexport)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bis)|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\bstatic)|(?<=\\babstract)|(?<=\\boverride)|(?<=\\baccessor)|(?<=\\bexport)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.ts"
@@ -3255,7 +3253,7 @@
           "name": "punctuation.definition.string.begin.regexp.ts"
         }
       },
-      "end": "(/)([gimsuydv]*)",
+      "end": "(/)([a-z]*)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.string.end.regexp.ts"
@@ -3390,7 +3388,7 @@
           "include": "$self"
         }
       ],
-      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.!*]|(?:is|keyof|typeof|readonly|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|symbol)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{;\\-.!*=])|(?!(?:if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
+      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.!*]|(?:is|keyof|typeof|readonly|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{;\\-.!*=])|(?!(?:if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
     },
     "type-object": {
       "name": "meta.object-type.ts",
@@ -3474,7 +3472,7 @@
           "name": "keyword.operator.expression.is.ts"
         }
       },
-      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "end": "(?=[)}{\\],;=>]|\\b(?:is|keyof|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
       "patterns": [
         {
           "include": "#type"
