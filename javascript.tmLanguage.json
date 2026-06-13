@@ -241,7 +241,7 @@
           "name": "punctuation.definition.string.begin.regexp.js"
         }
       },
-      "end": "(/)([gimsuydv]*)",
+      "end": "(/)([a-z]*)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.string.end.regexp.js"
@@ -2190,7 +2190,7 @@
           "name": "punctuation.definition.string.begin.regexp.js"
         }
       },
-      "end": "(/)([gimsuydv]*)",
+      "end": "(/)([a-z]*)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.string.end.regexp.js"

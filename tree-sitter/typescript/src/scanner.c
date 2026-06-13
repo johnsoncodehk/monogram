@@ -50,7 +50,7 @@ static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
 // regex-vs-division decision is already made by the LR context. We only
 // need to scan the literal body here.
 //
-// Regex flag characters (derived from the token pattern): "gimsuydv"
+// Regex flag characters (derived from the token pattern): "gimsuyd"
 // Division-after texts (informational; LR ctx handles these): ) ] ++ -- this super true false null undefined
 // Regex-after keywords (informational): in of instanceof typeof delete void await yield throw return case do else new
 static bool scan_regex(TSLexer *lexer) {
@@ -69,7 +69,7 @@ static bool scan_regex(TSLexer *lexer) {
     advance(lexer);
   }
   // Trailing flag characters.
-  const char *flags = "gimsuydv";
+  const char *flags = "gimsuyd";
   while (lexer->lookahead != 0 && strchr(flags, (char)lexer->lookahead) != NULL) advance(lexer);
   lexer->result_symbol = REGEX_LITERAL;
   lexer->mark_end(lexer);

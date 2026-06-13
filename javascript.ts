@@ -123,7 +123,7 @@ const Template     = token(seq('`', star(altPattern(noneOf('`', '\\', '$'), seq(
 });
 const regexEscape = seq('\\', noneOf(lineTerminator));
 const regexClassBody = star(altPattern(noneOf(']', '\\', '\n'), regexEscape));
-const Regex_       = token(seq('/', plus(altPattern(noneOf('/', '\\', '[', '\n'), regexEscape, seq('[', regexClassBody, ']'))), '/', star(oneOf('g', 'i', 'm', 's', 'u', 'y', 'd', 'v'))), {
+const Regex_       = token(seq('/', plus(altPattern(noneOf('/', '\\', '[', '\n'), regexEscape, seq('[', regexClassBody, ']'))), '/', star(identPart)), {   // flags: maximal-munch any IdentifierPart run (tsc lexes flags leniently; validity is a checker rule)
   regex: true,
   regexContext: {
     divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],

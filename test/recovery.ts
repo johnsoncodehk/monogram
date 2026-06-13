@@ -45,7 +45,9 @@ const VALID: string[] = [
 ];
 for (const f of [
   '/tmp/ts-repo/tests/cases/conformance/fixSignatureCaching.ts',
-  '/tmp/ts-repo/tests/cases/conformance/parser/ecmascript5/parserRealSource7.ts',
+  // parserRealSource12 (not 7): #7 has `new TypeLink[]` which is a tsc PARSE ERROR — it
+  // only "passed" here by exploiting the mid-line opt(';') split that statement-ASI removes.
+  '/tmp/ts-repo/tests/cases/conformance/parser/ecmascript5/parserRealSource12.ts',
 ]) if (existsSync(f)) VALID.push(readFileSync(f, 'utf-8'));
 let validN = 0;
 for (const text of VALID) {

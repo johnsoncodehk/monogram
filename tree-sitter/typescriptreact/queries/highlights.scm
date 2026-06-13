@@ -95,7 +95,6 @@
   "instanceof" "satisfies" "asserts" "typeof" "delete" "keyof" "infer" "void"
   "new" "as" "is"
 ] @keyword.operator
-"symbol" @type.builtin
 [
   "undefined" "false" "true" "null"
 ] @constant.builtin

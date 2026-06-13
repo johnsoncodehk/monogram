@@ -372,7 +372,6 @@
             "void": "operator",
             "this": "keyword",
             "unique": "keyword",
-            "symbol": "keyword",
             "import": "keyword",
             "function": "keyword",
             "in": "keyword",
@@ -433,6 +432,7 @@
             "number": "keyword",
             "boolean": "keyword",
             "object": "keyword",
+            "symbol": "keyword",
             "bigint": "keyword",
             "any": "keyword",
             "unknown": "keyword",
@@ -651,10 +651,6 @@
             "unique": {
               "token": "keyword",
               "switchTo": "@root"
-            },
-            "symbol": {
-              "token": "keyword",
-              "switchTo": "@value"
             },
             "import": {
               "token": "keyword",
@@ -900,6 +896,10 @@
               "token": "keyword",
               "switchTo": "@value"
             },
+            "symbol": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
             "bigint": {
               "token": "keyword",
               "switchTo": "@value"
@@ -1061,7 +1061,7 @@
         "include": "@exprBody"
       },
       [
-        "/(?:[^/\\\\\\[\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])+/[gimsuydv]*",
+        "/(?:[^/\\\\\\[\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])+/(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
         {
           "token": "regexp",
           "switchTo": "@value"
@@ -1158,7 +1158,6 @@
             "void": "operator",
             "this": "keyword",
             "unique": "keyword",
-            "symbol": "keyword",
             "import": "keyword",
             "function": "keyword",
             "in": "keyword",
@@ -1220,6 +1219,7 @@
             "number": "keyword",
             "boolean": "keyword",
             "object": "keyword",
+            "symbol": "keyword",
             "bigint": "keyword",
             "any": "keyword",
             "unknown": "keyword",
@@ -1248,7 +1248,7 @@
         }
       ],
       [
-        "/(?:[^/\\\\\\[\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])+/[gimsuydv]*",
+        "/(?:[^/\\\\\\[\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])+/(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
         "regexp"
       ],
       [

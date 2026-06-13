@@ -19,6 +19,11 @@ function tsFnArms(nameParts, body) {
     ['async', 'function', '*', ...nameParts, opt(TypeParams), '(', sep(asyncGenCtx(Param), ','), ')', opt(':', Type), asyncGenCtx(body)],
   ];
 }
+
+// Statement ASI terminator: a `;`, OR a line-terminator before the next token (newline
+// ASI), OR the next token is `}` (block end). A same-line non-`;`/`}` token can NOT end
+// the statement, so a mid-line split (`var x = a[]`) stays one statement (tsc-shaped).
+const asi = () => alt([';'], [not(sameLine)], [not(not('}'))]);
 // JavaScript is the SUBSET / base of the ECMAScript family; TypeScript is the
 // SUPERSET (JS + a type layer). The shared, type-free vocabulary — token consts,
 // the `notReserved`/`notReservedExpr` reserved-word guards, the precedence ladder
@@ -126,7 +131,7 @@ const Type = rule($ => {
     HexNumber, OctalNumber, BinaryNumber, BigInt_,
     ['-', alt(Number_, BigInt_)],
     'true', 'false', 'null', 'undefined', 'void', 'this',
-    ['unique', 'symbol'],
+    ['unique', $],   // `unique` is a general prefix type operator (tsc parses `unique <Type>`); `unique symbol` is the checker-valid case
     ['import', '(', $, ')'],
     Template,
     [$, sameLine, '[', $, ']'],   // indexed access T[K] — `[` must be on the same line (no ASI)
@@ -221,6 +226,9 @@ const heritageClauses = many(alt(
 
 const NewTarget = rule($ => [
   Ident,
+  // a `new` expression is itself a valid new-target (NewExpression : `new` NewExpression),
+  // so `new new Foo()()` / `new new f` chain — mirrors the Expr `new` arm but recurses here.
+  ['new', $, opt(alt(['<', sep(Type, ','), '>', opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')']))],
   [$, '.', Ident],
   [$, '[', Expr, ']'],
   ['(', Expr, ')'],
@@ -263,7 +271,7 @@ const Expr = rule($ => [
   // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`
   [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, ['<', sep(Type, ','), '>', '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
   [$, '[', $, ']'],
-  [$, '!'],   // TS non-null assertion — a LHS-chain tail (access can follow: `x!.y`, `x!()`), unlike update `++`/`--`
+  [$, sameLine, '!'],   // TS non-null assertion — RESTRICTED (no line break before `!`, like postfix ++/--); a LHS-chain tail (access can follow: `x!.y`, `x!()`)
   [$, '?', $, ':', $],
   [$, 'as', Type],
   [$, 'instanceof', $],
@@ -292,7 +300,7 @@ const Expr = rule($ => [
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   [$, 'satisfies', Type],
-  ['import', alt(['(', $, ')'], ['.', 'meta'])],
+  ['import', alt(['(', $, ')'], ['.', 'meta'], ['<', sep(Type, ','), '>', opt('(', sep($, ','), ')')])],   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
   ...tsFnArms([opt(notReserved, Ident)], Block),
@@ -411,25 +419,25 @@ const SwitchCase = rule($ => [
 
 const Stmt = rule($ => [
   Block,
-  [alt('let', 'const', 'var'), sep(Binding, ','), opt(';')],
+  [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
   ['if', '(', Expr, many(',', Expr), ')', $, opt('else', $)],
   ['for', opt('await'), '(', ForHead, ')', $],
   ['while', '(', Expr, many(',', Expr), ')', $],
   ['do', $, 'while', '(', Expr, many(',', Expr), ')', opt(';')],
   ['switch', '(', Expr, many(',', Expr), ')', '{', many(SwitchCase), '}'],
-  ['return', opt(Expr, many(',', Expr)), opt(';')],
-  ['throw', Expr, many(',', Expr), opt(';')],
+  ['return', opt(Expr, many(',', Expr)), asi()],
+  ['throw', Expr, many(',', Expr), asi()],
   // The label is a RESTRICTED production (`break [no LineTerminator here] Label`)
   // and a label can't be a reserved word — without both, `break` ⏎ `case "X":`
   // inside a switch eats `case` as the label and the whole switch cascades.
-  ['break', opt(sameLine, notReserved, Ident), opt(';')],
-  ['continue', opt(sameLine, notReserved, Ident), opt(';')],
+  ['break', opt(sameLine, notReserved, Ident), asi()],
+  ['continue', opt(sameLine, notReserved, Ident), asi()],
   ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
   [Ident, ':', $],
   ';',
-  ['debugger', opt(';')],
+  ['debugger', asi()],
   ['with', '(', Expr, ')', $],
-  [opt('await'), 'using', sep(Binding, ','), opt(';')],
+  [opt('await'), 'using', sep(Binding, ','), asi()],
   Decl,
   // ExpressionStatement lookahead restriction (ES2023 §14.5): a statement may not
   // begin with `function` / `async function` — those are declarations at statement
@@ -441,7 +449,7 @@ const Stmt = rule($ => [
   // (extends-expression heritage, bare `;` class elements, decorator placements), so
   // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
   // declaration arm first, then guard.
-  [not(alt('function', 'class', ['async', 'function'])), Expr, many(',', Expr), opt(';')],
+  [not(alt('function', 'class', ['async', 'function'])), Expr, many(',', Expr), asi()],
 ]);
 
 // ── Type Parameters ──
@@ -563,18 +571,32 @@ const EnumMember = rule($ => [
   [MemberName, opt('=', Expr)],
 ]);
 
+// Per-specifier `type` modifier (`import { type A }`, `export { type A as B }`). A LONE
+// `type` is the specifier NAME (`{ type }`, `{ type as B }`, `{ type, x }`), so the
+// modifier reading fires only when a real binding name follows on the same line — the
+// not(',', '}', 'as') guard keeps the bare-name reading reachable.
+const typeMod = () => opt('type', sameLine, not(alt(',', '}', 'as')));
 const ImportSpecifier = rule($ => [
-  [Ident, opt('as', Ident)],
+  [typeMod(), Ident, opt('as', Ident)],
   // arbitrary module namespace identifier (ES2022): `import { "str" as x }`. The
   // string form REQUIRES the rename (`{ "a" }` / `{ "a" as "b" }` are tsc parse
   // errors on the import side — the local binding must be an identifier).
-  [String_, 'as', Ident],
+  [typeMod(), String_, 'as', Ident],
 ]);
 
 // Export specifiers are WIDER than import ones: a ModuleExportName (identifier or
 // string) is valid on BOTH sides and may stand alone (`export { x as "s" }`,
 // `export { "a" as "b" } from "m"`, `export { "a" }` — all tsc parse-clean).
 const ExportSpecifier = rule($ => [
+  // `type` modifier disambiguation (tsc's multi-token lookahead). `type` is the modifier
+  // when followed by a real name that ISN'T `as` (arm 1), or by `as` that is itself the
+  // name — `{ type as }`, no rename target after (arm 2). Otherwise `type` is the name:
+  // `{ type }`, `{ type as B }` (renamed), `{ type, x }` all take arm 3.
+  ['type', sameLine, not('as'), not(alt(',', '}')), alt(Ident, String_), opt('as', alt(Ident, String_))],
+  // name is `as`: `{ type as }` (no rename) or `{ type as as Y }` (DOUBLE as = rename).
+  // A single `{ type as Y }` is NOT this arm — the not(Ident/String) / second-`as` guard
+  // rejects it so it falls to arm 3 as name=`type` renamed to Y.
+  ['type', sameLine, 'as', alt([not(alt(Ident, String_))], ['as', alt(Ident, String_)])],
   [alt(Ident, String_), opt('as', alt(Ident, String_))],
 ]);
 
@@ -603,7 +625,7 @@ const Decl = rule($ => [
   // tsc parses REPEATED `extends` clauses on an interface (`interface I extends A
   // extends B`) — the parser accepts them and the checker reports the duplicate;
   // mirror with many() rather than a single opt() clause.
-  ['interface', notReserved, Ident, opt(TypeParams), many('extends', sep(Type, ',')), '{', many(InterfaceMember, opt(alt(';', ','))), '}'],
+  ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, opt(alt(';', ','))), '}'],   // shared heritage: repeated/order-free extends+implements, `extends Foo?.Bar`, empty `extends {`
   ['type', notReserved, Ident, opt(TypeParams), '=', Type, opt(';')],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
   // class decl: optional decorators + optional `abstract`. gen-tm expands the
   // opt()/many() to recover the `class Ident … { … }` shape for highlighting.
@@ -629,10 +651,20 @@ const Decl = rule($ => [
   // its params/body carry the [Await] context — otherwise this lenient prefix would
   // catch the async arm's await-context rejections (e.g. `async function f(a=await)`)
   // and re-accept them as a plain function with a stray `async` modifier.
-  [alt('abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor'), $],
+  // A leading modifier soup before a declaration — mirrors the decorator-prefix arm
+  // below (var/let/const/using are Stmt-level forms `$`=Decl alone can't reach). tsc
+  // parses the soup before any of these (`accessor var x`, `public using y`); invalid
+  // combinations are the checker's line. Restricted to Decl + var/let/const + using —
+  // NOT an arbitrary expression statement (`public someExpr;` must stay a reject).
+  [many1(alt('abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor')), alt(
+    $,
+    [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
+    [opt('await'), 'using', Binding, many(',', Binding), opt(';')],
+  )],
   ['async', not('function'), $],
   ['namespace', notReserved, Ident, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([notReserved, Ident, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
+  ['export', 'as', 'namespace', notReserved, Ident, opt(';')],   // UMD NamespaceExportDeclaration — BEFORE the lenient `export alt($, Stmt)` (else `as` wraps as an expr-statement)
   ['export', alt($, Stmt)],
   // decorators before export/default/etc. — tsc allows either order. The variable-
   // statement alternates mirror tsc's parseDeclaration surface: after decorators it
@@ -641,7 +673,7 @@ const Decl = rule($ => [
   // statements (`@dec if (…)` is a tsc parse error).
   [many1(DecoratorExpr), alt(
     $,
-    [alt('let', 'const', 'var'), sep(Binding, ','), opt(';')],
+    [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
     // `using` requires a real binding here: `@dec using x` is parse-clean but
     // `using 1` is a tsc parse error (zero-binding `var;` by contrast is clean,
     // so the var/let/const alternative above keeps the lenient sep()).
@@ -653,9 +685,10 @@ const Decl = rule($ => [
     ...tsFnArms([opt(notReserved, Ident)], alt(Block, [not('{'), opt(';')])),  // function
     ['abstract', 'class', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named abstract class
     ['abstract', 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous abstract class
+    ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, opt(alt(';', ','))), '}'],   // export default interface (interface is not an Expr)
     [Expr, opt(';')],   // catch-all: export default <expr>
   )],
-  ['export', '*', alt(['from', String_, opt(';')], ['as', Ident, 'from', String_, opt(';')])],
+  ['export', opt('type'), '*', alt(['from', String_, opt(';')], ['as', alt(Ident, String_), 'from', String_, opt(';')])],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
   ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), opt(';')],
   ['export', '=', Expr, opt(';')],
   ['export', 'type', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), opt(';')],
@@ -663,7 +696,8 @@ const Decl = rule($ => [
   ['import', alt(
     [ImportClause, 'from', String_, opt(';')],          // import X from "m"  (also `import type from "m"` = default named `type`)
     ['type', ImportClause, 'from', String_, opt(';')],  // import type X from "m"
-    [Ident, '=', Expr, opt(';')],                       // import x = expr
+    ['type', Ident, '=', Expr, opt(';')],               // import type X = require(…) / = ns.Foo (type-only import-equals)
+    [Ident, '=', Expr, opt(';')],                       // import x = expr  (also `import type = …` where `type` is the binding name)
     [String_, opt(';')],                                // import "m"
   )],
   [many(DecoratorExpr), 'export', alt($, Stmt)],

@@ -33,6 +33,7 @@ module.exports = grammar({
     [$.stmt, $.decl],
     [$.expr, $.decl],
     [$.program, $.stmt],
+    [$.new_target],
     [$.expr, $.param],
     [$.expr, $.new_target],
     [$.expr, $.block],

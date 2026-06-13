@@ -520,6 +520,7 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
  */
 const LR_CONFLICT_CLOSURE: string[][] = [
   ['expr'], ['stmt'], ['stmt', 'decl'], ['expr', 'decl'], ['program', 'stmt'],
+  ['new_target'],   // nested `new new Foo()` — NewTarget's recursive leading-`new` arm self-conflicts
   ['type', 'type_param'], ['type_param'], ['expr', 'param'], ['expr', 'new_target'],
   ['expr', 'block'], ['expr', 'member_name'], ['expr', 'prop'], ['member_name', 'stmt'],
   ['decl'], ['binding'], ['type'], ['type', 'typeof_ref'], ['type', 'param'],
