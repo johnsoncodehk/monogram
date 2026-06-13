@@ -123,7 +123,10 @@ module.exports = grammar({
       $.octal_number,
       $.binary_number,
       $.big_int,
-      seq(optional("async"), "function", optional("*"), optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("function", optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("function", "*", optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("async", "function", optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
+      seq("async", "function", "*", optional(field('name', $.ident)), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", $.block),
       seq(optional($.decorator_expr), "class", field('name', $.ident), repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}"),
       seq(optional($.decorator_expr), "class", repeat(seq("extends", optional(seq(choice($.class_heritage), repeat(seq(",", choice($.class_heritage))), optional(","))))), "{", repeat($.class_member), "}")
     ),

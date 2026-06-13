@@ -321,7 +321,13 @@ const Expr = rule($ => [
   ['import', alt(['(', $, ')'], ['.', 'meta'])],
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
-  [opt('async'), 'function', opt('*'), opt(Ident), '(', sep(Param, ','), ')', Block],
+  // function expression, 4-way SPLIT on async × generator so each routes its params
+  // and body to the right [Await]/[Yield] family (plain resets; a generator's params
+  // and body are yield-context, async await-context, async-generator both).
+  ['function', opt(Ident), '(', sep(Param, ','), ')', resetCtx(Block)],
+  ['function', '*', opt(Ident), '(', sep(yieldCtx(Param), ','), ')', yieldCtx(Block)],
+  ['async', 'function', opt(Ident), '(', sep(awaitCtx(Param), ','), ')', awaitCtx(Block)],
+  ['async', 'function', '*', opt(Ident), '(', sep(asyncGenCtx(Param), ','), ')', asyncGenCtx(Block)],
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`); decorator dimension collapsed via opt(DecoratorExpr).
   [opt(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
