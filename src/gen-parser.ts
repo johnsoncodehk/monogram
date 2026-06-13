@@ -308,7 +308,8 @@ export function createParser(grammar: CstGrammar) {
 
   // Maximum binding power for non-operator LED patterns (member access, call, etc.)
   const maxBp = (grammar.precs.length + 1) * 2;
-  const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)
+  // per-rule call profiling (diagnostic); guarded so createParser works in browsers (no `process`)
+  const PROF = typeof process !== 'undefined' && !!process.env?.PROF;
 
   // ── Precomputed per-rule analysis ──
   // Rule lookup, left-recursion, and the NUD/LED (Pratt) / atom-continuation
