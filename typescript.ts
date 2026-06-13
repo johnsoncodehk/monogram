@@ -353,6 +353,16 @@ const ForBinding = rule($ => [
   [alt([notReserved, Ident, opt('!')], BindingPattern), opt(':', Type), opt('=', exclude('in', Expr))],
 ]);
 
+// A `using` / `await using` declaration binds a BindingIdentifier ONLY (no pattern). This
+// makes `using [a] = …` fall through to the expression `using[a] = …` — which is exactly
+// how tsc reads it (sync `using` is a contextual identifier there), so the tree matches.
+// (The `await using [a]` parse-error tsc reports is statement-ASI-gated — mono still
+// splits `await using` off the pattern — so clearing it belongs with the ASI round, #24;
+// this identifier-only binding is the prerequisite that round needs.)
+const UsingBinding = rule($ => [
+  [notReserved, Ident, opt(':', Type), opt('=', Expr)],
+]);
+
 const Param = rule($ => {
   const tail = [opt('?'), opt(':', Type), opt('=', Expr)];   // ?  : T  = E
   const body = alt(
@@ -428,7 +438,7 @@ const Stmt = rule($ => [
   ';',
   ['debugger', opt(';')],
   ['with', '(', Expr, ')', $],
-  [opt('await'), 'using', sep(Binding, ','), opt(';')],
+  [opt('await'), 'using', sep(UsingBinding, ','), opt(';')],
   Decl,
   // ExpressionStatement lookahead restriction (ES2023 §14.5): a statement may not
   // begin with `function` / `async function` — those are declarations at statement
@@ -644,7 +654,7 @@ const Decl = rule($ => [
     // `using` requires a real binding here: `@dec using x` is parse-clean but
     // `using 1` is a tsc parse error (zero-binding `var;` by contrast is clean,
     // so the var/let/const alternative above keeps the lenient sep()).
-    [opt('await'), 'using', Binding, many(',', Binding), opt(';')],
+    [opt('await'), 'using', UsingBinding, many(',', UsingBinding), opt(';')],
   )],
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error).
@@ -699,7 +709,7 @@ export default defineGrammar({
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
     Stmt, Block,
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
-    Binding, ForBinding, Param, ForHead, SwitchCase,
+    Binding, ForBinding, UsingBinding, Param, ForHead, SwitchCase,
     TypeParams, TypeParam,
     Decl, InterfaceMember, ClassMember, EnumMember,
     ImportClause, ImportSpecifier, ExportSpecifier,
