@@ -148,7 +148,7 @@ const Prop = rule($ => {
   return [
     ['...', Expr],                                                     // spread
     // accessor (get/set), with any modifier soup (lenient, tsc-shaped)
-    [many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(Param, ',')), ')', opt(':', Type), Block],
+    [many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(Param, ',')), ')', opt(':', Type), opt(Block)],  // body optional: `{ get foo() }` is a tsc-clean (error-recovery) parse
     // method: modifiers?/generator?, any member name (incl `#x`, computed `[e]`), then ( … ) { … }
     [many1(propMod), opt('*'), MemberName, opt('?'), opt('!'), opt(TypeParams), ...method],
     [opt('async'), opt('*'), MemberName, opt('?'), opt('!'), opt(TypeParams), ...method],
@@ -478,7 +478,7 @@ const MemberName = rule($ => [
 // member (tsc's disambiguation): followed by '('/'='/':'/';'/'?'/'!'/'<'/'{'/'}'
 // it is the member NAME instead ('public() {}', 'static = 1'). 'declare' is a real
 // class modifier; 'export'/'in'/'out' are parse-tolerated by tsc (semantic errors).
-const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'async', 'declare', 'export', 'in', 'out'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
+const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'async', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
 const callTail = ['(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
   ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
