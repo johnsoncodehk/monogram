@@ -1,6 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { createLexer, type Token } from './gen-lexer.ts';
+import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── CST output ──
 
@@ -36,6 +37,9 @@ export function getText(node: { offset: number; end: number }, source: string): 
 }
 
 export function createParser(grammar: CstGrammar) {
+  // [Await]/[Yield] fork — same rule-identity space as the emitted parser (no-op
+  // without ctx markers). Keeps the interp ≡ emit equivalence the gates compare.
+  grammar = withAwaitYield(grammar);
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
   // The lexer is a separate stage, built from the same grammar (token defs + lexer hints).

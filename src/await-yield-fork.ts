@@ -128,6 +128,31 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
   return { ...grammar, rules: [...baseRewritten, ...forks] };
 }
 
+// Collapse the [Await]/[Yield] forks back to the base grammar for the DERIVED-artifact
+// generators (AST types / TM scopes / tree-sitter rules): drop every fork rule and
+// rewrite any reference to a fork (the base async arm's rerouted Block$A, etc.) back to
+// its base name. The result is structurally the pre-fork grammar, so those generators
+// emit byte-identically. Identity (returns the same object) when nothing is forked.
+export function dropForks(grammar: CstGrammar): CstGrammar {
+  const canonOf = new Map<string, string>();
+  for (const r of grammar.rules) if (r.canon) canonOf.set(r.name, r.canon);
+  if (canonOf.size === 0) return grammar;
+  const reref = (e: RuleExpr): RuleExpr => {
+    if (!e || typeof e !== 'object') return e;
+    switch (e.type) {
+      case 'ref': return canonOf.has(e.name) ? { type: 'ref', name: canonOf.get(e.name)! } : e;
+      case 'group': return { type: 'group', body: reref(e.body), ...(e.suppress !== undefined ? { suppress: e.suppress } : {}) };
+      case 'seq': return { type: 'seq', items: e.items.map(reref) };
+      case 'alt': return { type: 'alt', items: e.items.map(reref) };
+      case 'quantifier': return { type: 'quantifier', body: reref(e.body), kind: e.kind };
+      case 'not': return { type: 'not', body: reref(e.body) };
+      case 'sep': return { type: 'sep', element: reref(e.element), delimiter: e.delimiter };
+      default: return e;
+    }
+  };
+  return { ...grammar, rules: grammar.rules.filter(r => !r.canon).map(r => ({ ...r, body: reref(r.body) })) };
+}
+
 // Add `words` to the not(alt(...)) reserved set of a guard rule's body. The guard is
 // `not(alt('catch','class',...))` (a `not` over an `alt` of literals) or `not(literal)`.
 function addReserved(body: RuleExpr, words: string[]): RuleExpr {

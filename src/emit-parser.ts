@@ -27,6 +27,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl, PrecLevel } from './types.ts';
 import { isKeywordLiteral, collectLiterals } from './grammar-utils.ts';
 import { emitLexer } from './emit-lexer.ts';
+import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── Static analysis (re-derived; mirrors gen-parser.ts exactly) ──
 
@@ -1345,6 +1346,12 @@ class Emitter {
 // ── Top-level emit ──
 
 export function emitParser(grammar: CstGrammar): string {
+  // [Await]/[Yield] context: name-fork the body-reachable rule closure into $A/$Y/$AY
+  // families (see await-yield-fork.ts). No-op for a grammar with no ctx markers. Done
+  // HERE (not at grammar export) so the forks exist ONLY in the parser's rule identity
+  // / memo / adoption space; the derived-artifact generators see the base grammar with
+  // the (transparent-group) markers and emit byte-identically.
+  grammar = withAwaitYield(grammar);
   const a = analyze(grammar);
   const e = new Emitter(a);
   e.litT = (v: string) => a.symtab.puLitKind.get(v) ?? -1;
