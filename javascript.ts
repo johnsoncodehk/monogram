@@ -328,8 +328,8 @@ const Expr = rule($ => [
   // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
   // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
   // the spec's [no LineTerminator here] between async and the binding identifier).
-  ['async', sameLine, Ident, '=>', awaitCtx(alt($, Block))],
-  [Ident, '=>', resetCtx(alt($, Block))],
+  ['async', sameLine, awaitCtx(notReserved, Ident), '=>', awaitCtx(alt($, Block))],
+  [notReserved, Ident, '=>', resetCtx(alt($, Block))],
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   ['import', alt(['(', $, ')'], ['.', 'meta'])],

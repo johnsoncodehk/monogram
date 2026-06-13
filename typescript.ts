@@ -276,8 +276,8 @@ const Expr = rule($ => [
   // async arrow with a BARE parameter: `async err => …`. tsc requires async and the
   // parameter on the same line (`async\nx => …` is `async;` then a plain arrow — ASI).
   // Without this arm the bare form only "parsed" by splitting into two statements.
-  ['async', sameLine, Ident, '=>', awaitCtx(alt($, Block))],
-  [Ident, '=>', resetCtx(alt($, Block))],
+  ['async', sameLine, awaitCtx(notReserved, Ident), '=>', awaitCtx(alt($, Block))],
+  [notReserved, Ident, '=>', resetCtx(alt($, Block))],
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   [$, 'satisfies', Type],
