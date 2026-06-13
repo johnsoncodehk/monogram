@@ -551,7 +551,10 @@ const Decl = rule($ => [
   // name): a reserved word is not a legal declaration name (`interface void {}`,
   // `class while {}`, `enum for {}`, `namespace debugger {}` — all TS errors), while a
   // contextual keyword name (`interface any`, `class string`, `enum number`) stays valid.
-  ['interface', notReserved, Ident, opt(TypeParams), opt('extends', sep(Type, ',')), '{', many(InterfaceMember, opt(alt(';', ','))), '}'],
+  // tsc parses REPEATED `extends` clauses on an interface (`interface I extends A
+  // extends B`) — the parser accepts them and the checker reports the duplicate;
+  // mirror with many() rather than a single opt() clause.
+  ['interface', notReserved, Ident, opt(TypeParams), many('extends', sep(Type, ',')), '{', many(InterfaceMember, opt(alt(';', ','))), '}'],
   ['type', notReserved, Ident, opt(TypeParams), '=', Type, opt(';')],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
   // class decl: optional decorators + optional `abstract`. gen-tm expands the
   // opt()/many() to recover the `class Ident … { … }` shape for highlighting.
