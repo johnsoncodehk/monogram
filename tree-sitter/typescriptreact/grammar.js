@@ -154,7 +154,7 @@ module.exports = grammar({
       prec.left(18, seq($.expr, "<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">")),
       prec.left(18, seq($.expr, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
       prec.left(18, seq($.expr, ".", choice($.ident, $.private_field))),
-      prec.left(18, seq($.expr, "?.", choice($.ident, $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template))),
+      prec.left(18, seq($.expr, "?.", choice($.ident, $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template, seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
       prec.left(18, seq($.expr, "[", $.expr, "]")),
       prec.left(18, seq($.expr, "!")),
       prec.left(18, seq($.expr, "?", $.expr, ":", $.expr)),

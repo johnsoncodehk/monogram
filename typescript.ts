@@ -234,7 +234,7 @@ const Expr = rule($ => [
   [$, '(', sep($, ','), ')'],
   [$, '.', alt(Ident, PrivateField)],
   // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`
-  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
+  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, ['<', sep(Type, ','), '>', '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
   [$, '[', $, ']'],
   [$, '!'],   // TS non-null assertion — a LHS-chain tail (access can follow: `x!.y`, `x!()`), unlike update `++`/`--`
   [$, '?', $, ':', $],
