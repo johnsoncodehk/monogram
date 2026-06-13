@@ -11,7 +11,8 @@
 //  Run:  node test/check.ts            # all gates
 //        node test/check.ts yaml       # only gates whose group/name contains "yaml"
 // ─────────────────────────────────────────────────────────────────────────────
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { cpus } from 'node:os';
 
 interface Gate { group: string; name: string; args: string[] }
 const GATES: Gate[] = [
@@ -58,23 +59,39 @@ if (!gates.length) { console.error(`no gate matches "${filter}"`); process.exit(
 const lastLine = (s: string): string => { const ls = s.trimEnd().split('\n').filter((l) => l.trim()); return ls.length ? ls[ls.length - 1].trim().slice(0, 70) : ''; };
 
 interface Result { gate: Gate; ok: boolean; ms: number; summary: string; output: string }
-const results: Result[] = [];
-let curGroup = '';
-for (const gate of gates) {
-  if (gate.group !== curGroup) { curGroup = gate.group; process.stdout.write(`\n  ${curGroup}\n`); }
+
+// Each gate is an independent subprocess (it re-emits its own parser and reads its own
+// corpus), so they run CONCURRENTLY across a worker pool — the gates share no mutable
+// state and write DISTINCT /tmp/emitted-*.mjs files, so parallelism is safe and turns the
+// wall-clock from sum-of-gates into ~max(sum/pool, slowest-gate). Results stream as each
+// finishes (completion order); the final summary is printed in gate order.
+function run(gate: Gate): Promise<Result> {
   const t0 = Date.now();
-  let ok = true, output = '';
-  try { output = execFileSync('node', gate.args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 }); }
-  catch (e: any) { ok = false; output = (e.stdout ?? '') + (e.stderr ?? ''); }
-  const ms = Date.now() - t0;
-  const summary = lastLine(output);
-  results.push({ gate, ok, ms, summary, output });
-  process.stdout.write(`    ${ok ? '✓' : '✗'} ${gate.name.padEnd(22)} ${String(ms).padStart(6)}ms  ${ok ? summary : ''}\n`);
+  return new Promise((resolve) => {
+    execFile('node', gate.args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      const output = (stdout ?? '') + (stderr ?? '');
+      resolve({ gate, ok: !err, ms: Date.now() - t0, summary: lastLine(output), output });
+    });
+  });
 }
 
-const failed = results.filter((r) => !r.ok);
+const POOL = Math.max(2, cpus().length - 2);
+const results: Result[] = [];
+let next = 0;
+async function worker(): Promise<void> {
+  while (next < gates.length) {
+    const gate = gates[next++];
+    const r = await run(gate);
+    results.push(r);
+    process.stdout.write(`    ${r.ok ? '✓' : '✗'} ${(r.gate.group + '/' + r.gate.name).padEnd(34)} ${String(r.ms).padStart(6)}ms  ${r.ok ? r.summary : ''}\n`);
+  }
+}
+await Promise.all(Array.from({ length: Math.min(POOL, gates.length) }, worker));
+
+const ordered = gates.map((g) => results.find((r) => r.gate === g)!);
+const failed = ordered.filter((r) => !r.ok);
 console.log(`\n${'─'.repeat(70)}`);
-console.log(`  ${results.length - failed.length}/${results.length} gates pass` + (failed.length ? `  — FAILED: ${failed.map((f) => f.gate.name).join(', ')}` : ' ✓'));
+console.log(`  ${ordered.length - failed.length}/${ordered.length} gates pass` + (failed.length ? `  — FAILED: ${failed.map((f) => f.gate.name).join(', ')}` : ' ✓'));
 for (const f of failed) {
   console.log(`\n── ✗ ${f.gate.name} (node ${f.gate.args.join(' ')}) ──`);
   console.log(f.output.trimEnd().split('\n').slice(-25).join('\n'));
