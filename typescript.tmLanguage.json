@@ -205,9 +205,6 @@
       "include": "#scope-storage-modifier"
     },
     {
-      "include": "#scope-storage-modifier-accessibility"
-    },
-    {
       "include": "#scope-keyword-other-extends"
     },
     {
@@ -2532,11 +2529,7 @@
       "name": "keyword.operator.expression.ts"
     },
     "scope-storage-modifier": {
-      "match": "\\b(readonly|abstract|async|static|declare)\\b",
-      "name": "storage.modifier.ts"
-    },
-    "scope-storage-modifier-accessibility": {
-      "match": "\\b(public|private|protected|override|accessor)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
+      "match": "\\b(readonly|abstract|async|public|private|protected|static|override|accessor|declare)\\b",
       "name": "storage.modifier.ts"
     },
     "scope-keyword-other-extends": {

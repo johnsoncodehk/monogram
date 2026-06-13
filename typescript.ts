@@ -576,7 +576,7 @@ const Decl = rule($ => [
   // dedicated arms above (function's opt('async'), class's opt('abstract')) match
   // valid combinations first and keep their flat shape, so only otherwise-invalid
   // pairings fall to this modifier-prefix arm.
-  [alt('async', 'abstract'), $],
+  [alt('async', 'abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor'), $],
   ['namespace', notReserved, Ident, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([notReserved, Ident, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
   ['export', alt($, Stmt)],
