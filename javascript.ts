@@ -89,7 +89,13 @@ const BigInt_      = token(seq(digits, 'n', numericTailGuard), { scope: 'constan
 // `[0-9]`/`\d` prefix, so without this the token would lose its `constant.numeric` scope.
 const fracTail = seq('.', star(digit), star(seq('_', plus(digit))));
 const expTail = seq(oneOf('e', 'E'), optPattern(oneOf('+', '-')), digits);
-const Number_      = token(seq(altPattern(seq(digits, optPattern(fracTail)), seq('.', digits)), optPattern(expTail), numericTailGuard), { scope: 'constant.numeric.decimal' });
+// A decimal integer part is a single `0` or a `[1-9]`-led run — a leading `0` followed by
+// a digit (legacy octal `0123`, leading-zero decimal `09`) is NOT a decimal literal: with
+// intPart='0', the trailing digit trips numericTailGuard so the token fails to match and
+// the lexer rejects it (tsc's scanner behavior). fracTail/expTail/BigInt keep `digits`
+// (leading zeros legal there: `0.012`, `1e007`, `0n`).
+const intPart = altPattern('0', seq(range('1', '9'), star(digit), star(seq('_', plus(digit)))));
+const Number_      = token(seq(altPattern(seq(intPart, optPattern(fracTail)), seq('.', digits)), optPattern(expTail), numericTailGuard), { scope: 'constant.numeric.decimal' });
 // A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must
 // match their strict forms — a `\u{cp}` with cp ≤ 0x10FFFF, a 4-hex `\uXXXX`, or a
 // 2-hex `\xXX` — while `\` + any *other* char (\n, \\, \q non-escape, line

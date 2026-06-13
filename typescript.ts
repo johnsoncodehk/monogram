@@ -105,7 +105,7 @@ const Type = rule($ => {
   const fnType = [opt(TypeParams), '(', sep(Param, ','), ')', '=>', $];  // (a: T) => R  /  <T>(…) => R
   return [
     [Ident, opt('is', $)],   // T  |  type predicate `x is T`
-    [$, '<', sep($, ','), '>'],
+    [$, sameLine, '<', sep($, ','), '>'],   // type-arg application T<A> — `<` must be on the same line (no ASI), like the postfix `[`/`!` arms below
     [$, sameLine, '[', ']'],   // array type T[] — `[` must be on the same line (no ASI)
     [$, '|', $],
     [$, '&', $],
