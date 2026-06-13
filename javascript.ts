@@ -177,7 +177,13 @@ export {
 // (let/static/implements/yield/await/…) — those ARE valid identifiers in some
 // context a CFG can't detect (sloppy mode, non-generator/non-async), so forbidding
 // them here would reject valid code (`var let = 1`, `function f(yield) {}`).
-export const notReserved = reservableNot(alt(
+// NOT reservable: tsc's PARSER accepts await/yield (and let/static/…) as binding
+// identifiers even inside an async/generator body — the "reserved word" rule there is
+// a CHECKER diagnostic, not a parse error (`async function f(){ let await = 1 }`,
+// `function* g(){ function yield(){} }` both parse). The [Await]/[Yield] reservation
+// that IS a parse error lives at expression position (notReservedExpr), where `await`
+// must be the operator and so needs an operand.
+export const notReserved = not(alt(
   'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default',
   'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for',
   'function', 'if', 'import', 'in', 'instanceof', 'new', 'null', 'return', 'super',
@@ -328,8 +334,8 @@ const Expr = rule($ => [
   // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
   // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
   // the spec's [no LineTerminator here] between async and the binding identifier).
-  ['async', sameLine, awaitCtx(notReserved, Ident), '=>', awaitCtx(alt($, Block))],
-  [notReserved, Ident, '=>', resetCtx(alt($, Block))],
+  ['async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(alt($, Block))],
+  [notReservedExpr, Ident, '=>', resetCtx(alt($, Block))],
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   ['import', alt(['(', $, ')'], ['.', 'meta'])],
