@@ -326,6 +326,23 @@ export interface IndentConfig {
   // control sigil, not content; absent → the block-scalar token's own scope (introducer reads as the
   // body string). The body always keeps the token scope; only the introducer capture is re-scoped.
   blockScalar?: { introducers: string[]; token: string; documentMarkers?: string[]; indicatorScope?: string };
+  // Set false to disable the YAML flow `:` key-separator carve-out (a `:` glued after a quoted
+  // scalar / flow-close is forced punctuation). Indentation grammars with `:name`-shaped tokens
+  // (bound-attribute shorthand) need those to survive after values. Default true (YAML behavior).
+  flowColonSeparator?: boolean;
+  // A comment introducer immediately followed by this string is NOT a comment line — it falls
+  // through to ordinary tokenization (e.g. comment '//' + commentExcept '!' → `//!` doc-comment
+  // lines lex as real tokens and stay visible to the indent stack, while `//` lines vanish).
+  commentExcept?: string;
+  // Raw content blocks: a line-TRAILING introducer (`tag:mode` at end of line, or a bare `:mode`
+  // at the line lead) captures all following more-indented lines as ONE verbatim token — the
+  // analogue of `blockScalar` for languages whose raw regions are introduced from the END of a
+  // line (Pug-style filters/content modes) rather than by a leading `|`/`>`. `signature` is a
+  // sticky-regex SOURCE matched at the introducer char through end-of-line (default
+  // `:(?:[A-Za-z][A-Za-z0-9-]*)?[ \t]*(?:\r?\n|$)`); `introChar` is its first char (a cheap
+  // pre-filter, default ':'). The introducer must be GLUED to the line's content (no top-level
+  // whitespace before it — whitespace inside balanced parens/quotes is fine) or sit at line lead.
+  rawBlock?: { token: string; signature?: string; introChar?: string };
   // Compact-notation indicators (YAML `-` / `?`): a block entry indicator whose nested node begins
   // INLINE on the same line (`- item: a`, `? - x`). The node's true indentation is then the column
   // of its first char AFTER the indicator, not the indicator's own column — so a following SIBLING

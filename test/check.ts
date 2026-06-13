@@ -38,6 +38,7 @@ const GATES: Gate[] = [
   { group: 'vue', name: 'directives', args: ['test/vue-directives.ts'] },
   { group: 'vue', name: 'embed-boundary', args: ['test/vue-embed-boundary.ts'] },
   { group: 'vue', name: 'interp-expr', args: ['test/vue-interp-expr.ts'] },
+  { group: 'core', name: 'indent-extensions', args: ['test/indent-extensions.ts'] },
   { group: 'yaml', name: 'issue12-regressions', args: ['test/yaml-issue12-regressions.ts'] },
   { group: 'yaml', name: 'depth-witnesses', args: ['test/yaml-depth-witnesses.ts'] },
   { group: 'yaml', name: 'depth-sites', args: ['test/depth-sites.ts'] },
