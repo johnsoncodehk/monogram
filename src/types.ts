@@ -402,7 +402,12 @@ export type RuleExpr =
   | { type: 'literal'; value: string }
   | { type: 'ref'; name: string }
   | { type: 'quantifier'; body: RuleExpr; kind: '*' | '+' | '?' }
-  | { type: 'group'; body: RuleExpr; suppress?: string[] }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  // `ctxMode` marks a subtree as [Await]/[Yield] context (the spec's grammar parameter):
+  // the await-yield-fork build transform reads it to name-fork the body-reachable rule
+  // closure into $A/$Y/$AY families. Every OTHER consumer treats this exactly like a
+  // plain transparent group (recurse into `body`), so the marker is invisible outside
+  // the fork transform.
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset' }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
@@ -436,6 +441,12 @@ export interface RuleDecl {
   name: string;
   body: RuleExpr;
   flags: string[];
+  // Set by the await-yield-fork transform on a generated [Await]/[Yield] family clone:
+  // the BASE rule name this fork collapses to for every DERIVED artifact (green-node
+  // type, AST type union, TM scope, tree-sitter rule, cst-match dispatch). The emitted
+  // parser keeps the distinct `name` for its memo/adoption rule identity, but reports
+  // `canon` as the node's rule name so trees stay byte-identical to the base grammar.
+  canon?: string;
 }
 
 export interface CstGrammar {

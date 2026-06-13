@@ -185,6 +185,19 @@ class ExcludeNode {
   readonly items: Element[];
   constructor(connectors: string[], items: Element[]) { this.connectors = connectors; this.items = items; }
 }
+class CtxNode {
+  // Mark the wrapped items as [Await]/[Yield] context (the ECMAScript grammar
+  // parameter): inside an async function/arrow/method body await is the AwaitExpression
+  // operator (no bare-identifier reading), and inside a generator body yield is the
+  // YieldExpression operator. The await-yield-fork build transform reads this marker to
+  // name-fork the body-reachable rule closure; every other consumer treats it as a
+  // transparent group. Wrap ONLY the async/generator arm's body+params; a nested
+  // non-async function/arrow/class body is simply left UNwrapped (context resets).
+  readonly __kind = 'ctx' as const;
+  readonly mode: 'await' | 'yield' | 'asyncgen' | 'reset';
+  readonly items: Element[];
+  constructor(mode: 'await' | 'yield' | 'asyncgen' | 'reset', items: Element[]) { this.mode = mode; this.items = items; }
+}
 class NotNode {
   readonly __kind = 'not' as const;
   // Zero-width negative lookahead over an element, or an array (a seq, like
@@ -194,7 +207,7 @@ class NotNode {
   constructor(item: Element | Element[]) { this.item = item; }
 }
 
-type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode;
+type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode;
 
 export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
@@ -222,6 +235,18 @@ export function alt(...items: Alternative[]): AltNode {
 export function exclude(connectors: string | string[], ...items: Element[]): ExcludeNode {
   return new ExcludeNode(typeof connectors === 'string' ? [connectors] : connectors, items);
 }
+
+// Mark items as await / yield / async-generator context (see CtxNode). Wrap an
+// async arm's body and params in awaitCtx(...), a generator arm's in yieldCtx(...),
+// an async-generator's in asyncGenCtx(...).
+export function awaitCtx(...items: Element[]): CtxNode { return new CtxNode('await', items); }
+export function yieldCtx(...items: Element[]): CtxNode { return new CtxNode('yield', items); }
+export function asyncGenCtx(...items: Element[]): CtxNode { return new CtxNode('asyncgen', items); }
+// Reset to NO await/yield context (a nested non-async/non-generator function/arrow/
+// method body, a class body, a computed property key, a field initializer). Wrapping a
+// body in resetCtx() inside an already-forked family routes its refs back to the plain
+// family — the boundary the fork transform stops at.
+export function resetCtx(...items: Element[]): CtxNode { return new CtxNode('reset', items); }
 
 // Zero-width negative lookahead: `not(x)` matches nothing and succeeds only when
 // `x` would NOT match here.
@@ -311,6 +336,14 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
       ? toRuleExpr(el.items[0], names)
       : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body, suppress: el.connectors };
+  }
+  if (el instanceof CtxNode) {
+    // Transparent group carrying the ctxMode marker; only the await-yield-fork
+    // transform reads ctxMode, everyone else recurses into body as a plain group.
+    const body = el.items.length === 1
+      ? toRuleExpr(el.items[0], names)
+      : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body, ctxMode: el.mode };
   }
   if (el instanceof AltNode) {
     // A branch may be a single element or a sequence (array → seq).
