@@ -2,6 +2,7 @@ import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not,
+  awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
 } from './src/api.ts';
 // JavaScript is the SUBSET / base of the ECMAScript family; TypeScript is the
 // SUPERSET (JS + a type layer). The shared, type-free vocabulary — token consts,
@@ -251,12 +252,17 @@ const Expr = rule($ => [
   ['new', 'class', opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],
   ['[', many(opt($), ','), opt($), ']'],
   ['{', sep(Prop, ','), '}'],
-  [opt('async'), opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), '=>', alt($, Block)],
+  // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter routes
+  // each arm's params + body to the right rule family (await-yield-fork.ts): an async
+  // arrow's params and body are await-context (`async (a = await) =>` rejects), a
+  // plain arrow's body resets. Type params/annotations stay PLAIN (not await-context).
+  ['async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(':', Type), '=>', awaitCtx(alt($, Block))],
+  [opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), '=>', resetCtx(alt($, Block))],
   // async arrow with a BARE parameter: `async err => …`. tsc requires async and the
   // parameter on the same line (`async\nx => …` is `async;` then a plain arrow — ASI).
   // Without this arm the bare form only "parsed" by splitting into two statements.
-  ['async', sameLine, Ident, '=>', alt($, Block)],
-  [Ident, '=>', alt($, Block)],
+  ['async', sameLine, Ident, '=>', awaitCtx(alt($, Block))],
+  [Ident, '=>', resetCtx(alt($, Block))],
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   [$, 'satisfies', Type],
