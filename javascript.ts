@@ -488,7 +488,7 @@ const callTail = ['(', sep(Param, ','), ')', opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
   ';',   // SemicolonClassElement: `class C { ; }`
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
-  [many(DecoratorExpr), many(Modifier), 'static', Block],   // decorated/modified static block parses (both SEMANTIC errors)
+  [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier (see typescript.ts)
   [
     many(DecoratorExpr),

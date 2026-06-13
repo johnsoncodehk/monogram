@@ -504,7 +504,7 @@ const callTail = ['(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';'
 const ClassMember = rule($ => [
   ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
-  [many(DecoratorExpr), many(Modifier), 'static', Block],   // decorated/modified static block parses (both SEMANTIC errors)
+  [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
   // `public @dec method()` ("Decorators are not valid here") and an orphan
   // `@dec` with no member, which a standalone sibling alternative tolerated
