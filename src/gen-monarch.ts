@@ -403,6 +403,21 @@ function applyAdjacentTagHeadMonarch(grammar: CstGrammar, tokenizer: Record<stri
   const headRules: MonarchRule[] = [];
   for (const n of selectorTokens) { const t = tokByName.get(n); if (t) headRules.push([pat(n), scopeOf(t)]); }
 
+  // Literals reachable inside the attr-list rule (`=`, `,`, …) — emitted as
+  // delimiters so e.g. `name="v"` doesn't tokenize its `=` as the default token.
+  const directLiterals = (e: RuleExpr, out: Set<string>): void => {
+    if (e.type === 'literal') { out.add((e as { value: string }).value); return; }
+    if (e.type === 'seq' || e.type === 'alt') { for (const i of e.items) directLiterals(i, out); return; }
+    if ((e.type === 'quantifier' || e.type === 'group' || e.type === 'not') && e.body) return directLiterals(e.body, out);
+    if (e.type === 'sep') return directLiterals(e.element, out);
+  };
+  const reachableLiterals = (rn: string, out: Set<string>, seen = new Set<string>()): void => {
+    if (seen.has(rn)) return; seen.add(rn);
+    const r = ruleByName.get(rn); if (!r) return;
+    directLiterals(r.body, out);
+    const rr = new Set<string>(); directRules(r.body, rr); for (const x of rr) reachableLiterals(x, out, seen);
+  };
+
   let attrInclude = false;
   for (const rn of attrRules) {
     const ar = ruleByName.get(rn); if (!ar) continue;
@@ -414,8 +429,23 @@ function applyAdjacentTagHeadMonarch(grammar: CstGrammar, tokenizer: Record<stri
     const toks = new Set<string>(); reachableTokens(rn, toks);
     const inner: MonarchRule[] = [];
     for (const n of toks) { const t = tokByName.get(n); if (t) inner.push([pat(n), scopeOf(t)]); }
+    const lits = new Set<string>(); reachableLiterals(rn, lits);
+    lits.delete(open); lits.delete(close);
+    // Stateful value rules FIRST: interpolated/multi-line templates and `{expr}`
+    // holes reuse the shared nesting machinery (which pops back here) instead of
+    // the flat single-line token patterns, which can't span `${…}` or newlines.
+    const statefulValues: MonarchRule[] = [];
+    if (tokenizer['templateN']) statefulValues.push(['`', { token: 'string', next: '@templateN' }]);
+    if (tokenizer['bracketCounting']) {
+      statefulValues.push(['\\{', { token: 'delimiter.bracket', next: '@bracketCounting' }]);
+      lits.delete('{'); lits.delete('}');
+    }
+    const litRules: MonarchRule[] = [...lits].sort((a, b) => b.length - a.length)
+      .map(l => [escapeRegex(l), 'delimiter'] as MonarchRule);
     tokenizer['adj_attrlist'] = [
+      ...statefulValues,
       ...inner,
+      ...litRules,
       ['[ \\t]+', 'white'],
       [escapeRegex(close), { token: 'delimiter.parenthesis', next: '@pop' }],
     ];

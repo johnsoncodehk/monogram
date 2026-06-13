@@ -43,7 +43,7 @@ const Txt = token(plus(noneOf(' ', '\t', '\n', '(', ')')), { blockOnly: true, sc
 const base: IndentConfig = { indentToken: 'Indent', dedentToken: 'Dedent', newlineToken: 'Newline', flowOpen: ['('], flowClose: [')'] };
 
 function mk(glued: boolean) {
-  const Attrs = rule(() => [['(', many(Att), ')']]);
+  const Attrs = rule(() => [['(', many(alt(Att, '=')), ')']]);
   const Text  = rule(() => [[many(alt(Txt, Cls, Att, '(', ')'))]]);
   const Head  = glued ? rule(() => [[El, many(adjacent, Cls)]]) : rule(() => [[El, many(Cls)]]);
   const Elem  = glued ? rule(() => [[Head, opt(adjacent, Attrs), opt(Text)]]) : rule(() => [[Head, opt(Attrs), opt(Text)]]);
@@ -180,6 +180,8 @@ check('monarch: glued `(xy)` name → attribute.name', mAdj('el.cd(xy) hi', 'xy'
 check('monarch: interior text after the head is the default token (not tag/attr)', mAdj('el.cd(xy) hi', 'hi') === '');
 check('monarch: spaced `.cd` is the default token (not attribute.name)', mAdj('el .cd hi', '.cd') === '');
 check('monarch: spaced `(xy)` content is the default token', mAdj('el (xy) hi', 'xy') === '');
+// Attr-list values: literals reachable in the attr rule (`=`) are delimiters, not the default token.
+check('monarch: `=` inside the attribute list is a delimiter', mAdj('el(xy=ab) hi', '=') === 'delimiter');
 // Over-fire guard: a tag-name-like word that is NOT line-leading (here, after a `(`) must not be
 // taken as a tag — Monarch has no line-start anchor, so the head opens only via the per-line dispatch.
 check('monarch: a tag-name word that is not line-leading is not a tag', mAdj('(zz) word', 'word') !== 'tag');
