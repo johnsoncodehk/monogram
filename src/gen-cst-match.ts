@@ -327,16 +327,47 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     return fn;
   }
 
+  // Minimum children the steps WILL consume (a lower bound): a required single-child
+  // step counts 1, optionals / loops 0, a branches the minimum over its branches. A
+  // greedy loop or optional must leave at least this many children for the steps that
+  // follow it — otherwise it can swallow a child a required suffix step needs (the
+  // parser avoided that with a zero-width guard, e.g. a Modifier's not() lookahead,
+  // which the CST does not record). The destructurer reconstructs the bound
+  // structurally: capping a greedy run at cc-suffixMin never cuts below the parser's
+  // actual count (count + suffix-consumed = cc, suffix-consumed >= suffixMin, so
+  // count <= cc-suffixMin), so it is a no-op except where greedy would over-consume.
+  function minKids(steps: Step[]): number {
+    let m = 0;
+    for (const s of steps) {
+      switch (s.kind) {
+        case 'lit': case 'litAlt': case 'tok': case 'node': m += 1; break;
+        case 'opt': if (s.min1) m += minKids(s.body); break;
+        case 'many': case 'sep': break;
+        case 'branches': {
+          let bm = Infinity;
+          for (const b of s.branches) bm = Math.min(bm, b.steps.length === 0 ? 0 : minKids(b.steps));
+          if (bm !== Infinity) m += bm;
+          break;
+        }
+      }
+    }
+    return m;
+  }
+
   // Render steps; `onFail(line)` returns the failure statement for this context.
-  function renderSteps(steps: Step[], w: (s: string) => void, ind: string, fail: () => string): void {
-    for (const st of steps) renderStep(st, w, ind, fail);
+  // `outerMin` = minimum children the steps AFTER this list (in the enclosing context)
+  // will consume; threaded so a loop's room check spans nesting boundaries.
+  function renderSteps(steps: Step[], w: (s: string) => void, ind: string, fail: () => string, outerMin = 0): void {
+    for (let k = 0; k < steps.length; k++) {
+      renderStep(steps[k], w, ind, fail, minKids(steps.slice(k + 1)) + outerMin);
+    }
   }
 
   function litCond(text: string, tt: string): string {
     return `__lit(t, cc, tb, i, src, ${J(text)}, ${tt === '$keyword' ? 1 : 0})`;
   }
 
-  function renderStep(st: Step, w: (s: string) => void, ind: string, fail: () => string): void {
+  function renderStep(st: Step, w: (s: string) => void, ind: string, fail: () => string, suffixMin: number): void {
     switch (st.kind) {
       case 'lit':
         w(`${ind}if (!${litCond(st.text, st.tt)}) ${fail()}`);
@@ -370,10 +401,13 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         const save = tmp();
         const ok = tmp();
         const lbl = tmp().replace('_t', '_b');
-        w(`${ind}{`);
+        // a NON-required optional must not consume a child the required suffix needs
+        // (the min1 first iteration is required and always attempts — the grammar
+        // guarantees a real element exists or the parser would have rejected)
+        w(st.min1 ? `${ind}{` : `${ind}if (cc - i > ${suffixMin}) {`);
         w(`${ind}  const ${save} = i; let ${ok} = true;`);
         w(`${ind}  ${lbl}: {`);
-        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`);
+        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
         w(`${ind}  }`);
         if (st.min1) w(`${ind}  if (!${ok}) ${fail()}`);
         else w(`${ind}  if (!${ok}) i = ${save};`);
@@ -385,9 +419,10 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         const ok = tmp();
         const lbl = tmp().replace('_t', '_b');
         w(`${ind}for (;;) {`);
+        if (suffixMin > 0) w(`${ind}  if (cc - i <= ${suffixMin}) break;`);  // leave children for the required suffix
         w(`${ind}  const ${save} = i; let ${ok} = true;`);
         w(`${ind}  ${lbl}: {`);
-        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`);
+        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
         w(`${ind}  }`);
         w(`${ind}  if (!${ok}) { i = ${save}; break; }`);
         w(`${ind}  if (i === ${save}) break;`);  // zero-width body guard
@@ -405,7 +440,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         w(`${ind}{`);
         w(`${ind}  const ${save} = i; let ${ok0} = true;`);
         w(`${ind}  ${lbl0}: {`);
-        renderSteps(st.element, w, ind + '    ', () => `{ ${ok0} = false; break ${lbl0}; }`);
+        renderSteps(st.element, w, ind + '    ', () => `{ ${ok0} = false; break ${lbl0}; }`, suffixMin);
         w(`${ind}  }`);
         w(`${ind}  if (!${ok0}) { i = ${save}; }`);
         w(`${ind}  else for (;;) {`);
@@ -413,7 +448,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         w(`${ind}    i++;`);
         w(`${ind}    const ${save}2 = i; let ${ok} = true;`);
         w(`${ind}    ${lbl}: {`);
-        renderSteps(st.element, w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`);
+        renderSteps(st.element, w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
         w(`${ind}    }`);
         w(`${ind}    if (!${ok}) { i = ${save}2; break; }`);
         w(`${ind}  }`);
@@ -442,7 +477,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
           }
           w(`${ind}    const ${save} = i; let ${ok} = true;`);
           w(`${ind}    ${lbl}: {`);
-          renderSteps(renameCaps(b.steps, pfx), w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`);
+          renderSteps(renameCaps(b.steps, pfx), w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
           w(`${ind}    }`);
           const fields = renamed.map(cp => `${cp.field}: ${cp.name}${cp.card === 'one' ? '!' : ''}`);
           w(`${ind}    if (${ok}) { ${done} = true; ${assignExpr(st.cap, `{ branch: ${J(b.tag)}${fields.length ? ', ' + fields.join(', ') : ''} }`)} }`);

@@ -461,12 +461,13 @@ const MemberName = rule($ => [
 // member's shared `modifiers …` prefix isn't re-parsed per alternative. Inner
 // alt() is first-match, so branches are ordered specific-before-general
 // (generator/accessor before the MemberName method/field split).
-const Modifier = alt('static', 'accessor', 'async');
+// modifier only when NOT followed by name-making tokens (see typescript.ts)
+const Modifier = alt([alt('static', 'accessor', 'async'), not(alt('(', '=', '{', '}'))]);
 const callTail = ['(', sep(Param, ','), ')', opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
   ';',   // SemicolonClassElement: `class C { ; }`
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
-  [many(DecoratorExpr), 'static', Block],   // decorated static block parses (decorators on it are a SEMANTIC error)
+  [many(DecoratorExpr), many(Modifier), 'static', Block],   // decorated/modified static block parses (both SEMANTIC errors)
   // decorators PREFIX a member, before any modifier (see typescript.ts)
   [
     many(DecoratorExpr),
@@ -478,13 +479,13 @@ const ClassMember = rule($ => [
         [...callTail],                                                         // method (requires `(`)
         // field catch-all; a ';'-less field must not be followed by a same-line
         // decorator (see typescript.ts)
-        [opt('=', Expr), alt([';'], [not([sameLine, Decorator])])],
+        [opt('=', Expr), alt([';'], [not(sameLine)], [not(not('}'))])],
       )],
     ),
   ],
   // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
   // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('=', Expr), alt([';'], [not([sameLine, Decorator])])],
+  [MemberName, opt('=', Expr), alt([';'], [not(sameLine)], [not(not('}'))])],
   [MemberName, '(', sep(Param, ','), ')', opt(Block), opt(';')],
 ]);
 

@@ -474,12 +474,16 @@ const MemberName = rule($ => [
 // member's shared `modifiers …` prefix isn't re-parsed per alternative. Inner
 // alt() is first-match, so branches are ordered specific-before-general
 // (generator/accessor/index-sig before the MemberName method/field split).
-const Modifier = alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'async');
+// A modifier KEYWORD counts as a modifier only when what follows can still be a
+// member (tsc's disambiguation): followed by '('/'='/':'/';'/'?'/'!'/'<'/'{'/'}'
+// it is the member NAME instead ('public() {}', 'static = 1'). 'declare' is a real
+// class modifier; 'export'/'in'/'out' are parse-tolerated by tsc (semantic errors).
+const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'async', 'declare', 'export', 'in', 'out'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
 const callTail = ['(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')] as const;
 const ClassMember = rule($ => [
   ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
   ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
-  [many(DecoratorExpr), 'static', Block],   // decorated static block parses (decorators on it are a SEMANTIC error)
+  [many(DecoratorExpr), many(Modifier), 'static', Block],   // decorated/modified static block parses (both SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
   // `public @dec method()` ("Decorators are not valid here") and an orphan
   // `@dec` with no member, which a standalone sibling alternative tolerated
@@ -488,7 +492,7 @@ const ClassMember = rule($ => [
     many(Modifier),
     alt(
       ['*', MemberName, opt('?'), opt(TypeParams), ...callTail],               // generator method
-      [alt('get', 'set'), MemberName, '(', opt(sep(Param, ',')), ')', opt(':', Type), opt(Block), opt(';')],  // accessor
+      [alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(Param, ',')), ')', opt(':', Type), opt(Block), opt(';')],  // accessor (type params parse; semantic error)
       ['[', Ident, ':', Type, ']', ':', Type, opt(';')],                        // index signature
       [MemberName, alt(
         [opt('?'), opt(TypeParams), ...callTail],                              // method (requires `(`)
@@ -496,13 +500,13 @@ const ClassMember = rule($ => [
         // followed by a SAME-LINE decorator: tsc reads that '@' as belonging to
         // THIS property ("Decorators must precede the name and all keywords") —
         // `x @dec y()` and `x = 1 @dec y()` reject, `x; @dec` and newline accept
-        [opt('!'), opt('?'), opt(':', Type), opt('=', Expr), alt([';'], [not([sameLine, Decorator])])],
+        [opt('!'), opt('?'), opt(':', Type), opt('=', Expr), alt([';'], [not(sameLine)], [not(not('}'))])],
       )],
     ),
   ],
   // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
   // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', Expr), alt([';'], [not([sameLine, Decorator])])],
+  [MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', Expr), alt([';'], [not(sameLine)], [not(not('}'))])],
   [MemberName, opt('?'), opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')],
 ]);
 
