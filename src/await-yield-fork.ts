@@ -34,9 +34,6 @@ type Family = 'await' | 'yield' | 'asyncgen';
 const SUFFIX: Record<Family, string> = { await: '$A', yield: '$Y', asyncgen: '$AY' };
 const RESERVED: Record<Family, string[]> = { await: ['await'], yield: ['yield'], asyncgen: ['await', 'yield'] };
 
-// The reserved-word guard rules whose forked variant must additionally forbid the
-// family's context keyword (so `await`/`yield` lose their bare-identifier reading).
-const GUARD_RULES = new Set(['notReservedExpr', 'notReserved']);
 
 export function withAwaitYield(grammar: CstGrammar): CstGrammar {
   const byName = new Map(grammar.rules.map(r => [r.name, r]));
@@ -83,7 +80,6 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
     if (!expr || typeof expr !== 'object') return expr;
     switch (expr.type) {
       case 'ref': {
-        if (fam && GUARD_RULES.has(expr.name)) return { type: 'ref', name: expr.name + SUFFIX[fam] };
         if (fam && closure[fam].has(expr.name)) return { type: 'ref', name: expr.name + SUFFIX[fam] };
         return expr;
       }
@@ -97,7 +93,13 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
       case 'seq': return { type: 'seq', items: expr.items.map(i => rewrite(i, fam)) };
       case 'alt': return { type: 'alt', items: expr.items.map(i => rewrite(i, fam)) };
       case 'quantifier': return { type: 'quantifier', body: rewrite(expr.body, fam), kind: expr.kind };
-      case 'not': return { type: 'not', body: rewrite(expr.body, fam) };
+      case 'not': {
+        // the bare-identifier reserved-word guard: inside a context family, also
+        // forbid that family's keyword(s), so `await`/`yield` lose their identifier
+        // reading (await with no operand then rejects — the prefix op needs one).
+        const body = fam && expr.reservable ? addReserved(rewrite(expr.body, fam), RESERVED[fam]) : rewrite(expr.body, fam);
+        return expr.reservable ? { type: 'not', body, reservable: true } : { type: 'not', body };
+      }
       case 'sep': return { type: 'sep', element: rewrite(expr.element, fam), delimiter: expr.delimiter };
       default: return expr;
     }
@@ -111,12 +113,9 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
     const suf = SUFFIX[fam];
     for (const name of closure[fam]) {
       const base = byName.get(name)!;
-      // a reserved-word guard in this family ALSO forbids the family's context keyword
-      // (so await/yield lose their bare-identifier reading); other rules just reroute.
-      const body = GUARD_RULES.has(name)
-        ? addReserved(rewrite(base.body, fam), RESERVED[fam])
-        : rewrite(base.body, fam);
-      forks.push({ name: name + suf, body, flags: [...base.flags], canon: name });
+      // rewrite reroutes in-family refs to $F and extends any reservable guard with
+      // the family's context keyword (see the 'not' case in rewrite()).
+      forks.push({ name: name + suf, body: rewrite(base.body, fam), flags: [...base.flags], canon: name });
     }
   }
 
@@ -125,7 +124,13 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
   // marker stay plain. ──
   const baseRewritten: RuleDecl[] = grammar.rules.map(r => ({ ...r, body: rewrite(r.body, null) }));
 
-  return { ...grammar, rules: [...baseRewritten, ...forks] };
+  // Insert the forks BEFORE the entry rule (the last rule — findEntryRule reads
+  // rules[length-1]) so the entry stays last. Existing rids shift only for the entry,
+  // which is looked up by position consistently everywhere; forks (body-internal
+  // rules) are never the entry.
+  if (forks.length === 0) return { ...grammar, rules: baseRewritten };
+  const entry = baseRewritten[baseRewritten.length - 1];
+  return { ...grammar, rules: [...baseRewritten.slice(0, -1), ...forks, entry] };
 }
 
 // Collapse the [Await]/[Yield] forks back to the base grammar for the DERIVED-artifact
@@ -153,17 +158,11 @@ export function dropForks(grammar: CstGrammar): CstGrammar {
   return { ...grammar, rules: grammar.rules.filter(r => !r.canon).map(r => ({ ...r, body: reref(r.body) })) };
 }
 
-// Add `words` to the not(alt(...)) reserved set of a guard rule's body. The guard is
-// `not(alt('catch','class',...))` (a `not` over an `alt` of literals) or `not(literal)`.
-function addReserved(body: RuleExpr, words: string[]): RuleExpr {
-  if (body.type === 'not') {
-    const inner = body.body;
-    const lits = (w: string): RuleExpr => ({ type: 'literal', value: w });
-    if (inner.type === 'alt') return { type: 'not', body: { type: 'alt', items: [...inner.items, ...words.map(lits)] } };
-    return { type: 'not', body: { type: 'alt', items: [inner, ...words.map(lits)] } };
-  }
-  // a guard that is a seq containing a not(...) (e.g. notReservedExpr used in a seq):
-  if (body.type === 'seq') return { type: 'seq', items: body.items.map(i => addReserved(i, words)) };
-  if (body.type === 'group') return { type: 'group', body: addReserved(body.body, words), suppress: body.suppress };
-  return body;
+// Add `words` to the INNER body of a reservable guard's not(...): the body is the
+// alt of forbidden literals (`alt('catch','class',…)`) or a single literal. Returns
+// the extended alt; the caller wraps it back in the `not`.
+function addReserved(inner: RuleExpr, words: string[]): RuleExpr {
+  const lits = words.map((w): RuleExpr => ({ type: 'literal', value: w }));
+  if (inner.type === 'alt') return { type: 'alt', items: [...inner.items, ...lits] };
+  return { type: 'alt', items: [inner, ...lits] };
 }

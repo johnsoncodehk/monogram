@@ -202,9 +202,11 @@ class NotNode {
   readonly __kind = 'not' as const;
   // Zero-width negative lookahead over an element, or an array (a seq, like
   // everywhere else in the rule DSL). Matches nothing; succeeds only when
-  // `item` can't match.
+  // `item` can't match. `reservable` flags the bare-identifier reserved-word guard
+  // (notReservedExpr) so the await-yield-fork transform extends it per context family.
   readonly item: Element | Element[];
-  constructor(item: Element | Element[]) { this.item = item; }
+  readonly reservable: boolean;
+  constructor(item: Element | Element[], reservable = false) { this.item = item; this.reservable = reservable; }
 }
 
 type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode;
@@ -252,6 +254,11 @@ export function resetCtx(...items: Element[]): CtxNode { return new CtxNode('res
 // `x` would NOT match here.
 export function not(item: Element | Element[]): NotNode {
   return new NotNode(item);
+}
+// The bare-identifier reserved-word guard (notReservedExpr / notReserved): a `not`
+// the await-yield-fork transform extends with await/yield inside those contexts.
+export function reservableNot(item: Element | Element[]): NotNode {
+  return new NotNode(item, true);
 }
 
 // ── Precedence ──
@@ -364,7 +371,7 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
     const body = Array.isArray(el.item)
       ? { type: 'seq' as const, items: el.item.map(i => toRuleExpr(i, names)) }
       : toRuleExpr(el.item, names);
-    return { type: 'not', body };
+    return el.reservable ? { type: 'not', body, reservable: true } : { type: 'not', body };
   }
   const marker = el as Marker;
   if (marker.__kind === 'op') return { type: 'op' };

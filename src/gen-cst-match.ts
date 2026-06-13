@@ -95,6 +95,10 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   // this before comparing to the (base) rid a base matcher expects.
   const ruleCanon = grammar.rules.map(r => ruleId.get(r.canon ?? r.name)!);
   ruleCanon.push(grammar.rules.length, grammar.rules.length + 1, grammar.rules.length + 2);   // $template/$error/$missing = self
+  // canon rid for a rule NAME: an arm that (after the fork) references a fork rule
+  // (Param$A) is matched against the BASE rid, since the child's ruleIdOf is also
+  // canonicalized to base in __nodeOf / the dispatch switches.
+  const cid = (name: string) => ruleCanon[ruleId.get(name)!];
   
 
   // Pratt / leftRec classification (mirrors the engines' classifyAlts/classifyLeftRec:
@@ -395,7 +399,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         const cond = st.name === '$operator'
           ? `__opTok(t, cc, i)`
           : st.template
-            ? `__tok(t, cc, tb, i, ${typeKind.get(st.name)}) || __nodeOf(t, cc, i, ${ruleId.get('$template')})`
+            ? `__tok(t, cc, tb, i, ${typeKind.get(st.name)}) || __nodeOf(t, cc, i, ${cid('$template')})`
             : `__tok(t, cc, tb, i, ${typeKind.get(st.name)})`;
         w(`${ind}if (!(${cond})) ${fail()}`);
         if (st.cap) assign(st.cap, `__SC[i] as ${st.cap.tsType}`, w, ind);
@@ -403,7 +407,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         return;
       }
       case 'node':
-        w(`${ind}if (!__nodeOf(t, cc, i, ${ruleId.get(st.rule)})) ${fail()}`);
+        w(`${ind}if (!__nodeOf(t, cc, i, ${cid(st.rule)})) ${fail()}`);
         if (st.cap) assign(st.cap, `__SC[i] as ${st.cap.tsType}`, w, ind);
         w(`${ind}i++;`);
         return;
@@ -654,7 +658,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       lines.push(`${pad}} else if ((e1 = __SC[1]) >= 0) {`);
       lines.push(`${pad}  switch (RULE_CANON[t.ruleIdOf(e1)]) {`);
       for (const r of [...nset].sort()) {
-        lines.push(`${pad}    case ${ruleId.get(r)}: { // ${r}`);
+        lines.push(`${pad}    case ${cid(r)}: { // ${r}`);
         lines.push(...subTry(i => restAdmit[i]!.keys.has('n:' + r)).map(l => '    ' + l));
         lines.push(`${pad}      break;`);
         lines.push(`${pad}    }`);
@@ -707,7 +711,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     disp.push(`  if (e0 >= 0) {`);
     disp.push(`    switch (RULE_CANON[t.ruleIdOf(e0)]) {`);
     for (const r of [...nodeRules].sort()) {
-      disp.push(`      case ${ruleId.get(r)}: { // ${r}`);
+      disp.push(`      case ${cid(r)}: { // ${r}`);
       const members = plans.map((_, k) => k).filter(k => admits[k].keys.size === 0 || admits[k].keys.has('n:' + r));
       const concrete = members.filter(k => admits[k].keys.size !== 0);
       const oneStep = concrete.every(k => plans[k].steps[0]?.kind === 'node');
@@ -827,7 +831,8 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     `};`,
     `/** rule ID → matcher (the emitted parser's rowRule ids — declaration order). */`,
     `export const MATCHERS_BY_ID: ((t: TreeAccess, n: never, tb: number, src: string) => { arm: string })[] = [`,
-    ...grammar.rules.map(r => `  match${sanitizeIdent(r.name)},`),
+    // a fork's rid maps to its BASE matcher (forks emit no matcher of their own).
+    ...grammar.rules.map(r => `  match${sanitizeIdent(r.canon ?? r.name)},`),
     `];`,
   ];
 

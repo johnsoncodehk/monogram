@@ -28,7 +28,8 @@ import {
   token, rule, defineGrammar,
   left, right, none, noUnaryLhs,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not,
+  sep, opt, many, many1, alt, exclude, not, reservableNot,
+  awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
 
@@ -162,7 +163,7 @@ export {
 // (let/static/implements/yield/await/…) — those ARE valid identifiers in some
 // context a CFG can't detect (sloppy mode, non-generator/non-async), so forbidding
 // them here would reject valid code (`var let = 1`, `function f(yield) {}`).
-export const notReserved = not(alt(
+export const notReserved = reservableNot(alt(
   'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default',
   'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for',
   'function', 'if', 'import', 'in', 'instanceof', 'new', 'null', 'return', 'super',
@@ -189,7 +190,7 @@ export const notReserved = not(alt(
 // further regresses: `extends` is load-bearing for tsc's tolerated heritage shapes
 // (`interface I extends { }` reads `{` as the body, `extends A extends B`,
 // `extends Foo?.Bar` — all parse-accepted by tsc through the identifier fallback).
-export const notReservedExpr = not(alt(
+export const notReservedExpr = reservableNot(alt(
   'break', 'case', 'catch', 'class', 'continue', 'debugger', 'delete', 'do',
   'else', 'enum', 'finally', 'for', 'if', 'return', 'switch', 'throw', 'try',
   'typeof', 'void', 'while', 'with',
@@ -304,12 +305,17 @@ const Expr = rule($ => [
   ['new', 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],
   ['[', many(opt($), ','), opt($), ']'],
   ['{', sep(Prop, ','), '}'],
-  [opt('async'), '(', sep(Param, ','), ')', '=>', alt($, Block)],
+  // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter can route
+  // each arm's params + body to the right rule family (await-yield-fork.ts): an async
+  // arrow's params and body are await-context (`async (a = await) =>` rejects — await
+  // needs an operand), a plain arrow's body resets to none.
+  ['async', '(', sep(awaitCtx(Param), ','), ')', '=>', awaitCtx(alt($, Block))],
+  ['(', sep(Param, ','), ')', '=>', resetCtx(alt($, Block))],
   // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
   // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
   // the spec's [no LineTerminator here] between async and the binding identifier).
-  ['async', sameLine, Ident, '=>', alt($, Block)],
-  [Ident, '=>', alt($, Block)],
+  ['async', sameLine, Ident, '=>', awaitCtx(alt($, Block))],
+  [Ident, '=>', resetCtx(alt($, Block))],
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   ['import', alt(['(', $, ')'], ['.', 'meta'])],

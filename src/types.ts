@@ -414,7 +414,11 @@ export type RuleExpr =
   // list in expression position is only a bare instantiation when it isn't
   // followed by something that starts an expression). Non-consuming → invisible
   // to highlighting / AST shape / other generators.
-  | { type: 'not'; body: RuleExpr }
+  // `reservable`: this is the bare-identifier reserved-word guard (notReservedExpr).
+  // The await-yield-fork transform, when cloning a rule into the $A/$Y/$AY family,
+  // adds that family's context keyword(s) to the inner alt — so `await`/`yield` lose
+  // their identifier reading inside an async/generator body. Invisible elsewhere.
+  | { type: 'not'; body: RuleExpr; reservable?: boolean }
   // Zero-width "no LineTerminator here" assertion: matches (consuming nothing)
   // iff the NEXT token is on the same line (no preceding newline). Encodes
   // ECMAScript/TS restricted productions like an array/indexed-access type's `[`,
