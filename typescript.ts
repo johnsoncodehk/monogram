@@ -228,7 +228,7 @@ const NewTarget = rule($ => [
   Ident,
   // a `new` expression is itself a valid new-target (NewExpression : `new` NewExpression),
   // so `new new Foo()()` / `new new f` chain — mirrors the Expr `new` arm but recurses here.
-  ['new', $, opt(alt(['<', sep(Type, ','), '>', opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')']))],
+  ['new', not('<'), $, opt(alt(['<', sep(Type, ','), '>', opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')']))],
   [$, '.', Ident],
   [$, '[', Expr, ']'],
   ['(', Expr, ')'],
@@ -433,7 +433,7 @@ const Stmt = rule($ => [
   ['break', opt(sameLine, notReserved, Ident), asi()],
   ['continue', opt(sameLine, notReserved, Ident), asi()],
   ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
-  [Ident, ':', $],
+  [notReserved, Ident, ':', $],
   ';',
   ['debugger', asi()],
   ['with', '(', Expr, ')', $],
@@ -449,7 +449,7 @@ const Stmt = rule($ => [
   // (extends-expression heritage, bare `;` class elements, decorator placements), so
   // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
   // declaration arm first, then guard.
-  [not(alt('function', 'class', ['async', 'function'])), Expr, many(',', Expr), asi()],
+  [not(alt('function', 'class', ['async', 'function'], ['let', '['])), Expr, many(',', Expr), asi()],
 ]);
 
 // ── Type Parameters ──
@@ -550,7 +550,7 @@ const ClassMember = rule($ => [
       ['async', many(Modifier), MemberName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],            // async method
       ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
       [alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(':', Type), opt(resetCtx(Block)), opt(';')],  // accessor (type params parse; semantic error)
-      ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), opt(';')],          // index signature (value type optional + trailing comma: tsc error-recovery parses)
+      ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), asi()],          // index signature; member separator = ; / newline / }
       [MemberName, alt(
         [opt('?'), opt(TypeParams), ...memTail(resetCtx)],                       // method (requires `(`)
         // field (all-optional → catch-all). A field NOT ended by ';' must not be

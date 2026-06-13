@@ -49,9 +49,6 @@
       "include": "#object-method-key"
     },
     {
-      "include": "#new-expr"
-    },
-    {
       "include": "#arrow-function-params"
     },
     {
@@ -708,7 +705,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.js.jsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.js.jsx"
@@ -2468,9 +2465,6 @@
           "include": "#object-method-key"
         },
         {
-          "include": "#new-expr"
-        },
-        {
           "include": "#arrow-function-params"
         },
         {
@@ -2669,7 +2663,7 @@
     },
     "regex": {
       "name": "string.regexp.js.jsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.js.jsx"
@@ -2690,22 +2684,6 @@
       "patterns": [
         {
           "include": "#regexp"
-        }
-      ]
-    },
-    "new-expr": {
-      "name": "meta.new-expr.js.jsx",
-      "begin": "\\b(new)\\b",
-      "beginCaptures": {
-        "1": {
-          "name": "keyword.operator.expression.js.jsx"
-        }
-      },
-      "end": "(?=[()}\\],=;])",
-      "patterns": [
-        {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
-          "name": "entity.name.function.js.jsx"
         }
       ]
     },

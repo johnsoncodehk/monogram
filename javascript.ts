@@ -331,7 +331,7 @@ const Expr = rule($ => [
   [$, 'in', $],
   [$, Template],
   // new T | new T(args)
-  ['new', NewTarget, opt('(', sep($, ','), ')')],
+  ['new', not('<'), NewTarget, opt('(', sep($, ','), ')')],
   ['new', 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],
   ['new', 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],
   ['[', many(opt($), ','), opt($), ']'],
@@ -462,7 +462,7 @@ const Stmt = rule($ => [
   ['break', opt(sameLine, notReserved, Ident), opt(';')],
   ['continue', opt(sameLine, notReserved, Ident), opt(';')],
   ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
-  [Ident, ':', $],
+  [notReserved, Ident, ':', $],
   ';',
   ['debugger', opt(';')],
   ['with', '(', Expr, ')', $],
@@ -478,7 +478,7 @@ const Stmt = rule($ => [
   // (extends-expression heritage, bare `;` class elements, decorator placements), so
   // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
   // declaration arm first, then guard.
-  [not(alt('function', 'class', ['async', 'function'])), Expr, many(',', Expr), opt(';')],
+  [not(alt('function', 'class', ['async', 'function'], ['let', '['])), Expr, many(',', Expr), opt(';')],
 ]);
 
 // ── Declarations ──
