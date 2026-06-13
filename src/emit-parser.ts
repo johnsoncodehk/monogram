@@ -1455,6 +1455,11 @@ export function emitParser(grammar: CstGrammar): string {
   // Rule-name table: rowRule stores the index; '$template' takes the slot after the
   // declared rules (parseTemplateExpr's synthetic node).
   e.emit(`const RULE_NAMES = ${J([...grammar.rules.map(r => r.name), '$template', '$error', '$missing'])};`);
+  // DISPLAY names: an [Await]/[Yield] fork (RuleDecl.canon set) keeps its distinct
+  // RULE_NAMES entry for memo/adoption rule identity, but REPORTS its base name as the
+  // node's rule name so trees stay byte-identical to the base grammar. Identical to
+  // RULE_NAMES when no rule is forked (the common case).
+  e.emit(`const RULE_DISPLAY = ${J([...grammar.rules.map(r => r.canon ?? r.name), '$template', '$error', '$missing'])};`);
   e.emit(`const RID_TEMPLATE = ${grammar.rules.length};`);
   e.emit(`const RID_ERROR = ${grammar.rules.length + 1};`);
   e.emit(`const RID_MISSING = ${grammar.rules.length + 2};`);
@@ -2664,7 +2669,7 @@ function leafTokenType(entry, tokBase) {
 // — the node's own absolute start coordinates. Leaf spans come from the token
 // columns at tokBase + the entry's node-relative token index.
 export const tree = {
-  ruleNameOf: (id) => RULE_NAMES[rowRule[id]],
+  ruleNameOf: (id) => RULE_DISPLAY[rowRule[id]],
   ruleIdOf: (id) => rowRule[id],
   lenOf: (id) => rowLen[id],
   tokLenOf: (id) => rowTokLen[id],
@@ -3029,7 +3034,7 @@ function missLit(v) {
 function missEntry(v, kb) {
   let message;
   if (v >= 1 << 21) message = 'expected ' + VSETS[v >>> 21];
-  else if (v >= RULE_MISS_BASE) message = 'expected ' + RULE_NAMES[v - RULE_MISS_BASE];
+  else if (v >= RULE_MISS_BASE) message = 'expected ' + RULE_DISPLAY[v - RULE_MISS_BASE];
   else if (v > 0) message = "expected '" + LIT_NAMES[v] + "'";
   else message = "expected '" + (K_NAMES[-v] ?? '?') + "'";
   return { offset: kb, end: kb, message };

@@ -956,7 +956,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          bestNode = { rule: rule.name, children, offset: startOff, end: endOff };
+          bestNode = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestPos = pos;
         }
       }
@@ -984,7 +984,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestAtomPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          node = { rule: rule.name, children, offset: startOff, end: endOff };
+          node = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestAtomPos = pos;
         }
       }
@@ -1008,7 +1008,7 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             node = {
-              rule: rule.name,
+              rule: (rule.canon ?? rule.name),
               children: [node, ...children],
               offset: node.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : node.end,
@@ -1050,7 +1050,7 @@ export function createParser(grammar: CstGrammar) {
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
               const rhs = parsePratt(rule, info.rbp);
               if (rhs && pos > bestNudPos) {
-                lhs = { rule: rule.name, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
+                lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 bestNudPos = pos;
               }
             }
@@ -1062,7 +1062,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestNudPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          lhs = { rule: rule.name, children, offset: startOff, end: endOff };
+          lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestNudPos = pos;
         }
       }
@@ -1120,7 +1120,7 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             lhs = {
-              rule: rule.name,
+              rule: (rule.canon ?? rule.name),
               children: [lhs, ...children],
               offset: lhs.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end,
@@ -1143,7 +1143,7 @@ export function createParser(grammar: CstGrammar) {
             if (!tailClosed) {                                   // can't postfix an update expr (`a++ --`)
               if (++pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
-              lhs = { rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
+              lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
               tailClosed = true;
               matched = true;
             }
@@ -1166,7 +1166,7 @@ export function createParser(grammar: CstGrammar) {
             const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
             const rhs = parsePratt(rule, info.rbp);
             if (rhs) {
-              lhs = { rule: rule.name, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
               matched = true;
             } else {
               pos = ledSaved;
