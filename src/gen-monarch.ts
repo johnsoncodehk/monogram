@@ -494,6 +494,21 @@ function applyAdjacentTagHeadMonarch(grammar: CstGrammar, tokenizer: Record<stri
     const hasEol = rules.some(r => Array.isArray(r) && r[0] === '$');
     if (!hasEol) rules.push(['$', { token: '', next: '@popall' }]);
   }
+
+  // And within the line: a quote in line FLOW is a string only when it's
+  // TERMINATED on the line (`@if(x === 'a')`), not a prose apostrophe
+  // ("project's") — swap the eager open-a-string-state rules for whole-string
+  // matches; a lone quote falls through to the plain text rules.
+  const exprRules = tokenizer['exprBody'];
+  if (exprRules) {
+    for (let i = 0; i < exprRules.length; i++) {
+      const r = exprRules[i];
+      if (!Array.isArray(r) || typeof r[1] !== 'object') continue;
+      const act = r[1] as MonarchAction;
+      if (r[0] === "'" && act.switchTo === '@string_squote') exprRules[i] = ["'(?:\\\\.|[^'\\\\])*'", 'string'];
+      if (r[0] === '"' && act.switchTo === '@string_dquote') exprRules[i] = ['"(?:\\\\.|[^"\\\\])*"', 'string'];
+    }
+  }
 }
 
 
