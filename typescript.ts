@@ -68,7 +68,7 @@ const TypeMember = rule($ => {
     [opt(alt('+', '-')), opt('readonly'), '[', alt(
       [Ident, alt(
         ['in', Type, opt('as', Type), ']', opt(alt('+', '-')), opt('?'), ':', Type],  // mapped: K in T (as U)?
-        [':', Type, ']', opt(':', Type)],                                             // index:  k: T
+        [':', Type, opt(','), ']', opt(':', Type)],                                    // index:  k: T  (trailing comma tolerated)
       )],
       [Expr, ']', opt('?'), propOrMethod],                                            // computed: expr
       [']', opt(':', Type)],                                                          // empty index sig: []  /  []: T
@@ -493,7 +493,7 @@ const ClassMember = rule($ => [
     alt(
       ['*', MemberName, opt('?'), opt(TypeParams), ...callTail],               // generator method
       [alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(Param, ',')), ')', opt(':', Type), opt(Block), opt(';')],  // accessor (type params parse; semantic error)
-      ['[', Ident, ':', Type, ']', ':', Type, opt(';')],                        // index signature
+      ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), opt(';')],          // index signature (value type optional + trailing comma: tsc error-recovery parses)
       [MemberName, alt(
         [opt('?'), opt(TypeParams), ...callTail],                              // method (requires `(`)
         // field (all-optional → catch-all). A field NOT ended by ';' must not be
