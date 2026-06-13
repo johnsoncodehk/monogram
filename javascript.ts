@@ -33,6 +33,20 @@ import {
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
 
+// Build the four async×generator arms of a `function` form, routing each arm's params
+// and body to its [Await]/[Yield] family: plain resets to none, generator -> yield,
+// async -> await, async-generator -> both. `nameParts` is spread in after `function`
+// (and `*` for the generator arms); `body` is the function body element. Param/Block
+// resolve at thunk-eval time (defined below), so this is safe to call inside a rule().
+function fnArms(nameParts, body) {
+  return [
+    ['function', ...nameParts, '(', sep(Param, ','), ')', resetCtx(body)],
+    ['function', '*', ...nameParts, '(', sep(yieldCtx(Param), ','), ')', yieldCtx(body)],
+    ['async', 'function', ...nameParts, '(', sep(awaitCtx(Param), ','), ')', awaitCtx(body)],
+    ['async', 'function', '*', ...nameParts, '(', sep(asyncGenCtx(Param), ','), ')', asyncGenCtx(body)],
+  ];
+}
+
 // ── Tokens ──
 
 // IdentifierName, ASCII + `\u`-escape forms. The `\uXXXX` / `\u{cp}` alternatives let an
@@ -321,13 +335,8 @@ const Expr = rule($ => [
   ['import', alt(['(', $, ')'], ['.', 'meta'])],
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
-  // function expression, 4-way SPLIT on async × generator so each routes its params
-  // and body to the right [Await]/[Yield] family (plain resets; a generator's params
-  // and body are yield-context, async await-context, async-generator both).
-  ['function', opt(Ident), '(', sep(Param, ','), ')', resetCtx(Block)],
-  ['function', '*', opt(Ident), '(', sep(yieldCtx(Param), ','), ')', yieldCtx(Block)],
-  ['async', 'function', opt(Ident), '(', sep(awaitCtx(Param), ','), ')', awaitCtx(Block)],
-  ['async', 'function', '*', opt(Ident), '(', sep(asyncGenCtx(Param), ','), ')', asyncGenCtx(Block)],
+  // function expression, 4-way split on async × generator (see fnArms).
+  ...fnArms([opt(Ident)], Block),
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`); decorator dimension collapsed via opt(DecoratorExpr).
   [opt(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
@@ -527,14 +536,14 @@ const Decl = rule($ => [
   // leading `function` is preferred as a declaration over an IIFE expression-
   // statement: Program tries Decl before Stmt, so `function f(){}\n()=>{}` parses
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
-  [opt('async'), 'function', opt('*'), Ident, '(', sep(Param, ','), ')', Block],
+  ...fnArms([Ident], Block),
   // class decl: optional decorators. gen-tm expands the opt()/many() to recover
   // the `class Ident … { … }` shape for highlighting.
   [many(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
   ['export', alt($, Stmt)],
   [many1(DecoratorExpr), $],   // decorators before export/default/etc.
   ['export', 'default', alt(
-    [opt('async'), 'function', opt('*'), opt(Ident), '(', sep(Param, ','), ')', Block],  // function
+    ...fnArms([opt(Ident)], Block),  // function
     [Expr, opt(';')],   // catch-all: export default <expr>
   )],
   ['export', '*', alt(['from', String_, opt(';')], ['as', Ident, 'from', String_, opt(';')])],

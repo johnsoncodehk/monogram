@@ -4,6 +4,21 @@ import {
   sep, opt, many, many1, alt, exclude, not,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
 } from './src/api.ts';
+
+// Build the four async×generator arms of a TypeScript `function` form, routing each
+// arm's params and body to its [Await]/[Yield] family (plain resets, generator ->
+// yield, async -> await, async-generator -> both). Type params and the return-type
+// annotation are NOT [Await]/[Yield]-parameterized, so they stay plain. `nameParts`
+// is spread in after `function` (and `*`); `body` is the function body element.
+// Param/Block/Type/TypeParams resolve at thunk-eval time (defined below).
+function tsFnArms(nameParts, body) {
+  return [
+    ['function', ...nameParts, opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), resetCtx(body)],
+    ['function', '*', ...nameParts, opt(TypeParams), '(', sep(yieldCtx(Param), ','), ')', opt(':', Type), yieldCtx(body)],
+    ['async', 'function', ...nameParts, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(':', Type), awaitCtx(body)],
+    ['async', 'function', '*', ...nameParts, opt(TypeParams), '(', sep(asyncGenCtx(Param), ','), ')', opt(':', Type), asyncGenCtx(body)],
+  ];
+}
 // JavaScript is the SUBSET / base of the ECMAScript family; TypeScript is the
 // SUPERSET (JS + a type layer). The shared, type-free vocabulary — token consts,
 // the `notReserved`/`notReservedExpr` reserved-word guards, the precedence ladder
@@ -269,7 +284,7 @@ const Expr = rule($ => [
   ['import', alt(['(', $, ')'], ['.', 'meta'])],
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
-  [opt('async'), 'function', opt('*'), opt(notReserved, Ident), opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), Block],
+  ...tsFnArms([opt(notReserved, Ident)], Block),
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`/`implements`); decorator dimension is a `many` (a class expression may
   // carry ≥2 decorators, `x = @d @d class C {}`, like the declaration arm below).
@@ -552,7 +567,7 @@ const Decl = rule($ => [
   // leading `function` is preferred as a declaration over an IIFE expression-
   // statement: Program tries Decl before Stmt, so `function f(){}\n()=>{}` parses
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
-  [opt('async'), 'function', opt('*'), notReserved, Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), alt(Block, opt(';'))],
+  ...tsFnArms([notReserved, Ident], alt(Block, [not('{'), opt(';')])),
   // The declaration NAME slots below carry `notReserved` (same guard as the type-alias
   // name): a reserved word is not a legal declaration name (`interface void {}`,
   // `class while {}`, `enum for {}`, `namespace debugger {}` — all TS errors), while a
@@ -579,10 +594,15 @@ const Decl = rule($ => [
   ['declare', alt($, Stmt)],
   // A leading `async`/`abstract` modifier before any declaration: tsc's parser
   // accepts it (the checker rejects invalid combinations like `async class`); the
-  // dedicated arms above (function's opt('async'), class's opt('abstract')) match
+  // dedicated arms above (function's async arm, class's opt('abstract')) match
   // valid combinations first and keep their flat shape, so only otherwise-invalid
-  // pairings fall to this modifier-prefix arm.
-  [alt('async', 'abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor'), $],
+  // pairings fall to this modifier-prefix arm. `async` is split out with a
+  // `not('function')` guard: `async function` MUST take the async-function arm so
+  // its params/body carry the [Await] context — otherwise this lenient prefix would
+  // catch the async arm's await-context rejections (e.g. `async function f(a=await)`)
+  // and re-accept them as a plain function with a stray `async` modifier.
+  [alt('abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor'), $],
+  ['async', not('function'), $],
   ['namespace', notReserved, Ident, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([notReserved, Ident, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
   ['export', alt($, Stmt)],
@@ -602,7 +622,7 @@ const Decl = rule($ => [
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error).
   ['export', many(DecoratorExpr), 'default', alt(
-    [opt('async'), 'function', opt('*'), opt(notReserved, Ident), opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), alt(Block, opt(';'))],  // function
+    ...tsFnArms([opt(notReserved, Ident)], alt(Block, [not('{'), opt(';')])),  // function
     ['abstract', 'class', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named abstract class
     ['abstract', 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous abstract class
     [Expr, opt(';')],   // catch-all: export default <expr>
