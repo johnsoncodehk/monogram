@@ -3037,11 +3037,11 @@
       "name": "keyword.operator.expression.tsx"
     },
     "scope-storage-modifier": {
-      "match": "\\b(readonly|async|static|declare)\\b",
+      "match": "\\b(readonly|abstract|async|static|declare)\\b",
       "name": "storage.modifier.tsx"
     },
     "scope-storage-modifier-accessibility": {
-      "match": "\\b(abstract|public|private|protected|override|accessor)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
+      "match": "\\b(public|private|protected|override|accessor)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
       "name": "storage.modifier.tsx"
     },
     "scope-keyword-other-extends": {
@@ -3133,11 +3133,11 @@
       "name": "storage.type.enum.tsx"
     },
     "scope-storage-type-namespace": {
-      "match": "\\b(namespace|module)\\b",
+      "match": "\\b(module|namespace)\\b",
       "name": "storage.type.namespace.tsx"
     },
     "scope-support-variable": {
-      "match": "\\b(module|console|window|document|process|require|exports|global|globalThis)\\b",
+      "match": "\\b(module|global|console|window|document|process|require|exports|globalThis)\\b",
       "name": "support.variable.tsx"
     },
     "scope-keyword-control-from-from": {

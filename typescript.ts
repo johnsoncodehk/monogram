@@ -565,7 +565,18 @@ const Decl = rule($ => [
   [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
   ['enum', notReserved, Ident, '{', sep(EnumMember, ','), '}'],
   ['declare', 'function', opt('*'), notReserved, Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), opt(';')],
+  // ambient module shorthand `declare module "foo";` (no body — the module arm below
+  // requires `{…}`) and `declare global { … }` (global-scope augmentation; `global`
+  // is a contextual-keyword block, not a namespace name). tsc accepts both.
+  ['declare', 'module', String_, opt(';')],
+  ['declare', 'global', '{', many(Stmt), '}'],
   ['declare', alt($, Stmt)],
+  // A leading `async`/`abstract` modifier before any declaration: tsc's parser
+  // accepts it (the checker rejects invalid combinations like `async class`); the
+  // dedicated arms above (function's opt('async'), class's opt('abstract')) match
+  // valid combinations first and keep their flat shape, so only otherwise-invalid
+  // pairings fall to this modifier-prefix arm.
+  [alt('async', 'abstract'), $],
   ['namespace', notReserved, Ident, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([notReserved, Ident, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
   ['export', alt($, Stmt)],

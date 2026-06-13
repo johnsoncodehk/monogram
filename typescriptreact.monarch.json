@@ -423,8 +423,8 @@
             "interface": "keyword",
             "type": "keyword",
             "enum": "keyword",
-            "namespace": "keyword",
             "module": "keyword",
+            "namespace": "keyword",
             "from": "keyword",
             "constructor": "keyword",
             "defer": "keyword",
@@ -856,11 +856,15 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "namespace": {
+            "module": {
               "token": "keyword",
               "switchTo": "@root"
             },
-            "module": {
+            "global": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "namespace": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -981,10 +985,6 @@
               "switchTo": "@value"
             },
             "exports": {
-              "token": "variable",
-              "switchTo": "@value"
-            },
-            "global": {
               "token": "variable",
               "switchTo": "@value"
             },
@@ -1209,8 +1209,9 @@
             "interface": "keyword",
             "type": "keyword",
             "enum": "keyword",
-            "namespace": "keyword",
             "module": "keyword",
+            "global": "variable",
+            "namespace": "keyword",
             "from": "keyword",
             "constructor": "keyword",
             "defer": "keyword",
@@ -1241,7 +1242,6 @@
             "process": "variable",
             "require": "variable",
             "exports": "variable",
-            "global": "variable",
             "globalThis": "variable",
             "@default": "identifier"
           }
