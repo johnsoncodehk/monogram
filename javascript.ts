@@ -259,13 +259,18 @@ const DecoratorExpr = rule($ => [
 // ── Expressions ──
 
 const Prop = rule($ => {
-  const method = ['(', sep(Param, ','), ')', Block];   // ( … ) { … }
+  // ( … ) { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
+  // MemberName stays outside it (a computed key inherits the enclosing context).
+  const propTail = (ctx) => ['(', sep(ctx(Param), ','), ')', ctx(Block)];
   return [
     ['...', Expr],                                                     // spread
-    // accessor (get/set)
-    [alt('get', 'set'), MemberName, '(', opt(sep(Param, ',')), ')', Block],
-    // method: async?/generator?, any member name (incl `#x`, computed `[e]`), then ( … ) { … }
-    [opt('async'), opt('*'), MemberName, ...method],
+    // accessor (get/set) — get/set bodies are plain (reset)
+    [alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', resetCtx(Block)],
+    // method, 4-way split on async × generator (each routes params+body to its family)
+    ['async', '*', MemberName, ...propTail(asyncGenCtx)],
+    ['async', MemberName, ...propTail(awaitCtx)],
+    ['*', MemberName, ...propTail(yieldCtx)],
+    [MemberName, ...propTail(resetCtx)],
     // value property — any member name incl computed `[e]: v` (MemberName covers `[Expr]`)
     [MemberName, ':', Expr],
     ['[', Expr, many(',', Expr), ']', ':', Expr],                      // computed comma list (lenient)
@@ -489,31 +494,46 @@ const MemberName = rule($ => [
 // alt() is first-match, so branches are ordered specific-before-general
 // (generator/accessor before the MemberName method/field split).
 // modifier only when NOT followed by name-making tokens (see typescript.ts)
-const Modifier = alt([alt('static', 'accessor', 'async'), not(alt('(', '=', '{', '}'))]);
-const callTail = ['(', sep(Param, ','), ')', opt(Block), opt(';')] as const;
+// `async` is NOT a generic member modifier here: it leads the async/async-generator
+// method arms below (which give the body its [Await] context), so the modifier soup
+// must not swallow it into a plain method (the class analog of the Decl modifier-prefix
+// fix). `static`/`accessor` stay generic modifiers.
+const Modifier = alt([alt('static', 'accessor'), not(alt('(', '=', '{', '}'))]);
+// Class member ( params ) body, with params+body routed to a [Await]/[Yield] family:
+// plain methods reset (a method body has its OWN, non-inherited context — the spec's
+// implicit function boundary), generators yield, async await, async-generators both.
+// The MemberName stays OUTSIDE the family: a computed key `[e]` is evaluated in the
+// ENCLOSING context, so it must inherit, not reset.
+const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(ctx(Block)), opt(';')];
 const ClassMember = rule($ => [
   ';',   // SemicolonClassElement: `class C { ; }`
-  ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
+  ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block), opt(';')],
   [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier (see typescript.ts)
   [
     many(DecoratorExpr),
     many(Modifier),
     alt(
-      ['*', MemberName, ...callTail],                                          // generator method
-      [alt('get', 'set'), MemberName, '(', opt(sep(Param, ',')), ')', opt(Block), opt(';')],  // accessor
+      // `async` is order-free among modifiers (tsc parses any order), so it carries
+      // its own inner modifier run and an async member's body is [+Await]/[+Await,+Yield].
+      ['async', many(Modifier), '*', MemberName, ...memTail(asyncGenCtx)],      // async generator method
+      ['async', many(Modifier), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', opt(awaitCtx(Block)), opt(';')],  // async accessor (semantic error; parses)
+      ['async', many(Modifier), 'static', awaitCtx(Block)],                     // `async static { }` (semantic error; parses)
+      ['async', many(Modifier), MemberName, ...memTail(awaitCtx)],             // async method
+      ['*', MemberName, ...memTail(yieldCtx)],                                  // generator method
+      [alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', opt(resetCtx(Block)), opt(';')],  // accessor
       [MemberName, alt(
-        [...callTail],                                                         // method (requires `(`)
+        [...memTail(resetCtx)],                                                 // method (requires `(`)
         // field catch-all; a ';'-less field must not be followed by a same-line
         // decorator (see typescript.ts)
-        [opt('=', Expr), alt([';'], [not(sameLine)], [not(not('}'))])],
+        [opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
       )],
     ),
   ],
   // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
   // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('=', Expr), alt([';'], [not(sameLine)], [not(not('}'))])],
-  [MemberName, '(', sep(Param, ','), ')', opt(Block), opt(';')],
+  [MemberName, opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
+  [MemberName, '(', sep(resetCtx(Param), ','), ')', opt(resetCtx(Block)), opt(';')],
 ]);
 
 const ImportSpecifier = rule($ => [

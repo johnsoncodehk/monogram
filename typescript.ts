@@ -153,21 +153,32 @@ const Type = rule($ => {
 // ── Expressions ──
 
 const Prop = rule($ => {
-  const method = ['(', sep(Param, ','), ')', opt(':', Type), Block];   // ( … ): T { … }
+  // ( … ): T { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
+  // MemberName and return type stay outside it (a computed key inherits the enclosing
+  // context, type positions are not parameterized).
+  const propTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(':', Type), ctx(Block)];
   // tsc parses a full modifier soup before ANY object-literal member and a `?` then
   // `!` after its name (`{ static m() {} }`, `{ export p: 1 }`, `{ a! }`, `{ a?() {} }`
   // are all parse-clean — rejecting them is the checker's job). `const`/`default` are
   // NOT parsed as modifiers there (tsc parse errors), so they stay out of the soup.
   // The soup arms are many1 + a plain fallback arm, so a member NAMED like a modifier
   // (`{ static: 1 }`, `{ async }`) falls through to the plain shapes.
-  const propMod = alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'async', 'export', 'declare', 'in', 'out');
+  // `async` is pulled out of the soup into the dedicated async method arms below (so the
+  // body gets its [Await] context); `static`/`get`/… stay lenient modifiers.
+  const propMod = alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out');
   return [
     ['...', Expr],                                                     // spread
-    // accessor (get/set), with any modifier soup (lenient, tsc-shaped)
-    [many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(Param, ',')), ')', opt(':', Type), opt(Block)],  // body optional: `{ get foo() }` is a tsc-clean (error-recovery) parse
+    // accessor (get/set), with any modifier soup (lenient, tsc-shaped) — body resets
+    [many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', opt(':', Type), opt(resetCtx(Block))],  // body optional: `{ get foo() }` is a tsc-clean (error-recovery) parse
     // method: modifiers?/generator?, any member name (incl `#x`, computed `[e]`), then ( … ) { … }
-    [many1(propMod), opt('*'), MemberName, opt('?'), opt('!'), opt(TypeParams), ...method],
-    [opt('async'), opt('*'), MemberName, opt('?'), opt('!'), opt(TypeParams), ...method],
+    [many1(propMod), opt('*'), MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(resetCtx)],
+    // async/generator method, 4-way split (each routes params+body to its family).
+    // async carries its own modifier run (order-free, like the class member arms).
+    ['async', many(propMod), '*', MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(asyncGenCtx)],
+    ['async', many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', opt(':', Type), opt(awaitCtx(Block))],  // async accessor (semantic error; parses)
+    ['async', many(propMod), MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(awaitCtx)],
+    ['*', MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(yieldCtx)],
+    [MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(resetCtx)],
     // value property — any member name incl computed `[e]: v` (MemberName covers `[Expr]`)
     [many1(propMod), MemberName, opt('?'), opt('!'), ':', Expr],
     [MemberName, opt('?'), opt('!'), ':', Expr],
@@ -499,11 +510,20 @@ const MemberName = rule($ => [
 // member (tsc's disambiguation): followed by '('/'='/':'/';'/'?'/'!'/'<'/'{'/'}'
 // it is the member NAME instead ('public() {}', 'static = 1'). 'declare' is a real
 // class modifier; 'export'/'in'/'out' are parse-tolerated by tsc (semantic errors).
-const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'async', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
+// `async` is NOT a generic class-member modifier here: it leads the async/async-generator
+// method arms below (which give the body its [Await] context), so the modifier soup must
+// not swallow it into a plain method (the class analog of the Decl modifier-prefix fix).
+const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
 const callTail = ['(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')] as const;
+// Class member ( params ): T body, params+body routed to a [Await]/[Yield] family:
+// plain methods reset (a method body has its OWN, non-inherited context — the spec's
+// implicit function boundary), generators yield, async await, async-generators both.
+// MemberName, type params, and the return type stay OUTSIDE the family (a computed key
+// `[e]` is evaluated in the ENCLOSING context, and type positions are not parameterized).
+const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(':', Type), opt(ctx(Block)), opt(';')];
 const ClassMember = rule($ => [
   ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
-  ['constructor', '(', sep(Param, ','), ')', Block, opt(';')],
+  ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block), opt(';')],
   [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
   // `public @dec method()` ("Decorators are not valid here") and an orphan
@@ -512,23 +532,30 @@ const ClassMember = rule($ => [
     many(DecoratorExpr),
     many(Modifier),
     alt(
-      ['*', MemberName, opt('?'), opt(TypeParams), ...callTail],               // generator method
-      [alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(Param, ',')), ')', opt(':', Type), opt(Block), opt(';')],  // accessor (type params parse; semantic error)
+      // `async` is order-free among modifiers (tsc parses any order; the checker
+      // validates), so it carries its own inner modifier run and an async member's
+      // body is [+Await]/[+Await,+Yield].
+      ['async', many(Modifier), '*', MemberName, opt('?'), opt(TypeParams), ...memTail(asyncGenCtx)],   // async generator method
+      ['async', many(Modifier), alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(':', Type), opt(awaitCtx(Block)), opt(';')],  // async accessor (semantic error; parses)
+      ['async', many(Modifier), 'static', awaitCtx(Block)],                              // `async static { }` (semantic error; parses)
+      ['async', many(Modifier), MemberName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],            // async method
+      ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
+      [alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(':', Type), opt(resetCtx(Block)), opt(';')],  // accessor (type params parse; semantic error)
       ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), opt(';')],          // index signature (value type optional + trailing comma: tsc error-recovery parses)
       [MemberName, alt(
-        [opt('?'), opt(TypeParams), ...callTail],                              // method (requires `(`)
+        [opt('?'), opt(TypeParams), ...memTail(resetCtx)],                       // method (requires `(`)
         // field (all-optional → catch-all). A field NOT ended by ';' must not be
         // followed by a SAME-LINE decorator: tsc reads that '@' as belonging to
         // THIS property ("Decorators must precede the name and all keywords") —
         // `x @dec y()` and `x = 1 @dec y()` reject, `x; @dec` and newline accept
-        [opt('!'), opt('?'), opt(':', Type), opt('=', Expr), alt([';'], [not(sameLine)], [not(not('}'))])],
+        [opt('!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
       )],
     ),
   ],
   // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
   // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', Expr), alt([';'], [not(sameLine)], [not(not('}'))])],
-  [MemberName, opt('?'), opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')],
+  [MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
+  [MemberName, opt('?'), opt(TypeParams), '(', sep(resetCtx(Param), ','), ')', opt(':', Type), opt(resetCtx(Block)), opt(';')],
 ]);
 
 const EnumMember = rule($ => [
