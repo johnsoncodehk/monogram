@@ -525,7 +525,12 @@ const Stmt = rule($ => [
   ';',
   ['debugger', asi()],
   ['with', '(', Expr, ')', $],
-  [opt('await'), 'using', sep(Binding, ','), asi()],
+  // A `using` / `await using` declaration binding is a BindingIdentifier — NOT a pattern. The
+  // `not(alt('[','{'))` routes a `[`/`{` start to the expression arm instead: `using [a] = b`
+  // is `using[a] = b` (element-assignment on the identifier `using`) and stays valid, while
+  // `using {a} = b` / `await using [a] = null` (no derivation — V8 + babel reject; tsc is
+  // lenient on the `{` form) correctly fail. (Guards the first binding; see ForHead for for-of.)
+  [opt('await'), 'using', not(alt('[', '{')), sep(Binding, ','), asi()],
   Decl,
   // ExpressionStatement lookahead restriction (ES2023 §14.5): a statement may not
   // begin with `function` / `async function` — those are declarations at statement
@@ -778,7 +783,7 @@ const Decl = rule($ => [
   [many1(alt('abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor')), alt(
     $,
     [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
-    [opt('await'), 'using', Binding, many(',', Binding), opt(';')],
+    [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), opt(';')],
   )],
   ['async', not('function'), $],
   ['namespace', notReserved, Ident, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
@@ -796,7 +801,7 @@ const Decl = rule($ => [
     // `using` requires a real binding here: `@dec using x` is parse-clean but
     // `using 1` is a tsc parse error (zero-binding `var;` by contrast is clean,
     // so the var/let/const alternative above keeps the lenient sep()).
-    [opt('await'), 'using', Binding, many(',', Binding), opt(';')],
+    [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), opt(';')],
   )],
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error).
