@@ -463,7 +463,12 @@ const ForHead = rule($ => {
   return [
     // declared head: `let/const/var/using/await using <bindings>` then C-style or in/of.
     // ForBinding gives a no-`in` initializer so `for (var a = 1 in xs)` parses.
-    [alt('let', 'const', 'var', 'using', ['await', 'using']), sep(ForBinding, ','), alt(
+    // `for (using of of …)` has no parse tree: the spec's `[lookahead != using of]` on the
+    // `using` ForDeclaration arm suppresses the using-DECL reading, and `using` as an
+    // identifier then fails (`using of of` reads as two for-of keywords). Guard the exact
+    // triple only — `for (using of ;…)` (C-style, binding named `of`) and `for (await using
+    // of of …)` (the await-using arm) stay valid.
+    [not(['using', 'of', 'of']), alt('let', 'const', 'var', 'using', ['await', 'using']), sep(ForBinding, ','), alt(
       cTail,
       // the for-in OBJECT is a full Expression (comma included: `for (a in b, c)`);
       // for-of takes an AssignmentExpression - no comma (tsc rejects `for (x of a, b)`)

@@ -106,9 +106,6 @@
       "include": "#scope-keyword-control-loop"
     },
     {
-      "include": "#scope-keyword-control-loop-of"
-    },
-    {
       "include": "#scope-keyword-control-flow"
     },
     {
@@ -2157,11 +2154,7 @@
       "name": "keyword.operator.expression.js.jsx"
     },
     "scope-keyword-control-loop": {
-      "match": "\\b(in|for|while|do|break|continue)\\b",
-      "name": "keyword.control.loop.js.jsx"
-    },
-    "scope-keyword-control-loop-of": {
-      "match": "\\b(of)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[]|\\s*$|\\s*[({\\[\"`/])",
+      "match": "\\b(in|for|while|do|break|continue|of)\\b",
       "name": "keyword.control.loop.js.jsx"
     },
     "scope-keyword-other": {
