@@ -116,11 +116,17 @@ function analyze(grammar: CstGrammar) {
   function classifyAlts(rule: RuleDecl) {
     const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
     const nuds: RuleExpr[] = [];
-    const leds: { expr: RuleExpr; items: RuleExpr[] }[] = [];
+    const leds: { expr: RuleExpr; items: RuleExpr[]; notLeftLeaf?: string[] }[] = [];
     for (const alt of alts) {
       const items = alt.type === 'seq' ? alt.items : [alt];
-      if (items[0]?.type === 'ref' && items[0].name === rule.name) leds.push({ expr: alt, items: items.slice(1) });
-      else nuds.push(alt);
+      // A LED arm may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`
+      // (`[notLeftLeaf('void',…), $, '.', Ident]`). Strip it into LED metadata; the self-ref is
+      // then the next item and `led.items` is everything after it — identical to a plain LED.
+      const guard = items[0]?.type === 'notLeftLeaf' ? items[0].words : undefined;
+      const head = guard ? 1 : 0;
+      if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
+        leds.push({ expr: alt, items: items.slice(head + 1), notLeftLeaf: guard });
+      } else nuds.push(alt);
     }
     return { nuds, leds };
   }
@@ -128,18 +134,26 @@ function analyze(grammar: CstGrammar) {
     const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
     const atoms: RuleExpr[] = [];
     const continuations: RuleExpr[][] = [];
+    const contNotLeftLeaf: (string[] | null)[] = [];
     for (const alt of alts) {
       const items = alt.type === 'seq' ? alt.items : [alt];
-      if (items[0]?.type === 'ref' && items[0].name === rule.name) continuations.push(items.slice(1));
-      else atoms.push(alt);
+      // A continuation may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`.
+      // Strip it into per-continuation metadata; the self-ref is the next item.
+      const guard = items[0]?.type === 'notLeftLeaf' ? items[0].words : undefined;
+      const head = guard ? 1 : 0;
+      if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
+        continuations.push(items.slice(head + 1));
+        contNotLeftLeaf.push(guard ?? null);
+      } else atoms.push(alt);
     }
-    return { atoms, continuations };
+    return { atoms, continuations, contNotLeftLeaf };
   }
   function isLeftRecursive(rule: RuleDecl): boolean {
     const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
     return alts.some(alt => {
       const items = alt.type === 'seq' ? alt.items : [alt];
-      return items[0]?.type === 'ref' && items[0].name === rule.name;
+      const head = items[0]?.type === 'notLeftLeaf' ? 1 : 0;
+      return items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name;
     });
   }
 
@@ -179,13 +193,14 @@ function analyze(grammar: CstGrammar) {
 
   // Access-tail + tail-closing LED classification (Pratt).
   // Returns, per Pratt rule, parallel arrays of flags aligned to the leds array.
-  const ledMeta = new Map<string, { accessTail: boolean[]; tailClosing: boolean[]; mixfix: (MixfixInfo | null)[]; first: FirstTok[]; prec: ({ lbp: number; rhsBp: number | null } | null)[] }>();
+  const ledMeta = new Map<string, { accessTail: boolean[]; tailClosing: boolean[]; mixfix: (MixfixInfo | null)[]; first: FirstTok[]; prec: ({ lbp: number; rhsBp: number | null } | null)[]; notLeftLeaf: (string[] | null)[] }>();
   for (const [ruleName, { leds }] of prattClassified.entries()) {
     const accessTail: boolean[] = [];
     const tailClosing: boolean[] = [];
     const mixfix: (MixfixInfo | null)[] = [];
     const first: FirstTok[] = [];
     const prec: ({ lbp: number; rhsBp: number | null } | null)[] = [];
+    const notLeftLeaf: (string[] | null)[] = [];
     for (const led of leds) {
       const it = led.items;
       let isAccessTail = false, isTailClosing = false;
@@ -209,8 +224,9 @@ function analyze(grammar: CstGrammar) {
         }
       }
       prec.push(lp);
+      notLeftLeaf.push(led.notLeftLeaf ?? null);
     }
-    ledMeta.set(ruleName, { accessTail, tailClosing, mixfix, first, prec });
+    ledMeta.set(ruleName, { accessTail, tailClosing, mixfix, first, prec, notLeftLeaf });
   }
 
   // Capped-NUD classification (Pratt). A NUD alternative wrapped in a `cap`-group is a
@@ -323,7 +339,7 @@ function analyze(grammar: CstGrammar) {
             if (kws) pending = pending ? new Set([...pending, ...kws]) : kws;
             continue;
           }
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) {
@@ -344,7 +360,7 @@ function analyze(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Set();
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -403,7 +419,7 @@ function analyze(grammar: CstGrammar) {
         const acc = new Set<string>();
         for (const item of e.items) {
           if (item.type === 'prefix') return null;
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
           const f = exprFirstPlain(item);
           if (f === null) return null;
           for (const k of f) acc.add(k);
@@ -421,7 +437,7 @@ function analyze(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirstPlain(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Set();
       case 'sep': return exprFirstPlain(e.element);
       default: return null;
     }
@@ -445,7 +461,7 @@ function analyze(grammar: CstGrammar) {
     const acc = new Set<string>();
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
       if (item.type === 'op' || item.type === 'postfix') { for (const k of opKeys) acc.add(k); return acc; }
       if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
       const f = exprFirstPlain(item);
@@ -458,7 +474,7 @@ function analyze(grammar: CstGrammar) {
   function suffixNullable(items: RuleExpr[], j: number): boolean {
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
       if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
       if (!exprNullable(item)) return false;
     }
@@ -476,7 +492,7 @@ function analyze(grammar: CstGrammar) {
         const items = e.items;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
-          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
           let isec: Sec;
           let itemNullable: boolean;
           if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
@@ -528,7 +544,7 @@ function analyze(grammar: CstGrammar) {
         if (sec.len1) acc.add(e.delimiter);
         return { s: acc, len1: sec.len1 };
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf':
         return { s: new Set(), len1: false };
       case 'op': case 'prefix': case 'postfix':
         return { s: new Set(), len1: true };
@@ -975,6 +991,11 @@ class Emitter {
         return `if (!(pos < cap && (tkFl[pos] & 2) === 0)) { ${onFail} }`;
       case 'noMultilineFlowBefore':
         return `if (!(pos < cap && (tkFl[pos] & 4) === 0)) { ${onFail} }`;
+      case 'notLeftLeaf':
+        // The head-leaf LED gate is applied in the Pratt LED loop (not here); the marker is
+        // stripped from the LED arm's items, so it never reaches the matcher. As a leaf-position
+        // no-op it consumes nothing and succeeds (matches the empty string).
+        return ``;
       case 'sep':
         return this.matchSepInto(expr.element, expr.delimiter, onFail);
       default:
@@ -1529,6 +1550,20 @@ export function emitParser(grammar: CstGrammar): string {
   // pass — `(a + b) = c` via the cover is correctly accepted, like tsc.)
   e.emit(`  if (n >= 3) { const _m = kids[cs + 1]; if (_m < 0) { const _mt = absTok[lhs] + ((~_m) >>> 2); if (binaryConnectors.has(${e.soa ? 'docText(toff(_mt), tend(_mt))' : 'tkText[_mt]'})) return true; } }`);
   e.emit(`  return false;`);
+  e.emit(`}`);
+  // Head-leaf TEXT of a node: descend the LEFTMOST-child spine to the OUTERMOST leaf and return its
+  // token text (the SAME head-leaf the _notTarget gate reads, generalized to recurse through child
+  // nodes). Drives the notLeftLeaf LED gate: a node whose head leaf text is in the arm's word set
+  // (e.g. `void`/`null`/`this` for the type `.` qualification) is not a valid LEFT operand of the
+  // arm. A childless ($missing recovery) node returns '' (matches no word → the arm is not blocked).
+  e.emit(`function _headLeafText(id) {`);
+  e.emit(`  while (rowCount[id] > 0) {`);
+  e.emit(`    const _hh = kids[rowStart[id]];`);
+  e.emit(`    if (_hh >= 0) { id = _hh; continue; }`);
+  e.emit(`    const _ht = absTok[id] + ((~_hh) >>> 2);`);
+  e.emit(`    return ${e.soa ? 'docText(toff(_ht), tend(_ht))' : 'tkText[_ht]'};`);
+  e.emit(`  }`);
+  e.emit(`  return '';`);
   e.emit(`}`);
   e.emit(`const tokenNames = new Set(${J([...a.tokenNames])});`);
   e.emit(`const templateTokenNames = new Set(${J([...a.templateTokenNames])});`);
@@ -2260,7 +2295,8 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
 // Left-recursive (non-Pratt) rule: atom then continuations (mirrors parseLeftRec).
 function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl) {
   const ruleFn = `R_${sanitize(rule.name)}`;
-  const { atoms, continuations } = a.leftRecClassified.get(rule.name)!;
+  const sn = sanitize(rule.name);
+  const { atoms, continuations, contNotLeftLeaf } = a.leftRecClassified.get(rule.name)!;
   const contMix = a.contMeta.get(rule.name)!;
   // A left-rec rule, like a Pratt rule, goes through parseRule's memo + context +
   // suppress wrapper in the interpreter — so currentPrattContext is set to this rule
@@ -2268,6 +2304,10 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   // template-literal TYPE must parse as Type, not the default expression rule).
   const rid = a.grammar.rules.indexOf(rule);
   e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_lr); }`);
+  // notLeftLeaf head-leaf word sets (module-level, built once) for this rule's gated continuations.
+  contNotLeftLeaf.forEach((words, i) => {
+    if (words) e.emit(`const _NLLC_${sn}_${i} = new Set(${J(words)});`);
+  });
   e.emit(`function ${ruleFn}_lr(_minBp) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
   e.emit(`  let node = -1; let bestAtomPos = saved;`);
@@ -2289,7 +2329,10 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   e.emit(`    const contSaved = pos; const contMark = scn;`);
   continuations.forEach((cont, i) => {
     e.emit(`    pos = contSaved; scn = contMark;`);
-    e.emit(`    { let ok = cont_${sanitize(rule.name)}_${i}();`);
+    // notLeftLeaf head-leaf gate: skip this continuation when the LEFT node's outermost (head) leaf
+    // text is in its word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
+    const gate = contNotLeftLeaf[i] ? `!_NLLC_${sn}_${i}.has(_headLeafText(node)) && ` : '';
+    e.emit(`    { let ok = ${gate}cont_${sanitize(rule.name)}_${i}();`);
     if (contMix[i]) {
       e.emit(`      if (!ok) { pos = contSaved; scn = contMark; ok = matchMixfixLed_${sanitize(rule.name)}_cont_${i}(); }`);
     }
@@ -2326,6 +2369,10 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // R_<rule>() wraps parseRule's memo/context handling, then calls the bp-taking core.
   const rid = a.grammar.rules.indexOf(rule);
   e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_pratt); }`);
+  // notLeftLeaf head-leaf word sets (module-level, built once) for this rule's gated LED arms.
+  meta.notLeftLeaf.forEach((words, i) => {
+    if (words) e.emit(`const _NLL_${sn}_${i} = new Set(${J(words)});`);
+  });
   e.emit(`function ${ruleFn}_pratt(minBp) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
   e.emit(`  let lhs = -1; let bestNudPos = saved;`);
@@ -2396,6 +2443,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       // Precedence gate for alternative-form LEDs (see LedPrec): without it they bind
       // maximally tight (`a == b ? c : d` mis-grouped as `a == (b ? c : d)`).
       if (meta.prec[i]) conds.push(`${meta.prec[i]!.lbp} > minBp`);
+      // notLeftLeaf head-leaf gate: skip the arm when the LEFT node's outermost (head) leaf text
+      // is in the arm's word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
+      if (meta.notLeftLeaf[i]) conds.push(`!_NLL_${sn}_${i}.has(_headLeafText(lhs))`);
       // suppress: skip a LED whose first literal connector is in suppressCur.
       const firstLit = (led.items[0]?.type === 'literal') ? led.items[0].value : null;
       if (firstLit !== null) conds.push(`!(suppressCur && suppressCur.has(${J(firstLit)}))`);

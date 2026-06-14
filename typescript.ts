@@ -1,7 +1,7 @@
 import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not, tsRelax, capExpr,
+  sep, opt, many, many1, alt, exclude, not, tsRelax, capExpr, notLeftLeaf,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
 } from './src/api.ts';
 
@@ -151,11 +151,19 @@ const Type = rule($ => {
     ['import', '(', $, ')'],
     Template,
     [$, sameLine, '[', $, ']'],   // indexed access T[K] — `[` must be on the same line (no ASI)
-    [$, '.', Ident],
+    // qualified type name `A.B`: a TypeName's root is an IdentifierReference, so the
+    // keyword/literal types `void`/`null`/`true`/`false`/`this` are NOT `.`-qualifiable
+    // (`void.x` has no parse tree — tsc rejects; @babel/parser is lenient but the spec
+    // PRODUCTIONS make it underivable). `undefined`/`number`/`string`/… are identifier-rooted
+    // and stay qualifiable. `notLeftLeaf(...)` gates the arm on the LEFT node's head leaf; it is
+    // zero-width, so tree-sitter DROPS it (the derived GLR grammar keeps the unconstrained `.`
+    // LED — a left-leaf predicate is not expressible in GLR, and a stray `void.x` is harmless for
+    // a highlighter). No tsRelax wrapper is needed: the marker is itself the relaxation point.
+    [notLeftLeaf('void', 'null', 'true', 'false', 'this'), $, '.', Ident],
     // ── JSDoc types — tsc parses these in NORMAL TS type positions (the checker
     // rejects them with "JSDoc types can only be used inside documentation
     // comments"), so the parse surface must accept them. ──
-    [$, '.', '<', sep($, ','), '>'],   // dotted type arguments: Array.<number>
+    [notLeftLeaf('void', 'null', 'true', 'false', 'this'), $, '.', '<', sep($, ','), '>'],   // dotted type arguments: Array.<number>
     ['?', $],    // prefix nullable: ?number
     ['!', $],    // prefix non-nullable: !string
     '?',         // JSDocUnknownType: a bare `?` (when no type follows)

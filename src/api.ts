@@ -94,6 +94,7 @@ interface OpMarker { readonly __kind: 'op' }
 interface SameLineMarker { readonly __kind: 'sameLine' }
 interface NoCommentMarker { readonly __kind: 'noCommentBefore' }
 interface NoMultilineFlowMarker { readonly __kind: 'noMultilineFlowBefore' }
+interface NotLeftLeafMarker { readonly __kind: 'notLeftLeaf'; readonly words: string[] }
 interface PrefixSlot {
   readonly __kind: 'prefix';
   (...ops: string[]): PrefixOps;
@@ -107,7 +108,7 @@ interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[]; requireTar
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
 interface LhsTargetOps { readonly __kind: 'lhs-target-ops'; ops: string[] }
 
-type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker;
+type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker | NotLeftLeafMarker;
 
 export const op: OpMarker = { __kind: 'op' };
 
@@ -124,6 +125,18 @@ export const noCommentBefore: NoCommentMarker = { __kind: 'noCommentBefore' };
 // so the flow-collection-as-block-key rule guards the `:` with this so a multi-line flow key is
 // rejected while a single-line one accepts (see RuleExpr 'noMultilineFlowBefore').
 export const noMultilineFlowBefore: NoMultilineFlowMarker = { __kind: 'noMultilineFlowBefore' };
+
+// Zero-width LEFT-operand head-leaf guard for a Pratt LED arm. Place it at the HEAD of a LED
+// alternative, before the self `$` (e.g. `[notLeftLeaf('void','null'), $, '.', Ident]`). The arm
+// matches only when the LEFT node's OUTERMOST (head) leaf token TEXT is NOT one of `words`; when it
+// IS, the arm is treated as not-matched (skipped) and the connector rebinds to nothing. Models TS's
+// rule that a qualified type name's root is an IdentifierReference, so the keyword/literal types
+// `void`/`null`/`true`/`false`/`this` are not `.`-qualifiable (`void.x` has no parse tree) while an
+// identifier-rooted type (`A.B`, `undefined.x`, `number.x`) is. Mirrors the AssignmentTargetType gate
+// (`lhsTarget`/`prefixTarget`), reading the SAME head leaf but predicated on TEXT membership.
+export function notLeftLeaf(...words: string[]): NotLeftLeafMarker {
+  return { __kind: 'notLeftLeaf', words };
+}
 
 export const prefix: PrefixSlot = Object.assign(
   (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops }),
@@ -462,6 +475,7 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
   if (marker.__kind === 'sameLine') return { type: 'sameLine' };
   if (marker.__kind === 'noCommentBefore') return { type: 'noCommentBefore' };
   if (marker.__kind === 'noMultilineFlowBefore') return { type: 'noMultilineFlowBefore' };
+  if (marker.__kind === 'notLeftLeaf') return { type: 'notLeftLeaf', words: marker.words };
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
 }
 

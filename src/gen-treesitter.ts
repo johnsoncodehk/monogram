@@ -245,6 +245,11 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       // Zero-width "preceding flow was single-line" assertion (YAML flow-as-block-key) — like
       // `noCommentBefore`, a scanner-level restriction; a no-op in the CFG.
       return 'blank()';
+    case 'notLeftLeaf':
+      // Zero-width LEFT head-leaf guard — a left-operand predicate is not expressible in tree-sitter
+      // GLR; it consumes nothing, so it renders a no-op (the constrained LED is wrapped in tsRelax,
+      // so tree-sitter renders the UNCONSTRAINED `.` form and never reaches this case in practice).
+      return 'blank()';
     case 'sep': {
       // sep(elem, ',') = optional(seq(elem, repeat(seq(',', elem)), optional(',')))
       // Trailing delimiter is allowed (matches the parser's matchSep behavior).

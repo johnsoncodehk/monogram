@@ -452,6 +452,18 @@ export type RuleExpr =
   // (`[flow]: v` is a key, `[23\n]: v` is not). Like `noCommentBefore`, non-consuming → invisible
   // to other generators (a no-op marker).
   | { type: 'noMultilineFlowBefore' }
+  // Zero-width LEFT-operand head-leaf guard for a Pratt LED arm (it sits at the HEAD of a LED
+  // alternative, before the self `$`). It gates the arm on the LEFT node's OUTERMOST (head) leaf
+  // token TEXT: when that text is in `words`, the LED arm is treated as NOT-matched (skipped), so
+  // the connector rebinds to nothing and the parse rejects. Encodes TS's rule that a qualified type
+  // name `A.B` has an IdentifierReference root — the keyword/literal types `void`/`null`/`true`/
+  // `false`/`this` are NOT qualifiable (`void.x` has no parse tree). It mirrors the AssignmentTargetType
+  // gate (`_notTarget`) which reads the same head leaf, but predicated on TEXT membership rather than
+  // operator-tag shape. Like the other zero-width markers it consumes nothing → invisible to every
+  // generator (a no-op in the CFG): gen-treesitter renders it `blank()` and drops it from the seq,
+  // so the derived GLR grammar keeps the UNCONSTRAINED `.` LED (a left-leaf predicate is not
+  // expressible in GLR, and a stray `void.x` is harmless for a highlighter) — no tsRelax needed.
+  | { type: 'notLeftLeaf'; words: string[] }
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
   | { type: 'prefix' }

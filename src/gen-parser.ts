@@ -186,13 +186,18 @@ export function createParser(grammar: CstGrammar) {
   function classifyAlts(rule: RuleDecl) {
     const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
     const nuds: RuleExpr[] = [];
-    const leds: { expr: RuleExpr; items: RuleExpr[] }[] = [];
+    const leds: { expr: RuleExpr; items: RuleExpr[]; notLeftLeaf?: string[] }[] = [];
 
     for (const alt of alts) {
       const items = alt.type === 'seq' ? alt.items : [alt];
-      if (items[0]?.type === 'ref' && items[0].name === rule.name) {
+      // A LED arm may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`
+      // (`[notLeftLeaf('void',…), $, '.', Ident]`). Strip it into LED metadata; the self-ref is
+      // the next item and `led.items` is everything after it — identical to a plain LED.
+      const guard = items[0]?.type === 'notLeftLeaf' ? items[0].words : undefined;
+      const head = guard ? 1 : 0;
+      if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
         // Left-recursive: LED
-        leds.push({ expr: alt, items: items.slice(1) });
+        leds.push({ expr: alt, items: items.slice(head + 1), notLeftLeaf: guard });
       } else if (items.length >= 2 && items[0]?.type === 'prefix') {
         // prefix $ → NUD with prefix handling
         nuds.push(alt);
@@ -208,16 +213,22 @@ export function createParser(grammar: CstGrammar) {
     const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
     const atoms: RuleExpr[] = [];
     const continuations: RuleExpr[][] = [];
+    const contNotLeftLeaf: (string[] | null)[] = [];
 
     for (const alt of alts) {
       const items = alt.type === 'seq' ? alt.items : [alt];
-      if (items[0]?.type === 'ref' && items[0].name === rule.name) {
-        continuations.push(items.slice(1));
+      // A continuation may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`.
+      // Strip it into per-continuation metadata; the self-ref is the next item.
+      const guard = items[0]?.type === 'notLeftLeaf' ? items[0].words : undefined;
+      const head = guard ? 1 : 0;
+      if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
+        continuations.push(items.slice(head + 1));
+        contNotLeftLeaf.push(guard ?? null);
       } else {
         atoms.push(alt);
       }
     }
-    return { atoms, continuations };
+    return { atoms, continuations, contNotLeftLeaf };
   }
 
   // ── Left recursion = a left-corner cycle ──
@@ -288,7 +299,10 @@ export function createParser(grammar: CstGrammar) {
   // a standalone definition of "is this rule left-recursive".
   function peelsDirect(rule: RuleDecl, alt: RuleExpr): boolean {
     const items = itemsOf(alt);
-    return items[0]?.type === 'ref' && items[0].name === rule.name;
+    // A leading zero-width `notLeftLeaf(...)` head-leaf guard precedes the self `$` in a LED arm;
+    // the arm is still DIRECT left-recursion (the local Pratt transform peels it), so look past it.
+    const head = items[0]?.type === 'notLeftLeaf' ? 1 : 0;
+    return items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name;
   }
   // The PURE left-corner edge map, over ALL alternatives (nothing pre-excluded). This is
   // the relation that DEFINES left recursion.
@@ -391,6 +405,12 @@ export function createParser(grammar: CstGrammar) {
       ledPrecOf.set(led, lp);
     }
   }
+  // Per-LED notLeftLeaf head-leaf word set (object-keyed like ledFirst/ledPrecOf): the arm matches
+  // only when the LEFT node's outermost (head) leaf text is NOT in this set.
+  const ledNotLeftLeaf = new Map<object, Set<string>>();
+  for (const { leds } of prattClassified.values()) {
+    for (const led of leds) if (led.notLeftLeaf) ledNotLeftLeaf.set(led, new Set(led.notLeftLeaf));
+  }
 
   // The template token(s): the parser routes their tokens to the interpolation-aware
   // parseTemplateExpr path (the lexer owns producing them — see gen-lexer.ts).
@@ -479,6 +499,12 @@ export function createParser(grammar: CstGrammar) {
       if (info) contMixfix.set(cont, info);
     }
   }
+  // Per-continuation notLeftLeaf head-leaf word set (object-keyed like contMixfix): the continuation
+  // matches only when the LEFT node's outermost (head) leaf text is NOT in this set.
+  const contNotLeftLeaf = new Map<object, Set<string>>();
+  for (const { continuations, contNotLeftLeaf: words } of leftRecClassified.values()) {
+    continuations.forEach((cont, i) => { if (words[i]) contNotLeftLeaf.set(cont, new Set(words[i]!)); });
+  }
 
   // ── Access-tail LEDs (closed under a postfix operator) ──
   // A postfix operator (`a++`) turns its operand into an "update expression" that
@@ -532,7 +558,7 @@ export function createParser(grammar: CstGrammar) {
         const acc = new Set<string>();
         for (const item of e.items) {
           if (item.type === 'prefix') return null;               // prefix op → any operator token: give up
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;  // non-consuming here
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;  // non-consuming here
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) acc.add(k);
@@ -550,7 +576,7 @@ export function createParser(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': return new Set();  // zero-width: contributes no FIRST tokens
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Set();  // zero-width: contributes no FIRST tokens
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -632,7 +658,7 @@ export function createParser(grammar: CstGrammar) {
     const acc = new Set<string>();
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
       if (item.type === 'op' || item.type === 'postfix') { for (const k of secOpKeys) acc.add(k); return acc; }
       if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
       const f = exprFirst(item);
@@ -645,7 +671,7 @@ export function createParser(grammar: CstGrammar) {
   function suffixNullable(items: RuleExpr[], j: number): boolean {
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
       if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
       if (!exprNullable(item)) return false;
     }
@@ -663,7 +689,7 @@ export function createParser(grammar: CstGrammar) {
         const items = e.items;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
-          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore') continue;
+          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
           let isec: Sec;
           let itemNullable: boolean;
           if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
@@ -715,7 +741,7 @@ export function createParser(grammar: CstGrammar) {
         if (sec.len1) acc.add(e.delimiter);
         return { s: acc, len1: sec.len1 };
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf':
         return { s: new Set(), len1: false };
       case 'op': case 'prefix': case 'postfix':
         return { s: new Set(), len1: true };
@@ -1026,6 +1052,10 @@ export function createParser(grammar: CstGrammar) {
       outer: while (true) {
         const contSaved = pos;
         for (const cont of continuations) {
+          // notLeftLeaf head-leaf gate: skip this continuation when the LEFT node's outermost (head)
+          // leaf text is in its word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
+          const nll = contNotLeftLeaf.get(cont);
+          if (nll !== undefined && nll.has(headLeafText(node))) continue;
           pos = contSaved;
           let children = matchSeq(cont);
           // Mixfix operand re-bind (same fix parsePratt uses): a continuation of the
@@ -1073,6 +1103,18 @@ export function createParser(grammar: CstGrammar) {
       // element `a[b]` have a `$punct` leaf there, a paren cover has a NODE child → those pass.
       if (cs.length >= 3) { const m = cs[1]; if (m && 'tokenType' in m && binaryConnectors.has(source.slice(m.offset, m.end))) return true; }
       return false;
+    };
+
+    // Head-leaf TEXT of a node: descend the LEFTMOST-child spine to the OUTERMOST leaf and return
+    // its source text (the same head leaf `notAssignTarget` reads, generalized to recurse through
+    // child nodes). Drives the notLeftLeaf LED gate. A childless node returns '' (matches no word).
+    const headLeafText = (node: CstNode): string => {
+      let cur: CstChild = node;
+      while (!('tokenType' in cur)) {
+        if (cur.children.length === 0) return '';
+        cur = cur.children[0];
+      }
+      return source.slice(cur.offset, cur.end);
     };
 
     // Pratt parser for rules with op/prefix/postfix
@@ -1163,6 +1205,10 @@ export function createParser(grammar: CstGrammar) {
           // tight (`a == b ? c : d` mis-grouped as `a == (b ? c : d)`).
           const lp = ledPrecOf.get(led);
           if (lp !== undefined && lp.lbp <= minBp) continue;
+          // notLeftLeaf head-leaf gate: skip the arm when the LEFT node's outermost (head) leaf text
+          // is in the arm's word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
+          const nll = ledNotLeftLeaf.get(led);
+          if (nll !== undefined && 'children' in lhs && nll.has(headLeafText(lhs))) continue;
           if (!canStart(ledFirst.get(led), tok)) continue;   // first-token dispatch for LED continuations
 
           pos = ledSaved;
@@ -1340,6 +1386,11 @@ export function createParser(grammar: CstGrammar) {
           const tok = peek();
           return tok && !tok.multilineFlowBefore ? [] : null;
         }
+        case 'notLeftLeaf':
+          // The head-leaf LED gate is applied in the Pratt LED loop (not here); the marker is
+          // stripped from the LED arm's items, so it never reaches here. As a leaf-position no-op
+          // it consumes nothing and succeeds (returns no children).
+          return [];
         case 'sep':
           return matchSep(expr.element, expr.delimiter);
         default:

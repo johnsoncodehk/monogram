@@ -126,7 +126,11 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     };
 
     for (const alt of alts) {
-      const items = alt.type === 'seq' ? alt.items : [alt];
+      const rawItems = alt.type === 'seq' ? alt.items : [alt];
+      // A leading `notLeftLeaf(...)` head-leaf guard sits BEFORE the self `$` of a LED arm and is
+      // zero-width — drop it so the self-ref classification and the step plan match the parser's
+      // LED node shape (`[leftNode, …]`), exactly as the parsers' classifyAlts strips it.
+      const items = rawItems[0]?.type === 'notLeftLeaf' ? rawItems.slice(1) : rawItems;
       // Pratt op-form marker alts are covered by the synthesized op arms below.
       if (items.some(it => it.type === 'op' || it.type === 'prefix' || it.type === 'postfix')) continue;
 
@@ -191,7 +195,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       return isKeywordLiteral(v) ? v : (PUNCT_NAMES[v] ?? 'p' + [...v].map(c => c.charCodeAt(0)).join('_'));
     }
     if (first.type === 'ref') return lowerFirst(first.name);
-    if (first.type === 'not' || first.type === 'sameLine' || first.type === 'noCommentBefore' || first.type === 'noMultilineFlowBefore') {
+    if (first.type === 'not' || first.type === 'sameLine' || first.type === 'noCommentBefore' || first.type === 'noMultilineFlowBefore' || first.type === 'notLeftLeaf') {
       return nameFrom(items.slice(1), fuel - 1);   // zero-width: name by what follows
     }
     if (first.type === 'alt') {
@@ -208,7 +212,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   // (inside opt → 'opt', inside many/sep → 'many') applied to captures.
   function pushSteps(steps: Step[], it: RuleExpr, captures: Capture[], used: Set<string>, card: Card): void {
     switch (it.type) {
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf':
         return;   // zero-width: no children
       case 'literal':
         steps.push({ kind: 'lit', text: it.value, tt: ttOf(it.value) });
