@@ -102,9 +102,10 @@ interface PostfixSlot {
   readonly __kind: 'postfix';
   (...ops: string[]): PostfixOps;
 }
-interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[] }
-interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[] }
+interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[]; requireTarget?: boolean }
+interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[]; requireTarget?: boolean }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
+interface LhsTargetOps { readonly __kind: 'lhs-target-ops'; ops: string[] }
 
 type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker;
 
@@ -140,6 +141,27 @@ export const postfix: PostfixSlot = Object.assign(
 // and `++x ** y` are fine. A general, declarable property — Python, by contrast,
 // allows `-x ** y` and would not use this. The engine enforces it generically.
 export const noUnaryLhs = (...ops: string[]): NoUnaryLhsOps => ({ __kind: 'no-unary-lhs-ops' as const, ops });
+
+// Mark infix operators whose LEFT operand must be a valid ASSIGNMENT TARGET
+// (a LeftHandSideExpression — identifier / member / element / call / paren / `this`),
+// NOT a prefix-unary, prefix-update, or postfix-update expression. E.g. JS `=` and the
+// compound assignments: `-x = 1`, `++x = 1`, `x++ = 1` are syntax errors, but `x = 1`,
+// `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine. This is ECMAScript's
+// AssignmentTargetType, enforced at PARSE time. A general, declarable property; the
+// engine enforces it generically via the operand node's outermost form (head/tail leaf).
+export const lhsTarget = (...ops: string[]): LhsTargetOps => ({ __kind: 'lhs-target-ops' as const, ops });
+
+// Postfix operators whose OPERAND must be a valid assignment target (LHS), same shape
+// rule as `lhsTarget` above — e.g. JS postfix `++`/`--`: `x++` is fine but `-x++` parses
+// as `-(x++)`, and `++x++`, `x++ ++` are syntax errors (the operand `++x` / `x++` is not
+// a LeftHandSideExpression). Distinct from `postfix(...)` (no operand-shape constraint).
+export const postfixTarget = (...ops: string[]): PostfixOps => ({ __kind: 'postfix-ops' as const, ops, requireTarget: true });
+
+// Prefix operators whose OPERAND must be a valid assignment target (LHS) — e.g. JS prefix
+// `++`/`--` (the update prefixes): `++x`, `++x.y` are fine but `++-x`, `++ ++x`, `++x--`
+// are syntax errors. Distinct from `prefix(...)` (the pure-unary `-`/`!`/`typeof`/… take
+// ANY operand, including an update: `-x++`, `void ++x` are fine).
+export const prefixTarget = (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops, requireTarget: true });
 
 // ── Combinators ──
 
@@ -287,7 +309,7 @@ interface PrecLevelDef {
   operators: PrecOperator[];
 }
 
-type OpSpec = string | PrefixOps | PostfixOps | NoUnaryLhsOps;
+type OpSpec = string | PrefixOps | PostfixOps | NoUnaryLhsOps | LhsTargetOps;
 
 function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
   const result: PrecOperator[] = [];
@@ -295,9 +317,11 @@ function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
     if (typeof o === 'string') {
       result.push({ value: o, position: 'infix' });
     } else if (o.__kind === 'prefix-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'prefix' });
+      for (const v of o.ops) result.push({ value: v, position: 'prefix', requireTarget: o.requireTarget });
     } else if (o.__kind === 'postfix-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'postfix' });
+      for (const v of o.ops) result.push({ value: v, position: 'postfix', requireTarget: o.requireTarget });
+    } else if (o.__kind === 'lhs-target-ops') {
+      for (const v of o.ops) result.push({ value: v, position: 'infix', requireTarget: true });
     } else {
       for (const v of o.ops) result.push({ value: v, position: 'infix', noUnaryLhs: true });
     }

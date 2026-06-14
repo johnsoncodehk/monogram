@@ -27,6 +27,7 @@ interface OpInfo {
   rbp: number;
   assoc: 'left' | 'right' | 'none';
   position: 'infix' | 'prefix' | 'postfix';
+  requireTarget?: boolean;
 }
 
 // ── Parser ──
@@ -123,6 +124,7 @@ export function createParser(grammar: CstGrammar) {
           rbp: level.assoc === 'right' ? bp - 1 : bp,
           assoc: level.assoc,
           position: 'prefix',
+          requireTarget: op.requireTarget,
         });
       } else if (op.position === 'postfix') {
         postfixOpValues.add(op.value);
@@ -131,11 +133,12 @@ export function createParser(grammar: CstGrammar) {
           rbp: 0,
           assoc: level.assoc,
           position: 'postfix',
+          requireTarget: op.requireTarget,
         });
       } else {
         const lbp = bp;
         const rbp = level.assoc === 'right' ? bp - 1 : bp;
-        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix' });
+        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix', requireTarget: op.requireTarget });
         if (op.noUnaryLhs) noUnaryLhsOps.add(op.value);
       }
     }
@@ -1027,6 +1030,23 @@ export function createParser(grammar: CstGrammar) {
       return node;
     }
 
+    // Assignment-target shape test (ECMAScript AssignmentTargetType): a node is NOT a valid
+    // LHS target iff its outermost form is a prefix-op (prefix-unary OR prefix-update `++x`)
+    // — head child is an `$operator` leaf in prefixOps — or a postfix-update (`x++`) — tail
+    // child is an `$operator` leaf in postfixOpValues. A parenthesized cover / member /
+    // element / call / non-null (`!`) tail has no `$operator` leaf at head or tail → passes.
+    const notAssignTarget = (node: CstNode): boolean => {
+      const cs = node.children;
+      if (cs.length === 0) return false;
+      const head = cs[0];
+      if (head && 'tokenType' in head && head.tokenType === '$operator'
+          && prefixOps.has(source.slice(head.offset, head.end))) return true;
+      const tail = cs[cs.length - 1];
+      if (tail && 'tokenType' in tail && tail.tokenType === '$operator'
+          && postfixOpValues.has(source.slice(tail.offset, tail.end))) return true;
+      return false;
+    };
+
     // Pratt parser for rules with op/prefix/postfix
     function parsePratt(rule: RuleDecl, minBp: number): CstNode | null {
       const { nuds, leds } = prattClassified.get(rule.name)!;
@@ -1053,6 +1073,9 @@ export function createParser(grammar: CstGrammar) {
               if (++pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
               const rhs = parsePratt(rule, info.rbp);
+              // A target-requiring prefix (`++`/`--`) operand must be a LeftHandSideExpression
+              // (`++-x`, `++ ++x`, `++x--` are syntax errors). Fail hard like noUnaryLhs.
+              if (rhs && info.requireTarget && notAssignTarget(rhs)) return null;
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 bestNudPos = pos;
@@ -1145,6 +1168,9 @@ export function createParser(grammar: CstGrammar) {
         if (info && info.lbp > minBp) {
           if (info.position === 'postfix') {
             if (!tailClosed) {                                   // can't postfix an update expr (`a++ --`)
+              // A target-requiring postfix (`++`/`--`) operand must be a LeftHandSideExpression
+              // (`++x++`, `x++ ++` are syntax errors). Fail hard like noUnaryLhs.
+              if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
               if (++pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
@@ -1152,6 +1178,9 @@ export function createParser(grammar: CstGrammar) {
               matched = true;
             }
           } else {
+            // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
+            // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Fail hard like noUnaryLhs.
+            if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
             // A `noUnaryLhs` op (e.g. `**`) may not take a bare unary-prefix expression
             // (`-x`, `typeof x` — a prefix-op node whose op is NOT also a postfix, i.e.
             // not an update `++`/`--`) as its LEFT operand. Fail the whole expression

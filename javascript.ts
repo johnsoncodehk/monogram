@@ -26,7 +26,7 @@
 
 import {
   token, rule, defineGrammar,
-  left, right, none, noUnaryLhs,
+  left, right, none, noUnaryLhs, lhsTarget, prefixTarget, postfixTarget,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not, reservableNot,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
@@ -235,8 +235,11 @@ export const jsLedPrecs = [
 ];
 
 export const ecmaPrec = [
-  right('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^='),
-  right('??=', '||=', '&&='),
+  // Assignment operators require a LeftHandSideExpression target (ECMAScript
+  // AssignmentTargetType): `-x = 1`, `++x = 1`, `x++ = 1` are syntax errors; `x = 1`,
+  // `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine.
+  right(lhsTarget('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=')),
+  right(lhsTarget('??=', '||=', '&&=')),
   left('??'),
   left('||'),
   left('&&'),
@@ -250,8 +253,13 @@ export const ecmaPrec = [
   left('*', '/', '%'),
   right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
   right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
-  right(prefix('++', '--')),
-  left(postfix('++', '--')),
+  // prefix `++`/`--` (update prefixes) operand must be a LeftHandSideExpression: `++x`,
+  // `++x.y` are fine but `++-x`, `++ ++x`, `++x--`, `++await x` are syntax errors. The
+  // pure-unary prefixes above take ANY operand (`-x++`, `void ++x` are fine) → stay plain.
+  right(prefixTarget('++', '--')),
+  // postfix `++`/`--` operand must be a LeftHandSideExpression: `x++`, `(-x)++` are fine
+  // but `++x++`, `x++ ++` are syntax errors (operand `++x`/`x++` is not an LHS).
+  left(postfixTarget('++', '--')),
 ];
 
 // ── Decorators ──

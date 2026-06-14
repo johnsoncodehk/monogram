@@ -36,6 +36,7 @@ interface OpInfo {
   rbp: number;
   assoc: 'left' | 'right' | 'none';
   position: 'infix' | 'prefix' | 'postfix';
+  requireTarget?: boolean;
 }
 
 type FirstTok = { lit: string } | { tok: string } | null;
@@ -62,20 +63,26 @@ function analyze(grammar: CstGrammar) {
   const prefixOps = new Map<string, OpInfo>();
   const noUnaryLhsOps = new Set<string>();
   const postfixOpValues = new Set<string>();
+  // Infix/postfix ops whose operand must be a valid assignment target (LHS) — see
+  // PrecOperator.requireTarget. Keyed like noUnaryLhsOps for the byte-table dispatch.
+  const requireTargetOps = new Set<string>();
   for (let i = 0; i < grammar.precs.length; i++) {
     const level = grammar.precs[i];
     const bp = (i + 1) * 2;
     for (const op of level.operators) {
       if (op.position === 'prefix') {
-        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix' });
+        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix', requireTarget: op.requireTarget });
+        if (op.requireTarget) requireTargetOps.add(op.value);
       } else if (op.position === 'postfix') {
         postfixOpValues.add(op.value);
-        opTable.set(op.value, { lbp: bp, rbp: 0, assoc: level.assoc, position: 'postfix' });
+        opTable.set(op.value, { lbp: bp, rbp: 0, assoc: level.assoc, position: 'postfix', requireTarget: op.requireTarget });
+        if (op.requireTarget) requireTargetOps.add(op.value);
       } else {
         const lbp = bp;
         const rbp = level.assoc === 'right' ? bp - 1 : bp;
-        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix' });
+        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix', requireTarget: op.requireTarget });
         if (op.noUnaryLhs) noUnaryLhsOps.add(op.value);
+        if (op.requireTarget) requireTargetOps.add(op.value);
       }
     }
   }
@@ -612,7 +619,7 @@ function analyze(grammar: CstGrammar) {
   };
 
   return {
-    grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues,
+    grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nullableRules, firstSets, symtab, qualKeys,
@@ -1453,7 +1460,40 @@ export function emitParser(grammar: CstGrammar): string {
     }
     e.emit(`const NOUNARY_T = Uint8Array.from([${nu.join(',')}]);`);
   }
+  // Ops whose operand must be a valid assignment target (LHS) — byte-table for the LED
+  // dispatch (a token's t equals an op value iff its t-int matches — vocabulary).
+  {
+    let tSize = 1;
+    for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
+    for (const v of st.puLitKind.values()) tSize = Math.max(tSize, v + 1);
+    const rt = new Array<number>(tSize).fill(0);
+    for (const v of a.requireTargetOps) {
+      const d = st.classifyKey(v);
+      if (d.kind !== 'tok' && d.t > 0) rt[d.t] = 1;
+    }
+    e.emit(`const REQTGT_T = Uint8Array.from([${rt.join(',')}]);`);
+  }
   e.emit(`const postfixOpValues = new Set(${J([...a.postfixOpValues])});`);
+  // Assignment-target shape test (ECMAScript AssignmentTargetType): a node id is NOT a
+  // valid LHS target iff its outermost form is a prefix-op (prefix-unary OR prefix-update
+  // `++x`) — head kid is an operator-tag leaf in prefixOps — or a postfix-update (`x++`) —
+  // tail kid is an operator-tag leaf in postfixOpValues. A parenthesized cover / member /
+  // element / call / non-null tail has no operator-tag leaf at head or tail, so it passes.
+  e.emit(`function _notTarget(lhs) {`);
+  e.emit(`  const n = rowCount[lhs]; if (n === 0) return false;`);
+  e.emit(`  const cs = rowStart[lhs];`);
+  e.emit(`  const _h = kids[cs];`);
+  e.emit(`  if (_h < 0 && ((~_h) & 3) === 2) {`);
+  e.emit(`    const _ht = absTok[lhs] + ((~_h) >>> 2);`);
+  e.emit(`    if (prefixOps.has(${e.soa ? 'docText(toff(_ht), tend(_ht))' : 'tkText[_ht]'})) return true;`);
+  e.emit(`  }`);
+  e.emit(`  const _t = kids[cs + n - 1];`);
+  e.emit(`  if (_t < 0 && ((~_t) & 3) === 2) {`);
+  e.emit(`    const _tt = absTok[lhs] + ((~_t) >>> 2);`);
+  e.emit(`    if (postfixOpValues.has(${e.soa ? 'docText(toff(_tt), tend(_tt))' : 'tkText[_tt]'})) return true;`);
+  e.emit(`  }`);
+  e.emit(`  return false;`);
+  e.emit(`}`);
   e.emit(`const tokenNames = new Set(${J([...a.tokenNames])});`);
   e.emit(`const templateTokenNames = new Set(${J([...a.templateTokenNames])});`);
   e.emit(`const templateTokenName = ${J(a.templateTokenName ?? null)};`);
@@ -2262,6 +2302,11 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
       e.emit(`        let rhs = ${ruleFn}_pratt(info.rbp);`);
       e.emit(`        if (rhs < 0 && recovering) rhs = missRule(${rid});`);
+      // A target-requiring prefix (`++`/`--`) operand must be a LeftHandSideExpression
+      // (`++-x`, `++ ++x`, `++x--`, `++await x` are syntax errors). Fail hard like
+      // noUnaryLhs. A recovery-synthesized $missing operand has no children, so
+      // _notTarget returns false → recovery is not falsely rejected.
+      e.emit(`        if (rhs >= 0 && info.requireTarget && _notTarget(rhs)) return -1;`);
       e.emit(`        if (rhs >= 0 && pos > bestNudPos) { scPush(rhs); lhs = finishNode(${rid}, mark); bestNudPos = pos; }`);
       e.emit(`      }`);
       e.emit(`    }`);
@@ -2329,12 +2374,19 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`    if (info && info.lbp > minBp) {`);
   e.emit(`      if (info.position === 'postfix') {`);
   e.emit(`        if (!tailClosed) {`);
+  // A target-requiring postfix (`++`/`--`) may not apply to a unary/update operand
+  // (`++x++`, `x++ ++`): its operand must be a LeftHandSideExpression. Fail hard (like
+  // noUnaryLhs), so the expression can't reparse some other way.
+  e.emit(`          if (REQTGT_T[tkT[pos]] !== 0 && _notTarget(lhs)) return -1;`);
   e.emit(`          scPush(~((pos << 2) | 2));`);
   e.emit(`          if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
   e.emit(`          lhs = finishWrap(${rid}, lhs, ledMark);`);
   e.emit(`          tailClosed = true; matched = true;`);
   e.emit(`        }`);
   e.emit(`      } else {`);
+  // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
+  // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Like noUnaryLhs, fail hard.
+  e.emit(`        if (REQTGT_T[tkT[pos]] !== 0 && _notTarget(lhs)) return -1;`);
   e.emit(`        if (NOUNARY_T[tkT[pos]] !== 0 && rowCount[lhs] > 0) {`);
   e.emit(`          const _h = kids[rowStart[lhs]];`);
   e.emit(`          if (_h < 0 && ((~_h) & 3) === 2) {`);

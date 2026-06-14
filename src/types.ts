@@ -375,6 +375,11 @@ export interface PrecOperator {
   value: string;
   position: 'infix' | 'prefix' | 'postfix';
   noUnaryLhs?: boolean;  // infix op whose left operand may not be a bare unary-prefix expression (e.g. JS `**`)
+  // Operator whose left operand (infix) / operand (postfix) must be a valid assignment
+  // target (LeftHandSideExpression) — NOT a prefix-unary, prefix-update, or postfix-update
+  // expression. ECMAScript AssignmentTargetType, enforced at parse time (JS `=`/`+=`/…,
+  // postfix `++`/`--`). A parenthesized cover or member/element/call/non-null tail passes.
+  requireTarget?: boolean;
 }
 
 export interface PrecLevel {
