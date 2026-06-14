@@ -1,7 +1,7 @@
 import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not,
+  sep, opt, many, many1, alt, exclude, not, tsRelax,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
 } from './src/api.ts';
 
@@ -13,10 +13,10 @@ import {
 // Param/Block/Type/TypeParams resolve at thunk-eval time (defined below).
 function tsFnArms(nameParts, body) {
   return [
-    ['function', ...nameParts, opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), resetCtx(body)],
-    ['function', '*', ...nameParts, opt(TypeParams), '(', sep(yieldCtx(Param), ','), ')', opt(':', Type), yieldCtx(body)],
-    ['async', 'function', ...nameParts, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(':', Type), awaitCtx(body)],
-    ['async', 'function', '*', ...nameParts, opt(TypeParams), '(', sep(asyncGenCtx(Param), ','), ')', opt(':', Type), asyncGenCtx(body)],
+    ['function', ...nameParts, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), resetCtx(body)],
+    ['function', '*', ...nameParts, opt(TypeParams), '(', sep(yieldCtx(Param), ','), ')', opt(":", ReturnType), yieldCtx(body)],
+    ['async', 'function', ...nameParts, opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), awaitCtx(body)],
+    ['async', 'function', '*', ...nameParts, opt(TypeParams), '(', sep(asyncGenCtx(Param), ','), ')', opt(":", ReturnType), asyncGenCtx(body)],
   ];
 }
 
@@ -78,7 +78,7 @@ const DecoratorExpr = rule($ => [
 // ── Types ──
 
 const TypeMember = rule($ => {
-  const callSig = [opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type)];  // `<T>( … ): Ret`
+  const callSig = [opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
   const propOrMethod = alt(callSig, [opt(':', Type)]);  // after a name: method (callSig) | property
   return [
     // call / construct signature (no member name): a construct sig is just a
@@ -102,9 +102,17 @@ const TypeMember = rule($ => {
 });
 
 const Type = rule($ => {
-  const fnType = [opt(TypeParams), '(', sep(Param, ','), ')', '=>', $];  // (a: T) => R  /  <T>(…) => R
+  const fnType = [opt(TypeParams), '(', sep(Param, ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
   return [
-    [Ident, opt('is', $)],   // T  |  type predicate `x is T`
+    // A bare type reference / entity name. The type-predicate `x is T` is NOT here for the
+    // PARSER: tsc's parser accepts `x is T` ONLY in a function RETURN-TYPE position (see
+    // ReturnType below), so a predicate in any other type slot (var/param/property
+    // annotation, cast, type argument, union member, …) is a parse error. (`asserts x` is
+    // different — tsc's parser accepts it in EVERY position, so it stays in this general
+    // Type, below.) tsRelax: tree-sitter KEEPS the predicate in the general type (its
+    // status-quo shape, GLR-cheap), since a highlighter may over-accept a stray predicate
+    // — adding the return-only ReturnType to ~18 slots for tree-sitter inflates its table.
+    tsRelax(Ident, [Ident, opt('is', Type)]),
     [$, sameLine, '<', sep($, ','), '>'],   // type-arg application T<A> — `<` must be on the same line (no ASI), like the postfix `[`/`!` arms below
     [$, sameLine, '[', ']'],   // array type T[] — `[` must be on the same line (no ASI)
     [$, '|', $],
@@ -120,7 +128,11 @@ const Type = rule($ => {
     // tuple element: `...`? (name `?`? `:`)? `...`? Type `?`?  — the second `...`
     // covers a named rest member `n: ...T[]` (TS: RestType after the label); the
     // trailing `?` covers optional members `n: T?` / `T?` (TS: OptionalType).
-    ['[', many(opt('...'), opt(Ident, opt('?'), ':'), opt('...'), $, opt('?'), opt(',')), ']'],
+    // Elements are comma-SEPARATED: a `,` is required between elements (`[A B]` and
+    // even `[A\n B]` are tsc's "',' expected" — unlike object types, a newline does NOT
+    // separate tuple members), while the LAST element needs none (`]`-ahead). Trailing
+    // comma is covered by the `,` arm before the closing-`]` iteration fails to start.
+    ['[', many(opt('...'), opt(Ident, opt('?'), ':'), opt('...'), $, opt('?'), alt([','], [not(not(']'))])), ']'],
     // object type literal: members are SEPARATED by `;` / `,` / a newline (the type
     // analog of statement ASI) — two members on one line with no separator reject
     // (`{ a: T b: U }` is tsc's "';' expected"). The `}`-ahead arm lets the last member
@@ -165,7 +177,7 @@ const Prop = rule($ => {
   // ( … ): T { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
   // MemberName and return type stay outside it (a computed key inherits the enclosing
   // context, type positions are not parameterized).
-  const propTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(':', Type), ctx(Block)];
+  const propTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), ctx(Block)];
   // tsc parses a full modifier soup before ANY object-literal member and a `?` then
   // `!` after its name (`{ static m() {} }`, `{ export p: 1 }`, `{ a! }`, `{ a?() {} }`
   // are all parse-clean — rejecting them is the checker's job). `const`/`default` are
@@ -178,13 +190,13 @@ const Prop = rule($ => {
   return [
     ['...', Expr],                                                     // spread
     // accessor (get/set), with any modifier soup (lenient, tsc-shaped) — body resets
-    [many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', opt(':', Type), opt(resetCtx(Block))],  // body optional: `{ get foo() }` is a tsc-clean (error-recovery) parse
+    [many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), opt(resetCtx(Block))],  // body optional: `{ get foo() }` is a tsc-clean (error-recovery) parse
     // method: modifiers?/generator?, any member name (incl `#x`, computed `[e]`), then ( … ) { … }
     [many1(propMod), opt('*'), MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(resetCtx)],
     // async/generator method, 4-way split (each routes params+body to its family).
     // async carries its own modifier run (order-free, like the class member arms).
     ['async', many(propMod), '*', MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(asyncGenCtx)],
-    ['async', many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', opt(':', Type), opt(awaitCtx(Block))],  // async accessor (semantic error; parses)
+    ['async', many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), opt(awaitCtx(Block))],  // async accessor (semantic error; parses)
     ['async', many(propMod), MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(awaitCtx)],
     ['*', MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(yieldCtx)],
     [MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(resetCtx)],
@@ -199,6 +211,23 @@ const Prop = rule($ => {
     [notReserved, Ident, opt('?'), opt('!'), opt('=', Expr)],
   ];
 });
+
+// A function/method/accessor/arrow/fn-type RETURN type. Beyond an ordinary Type it may be
+// a TYPE PREDICATE `x is T` / `this is T` — a narrowing guard tsc's parser accepts ONLY in
+// return position. The SUBJECT is a bare identifier or `this` (a number/string/qualified/
+// parenthesized subject rejects); `await`/`yield` are accepted as ordinary-identifier
+// subjects. The `is` TARGET is an ordinary (non-predicate) Type, so `x is y is z` rejects.
+// `asserts` predicates are NOT here — they live in the general Type (tsc parses them in any
+// position), and a return type written `asserts x` falls through to the Type arm below.
+// A function/method/accessor/arrow/fn-type RETURN type. For the PARSER it adds the type
+// predicate `x is T` / `this is T` (subject = identifier or `this`; target = an ordinary
+// non-predicate Type, so `x is y is z` rejects) on top of an ordinary Type — and the
+// predicate appears ONLY here (return position), nowhere else. It stays TRANSPARENT (the
+// strict side is a plain `alt`, not a rule), so a normal return is a bare `Type` node —
+// identical CST shape to a pre-predicate return slot, leaving AST lowering / cst-match
+// unaffected. tsRelax: tree-sitter renders just `Type` here (the predicate lives in its
+// general type instead), so adding ReturnType to ~18 slots doesn't inflate its GLR table.
+const ReturnType = tsRelax(alt([alt(Ident, 'this'), 'is', Type], Type), Type);
 
 const ClassHeritage = rule($ => [
   // Non-constructor primaries: tsc PARSES `extends undefined/true/42/"x"` cleanly
@@ -299,8 +328,8 @@ const Expr = rule($ => [
   // each arm's params + body to the right rule family (await-yield-fork.ts): an async
   // arrow's params and body are await-context (`async (a = await) =>` rejects), a
   // plain arrow's body resets. Type params/annotations stay PLAIN (not await-context).
-  ['async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(':', Type), '=>', awaitCtx(alt($, Block))],
-  [opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), '=>', resetCtx(alt($, Block))],
+  ['async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(alt($, Block))],
+  [opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(alt($, Block))],
   // async arrow with a BARE parameter: `async err => …`. tsc requires async and the
   // parameter on the same line (`async\nx => …` is `async;` then a plain arrow — ASI).
   // Without this arm the bare form only "parsed" by splitting into two statements.
@@ -496,13 +525,13 @@ const TypeParams = rule($ => [
 // ── Declarations ──
 
 const InterfaceMember = rule($ => {
-  const callSig = [opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type)];  // `<T>( … ): Ret`
+  const callSig = [opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
   const propOrMethod = alt(callSig, [opt(':', Type)]);  // after a name: method | property (bare = implicit any)
   return [
     // call / construct signature (construct = call sig with a leading `new`)
     [opt('new'), ...callSig],
     // getter / setter (`get`/`set` as a member NAME falls through to the named branch)
-    [alt('get', 'set'), MemberName, '(', sep(Param, ','), ')', opt(':', Type)],
+    [alt('get', 'set'), MemberName, '(', sep(Param, ','), ')', opt(":", ReturnType)],
     // mapped type: static? (+/-)? readonly? [ K in T (as U)? ] (+/-)? ?? : T
     [opt('static'), opt(alt('+', '-')), opt('readonly'), '[', Ident, 'in', Type, opt('as', Type), ']', opt(alt('+', '-')), opt('?'), ':', Type],
     // readonly property (readonly index sig is the bracketed branch below)
@@ -542,13 +571,25 @@ const MemberName = rule($ => [
 // method arms below (which give the body its [Await] context), so the modifier soup must
 // not swallow it into a plain method (the class analog of the Decl modifier-prefix fix).
 const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
-const callTail = ['(', sep(Param, ','), ')', opt(':', Type), opt(Block), opt(';')] as const;
+// A class-member modifier run allows AT MOST ONE `static`: a duplicate `static` is a tsc
+// PARSE error ("Unexpected keyword or identifier"), uniquely among modifiers — `public
+// public`, `readonly readonly`, `abstract abstract` all parse (checker errors). `static`
+// is the unique pivot, so the run is unambiguous: non-static modifiers, then OPTIONALLY
+// one `static` followed by more non-static modifiers. (The second `many` sits INSIDE the
+// opt — two adjacent delimiter-less `many`s would be ambiguous.) This is correct for the
+// parser but DOUBLES the modifier-vs-member-name decision boundaries against the member
+// alt, which explodes tree-sitter's GLR table — so it is wrapped in tsRelax with the
+// plain `many(Modifier)` (tree-sitter's status-quo, GLR-cheap) as the relaxed rendering;
+// a highlighter over-accepting `static static` is harmless.
+const NonStaticMod = alt([alt('public', 'private', 'protected', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
+const modRun = tsRelax([many(NonStaticMod), opt('static', many(NonStaticMod))], many(Modifier));
+const callTail = ['(', sep(Param, ','), ')', opt(":", ReturnType), opt(Block), opt(';')] as const;
 // Class member ( params ): T body, params+body routed to a [Await]/[Yield] family:
 // plain methods reset (a method body has its OWN, non-inherited context — the spec's
 // implicit function boundary), generators yield, async await, async-generators both.
 // MemberName, type params, and the return type stay OUTSIDE the family (a computed key
 // `[e]` is evaluated in the ENCLOSING context, and type positions are not parameterized).
-const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(':', Type), opt(ctx(Block)), opt(';')];
+const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), opt(ctx(Block)), opt(';')];
 const ClassMember = rule($ => [
   ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
   ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block), opt(';')],
@@ -558,17 +599,17 @@ const ClassMember = rule($ => [
   // `@dec` with no member, which a standalone sibling alternative tolerated
   [
     many(DecoratorExpr),
-    many(Modifier),
+    modRun,
     alt(
       // `async` is order-free among modifiers (tsc parses any order; the checker
       // validates), so it carries its own inner modifier run and an async member's
       // body is [+Await]/[+Await,+Yield].
       ['async', many(Modifier), '*', MemberName, opt('?'), opt(TypeParams), ...memTail(asyncGenCtx)],   // async generator method
-      ['async', many(Modifier), alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(':', Type), opt(awaitCtx(Block)), opt(';')],  // async accessor (semantic error; parses)
+      ['async', many(Modifier), alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), opt(awaitCtx(Block)), opt(';')],  // async accessor (semantic error; parses)
       ['async', many(Modifier), 'static', awaitCtx(Block)],                              // `async static { }` (semantic error; parses)
       ['async', many(Modifier), MemberName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],            // async method
       ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
-      [alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(':', Type), opt(resetCtx(Block)), opt(';')],  // accessor (type params parse; semantic error)
+      [alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), opt(resetCtx(Block)), opt(';')],  // accessor (type params parse; semantic error)
       ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), asi()],          // index signature; member separator = ; / newline / }
       // a bare identifier `constructor` member MUST be a call signature — tsc rejects a
       // `constructor` field/property ("'(' expected"): `constructor;`, `constructor = 1`,
@@ -592,7 +633,7 @@ const ClassMember = rule($ => [
   // `constructor` excluded here too (`constructor?()`/`constructor!()` are tsc parse
   // errors): every VALID `constructor(…)` is caught by the dedicated arms above, so a
   // `constructor` reaching this method fallback is always a malformed form.
-  [not('constructor'), MemberName, opt('?'), opt(TypeParams), '(', sep(resetCtx(Param), ','), ')', opt(':', Type), opt(resetCtx(Block)), opt(';')],
+  [not('constructor'), MemberName, opt('?'), opt(TypeParams), '(', sep(resetCtx(Param), ','), ')', opt(":", ReturnType), opt(resetCtx(Block)), opt(';')],
 ]);
 
 const EnumMember = rule($ => [
@@ -663,7 +704,7 @@ const Decl = rule($ => [
   // Named/anonymous are separate arms, mirroring the class-expression pair above.
   [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
   ['enum', notReserved, Ident, '{', sep(EnumMember, ','), '}'],
-  ['declare', 'function', opt('*'), notReserved, Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(':', Type), opt(';')],
+  ['declare', 'function', opt('*'), notReserved, Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), opt(';')],
   // ambient module shorthand `declare module "foo";` (no body — the module arm below
   // requires `{…}`) and `declare global { … }` (global-scope augmentation; `global`
   // is a contextual-keyword block, not a namespace name). tsc accepts both.

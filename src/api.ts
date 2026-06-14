@@ -209,7 +209,18 @@ class NotNode {
   constructor(item: Element | Element[], reservable = false) { this.item = item; this.reservable = reservable; }
 }
 
-type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode;
+class RelaxNode {
+  // A tree-sitter-only divergence: the PARSER (and every other generator) parses
+  // `strict`; gen-treesitter renders `relaxed`. Use when a parser-correct constraint is
+  // tree-sitter-GLR-hostile and the highlighter can safely over-accept the rare malformed
+  // form (see RuleExpr.group.tsRelaxed). Like ctx/exclude it lowers to a transparent group.
+  readonly __kind = 'relax' as const;
+  readonly strict: Element[];
+  readonly relaxed: Element[];
+  constructor(strict: Element[], relaxed: Element[]) { this.strict = strict; this.relaxed = relaxed; }
+}
+
+type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode;
 
 export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
@@ -236,6 +247,13 @@ export function alt(...items: Alternative[]): AltNode {
 // a top-level `in`, leaving it for the enclosing rule.
 export function exclude(connectors: string | string[], ...items: Element[]): ExcludeNode {
   return new ExcludeNode(typeof connectors === 'string' ? [connectors] : connectors, items);
+}
+
+// Parse `strict` (in the parser and all generators) but render `relaxed` for tree-sitter.
+// For a parser-correct constraint that explodes / inflates the tree-sitter GLR table while
+// the highlighter doesn't need it. Each side is a single element or an array (a seq).
+export function tsRelax(strict: Element | Element[], relaxed: Element | Element[]): RelaxNode {
+  return new RelaxNode(Array.isArray(strict) ? strict : [strict], Array.isArray(relaxed) ? relaxed : [relaxed]);
 }
 
 // Mark items as await / yield / async-generator context (see CtxNode). Wrap an
@@ -351,6 +369,14 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
       ? toRuleExpr(el.items[0], names)
       : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body, ctxMode: el.mode };
+  }
+  if (el instanceof RelaxNode) {
+    // Transparent group: every consumer reads `body` (strict); only gen-treesitter
+    // renders `tsRelaxed`.
+    const build = (items: Element[]): RuleExpr => items.length === 1
+      ? toRuleExpr(items[0], names)
+      : { type: 'seq', items: items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body: build(el.strict), tsRelaxed: build(el.relaxed) };
   }
   if (el instanceof AltNode) {
     // A branch may be a single element or a sequence (array → seq).

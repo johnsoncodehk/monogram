@@ -223,7 +223,10 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       return `repeat1(${body})`;
     }
     case 'group':
-      return renderExpr(expr.body, ctx);
+      // A tsRelax group carries a tree-sitter-only alternate rendering (a parser-strict
+      // constraint the highlighter relaxes — see RuleExpr.group.tsRelaxed). Render that
+      // instead of the strict body; every other consumer uses `body`.
+      return renderExpr(expr.tsRelaxed ?? expr.body, ctx);
     case 'not':
       // Zero-width negative lookahead: not expressible in a tree-sitter CFG, and
       // it consumes nothing, so it drops to a no-op (the surrounding choice keeps

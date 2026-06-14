@@ -407,7 +407,13 @@ export type RuleExpr =
   // closure into $A/$Y/$AY families. Every OTHER consumer treats this exactly like a
   // plain transparent group (recurse into `body`), so the marker is invisible outside
   // the fork transform.
-  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset' }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  // `tsRelaxed`: a TREE-SITTER-ONLY alternate rendering. The parser (and every other
+  // generator) uses `body` — the strict form; gen-treesitter renders `tsRelaxed` instead.
+  // Lets a PARSER-only constraint that is correct but tree-sitter-GLR-hostile (e.g.
+  // at-most-one-`static`, or restricting a type predicate to return position) keep the
+  // derived highlighter at its cheap status-quo shape — a highlighter may over-accept a
+  // rare malformed form harmlessly. Like every group field, it is transparent (no node).
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; tsRelaxed?: RuleExpr }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
