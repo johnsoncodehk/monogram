@@ -253,12 +253,18 @@ export const ecmaPrec = [
   left('*', '/', '%'),
   right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
   right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
-  // prefix `++`/`--` (update prefixes) operand must be a LeftHandSideExpression: `++x`,
-  // `++x.y` are fine but `++-x`, `++ ++x`, `++x--`, `++await x` are syntax errors. The
-  // pure-unary prefixes above take ANY operand (`-x++`, `void ++x` are fine) → stay plain.
-  right(prefixTarget('++', '--')),
-  // postfix `++`/`--` operand must be a LeftHandSideExpression: `x++`, `(-x)++` are fine
-  // but `++x++`, `x++ ++` are syntax errors (operand `++x`/`x++` is not an LHS).
+  // prefix `++`/`--` (update prefixes): the spec operand is a UnaryExpression
+  // (`UpdateExpression : ++ UnaryExpression`), so `++-x`, `++ ++x`, `++await x`, `++delete a.b`
+  // are all PRODUCTION-DERIVABLE — the CST producer accepts them and emits the concrete tree.
+  // "operand is not a simple assignment target" is a Static-Semantics early error (the same
+  // class as `(a+b)=c`), which is identified downstream when an AST `UpdateExpression`
+  // (operand: SimpleAssignmentTarget) fails to lower — NOT here. So this stays a plain prefix.
+  right(prefix('++', '--')),
+  // postfix `++`/`--` operand IS a LeftHandSideExpression in the grammar
+  // (`UpdateExpression : LeftHandSideExpression [no LT] ++`), so `++x++`, `x++ ++` are genuine
+  // PRODUCTION-violations (operand `++x`/`x++` is an UpdateExpression, not a LHS) — no parse
+  // tree exists, so the CST producer correctly rejects them. (Asymmetric with the prefix above
+  // by the grammar's own slot types: prefix operand = UnaryExpression, postfix operand = LHS.)
   left(postfixTarget('++', '--')),
 ];
 
@@ -334,11 +340,11 @@ const Expr = rule($ => [
   ['...', $],
   [$, '(', sep($, ','), ')'],
   [$, '.', alt(Ident, PrivateField)],
-  // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`
-  // optional chain `?.` member: an Ident only — a private `?.#x` is a tsc parse error
-  // ("An optional chain cannot contain private identifiers"), so PrivateField is excluded
-  // here (a NON-optional `a.#x` via the `.` led above stays valid). `?.(`/`?.[`/`?.\`` tails ok.
-  [$, '?.', alt(Ident, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
+  // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`. A private member `?.#x` IS
+  // valid current ECMAScript (V8 + Babel accept it; tsc's lone parse rejection is a bug being
+  // removed in TS#60263) — so PrivateField stays. The CST producer models the syntax; it does
+  // not adjudicate tsc-only restrictions.
+  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
   [$, '[', $, ']'],
   [$, '?', $, ':', $],
   [$, 'instanceof', $],

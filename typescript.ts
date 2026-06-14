@@ -66,7 +66,7 @@ const DecoratorExpr = rule($ => [
     // optional chain: ?.y | ?.#y | ?.(args) | ?.[i] — unlike plain element access,
     // `?.[` is unambiguous (a computed class member never starts with `?.`), so tsc
     // parses it in decorator position and we mirror.
-    ['?.', alt(Ident, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'])],   // `?.#x` excluded: an optional chain may not contain a private identifier
+    ['?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'])],   // `?.#y` is valid current ES (see Expr `?.` below)
     Template,                                             // tagged template: @x`…`
   ))],
   // `@new x` — the decorator expression is a NewExpression. The lexer maximal-munches
@@ -316,10 +316,12 @@ const Expr = rule($ => [
   [$, '<', sep(Type, ','), '>', not(Expr)],
   [$, '(', sep($, ','), ')'],
   [$, '.', alt(Ident, PrivateField)],
-  // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`
-  // optional chain `?.` member: Ident only — `a?.#x` is a tsc parse error ("An optional
-  // chain cannot contain private identifiers"); a NON-optional `a.#x` (the `.` led) stays valid.
-  [$, '?.', alt(Ident, ['(', sep($, ','), ')'], ['[', $, ']'], Template, ['<', sep(Type, ','), '>', '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
+  // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…` | ?.<T>(args). A private member
+  // `a?.#x` IS valid current ECMAScript (V8 + Babel accept; tsc's lone parse rejection is a bug
+  // being removed in TS#60263), so PrivateField stays — the CST producer models the syntax, not
+  // a tsc-only restriction. Any "no private in optional chain" rule, were it real, would be a
+  // Static-Semantics check in a CST consumer, never a parse-level exclusion here.
+  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, ['<', sep(Type, ','), '>', '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
   [$, '[', $, ']'],
   [$, sameLine, '!'],   // TS non-null assertion — RESTRICTED (no line break before `!`, like postfix ++/--); a LHS-chain tail (access can follow: `x!.y`, `x!()`)
   [$, '?', $, ':', $],
@@ -595,16 +597,21 @@ const MemberName = rule($ => [
 // method arms below (which give the body its [Await] context), so the modifier soup must
 // not swallow it into a plain method (the class analog of the Decl modifier-prefix fix).
 const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
-// A class-member modifier run allows AT MOST ONE `static`: a duplicate `static` is a tsc
-// PARSE error ("Unexpected keyword or identifier"), uniquely among modifiers — `public
-// public`, `readonly readonly`, `abstract abstract` all parse (checker errors). `static`
-// is the unique pivot, so the run is unambiguous: non-static modifiers, then OPTIONALLY
-// one `static` followed by more non-static modifiers. (The second `many` sits INSIDE the
-// opt — two adjacent delimiter-less `many`s would be ambiguous.) This is correct for the
-// parser but DOUBLES the modifier-vs-member-name decision boundaries against the member
-// alt, which explodes tree-sitter's GLR table — so it is wrapped in tsRelax with the
-// plain `many(Modifier)` (tree-sitter's status-quo, GLR-cheap) as the relaxed rendering;
-// a highlighter over-accepting `static static` is harmless.
+// A class-member modifier run allows AT MOST ONE `static` — this is SYNTAX, not a deferred
+// duplicate-modifier check: ECMAScript's ClassElement production has a single `static` slot,
+// and `static static x` is rejected by BOTH tsc AND babel (the only valid reading of a second
+// `static` is a member NAME — `static static(){}` / `static static = 1` parse — so once the
+// name slot is taken, a trailing field name has no production). Two static MODIFIERS is simply
+// not a grammar-sanctioned tree. (Duplicate NON-static modifiers like `public public` are a
+// different matter — tsc parses them as a checker error, babel parse-rejects them; we follow
+// tsc and keep them in the run as a faithful CST, leaving the duplicate as a downstream
+// semantic check.) So the run is: non-static modifiers, then OPTIONALLY one `static` followed
+// by more non-static modifiers. (The second `many` sits INSIDE the opt — two adjacent
+// delimiter-less `many`s would be ambiguous.) This precise shape DOUBLES the modifier-vs-
+// member-name decision boundaries against the member alt, which explodes tree-sitter's GLR
+// table — so it is wrapped in tsRelax with plain `many(Modifier)` as the relaxed rendering: a
+// legitimate CAPABILITY bridge (GLR cannot express the at-most-one-static refinement cheaply),
+// and a highlighter over-accepting `static static` is harmless and measured.
 const NonStaticMod = alt([alt('public', 'private', 'protected', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
 const modRun = tsRelax([many(NonStaticMod), opt('static', many(NonStaticMod))], many(Modifier));
 const callTail = ['(', sep(Param, ','), ')', opt(":", ReturnType), opt(Block), opt(';')] as const;
