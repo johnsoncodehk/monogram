@@ -98,6 +98,19 @@ export interface RegexContext {
 export interface RawEmbed {
   default: string;                  // embed scope when no (or an unlisted) lang= attribute
   lang?: Record<string, string>;    // lang attribute value → embed scope (e.g. { ts: 'source.ts' })
+  // Whether the embedded language can swallow the close tag mid-line or leave an open construct at
+  // the close that misreads it — i.e. whether the body must FORCE-CLOSE mid-line and FORCE-UNWIND an
+  // open embedded region at the close tag. TRUE for `<script>` (JS `//</script>` on one line must
+  // still close — tmbundle#85; an unterminated `type T =` must unwind before `</script>` is read as
+  // type-args — #5538/#2060): the body uses a `begin/while` open region whose `.*` drops at the first
+  // line CONTAINING the close, plus separate close-LINE rules. That `while` drop is what makes a non-
+  // first DIALECT's close-line content land on a lang-INDEPENDENT close rule (only the first fires),
+  // so a multi-dialect `forceClose` embed cannot keep per-dialect close lines — script accepts this
+  // (mid-line force-close is the priority for JS). FALSE (the default for a `{ default, lang }` embed)
+  // is for a well-behaved embed like CSS — no greedy line-comment swallows `</style>`, nothing leaves
+  // an open construct — so the body uses a lookahead-`end` region (matching the official Vue grammar):
+  // the embed stays active up to `</tag` so a WITH-CONTENT close line keeps its DIALECT (issue #43).
+  forceClose?: boolean;
 }
 
 /**

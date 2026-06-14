@@ -71,9 +71,12 @@ function escapeForCharClass(s: string): string {
 
 /** A CASE-INSENSITIVE, Onigmo-PORTABLE pattern matching `s` regardless of letter case.
  *  Each cased letter becomes a two-char class (`s` → `[Ss]`); other chars are escaped as
- *  usual. We do NOT use an inline `(?i)` flag — vscode-textmate/Onigmo does not honor inline
- *  case flags reliably (the tm-diagnostics gate rejects them). Used by the markup emitter so a
- *  raw-text element (`<SCRIPT>`/`<Script>`) matches the same set the lexer folds via `.toLowerCase()`. */
+ *  usual. We keep the explicit char-class rather than an inline `(?i:…)` scoped flag: both
+ *  vscode-oniguruma AND vscode-onigmo were measured (issue #43) to honor `(?i:style)` and the
+ *  tm-diagnostics guard accepts it, but the char-class is engine-independent DATA and switching
+ *  would only churn every raw-text rule's bytes (across html + vue) for no behavioral gain. Used
+ *  by the markup emitter so a raw-text element (`<SCRIPT>`/`<Script>`) matches the same set the
+ *  lexer folds via `.toLowerCase()`. */
 function caseFoldLiteral(s: string): string {
   let out = '';
   for (const ch of s) {
@@ -3889,16 +3892,25 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   // Capture-embed: the start-tag attributes (`lang="ts"`, …) are re-tokenized by #attribute
   // instead of being lumped; the body is re-tokenized by the embedded grammar.
   const attrCap = { patterns: [{ include: '#attribute' }] };
-  const emitRaw = (key: string, tag: string, embed: string, langVal?: string) => {
+  const emitRaw = (key: string, tag: string, embed: string, langVal?: string, forceClose = true) => {
     // HTML tag names are CASE-INSENSITIVE; the lexer folds case (`.toLowerCase()`), so the
     // raw-text open/close PATTERNS must match `<SCRIPT>`/`<Script>` too — else the body falls
     // through to the generic #tag rule and the highlighter invents tags inside it (bug). We
     // case-fold the tag literal per-character (`script`→`[Ss][Cc]…`, Onigmo-portable, no `(?i)`)
     // for every MATCH; repository keys and meta `name`s stay the canonical lowercase `tag`.
     const tagRe = caseFoldLiteral(tag);
+    // The `lang="<val>"` matcher CAPTURES the open quote and BACK-REFERENCES it for the close, so
+    // the two quotes MUST be the same char — a malformed `lang="ts'` / `lang='ts"` is NOT a match
+    // (two independent `["']` classes would accept the mismatched pair). The quote opens its OWN
+    // capture group right INSIDE the `attrs` group (always group 3, after `<`=1 and the name=2), so
+    // the quote is group 4 (= `quoteGroup`) and every capture DOWNSTREAM of `attrs` shifts by 1 when
+    // a langVal is present — `g(n)` renumbers those maps relative to that offset rather than hardcoding.
+    const quoteGroup = 4;                                                     // (`<`)1 (name)2 (attrs)3 (quote)4
+    const extra = langVal ? 1 : 0;
     const attrs = langVal
-      ? `([^${ccClose}]*\\blang\\s*=\\s*["']${langVal}["'][^${ccClose}]*)`   // start tag carries lang="<val>"
+      ? `([^${ccClose}]*\\blang\\s*=\\s*(["'])${langVal}\\${quoteGroup}[^${ccClose}]*)`   // start tag carries lang="<val>" (quotes back-ref'd)
       : `([^${ccClose}]*)`;
+    const g = (n: number) => String(n + (n >= quoteGroup ? extra : 0));      // capture index after the `attrs`(3)+quote(4) group shifts by `extra`
     const bodyCap = { name: embed, patterns: [{ include: embed }] };          // capture re-tokenized as the embed
     // (1) single-line `<tag …>BODY</tag>` — one regex bounds the body at `</tag>` (so even
     //     a mid-construct embed can't escape), body + attrs re-tokenized via capture-embed.
@@ -3906,9 +3918,9 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
       name: `meta.${tag}.${L}`,
       match: `(${o})(${tagRe})\\b${attrs}(${c})(.*?)(${o}${slash})(${tagRe})\\s*(${c})`,
       captures: {
-        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose },
-        '5': bodyCap,
-        '6': { name: sOpen }, '7': { name: sName }, '8': { name: sClose },
+        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, [g(4)]: { name: sClose },
+        [g(5)]: bodyCap,
+        [g(6)]: { name: sOpen }, [g(7)]: { name: sName }, [g(8)]: { name: sClose },
       },
     };
     // (1b) single-line OPEN+BODY then `</tag` whose `>` is DEFERRED to a later line — the whole
@@ -3926,73 +3938,102 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
       name: `meta.${tag}.${L}`,
       begin: `(${o})(${tagRe})\\b${attrs}(${c})(.*?)(${o}${slash})(${tagRe})(?=\\s*$)`,
       beginCaptures: {
-        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose },
-        '5': bodyCap, '6': { name: sOpen }, '7': { name: sName },
+        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, [g(4)]: { name: sClose },
+        [g(5)]: bodyCap, [g(6)]: { name: sOpen }, [g(7)]: { name: sName },
       },
-      end: `(${c})`, endCaptures: { '1': { name: sClose } },
-    };
-    // (2) multi-line `begin/while` — the `while` re-checks each line and DROPS the region
-    //     (popping any open embedded region) at the first line CONTAINING `</tag>` (the `.*`
-    //     reaches it anywhere on the line, not just `^\s*` at the start). So the close wins even
-    //     MID-LINE: a `</script>` after a JS `//` comment (tmbundle#85) — or inside a JS string —
-    //     still closes the element, matching parse5 / the HTML tokenizer, which close at the FIRST
-    //     `</script>` regardless of embedded-language context. The embed stays ONE continuous
-    //     region across lines (the `while` only TESTS, never re-anchors), so a multi-line template
-    //     literal / block comment in the body is unbroken; only a line that actually contains the
-    //     close tag drops. The close-tag test is `</tag` then ws / `>` / END-OF-LINE (`$`): the EOL
-    //     alternative drops a line whose `</tag` has its `>` DEFERRED to a later line (tmbundle#97),
-    //     so that line leaves the embed and the sibling `#<key>-close-ml` re-embeds its pre-close
-    //     content. CRUCIALLY the line-start drop FORCE-UNWINDS a still-open embedded region
-    //     (e.g. a trailing unterminated `type T =` whose body would otherwise read `</script>` as
-    //     `< script >` type-args) — an `end:(?=</tag)` lookahead can NOT do this (the innermost open
-    //     embed region's patterns are evaluated before any outer `end`), so the `while` is load-
-    //     bearing here (#5538/#2060, #65/#74). The dropped close LINE's pre-close content is then
-    //     re-embedded by the sibling `#<key>-close` rule below. The close tag is matched by host #tag.
-    repository[key] = {
-      name: `meta.${tag}.${L}`,
-      begin: `(${o})(${tagRe})\\b${attrs}(${c})`,
-      beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose } },
-      while: `^(?!.*${o}${slash}${tagRe}(?:[\\s${ccClose}]|$))`,
-      contentName: embed,
-      patterns: [{ include: embed }],
-    };
-    // (3) CLOSE LINE with leading content — `BODY</tag>` where BODY shares the close's line (the
-    //     open tag was on an earlier line, so this is NOT the `-inline` single-line shape; and the
-    //     `begin/while` above DROPS this line because it contains the close). Without this, that
-    //     pre-close BODY falls to plain host text (the #2060 / #5538 same-line-close gap). Here it is
-    //     re-tokenized as a BOUNDED capture-embed: BODY is captured up to the close and run through
-    //     the embed in ISOLATION, so the embed's own greedy line-comment / regex / unterminated
-    //     construct physically cannot reach across the close — the close stays clean tag punctuation
-    //     AND its preceding code is highlighted. The BODY needs ≥1 char before the close, so a BARE
-    //     close line (just `</tag>`) does NOT match here — it stays on the `begin/while` force-unwind
-    //     path (preserving #5538's open-type unwind). The BODY is a tempered-greedy run
-    //     `(?:(?!<tag\b).)+?` — any char that does NOT begin a `<tag` OPEN, so the rule cannot fire on
-    //     a single-line `<tag>…</tag>` (that whole line is the `-inline` shape, claimed earlier) nor
-    //     swallow a following block's open tag, yet a bare `<` in the body (`a < b`) is fine. Agnostic:
-    //     keys only on the tag + `<`/`/`/`>` delimiters (DATA), never on the embed's syntax.
-    repository[`${key}-close`] = {
-      name: `meta.${tag}.${L}`,
-      match: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})\\s*(${c})`,
-      captures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName }, '5': { name: sClose } },
-    };
-    // (3b) ORPHAN CLOSE LINE whose `>` is DEFERRED — `BODY</tag` ending the line, the `>` on a later
-    //     one (the case-(3) sibling but with the close `>` split off, the tmbundle#97 deferred-`>`
-    //     shape after the body sits on its own line). The widened `begin/while` (2) drops this line
-    //     (its `</tag` is at end-of-line), so it lands here: a bounded `begin/end` that capture-embeds
-    //     BODY (so the embed can't reach the close), opens at `</tag` with only whitespace after it
-    //     (`(?=\s*$)` → the `>` is deferred), and `end`s at the deferred `>`. Same tempered-greedy
-    //     BODY run as (3) so it can't swallow a following block's `<tag` OPEN; agnostic to the embed.
-    repository[`${key}-close-ml`] = {
-      name: `meta.${tag}.${L}`,
-      begin: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})(?=\\s*$)`,
-      beginCaptures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName } },
       end: `(${c})`, endCaptures: { '1': { name: sClose } },
     };
     top.push({ include: `#${key}-inline` });      // single-line first, then multi-line
     top.push({ include: `#${key}-inline-ml` });   // single-line open+body+</tag with a DEFERRED `>` (#97)
-    top.push({ include: `#${key}` });
-    top.push({ include: `#${key}-close` });        // orphan close line (BODY</tag>) — after the open-tag rules
-    top.push({ include: `#${key}-close-ml` });     // orphan close line with a DEFERRED `>` (#97)
+    const closeAhead = `${o}${slash}${tagRe}(?:[\\s${ccClose}]|$)`;       // `</tag` then ws / `>` / EOL (a DEFERRED `>` on a later line, tmbundle#97)
+    if (forceClose) {
+      // (2) multi-line `begin/while` — the `while` re-checks each line and DROPS the region
+      //     (popping any open embedded region) at the first line CONTAINING `</tag>` (the `.*`
+      //     reaches it anywhere on the line, not just `^\s*` at the start). So the close wins even
+      //     MID-LINE: a `</script>` after a JS `//` comment (tmbundle#85) — or inside a JS string —
+      //     still closes the element, matching parse5 / the HTML tokenizer, which close at the FIRST
+      //     `</script>` regardless of embedded-language context. The embed stays ONE continuous
+      //     region across lines (the `while` only TESTS, never re-anchors), so a multi-line template
+      //     literal / block comment in the body is unbroken; only a line that actually contains the
+      //     close tag drops. The close-tag test is `</tag` then ws / `>` / END-OF-LINE (`$`): the EOL
+      //     alternative drops a line whose `</tag` has its `>` DEFERRED to a later line (tmbundle#97),
+      //     so that line leaves the embed and the sibling `#<key>-close-ml` re-embeds its pre-close
+      //     content. CRUCIALLY the line-start drop FORCE-UNWINDS a still-open embedded region
+      //     (e.g. a trailing unterminated `type T =` whose body would otherwise read `</script>` as
+      //     `< script >` type-args) — an `end:(?=</tag)` lookahead can NOT do this (the innermost open
+      //     embed region's patterns are evaluated before any outer `end`), so the `while` is load-
+      //     bearing here (#5538/#2060, #65/#74). The dropped close LINE's pre-close content is then
+      //     re-embedded by the sibling `#<key>-close` rule below. The close tag is matched by host #tag.
+      //     This is the `forceClose` shape — for a body that can swallow the close mid-line (JS): it
+      //     CANNOT keep a non-first DIALECT's close-line content in its own dialect (the dropped line
+      //     leaves the region and lands on a lang-INDEPENDENT close rule — only the first fires). That
+      //     is the dual of #85: mid-line force-close OR dialect-correct close lines, not both. Script
+      //     takes force-close; a well-behaved embed (CSS) takes the `else` branch (dialect-correct).
+      repository[key] = {
+        name: `meta.${tag}.${L}`,
+        begin: `(${o})(${tagRe})\\b${attrs}(${c})`,
+        beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, [g(4)]: { name: sClose } },
+        while: `^(?!.*${closeAhead})`,
+        contentName: embed,
+        patterns: [{ include: embed }],
+      };
+      // (3) CLOSE LINE with leading content — `BODY</tag>` where BODY shares the close's line (the
+      //     open tag was on an earlier line, so this is NOT the `-inline` single-line shape; and the
+      //     `begin/while` above DROPS this line because it contains the close). Without this, that
+      //     pre-close BODY falls to plain host text (the #2060 / #5538 same-line-close gap). Here it is
+      //     re-tokenized as a BOUNDED capture-embed: BODY is captured up to the close and run through
+      //     the embed in ISOLATION, so the embed's own greedy line-comment / regex / unterminated
+      //     construct physically cannot reach across the close — the close stays clean tag punctuation
+      //     AND its preceding code is highlighted. The BODY needs ≥1 char before the close, so a BARE
+      //     close line (just `</tag>`) does NOT match here — it stays on the `begin/while` force-unwind
+      //     path (preserving #5538's open-type unwind). The BODY is a tempered-greedy run
+      //     `(?:(?!<tag\b).)+?` — any char that does NOT begin a `<tag` OPEN, so the rule cannot fire on
+      //     a single-line `<tag>…</tag>` (that whole line is the `-inline` shape, claimed earlier) nor
+      //     swallow a following block's open tag, yet a bare `<` in the body (`a < b`) is fine. Agnostic:
+      //     keys only on the tag + `<`/`/`/`>` delimiters (DATA), never on the embed's syntax.
+      repository[`${key}-close`] = {
+        name: `meta.${tag}.${L}`,
+        match: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})\\s*(${c})`,
+        captures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName }, '5': { name: sClose } },
+      };
+      // (3b) ORPHAN CLOSE LINE whose `>` is DEFERRED — `BODY</tag` ending the line, the `>` on a later
+      //     one (the case-(3) sibling but with the close `>` split off, the tmbundle#97 deferred-`>`
+      //     shape after the body sits on its own line). The widened `begin/while` (2) drops this line
+      //     (its `</tag` is at end-of-line), so it lands here: a bounded `begin/end` that capture-embeds
+      //     BODY (so the embed can't reach the close), opens at `</tag` with only whitespace after it
+      //     (`(?=\s*$)` → the `>` is deferred), and `end`s at the deferred `>`. Same tempered-greedy
+      //     BODY run as (3) so it can't swallow a following block's `<tag` OPEN; agnostic to the embed.
+      repository[`${key}-close-ml`] = {
+        name: `meta.${tag}.${L}`,
+        begin: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})(?=\\s*$)`,
+        beginCaptures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName } },
+        end: `(${c})`, endCaptures: { '1': { name: sClose } },
+      };
+      top.push({ include: `#${key}` });
+      top.push({ include: `#${key}-close` });        // orphan close line (BODY</tag>) — after the open-tag rules
+      top.push({ include: `#${key}-close-ml` });     // orphan close line with a DEFERRED `>` (#97)
+    } else {
+      // (2′) WELL-BEHAVED embed (no greedy construct can swallow the close, e.g. CSS) — a single
+      //     `begin/end` region with a LOOKAHEAD `end` that never CONSUMES the close tag. Because the
+      //     embed (`contentName`/`patterns`) stays active right up to `</tag`, a WITH-CONTENT close
+      //     line (`BODY</tag>`, the open tag on an earlier line) is tokenised by THIS region's embed —
+      //     so it keeps its own DIALECT (issue #43); the lang-independent top-level close rules of the
+      //     `forceClose` path (which only the first-listed dialect could win) are GONE. The `</tag`
+      //     punctuation is left for the host `#tag` rule. The lookahead `(?:[\s>]|$)` after `</tag`
+      //     also covers the deferred-`>` (#97) shape (the `$`/ws alternatives), so no separate close-ml
+      //     rule is needed. This is the official Vue grammar's `multi-line-style-tag-stuff` body shape,
+      //     generalised to the config delimiters. Safe ONLY for embeds that cannot force-close mid-line
+      //     (see `forceClose` doc on RawEmbed) — script keeps the `if` branch.
+      repository[key] = {
+        name: `meta.${tag}.${L}`,
+        begin: `(${o})(${tagRe})\\b${attrs}(${c})`,
+        beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, [g(4)]: { name: sClose } },
+        end: `(?=${closeAhead})`,
+        contentName: embed,
+        patterns: [{ include: embed }],
+      };
+      top.push({ include: `#${key}` });
+    }
   };
   // Multi-line START TAG variant — `<script\n  lang="ts"\n>` (force-expand-multiline
   // formatting; vuejs/language-tools#3999). A TextMate `begin` is single-line, so the entries
@@ -4057,11 +4098,18 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   for (const tag of m.rawText?.tags ?? []) {
     const spec = m.rawText!.embed?.[tag] ?? (tokScope(m.rawText!.token) ?? `source.${L}`);
     if (typeof spec === 'string') {
+      // A bare-string embed has no dialects (no per-dialect close collision) — keep the `begin/while`
+      // force-close shape (a single-blob `source.js`/`source.css` body still needs #85/#5538 fidelity).
       emitRaw(`raw-${tag}`, tag, spec);
     } else {
+      // Whether the embed can swallow the close mid-line (script) or is well-behaved (style). All of
+      // a tag's dialects share one verdict (the lang on the open tag selects scope, not close shape),
+      // so derive `forceClose` ONCE and pass it to every dialect's emit. Default false = dialect-correct
+      // close lines via lookahead-`end` (issue #43); script opts in to the `while` (RawEmbed.forceClose).
+      const forceClose = spec.forceClose ?? false;
       // lang-specific regions FIRST (they require the matching lang= attr), default LAST.
-      for (const [langVal, langEmbed] of Object.entries(spec.lang ?? {})) emitRaw(`raw-${tag}-${langVal}`, tag, langEmbed, langVal);
-      emitRaw(`raw-${tag}`, tag, spec.default);
+      for (const [langVal, langEmbed] of Object.entries(spec.lang ?? {})) emitRaw(`raw-${tag}-${langVal}`, tag, langEmbed, langVal, forceClose);
+      emitRaw(`raw-${tag}`, tag, spec.default, undefined, forceClose);
     }
     emitRawMultiline(tag, spec);   // multi-line start-tag variant (one per tag, all langs inside)
   }

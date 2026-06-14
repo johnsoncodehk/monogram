@@ -76,7 +76,11 @@ export default defineGrammar({
         // <template> keeps the embedded-HTML-fragment scope text.html.derivative.
         template: { default: 'text.html.derivative', lang: { pug: 'text.pug' } },
         // <script lang="ts"> embeds Monogram's OWN proven TS grammar (more correct than VS Code's).
-        script: { default: 'source.js', lang: { ts: 'source.ts', tsx: 'source.tsx', jsx: 'source.js.jsx', coffee: 'source.coffee' } },
+        // forceClose: JS can swallow `</script>` mid-line (a `//` line comment, a string) and an
+        // unterminated `type T =` must unwind at the close — so the body needs the `begin/while`
+        // force-close (tmbundle#85, #5538/#2060). Style omits it: CSS is well-behaved, so it uses the
+        // lookahead-end region that keeps a non-first DIALECT's close-line content in its dialect (#43).
+        script: { default: 'source.js', lang: { ts: 'source.ts', tsx: 'source.tsx', jsx: 'source.js.jsx', coffee: 'source.coffee' }, forceClose: true },
         style: { default: 'source.css', lang: { scss: 'source.css.scss', less: 'source.css.less', stylus: 'source.stylus', postcss: 'source.postcss', sass: 'source.sass' } },
       },
     },

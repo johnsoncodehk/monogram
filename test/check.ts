@@ -41,6 +41,7 @@ const GATES: Gate[] = [
   { group: 'highlighter', name: 'raw-text-case-sites', args: ['test/raw-text-case-sites.ts'] },
   { group: 'vue', name: 'directives', args: ['test/vue-directives.ts'] },
   { group: 'vue', name: 'embed-boundary', args: ['test/vue-embed-boundary.ts'] },
+  { group: 'vue', name: 'raw-style-embed', args: ['test/vue-raw-style-embed-sites.ts'] },
   { group: 'vue', name: 'interp-expr', args: ['test/vue-interp-expr.ts'] },
   { group: 'core', name: 'indent-extensions', args: ['test/indent-extensions.ts'] },
   { group: 'yaml', name: 'issue12-regressions', args: ['test/yaml-issue12-regressions.ts'] },

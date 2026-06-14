@@ -43,12 +43,6 @@
       "include": "#raw-template-pug"
     },
     {
-      "include": "#raw-template-pug-close"
-    },
-    {
-      "include": "#raw-template-pug-close-ml"
-    },
-    {
       "include": "#raw-template-inline"
     },
     {
@@ -56,12 +50,6 @@
     },
     {
       "include": "#raw-template"
-    },
-    {
-      "include": "#raw-template-close"
-    },
-    {
-      "include": "#raw-template-close-ml"
     },
     {
       "include": "#raw-template-ml"
@@ -154,12 +142,6 @@
       "include": "#raw-style-scss"
     },
     {
-      "include": "#raw-style-scss-close"
-    },
-    {
-      "include": "#raw-style-scss-close-ml"
-    },
-    {
       "include": "#raw-style-less-inline"
     },
     {
@@ -167,12 +149,6 @@
     },
     {
       "include": "#raw-style-less"
-    },
-    {
-      "include": "#raw-style-less-close"
-    },
-    {
-      "include": "#raw-style-less-close-ml"
     },
     {
       "include": "#raw-style-stylus-inline"
@@ -184,12 +160,6 @@
       "include": "#raw-style-stylus"
     },
     {
-      "include": "#raw-style-stylus-close"
-    },
-    {
-      "include": "#raw-style-stylus-close-ml"
-    },
-    {
       "include": "#raw-style-postcss-inline"
     },
     {
@@ -197,12 +167,6 @@
     },
     {
       "include": "#raw-style-postcss"
-    },
-    {
-      "include": "#raw-style-postcss-close"
-    },
-    {
-      "include": "#raw-style-postcss-close-ml"
     },
     {
       "include": "#raw-style-sass-inline"
@@ -214,12 +178,6 @@
       "include": "#raw-style-sass"
     },
     {
-      "include": "#raw-style-sass-close"
-    },
-    {
-      "include": "#raw-style-sass-close-ml"
-    },
-    {
       "include": "#raw-style-inline"
     },
     {
@@ -227,12 +185,6 @@
     },
     {
       "include": "#raw-style"
-    },
-    {
-      "include": "#raw-style-close"
-    },
-    {
-      "include": "#raw-style-close-ml"
     },
     {
       "include": "#raw-style-ml"
@@ -606,7 +558,7 @@
     },
     "raw-template-pug-inline": {
       "name": "meta.template.vue",
-      "match": "(<)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']pug[\"'][^>]*)(>)(.*?)(</)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\s*(>)",
+      "match": "(<)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])pug\\4[^>]*)(>)(.*?)(</)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -621,10 +573,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "text.pug",
           "patterns": [
             {
@@ -632,20 +584,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-template-pug-inline-ml": {
       "name": "meta.template.vue",
-      "begin": "(<)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']pug[\"'][^>]*)(>)(.*?)(</)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])(?=\\s*$)",
+      "begin": "(<)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])pug\\4[^>]*)(>)(.*?)(</)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -660,10 +612,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "text.pug",
           "patterns": [
             {
@@ -671,10 +623,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -687,7 +639,7 @@
     },
     "raw-template-pug": {
       "name": "meta.template.vue",
-      "begin": "(<)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']pug[\"'][^>]*)(>)",
+      "begin": "(<)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])pug\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -702,66 +654,17 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
-      "while": "^(?!.*</[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee](?:[\\s>]|$))",
+      "end": "(?=</[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee](?:[\\s>]|$))",
       "contentName": "text.pug",
       "patterns": [
         {
           "include": "text.pug"
         }
       ]
-    },
-    "raw-template-pug-close": {
-      "name": "meta.template.vue",
-      "match": "^(\\s*)((?:(?!<[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee]\\b).)+?)(</)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\s*(>)",
-      "captures": {
-        "2": {
-          "name": "text.pug",
-          "patterns": [
-            {
-              "include": "text.pug"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        },
-        "5": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
-    "raw-template-pug-close-ml": {
-      "name": "meta.template.vue",
-      "begin": "^(\\s*)((?:(?!<[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee]\\b).)+?)(</)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])(?=\\s*$)",
-      "beginCaptures": {
-        "2": {
-          "name": "text.pug",
-          "patterns": [
-            {
-              "include": "text.pug"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        }
-      },
-      "end": "(>)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
     },
     "raw-template-inline": {
       "name": "meta.template.vue",
@@ -865,62 +768,13 @@
           "name": "punctuation.definition.tag.end.vue"
         }
       },
-      "while": "^(?!.*</[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee](?:[\\s>]|$))",
+      "end": "(?=</[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee](?:[\\s>]|$))",
       "contentName": "text.html.derivative",
       "patterns": [
         {
           "include": "text.html.derivative"
         }
       ]
-    },
-    "raw-template-close": {
-      "name": "meta.template.vue",
-      "match": "^(\\s*)((?:(?!<[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee]\\b).)+?)(</)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])\\s*(>)",
-      "captures": {
-        "2": {
-          "name": "text.html.derivative",
-          "patterns": [
-            {
-              "include": "text.html.derivative"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        },
-        "5": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
-    "raw-template-close-ml": {
-      "name": "meta.template.vue",
-      "begin": "^(\\s*)((?:(?!<[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee]\\b).)+?)(</)([Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])(?=\\s*$)",
-      "beginCaptures": {
-        "2": {
-          "name": "text.html.derivative",
-          "patterns": [
-            {
-              "include": "text.html.derivative"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        }
-      },
-      "end": "(>)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
     },
     "raw-template-ml": {
       "name": "meta.template.vue",
@@ -1025,7 +879,7 @@
     },
     "raw-script-ts-inline": {
       "name": "meta.script.vue",
-      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']ts[\"'][^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
+      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])ts\\4[^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1040,10 +894,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.ts",
           "patterns": [
             {
@@ -1051,20 +905,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-script-ts-inline-ml": {
       "name": "meta.script.vue",
-      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']ts[\"'][^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])ts\\4[^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1079,10 +933,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.ts",
           "patterns": [
             {
@@ -1090,10 +944,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -1106,7 +960,7 @@
     },
     "raw-script-ts": {
       "name": "meta.script.vue",
-      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']ts[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])ts\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1121,7 +975,7 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
@@ -1184,7 +1038,7 @@
     },
     "raw-script-tsx-inline": {
       "name": "meta.script.vue",
-      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']tsx[\"'][^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
+      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])tsx\\4[^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1199,10 +1053,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.tsx",
           "patterns": [
             {
@@ -1210,20 +1064,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-script-tsx-inline-ml": {
       "name": "meta.script.vue",
-      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']tsx[\"'][^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])tsx\\4[^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1238,10 +1092,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.tsx",
           "patterns": [
             {
@@ -1249,10 +1103,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -1265,7 +1119,7 @@
     },
     "raw-script-tsx": {
       "name": "meta.script.vue",
-      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']tsx[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])tsx\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1280,7 +1134,7 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
@@ -1343,7 +1197,7 @@
     },
     "raw-script-jsx-inline": {
       "name": "meta.script.vue",
-      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']jsx[\"'][^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
+      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])jsx\\4[^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1358,10 +1212,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.js.jsx",
           "patterns": [
             {
@@ -1369,20 +1223,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-script-jsx-inline-ml": {
       "name": "meta.script.vue",
-      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']jsx[\"'][^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])jsx\\4[^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1397,10 +1251,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.js.jsx",
           "patterns": [
             {
@@ -1408,10 +1262,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -1424,7 +1278,7 @@
     },
     "raw-script-jsx": {
       "name": "meta.script.vue",
-      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']jsx[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])jsx\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1439,7 +1293,7 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
@@ -1502,7 +1356,7 @@
     },
     "raw-script-coffee-inline": {
       "name": "meta.script.vue",
-      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']coffee[\"'][^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
+      "match": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])coffee\\4[^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1517,10 +1371,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.coffee",
           "patterns": [
             {
@@ -1528,20 +1382,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-script-coffee-inline-ml": {
       "name": "meta.script.vue",
-      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']coffee[\"'][^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])coffee\\4[^>]*)(>)(.*?)(</)([Ss][Cc][Rr][Ii][Pp][Tt])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1556,10 +1410,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.coffee",
           "patterns": [
             {
@@ -1567,10 +1421,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -1583,7 +1437,7 @@
     },
     "raw-script-coffee": {
       "name": "meta.script.vue",
-      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*[\"']coffee[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Cc][Rr][Ii][Pp][Tt])\\b([^>]*\\blang\\s*=\\s*([\"'])coffee\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -1598,7 +1452,7 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
@@ -2041,7 +1895,7 @@
     },
     "raw-style-scss-inline": {
       "name": "meta.style.vue",
-      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']scss[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
+      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])scss\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2056,10 +1910,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.css.scss",
           "patterns": [
             {
@@ -2067,20 +1921,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-style-scss-inline-ml": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']scss[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])scss\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2095,10 +1949,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.css.scss",
           "patterns": [
             {
@@ -2106,10 +1960,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -2122,7 +1976,7 @@
     },
     "raw-style-scss": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']scss[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])scss\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2137,11 +1991,11 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
-      "while": "^(?!.*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
+      "end": "(?=</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
       "contentName": "source.css.scss",
       "patterns": [
         {
@@ -2149,58 +2003,9 @@
         }
       ]
     },
-    "raw-style-scss-close": {
-      "name": "meta.style.vue",
-      "match": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
-      "captures": {
-        "2": {
-          "name": "source.css.scss",
-          "patterns": [
-            {
-              "include": "source.css.scss"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        },
-        "5": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
-    "raw-style-scss-close-ml": {
-      "name": "meta.style.vue",
-      "begin": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
-      "beginCaptures": {
-        "2": {
-          "name": "source.css.scss",
-          "patterns": [
-            {
-              "include": "source.css.scss"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        }
-      },
-      "end": "(>)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
     "raw-style-less-inline": {
       "name": "meta.style.vue",
-      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']less[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
+      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])less\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2215,10 +2020,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.css.less",
           "patterns": [
             {
@@ -2226,20 +2031,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-style-less-inline-ml": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']less[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])less\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2254,10 +2059,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.css.less",
           "patterns": [
             {
@@ -2265,10 +2070,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -2281,7 +2086,7 @@
     },
     "raw-style-less": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']less[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])less\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2296,11 +2101,11 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
-      "while": "^(?!.*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
+      "end": "(?=</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
       "contentName": "source.css.less",
       "patterns": [
         {
@@ -2308,58 +2113,9 @@
         }
       ]
     },
-    "raw-style-less-close": {
-      "name": "meta.style.vue",
-      "match": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
-      "captures": {
-        "2": {
-          "name": "source.css.less",
-          "patterns": [
-            {
-              "include": "source.css.less"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        },
-        "5": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
-    "raw-style-less-close-ml": {
-      "name": "meta.style.vue",
-      "begin": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
-      "beginCaptures": {
-        "2": {
-          "name": "source.css.less",
-          "patterns": [
-            {
-              "include": "source.css.less"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        }
-      },
-      "end": "(>)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
     "raw-style-stylus-inline": {
       "name": "meta.style.vue",
-      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']stylus[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
+      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])stylus\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2374,10 +2130,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.stylus",
           "patterns": [
             {
@@ -2385,20 +2141,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-style-stylus-inline-ml": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']stylus[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])stylus\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2413,10 +2169,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.stylus",
           "patterns": [
             {
@@ -2424,10 +2180,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -2440,7 +2196,7 @@
     },
     "raw-style-stylus": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']stylus[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])stylus\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2455,11 +2211,11 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
-      "while": "^(?!.*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
+      "end": "(?=</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
       "contentName": "source.stylus",
       "patterns": [
         {
@@ -2467,58 +2223,9 @@
         }
       ]
     },
-    "raw-style-stylus-close": {
-      "name": "meta.style.vue",
-      "match": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
-      "captures": {
-        "2": {
-          "name": "source.stylus",
-          "patterns": [
-            {
-              "include": "source.stylus"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        },
-        "5": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
-    "raw-style-stylus-close-ml": {
-      "name": "meta.style.vue",
-      "begin": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
-      "beginCaptures": {
-        "2": {
-          "name": "source.stylus",
-          "patterns": [
-            {
-              "include": "source.stylus"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        }
-      },
-      "end": "(>)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
     "raw-style-postcss-inline": {
       "name": "meta.style.vue",
-      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']postcss[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
+      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])postcss\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2533,10 +2240,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.postcss",
           "patterns": [
             {
@@ -2544,20 +2251,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-style-postcss-inline-ml": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']postcss[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])postcss\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2572,10 +2279,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.postcss",
           "patterns": [
             {
@@ -2583,10 +2290,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -2599,7 +2306,7 @@
     },
     "raw-style-postcss": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']postcss[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])postcss\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2614,11 +2321,11 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
-      "while": "^(?!.*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
+      "end": "(?=</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
       "contentName": "source.postcss",
       "patterns": [
         {
@@ -2626,58 +2333,9 @@
         }
       ]
     },
-    "raw-style-postcss-close": {
-      "name": "meta.style.vue",
-      "match": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
-      "captures": {
-        "2": {
-          "name": "source.postcss",
-          "patterns": [
-            {
-              "include": "source.postcss"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        },
-        "5": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
-    "raw-style-postcss-close-ml": {
-      "name": "meta.style.vue",
-      "begin": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
-      "beginCaptures": {
-        "2": {
-          "name": "source.postcss",
-          "patterns": [
-            {
-              "include": "source.postcss"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        }
-      },
-      "end": "(>)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
     "raw-style-sass-inline": {
       "name": "meta.style.vue",
-      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']sass[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
+      "match": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])sass\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
       "captures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2692,10 +2350,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.sass",
           "patterns": [
             {
@@ -2703,20 +2361,20 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         },
-        "8": {
+        "9": {
           "name": "punctuation.definition.tag.end.vue"
         }
       }
     },
     "raw-style-sass-inline-ml": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']sass[\"'][^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])sass\\4[^>]*)(>)(.*?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2731,10 +2389,10 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         },
-        "5": {
+        "6": {
           "name": "source.sass",
           "patterns": [
             {
@@ -2742,10 +2400,10 @@
             }
           ]
         },
-        "6": {
+        "7": {
           "name": "punctuation.definition.tag.begin.vue"
         },
-        "7": {
+        "8": {
           "name": "entity.name.tag.vue"
         }
       },
@@ -2758,7 +2416,7 @@
     },
     "raw-style-sass": {
       "name": "meta.style.vue",
-      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*[\"']sass[\"'][^>]*)(>)",
+      "begin": "(<)([Ss][Tt][Yy][Ll][Ee])\\b([^>]*\\blang\\s*=\\s*([\"'])sass\\4[^>]*)(>)",
       "beginCaptures": {
         "1": {
           "name": "punctuation.definition.tag.begin.vue"
@@ -2773,66 +2431,17 @@
             }
           ]
         },
-        "4": {
+        "5": {
           "name": "punctuation.definition.tag.end.vue"
         }
       },
-      "while": "^(?!.*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
+      "end": "(?=</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
       "contentName": "source.sass",
       "patterns": [
         {
           "include": "source.sass"
         }
       ]
-    },
-    "raw-style-sass-close": {
-      "name": "meta.style.vue",
-      "match": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
-      "captures": {
-        "2": {
-          "name": "source.sass",
-          "patterns": [
-            {
-              "include": "source.sass"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        },
-        "5": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
-    "raw-style-sass-close-ml": {
-      "name": "meta.style.vue",
-      "begin": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
-      "beginCaptures": {
-        "2": {
-          "name": "source.sass",
-          "patterns": [
-            {
-              "include": "source.sass"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        }
-      },
-      "end": "(>)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
     },
     "raw-style-inline": {
       "name": "meta.style.vue",
@@ -2936,62 +2545,13 @@
           "name": "punctuation.definition.tag.end.vue"
         }
       },
-      "while": "^(?!.*</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
+      "end": "(?=</[Ss][Tt][Yy][Ll][Ee](?:[\\s>]|$))",
       "contentName": "source.css",
       "patterns": [
         {
           "include": "source.css"
         }
       ]
-    },
-    "raw-style-close": {
-      "name": "meta.style.vue",
-      "match": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])\\s*(>)",
-      "captures": {
-        "2": {
-          "name": "source.css",
-          "patterns": [
-            {
-              "include": "source.css"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        },
-        "5": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
-    },
-    "raw-style-close-ml": {
-      "name": "meta.style.vue",
-      "begin": "^(\\s*)((?:(?!<[Ss][Tt][Yy][Ll][Ee]\\b).)+?)(</)([Ss][Tt][Yy][Ll][Ee])(?=\\s*$)",
-      "beginCaptures": {
-        "2": {
-          "name": "source.css",
-          "patterns": [
-            {
-              "include": "source.css"
-            }
-          ]
-        },
-        "3": {
-          "name": "punctuation.definition.tag.begin.vue"
-        },
-        "4": {
-          "name": "entity.name.tag.vue"
-        }
-      },
-      "end": "(>)",
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.end.vue"
-        }
-      }
     },
     "raw-style-ml": {
       "name": "meta.style.vue",
