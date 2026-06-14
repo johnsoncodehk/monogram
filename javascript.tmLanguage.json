@@ -124,6 +124,9 @@
       "include": "#scope-keyword-control-from-from"
     },
     {
+      "include": "#scope-keyword-other"
+    },
+    {
       "include": "#scope-storage-type-class"
     },
     {
@@ -134,9 +137,6 @@
     },
     {
       "include": "#scope-storage-modifier-accessibility"
-    },
-    {
-      "include": "#scope-keyword-other"
     },
     {
       "include": "#scope-storage-type-function"
@@ -1685,6 +1685,10 @@
       "match": "\\b(of)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[]|\\s*$|\\s*[({\\[\"`/])",
       "name": "keyword.control.loop.js"
     },
+    "scope-keyword-other": {
+      "match": "\\b(target|meta|as)\\b",
+      "name": "keyword.other.js"
+    },
     "scope-storage-type-class": {
       "match": "\\b(class)\\b",
       "name": "storage.type.class.js"
@@ -1708,10 +1712,6 @@
     "scope-keyword-control-import": {
       "match": "\\b(import)\\b",
       "name": "keyword.control.import.js"
-    },
-    "scope-keyword-other": {
-      "match": "\\b(meta|as)\\b",
-      "name": "keyword.other.js"
     },
     "scope-storage-type-function": {
       "match": "\\b(function)\\b",
@@ -1927,13 +1927,13 @@
       "match": "\\b(yield)\\b",
       "name": "keyword.control.flow.js"
     },
+    "expr-scope-keyword-other": {
+      "match": "\\b(target|meta)\\b",
+      "name": "keyword.other.js"
+    },
     "expr-scope-storage-modifier": {
       "match": "\\b(async)\\b",
       "name": "storage.modifier.js"
-    },
-    "expr-scope-keyword-other": {
-      "match": "\\b(meta)\\b",
-      "name": "keyword.other.js"
     },
     "expression": {
       "patterns": [
@@ -2028,6 +2028,9 @@
           "include": "#scope-keyword-control-from-from"
         },
         {
+          "include": "#expr-scope-keyword-other"
+        },
+        {
           "include": "#scope-storage-type-class"
         },
         {
@@ -2035,9 +2038,6 @@
         },
         {
           "include": "#expr-scope-storage-modifier"
-        },
-        {
-          "include": "#expr-scope-keyword-other"
         },
         {
           "include": "#scope-storage-type-function"

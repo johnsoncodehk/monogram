@@ -57,9 +57,9 @@
 
 ;; Keyword, operator, and punctuation literals.
 [
-  "debugger" "accessor" "default" "extends" "switch" "export" "static" "const"
-  "using" "class" "async" "case" "with" "from" "meta" "let"
-  "var" "get" "set" "as"
+  "debugger" "accessor" "default" "extends" "switch" "export" "static" "target"
+  "const" "using" "class" "async" "case" "with" "from" "meta"
+  "let" "var" "get" "set" "as"
 ] @keyword
 [
   "constructor" "function" "=>"

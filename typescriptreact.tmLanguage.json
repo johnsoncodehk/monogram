@@ -3069,7 +3069,7 @@
       "name": "support.type.primitive.tsx"
     },
     "scope-keyword-other": {
-      "match": "\\b(unique|@new|meta|out)\\b",
+      "match": "\\b(unique|@new|target|meta|out)\\b",
       "name": "keyword.other.tsx"
     },
     "scope-keyword-control-import": {

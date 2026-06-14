@@ -379,6 +379,7 @@
             "@new": "keyword",
             "super": "keyword",
             "instanceof": "operator",
+            "target": "keyword",
             "class": "keyword",
             "implements": "keyword",
             "async": "keyword",
@@ -664,6 +665,10 @@
             },
             "instanceof": {
               "token": "operator",
+              "switchTo": "@root"
+            },
+            "target": {
+              "token": "keyword",
               "switchTo": "@root"
             },
             "class": {
@@ -1143,6 +1148,7 @@
             "@new": "keyword",
             "super": "keyword",
             "instanceof": "operator",
+            "target": "keyword",
             "class": "keyword",
             "implements": "keyword",
             "async": "keyword",

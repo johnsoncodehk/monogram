@@ -116,7 +116,7 @@ module.exports = grammar({
 
     type_member: $ => choice(seq(optional("new"), optional($.type_params), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional(seq(":", $.type))), seq(optional(choice("+", "-")), optional("readonly"), "[", choice(seq($.ident, choice(seq("in", $.type, optional(seq("as", $.type)), "]", optional(choice("+", "-")), optional("?"), ":", $.type), seq(":", $.type, optional(","), "]", optional(seq(":", $.type))))), seq($.expr, "]", optional("?"), choice(seq(optional($.type_params), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional(seq(":", $.type))), optional(seq(":", $.type)))), seq("]", optional(seq(":", $.type))))), seq("readonly", $.ident, optional("?"), ":", $.type), seq(choice($.ident, $.number, $.string, $.private_field), optional("?"), choice(seq(optional($.type_params), "(", optional(seq($.param, repeat(seq(",", $.param)), optional(","))), ")", optional(seq(":", $.type))), optional(seq(":", $.type))))),
 
-    decorator_expr: $ => choice(seq($.decorator, repeat(choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), "!", seq(".", choice($.ident, $.private_field)), seq("?.", choice($.ident, $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"))), $.template))), seq("@new", $.new_target, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
+    decorator_expr: $ => choice(seq($.decorator, repeat(choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), "!", seq(".", choice($.ident, $.private_field)), seq("?.", choice($.ident, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"))), $.template))), seq("@new", $.new_target, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
 
     typeof_ref: $ => choice($.ident, seq("import", "(", $.type, ")"), seq($.typeof_ref, ".", $.ident)),
 
@@ -155,7 +155,7 @@ module.exports = grammar({
       prec.left(18, seq($.expr, "<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">")),
       prec.left(18, seq($.expr, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
       prec.left(18, seq($.expr, ".", choice($.ident, $.private_field))),
-      prec.left(18, seq($.expr, "?.", choice($.ident, $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template, seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
+      prec.left(18, seq($.expr, "?.", choice($.ident, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template, seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
       prec.left(18, seq($.expr, "[", $.expr, "]")),
       prec.left(18, seq($.expr, "!")),
       prec.left(18, seq($.expr, "?", $.expr, ":", $.expr)),
@@ -163,6 +163,7 @@ module.exports = grammar({
       prec.left(18, seq($.expr, "instanceof", $.expr)),
       prec.left(18, seq($.expr, "in", $.expr)),
       prec.left(18, seq($.expr, $.template)),
+      seq("new", ".", "target"),
       seq("new", $.new_target, optional(choice(seq("<", optional(seq($.type, repeat(seq(",", $.type)), optional(","))), ">", optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))), seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
       seq("new", "class", field('name', $.ident), optional($.type_params), optional(seq("extends", $.class_heritage)), optional(seq("implements", optional(seq($.type, repeat(seq(",", $.type)), optional(","))))), "{", repeat($.class_member), "}", optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))),
       seq("new", "class", optional($.type_params), optional(seq("extends", $.class_heritage)), optional(seq("implements", optional(seq($.type, repeat(seq(",", $.type)), optional(","))))), "{", repeat($.class_member), "}", optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))),

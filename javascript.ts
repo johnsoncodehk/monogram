@@ -323,7 +323,7 @@ const Expr = rule($ => [
   // `super` is a CONSTRAINED primary (mirrors tsc's parseSuperExpression): MUST be
   // immediately followed by a call `(args)`, member `.name`/`.#priv`, or element `[expr]`.
   ['super', alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
-  [not('super'), notReservedExpr, Ident],
+  [not('super'), not('new'), notReservedExpr, Ident],
   Number_,
   String_,
   Template,
@@ -335,12 +335,19 @@ const Expr = rule($ => [
   [$, '(', sep($, ','), ')'],
   [$, '.', alt(Ident, PrivateField)],
   // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`
-  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
+  // optional chain `?.` member: an Ident only — a private `?.#x` is a tsc parse error
+  // ("An optional chain cannot contain private identifiers"), so PrivateField is excluded
+  // here (a NON-optional `a.#x` via the `.` led above stays valid). `?.(`/`?.[`/`?.\`` tails ok.
+  [$, '?.', alt(Ident, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
   [$, '[', $, ']'],
   [$, '?', $, ':', $],
   [$, 'instanceof', $],
   [$, 'in', $],
   [$, Template],
+  // `new.target` meta-property — the only `new` form not followed by a target; matched by a
+  // dedicated arm (NOT the bare identifier nud, which excludes `new`) so a failed `new T` arm
+  // can't slide `new` in as an Ident (`new <T>Foo()` → the comparison `(new < T) > Foo()`).
+  ['new', '.', 'target'],
   // new T | new T(args)
   ['new', not('<'), NewTarget, opt('(', sep($, ','), ')')],
   ['new', 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],

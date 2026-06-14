@@ -2564,7 +2564,7 @@
       "name": "support.type.primitive.ts"
     },
     "scope-keyword-other": {
-      "match": "\\b(unique|@new|meta|out)\\b",
+      "match": "\\b(unique|@new|target|meta|out)\\b",
       "name": "keyword.other.ts"
     },
     "scope-keyword-control-import": {

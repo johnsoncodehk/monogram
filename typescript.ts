@@ -66,7 +66,7 @@ const DecoratorExpr = rule($ => [
     // optional chain: ?.y | ?.#y | ?.(args) | ?.[i] — unlike plain element access,
     // `?.[` is unambiguous (a computed class member never starts with `?.`), so tsc
     // parses it in decorator position and we mirror.
-    ['?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'])],
+    ['?.', alt(Ident, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'])],   // `?.#x` excluded: an optional chain may not contain a private identifier
     Template,                                             // tagged template: @x`…`
   ))],
   // `@new x` — the decorator expression is a NewExpression. The lexer maximal-munches
@@ -290,9 +290,10 @@ const Expr = rule($ => [
   // LEDs (type-arg call, optional chain, tagged template, assignment) attach and re-open
   // that whole class; further access chains off the RESULT normally (`super.x<T>()`).
   ['super', alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
-  // bare-identifier NUD — also excludes `super` (a one-token text match that would
-  // otherwise slide in here as an Ident now that it's gone from the literals-first list).
-  [not('super'), notReservedExpr, Ident],
+  // bare-identifier NUD — excludes `super` AND `new` (reserved one-token text matches
+  // handled by their own arms above; without these guards a failed `super`/`new` arm would
+  // slide the keyword in here as an Ident — e.g. `new <T>Foo()` reparsing as `(new < T) > Foo()`).
+  [not('super'), not('new'), notReservedExpr, Ident],
   Number_,
   String_,
   Template,
@@ -316,7 +317,9 @@ const Expr = rule($ => [
   [$, '(', sep($, ','), ')'],
   [$, '.', alt(Ident, PrivateField)],
   // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…`
-  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, ['<', sep(Type, ','), '>', '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
+  // optional chain `?.` member: Ident only — `a?.#x` is a tsc parse error ("An optional
+  // chain cannot contain private identifiers"); a NON-optional `a.#x` (the `.` led) stays valid.
+  [$, '?.', alt(Ident, ['(', sep($, ','), ')'], ['[', $, ']'], Template, ['<', sep(Type, ','), '>', '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
   [$, '[', $, ']'],
   [$, sameLine, '!'],   // TS non-null assertion — RESTRICTED (no line break before `!`, like postfix ++/--); a LHS-chain tail (access can follow: `x!.y`, `x!()`)
   [$, '?', $, ':', $],
@@ -324,6 +327,12 @@ const Expr = rule($ => [
   [$, 'instanceof', $],
   [$, 'in', $],
   [$, Template],
+  // `new.target` meta-property — the ONLY form where `new` is not followed by a target.
+  // Listed before the `new T` arm and matched by the dedicated `new` arms (NOT the bare
+  // identifier nud, which excludes `new`), so `new <T>Foo()` — where the `new T` arm fails
+  // on the leading `<` — can no longer fall through to `new` as an identifier and reparse
+  // as the comparison `(new < T) > Foo()` (tsc: "Expression expected").
+  ['new', '.', 'target'],
   // new T | new T(args) | new T<X> | new T<X>(args)
   ['new', NewTarget, opt(alt(
     ['<', sep(Type, ','), '>', opt('(', sep($, ','), ')')],

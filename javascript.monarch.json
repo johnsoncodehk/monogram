@@ -448,6 +448,10 @@
               "token": "operator",
               "switchTo": "@root"
             },
+            "target": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "class": {
               "token": "keyword",
               "switchTo": "@root"
@@ -826,6 +830,7 @@
             "instanceof": "operator",
             "in": "keyword",
             "new": "operator",
+            "target": "keyword",
             "class": "keyword",
             "extends": "keyword",
             "async": "keyword",

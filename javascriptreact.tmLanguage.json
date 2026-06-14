@@ -133,6 +133,9 @@
       "include": "#scope-keyword-control-from-from"
     },
     {
+      "include": "#scope-keyword-other"
+    },
+    {
       "include": "#scope-storage-type-class"
     },
     {
@@ -143,9 +146,6 @@
     },
     {
       "include": "#scope-storage-modifier-accessibility"
-    },
-    {
-      "include": "#scope-keyword-other"
     },
     {
       "include": "#scope-storage-type-function"
@@ -2164,6 +2164,10 @@
       "match": "\\b(of)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[]|\\s*$|\\s*[({\\[\"`/])",
       "name": "keyword.control.loop.js.jsx"
     },
+    "scope-keyword-other": {
+      "match": "\\b(target|meta|as)\\b",
+      "name": "keyword.other.js.jsx"
+    },
     "scope-storage-type-class": {
       "match": "\\b(class)\\b",
       "name": "storage.type.class.js.jsx"
@@ -2187,10 +2191,6 @@
     "scope-keyword-control-import": {
       "match": "\\b(import)\\b",
       "name": "keyword.control.import.js.jsx"
-    },
-    "scope-keyword-other": {
-      "match": "\\b(meta|as)\\b",
-      "name": "keyword.other.js.jsx"
     },
     "scope-storage-type-function": {
       "match": "\\b(function)\\b",
@@ -2406,13 +2406,13 @@
       "match": "\\b(yield)\\b",
       "name": "keyword.control.flow.js.jsx"
     },
+    "expr-scope-keyword-other": {
+      "match": "\\b(target|meta)\\b",
+      "name": "keyword.other.js.jsx"
+    },
     "expr-scope-storage-modifier": {
       "match": "\\b(async)\\b",
       "name": "storage.modifier.js.jsx"
-    },
-    "expr-scope-keyword-other": {
-      "match": "\\b(meta)\\b",
-      "name": "keyword.other.js.jsx"
     },
     "expression": {
       "patterns": [
@@ -2516,6 +2516,9 @@
           "include": "#scope-keyword-control-from-from"
         },
         {
+          "include": "#expr-scope-keyword-other"
+        },
+        {
           "include": "#scope-storage-type-class"
         },
         {
@@ -2523,9 +2526,6 @@
         },
         {
           "include": "#expr-scope-storage-modifier"
-        },
-        {
-          "include": "#expr-scope-keyword-other"
         },
         {
           "include": "#scope-storage-type-function"
