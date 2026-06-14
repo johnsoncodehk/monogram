@@ -127,6 +127,11 @@ for (const name of GRAMMARS) {
           console.log('FRESH errors:', JSON.stringify(fc.errors));
           console.log('INC errors:  ', JSON.stringify(cst.errors));
         }
+        if (process.env.DUMP_TREES) {
+          writeFileSync(`/tmp/incr-fresh-${name}-doc${docs}-step${k}.json`, JSON.stringify(JSON.parse(JSON.stringify(objectify(fresh.tree, (fns) => fresh.visit(fc, fns)))), null, 1));
+          writeFileSync(`/tmp/incr-inc-${name}-doc${docs}-step${k}.json`, JSON.stringify(JSON.parse(JSON.stringify(objectify(session.tree, (fns) => session.visit(cst, fns)))), null, 1));
+          console.log(`DUMP_TREES wrote /tmp/incr-{fresh,inc}-${name}-doc${docs}-step${k}.json (edit ${JSON.stringify(edit)})`);
+        }
         if (failures.length < 10) {
           let i = 0; while (i < a.length && a[i] === b[i]) i++;
           failures.push(`${name} doc${docs} step${k}: edit ≠ fresh @${i} edit=${JSON.stringify(edit).slice(0, 60)}\n      fresh: …${a.slice(Math.max(0, i - 40), i + 60)}…\n      inc:   …${b.slice(Math.max(0, i - 40), i + 60)}…`);

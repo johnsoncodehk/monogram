@@ -282,8 +282,17 @@ const Expr = rule($ => [
   // (both are one token) goes to the first-listed alternative, so listing the literals
   // first makes `this`/`true`/… arrive as $keyword leaves — the tree records what the
   // word IS instead of the bare-identifier fallback winning the tie and stamping Ident.
-  'true', 'false', 'null', 'undefined', 'this', 'super',
-  [notReservedExpr, Ident],
+  'true', 'false', 'null', 'undefined', 'this',
+  // `super` is a CONSTRAINED primary (mirrors tsc's parseSuperExpression): it MUST be
+  // immediately followed by a call `(args)`, a member `.name`/`.#priv`, or an element
+  // `[expr]` access. Bare `super`, `super<T>()`, `super?.x`, a super-tagged-template, and
+  // `super = …` are all parse errors. Modeling super as a bare atom would let the generic
+  // LEDs (type-arg call, optional chain, tagged template, assignment) attach and re-open
+  // that whole class; further access chains off the RESULT normally (`super.x<T>()`).
+  ['super', alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
+  // bare-identifier NUD — also excludes `super` (a one-token text match that would
+  // otherwise slide in here as an Ident now that it's gone from the literals-first list).
+  [not('super'), notReservedExpr, Ident],
   Number_,
   String_,
   Template,

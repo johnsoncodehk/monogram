@@ -205,10 +205,10 @@
       "include": "#punctuation-comma"
     },
     {
-      "include": "#scope-punctuation-accessor-optional"
+      "include": "#scope-punctuation-bracket-square"
     },
     {
-      "include": "#scope-punctuation-bracket-square"
+      "include": "#scope-punctuation-accessor-optional"
     },
     {
       "include": "#scope-punctuation-bracket-curly"
@@ -2382,13 +2382,13 @@
       "match": "\\(|\\)",
       "name": "punctuation.bracket.round.js.jsx"
     },
-    "scope-punctuation-accessor-optional": {
-      "match": "\\?\\.",
-      "name": "punctuation.accessor.optional.js.jsx"
-    },
     "scope-punctuation-bracket-square": {
       "match": "\\[|\\]",
       "name": "punctuation.bracket.square.js.jsx"
+    },
+    "scope-punctuation-accessor-optional": {
+      "match": "\\?\\.",
+      "name": "punctuation.accessor.optional.js.jsx"
     },
     "scope-punctuation-bracket-curly": {
       "match": "\\{|\\}",
@@ -2579,10 +2579,10 @@
           "include": "#punctuation-comma"
         },
         {
-          "include": "#scope-punctuation-accessor-optional"
+          "include": "#scope-punctuation-bracket-square"
         },
         {
-          "include": "#scope-punctuation-bracket-square"
+          "include": "#scope-punctuation-accessor-optional"
         },
         {
           "include": "#scope-punctuation-bracket-curly"

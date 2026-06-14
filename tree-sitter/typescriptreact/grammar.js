@@ -144,7 +144,7 @@ module.exports = grammar({
       "null",
       "undefined",
       "this",
-      "super",
+      seq("super", choice(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq(".", choice($.ident, $.private_field)), seq("[", $.expr, "]"))),
       $.ident,
       $.number,
       $.string,

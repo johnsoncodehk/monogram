@@ -2523,7 +2523,15 @@ function parseRuleEntry(idx, rid, name, core) {
       : start >= adoptDmgOldEnd + adoptDelta ? start - adoptDelta : -1;
     if (q >= 0) {
       const aid = adoptSeek(q, rid);
-      if (aid >= 0 && recovering && !barsWindowEq(start, q, rowExt[aid])) {
+      if (aid >= 0 && recovering && rowRM[aid] !== 0 && missAt(start + rowTokLen[aid])) {
+        // RE-DERIVE (don't adopt): this recovery-made row ENDS on a recovery bar — exactly
+        // where a following sibling's list-element / optional synthesis reads the per-position
+        // memo that this row's interior derivation SEEDS under commitment (missRule/missTok
+        // fire only when pos > probeBase, a NON-local context barsWindowEq can't see). Adopting
+        // skips the interior, leaving the memo un-seeded, so the sibling synthesizes one fewer
+        // $missing than a fresh parse — the incremental≢fresh divergence (#47). Synthesis only
+        // fires AT a bar (recoverArmed), so a bar at this row's end is precisely the condition.
+      } else if (aid >= 0 && recovering && !barsWindowEq(start, q, rowExt[aid])) {
         // bar context differs from the build run — parse this window for real
       } else if (aid >= 0) {
         pos = start + rowTokLen[aid];
