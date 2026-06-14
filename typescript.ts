@@ -1,7 +1,7 @@
 import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not, tsRelax,
+  sep, opt, many, many1, alt, exclude, not, tsRelax, capExpr,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
 } from './src/api.ts';
 
@@ -337,13 +337,19 @@ const Expr = rule($ => [
   // each arm's params + body to the right rule family (await-yield-fork.ts): an async
   // arrow's params and body are await-context (`async (a = await) =>` rejects), a
   // plain arrow's body resets. Type params/annotations stay PLAIN (not await-context).
-  ['async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(alt($, Block))],
-  [opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(alt($, Block))],
+  // capExpr('?'): an ArrowFunction is the LOWEST-precedence AssignmentExpression — neither a
+  // binary/logical/conditional operand nor an assignment target — so each arm is capped BELOW
+  // the conditional `?`: it parses only at an assignment-or-looser minBp and admits no led once
+  // parsed (`() => {} || a` rejects, NOT `(() => {}) || a`); a `||`/`?:` INSIDE an expression
+  // body (`() => a || b`) is unaffected. Body `alt(Block, $)` (Block FIRST) = the spec's
+  // ConciseBody `[lookahead ≠ {] AssignmentExpression | { FunctionBody }`.
+  capExpr('?', 'async', opt(TypeParams), '(', sep(awaitCtx(Param), ','), ')', opt(":", ReturnType), '=>', awaitCtx(alt(Block, $))),
+  capExpr('?', opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), '=>', resetCtx(alt(Block, $))),
   // async arrow with a BARE parameter: `async err => …`. tsc requires async and the
   // parameter on the same line (`async\nx => …` is `async;` then a plain arrow — ASI).
   // Without this arm the bare form only "parsed" by splitting into two statements.
-  ['async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(alt($, Block))],
-  [notReservedExpr, Ident, '=>', resetCtx(alt($, Block))],
+  capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(alt(Block, $))),
+  capExpr('?', notReservedExpr, Ident, '=>', resetCtx(alt(Block, $))),
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   [$, 'satisfies', Type],

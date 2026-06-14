@@ -242,7 +242,23 @@ class RelaxNode {
   constructor(strict: Element[], relaxed: Element[]) { this.strict = strict; this.relaxed = relaxed; }
 }
 
-type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode;
+class CapExprNode {
+  // Wrap a NUD alternative that is a complete assignment-level expression — an
+  // ArrowFunction, the LOWEST-precedence ECMAScript AssignmentExpression. `below` names
+  // the operator whose binding power is the cap: the alternative may be parsed only when
+  // the enclosing Pratt minBp is looser than `below`, and once parsed it admits NO led
+  // (`() => {} || a` is not `(() => {}) || a` — an arrow can be neither operand of
+  // `||`/`??`/`?:`/binary, nor an assignment target). Reuses the transparent `group` node:
+  // matched exactly like the bare alternative (no extra CST node), the cap is read only by
+  // the expression engine. A general property — any grammar with a lowest-precedence
+  // primary expression form can declare it; the engine enforces it generically.
+  readonly __kind = 'cap-expr' as const;
+  readonly below: string;
+  readonly items: Element[];
+  constructor(below: string, items: Element[]) { this.below = below; this.items = items; }
+}
+
+type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode;
 
 export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
@@ -276,6 +292,14 @@ export function exclude(connectors: string | string[], ...items: Element[]): Exc
 // the highlighter doesn't need it. Each side is a single element or an array (a seq).
 export function tsRelax(strict: Element | Element[], relaxed: Element | Element[]): RelaxNode {
   return new RelaxNode(Array.isArray(strict) ? strict : [strict], Array.isArray(relaxed) ? relaxed : [relaxed]);
+}
+
+// Mark a NUD alternative as a complete assignment-level expression (an ArrowFunction —
+// the lowest-precedence ECMAScript AssignmentExpression). `below` names the operator whose
+// binding power caps it: the alternative parses only when the enclosing Pratt minBp is
+// looser than `below`, and once parsed admits no led. See CapExprNode.
+export function capExpr(below: string, ...items: Element[]): CapExprNode {
+  return new CapExprNode(below, items);
 }
 
 // Mark items as await / yield / async-generator context (see CtxNode). Wrap an
@@ -401,6 +425,14 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
       ? toRuleExpr(items[0], names)
       : { type: 'seq', items: items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body: build(el.strict), tsRelaxed: build(el.relaxed) };
+  }
+  if (el instanceof CapExprNode) {
+    // Reuse the transparent `group` node (every walker recurses into `body`); `capBelow`
+    // is read only by the expression engine's Pratt core.
+    const body = el.items.length === 1
+      ? toRuleExpr(el.items[0], names)
+      : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body, capBelow: el.below };
   }
   if (el instanceof AltNode) {
     // A branch may be a single element or a sequence (array → seq).

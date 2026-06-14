@@ -157,6 +157,19 @@ export function createParser(grammar: CstGrammar) {
     ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
   }
 
+  // A `cap`-group NUD (an ArrowFunction — the lowest-precedence AssignmentExpression)
+  // parses only when minBp is LOOSER than the named connector's binding power; the value
+  // resolves from the ladder or the ledPrec table. See parsePratt for enforcement.
+  const connectorLbp = (connector: string): number => {
+    const op = opTable.get(connector);
+    if (op) return op.lbp;
+    const lp = ledPrecByConnector.get(connector);
+    if (lp) return lp.lbp;
+    throw new Error(`capExpr: connector ${JSON.stringify(connector)} is not a ladder operator or ledPrec connector`);
+  };
+  const nudCapOf = (nud: RuleExpr): number | null =>
+    nud.type === 'group' && nud.capBelow !== undefined ? connectorLbp(nud.capBelow) : null;
+
   // Classify rules: which use Pratt parsing
   const prattRules = new Set<string>();
   for (const rule of grammar.rules) {
@@ -768,6 +781,11 @@ export function createParser(grammar: CstGrammar) {
     const tokens = tokenize(source);
     let pos = 0;
     let maxPos = 0;   // farthest token index ever ADVANCED past (diagnostic; updated at the pos++ sites, mirroring the emitted engine so reject messages stay engine-identical)
+    // Cap-propagation flag (capExpr), mirrors the emitted engine: set true when a parsePratt
+    // call returns a CAPPED assignment-level expression (an ArrowFunction). An enclosing
+    // operator LED reads it right after parsing its RHS and refuses to continue (so the RHS of
+    // `a = () => {}` admits no trailing `||`/`?:` — it stays unconsumed and the parse rejects).
+    let _prattCapped = false;
     // Packrat memo for pratt/left-recursive rules (Expr, Type, …): cache the
     // parse result + end position by start position, so backtracking doesn't
     // re-parse the same rule at the same spot. Sound because those rules reset
@@ -1051,13 +1069,21 @@ export function createParser(grammar: CstGrammar) {
     function parsePratt(rule: RuleDecl, minBp: number): CstNode | null {
       const { nuds, leds } = prattClassified.get(rule.name)!;
       const saved = pos;
+      _prattCapped = false;   // reset; set true only on a capped (arrow) return
 
       // NUD: parse atom or prefix (longest match)
       let lhs: CstNode | null = null;
       let bestNudPos = saved;
+      // True iff the winning NUD is a capped (assignment-level) expression — an
+      // ArrowFunction. Such a NUD admits no led; the led loop is skipped entirely.
+      let capped = false;
       const startTok = tokens[saved] ?? null;
       const startTok2 = (parseLimit >= 0 && saved + 1 >= parseLimit) ? null : (tokens[saved + 1] ?? null);
       for (const nud of nuds) {
+        // A capped NUD parses only at a minBp LOOSER than its cap: refused as the operand
+        // of any tighter operator (so `a || () => {}` rejects — `||`'s rhs minBp >= cap).
+        const capBp = nudCapOf(nud);
+        if (capBp !== null && minBp >= capBp) continue;
         if (!altMightStart(nud, startTok)) continue;
         if (!altMightSecond(nud, startTok2)) continue;
         pos = saved;
@@ -1079,6 +1105,7 @@ export function createParser(grammar: CstGrammar) {
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 bestNudPos = pos;
+                capped = false;   // a prefix NUD is never capped
               }
             }
           }
@@ -1091,11 +1118,16 @@ export function createParser(grammar: CstGrammar) {
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestNudPos = pos;
+          capped = capBp !== null;   // the LONGEST match wins; record whether it is capped
         }
       }
       if (lhs) pos = bestNudPos;
 
       if (!lhs) { pos = saved; return null; }
+
+      // A capped NUD (assignment-level arrow) admits no led: return it as-is so a trailing
+      // tighter operator stays unconsumed and the enclosing parse rejects (`() => {} || a`).
+      if (capped) { _prattCapped = true; return lhs; }
 
       // Once a postfix operator binds (`a++`), the operand is an update expression
       // that access tails (`[…]`, `.x`, `(…)`, `<T>`, tagged template) can't extend.
@@ -1198,6 +1230,13 @@ export function createParser(grammar: CstGrammar) {
             if (++pos > maxPos) maxPos = pos;
             const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
             const rhs = parsePratt(rule, info.rbp);
+            // CAP PROPAGATION: an operator whose RHS is a capped assignment-level expression
+            // (an ArrowFunction) is itself capped — it admits no further led, so a trailing
+            // `|| x` / `? :` stays unconsumed (`a = () => {} || x` rejects). `_prattCapped` is
+            // still true from the RHS, so an enclosing operator refuses it too (`b = a = arrow`).
+            if (rhs && _prattCapped) {
+              return { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+            }
             if (rhs) {
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
               matched = true;

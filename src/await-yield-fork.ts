@@ -87,8 +87,13 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
         const inner = expr.ctxMode === 'reset' ? null : (expr.ctxMode ? expr.ctxMode : fam);
         const body = rewrite(expr.body, inner);
         // strip the ctxMode marker from the emitted grammar (it has done its routing
-        // job); keep `suppress` (the no-in context, still read by the engine).
-        return expr.suppress !== undefined ? { type: 'group', body, suppress: expr.suppress } : { type: 'group', body };
+        // job); keep `suppress` (no-in context) and `capBelow` (assignment-level cap),
+        // both still read by the parser engine. (tsRelaxed is gen-treesitter-only and the
+        // post-fork grammar is the PARSER's, which uses `body` — so it is correctly dropped.)
+        const g: RuleExpr = { type: 'group', body };
+        if (expr.suppress !== undefined) g.suppress = expr.suppress;
+        if (expr.capBelow !== undefined) g.capBelow = expr.capBelow;
+        return g;
       }
       case 'seq': return { type: 'seq', items: expr.items.map(i => rewrite(i, fam)) };
       case 'alt': return { type: 'alt', items: expr.items.map(i => rewrite(i, fam)) };
@@ -146,7 +151,7 @@ export function dropForks(grammar: CstGrammar): CstGrammar {
     if (!e || typeof e !== 'object') return e;
     switch (e.type) {
       case 'ref': return canonOf.has(e.name) ? { type: 'ref', name: canonOf.get(e.name)! } : e;
-      case 'group': return { type: 'group', body: reref(e.body), ...(e.suppress !== undefined ? { suppress: e.suppress } : {}) };
+      case 'group': return { type: 'group', body: reref(e.body), ...(e.suppress !== undefined ? { suppress: e.suppress } : {}), ...(e.capBelow !== undefined ? { capBelow: e.capBelow } : {}) };
       case 'seq': return { type: 'seq', items: e.items.map(reref) };
       case 'alt': return { type: 'alt', items: e.items.map(reref) };
       case 'quantifier': return { type: 'quantifier', body: reref(e.body), kind: e.kind };

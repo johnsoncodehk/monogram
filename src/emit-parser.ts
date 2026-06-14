@@ -203,6 +203,26 @@ function analyze(grammar: CstGrammar) {
     ledMeta.set(ruleName, { accessTail, tailClosing, mixfix, first, prec });
   }
 
+  // Capped-NUD classification (Pratt). A NUD alternative wrapped in a `cap`-group is a
+  // complete assignment-level expression (an ArrowFunction — the lowest-precedence
+  // AssignmentExpression): it parses only when minBp is LOOSER than the named connector's
+  // binding power (so it is refused as the operand of any tighter operator, e.g.
+  // `a || () => {}`), and once parsed it admits NO led (so `() => {} || a` leaves `|| a`
+  // unconsumed and the parse rejects). `cap[i]` is the binding-power threshold for nud i
+  // (null = uncapped). The connector's lbp resolves from the ladder or the ledPrec table.
+  const connectorLbp = (connector: string): number => {
+    const op = opTable.get(connector);
+    if (op) return op.lbp;
+    const lp = ledPrecByConnector.get(connector);
+    if (lp) return lp.lbp;
+    throw new Error(`capExpr: connector ${JSON.stringify(connector)} is not a ladder operator or ledPrec connector`);
+  };
+  const nudCap = new Map<string, (number | null)[]>();
+  for (const [ruleName, { nuds }] of prattClassified.entries()) {
+    nudCap.set(ruleName, nuds.map(nud =>
+      nud.type === 'group' && nud.capBelow !== undefined ? connectorLbp(nud.capBelow) : null));
+  }
+
   // Left-rec continuation mixfix.
   const contMeta = new Map<string, (MixfixInfo | null)[]>();
   for (const [ruleName, { continuations }] of leftRecClassified.entries()) {
@@ -622,7 +642,7 @@ function analyze(grammar: CstGrammar) {
     grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
-    altSecond, ledMeta, contMeta, nullableRules, firstSets, symtab, qualKeys,
+    altSecond, ledMeta, contMeta, nudCap, nullableRules, firstSets, symtab, qualKeys,
     exprFirst, exprNullable,
   };
 }
@@ -1899,6 +1919,12 @@ function finishWrap(rid, lhsId, mark) {
 // ── per-parse state (module-level closures, reset by parse()) ──
 let pos = 0;
 let maxPos = 0;
+// Cap-propagation flag (capExpr): set true when a pratt call returns a CAPPED
+// assignment-level expression (an ArrowFunction), so an enclosing operator LED can refuse
+// to continue it (in  a = ()=>{} || x  the assignment RHS is a capped arrow, so the || must
+// not attach to the assignment; it stays unconsumed and the parse rejects). Reset at each
+// capped-rule pratt entry; read by the op LED right after parsing its RHS.
+let _prattCapped = false;
 // Frame-LOCAL advance watermark: reach of the CURRENT rule frame (reset to the
 // frame's start at parseRuleEntry, folded back into the parent on exit). Keeps
 // rowExt/memo watermarks EXACT — the global maxPos contaminates them with probes
@@ -2278,6 +2304,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   const sn = sanitize(rule.name);
   const { nuds, leds } = a.prattClassified.get(rule.name)!;
   const meta = a.ledMeta.get(rule.name)!;
+  const nudCap = a.nudCap.get(rule.name)!;
+  const anyCapped = nudCap.some(c => c !== null);
 
   // R_<rule>() wraps parseRule's memo/context handling, then calls the bp-taking core.
   const rid = a.grammar.rules.indexOf(rule);
@@ -2285,13 +2313,20 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`function ${ruleFn}_pratt(minBp) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
   e.emit(`  let lhs = -1; let bestNudPos = saved;`);
+  // `capped` becomes true iff the winning NUD is a capped (assignment-level) expression —
+  // an ArrowFunction. Such a NUD admits no led, so the led loop is skipped entirely.
+  if (anyCapped) e.emit(`  let capped = false; _prattCapped = false;`);
   // NUD loop.
   const nudDispatch = e.altMaskDispatch(nuds, '_am');
   if (nudDispatch) e.emit(`  ${nudDispatch.maskInit}`);
   nuds.forEach((nud, i) => {
     const items = nud.type === 'seq' ? nud.items : [nud];
+    const capBp = nudCap[i];
     e.emit(`  // nud ${i}`);
-    e.emit(`  if (${nudDispatch ? nudDispatch.bit(i) : e.altGuard(nud)}) {`);
+    // A capped NUD parses only at a minBp LOOSER than its cap: it is refused as a tighter
+    // operator's operand (so `a || () => {}` rejects — `||`'s rhs minBp >= the cap).
+    const guard = nudDispatch ? nudDispatch.bit(i) : e.altGuard(nud);
+    e.emit(`  if (${capBp !== null ? `minBp < ${capBp} && ` : ''}${guard}) {`);
     e.emit(`    pos = saved; scn = mark;`);
     if (items[0]?.type === 'prefix') {
       // prefix $ pattern: identical to parsePratt's prefix branch.
@@ -2314,6 +2349,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`    if (nud_${sn}_${i}() && pos > bestNudPos) {`);
       e.emit(`      lhs = finishNode(${rid}, mark);`);
       e.emit(`      bestNudPos = pos;`);
+      // The LONGEST match wins; record whether THAT winner is capped.
+      if (anyCapped) e.emit(`      capped = ${capBp !== null ? 'true' : 'false'};`);
       e.emit(`    }`);
     }
     e.emit(`  }`);
@@ -2321,6 +2358,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`  scn = mark;`);
   e.emit(`  if (lhs < 0) { pos = saved; return -1; }`);
   e.emit(`  pos = bestNudPos;`);
+  // A capped NUD (assignment-level arrow) admits no led: return it as-is so a trailing
+  // tighter operator stays unconsumed and the enclosing parse rejects (`() => {} || a`).
+  if (anyCapped) e.emit(`  if (capped) { _prattCapped = true; return lhs; }`);
   e.emit(`  let tailClosed = false;`);
   e.emit(`  while (true) {`);
   e.emit(`    if (pos >= cap) break;`);
@@ -2399,6 +2439,11 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
   e.emit(`        let rhs = ${ruleFn}_pratt(info.rbp);`);
   e.emit(`        if (rhs < 0 && recovering) rhs = missRule(${rid});`);
+  // CAP PROPAGATION: an operator whose RHS is a capped assignment-level expression (an
+  // ArrowFunction) is ITSELF capped — `a = () => {}` admits no further led, so a trailing
+  // `|| x` / `? :` stays unconsumed and the parse rejects (`a = () => {} || x`). `return lhs`
+  // keeps `_prattCapped` true so an enclosing operator refuses it too (`b = a = arrow`).
+  if (anyCapped) e.emit(`        if (rhs >= 0 && _prattCapped) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); return lhs; }`);
   e.emit(`        if (rhs >= 0) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); matched = true; }`);
   e.emit(`        else { pos = ledSaved; scn = ledMark; }`);
   e.emit(`      }`);

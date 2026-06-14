@@ -28,7 +28,7 @@ import {
   token, rule, defineGrammar,
   left, right, none, noUnaryLhs, lhsTarget, prefixTarget, postfixTarget,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not, reservableNot,
+  sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
@@ -351,13 +351,21 @@ const Expr = rule($ => [
   // each arm's params + body to the right rule family (await-yield-fork.ts): an async
   // arrow's params and body are await-context (`async (a = await) =>` rejects — await
   // needs an operand), a plain arrow's body resets to none.
-  ['async', '(', sep(awaitCtx(Param), ','), ')', '=>', awaitCtx(alt($, Block))],
-  ['(', sep(Param, ','), ')', '=>', resetCtx(alt($, Block))],
+  // capExpr('?'): an ArrowFunction is the LOWEST-precedence AssignmentExpression — it can be
+  // neither the operand of a binary/logical/conditional operator nor an assignment target, so
+  // each arm is capped BELOW the conditional `?`: it parses only at an assignment-or-looser
+  // minBp and, once parsed, admits no led (`() => {} || a` rejects, NOT `(() => {}) || a`). A
+  // `||`/`?:` INSIDE an expression body (`() => a || b`) is unaffected — parsed by the body `$`.
+  // The body is `alt(Block, $)` (Block FIRST) = the spec's ConciseBody `[lookahead ≠ {]
+  // AssignmentExpression | { FunctionBody }`: `() => {}` is a block body, not an object literal
+  // that greedily absorbs a trailing `|| a` / `.x`.
+  capExpr('?', 'async', '(', sep(awaitCtx(Param), ','), ')', '=>', awaitCtx(alt(Block, $))),
+  capExpr('?', '(', sep(Param, ','), ')', '=>', resetCtx(alt(Block, $))),
   // async arrow with a BARE parameter: `async err => …` (ES2017). `async` and the
   // parameter must share a line (`async\nx => …` is `async;` then a plain arrow —
   // the spec's [no LineTerminator here] between async and the binding identifier).
-  ['async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(alt($, Block))],
-  [notReservedExpr, Ident, '=>', resetCtx(alt($, Block))],
+  capExpr('?', 'async', sameLine, awaitCtx(notReservedExpr, Ident), '=>', awaitCtx(alt(Block, $))),
+  capExpr('?', notReservedExpr, Ident, '=>', resetCtx(alt(Block, $))),
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   ['import', alt(['(', $, ')'], ['.', 'meta'])],

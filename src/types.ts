@@ -418,7 +418,12 @@ export type RuleExpr =
   // at-most-one-`static`, or restricting a type predicate to return position) keep the
   // derived highlighter at its cheap status-quo shape — a highlighter may over-accept a
   // rare malformed form harmlessly. Like every group field, it is transparent (no node).
-  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; tsRelaxed?: RuleExpr }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  // capBelow: this NUD alternative is a complete assignment-level expression (an
+  // ArrowFunction — the LOWEST-precedence ECMAScript AssignmentExpression). It may be
+  // parsed only when the enclosing Pratt minBp is LOOSER than the named connector's
+  // binding power, and once parsed admits NO led (a tighter operator can neither take it
+  // as an operand nor continue it). Read only by the expression-engine Pratt core.
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; tsRelaxed?: RuleExpr; capBelow?: string }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
