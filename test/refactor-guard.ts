@@ -60,7 +60,8 @@ const should = {
   'tp in out': 'type T<in out A> = A;',
   'tp out extends': 'type T<out A extends B> = A;',
   'tp name-out': 'type T<out> = out;',      // `out` as the param NAME, not modifier
-  'tp name-in default': 'interface I<in = any> {}',
+  'tp name-out default': 'interface I<out = any> {}',   // `out` (contextual) is a valid param NAME; `in` (reserved) is NOT — `<in = any>` is a tsc parse error
+
   // declarations
   'decl class': 'class C {}',
   'decl abstract class': 'abstract class C {}',

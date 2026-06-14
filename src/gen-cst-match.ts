@@ -23,6 +23,7 @@
 // must be matched by exactly its rule's matcher, consuming all children.
 import type { CstGrammar, PrecOperator, RuleDecl, RuleExpr } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
+import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── Arm step plan ──
 
@@ -74,6 +75,10 @@ function sanitizeIdent(s: string): string {
 const J = (v: unknown) => JSON.stringify(v);
 
 export function generateCstMatch(grammar: CstGrammar, importFrom: string): string {
+  // Same [Await]/[Yield] fork the parsers apply, so the rule-id space (ruleIdOf)
+  // agrees with the tree. Matchers/types are emitted for BASE rules only (a fork
+  // collapses to its base via RULE_CANON); no-op without ctx markers.
+  grammar = withAwaitYield(grammar);
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
   const templateTokenNames = new Set(grammar.tokens.filter(t => t.template).map(t => t.name));
   const ruleNames = new Set(grammar.rules.map(r => r.name));
@@ -85,6 +90,15 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   { let next = 5; for (const t of grammar.tokens) if (!typeKind.has(t.name)) typeKind.set(t.name, next++); }
   const ruleId = new Map<string, number>(grammar.rules.map((r, i) => [r.name, i]));
   ruleId.set('$template', grammar.rules.length);
+  // canon rid per rid: a fork collapses to its base; everything else is itself. The
+  // emitted __nodeOf / dispatch switches canonicalize the CHILD's ruleIdOf through
+  // this before comparing to the (base) rid a base matcher expects.
+  const ruleCanon = grammar.rules.map(r => ruleId.get(r.canon ?? r.name)!);
+  ruleCanon.push(grammar.rules.length, grammar.rules.length + 1, grammar.rules.length + 2);   // $template/$error/$missing = self
+  // canon rid for a rule NAME: an arm that (after the fork) references a fork rule
+  // (Param$A) is matched against the BASE rid, since the child's ruleIdOf is also
+  // canonicalized to base in __nodeOf / the dispatch switches.
+  const cid = (name: string) => ruleCanon[ruleId.get(name)!];
   
 
   // Pratt / leftRec classification (mirrors the engines' classifyAlts/classifyLeftRec:
@@ -112,7 +126,11 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     };
 
     for (const alt of alts) {
-      const items = alt.type === 'seq' ? alt.items : [alt];
+      const rawItems = alt.type === 'seq' ? alt.items : [alt];
+      // A leading `notLeftLeaf(...)` head-leaf guard sits BEFORE the self `$` of a LED arm and is
+      // zero-width — drop it so the self-ref classification and the step plan match the parser's
+      // LED node shape (`[leftNode, …]`), exactly as the parsers' classifyAlts strips it.
+      const items = rawItems[0]?.type === 'notLeftLeaf' ? rawItems.slice(1) : rawItems;
       // Pratt op-form marker alts are covered by the synthesized op arms below.
       if (items.some(it => it.type === 'op' || it.type === 'prefix' || it.type === 'postfix')) continue;
 
@@ -177,7 +195,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       return isKeywordLiteral(v) ? v : (PUNCT_NAMES[v] ?? 'p' + [...v].map(c => c.charCodeAt(0)).join('_'));
     }
     if (first.type === 'ref') return lowerFirst(first.name);
-    if (first.type === 'not' || first.type === 'sameLine' || first.type === 'noCommentBefore' || first.type === 'noMultilineFlowBefore') {
+    if (first.type === 'not' || first.type === 'sameLine' || first.type === 'noCommentBefore' || first.type === 'noMultilineFlowBefore' || first.type === 'notLeftLeaf') {
       return nameFrom(items.slice(1), fuel - 1);   // zero-width: name by what follows
     }
     if (first.type === 'alt') {
@@ -194,7 +212,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   // (inside opt → 'opt', inside many/sep → 'many') applied to captures.
   function pushSteps(steps: Step[], it: RuleExpr, captures: Capture[], used: Set<string>, card: Card): void {
     switch (it.type) {
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf':
         return;   // zero-width: no children
       case 'literal':
         steps.push({ kind: 'lit', text: it.value, tt: ttOf(it.value) });
@@ -327,16 +345,47 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     return fn;
   }
 
+  // Minimum children the steps WILL consume (a lower bound): a required single-child
+  // step counts 1, optionals / loops 0, a branches the minimum over its branches. A
+  // greedy loop or optional must leave at least this many children for the steps that
+  // follow it — otherwise it can swallow a child a required suffix step needs (the
+  // parser avoided that with a zero-width guard, e.g. a Modifier's not() lookahead,
+  // which the CST does not record). The destructurer reconstructs the bound
+  // structurally: capping a greedy run at cc-suffixMin never cuts below the parser's
+  // actual count (count + suffix-consumed = cc, suffix-consumed >= suffixMin, so
+  // count <= cc-suffixMin), so it is a no-op except where greedy would over-consume.
+  function minKids(steps: Step[]): number {
+    let m = 0;
+    for (const s of steps) {
+      switch (s.kind) {
+        case 'lit': case 'litAlt': case 'tok': case 'node': m += 1; break;
+        case 'opt': if (s.min1) m += minKids(s.body); break;
+        case 'many': case 'sep': break;
+        case 'branches': {
+          let bm = Infinity;
+          for (const b of s.branches) bm = Math.min(bm, b.steps.length === 0 ? 0 : minKids(b.steps));
+          if (bm !== Infinity) m += bm;
+          break;
+        }
+      }
+    }
+    return m;
+  }
+
   // Render steps; `onFail(line)` returns the failure statement for this context.
-  function renderSteps(steps: Step[], w: (s: string) => void, ind: string, fail: () => string): void {
-    for (const st of steps) renderStep(st, w, ind, fail);
+  // `outerMin` = minimum children the steps AFTER this list (in the enclosing context)
+  // will consume; threaded so a loop's room check spans nesting boundaries.
+  function renderSteps(steps: Step[], w: (s: string) => void, ind: string, fail: () => string, outerMin = 0): void {
+    for (let k = 0; k < steps.length; k++) {
+      renderStep(steps[k], w, ind, fail, minKids(steps.slice(k + 1)) + outerMin);
+    }
   }
 
   function litCond(text: string, tt: string): string {
     return `__lit(t, cc, tb, i, src, ${J(text)}, ${tt === '$keyword' ? 1 : 0})`;
   }
 
-  function renderStep(st: Step, w: (s: string) => void, ind: string, fail: () => string): void {
+  function renderStep(st: Step, w: (s: string) => void, ind: string, fail: () => string, suffixMin: number): void {
     switch (st.kind) {
       case 'lit':
         w(`${ind}if (!${litCond(st.text, st.tt)}) ${fail()}`);
@@ -354,7 +403,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         const cond = st.name === '$operator'
           ? `__opTok(t, cc, i)`
           : st.template
-            ? `__tok(t, cc, tb, i, ${typeKind.get(st.name)}) || __nodeOf(t, cc, i, ${ruleId.get('$template')})`
+            ? `__tok(t, cc, tb, i, ${typeKind.get(st.name)}) || __nodeOf(t, cc, i, ${cid('$template')})`
             : `__tok(t, cc, tb, i, ${typeKind.get(st.name)})`;
         w(`${ind}if (!(${cond})) ${fail()}`);
         if (st.cap) assign(st.cap, `__SC[i] as ${st.cap.tsType}`, w, ind);
@@ -362,7 +411,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         return;
       }
       case 'node':
-        w(`${ind}if (!__nodeOf(t, cc, i, ${ruleId.get(st.rule)})) ${fail()}`);
+        w(`${ind}if (!__nodeOf(t, cc, i, ${cid(st.rule)})) ${fail()}`);
         if (st.cap) assign(st.cap, `__SC[i] as ${st.cap.tsType}`, w, ind);
         w(`${ind}i++;`);
         return;
@@ -370,10 +419,13 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         const save = tmp();
         const ok = tmp();
         const lbl = tmp().replace('_t', '_b');
-        w(`${ind}{`);
+        // a NON-required optional must not consume a child the required suffix needs
+        // (the min1 first iteration is required and always attempts — the grammar
+        // guarantees a real element exists or the parser would have rejected)
+        w(st.min1 ? `${ind}{` : `${ind}if (cc - i > ${suffixMin}) {`);
         w(`${ind}  const ${save} = i; let ${ok} = true;`);
         w(`${ind}  ${lbl}: {`);
-        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`);
+        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
         w(`${ind}  }`);
         if (st.min1) w(`${ind}  if (!${ok}) ${fail()}`);
         else w(`${ind}  if (!${ok}) i = ${save};`);
@@ -385,9 +437,10 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         const ok = tmp();
         const lbl = tmp().replace('_t', '_b');
         w(`${ind}for (;;) {`);
+        if (suffixMin > 0) w(`${ind}  if (cc - i <= ${suffixMin}) break;`);  // leave children for the required suffix
         w(`${ind}  const ${save} = i; let ${ok} = true;`);
         w(`${ind}  ${lbl}: {`);
-        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`);
+        renderSteps(st.body, w, ind + '    ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
         w(`${ind}  }`);
         w(`${ind}  if (!${ok}) { i = ${save}; break; }`);
         w(`${ind}  if (i === ${save}) break;`);  // zero-width body guard
@@ -405,7 +458,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         w(`${ind}{`);
         w(`${ind}  const ${save} = i; let ${ok0} = true;`);
         w(`${ind}  ${lbl0}: {`);
-        renderSteps(st.element, w, ind + '    ', () => `{ ${ok0} = false; break ${lbl0}; }`);
+        renderSteps(st.element, w, ind + '    ', () => `{ ${ok0} = false; break ${lbl0}; }`, suffixMin);
         w(`${ind}  }`);
         w(`${ind}  if (!${ok0}) { i = ${save}; }`);
         w(`${ind}  else for (;;) {`);
@@ -413,7 +466,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
         w(`${ind}    i++;`);
         w(`${ind}    const ${save}2 = i; let ${ok} = true;`);
         w(`${ind}    ${lbl}: {`);
-        renderSteps(st.element, w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`);
+        renderSteps(st.element, w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
         w(`${ind}    }`);
         w(`${ind}    if (!${ok}) { i = ${save}2; break; }`);
         w(`${ind}  }`);
@@ -442,7 +495,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
           }
           w(`${ind}    const ${save} = i; let ${ok} = true;`);
           w(`${ind}    ${lbl}: {`);
-          renderSteps(renameCaps(b.steps, pfx), w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`);
+          renderSteps(renameCaps(b.steps, pfx), w, ind + '      ', () => `{ ${ok} = false; break ${lbl}; }`, suffixMin);
           w(`${ind}    }`);
           const fields = renamed.map(cp => `${cp.field}: ${cp.name}${cp.card === 'one' ? '!' : ''}`);
           w(`${ind}    if (${ok}) { ${done} = true; ${assignExpr(st.cap, `{ branch: ${J(b.tag)}${fields.length ? ', ' + fields.join(', ') : ''} }`)} }`);
@@ -540,6 +593,7 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   const matcherMapEntries: string[] = [];
 
   for (const rule of grammar.rules) {
+    if (rule.canon) continue;   // a fork collapses to its base matcher/type (RULE_CANON)
     const plans = buildArms(rule);
     const tName = matchTypeName(rule.name);
     const nName = nodeType(rule.name);
@@ -606,9 +660,9 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
       lines.push(`${pad}if (cc < 2) {`);
       lines.push(...memberIdx.map((k, i) => (restAdmit[i] === null || restAdmit[i]!.canEmpty ? pad + '  ' + tryLine(k).trim() : '')).filter(Boolean));
       lines.push(`${pad}} else if ((e1 = __SC[1]) >= 0) {`);
-      lines.push(`${pad}  switch (t.ruleIdOf(e1)) {`);
+      lines.push(`${pad}  switch (RULE_CANON[t.ruleIdOf(e1)]) {`);
       for (const r of [...nset].sort()) {
-        lines.push(`${pad}    case ${ruleId.get(r)}: { // ${r}`);
+        lines.push(`${pad}    case ${cid(r)}: { // ${r}`);
         lines.push(...subTry(i => restAdmit[i]!.keys.has('n:' + r)).map(l => '    ' + l));
         lines.push(`${pad}      break;`);
         lines.push(`${pad}    }`);
@@ -659,9 +713,9 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     for (let k = 0; k < plans.length; k++) if (admits[k].canEmpty || admits[k].keys.size === 0) disp.push(tryLine(k));
     disp.push(`  } else { const e0 = __SC[0];`);
     disp.push(`  if (e0 >= 0) {`);
-    disp.push(`    switch (t.ruleIdOf(e0)) {`);
+    disp.push(`    switch (RULE_CANON[t.ruleIdOf(e0)]) {`);
     for (const r of [...nodeRules].sort()) {
-      disp.push(`      case ${ruleId.get(r)}: { // ${r}`);
+      disp.push(`      case ${cid(r)}: { // ${r}`);
       const members = plans.map((_, k) => k).filter(k => admits[k].keys.size === 0 || admits[k].keys.has('n:' + r));
       const concrete = members.filter(k => admits[k].keys.size !== 0);
       const oneStep = concrete.every(k => plans[k].steps[0]?.kind === 'node');
@@ -763,10 +817,13 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
   header.push(`  const e = __SC[i];`);
   header.push(`  return e < 0 && t.leafKindOf(e) === 2;`);
   header.push(`};`);
+  // canon rid table: a fork node's ruleIdOf maps to its base rid before any compare,
+  // so a base matcher accepts a forked child. Identity without ctx forks.
+  header.push(`const RULE_CANON = ${JSON.stringify(ruleCanon)};`);
   header.push(`const __nodeOf = (t: TreeAccess, cc: number, i: number, rid: number): boolean => {`);
   header.push(`  if (i >= cc) return false;`);
   header.push(`  const e = __SC[i];`);
-  header.push(`  return e >= 0 && t.ruleIdOf(e) === rid;`);
+  header.push(`  return e >= 0 && RULE_CANON[t.ruleIdOf(e)] === rid;`);
   header.push(`};`);
   header.push(``);
 
@@ -778,7 +835,8 @@ export function generateCstMatch(grammar: CstGrammar, importFrom: string): strin
     `};`,
     `/** rule ID → matcher (the emitted parser's rowRule ids — declaration order). */`,
     `export const MATCHERS_BY_ID: ((t: TreeAccess, n: never, tb: number, src: string) => { arm: string })[] = [`,
-    ...grammar.rules.map(r => `  match${sanitizeIdent(r.name)},`),
+    // a fork's rid maps to its BASE matcher (forks emit no matcher of their own).
+    ...grammar.rules.map(r => `  match${sanitizeIdent(r.canon ?? r.name)},`),
     `];`,
   ];
 

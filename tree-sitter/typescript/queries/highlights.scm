@@ -62,15 +62,15 @@
 
 ;; Builtin / global / constant identifier names.
 ((ident) @variable.builtin
-  (#any-of? @variable.builtin "console" "window" "document" "process" "require" "exports" "global" "globalThis"))
+  (#any-of? @variable.builtin "console" "window" "document" "process" "require" "exports" "globalThis"))
 
 ;; Keyword, operator, and punctuation literals.
 [
   "implements" "interface" "namespace" "protected" "debugger" "readonly" "abstract" "override"
   "accessor" "default" "private" "declare" "extends" "switch" "export" "module"
-  "public" "static" "unique" "const" "using" "class" "async" "case"
-  "with" "from" "type" "enum" "@new" "meta" "let" "var"
-  "get" "set" "out"
+  "public" "static" "unique" "target" "const" "using" "class" "async"
+  "case" "with" "from" "type" "enum" "@new" "meta" "let"
+  "var" "get" "set" "out"
 ] @keyword
 [
   "constructor" "function" "=>"
@@ -94,12 +94,11 @@
   "instanceof" "satisfies" "asserts" "typeof" "delete" "keyof" "infer" "void"
   "new" "as" "is"
 ] @keyword.operator
-"symbol" @type.builtin
 [
   "undefined" "false" "true" "null"
 ] @constant.builtin
 [
-  "super" "this"
+  "global" "super" "this"
 ] @variable.builtin
 [
   ">>>=" "**=" "<<=" ">>=" "??=" "||=" "&&=" "==="

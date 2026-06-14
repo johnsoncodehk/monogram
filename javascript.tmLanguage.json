@@ -40,9 +40,6 @@
       "include": "#object-method-key"
     },
     {
-      "include": "#new-expr"
-    },
-    {
       "include": "#arrow-function-params"
     },
     {
@@ -100,9 +97,6 @@
       "include": "#scope-keyword-control-loop"
     },
     {
-      "include": "#scope-keyword-control-loop-of"
-    },
-    {
       "include": "#scope-keyword-control-flow"
     },
     {
@@ -127,6 +121,9 @@
       "include": "#scope-keyword-control-from-from"
     },
     {
+      "include": "#scope-keyword-other"
+    },
+    {
       "include": "#scope-storage-type-class"
     },
     {
@@ -137,9 +134,6 @@
     },
     {
       "include": "#scope-storage-modifier-accessibility"
-    },
-    {
-      "include": "#scope-keyword-other"
     },
     {
       "include": "#scope-storage-type-function"
@@ -199,10 +193,10 @@
       "include": "#punctuation-comma"
     },
     {
-      "include": "#scope-punctuation-accessor-optional"
+      "include": "#scope-punctuation-bracket-square"
     },
     {
-      "include": "#scope-punctuation-bracket-square"
+      "include": "#scope-punctuation-accessor-optional"
     },
     {
       "include": "#scope-punctuation-bracket-curly"
@@ -229,7 +223,7 @@
   "repository": {
     "regex-literal-prefix-ops": {
       "name": "string.regexp.js",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\baccessor)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.js"
@@ -241,7 +235,7 @@
           "name": "punctuation.definition.string.begin.regexp.js"
         }
       },
-      "end": "(/)([gimsuydv]*)",
+      "end": "(/)([a-z]*)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.string.end.regexp.js"
@@ -981,7 +975,7 @@
     },
     "number": {
       "name": "constant.numeric.decimal.js",
-      "match": "(?:[0-9]+(?:_[0-9]+)*(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
+      "match": "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])"
     },
     "template": {
       "name": "string.quoted.other.template.js",
@@ -1681,12 +1675,12 @@
       "name": "keyword.operator.expression.js"
     },
     "scope-keyword-control-loop": {
-      "match": "\\b(in|for|while|do|break|continue)\\b",
+      "match": "\\b(in|for|while|do|break|continue|of)\\b",
       "name": "keyword.control.loop.js"
     },
-    "scope-keyword-control-loop-of": {
-      "match": "\\b(of)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[]|\\s*$|\\s*[({\\[\"`/])",
-      "name": "keyword.control.loop.js"
+    "scope-keyword-other": {
+      "match": "\\b(target|meta|as)\\b",
+      "name": "keyword.other.js"
     },
     "scope-storage-type-class": {
       "match": "\\b(class)\\b",
@@ -1697,11 +1691,11 @@
       "name": "keyword.other.extends.js"
     },
     "scope-storage-modifier": {
-      "match": "\\b(async)\\b",
+      "match": "\\b(async|accessor)\\b",
       "name": "storage.modifier.js"
     },
     "scope-storage-modifier-accessibility": {
-      "match": "\\b(static|accessor)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
+      "match": "\\b(static)\\b(?=\\s+(?:\\.\\.\\.|[[:alpha:]_$\\[*#{\"'0-9]))",
       "name": "storage.modifier.js"
     },
     "scope-keyword-control-flow": {
@@ -1711,10 +1705,6 @@
     "scope-keyword-control-import": {
       "match": "\\b(import)\\b",
       "name": "keyword.control.import.js"
-    },
-    "scope-keyword-other": {
-      "match": "\\b(meta|as)\\b",
-      "name": "keyword.other.js"
     },
     "scope-storage-type-function": {
       "match": "\\b(function)\\b",
@@ -1906,13 +1896,13 @@
       "match": "\\(|\\)",
       "name": "punctuation.bracket.round.js"
     },
-    "scope-punctuation-accessor-optional": {
-      "match": "\\?\\.",
-      "name": "punctuation.accessor.optional.js"
-    },
     "scope-punctuation-bracket-square": {
       "match": "\\[|\\]",
       "name": "punctuation.bracket.square.js"
+    },
+    "scope-punctuation-accessor-optional": {
+      "match": "\\?\\.",
+      "name": "punctuation.accessor.optional.js"
     },
     "scope-punctuation-bracket-curly": {
       "match": "\\{|\\}",
@@ -1931,8 +1921,12 @@
       "name": "keyword.control.flow.js"
     },
     "expr-scope-keyword-other": {
-      "match": "\\b(meta)\\b",
+      "match": "\\b(target|meta)\\b",
       "name": "keyword.other.js"
+    },
+    "expr-scope-storage-modifier": {
+      "match": "\\b(async)\\b",
+      "name": "storage.modifier.js"
     },
     "expression": {
       "patterns": [
@@ -1974,9 +1968,6 @@
         },
         {
           "include": "#object-method-key"
-        },
-        {
-          "include": "#new-expr"
         },
         {
           "include": "#arrow-function-params"
@@ -2030,16 +2021,16 @@
           "include": "#scope-keyword-control-from-from"
         },
         {
+          "include": "#expr-scope-keyword-other"
+        },
+        {
           "include": "#scope-storage-type-class"
         },
         {
           "include": "#scope-keyword-other-extends"
         },
         {
-          "include": "#scope-storage-modifier"
-        },
-        {
-          "include": "#expr-scope-keyword-other"
+          "include": "#expr-scope-storage-modifier"
         },
         {
           "include": "#scope-storage-type-function"
@@ -2093,10 +2084,10 @@
           "include": "#punctuation-comma"
         },
         {
-          "include": "#scope-punctuation-accessor-optional"
+          "include": "#scope-punctuation-bracket-square"
         },
         {
-          "include": "#scope-punctuation-bracket-square"
+          "include": "#scope-punctuation-accessor-optional"
         },
         {
           "include": "#scope-punctuation-bracket-curly"
@@ -2177,7 +2168,7 @@
     },
     "regex": {
       "name": "string.regexp.js",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\baccessor)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)|(?<=\\bin)|(?<=\\bextends)|(?<=\\byield)|(?<=\\bget)|(?<=\\bset)|(?<=\\basync)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bof)|(?<=\\bcase)|(?<=\\bexport)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\bstatic)|(?<=\\btypeof)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.js"
@@ -2186,7 +2177,7 @@
           "name": "punctuation.definition.string.begin.regexp.js"
         }
       },
-      "end": "(/)([gimsuydv]*)",
+      "end": "(/)([a-z]*)",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.string.end.regexp.js"
@@ -2198,22 +2189,6 @@
       "patterns": [
         {
           "include": "#regexp"
-        }
-      ]
-    },
-    "new-expr": {
-      "name": "meta.new-expr.js",
-      "begin": "\\b(new)\\b",
-      "beginCaptures": {
-        "1": {
-          "name": "keyword.operator.expression.js"
-        }
-      },
-      "end": "(?=[()}\\],=;])",
-      "patterns": [
-        {
-          "match": "(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
-          "name": "entity.name.function.js"
         }
       ]
     },

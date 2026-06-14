@@ -356,10 +356,11 @@
         "(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
         {
           "cases": {
-            "is": "operator",
             "keyof": "operator",
             "typeof": "operator",
             "readonly": "keyword",
+            "this": "keyword",
+            "is": "operator",
             "abstract": "keyword",
             "new": "operator",
             "asserts": "operator",
@@ -370,9 +371,7 @@
             "null": "keyword",
             "undefined": "keyword",
             "void": "operator",
-            "this": "keyword",
             "unique": "keyword",
-            "symbol": "keyword",
             "import": "keyword",
             "function": "keyword",
             "in": "keyword",
@@ -380,6 +379,7 @@
             "@new": "keyword",
             "super": "keyword",
             "instanceof": "operator",
+            "target": "keyword",
             "class": "keyword",
             "implements": "keyword",
             "async": "keyword",
@@ -423,8 +423,8 @@
             "interface": "keyword",
             "type": "keyword",
             "enum": "keyword",
-            "namespace": "keyword",
             "module": "keyword",
+            "namespace": "keyword",
             "from": "keyword",
             "constructor": "keyword",
             "defer": "keyword",
@@ -433,6 +433,7 @@
             "number": "keyword",
             "boolean": "keyword",
             "object": "keyword",
+            "symbol": "keyword",
             "bigint": "keyword",
             "any": "keyword",
             "unknown": "keyword",
@@ -550,7 +551,7 @@
         }
       ],
       [
-        "(?:[0-9]+(?:_[0-9]+)*(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
+        "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
         {
           "token": "number",
           "switchTo": "@value"
@@ -588,10 +589,6 @@
         "(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
         {
           "cases": {
-            "is": {
-              "token": "operator",
-              "switchTo": "@root"
-            },
             "keyof": {
               "token": "operator",
               "switchTo": "@root"
@@ -602,6 +599,14 @@
             },
             "readonly": {
               "token": "keyword",
+              "switchTo": "@root"
+            },
+            "this": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "is": {
+              "token": "operator",
               "switchTo": "@root"
             },
             "abstract": {
@@ -644,17 +649,9 @@
               "token": "operator",
               "switchTo": "@root"
             },
-            "this": {
-              "token": "keyword",
-              "switchTo": "@value"
-            },
             "unique": {
               "token": "keyword",
               "switchTo": "@root"
-            },
-            "symbol": {
-              "token": "keyword",
-              "switchTo": "@value"
             },
             "import": {
               "token": "keyword",
@@ -682,6 +679,10 @@
             },
             "instanceof": {
               "token": "operator",
+              "switchTo": "@root"
+            },
+            "target": {
+              "token": "keyword",
               "switchTo": "@root"
             },
             "class": {
@@ -856,11 +857,15 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "namespace": {
+            "module": {
               "token": "keyword",
               "switchTo": "@root"
             },
-            "module": {
+            "global": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
+            "namespace": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -893,6 +898,10 @@
               "switchTo": "@value"
             },
             "object": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "symbol": {
               "token": "keyword",
               "switchTo": "@value"
             },
@@ -984,10 +993,6 @@
               "token": "variable",
               "switchTo": "@value"
             },
-            "global": {
-              "token": "variable",
-              "switchTo": "@value"
-            },
             "globalThis": {
               "token": "variable",
               "switchTo": "@value"
@@ -1061,7 +1066,7 @@
         "include": "@exprBody"
       },
       [
-        "/(?:[^/\\\\\\[\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])+/[gimsuydv]*",
+        "/(?:[^/\\\\\\[*\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])(?:[^/\\\\\\[\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])*/(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
         {
           "token": "regexp",
           "switchTo": "@value"
@@ -1119,7 +1124,7 @@
         "number"
       ],
       [
-        "(?:[0-9]+(?:_[0-9]+)*(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
+        "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
         "number"
       ],
       [
@@ -1142,10 +1147,11 @@
         "(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
         {
           "cases": {
-            "is": "operator",
             "keyof": "operator",
             "typeof": "operator",
             "readonly": "keyword",
+            "this": "keyword",
+            "is": "operator",
             "abstract": "keyword",
             "new": "operator",
             "asserts": "operator",
@@ -1156,9 +1162,7 @@
             "null": "keyword",
             "undefined": "keyword",
             "void": "operator",
-            "this": "keyword",
             "unique": "keyword",
-            "symbol": "keyword",
             "import": "keyword",
             "function": "keyword",
             "in": "keyword",
@@ -1166,6 +1170,7 @@
             "@new": "keyword",
             "super": "keyword",
             "instanceof": "operator",
+            "target": "keyword",
             "class": "keyword",
             "implements": "keyword",
             "async": "keyword",
@@ -1209,8 +1214,9 @@
             "interface": "keyword",
             "type": "keyword",
             "enum": "keyword",
-            "namespace": "keyword",
             "module": "keyword",
+            "global": "variable",
+            "namespace": "keyword",
             "from": "keyword",
             "constructor": "keyword",
             "defer": "keyword",
@@ -1219,6 +1225,7 @@
             "number": "keyword",
             "boolean": "keyword",
             "object": "keyword",
+            "symbol": "keyword",
             "bigint": "keyword",
             "any": "keyword",
             "unknown": "keyword",
@@ -1241,14 +1248,13 @@
             "process": "variable",
             "require": "variable",
             "exports": "variable",
-            "global": "variable",
             "globalThis": "variable",
             "@default": "identifier"
           }
         }
       ],
       [
-        "/(?:[^/\\\\\\[\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])+/[gimsuydv]*",
+        "/(?:[^/\\\\\\[*\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])(?:[^/\\\\\\[\\n]|\\\\[^\\n\\r\\u2028\\u2029]|\\[(?:[^\\]\\\\\\n]|\\\\[^\\n\\r\\u2028\\u2029])*\\])*/(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*",
         "regexp"
       ],
       [

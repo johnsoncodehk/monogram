@@ -223,7 +223,10 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       return `repeat1(${body})`;
     }
     case 'group':
-      return renderExpr(expr.body, ctx);
+      // A tsRelax group carries a tree-sitter-only alternate rendering (a parser-strict
+      // constraint the highlighter relaxes — see RuleExpr.group.tsRelaxed). Render that
+      // instead of the strict body; every other consumer uses `body`.
+      return renderExpr(expr.tsRelaxed ?? expr.body, ctx);
     case 'not':
       // Zero-width negative lookahead: not expressible in a tree-sitter CFG, and
       // it consumes nothing, so it drops to a no-op (the surrounding choice keeps
@@ -241,6 +244,11 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
     case 'noMultilineFlowBefore':
       // Zero-width "preceding flow was single-line" assertion (YAML flow-as-block-key) — like
       // `noCommentBefore`, a scanner-level restriction; a no-op in the CFG.
+      return 'blank()';
+    case 'notLeftLeaf':
+      // Zero-width LEFT head-leaf guard — a left-operand predicate is not expressible in tree-sitter
+      // GLR; it consumes nothing, so it renders a no-op (the constrained LED is wrapped in tsRelax,
+      // so tree-sitter renders the UNCONSTRAINED `.` form and never reaches this case in practice).
       return 'blank()';
     case 'sep': {
       // sep(elem, ',') = optional(seq(elem, repeat(seq(',', elem)), optional(',')))
@@ -520,6 +528,7 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
  */
 const LR_CONFLICT_CLOSURE: string[][] = [
   ['expr'], ['stmt'], ['stmt', 'decl'], ['expr', 'decl'], ['program', 'stmt'],
+  ['new_target'],   // nested `new new Foo()` — NewTarget's recursive leading-`new` arm self-conflicts
   ['type', 'type_param'], ['type_param'], ['expr', 'param'], ['expr', 'new_target'],
   ['expr', 'block'], ['expr', 'member_name'], ['expr', 'prop'], ['member_name', 'stmt'],
   ['decl'], ['binding'], ['type'], ['type', 'typeof_ref'], ['type', 'param'],

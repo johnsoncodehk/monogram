@@ -392,6 +392,11 @@ export interface PrecOperator {
   value: string;
   position: 'infix' | 'prefix' | 'postfix';
   noUnaryLhs?: boolean;  // infix op whose left operand may not be a bare unary-prefix expression (e.g. JS `**`)
+  // Operator whose left operand (infix) / operand (postfix) must be a valid assignment
+  // target (LeftHandSideExpression) — NOT a prefix-unary, prefix-update, or postfix-update
+  // expression. ECMAScript AssignmentTargetType, enforced at parse time (JS `=`/`+=`/…,
+  // postfix `++`/`--`). A parenthesized cover or member/element/call/non-null tail passes.
+  requireTarget?: boolean;
 }
 
 export interface PrecLevel {
@@ -419,14 +424,34 @@ export type RuleExpr =
   | { type: 'literal'; value: string }
   | { type: 'ref'; name: string }
   | { type: 'quantifier'; body: RuleExpr; kind: '*' | '+' | '?' }
-  | { type: 'group'; body: RuleExpr; suppress?: string[] }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  // `ctxMode` marks a subtree as [Await]/[Yield] context (the spec's grammar parameter):
+  // the await-yield-fork build transform reads it to name-fork the body-reachable rule
+  // closure into $A/$Y/$AY families. Every OTHER consumer treats this exactly like a
+  // plain transparent group (recurse into `body`), so the marker is invisible outside
+  // the fork transform.
+  // `tsRelaxed`: a TREE-SITTER-ONLY alternate rendering. The parser (and every other
+  // generator) uses `body` — the strict form; gen-treesitter renders `tsRelaxed` instead.
+  // Lets a PARSER-only constraint that is correct but tree-sitter-GLR-hostile (e.g.
+  // at-most-one-`static`, or restricting a type predicate to return position) keep the
+  // derived highlighter at its cheap status-quo shape — a highlighter may over-accept a
+  // rare malformed form harmlessly. Like every group field, it is transparent (no node).
+  // capBelow: this NUD alternative is a complete assignment-level expression (an
+  // ArrowFunction — the LOWEST-precedence ECMAScript AssignmentExpression). It may be
+  // parsed only when the enclosing Pratt minBp is LOOSER than the named connector's
+  // binding power, and once parsed admits NO led (a tighter operator can neither take it
+  // as an operand nor continue it). Read only by the expression-engine Pratt core.
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; tsRelaxed?: RuleExpr; capBelow?: string }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
   // list in expression position is only a bare instantiation when it isn't
   // followed by something that starts an expression). Non-consuming → invisible
   // to highlighting / AST shape / other generators.
-  | { type: 'not'; body: RuleExpr }
+  // `reservable`: this is the bare-identifier reserved-word guard (notReservedExpr).
+  // The await-yield-fork transform, when cloning a rule into the $A/$Y/$AY family,
+  // adds that family's context keyword(s) to the inner alt — so `await`/`yield` lose
+  // their identifier reading inside an async/generator body. Invisible elsewhere.
+  | { type: 'not'; body: RuleExpr; reservable?: boolean }
   // Zero-width "no LineTerminator here" assertion: matches (consuming nothing)
   // iff the NEXT token is on the same line (no preceding newline). Encodes
   // ECMAScript/TS restricted productions like an array/indexed-access type's `[`,
@@ -444,6 +469,18 @@ export type RuleExpr =
   // (`[flow]: v` is a key, `[23\n]: v` is not). Like `noCommentBefore`, non-consuming → invisible
   // to other generators (a no-op marker).
   | { type: 'noMultilineFlowBefore' }
+  // Zero-width LEFT-operand head-leaf guard for a Pratt LED arm (it sits at the HEAD of a LED
+  // alternative, before the self `$`). It gates the arm on the LEFT node's OUTERMOST (head) leaf
+  // token TEXT: when that text is in `words`, the LED arm is treated as NOT-matched (skipped), so
+  // the connector rebinds to nothing and the parse rejects. Encodes TS's rule that a qualified type
+  // name `A.B` has an IdentifierReference root — the keyword/literal types `void`/`null`/`true`/
+  // `false`/`this` are NOT qualifiable (`void.x` has no parse tree). It mirrors the AssignmentTargetType
+  // gate (`_notTarget`) which reads the same head leaf, but predicated on TEXT membership rather than
+  // operator-tag shape. Like the other zero-width markers it consumes nothing → invisible to every
+  // generator (a no-op in the CFG): gen-treesitter renders it `blank()` and drops it from the seq,
+  // so the derived GLR grammar keeps the UNCONSTRAINED `.` LED (a left-leaf predicate is not
+  // expressible in GLR, and a stray `void.x` is harmless for a highlighter) — no tsRelax needed.
+  | { type: 'notLeftLeaf'; words: string[] }
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
   | { type: 'prefix' }
@@ -453,6 +490,12 @@ export interface RuleDecl {
   name: string;
   body: RuleExpr;
   flags: string[];
+  // Set by the await-yield-fork transform on a generated [Await]/[Yield] family clone:
+  // the BASE rule name this fork collapses to for every DERIVED artifact (green-node
+  // type, AST type union, TM scope, tree-sitter rule, cst-match dispatch). The emitted
+  // parser keeps the distinct `name` for its memo/adoption rule identity, but reports
+  // `canon` as the node's rule name so trees stay byte-identical to the base grammar.
+  canon?: string;
 }
 
 export interface CstGrammar {

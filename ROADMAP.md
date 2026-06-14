@@ -26,6 +26,9 @@ Three parser-grounded layers (in `test/`), each comparing against the language's
 
 ## What's next
 
+- **Parser-acceptance long tail vs tsc** (measured by `test/recovery-conformance.ts`: recall 61.2%, 108 conformance files we parse-accept that tsc's parser rejects). The remainder is fully enumerated, two buckets:
+  - **`[Await]`/`[Yield]` parameter contexts** (31 files): `await`/`yield` must be reserved *inside* async/generator bodies and parameter lists, identifiers elsewhere. Needs a context-threading mechanism in the engine — the same shape as `exclude('in', …)` for the no-`in` context, but suppressing identifier *texts* over a subtree. Designed direction, not yet built.
+  - **Per-shape strictness** (77 files, each class small and named): declaration-modifier ordering (`public @dec method`), private names outside classes (`const #foo`), strict-mode octal literals (`001`), member declarations with `var` (`class C { var x }`), paren-less `new` arguments (`new C0 32`), reserved words in dotted namespace tails, template-literal module names, `extends void`, `super<T>` tagged templates. Each wants the same treatment that landed for `case`/`class`/statement keywords: fix, then prove FN=0 with the accept/reject flip-scan against the corpus.
 - **More vscode#203212 bundles** — low-effort first (ini, diff, git config, xml); the large ones (ruby, perl, c/c++, groovy) each need an instrumentable official parser (WASM / native-coverage) + a corpus.
 - **Field labels** in the grammar DSL → richer named-field AST types.
 - **Highlighter long tail** — the few remaining per-language divergences are documented (in the PR) as either the shared TextMate-vs-parser ceiling or proven architectural floors; where a construct provably exceeds the TextMate model, the derived **tree-sitter** target (a real whole-tree parser) resolves it.

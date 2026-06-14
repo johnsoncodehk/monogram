@@ -34,7 +34,7 @@ A TextMate grammar is a pile of regexes guessing at a language's structure. It's
 
 Take `typeof x < y`. A regex highlighter has to guess whether `<` opens a generic argument list or is a less-than comparison — and it guesses wrong somewhere, forever. A **parser** doesn't guess; the grammar already decides. Monogram inverts the dependency:
 
-1. **Write the grammar, then prove it.** The grammar is executable — Monogram runs it as a recursive-descent + [Pratt](https://en.wikipedia.org/wiki/Operator-precedence_parser) (operator-precedence) parser over the TypeScript conformance suite, measured *bidirectionally*: it must **accept** every input `tsc` accepts **and reject** every input it rejects.
+1. **Write the grammar, then prove it.** The grammar is executable — Monogram runs it as a recursive-descent + [Pratt](https://en.wikipedia.org/wiki/Operator-precedence_parser) (operator-precedence) parser over the TypeScript conformance suite, measured *bidirectionally*: it **accepts** what `tsc` accepts and **rejects** what `tsc` rejects — with `tsc` the [oracle, not the definition](#correctness-the-productions-not-tsc), the two diverging only where `tsc` itself does.
 
 2. **Derive the highlighters from that proven grammar**, never hand-write them. The TextMate, tree-sitter, and Monarch outputs are all generated from the one parser-validated definition, so their correctness is underwritten by the conformance run, not by regex tuning.
 
@@ -48,6 +48,21 @@ Two numbers answer two different questions — read them together, not against e
 - **The filed bugs** (the ledger under it) — on the exact cases reported against the hand-written official grammar, does the *derived* one fix them? This strips the easy bulk away and shows only the ambiguous frontier — generic-`<`-vs-less-than, regex-vs-division, whitespace-fragile multiline generics — where a parser-derived grammar pulls away from hand-tuned regex.
 
 So the two aren't in tension: a near-tie in the broad table can sit right next to a lopsided ledger — the broad average dilutes the difference with easy tokens, while the ledger zooms in on the hard cases it buries.
+
+### Correctness: the productions, not `tsc`
+
+The conformance run measures Monogram against `tsc`, but `tsc` is the **oracle, not the definition**. What the grammar models is the language's **syntactic productions** — and the parser produces a [CST](#what-you-get), which is *pre-semantic*: whether an expression is a valid assignment target, or a `using` binding is an identifier rather than a pattern, is a **static-semantic** rule. That belongs to a CST *consumer* — the CST→AST lowering, or a validator that walks the tree — not to the parser. The parser's one job is to accept exactly the strings the productions derive.
+
+This matters because `tsc`'s *parser* is not the same thing as the language. It draws its own parse-vs-check line, and on a handful of inputs it diverges from the grammar — and from the other engines (V8, Babel) — in **both** directions. Driving Monogram's accept/reject to *exactly* `tsc` would mean reproducing those quirks; instead it follows the productions:
+
+| Input | Monogram | `tsc` parser | V8 / Babel | Why |
+|---|---|:--:|:--:|---|
+| `obj?.#field` | accept | reject | accept | A private member in an optional chain is valid current ECMAScript — V8 and Babel both accept it; `tsc`'s parser is the lone rejecter. |
+| `let v: void.x` | reject | accept | reject | A qualified type name's root is an `IdentifierReference`; `void` is a keyword type, so no production qualifies it. (`undefined.x` *is* valid — `undefined` is identifier-rooted.) |
+| `using {a} = b` | reject | accept | reject | A `using` binding is a `BindingIdentifier` (`BindingList[~Pattern]`); the object pattern has no production. `using [a] = b` *is* valid — there `using` is an identifier and `[a]` is an element access. |
+| `++ -x` | accept | reject | reject | `++ UnaryExpression` derives it; "operand must be a simple target" is a static-semantic early error, which the parser leaves to a consumer. |
+
+`tsc` rejecting the first and accepting the next two (its parser doesn't enforce those productions until the checker) is exactly why "match `tsc`" can't *be* the definition of correct — only the measurement oracle.
 
 ### Broad agreement vs the official grammar
 
@@ -227,12 +242,29 @@ The **only-Monogram** wins above are all disambiguations that are *TextMate-expr
 
 "TextMate can't express X" is not a guess or an assertion; it is a claim to be **proven from the model**. TextMate is a line-oriented matcher whose only cross-line memory is a finite stack of scope contexts, so a proof exhibits an X whose correct highlighting provably needs memory that model lacks — unbounded lookback to a token that is not an enclosing context. A failed *attempt* to derive a pattern is not such a proof: a cleverer pattern may exist, and most "impossible for TextMate" folklore is exactly this error — the multiline / nested-generic cases turn out TM-expressible once a parser supplies the pattern, which is why the derived grammar gets them right. Where a construct provably exceeds the model, Monogram's **tree-sitter** target — a real parser over the whole tree — resolves it.
 
+### Total parsing under edits — measured against tsc and tree-sitter
+
+The handle API (`createParser()`) is **total**: every text yields a tree plus `cst.errors`, with tsc-grade diagnostics (`expected ',' or ']'` where every listed token is *provably* still accepted at that position, `to match this '('` related info, zero-width `$missing` nodes that keep a call's shape when its `)` is missing). Two structural guarantees back it:
+
+- **The valid path is byte-identical to the strict parser** — recovery runs only after a strict pass has rejected, so error tolerance costs valid input nothing, by construction.
+- **Every edited re-parse is byte-identical to a fresh parse** of the same text — tree *and* errors, broken states included, held exact by generative edit scripts across all seven grammars in CI (`test/incremental-grammars.ts`).
+
+One 9 MB TypeScript document, identical single-character edit scripts (`test/head-to-head.ts`, node v24, Apple silicon; ✎ = per keystroke, median):
+
+| engine | fresh parse | valid ✎ | breaking ✎ | while-broken ✎ | fixing ✎ |
+|---|---:|---:|---:|---:|---:|
+| **Monogram** | **167 ms** | 0.37 ms | 12 ms | **0.22 ms** | 2.2 ms |
+| tsc `updateSourceFile` | 207 ms | 35 ms | 12.0 ms | 11.9 ms | 11.9 ms |
+| tree-sitter (official) | 430 ms | **0.18 ms** | **0.29 ms** | 0.30 ms | **0.22 ms** |
+
+Monogram beats tsc on every phase (valid typing ~100×, while-broken ~50×) and beats or matches tree-sitter everywhere except the two **transition** edits (break/fix). Profiling attributes those almost entirely to the bench's 4.5 MB cursor jump: token-column offsets are EOF-relative-biased so that local typing never rewrites the suffix (that is what makes the valid keystroke 0.37 ms), and the bias boundary moves with the cursor — a far jump pays once, proportional to the jump distance, then repeated break/fix transitions at that position settle to **~1.6–2 ms** (the parser passes measure under 1 ms of that).
+
 ## What you get
 
 From one grammar definition (a small TypeScript combinator API), five outputs are **fully functional**:
 
 - **A lexer** — tokenizes source straight from the grammar's token definitions; usable on its own (`createLexer(grammar).tokenize`).
-- **A CST parser** — recursive descent + Pratt precedence on top of the lexer, producing a **CST** (concrete syntax tree): every token is a node, including punctuation and keywords — roughly 2× an AST's nodes, by design, which is exactly what the highlighter and lossless source reconstruction need.
+- **A CST parser** — recursive descent + Pratt precedence on top of the lexer, producing a **CST** (concrete syntax tree): every token is a node, including punctuation and keywords — roughly 2× an AST's nodes, by design, which is exactly what the highlighter and lossless source reconstruction need. A CST is *pre-semantic* (it models the productions, not static semantics — see [Correctness](#correctness-the-productions-not-tsc)).
 - **A TextMate grammar** — a `.tmLanguage.json` for VS Code / Sublime syntax highlighting, derived from the same rules, including derived **JSDoc-body** and **regex-internal** sub-grammars. (TextMate *scopes* are the dot-separated labels — `entity.name.function`, `keyword.control` — that a theme maps to colors.)
 - **A VS Code language configuration** — `language-configuration.json` (comments, bracket pairs, auto-close/surround, folding) derived from the same tokens.
 - **CST node types** — a TypeScript discriminated union (keyed by rule) for typed tree consumers.

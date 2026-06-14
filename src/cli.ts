@@ -133,6 +133,7 @@ function formatExpr(expr: RuleExpr): string {
     case 'sameLine': return 'sameLine';
     case 'noCommentBefore': return 'noCommentBefore';
     case 'noMultilineFlowBefore': return 'noMultilineFlowBefore';
+    case 'notLeftLeaf': return `notLeftLeaf(${expr.words.map(w => `'${w}'`).join(', ')})`;
     case 'sep': return `sep(${formatExpr(expr.element)}, '${expr.delimiter}')`;
   }
 }

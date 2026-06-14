@@ -94,6 +94,7 @@ interface OpMarker { readonly __kind: 'op' }
 interface SameLineMarker { readonly __kind: 'sameLine' }
 interface NoCommentMarker { readonly __kind: 'noCommentBefore' }
 interface NoMultilineFlowMarker { readonly __kind: 'noMultilineFlowBefore' }
+interface NotLeftLeafMarker { readonly __kind: 'notLeftLeaf'; readonly words: string[] }
 interface PrefixSlot {
   readonly __kind: 'prefix';
   (...ops: string[]): PrefixOps;
@@ -102,11 +103,12 @@ interface PostfixSlot {
   readonly __kind: 'postfix';
   (...ops: string[]): PostfixOps;
 }
-interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[] }
-interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[] }
+interface PrefixOps { readonly __kind: 'prefix-ops'; ops: string[]; requireTarget?: boolean }
+interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[]; requireTarget?: boolean }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
+interface LhsTargetOps { readonly __kind: 'lhs-target-ops'; ops: string[] }
 
-type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker;
+type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker | NotLeftLeafMarker;
 
 export const op: OpMarker = { __kind: 'op' };
 
@@ -124,6 +126,18 @@ export const noCommentBefore: NoCommentMarker = { __kind: 'noCommentBefore' };
 // rejected while a single-line one accepts (see RuleExpr 'noMultilineFlowBefore').
 export const noMultilineFlowBefore: NoMultilineFlowMarker = { __kind: 'noMultilineFlowBefore' };
 
+// Zero-width LEFT-operand head-leaf guard for a Pratt LED arm. Place it at the HEAD of a LED
+// alternative, before the self `$` (e.g. `[notLeftLeaf('void','null'), $, '.', Ident]`). The arm
+// matches only when the LEFT node's OUTERMOST (head) leaf token TEXT is NOT one of `words`; when it
+// IS, the arm is treated as not-matched (skipped) and the connector rebinds to nothing. Models TS's
+// rule that a qualified type name's root is an IdentifierReference, so the keyword/literal types
+// `void`/`null`/`true`/`false`/`this` are not `.`-qualifiable (`void.x` has no parse tree) while an
+// identifier-rooted type (`A.B`, `undefined.x`, `number.x`) is. Mirrors the AssignmentTargetType gate
+// (`lhsTarget`/`prefixTarget`), reading the SAME head leaf but predicated on TEXT membership.
+export function notLeftLeaf(...words: string[]): NotLeftLeafMarker {
+  return { __kind: 'notLeftLeaf', words };
+}
+
 export const prefix: PrefixSlot = Object.assign(
   (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops }),
   { __kind: 'prefix' as const },
@@ -140,6 +154,27 @@ export const postfix: PostfixSlot = Object.assign(
 // and `++x ** y` are fine. A general, declarable property — Python, by contrast,
 // allows `-x ** y` and would not use this. The engine enforces it generically.
 export const noUnaryLhs = (...ops: string[]): NoUnaryLhsOps => ({ __kind: 'no-unary-lhs-ops' as const, ops });
+
+// Mark infix operators whose LEFT operand must be a valid ASSIGNMENT TARGET
+// (a LeftHandSideExpression — identifier / member / element / call / paren / `this`),
+// NOT a prefix-unary, prefix-update, or postfix-update expression. E.g. JS `=` and the
+// compound assignments: `-x = 1`, `++x = 1`, `x++ = 1` are syntax errors, but `x = 1`,
+// `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine. This is ECMAScript's
+// AssignmentTargetType, enforced at PARSE time. A general, declarable property; the
+// engine enforces it generically via the operand node's outermost form (head/tail leaf).
+export const lhsTarget = (...ops: string[]): LhsTargetOps => ({ __kind: 'lhs-target-ops' as const, ops });
+
+// Postfix operators whose OPERAND must be a valid assignment target (LHS), same shape
+// rule as `lhsTarget` above — e.g. JS postfix `++`/`--`: `x++` is fine but `-x++` parses
+// as `-(x++)`, and `++x++`, `x++ ++` are syntax errors (the operand `++x` / `x++` is not
+// a LeftHandSideExpression). Distinct from `postfix(...)` (no operand-shape constraint).
+export const postfixTarget = (...ops: string[]): PostfixOps => ({ __kind: 'postfix-ops' as const, ops, requireTarget: true });
+
+// Prefix operators whose OPERAND must be a valid assignment target (LHS) — e.g. JS prefix
+// `++`/`--` (the update prefixes): `++x`, `++x.y` are fine but `++-x`, `++ ++x`, `++x--`
+// are syntax errors. Distinct from `prefix(...)` (the pure-unary `-`/`!`/`typeof`/… take
+// ANY operand, including an update: `-x++`, `void ++x` are fine).
+export const prefixTarget = (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops, requireTarget: true });
 
 // ── Combinators ──
 
@@ -185,15 +220,58 @@ class ExcludeNode {
   readonly items: Element[];
   constructor(connectors: string[], items: Element[]) { this.connectors = connectors; this.items = items; }
 }
+class CtxNode {
+  // Mark the wrapped items as [Await]/[Yield] context (the ECMAScript grammar
+  // parameter): inside an async function/arrow/method body await is the AwaitExpression
+  // operator (no bare-identifier reading), and inside a generator body yield is the
+  // YieldExpression operator. The await-yield-fork build transform reads this marker to
+  // name-fork the body-reachable rule closure; every other consumer treats it as a
+  // transparent group. Wrap ONLY the async/generator arm's body+params; a nested
+  // non-async function/arrow/class body is simply left UNwrapped (context resets).
+  readonly __kind = 'ctx' as const;
+  readonly mode: 'await' | 'yield' | 'asyncgen' | 'reset';
+  readonly items: Element[];
+  constructor(mode: 'await' | 'yield' | 'asyncgen' | 'reset', items: Element[]) { this.mode = mode; this.items = items; }
+}
 class NotNode {
   readonly __kind = 'not' as const;
-  // Zero-width negative lookahead over a single element (wrap a sequence in a
-  // group/alt if needed). Matches nothing; succeeds only when `item` can't match.
-  readonly item: Element;
-  constructor(item: Element) { this.item = item; }
+  // Zero-width negative lookahead over an element, or an array (a seq, like
+  // everywhere else in the rule DSL). Matches nothing; succeeds only when
+  // `item` can't match. `reservable` flags the bare-identifier reserved-word guard
+  // (notReservedExpr) so the await-yield-fork transform extends it per context family.
+  readonly item: Element | Element[];
+  readonly reservable: boolean;
+  constructor(item: Element | Element[], reservable = false) { this.item = item; this.reservable = reservable; }
 }
 
-type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode;
+class RelaxNode {
+  // A tree-sitter-only divergence: the PARSER (and every other generator) parses
+  // `strict`; gen-treesitter renders `relaxed`. Use when a parser-correct constraint is
+  // tree-sitter-GLR-hostile and the highlighter can safely over-accept the rare malformed
+  // form (see RuleExpr.group.tsRelaxed). Like ctx/exclude it lowers to a transparent group.
+  readonly __kind = 'relax' as const;
+  readonly strict: Element[];
+  readonly relaxed: Element[];
+  constructor(strict: Element[], relaxed: Element[]) { this.strict = strict; this.relaxed = relaxed; }
+}
+
+class CapExprNode {
+  // Wrap a NUD alternative that is a complete assignment-level expression — an
+  // ArrowFunction, the LOWEST-precedence ECMAScript AssignmentExpression. `below` names
+  // the operator whose binding power is the cap: the alternative may be parsed only when
+  // the enclosing Pratt minBp is looser than `below`, and once parsed it admits NO led
+  // (`() => {} || a` is not `(() => {}) || a` — an arrow can be neither operand of
+  // `||`/`??`/`?:`/binary, nor an assignment target). Reuses the transparent `group` node:
+  // matched exactly like the bare alternative (no extra CST node), the cap is read only by
+  // the expression engine. A general property — any grammar with a lowest-precedence
+  // primary expression form can declare it; the engine enforces it generically.
+  readonly __kind = 'cap-expr' as const;
+  readonly below: string;
+  readonly items: Element[];
+  constructor(below: string, items: Element[]) { this.below = below; this.items = items; }
+}
+
+type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode;
 
 export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
@@ -222,10 +300,42 @@ export function exclude(connectors: string | string[], ...items: Element[]): Exc
   return new ExcludeNode(typeof connectors === 'string' ? [connectors] : connectors, items);
 }
 
+// Parse `strict` (in the parser and all generators) but render `relaxed` for tree-sitter.
+// For a parser-correct constraint that explodes / inflates the tree-sitter GLR table while
+// the highlighter doesn't need it. Each side is a single element or an array (a seq).
+export function tsRelax(strict: Element | Element[], relaxed: Element | Element[]): RelaxNode {
+  return new RelaxNode(Array.isArray(strict) ? strict : [strict], Array.isArray(relaxed) ? relaxed : [relaxed]);
+}
+
+// Mark a NUD alternative as a complete assignment-level expression (an ArrowFunction —
+// the lowest-precedence ECMAScript AssignmentExpression). `below` names the operator whose
+// binding power caps it: the alternative parses only when the enclosing Pratt minBp is
+// looser than `below`, and once parsed admits no led. See CapExprNode.
+export function capExpr(below: string, ...items: Element[]): CapExprNode {
+  return new CapExprNode(below, items);
+}
+
+// Mark items as await / yield / async-generator context (see CtxNode). Wrap an
+// async arm's body and params in awaitCtx(...), a generator arm's in yieldCtx(...),
+// an async-generator's in asyncGenCtx(...).
+export function awaitCtx(...items: Element[]): CtxNode { return new CtxNode('await', items); }
+export function yieldCtx(...items: Element[]): CtxNode { return new CtxNode('yield', items); }
+export function asyncGenCtx(...items: Element[]): CtxNode { return new CtxNode('asyncgen', items); }
+// Reset to NO await/yield context (a nested non-async/non-generator function/arrow/
+// method body, a class body, a computed property key, a field initializer). Wrapping a
+// body in resetCtx() inside an already-forked family routes its refs back to the plain
+// family — the boundary the fork transform stops at.
+export function resetCtx(...items: Element[]): CtxNode { return new CtxNode('reset', items); }
+
 // Zero-width negative lookahead: `not(x)` matches nothing and succeeds only when
 // `x` would NOT match here.
-export function not(item: Element): NotNode {
+export function not(item: Element | Element[]): NotNode {
   return new NotNode(item);
+}
+// The bare-identifier reserved-word guard (notReservedExpr / notReserved): a `not`
+// the await-yield-fork transform extends with await/yield inside those contexts.
+export function reservableNot(item: Element | Element[]): NotNode {
+  return new NotNode(item, true);
 }
 
 // ── Precedence ──
@@ -236,7 +346,7 @@ interface PrecLevelDef {
   operators: PrecOperator[];
 }
 
-type OpSpec = string | PrefixOps | PostfixOps | NoUnaryLhsOps;
+type OpSpec = string | PrefixOps | PostfixOps | NoUnaryLhsOps | LhsTargetOps;
 
 function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
   const result: PrecOperator[] = [];
@@ -244,9 +354,11 @@ function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
     if (typeof o === 'string') {
       result.push({ value: o, position: 'infix' });
     } else if (o.__kind === 'prefix-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'prefix' });
+      for (const v of o.ops) result.push({ value: v, position: 'prefix', requireTarget: o.requireTarget });
     } else if (o.__kind === 'postfix-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'postfix' });
+      for (const v of o.ops) result.push({ value: v, position: 'postfix', requireTarget: o.requireTarget });
+    } else if (o.__kind === 'lhs-target-ops') {
+      for (const v of o.ops) result.push({ value: v, position: 'infix', requireTarget: true });
     } else {
       for (const v of o.ops) result.push({ value: v, position: 'infix', noUnaryLhs: true });
     }
@@ -311,6 +423,30 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
       : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body, suppress: el.connectors };
   }
+  if (el instanceof CtxNode) {
+    // Transparent group carrying the ctxMode marker; only the await-yield-fork
+    // transform reads ctxMode, everyone else recurses into body as a plain group.
+    const body = el.items.length === 1
+      ? toRuleExpr(el.items[0], names)
+      : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body, ctxMode: el.mode };
+  }
+  if (el instanceof RelaxNode) {
+    // Transparent group: every consumer reads `body` (strict); only gen-treesitter
+    // renders `tsRelaxed`.
+    const build = (items: Element[]): RuleExpr => items.length === 1
+      ? toRuleExpr(items[0], names)
+      : { type: 'seq', items: items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body: build(el.strict), tsRelaxed: build(el.relaxed) };
+  }
+  if (el instanceof CapExprNode) {
+    // Reuse the transparent `group` node (every walker recurses into `body`); `capBelow`
+    // is read only by the expression engine's Pratt core.
+    const body = el.items.length === 1
+      ? toRuleExpr(el.items[0], names)
+      : { type: 'seq' as const, items: el.items.map(i => toRuleExpr(i, names)) };
+    return { type: 'group', body, capBelow: el.below };
+  }
   if (el instanceof AltNode) {
     // A branch may be a single element or a sequence (array → seq).
     return {
@@ -326,7 +462,11 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
     };
   }
   if (el instanceof NotNode) {
-    return { type: 'not', body: toRuleExpr(el.item, names) };
+    // an array is a seq here like everywhere else in the rule DSL
+    const body = Array.isArray(el.item)
+      ? { type: 'seq' as const, items: el.item.map(i => toRuleExpr(i, names)) }
+      : toRuleExpr(el.item, names);
+    return el.reservable ? { type: 'not', body, reservable: true } : { type: 'not', body };
   }
   const marker = el as Marker;
   if (marker.__kind === 'op') return { type: 'op' };
@@ -335,6 +475,7 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
   if (marker.__kind === 'sameLine') return { type: 'sameLine' };
   if (marker.__kind === 'noCommentBefore') return { type: 'noCommentBefore' };
   if (marker.__kind === 'noMultilineFlowBefore') return { type: 'noMultilineFlowBefore' };
+  if (marker.__kind === 'notLeftLeaf') return { type: 'notLeftLeaf', words: marker.words };
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
 }
 
