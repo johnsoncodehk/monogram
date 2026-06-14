@@ -84,7 +84,7 @@ export const cases: Issue12Case[] = [
   //    grounded in the independent `yaml`-package CST (the type at the marked offset), not Monogram. ──
   { id: '#11', title: 'M5DY: the `-` of a block-sequence entry inside an explicit (`?`) key is punctuation, not a string',
     src: '? - Detroit Tigers\n  - Chicago cubs\n:\n  - 2001-07-23\n', at: '- Chicago', col: 0,
-    should: (s) => isPunct(s) && !isString(s), why: 'CST: `seq-item-ind`. The `? - …\\n  - …` complex key is a block sequence; the official grammar scopes the `-` punctuation.definition.block.sequence.item. Monogram folds the whole entry into string.unquoted', bug: true },
+    should: (s) => isPunct(s) && !isString(s), why: 'CST: `seq-item-ind`. The `? - …\\n  - …` complex key is a block sequence; the official grammar scopes the `-` punctuation.definition.block.sequence.item. Monogram folds the whole entry into string.unquoted' },
 
   { id: '#12', title: '6CA3: a TAB-indented top-level flow `[` is flow punctuation, not a string',
     src: '---\n\n\t[\n\t]\n', at: '\t[', col: 1,
@@ -92,15 +92,15 @@ export const cases: Issue12Case[] = [
 
   { id: '#13', title: 'AB8U: an over-indented `-` continuation line is plain-scalar content, not a second sequence entry',
     src: '- single multiline\n - sequence entry\n', at: '- sequence', col: 0,
-    should: (s) => isString(s) && !isPunct(s), why: 'CST: one `scalar` token `single multiline\\n - sequence entry` — the `- single multiline` entry value is a multi-line plain scalar; the indented `-` folds into it, it is NOT a sequence indicator', bug: true },
+    should: (s) => isString(s) && !isPunct(s), why: 'CST: one `scalar` token `single multiline\\n - sequence entry` — the `- single multiline` entry value is a multi-line plain scalar; the indented `-` folds into it, it is NOT a sequence indicator' },
 
   { id: '#14', title: 'a `#` line BELOW a `|2` block scalar\'s content indent is a comment, not block string',
     src: '-  -  abc:  |2  #comment\n         # string 9\n        # string 8\n       #comment 7\n      #comment 6\n     #comment 5\n    #comment 4\n', at: '#comment 7', col: 0,
-    should: (s) => isComment(s), why: 'explicit indent 2 fixes the content indent at the parent+2 (= column 8 here); `# string 9`/`# string 8` (indent 9/8) are body but `#comment 7`/6/5 (indent <8) are comments. Monogram extends the block string down to indent 5, painting three comment lines as string', bug: true },
+    should: (s) => isComment(s), why: 'explicit indent 2 fixes the content indent at parent+2 (column 8 here); `# string 9`/8 (indent 9/8) are body but `#comment 7`/6/5 (indent <8) are comments. ROOT CAUSE (a known limit, not a quick fix): the block-scalar content floor is a FLAT per-line regex `\\1[ \\t]\\3 {N}` that re-asserts ONE sequence dash as a whitespace column — a compact-NESTED sequence (`-  -  …: |N`) needs one backref pair PER dash, which a single regex cannot express for ARBITRARY depth (a bounded d=2,3 just moves the bug to d=4). The fix is the official grammar shape: nested column-carrying while-regions (each `- ` opens a child region carrying its column), a separate gen-tm YAML-derivation refactor', bug: true },
 
   { id: '#15', title: 'a `#` line at column 0 inside a root `|` block scalar is string content, not a comment',
     src: ' | # comment\n# string\n', at: '# string', col: 0,
-    should: (s) => isString(s) && notComment(s), why: 'CST: block-scalar body. A root `|` auto-detects content indent from the first body line (`# string`, indent 0); `#` inside a block scalar is LITERAL, not a comment', bug: true },
+    should: (s) => isString(s) && notComment(s), why: 'CST: block-scalar body. A root `|` auto-detects content indent from the first body line (`# string`, indent 0); `#` inside a block scalar is LITERAL, not a comment' },
 
   { id: '#16', title: 'DBG4 (spec 7.10): a plain scalar `::vector` is a string, not a mapping',
     src: '- ::vector\n', at: '::vector', col: 0,

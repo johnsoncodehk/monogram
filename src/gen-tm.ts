@@ -5113,7 +5113,9 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const docMarkAlt = docMarkers.map(escapeRegex).join('|');
       const docMark = `(?:${docMarkAlt})(?=[\\t ]|$)`;
       repository[`${bsKey}-doc`] = {
-        begin: `^()(?=(?:${docMark}[\\t ]+)?${intro}[\\t ]*(?:#|$))`,
+        // `^([\\t ]*)` (not `^()`) so a leading-whitespace root introducer (` | …`) still routes
+        // here — a `#`-led body line at column 0 is then block-scalar string, not a comment (#12/#15).
+        begin: `^([\\t ]*)(?=(?:${docMark}[\\t ]+)?${intro}[\\t ]*(?:#|$))`,
         while: `\\G(?!${docMark})`,
         patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
       };
@@ -5211,6 +5213,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // a real key separator (`http://x` keeps its glued `:` → still plain content). Used as a NEGATIVE
       // lookahead to bound the fold at the first sibling/comment line, matching the parser's foldedPlain.
       const structAhead = `(?:${cmtLit}|${compactAlt}|${flowEx}*?${kvSep}(?:[\\t ]|$))`;
+      // Fold-RELEASE variant (drops the `-`/`?` compact arm from structAhead, like §2c's foldExclude):
+      // once an inline plain value has started, a strictly-deeper line (the `\\1[ \\t]+` already
+      // guarantees it) that begins with `-`/`?` is plain-scalar CONTENT (a multi-line fold), not a
+      // sibling node — only a comment or a real `key:` separator ends the fold. (monogram#12 AB8U.)
+      const foldRelease = `(?:${cmtLit}|${flowEx}*?${kvSep}(?:[\\t ]|$))`;
       // ── VALUE-POSITION guard (the closed transform's hinge) ──
       // The IR-derived value-positions (valuePositions): the structural introducers (`-`/`?`/`:`) that
       // open an indented value block. A FOLD region must YIELD at a value-position — the indented block
@@ -5303,9 +5310,15 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const continuationRule = { match: '\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*', name: plainContent };
       // Emitted only when the grammar actually has a DEEPER fold (`Indent <leaf> … Dedent`).
       if (fold.hasDeeper) {
+        // An explicit key whose value is a block sequence (`? - x` on one line) is NOT a foldable
+        // plain scalar — the `-` is a sequence item indicator the #block-sequence region must claim.
+        // Guard the plain fold from opening on that head (both indicators are grammar-derived, so the
+        // six non-indent grammars regenerate byte-identical). (monogram#12 M5DY.)
+        const ekInd = detectExplicitKey(grammar)?.indicator, seqInd = detectBlockSequence(grammar)?.indicator;
+        const seqInKeyGuard = (ekInd && seqInd) ? `(?!${escapeRegex(ekInd)}[\\t ]+${escapeRegex(seqInd)}[\\t ])` : '';
         repository['plain-continuation'] = emitIndentRegion({
-          lookahead: `(?=${plainVp})`,
-          cont: `\\1[ \\t]+(?!${structAhead})`,
+          lookahead: `(?=${seqInKeyGuard}${plainVp})`,
+          cont: `\\1[ \\t]+(?!${foldRelease})`,
           blankFirst: true,
           patterns: [continuationRule, ...plainHeaderIncs],
         });
@@ -5333,7 +5346,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // the guard is the explicit-key instance of "a fold yields to a value-position".
         repository['explicit-key-continuation'] = emitIndentRegion({
           lookahead: `(?=${escapeRegex(ekFold.indicator)}[\\t ]+(?=${plainSrc})${keyColonGuard})`,
-          cont: `\\1[ \\t]+(?!${structAhead})`,
+          cont: `\\1[ \\t]+(?!${foldRelease})`,
           blankFirst: true,
           patterns: [ekContRule, ...plainHeaderIncs],
         });
