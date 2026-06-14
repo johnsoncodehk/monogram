@@ -129,7 +129,13 @@ const Template     = token(seq('`', star(altPattern(noneOf('`', '\\', '$'), seq(
 });
 const regexEscape = seq('\\', noneOf(lineTerminator));
 const regexClassBody = star(altPattern(noneOf(']', '\\', '\n'), regexEscape));
-const Regex_       = token(seq('/', plus(altPattern(noneOf('/', '\\', '[', '\n'), regexEscape, seq('[', regexClassBody, ']'))), '/', star(identPart)), {   // flags: maximal-munch any IdentifierPart run (tsc lexes flags leniently; validity is a checker rule)
+// RegularExpressionChar; the FIRST char additionally excludes `*` (RegularExpressionFirstChar)
+// so `/*` is never a regex start — it is a block-comment open, and an unterminated `/* … /`
+// is a lexical error, NOT a regex literal. (A `*` anywhere after the first char stays legal:
+// `/a*/`.) Body is one-or-more total, so `//` remains a LineComment as before.
+const regexChar      = altPattern(noneOf('/', '\\', '[', '\n'), regexEscape, seq('[', regexClassBody, ']'));
+const regexFirstChar = altPattern(noneOf('/', '\\', '[', '*', '\n'), regexEscape, seq('[', regexClassBody, ']'));
+const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(identPart)), {   // flags: maximal-munch any IdentifierPart run (tsc lexes flags leniently; validity is a checker rule)
   regex: true,
   regexContext: {
     divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt'],
