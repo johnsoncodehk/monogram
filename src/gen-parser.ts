@@ -156,6 +156,12 @@ export function createParser(grammar: CstGrammar) {
     const lbp = lp.sameAs !== undefined ? op.lbp : op.lbp - 1;
     ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
   }
+  // Binary / relational / conditional connectors (the MIDDLE child of a `$ op $` LED) —
+  // a node with one at child[1] is not a LeftHandSideExpression, so not an assignment target
+  // (`a + b = c`, `a in b = c`). Ladder INFIX ops + alternative-form binary LEDs.
+  const binaryConnectors = new Set<string>();
+  for (const [v, info] of opTable) if (info.position === 'infix') binaryConnectors.add(v);
+  for (const k of ledPrecByConnector.keys()) binaryConnectors.add(k);
 
   // A `cap`-group NUD (an ArrowFunction — the lowest-precedence AssignmentExpression)
   // parses only when minBp is LOOSER than the named connector's binding power; the value
@@ -1062,6 +1068,10 @@ export function createParser(grammar: CstGrammar) {
       const tail = cs[cs.length - 1];
       if (tail && 'tokenType' in tail && tail.tokenType === '$operator'
           && postfixOpValues.has(source.slice(tail.offset, tail.end))) return true;
+      // a binary / relational / conditional expression (`a + b`, `a in b`, `a as T`) is not a
+      // LeftHandSideExpression: its MIDDLE child is a binary-connector leaf. Member `a.b` /
+      // element `a[b]` have a `$punct` leaf there, a paren cover has a NODE child → those pass.
+      if (cs.length >= 3) { const m = cs[1]; if (m && 'tokenType' in m && binaryConnectors.has(source.slice(m.offset, m.end))) return true; }
       return false;
     };
 

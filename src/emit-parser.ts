@@ -99,6 +99,16 @@ function analyze(grammar: CstGrammar) {
     ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
   }
 
+  // Binary / relational / conditional connectors — the MIDDLE child of a `$ op $` (or
+  // alternative-form) LED. A node whose child[1] is one of these is a binary expression,
+  // NOT a LeftHandSideExpression, so it is not a valid assignment target (`a + b = c`,
+  // `a in b = c`, `a as T = b` are spec grammar errors). Ladder INFIX ops carry the
+  // operator as an operator-tag leaf; the alternative-form binary LEDs (`in`/`instanceof`/
+  // `as`/`satisfies`/`?`) carry it as a keyword/punct leaf — both land at child[1].
+  const binaryConnectors = new Set<string>();
+  for (const [v, info] of opTable) if (info.position === 'infix') binaryConnectors.add(v);
+  for (const k of ledPrecByConnector.keys()) binaryConnectors.add(k);
+
   // Pratt rules.
   const prattRules = new Set<string>();
   for (const rule of grammar.rules) if (hasMarker(rule.body)) prattRules.add(rule.name);
@@ -639,7 +649,7 @@ function analyze(grammar: CstGrammar) {
   };
 
   return {
-    grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
+    grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps, binaryConnectors,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nudCap, nullableRules, firstSets, symtab, qualKeys,
@@ -1494,6 +1504,7 @@ export function emitParser(grammar: CstGrammar): string {
     e.emit(`const REQTGT_T = Uint8Array.from([${rt.join(',')}]);`);
   }
   e.emit(`const postfixOpValues = new Set(${J([...a.postfixOpValues])});`);
+  e.emit(`const binaryConnectors = new Set(${J([...a.binaryConnectors])});`);
   // Assignment-target shape test (ECMAScript AssignmentTargetType): a node id is NOT a
   // valid LHS target iff its outermost form is a prefix-op (prefix-unary OR prefix-update
   // `++x`) — head kid is an operator-tag leaf in prefixOps — or a postfix-update (`x++`) —
@@ -1512,6 +1523,11 @@ export function emitParser(grammar: CstGrammar): string {
   e.emit(`    const _tt = absTok[lhs] + ((~_t) >>> 2);`);
   e.emit(`    if (postfixOpValues.has(${e.soa ? 'docText(toff(_tt), tend(_tt))' : 'tkText[_tt]'})) return true;`);
   e.emit(`  }`);
+  // a binary / relational / conditional expression (`a + b`, `a in b`, `a as T`, …) is not a
+  // LeftHandSideExpression: its MIDDLE child is a binary connector leaf. (Member `a.b` /
+  // element `a[b]` have a PUNCT leaf there, a parenthesized cover has a NODE child, so those
+  // pass — `(a + b) = c` via the cover is correctly accepted, like tsc.)
+  e.emit(`  if (n >= 3) { const _m = kids[cs + 1]; if (_m < 0) { const _mt = absTok[lhs] + ((~_m) >>> 2); if (binaryConnectors.has(${e.soa ? 'docText(toff(_mt), tend(_mt))' : 'tkText[_mt]'})) return true; } }`);
   e.emit(`  return false;`);
   e.emit(`}`);
   e.emit(`const tokenNames = new Set(${J([...a.tokenNames])});`);
