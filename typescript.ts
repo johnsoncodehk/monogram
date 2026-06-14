@@ -197,11 +197,16 @@ const Prop = rule($ => {
 });
 
 const ClassHeritage = rule($ => [
-  Ident,
-  // (leds below also cover `A?.B` — tsc parses optional chains in heritage cleanly)
   // Non-constructor primaries: tsc PARSES `extends undefined/true/42/"x"` cleanly
-  // (rejecting them is the CHECKER's job), so the heritage grammar must too.
+  // (rejecting them is the CHECKER's job), so the heritage grammar must too. The
+  // identifier-reference head is reserved-guarded (notReservedExpr, the same guard the
+  // expression NUD uses): a prefix-operator / statement keyword with NO bare-expression
+  // role — `void`, `typeof`, `delete`, `enum`, `case`, `throw`, … — is not a valid base
+  // (tsc parses `extends void {}` as "Expression expected"), while `this`/`await`/`yield`/
+  // `async`/plain identifiers are. Literals stay listed first so they keep their leaf scope.
+  // (leds below also cover `A?.B` — tsc parses optional chains in heritage cleanly)
   Number_, String_, 'true', 'false', 'null', 'undefined',
+  [notReservedExpr, Ident],
   // The heritage clause is a LeftHandSideExpression, not just a dotted name: a
   // parenthesized expression (`extends (B)`, `extends (cond ? A : B)`) and a class
   // EXPRESSION (`extends class {}`, `extends class Q extends P {}`) are both valid
@@ -365,19 +370,24 @@ const ForBinding = rule($ => [
 const Param = rule($ => {
   const tail = [opt('?'), opt(':', Type), opt('=', Expr)];   // ?  : T  = E
   const body = alt(
-    // NOTE: a plain parameter name is NOT reserved-guarded — `this` is a valid first
-    // parameter even without an annotation (`function f(this, a)`: the implicit-any
-    // `this`-param), and `this` is an always-reserved word; guarding here would reject
-    // that valid form. (A truly reserved param name like `function f(while)` stays an
-    // accepted over-accept; it's out of this gap's scope.)
-    [Ident, ...tail],
+    // The plain-name arm EXCLUDES `this`: tsc's parser treats `this` as a special
+    // parameter form accepting ONLY bare `this` or `this: T` (the dedicated arm below)
+    // — `this?`, `this = 1`, `this: T = 1`, and any decorated/modified `this`
+    // (`@dec this`, `public this`) are parse errors there. Letting `this` match as a
+    // plain Ident here would re-open that whole class via the tail/decorator/modifier
+    // paths. (A truly reserved param name like `function f(while)` stays an accepted
+    // over-accept; it's out of this gap's scope.)
+    [not('this'), Ident, ...tail],
     [BindingPattern, ...tail],
     // a rest element, by contrast, can never validly be a reserved word (`...while`),
     // and `...this` is invalid too, so guarding the rest name is FN-safe.
     ['...', alt([notReserved, Ident], BindingPattern), opt('?'), opt(':', Type), opt('=', Expr)],   // rest (`?`/initializer are CHECKER errors in tsc, not parse errors)
   );
   return [
-    ['this', ':', Type],
+    // `this`-param: bare `this` or `this: T` ONLY — no `?`, no default, no decorator,
+    // no modifier (tsc's parser rejects all of those). This is the SOLE way `this`
+    // reaches param position; the plain-name arm above excludes it.
+    ['this', opt(':', Type)],
     // optional decorators + optional parameter modifiers, then the binding.
     // many1 → with modifiers; the no-modifier branch also catches a param NAMED
     // like a modifier (`public: T`), which many() would otherwise eat. tsc parses
@@ -556,7 +566,13 @@ const ClassMember = rule($ => [
       ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
       [alt('get', 'set'), MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(':', Type), opt(resetCtx(Block)), opt(';')],  // accessor (type params parse; semantic error)
       ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), asi()],          // index signature; member separator = ; / newline / }
-      [MemberName, alt(
+      // a bare identifier `constructor` member MUST be a call signature — tsc rejects a
+      // `constructor` field/property ("'(' expected"): `constructor;`, `constructor = 1`,
+      // `constructor: T`, even modified (`public constructor;`). TypeParams parse; `?`/`!`
+      // do not. A string / #private / computed name `constructor` is NOT the identifier,
+      // so it stays a valid field (the `not('constructor')` generic arm below covers it).
+      ['constructor', opt(TypeParams), ...memTail(resetCtx)],
+      [not('constructor'), MemberName, alt(
         [opt('?'), opt(TypeParams), ...memTail(resetCtx)],                       // method (requires `(`)
         // field (all-optional → catch-all). A field NOT ended by ';' must not be
         // followed by a SAME-LINE decorator: tsc reads that '@' as belonging to
@@ -568,8 +584,11 @@ const ClassMember = rule($ => [
   ],
   // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
   // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
-  [MemberName, opt('?'), opt(TypeParams), '(', sep(resetCtx(Param), ','), ')', opt(':', Type), opt(resetCtx(Block)), opt(';')],
+  [not('constructor'), MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
+  // `constructor` excluded here too (`constructor?()`/`constructor!()` are tsc parse
+  // errors): every VALID `constructor(…)` is caught by the dedicated arms above, so a
+  // `constructor` reaching this method fallback is always a malformed form.
+  [not('constructor'), MemberName, opt('?'), opt(TypeParams), '(', sep(resetCtx(Param), ','), ')', opt(':', Type), opt(resetCtx(Block)), opt(';')],
 ]);
 
 const EnumMember = rule($ => [
