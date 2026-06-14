@@ -121,7 +121,11 @@ const Type = rule($ => {
     // covers a named rest member `n: ...T[]` (TS: RestType after the label); the
     // trailing `?` covers optional members `n: T?` / `T?` (TS: OptionalType).
     ['[', many(opt('...'), opt(Ident, opt('?'), ':'), opt('...'), $, opt('?'), opt(',')), ']'],
-    ['{', many(TypeMember, opt(alt(';', ','))), '}'],
+    // object type literal: members are SEPARATED by `;` / `,` / a newline (the type
+    // analog of statement ASI) — two members on one line with no separator reject
+    // (`{ a: T b: U }` is tsc's "';' expected"). The `}`-ahead arm lets the last member
+    // need no trailing separator; `;`/`,` also cover an explicit trailing delimiter.
+    ['{', many(TypeMember, alt([';'], [','], [not(sameLine)], [not(not('}'))])), '}'],
     ['asserts', Ident, opt('is', $)],
     [$, 'extends', $, '?', $, ':', $],
     // infer U | infer U extends T | infer U extends T ? X : Y (conditional binds to the infer)
