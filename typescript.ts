@@ -335,13 +335,19 @@ const Expr = rule($ => [
   // on the leading `<` — can no longer fall through to `new` as an identifier and reparse
   // as the comparison `(new < T) > Foo()` (tsc: "Expression expected").
   ['new', '.', 'target'],
-  // new T | new T(args) | new T<X> | new T<X>(args)
-  ['new', NewTarget, opt(alt(
-    ['<', sep(Type, ','), '>', opt('(', sep($, ','), ')')],
+  // new T | new T(args) | new T<X> | new T<X>(args). An optional chain may NOT follow a bare
+  // `new` (no Arguments): a NewExpression is not a valid `?.` base (the base must be a
+  // MemberExpression / CallExpression — i.e. a `new` WITH `( )`), so `new a?.b`, `new a<T>?.b`,
+  // `new class{}?.x`, `new new a()?.x` have no parse tree (tsc + V8 + babel all reject). The
+  // `not('?.')` guards exactly the no-call exits; `new a()?.b` (Arguments consumed) chains via
+  // the outer `?.` LED unchanged.
+  ['new', NewTarget, alt(
+    ['<', sep(Type, ','), '>', alt(['(', sep($, ','), ')'], not('?.'))],
     ['(', sep($, ','), ')'],
-  ))],
-  ['new', 'class', notReserved, Ident, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],
-  ['new', 'class', opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],
+    not('?.'),
+  )],
+  ['new', 'class', notReserved, Ident, opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
+  ['new', 'class', opt(TypeParams), opt('extends', ClassHeritage), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['[', many(opt($), ','), opt($), ']'],
   ['{', sep(Prop, ','), '}'],
   // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter routes

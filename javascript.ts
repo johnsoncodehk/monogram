@@ -360,10 +360,13 @@ const Expr = rule($ => [
   // dedicated arm (NOT the bare identifier nud, which excludes `new`) so a failed `new T` arm
   // can't slide `new` in as an Ident (`new <T>Foo()` → the comparison `(new < T) > Foo()`).
   ['new', '.', 'target'],
-  // new T | new T(args)
-  ['new', not('<'), NewTarget, opt('(', sep($, ','), ')')],
-  ['new', 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],
-  ['new', 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}', opt('(', sep($, ','), ')')],
+  // new T | new T(args). An optional chain may NOT follow a bare `new` (no Arguments): a
+  // NewExpression is not a valid `?.` base, so `new a?.b` / `new class{}?.x` have no parse tree
+  // (tsc + V8 + babel all reject). `not('?.')` guards the no-call exit; `new a()?.b` chains via
+  // the outer `?.` LED unchanged.
+  ['new', not('<'), NewTarget, alt(['(', sep($, ','), ')'], not('?.'))],
+  ['new', 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
+  ['new', 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['[', many(opt($), ','), opt($), ']'],
   ['{', sep(Prop, ','), '}'],
   // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter can route
