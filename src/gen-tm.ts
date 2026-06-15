@@ -1960,11 +1960,16 @@ function generateTypeCastPattern(
   // Casts after a keyword that ends in a letter (`return <T>x`) stay a comparison
   // here — rare, and never a regression (they were unhighlighted before too).
   const notAfter = notAfterValueWithOptionalWhitespace('\\w$)\\]');
-  // Type-shaped, balanced-angle inner content (kept to type characters so an
-  // ordinary `a < b > c` comparison — whose operands are arbitrary expressions —
-  // is not swallowed). `\g<TC>` recurses for nested generics like `<Array<T>>`.
-  const typeChars = '[\\w$.,\\[\\]\\s|&]';
-  const typeContent = `(?<TC>${typeChars}*(?:<\\g<TC>>${typeChars}*)*)`;
+  // Type-shaped inner content, scanned FLAT to the closer (no `\g<>` recursion → no Oniguruma
+  // ~20-level subroutine cap, which formerly FLIPPED a cast over a d>=20 nested generic to a
+  // comparison). The begin only needs to FIND the `>operand` closer, not balance the type —
+  // #type-inner parses the body — so a flat class star over the type alphabet (now including the
+  // angle brackets so `<Array<Set<…>>>` is scanned, not balanced) suffices. Expression-only
+  // operators (`*`, `+`, …) stay OUT of the class, so `a < b * c > d` is not swallowed —
+  // discrimination identical to the recursive form. Mirrors the generic-call/arrow flat-confirm
+  // migration (typeArgConfirm / arrowEndConfirm); the cast was the one confirmer it never reached.
+  const typeChars = '[\\w$.,\\[\\]\\s|&<>]';
+  const typeContent = `${typeChars}*`;
   // Content must START with a type-start char (identifier / `(` paren-type /
   // `{` object-type / `[` tuple-type) — never a digit or operator.
   const typeStart = `[[:alpha:]_$({\\[]`;
