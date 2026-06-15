@@ -252,7 +252,13 @@ class RelaxNode {
   readonly __kind = 'relax' as const;
   readonly strict: Element[];
   readonly relaxed: Element[];
-  constructor(strict: Element[], relaxed: Element[]) { this.strict = strict; this.relaxed = relaxed; }
+  // When set, gen-treesitter emits `relaxed` ONCE as a shared rule of this name and renders
+  // every reference as `$.<ruleName>`, instead of inlining `relaxed` at each site. Inlining a
+  // relaxed form duplicates its states at every use; a shared rule keeps them in ONE place
+  // (the difference is large — see issue #46). Visibility follows tree-sitter's `_`-prefix
+  // convention (a leading `_` hides the node).
+  readonly ruleName?: string;
+  constructor(strict: Element[], relaxed: Element[], ruleName?: string) { this.strict = strict; this.relaxed = relaxed; this.ruleName = ruleName; }
 }
 
 class CapExprNode {
@@ -303,8 +309,8 @@ export function exclude(connectors: string | string[], ...items: Element[]): Exc
 // Parse `strict` (in the parser and all generators) but render `relaxed` for tree-sitter.
 // For a parser-correct constraint that explodes / inflates the tree-sitter GLR table while
 // the highlighter doesn't need it. Each side is a single element or an array (a seq).
-export function tsRelax(strict: Element | Element[], relaxed: Element | Element[]): RelaxNode {
-  return new RelaxNode(Array.isArray(strict) ? strict : [strict], Array.isArray(relaxed) ? relaxed : [relaxed]);
+export function tsRelax(strict: Element | Element[], relaxed: Element | Element[], ruleName?: string): RelaxNode {
+  return new RelaxNode(Array.isArray(strict) ? strict : [strict], Array.isArray(relaxed) ? relaxed : [relaxed], ruleName);
 }
 
 // Mark a NUD alternative as a complete assignment-level expression (an ArrowFunction —
@@ -437,7 +443,7 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
     const build = (items: Element[]): RuleExpr => items.length === 1
       ? toRuleExpr(items[0], names)
       : { type: 'seq', items: items.map(i => toRuleExpr(i, names)) };
-    return { type: 'group', body: build(el.strict), tsRelaxed: build(el.relaxed) };
+    return { type: 'group', body: build(el.strict), tsRelaxed: build(el.relaxed), tsRuleName: el.ruleName };
   }
   if (el instanceof CapExprNode) {
     // Reuse the transparent `group` node (every walker recurses into `body`); `capBelow`

@@ -167,6 +167,15 @@ interface GrammarJsContext {
    * Keyed by node identity (the exact RuleExpr object in the grammar AST).
    */
   nameFieldNodes: Set<RuleExpr>;
+  /**
+   * Shared rules extracted from tsRelax(..., ruleName) groups: name → relaxed body. The body
+   * is emitted ONCE as a rule and every reference renders as `$.<name>`, so a tree-sitter-only
+   * relaxed form is SHARED across all its use sites instead of inlined (and duplicated) at each
+   * — the difference is large for a rule used in many type positions (the fn-type/method param,
+   * issue #46). Visibility follows tree-sitter's `_`-prefix convention. Empty when the grammar
+   * uses no named tsRelax.
+   */
+  tsSharedRules: Map<string, RuleExpr>;
 }
 
 function hasMarker(expr: RuleExpr): boolean {
@@ -175,6 +184,27 @@ function hasMarker(expr: RuleExpr): boolean {
   if (expr.type === 'quantifier' || expr.type === 'group') return hasMarker(expr.body);
   if (expr.type === 'sep') return hasMarker(expr.element);
   return false;
+}
+
+/** Pre-scan every rule body for named tsRelax groups (`tsRuleName`), collecting name → relaxed
+ *  body. Done before conflicts/rules are emitted so the shared rule names are known to
+ *  deriveConflicts (a closure tuple may name one) and the bodies can be emitted as shared rules. */
+function collectTsSharedRules(grammar: CstGrammar): Map<string, RuleExpr> {
+  const out = new Map<string, RuleExpr>();
+  const walk = (e: RuleExpr): void => {
+    switch (e.type) {
+      case 'group':
+        if (e.tsRuleName && !out.has(e.tsRuleName)) out.set(e.tsRuleName, e.tsRelaxed ?? e.body);
+        // Walk the relaxed subtree (what tree-sitter actually emits), not the strict body.
+        walk(e.tsRelaxed ?? e.body); break;
+      case 'seq': case 'alt': e.items.forEach(walk); break;
+      case 'quantifier': walk(e.body); break;
+      case 'sep': walk(e.element); break;
+      case 'not': walk(e.body); break;
+    }
+  };
+  for (const r of grammar.rules) walk(r.body);
+  return out;
 }
 
 /**
@@ -222,11 +252,19 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       if (expr.kind === '*') return `repeat(${body})`;
       return `repeat1(${body})`;
     }
-    case 'group':
+    case 'group': {
       // A tsRelax group carries a tree-sitter-only alternate rendering (a parser-strict
       // constraint the highlighter relaxes — see RuleExpr.group.tsRelaxed). Render that
       // instead of the strict body; every other consumer uses `body`.
-      return renderExpr(expr.tsRelaxed ?? expr.body, ctx);
+      const relaxed = expr.tsRelaxed ?? expr.body;
+      // Named tsRelax: emit the relaxed body ONCE as a shared rule and reference it, so its
+      // states are shared across all use sites rather than inlined at each.
+      if (expr.tsRuleName) {
+        if (!ctx.tsSharedRules.has(expr.tsRuleName)) ctx.tsSharedRules.set(expr.tsRuleName, relaxed);
+        return `$.${expr.tsRuleName}`;
+      }
+      return renderExpr(relaxed, ctx);
+    }
     case 'not':
       // Zero-width negative lookahead: not expressible in a tree-sitter CFG, and
       // it consumes nothing, so it drops to a no-op (the surrounding choice keeps
@@ -572,6 +610,15 @@ const LR_CONFLICT_CLOSURE: string[][] = [
   ['decorator_expr', 'new_target'],
   ['binding_element'],
   ['type_member', 'expr', 'prop', 'member_name'],
+  // issue #46: the type-only fn/method/index param (`type_fn_param`, a shared tsRelax rule)
+  // decouples the type sub-grammar from `expr` — a function-TYPE param can no longer reach a
+  // default-value expression — which collapses ~2.2k GLR states. These are the residual
+  // conflicts at the `(` boundary where a param could still be value-context.
+  ['type_fn_param', 'type'],
+  ['type_fn_param', 'type', 'expr', 'param'],
+  ['type_fn_param', 'expr', 'param'],
+  ['type_fn_param', 'expr'],
+  ['type_fn_param', 'param'],
   // YAML (issue #3): an indentation grammar is massively ambiguous — a newline may continue a node or
   // start the next document, a `:` may open a value or be an empty-key map, a scalar may be a key or a
   // leaf, a flow collection may be a value or an implicit block key. tree-sitter's GLR absorbs all of
@@ -645,7 +692,9 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
   //    both name sets count — `$.key` is a valid conflict symbol whether key is a rule or a token.
   const tokenSnakes = new Set(ctx.tokenSnake.values());
   for (const tuple of LR_CONFLICT_CLOSURE) {
-    if (tuple.every(r => ruleSnakes.has(r) || tokenSnakes.has(r))) push(tuple);
+    // A tuple symbol may be a rule, a token, or a shared hidden tsRelax rule (e.g. the
+    // type-only fn-param `_type_fn_param`); all three are valid `$.<name>` conflict symbols.
+    if (tuple.every(r => ruleSnakes.has(r) || tokenSnakes.has(r) || ctx.tsSharedRules.has(r))) push(tuple);
   }
 
   return conflicts;
@@ -1059,6 +1108,7 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
     templatePlan,
     interpolationPlans,
     nameFieldNodes: nameFields.nodes,
+    tsSharedRules: collectTsSharedRules(grammar),
   };
 
   const grammarJs = buildGrammarJs(ctx, grammarName);
@@ -1146,6 +1196,20 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     const body = buildRuleBody(rule, ctx);
     ruleEntries.push(`    ${snake}: $ => ${body}`);
   }
+
+  // Shared rules from named tsRelax (e.g. the type-only fn-param). Emitted right AFTER the
+  // entry rule (index 1), never first: the entry rule must stay the start symbol, AND
+  // tree-sitter's state count is sensitive to rule ORDER — placing the type-param rule EARLY
+  // collapses ~2k more states than placing it last (measured, issue #46). Emitted once so
+  // their states are shared across every reference rather than inlined at each use site.
+  // (Visibility follows the tree-sitter convention: a `_`-prefixed name is hidden; the
+  // type-fn-param is deliberately VISIBLE so its param-name child is not spliced into the
+  // enclosing `type` node — see typescript.ts.)
+  const sharedEntries: string[] = [];
+  for (const [name, body] of ctx.tsSharedRules) {
+    sharedEntries.push(`    ${name}: $ => ${renderExpr(body, ctx)}`);
+  }
+  if (sharedEntries.length) ruleEntries.splice(1, 0, ...sharedEntries);
 
   // Token rules (named) — those not provided by the scanner. Skip tokens are
   // included so `extras` references resolve.

@@ -77,8 +77,26 @@ const DecoratorExpr = rule($ => [
 
 // ── Types ──
 
+// A function / constructor / method / index-signature parameter that appears in a TYPE
+// position. Such a parameter never carries a default value (`= Expr`) or a decorator
+// (`@d`) — both are parse/checker errors in a type — so the full `Param` rule (which
+// reaches `DecoratorExpr` and `= Expr`, and through them the whole expression grammar)
+// is what couples the type sub-grammar to the expression sub-grammar. That coupling is
+// the dominant driver of the tree-sitter state explosion (issue #46): a derived GLR
+// parser must keep the `type` and `expr` interpretations co-live at every `(`, because
+// a type-position param can reach an expression. `tsRelax` keeps the PARSER (and every
+// other generator) on the shared `Param` rule, but renders this lean, expression-free
+// param for tree-sitter only — making the type partition disjoint from `expr`.
+//
+// The rule is a VISIBLE node (not `_`-hidden): a hidden rule splices its `ident` child
+// straight into the enclosing `type` node, where the `(type (ident) @type)` highlight query
+// would then mis-scope a function-type PARAMETER NAME as a type. A visible `type_fn_param`
+// node keeps the param name out of `type`'s direct children (→ @variable), while the `: T`
+// annotation stays a nested `type` node (→ `T` still @type).
+const typeFnParam = () => tsRelax(Param, [opt('...'), Ident, opt('?'), opt(':', Type)], 'type_fn_param');
+
 const TypeMember = rule($ => {
-  const callSig = [opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
+  const callSig = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
   const propOrMethod = alt(callSig, [opt(':', Type)]);  // after a name: method (callSig) | property
   return [
     // call / construct signature (no member name): a construct sig is just a
@@ -102,7 +120,7 @@ const TypeMember = rule($ => {
 });
 
 const Type = rule($ => {
-  const fnType = [opt(TypeParams), '(', sep(Param, ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
+  const fnType = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
   return [
     // A bare type reference / entity name. The type-predicate `x is T` is NOT here for the
     // PARSER: tsc's parser accepts `x is T` ONLY in a function RETURN-TYPE position (see
@@ -575,13 +593,13 @@ const TypeParams = rule($ => [
 // ── Declarations ──
 
 const InterfaceMember = rule($ => {
-  const callSig = [opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
+  const callSig = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
   const propOrMethod = alt(callSig, [opt(':', Type)]);  // after a name: method | property (bare = implicit any)
   return [
     // call / construct signature (construct = call sig with a leading `new`)
     [opt('new'), ...callSig],
     // getter / setter (`get`/`set` as a member NAME falls through to the named branch)
-    [alt('get', 'set'), MemberName, '(', sep(Param, ','), ')', opt(":", ReturnType)],
+    [alt('get', 'set'), MemberName, '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)],
     // mapped type: static? (+/-)? readonly? [ K in T (as U)? ] (+/-)? ?? : T
     [opt('static'), opt(alt('+', '-')), opt('readonly'), '[', Ident, 'in', Type, opt('as', Type), ']', opt(alt('+', '-')), opt('?'), ':', Type],
     // readonly property (readonly index sig is the bracketed branch below)
@@ -593,7 +611,7 @@ const InterfaceMember = rule($ => {
     // index signature: static? readonly? [ Param,* ] (: T)?  — TS parses the brackets
     // as a full parameter list, so `[]`, `[a?]`, `[public a]`, `[a: T, b: U]` all parse
     // (the extra forms are grammar-errors TS reports post-parse, but the parser accepts).
-    [opt('static'), opt('readonly'), '[', sep(Param, ','), ']', opt(':', Type)],
+    [opt('static'), opt('readonly'), '[', sep(typeFnParam(), ','), ']', opt(':', Type)],
   ];
 });
 
