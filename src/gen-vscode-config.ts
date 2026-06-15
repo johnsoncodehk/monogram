@@ -8,6 +8,9 @@ import { tokenPatternBlockDelimiters, tokenPatternHasStartAnchor, tokenPatternLi
 // the grammar's token definitions, lexer hints, and `scopes` section.
 
 interface AutoPair { open: string; close: string; notIn?: string[]; }
+// A VS Code onEnter `beforeText`/`afterText` is a regex SOURCE — a bare string (case-sensitive)
+// or `{ pattern, flags }` (e.g. `i`, for case-insensitive tag matching in markup).
+type EnterText = string | { pattern: string; flags: string };
 export interface LanguageConfig {
   comments?: { lineComment?: string; blockComment?: [string, string] };
   brackets?: [string, string][];
@@ -18,7 +21,7 @@ export interface LanguageConfig {
   folding?: { markers: { start: string; end: string } };
   wordPattern?: string;
   indentationRules?: { increaseIndentPattern: string; decreaseIndentPattern: string };
-  onEnterRules?: { beforeText: string; afterText?: string; action: { indent: string; appendText?: string; removeText?: number } }[];
+  onEnterRules?: { beforeText: EnterText; afterText?: EnterText; action: { indent: string; appendText?: string; removeText?: number } }[];
 }
 
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -146,6 +149,109 @@ export function generateLanguageConfig(grammar: CstGrammar): LanguageConfig {
     onEnter.push({ beforeText: `(?<!\\\\|\\w:)${escRe(lineComment)}\\s*\\S`, afterText: `^(?!\\s*$).+`, action: { indent: 'none', appendText: `${lineComment} ` } });
   }
   if (onEnter.length) config.onEnterRules = onEnter;
+
+  // ── Markup languages (HTML / Vue) — tag-structural editor behavior ──
+  // A markup grammar (`grammar.markup`) carries the structural DATA — tag delimiters, the
+  // void / raw-text element sets, the comment delimiters, the embed scopes — needed to DERIVE
+  // the editor behavior a hand-written HTML/Vue language-configuration provides (tag-aware
+  // indent / onEnter, region folding, comment + embedded-language brackets), which the token /
+  // scope heuristics above cannot produce for a markup language. Everything below is derived
+  // from that data; nothing is HTML-hardcoded — the same branch fits any markup grammar.
+  const mk = grammar.markup;
+  if (mk) {
+    const tagOpen = mk.tagOpen, tagClose = mk.tagClose, closeMarker = mk.closeMarker ?? '/';
+    const to = escRe(tagOpen), tc = escRe(tagClose), cm = escRe(closeMarker);
+    const tcCls = escClass(tagClose), toCls = escClass(tagOpen);
+    const tagName = ident ? tokenPatternSource(ident) : '[A-Za-z][\\w:.\\-]*'; // tag-name capture
+    const nameClass = '[A-Za-z0-9_:.\\-]';                                      // tag-name body char class
+    const cOpen = mk.comment?.open, cClose = mk.comment?.close;
+
+    // A file that EMBEDS a programming language (a rawText / attribute / interpolation embed whose
+    // scope is `source.*`) is edited with that language's brackets — `{}` `[]` `()`, backtick, the
+    // JSDoc `/** */` — and a general word pattern, exactly as VS Code's HTML config does for its
+    // embedded JS/CSS. A markup-only embed (e.g. Vue `<template>` → text.html.*) does not trigger it.
+    const embedScopes: string[] = [];
+    if (mk.rawText?.embed) for (const e of Object.values(mk.rawText.embed)) embedScopes.push(typeof e === 'string' ? e : e.default);
+    if (mk.attributeEmbed) for (const a of mk.attributeEmbed) embedScopes.push(a.embed);
+    if (mk.customBlockEmbed) embedScopes.push(...Object.values(mk.customBlockEmbed));
+    if (mk.inject?.exprEmbed) embedScopes.push(mk.inject.exprEmbed);
+    const embedsCode = embedScopes.some(s => s?.startsWith('source.'));
+
+    // Tags that must NOT indent-on-Enter / increase indent: void elements (no children) + raw-text
+    // elements whose body is a PROGRAMMING language (`source.*`, its own grammar owns indentation).
+    // A raw-text block embedding MARKUP (Vue `<template>` → text.html.*) is excluded, so it indents.
+    const codeRawTags = (mk.rawText?.tags ?? []).filter(t => {
+      const e = mk.rawText!.embed?.[t];
+      const s = typeof e === 'string' ? e : e?.default;
+      return !!s?.startsWith('source.');
+    });
+    const voidAlt = [...new Set([...(mk.voidTags ?? []), ...codeRawTags])].map(escRe).join('|');
+
+    // ── Brackets ── the comment pair, plus the embedded language's `{}` `()`.
+    const brk: [string, string][] = [];
+    if (cOpen && cClose) brk.push([cOpen, cClose]);
+    if (embedsCode) brk.push(['{', '}'], ['(', ')']);
+    if (brk.length) config.brackets = brk;
+    config.colorizedBracketPairs = []; // markup defers bracket colorization to the editor default
+
+    // ── Auto-closing / surrounding ── embedded brackets, the attribute quotes, the comment, and
+    // (when code is embedded) the backtick string + JSDoc opener.
+    const quotes = mk.attributeQuotes ?? ['"', "'"];
+    const auto: AutoPair[] = [];
+    if (embedsCode) auto.push({ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '(', close: ')' });
+    for (const q of quotes) auto.push({ open: q, close: q });
+    if (cOpen && cClose) auto.push({ open: cOpen, close: cClose, notIn: ['comment', 'string'] });
+    if (embedsCode) auto.push({ open: '`', close: '`', notIn: ['string', 'comment'] }, { open: '/**', close: ' */', notIn: ['string'] });
+    config.autoClosingPairs = auto;
+
+    const surround: [string, string][] = [...quotes.map(q => [q, q] as [string, string])];
+    if (embedsCode) surround.push(['{', '}'], ['[', ']'], ['(', ')']);
+    if (hasAngle) surround.push(['<', '>']);
+    if (embedsCode) surround.push(['`', '`']);
+    config.surroundingPairs = surround;
+
+    // ── autoCloseBefore ── embedded-code separators / closers, the angle brackets, quotes.
+    const before: string[] = [];
+    if (embedsCode) before.push(';', ':', '.', ',', '=', '}', ')', ']');
+    before.push('>', '<');
+    if (embedsCode) before.push('`');
+    before.push(...quotes);
+    config.autoCloseBefore = [...new Set(before)].join('') + ' \n\t';
+
+    // ── Folding ── region markers expressed with the block-comment delimiters.
+    if (cOpen && cClose) {
+      const o = escRe(cOpen), c = escRe(cClose);
+      config.folding = { markers: { start: `^\\s*${o}\\s*#region\\b.*${c}`, end: `^\\s*${o}\\s*#endregion\\b.*${c}` } };
+    }
+
+    // ── Word pattern ── an embedded-code file gets the general word pattern (a tag-name pattern
+    // would stop selection at the first separator and never select code identifiers); otherwise
+    // leave the identifier-token pattern derived above. `-` stays a word char (kebab-case names,
+    // CSS custom properties), matching the editor default for HTML.
+    if (embedsCode) {
+      config.wordPattern = '(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\$\\^\\&\\*\\(\\)\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\\'\\"\\,\\.\\<\\>\\/\\s]+)';
+    }
+
+    // ── onEnter ── indent inside an opened tag (outdent when the close tag is on the next line),
+    // skipping void / code-raw elements. The attribute-skip clause is built from the quote chars.
+    const qAlts = quotes.map(q => `${escRe(q)}[^${escClass(q)}]*${escRe(q)}`).join('|');
+    const attrSkip = `(?:[^${escClass(quotes.join(''))}${escClass(closeMarker)}${tcCls}]|${qAlts})*?`;
+    const beforeOpen = `${to}(?!(?:${voidAlt}))(${tagName})(?:${attrSkip}(?!${cm})${tc})[^${toCls}]*$`;
+    const afterClose = `^${to}${cm}(${tagName})\\s*${tc}`;
+    config.onEnterRules = [
+      { beforeText: { pattern: beforeOpen, flags: 'i' }, afterText: { pattern: afterClose, flags: 'i' }, action: { indent: 'indentOutdent' } },
+      { beforeText: { pattern: beforeOpen, flags: 'i' }, action: { indent: 'indent' } },
+    ];
+
+    // ── Indentation ── increase after a non-void / non-self-closed open tag (and an open comment /
+    // brace when code is embedded); decrease on a close tag / comment-close / `}`.
+    const incComment = cOpen && cClose ? `|${escRe(cOpen)}(?!.*${escRe(cClose)})` : '';
+    const decComment = cClose ? `|${escRe(cClose)}` : '';
+    config.indentationRules = {
+      increaseIndentPattern: `${to}(?!\\?|(?:${voidAlt})\\b|[^${tcCls}]*${cm}${tc})(${nameClass}+)(?=\\s|${tc})\\b[^${tcCls}]*${tc}(?!.*${to}${cm}\\1${tc})${incComment}${embedsCode ? `|\\{[^}"']*$` : ''}`,
+      decreaseIndentPattern: `^\\s*(${to}${cm}${nameClass}+\\b[^${tcCls}]*${tc}${decComment}${embedsCode ? `|\\}` : ''})`,
+    };
+  }
 
   return config;
 }
