@@ -69,14 +69,16 @@ function escapeForCharClass(s: string): string {
   return s.replace(/[\[\]\\^-]/g, '\\$&');
 }
 
-/** A CASE-INSENSITIVE, Onigmo-PORTABLE pattern matching `s` regardless of letter case.
- *  Each cased letter becomes a two-char class (`s` → `[Ss]`); other chars are escaped as
- *  usual. We keep the explicit char-class rather than an inline `(?i:…)` scoped flag: both
- *  vscode-oniguruma AND vscode-onigmo were measured (issue #43) to honor `(?i:style)` and the
- *  tm-diagnostics guard accepts it, but the char-class is engine-independent DATA and switching
- *  would only churn every raw-text rule's bytes (across html + vue) for no behavioral gain. Used
- *  by the markup emitter so a raw-text element (`<SCRIPT>`/`<Script>`) matches the same set the
- *  lexer folds via `.toLowerCase()`. */
+/** An ASCII-CASE-INSENSITIVE pattern matching `s` regardless of letter case. Each cased letter
+ *  becomes a two-char class (`s` → `[Ss]`); other chars are escaped as usual. We keep the explicit
+ *  char-class rather than an inline `(?i:…)` flag for CORRECTNESS, not byte-thrift (issue #43): both
+ *  engines compile `(?i:)`, but `(?i:)` in (vscode-)oniguruma applies full UNICODE case-folding —
+ *  `(?i:style)` also matches `ſtyle` (U+017F LONG S ≡ s), `(?i:k)` matches the Kelvin sign U+212A, etc.
+ *  HTML tag-name matching is ASCII-case-insensitive ONLY (the spec ASCII-lowercases names, and our
+ *  lexer folds via `.toLowerCase()`, which leaves `ſ` alone), so `(?i:style)` would OVER-match a
+ *  non-style element `<ſtyle>` and wrongly embed CSS. The per-char class matches EXACTLY the set the
+ *  lexer folds (`<SCRIPT>`/`<Script>` but never `<ſcript>`) — keeping the highlighter consistent with
+ *  the parser by construction. Used by the markup emitter for every raw-text element/close tag. */
 function caseFoldLiteral(s: string): string {
   let out = '';
   for (const ch of s) {
