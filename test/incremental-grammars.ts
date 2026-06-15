@@ -23,7 +23,7 @@ type Cst = { root: number; errors: Diag[] };
 type Parser = { parse(s: string): Cst; edit(cst: Cst, edits: Edit[]): void; visit(cst: Cst, fns: object): void; tree: import('./emitted-obj.ts').TreeView & { lenOf(id: number): number; leafOffsetOf(e: number, tb: number): number; leafEndOf(e: number, tb: number): number } };
 type Em = { createParser(): Parser };
 
-const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'vue'];
+const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
 
 let seedState = 0x5EED1E55;
 const rand = () => ((seedState = (seedState * 48271) % 0x7fffffff) / 0x7fffffff);

@@ -40,7 +40,6 @@ const GAP = [
   { lang: 'TSX', script: 'test/scope-gap-run.ts', args: ['tsx'], officialEnv: 'MONOGRAM_OFFICIAL_TSX' },
   { lang: 'HTML', script: 'test/scope-gap-run.ts', args: ['html'] },
   { lang: 'YAML', script: 'test/scope-gap-run.ts', args: ['yaml'] },
-  { lang: 'Vue', script: 'test/scope-gap-run.ts', args: ['vue'] },
 ] as { lang: string; script: string; args: string[]; officialEnv?: string }[];
 
 const pct = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(1) + '%');
@@ -59,7 +58,7 @@ const gapRows = GAP.map((a) => {
 
 const covBy = new Map(covRows.map((x) => [x.lang, x.r]));
 const gapBy = new Map(gapRows.map((x) => [x.lang, x.r]));
-const LANGS = ['TypeScript', 'JavaScript', 'JSX', 'TSX', 'HTML', 'YAML', 'Vue'];
+const LANGS = ['TypeScript', 'JavaScript', 'JSX', 'TSX', 'HTML', 'YAML'];
 
 let md = '';
 // The legend (agree / covered / Highlighter) is hand-written prose in the README, above the
@@ -76,12 +75,11 @@ const block = '<!-- coverage:start -->\n' + md + '<!-- coverage:end -->';
 if (!WRITE) { console.log('\n' + md); process.exit(0); }
 
 // Refuse to clobber the committed table with a partial one: a missing corpus or official
-// grammar makes an adapter return null → "—". Vue has no parser-axis adapter, so its Parser
-// cell is the single allowed gap; every other cell must be present before we overwrite.
+// grammar makes an adapter return null → "—". Every cell must be present before we overwrite.
 const missing: string[] = [];
 for (const lang of LANGS) {
   if (!gapBy.get(lang)) missing.push(`${lang} highlighter`);
-  if (lang !== 'Vue' && !covBy.get(lang)) missing.push(`${lang} parser`);
+  if (!covBy.get(lang)) missing.push(`${lang} parser`);
 }
 if (missing.length) {
   console.error('Refusing to write a partial coverage table — missing: ' + missing.join(', '));

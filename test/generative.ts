@@ -73,8 +73,6 @@ const LANGS: LangCfg[] = [
   // tokenize instead of erroring. The consistency check reads the host markup tokens regardless.
   { name: 'html', module: '../html.ts', scopeName: 'text.html.basic', tmPath: 'html.tmLanguage.json',
     tmExtra: { 'source.js': 'javascript.tmLanguage.json', 'source.css': 'html.tmLanguage.json' } },
-  { name: 'vue', module: '../vue.ts', scopeName: 'text.html.vue', tmPath: 'vue.tmLanguage.json',
-    tmExtra: { 'text.html.basic': 'html.tmLanguage.json', 'source.js': 'javascript.tmLanguage.json', 'source.ts': 'typescript.tmLanguage.json', 'source.tsx': 'typescriptreact.tmLanguage.json' } },
 ];
 
 // ── vscode-textmate tokenizer (one shared WASM load) ─────────────────────────────────────────────

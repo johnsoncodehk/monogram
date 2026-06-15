@@ -17,7 +17,7 @@ The suite produces **four kinds of report**, each answering a different question
 The CI-blocking pass/fail checks (no external corpus needed). One runner, one ✓/✗ table, one
 exit code — instead of a dozen scripts with a dozen formats. Covers: sanity / agnostic /
 refactor-guard / issue-cases · conformance (js, tsx, jsx, html) · highlighter guards + RedCMD
-diagnostics + Monarch + HTML embed/lexer · Vue directives/embeds/interpolation · YAML
+diagnostics + Monarch + HTML embed/lexer · YAML
 issue-12 + depth-witnesses · the generative **scope≡role** check + the gap-ledger selftest +
 `--check`. `node test/check.ts <substr>` runs a subset (e.g. `… yaml`).
 
@@ -64,7 +64,7 @@ Neither subsumes the other. `check` (self-consistency) does **not** replace the 
 
 ## 4. Bench — on demand
 
-`npm run bench:perf`, `bench:html-official`, `bench:vue-*`, `bench:issues` (the README bug ledger),
+`npm run bench:perf`, `bench:html-official`, `bench:issues` (the README bug ledger),
 `gate:treesitter`, `compat`. Informational — perf, official-comparison detail, repo-compat. Not gates.
 
 ---

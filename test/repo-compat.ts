@@ -41,8 +41,6 @@ const pct = (n: number, d: number) => (d === 0 ? 100 : (100 * n) / d);
 // (the real external consumer). We scan it once and, per grammar, pick out `<scope>#<key>` refs.
 const refTexts: string[] = [];
 for (const f of readdirSync(repoRoot)) if (f.endsWith('.tmLanguage.json')) refTexts.push(readFileSync(`${repoRoot}${f}`, 'utf-8'));
-const offVue = `${repoRoot}test/fixtures/vue-official/vue.tmLanguage.json`;
-if (existsSync(offVue)) refTexts.push(readFileSync(offVue, 'utf-8'));
 const corpus = refTexts.join('\n');
 
 console.log('\n══════════════════════════════════════════════════════════════════════');

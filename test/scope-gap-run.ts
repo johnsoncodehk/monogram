@@ -122,9 +122,6 @@ const BUILDERS: Record<string, () => ScopeGapAdapter> = {
 };
 
 const lang = process.argv[2];
-if (lang === 'vue') { await import('./scope-gap-vue.ts'); }   // injection grammar — its own tokenizer
-else {
-  const build = BUILDERS[lang];
-  if (!build) { console.error(`usage: node test/scope-gap-run.ts <ts|js|jsx|tsx|html|yaml|vue> [N|all]\nunknown language: ${lang ?? '(none)'}`); process.exit(1); }
-  await run(build());
-}
+const build = BUILDERS[lang];
+if (!build) { console.error(`usage: node test/scope-gap-run.ts <ts|js|jsx|tsx|html|yaml> [N|all]\nunknown language: ${lang ?? '(none)'}`); process.exit(1); }
+await run(build());
