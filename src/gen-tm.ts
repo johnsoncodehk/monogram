@@ -4002,6 +4002,12 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
       //     a single-line `<tag>…</tag>` (that whole line is the `-inline` shape, claimed earlier) nor
       //     swallow a following block's open tag, yet a bare `<` in the body (`a < b`) is fine. Agnostic:
       //     keys only on the tag + `<`/`/`/`>` delimiters (DATA), never on the embed's syntax.
+      top.push({ include: `#${key}` });
+      // The close-line rules (3)/(3b) key on the TAG ONLY (a close line carries no `lang=`), so emitting
+      // them per dialect yields byte-identical regex where only the first-included fires and the rest are
+      // dead (monogram#43 "will never match" / "all raw embedded languages"). Emit them ONCE — on the
+      // lang-less call (`langVal === undefined`), with the default embed — and skip them for every dialect.
+      if (langVal === undefined) {
       repository[`${key}-close`] = {
         name: `meta.${tag}.${L}`,
         match: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})\\s*(${c})`,
@@ -4020,9 +4026,9 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
         beginCaptures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName } },
         end: `(${c})`, endCaptures: { '1': { name: sClose } },
       };
-      top.push({ include: `#${key}` });
-      top.push({ include: `#${key}-close` });        // orphan close line (BODY</tag>) — after the open-tag rules
+      top.push({ include: `#${key}-close` });        // orphan close line (BODY</tag>) — once per tag, lang-independent
       top.push({ include: `#${key}-close-ml` });     // orphan close line with a DEFERRED `>` (#97)
+      }
     } else {
       // (2′) WELL-BEHAVED embed (no greedy construct can swallow the close, e.g. CSS) — a single
       //     `begin/end` region with a LOOKAHEAD `end` that never CONSUMES the close tag. Because the
