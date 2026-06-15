@@ -51,6 +51,7 @@ const GATES: Gate[] = [
   { group: 'yaml', name: 'flow-sites', args: ['test/flow-sites.ts'] },
   { group: 'yaml', name: 'compact-nest-sites', args: ['test/compact-nest-sites.ts'] },
   { group: 'yaml', name: 'deepest-sibling', args: ['test/yaml-deepest-sibling-probe.ts'] },
+  { group: 'yaml', name: 'blockscalar-depth', args: ['test/yaml-blockscalar-depth-probe.ts'] },
   { group: 'generative', name: 'scope≡role', args: ['test/generative.ts'] },
   { group: 'generative', name: 'gap-ledger-selftest', args: ['test/gap-ledger-selftest.ts'] },
   { group: 'generative', name: 'gap-ledger-check', args: ['test/gap-ledger.ts', '--check'] },
