@@ -5485,55 +5485,43 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // indicator's column, which no `\1`-relative backref can express (the prefix is `- `, not spaces) and
       // no possessive `[ \t]++` can split from the deeper-fold case `x: y\n  - b` (same line, must fold).
       //
-      // The fix mirrors the maintained RedCMD YAML grammar's block-sequence: a `\G`-anchored region whose
-      // rule stack carries the indent depth, RE-OPENED per compact level (its body self-includes
-      // #block-sequence, so `- - - a` nests three deep). The meta.stream wrapper re-anchors `\G` at every
-      // line, so each level's captures pin ITS OWN inner indicator column and reclaim only siblings AT that
-      // column. We emit it ONLY for the COMPACT case (a dash followed by ANOTHER dash on the same line) —
-      // `begin … (?=([\t ]+)${dash}[\t ])` — so a single `- a`, a `- key: v` mapping item, a `- {…}`/`- "…"`/
-      // `- |` value, etc. are UNTOUCHED (still handled by the top-level token includes + the §2a′ fold),
-      // confining this region to exactly the bug's shape. The compact re-anchor `(?=((?<=${reanchor}) )?+)`
-      // (a FIXED-width lookbehind — portable, unlike RedCMD's variable-length `(?<![^\t ][\t ]*+:|---)`,
-      // which is rejected by Onigmo / GitHub-Linguist) lets the inner dash open right after the outer `- `.
+      // The fix carries the inner indicator column by CONSUMPTION — the same idiom as the §2a⁗ block-scalar
+      // region — instead of a per-line lookahead RECONSTRUCTION. A `\G`-anchored region opens per compact
+      // level and CONSUMES its level's width each line, so the RULE STACK (one frame per `- `) carries the
+      // true column through ARBITRARY depth, with no single-frame capture to saturate. We emit it ONLY for
+      // the COMPACT case (a dash followed by ANOTHER dash on the same line) — `begin … (?=${dash}[\t ])` —
+      // so a single `- a`, a `- key: v` mapping item, a `- {…}`/`- "…"`/`- |` value, etc. are UNTOUCHED
+      // (still handled by the top-level token includes + the §2a′ fold), confining this region to the
+      // compact-nesting shape.
       //
-      // The inner indicator's column is reconstructed PORTABLY as `\1\2 \4`: the outer indent (`\1\2`) +
-      // one literal space for the dash's own column + the captured indicator run `\4` (the run of spaces
-      // between the outer dash and the inner one — group 4 in the begin's lookahead, so a multi-space
-      // compact `-  - x` pins correctly too). The `while` then STAYS on: (arm 0) a COMPACT sibling at the
-      // column `(?=\1\2 \4${dash}[\t ]+${dash}[\t ])` — a zero-width lookahead that keeps the region alive
-      // WITHOUT consuming, so the body RE-DISPATCHES the compact `- - …` line from line start and a nested
-      // #block-sequence opens there capturing its OWN `( *+)` indent (the non-first-item generalization of
-      // monogram#24 — see below); (arm 1) a dash AT EXACTLY that column `(\1\2 \4)(?=${dash}[\t ]|${dash}$)`
-      // — a non-compact sibling item, reclaimed as `punctuation`; (arm 2) a line STRICTLY DEEPER than the
-      // column `(?=\1\2 \4[\t ])` — a zero-width lookahead that keeps the region alive WITHOUT consuming (so
-      // a nested deeper #block-sequence, if its own begin matched on the header line, gets first claim on its
-      // own sibling before the fold), with the deeper line scoped by the body's #block-fold rule (a plain
-      // continuation) or #block-value (a structured value); or (arm 3) a blank line. It RELEASES on a dedent
-      // OR a non-dash line at the column (a sibling mapping/scalar), so a column-0 `key:` after the sequence
-      // is NOT swallowed.
+      // begin `\G( *+)(${dash})([\t ]+)(?=${dash}[\t ])` consumes THIS level's leading indent (`\1`), its
+      // dash (group 2, scoped `punctuation`) and the inter-dash run (`\3`, so a multi-space `-  - x` and a
+      // mixed `- -  - x` each carry their own run width), then requires a following dash. Being `\G`-relative
+      // its body self-include re-opens it at the post-run cursor, so `- - - - a` stacks one consuming frame
+      // per inline dash, each advancing `\G` past its own column. while `\G(?>\1[\t ]\3|[\t ]*$)` consumes
+      // this level's width (indent + the dash's own column + the run) on each continuation line, or stays on
+      // a blank line. The continuation cursor, after all stacked frames consume, lands at exactly the inner
+      // node column.
       //
-      // NON-FIRST-ITEM compact nesting (`- - a\n  - - b\n    - c` → `[["a",["b","c"]]]`): the inner compact
-      // sequence `- - b` is opened by the SECOND outer item, on a CONTINUATION line. A consuming reclaim arm
-      // (arm 1) would eat that line's leading indent before the body ran, so the nested #block-sequence would
-      // open mid-line with `( *+)=""` and reconstruct its sibling column too shallow (the `    - c` sibling
-      // would fall through to the fold → painted string). Arm 0 is the fix: a compact sibling is reclaimed
-      // ZERO-WIDTH, so the body re-dispatches from line start and the nested #block-sequence captures the
-      // FULL indent (`( *+)="  "`), pinning `    - c` at the right column. On the FIRST outer item the inner
-      // dashes are inline on the header line, so each level's begin already captures its offset — that case
-      // worked before; arm 0 extends the same column-correct open to a sibling-opened nest.
-      //
-      // A deeper line that is NOT a nested sibling folds into the item's plain scalar: the body's
-      // #block-fold rule (`^([\t ]+)(?=[^\t\r\n#])(plain run)`, anchored at LINE START so it never fires on
-      // the header line's inline inner item, which sits past column 0) scopes it `string.unquoted`. So
-      // `- - a\n   - b` (`[["a - b"]]` — the deeper `- b` folds) is `string`, while `- - a\n  - b` and
-      // `- - - a\n    - b` (a same-column sibling at the inner OR a deeper-nested level) stay `punctuation`.
-      // This resolves monogram#24's deeper-irregular residual without a variable-length lookbehind.
+      // RECLAIM vs FOLD falls out of the consume — no per-column lookahead, no saturating reconstruction.
+      // A continuation line whose indent the stacked whiles fully consume leaves `\G` AT a dash (a
+      // same-column sibling): the body scopes it `punctuation`. A line STRICTLY DEEPER leaves residual
+      // leading whitespace at the carried `\G`, which the body's #block-fold — re-anchored from `^` to `\G`
+      // so it tests the CARRIED mid-line cursor, not line start — folds to `string.unquoted` (a plain-scalar
+      // continuation). This `\G`-coupling is what splits the oracle-opposite pair the old saturated single
+      // column could not: after `- - - - a` (d=4, 3 consuming frames carry to col 6) a sibling at col 8 has
+      // residual whitespace → fold; after `- - - - - a` (d=5, 4 frames carry to col 8) the col-8 dash sits
+      // AT the carried cursor → punctuation. Both are correct at every depth because the carry is per-level
+      // recursive, not a fixed-arity formula (verified d=1..12, uniform and mixed compaction, vs the eemeli
+      // CST oracle — test/yaml-deepest-sibling-probe.ts). A sibling-opened multi-line nest
+      // (`- - a\n  - - b\n    - c`) works the same way: each line re-anchors via the meta.stream wrapper and
+      // the consume carries its column. The region RELEASES on a dedent or a non-dash line at the column, so
+      // a column-0 `key:` after the sequence is not swallowed. Portable Oniguruma only — no variable-length
+      // lookbehind (RedCMD's `(?<![^\t ][\t ]*+:|---)` is rejected by Onigmo / GitHub-Linguist), no
+      // cross-frame backref; the carry is pure `\G`-relative consumption.
       const blockSeq = detectBlockSequence(grammar);
       if (blockSeq) {
         const dash = escapeRegex(blockSeq.indicator);
-        // The compact re-anchor lookbehind class: the compact indicators (`-`/`?`) plus the key/value
-        // separator (`:`) — exactly the single chars a nested node may sit immediately after on one line.
-        const reanchor = `[${[...(ind.compactIndicators ?? []), ind.keyValueSeparator ?? ':'].map(escapeForCharClass).join('')}]`;
         // The item's plain VALUE folds across DEEPER lines (a multi-line plain scalar) but releases at a
         // same-column sibling (reclaimed by the sequence `while`). Opens only on a BARE plain head (not a
         // key/indicator/comment — those are scoped by the dispatch includes), then an inner string region
@@ -5548,18 +5536,16 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           ],
         };
         // The region SHELL (begin/while/captures); its body `patterns` is filled at the END (after the
-        // top-level dispatch is built + ordered), since the item content reuses that full dispatch. Group 4
-        // (`([\t ]+)`, in the begin's lookahead) captures the indicator run between the outer and inner
-        // dashes, so the `while` can reconstruct the inner column as `\1\2 \4` (outer indent + the dash's
-        // own column + the run). Arm 0 keeps the region alive ZERO-WIDTH on a COMPACT sibling at the column
-        // (so the body re-dispatches it from line start, opening a column-correct nested #block-sequence);
-        // arm 1 reclaims a same-column NON-compact sibling (`punctuation`); arm 2 is a zero-width lookahead
-        // that keeps the region alive on a strictly-deeper line (deferring to a nested level's sibling-
-        // reclaim, then to the body's #block-fold / #block-value rules); arm 3 is a blank line.
+        // top-level dispatch is built + ordered), since the item content reuses that full dispatch. The
+        // begin consumes `( *+)` (this level's indent, `\1`) + the dash (group 2, `punctuation`) + `([\t ]+)`
+        // (the inter-dash run, `\3`); the `while` `\G(?>\1[\t ]\3|[\t ]*$)` consumes that same width each
+        // continuation line, carrying the column by CONSUMPTION (no `\1\2 \4` reconstruction to saturate).
+        // A fully-consumed line lands `\G` AT a sibling dash (body → punctuation); a strictly-deeper line
+        // keeps residual whitespace there (body's `\G`-anchored #block-fold → string); a blank line stays.
         repository['block-sequence'] = {
-          begin: `(?=((?<=${reanchor}) )?+)\\G( *+)(${dash})(?=([\\t ]+)${dash}[\\t ])`,
-          beginCaptures: { '3': { name: `punctuation.${langName}` } },
-          while: `\\G(?>(?=\\1\\2 \\4${dash}[\\t ]+${dash}[\\t ])|(\\1\\2 \\4)(?=${dash}[\\t ]|${dash}$)|(?=\\1\\2 \\4[\\t ])|[\\t ]*$)`,
+          begin: `\\G( *+)(${dash})([\\t ]+)(?=${dash}[\\t ])`,
+          beginCaptures: { '2': { name: `punctuation.${langName}` } },
+          while: `\\G(?>\\1[\\t ]\\3|[\\t ]*$)`,
           patterns: [],
         };
         // ── A block-mapping VALUE introduced by `${kvSep}`-at-EOL, INSIDE a compact item (`- key:` then an
@@ -5598,7 +5584,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // #block-sequence instead of folding. (monogram#24 deeper residual.)
         const foldExclude = `(?:${cmtLit}|${flowEx}*?${kvSep}(?:[\\t ]|$))`;
         repository['block-fold'] = {
-          match: `^([\\t ]+)(?=[^\\t\\r\\n${cmtCc}])(?!${foldExclude})((?:[^${cmtCc}\\n]|${cmtLit}(?<=[^\\t\\n\\f\\r ]${cmtLit}))*)`,
+          match: `\\G([\\t ]+)(?=[^\\t\\r\\n${cmtCc}])(?!${foldExclude})((?:[^${cmtCc}\\n]|${cmtLit}(?<=[^\\t\\n\\f\\r ]${cmtLit}))*)`,
           captures: { '2': { name: plainContent } },
         };
         topPatterns.push({ include: '#block-sequence' });

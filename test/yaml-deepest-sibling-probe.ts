@@ -70,17 +70,32 @@ const under: string[] = [];   // grammar non-punct, oracle SEQ  (real sibling fo
 const over: string[] = [];    // grammar punct,     oracle fold (deeper fold reclaimed → regression)
 let checked = 0;
 
-for (const sp of [' ', '  ']) {
-  for (let d = 1; d <= 8; d++) {
-    const header = (`-${sp}`).repeat(d) + 'a';
-    const maxCol = (1 + sp.length) * d + 2;
+// Inter-dash spacing PATTERNS. The depth-general claim must hold for ARBITRARY depth (not fit to a
+// fixed d) and ARBITRARY uniform/mixed compaction, so we sweep d=1..12 and four width-patterns: all-1,
+// all-2, and the two alternations [1,2]/[2,1] (mixed compaction the consuming carrier must also handle,
+// since each frame consumes whatever its own inter-dash run captured). Header `(- |-  )^d a`; for each
+// we sweep EVERY sibling column and compare both directions to the eemeli oracle.
+const widthAt = (pat: number[], i: number) => pat[i % pat.length];
+const PATTERNS: { name: string; pat: number[] }[] = [
+  { name: 'sp1', pat: [1] },
+  { name: 'sp2', pat: [2] },
+  { name: 'alt12', pat: [1, 2] },
+  { name: 'alt21', pat: [2, 1] },
+];
+
+for (const { name, pat } of PATTERNS) {
+  for (let d = 1; d <= 12; d++) {
+    let header = '';
+    for (let i = 0; i < d; i++) header += '-' + ' '.repeat(widthAt(pat, i));
+    header += 'a';
+    const maxCol = header.length + 2;
     for (let col = 0; col <= maxCol; col++) {
       const src = `${header}\n${' '.repeat(col)}- b\n`;
       if (YAML.parseDocument(src).errors.length) continue;   // only VALID YAML
       checked++;
       const isPunct = /punctuation/.test(scopeAt(src, 1, col) ?? '');
       const isSeq = oracleIsSeqDash(src, 1, col);
-      const tag = `sp${sp.length} d${d} c${col}  ${JSON.stringify(src)}`;
+      const tag = `${name} d${d} c${col}  ${JSON.stringify(src)}`;
       if (isSeq && !isPunct) under.push(tag);
       if (!isSeq && isPunct) over.push(tag);
     }
