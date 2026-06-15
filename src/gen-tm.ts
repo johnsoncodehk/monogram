@@ -4316,10 +4316,16 @@ function buildMarkupInjectParts(grammar: CstGrammar, mainScopeName: string): { r
   return { repo, files };
 }
 
+// The grammar's name — its single source of truth (declared via `defineGrammar({ name })`, or set
+// by the CLI from the filename for an unnamed grammar). Falls back to the scopeName's last segment.
+function nameOf(grammar: CstGrammar): string {
+  return grammar.name ?? grammar.scopeName?.split('.').pop() ?? 'grammar';
+}
+
 // The injection FILES (thin stubs, one per concern). The rule BODIES are merged into the host
 // grammar's repository by generateMarkupTm. Returns [] when no injection is declared.
-export function generateMarkupInjection(grammar: CstGrammar, grammarName: string): InjectionGrammar[] {
-  return buildMarkupInjectParts(grammar, grammar.scopeName ?? `text.${grammarName}`)?.files ?? [];
+export function generateMarkupInjection(grammar: CstGrammar): InjectionGrammar[] {
+  return buildMarkupInjectParts(grammar, grammar.scopeName ?? `text.${nameOf(grammar)}`)?.files ?? [];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4333,16 +4339,17 @@ interface ContributesSnippet {
   languages: { id: string; extensions: string[]; configuration: string }[];
   grammars: { language?: string; scopeName: string; path: string; injectTo?: string[]; embeddedLanguages?: Record<string, string> }[];
 }
-export function generateContributes(grammar: CstGrammar, grammarName: string): ContributesSnippet | null {
+export function generateContributes(grammar: CstGrammar): ContributesSnippet | null {
   const man = grammar.manifest;
   if (!man) return null;
+  const grammarName = nameOf(grammar);
   const scopeName = grammar.scopeName ?? `source.${grammarName}`;
   const grammars: ContributesSnippet['grammars'] = [
     // The main grammar — carries the embeddedLanguages map (template/script/style regions).
     { language: grammarName, scopeName, path: `./${grammarName}.tmLanguage.json`,
       ...(man.embeddedLanguages ? { embeddedLanguages: man.embeddedLanguages } : {}) },
     // Each injection (thin stub) loads into the declared host grammars (injectTo).
-    ...generateMarkupInjection(grammar, grammarName).map(inj => ({
+    ...generateMarkupInjection(grammar).map(inj => ({
       scopeName: inj.scopeName, path: `./${inj.scopeName}.tmLanguage.json`,
       ...(man.injectTo ? { injectTo: man.injectTo } : {}),
     })),
@@ -4554,17 +4561,17 @@ function applyCanonicalRepoNames(
   }
 }
 
-export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGrammar {
+export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // Honour the grammar's DECLARED scopeName (e.g. source.ts) and derive every scope's
   // language suffix from it (ts / js / tsx) instead of the raw grammar name
   // (typescript / …). Themes key on `keyword.control.ts`, not `…​.typescript`, so this
   // is what makes the derived grammar a drop-in for the official one. The raw name is
   // kept only for the display `name` field below.
-  const grammarName = langName;
-  const scopeName = grammar.scopeName ?? `source.${langName}`;
+  const grammarName = nameOf(grammar);
+  const scopeName = grammar.scopeName ?? `source.${grammarName}`;
   // Markup languages (HTML/Vue) derive a region-based grammar, not the token-stream one.
   if (grammar.markup) return generateMarkupTm(grammar, grammarName, scopeName);
-  langName = scopeName.replace(/^source\./, '');
+  const langName = scopeName.replace(/^source\./, '');
   const repository: Record<string, TmPattern> = {};
   const topPatterns: { include: string }[] = [];
 

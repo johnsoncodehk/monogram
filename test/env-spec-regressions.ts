@@ -28,7 +28,7 @@ const check = (label: string, cond: boolean) => {
   const File = rule(() => [[BT]]);
   const grammar = defineGrammar({ name: 'backtick-string', tokens: { BT }, rules: { File }, entry: File });
 
-  const tm = generateTmLanguage(grammar, 'backtick-string');
+  const tm = generateTmLanguage(grammar);
   const btRepo = tm.repository.bt;
   check('tm: backtick token repository entry exists', !!btRepo);
   check('tm: backtick token begin delimiter is `', btRepo?.begin === '`');

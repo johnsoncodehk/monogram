@@ -61,7 +61,7 @@ const grammar = defineGrammar({
 });
 
 // ── TextMate generation ──
-const tm = generateTmLanguage(grammar, 'interpolation-metadata');
+const tm = generateTmLanguage(grammar);
 const dqTm = tm.repository.dq;
 check('tm: DQ repository entry exists', !!dqTm);
 check('tm: DQ ${ interpolation begin is the escaped literal', JSON.stringify(dqTm).includes('"begin":"\\\\$\\\\{"'));

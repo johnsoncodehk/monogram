@@ -17,7 +17,10 @@ if (!file) {
 
 const mod = await import(resolve(file));
 const grammar = mod.default as CstGrammar & { name?: string };
+// An unnamed grammar takes its name from the filename; set it on the grammar so the generators
+// have one source of truth (gen-tm reads `grammar.name` rather than taking a name parameter).
 const langName = grammar.name ?? basename(file, '.ts');
+grammar.name = langName;
 
 console.log(`Parsed ${file}:`);
 console.log(`  ${grammar.tokens.length} tokens`);
@@ -47,7 +50,7 @@ for (const r of grammar.rules) {
 }
 
 // Generate TextMate grammar
-const tm = generateTmLanguage(grammar, langName);
+const tm = generateTmLanguage(grammar);
 const outPath = join(dirname(file), `${langName}.tmLanguage.json`);
 writeFileSync(outPath, JSON.stringify(tm, null, 2) + '\n');
 console.log(`\n→ Generated ${outPath}`);
@@ -56,7 +59,7 @@ console.log(`\n→ Generated ${outPath}`);
 // `markup.inject` — one THIN-STUB file per concern, injected onto the host (HTML) scopes,
 // matching the official Vue topology (vue-directives.json / vue-interpolations.json). The
 // rule bodies live in the main grammar's repository; these files just include them.
-for (const injection of generateMarkupInjection(grammar, langName)) {
+for (const injection of generateMarkupInjection(grammar)) {
   const injPath = join(dirname(file), `${injection.scopeName}.tmLanguage.json`);
   writeFileSync(injPath, JSON.stringify(injection, null, 2) + '\n');
   console.log(`→ Generated ${injPath}`);
@@ -74,7 +77,7 @@ for (const alias of grammar.aliasScopes ?? []) {
 // A VS Code `contributes` snippet — packaging that wires all the generated grammars (main +
 // injections + aliases) into an editor. For Vue this is what makes the files a drop-in for
 // vuejs/language-tools'; emitted only when the grammar declares a `manifest`.
-const contributes = generateContributes(grammar, langName);
+const contributes = generateContributes(grammar);
 if (contributes) {
   const cPath = join(dirname(file), `${langName}.contributes.json`);
   writeFileSync(cPath, JSON.stringify({ contributes }, null, 2) + '\n');

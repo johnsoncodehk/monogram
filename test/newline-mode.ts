@@ -77,7 +77,7 @@ check('rejects a statement with no `=`', !accepts('A B'));
 check('rejects a statement with no value', !accepts('A='));
 
 // ── 3. TextMate: generates without error; the NEWLINE never() token yields no rule ──
-const tm = generateTmLanguage(g, 'envspec');
+const tm = generateTmLanguage(g);
 check('TextMate grammar has a non-empty repository', !!tm.repository && Object.keys(tm.repository).length > 0);
 check('TextMate grammar has patterns', Array.isArray(tm.patterns) && tm.patterns.length > 0);
 check('TextMate: NEWLINE is an invisible never-match (?!) rule (same convention as YAML indent tokens)', tm.repository.newline?.match === '(?!)');

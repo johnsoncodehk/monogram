@@ -73,7 +73,7 @@ const gj = defineGrammar({
   prec: [none('<', '>')],
   rules: { JType, JGeneric, JElement, JExpr, JProgram }, entry: JProgram,
 });
-const jbegin = generateTmLanguage(gj, 'minijsx').repository['jsx-self-closing-element-in-expression']?.begin ?? '';
+const jbegin = generateTmLanguage(gj).repository['jsx-self-closing-element-in-expression']?.begin ?? '';
 check('gen-tm JSX disambiguation skip-set quotes derived from grammar (~, not hardcoded \")',
   jbegin.includes('~[^~]*~') && !jbegin.includes('"[^"]*"') && !jbegin.includes("'[^']*'"));
 
@@ -104,7 +104,7 @@ const ga = defineGrammar({
   scopes: { 'storage.type.function': ['fn'] },  // so `fn` is a detected declaration keyword
   rules: { AType, ATP, AParam, ADecl, AArrow, ACall, AAttr, AElem, AExpr, AStmt, AProg }, entry: AProg,
 });
-const abegin = generateTmLanguage(ga, 'angjsx').repository['arrow-type-parameters']?.begin ?? '';
+const abegin = generateTmLanguage(ga).repository['arrow-type-parameters']?.begin ?? '';
 check('gen-tm arrow-param confirm parens derived from arrow rule (⟨⟩, not hardcoded `(`)',
   abegin.includes('⟨') && abegin.includes('⟩') && !abegin.includes('\\('));
 
@@ -138,7 +138,7 @@ const gc2 = defineGrammar({
 });
 // BOTH sides of the disambiguation must carry the DERIVED keyword: the positive
 // #arrow-type-parameters begin guard AND the inverse JSX-trigger carve-out.
-const ctm = generateTmLanguage(gc2, 'conjsx');
+const ctm = generateTmLanguage(gc2);
 const cbegin = ctm.repository['arrow-type-parameters']?.begin ?? '';
 const ccarve = ctm.repository['jsx-self-closing-element-in-expression']?.begin ?? '';
 const kwOk = (s: string) => s.includes('\\bsubtypeof\\b') && !s.includes('\\bextends\\b') && !s.includes('\\bis\\b');
