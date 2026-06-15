@@ -5081,6 +5081,87 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // key-colon/property, so the lookahead fails. The key arm matches up to the FIRST `: ` separator.
     const bsProp = '(?:[&!][^\\t\\n\\f\\r \\[\\]{},]*[\\t ]+)*';
     const bsVp = `(?:(?:${docAlt})[\\t ]+)?(?:${compactCls}[\\t ]+)*(?:[^\\n]*?${kvSep}[\\t ]+)?${bsProp}`;
+    // ── 2a⁗. COMPACT-NESTED block scalar — a column-CARRYING nested region (monogram#12 #14) ──
+    // A `|N`/`>N` (or auto-detect `|`) block scalar whose mapping sits inside a COMPACT block sequence
+    // (`-  -  abc: |2`) has a content floor of `dashPrefixWidth + N`, where `dashPrefixWidth` is the full
+    // width of the `(- )+` prefix. That width grows ONE column-group per dash, so a FLAT per-line floor
+    // (`\1[ \t]\3 {N}`, which captures only the FIRST dash's column) is correct only at depth 1 and
+    // over-paints every deeper comment/dedent line at depth ≥ 2 — the bug a single backref pair cannot
+    // express for arbitrary depth (a bounded d=2,3 just moves the wall to d=4).
+    //
+    // The fix is the maintained RedCMD YAML grammar's shape: each `- ` opens its OWN `\G`-anchored child
+    // region that re-asserts (and CONSUMES) its level's indentation each line, so the rule stack carries
+    // the column down through arbitrary nesting and the block scalar's floor is expressed RELATIVE to the
+    // innermost level's advanced `\G` (additive over the enclosing columns) rather than an absolute
+    // per-line formula. Unlike the §2c #block-sequence (which stays zero-width on continuation lines so a
+    // nested level can reclaim its own sibling), THIS region's value is a single block scalar — there are
+    // no per-level siblings to reclaim — so its `while` CONSUMES `\1[ \t]\3` (this level's indent + the
+    // dash's own column + the run after the dash) each line, advancing `\G` to exactly `dashPrefixWidth`
+    // before the innermost latch runs. Portable Oniguruma only (no `{\N}` backref-as-count, no
+    // variable-length lookbehind): the dash level is `\G`-relative and self-recursive (one level per
+    // dash), and the explicit-N latch uses a LITERAL `{N}` floor (one region per digit, as §2a‴).
+    //
+    // The dash level opens ONLY on a real block-scalar header — `(?:dash )*… key: … |/> (#|$)` — so a
+    // plain compact nest (`- - a`, `- - k: v`) never matches it and still falls to §2c #block-sequence.
+    // The level body self-includes (deeper dashes); its `bsHeaderIncs` scope the inline `key:`/anchor/tag
+    // on the header line FIRST (they match further LEFT than the latch, which is not `\G`-anchored), so by
+    // the time the cursor reaches the introducer the latch opens there; and #comment handles a dedented
+    // comment line (after the consuming `while` strips this level's indent, a line shallower than the
+    // content floor is a real comment).
+    const seqDash = detectBlockSequence(grammar)?.indicator;
+    const seqDashRe = seqDash ? escapeRegex(seqDash) : '';
+    // The leading-indicator class for the header lookahead (`-`/`?`): a compact item may be preceded by
+    // further sequence dashes or an explicit-key `?` before the `key: |` (`- ? k: |`). Derived from the
+    // compact indicators, same as the value-prefix elsewhere; falls back to the dash alone.
+    const seqLeadCls = (ind.compactIndicators ?? []).length ? compactCls : `[${seqDashRe}]`;
+    // The header lookahead a dash level requires: optional further compact indicators, then a key + `:`
+    // separator + optional node properties + the block-scalar introducer (auto-detect `intro`, or the
+    // explicit `introClass${bsDigitAlt(n)}`), then a blank/comment rest-of-line.
+    const seqHeader = (header: string) =>
+      `(?=(?:${seqLeadCls}[\\t ]+)*[^\\n]*?${kvSep}[\\t ]+${bsProp}${header}[\\t ]*(?:#|$))`;
+    // The innermost latch — IDENTICAL in shape to `bsIntroRule`: a whitespace-only `[\t ]*` lead-in (NOT
+    // `\G`-anchored) so it matches the `|`/`>` introducer AFTER `bsHeaderIncs` have scoped the inline
+    // header (`key:`/anchor/tag). Two flaws of a `\G`-anchored skip the no-`\G` form avoids: a `\G[^…]*`
+    // skip SWALLOWS `key:` as unscoped region body, and a `\G[\t ]*` (with `\G`) never fires at all,
+    // because after a sub-match (`#key`/`#punctuation`) vscode-textmate does NOT re-anchor `\G` to the
+    // post-sub-match position. Without `\G` the latch competes by LEFTMOST: `#key`/`#punctuation` (and a
+    // deeper `#selfKey` dash, which IS `\G`-anchored at the line start) all match further left, so the
+    // latch only wins once the cursor reaches the introducer. AUTO-DETECT (`intro`) runs the funky body
+    // (floors at the first content line, relative to the consuming `while`'s advanced `\G`); EXPLICIT
+    // (`|N`) uses a LITERAL `{N}` floor — ` {N}` admits a body line at exactly the floor (deeper/at-floor
+    // is content), `[\t ]*$` keeps blanks, and a SHALLOWER line (a dedented comment/sibling) releases it.
+    const seqLatchAuto = {
+      begin: `[\\t ]*(${intro})(?=[\\t ]*(?:#|$))([\\t ]*.*)`,
+      beginCaptures: { '1': { name: bsIndicator }, '2': { patterns: commentIncs } },
+      while: '\\G',
+      patterns: funkyBody(bsContent),
+    };
+    const seqLatchExplicit = (n: number) => ({
+      begin: `[\\t ]*(${introClass}${bsDigitAlt(n)})(?=[\\t ]*(?:#|$))([\\t ]*.*)`,
+      beginCaptures: { '1': { name: bsIndicator }, '2': { patterns: commentIncs } },
+      while: `\\G(?> {${n}}(?=[\\t ]|[\\t ]*${cmtLit}?)|[\\t ]*$)`,
+      patterns: [{ begin: '$', while: '\\G', contentName: bsContent }],
+    });
+    // EVERY compact-sequence block-scalar level carries the FULL latch set, because a single `- ` entry's
+    // mapping can mix indicators across its keys (`- aaa: |2` … `  bbb: |` — the §2a⁗ regression scope-gap
+    // caught: a per-indicator region opened by `|2` had only the `|2` latch, so the sibling `bbb: |`
+    // auto-scalar found no latch and fell to meta.stream). The EXPLICIT `|N` latches (digit 1-9) are
+    // listed FIRST so a `|N` key takes the precise `{N}` floor; the AUTO latch is the fallback for a plain
+    // `|`/`>`/`|-` (whose floor auto-detects from the first body line). Each latch keys on the block
+    // scalar's OWN indicator, independent of which key opened the enclosing dash level.
+    const seqLatches = [...Array.from({ length: 9 }, (_, i) => seqLatchExplicit(i + 1)), seqLatchAuto];
+    // The consuming dash-level region: `\G`-anchored (nests via the meta.stream `\G` re-anchor), opens on
+    // one compact dash whose line carries a block-scalar header, CONSUMES `\1[ \t]\3` each line (so `\G`
+    // advances by this level's width), and its body self-includes (deeper dash) + every latch + header
+    // includes + #comment. `selfKey` is its own repository key (for the self-include). The opener `header`
+    // is the AUTO `intro` (it admits `|`/`>`/`|N`), so ONE region handles all indicators; the body's
+    // ordered latches pick the right floor per key.
+    const emitSeqBlockScalar = (selfKey: string, header: string, latches: TmPattern[]): TmPattern => ({
+      begin: `\\G( *+)(${seqDashRe})([\\t ]+)${seqHeader(header)}`,
+      beginCaptures: { '2': { name: `punctuation.${langName}` } },
+      while: '\\G(?>\\1[\\t ]\\3|[\\t ]*$)',
+      patterns: [{ include: `#${selfKey}` }, ...latches, ...bsHeaderIncs, ...commentIncs],
+    });
     // Expose the introducer / inner-rule / header-includes to §2b (the `? |` explicit-key variant).
     bsIntro = intro;
     bsFunkyIntroRule = bsIntroRule;
@@ -5121,17 +5202,14 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       };
       topPatterns.push({ include: `#${bsKey}-doc` });
     }
-    // Sequence entry whose mapping VALUE is the block scalar (`- a: |` … `  b:`): bound siblings at the
-    // KEY column, not the dash column, else the next entry key is swallowed. The begin consumes the
-    // leading indent `\1` AND the dash + its trailing spaces `\3`, and the bound `\1[ \t]\3[ \t]` is
-    // one column past the key. A pure-space backref (`\1`, `\3`) standing in for the dash column keeps
-    // it portable (no literal `- ` backref, which would never match space-indented body lines).
-    repository[`${bsKey}-seq`] = emitIndentRegion({
-      lookahead: `(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+${bsProp}${intro}[\\t ]*(?:#|$))`,
-      beginCaptures: { '2': { name: `punctuation.${langName}` } },
-      cont: '\\1[ \\t]\\3[ \\t]',
-      patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
-    });
+    // Sequence entry whose mapping VALUE is a block scalar (`- a: |` / `- a: |N` … `  b: …`): the §2a⁗
+    // consuming dash-level region. Each `- ` opens a `\G`-relative child carrying its column, so a COMPACT
+    // nest (`-  -  a: |`) accumulates the correct content indent through the recursion (the flat
+    // `\1[ \t]\3[ \t]`/`\1[ \t]\3 {N}` floors it replaces counted only ONE dash → over-painted depth ≥ 2,
+    // monogram#12 #14). ONE region opens on the AUTO `intro` (admits `|`/`>`/`|N`) and its body carries
+    // ALL latches (`seqLatches`: explicit `{N}` floors + auto fallback), so every key of the entry's
+    // mapping — even with mixed indicators — takes the right floor. Self-includes `#${bsKey}-seq`.
+    repository[`${bsKey}-seq`] = emitSeqBlockScalar(`${bsKey}-seq`, intro, seqLatches);
     topPatterns.push({ include: `#${bsKey}-seq` });
 
     // ── 2a‴. EXPLICIT-indent block scalars (`|N` / `>N`, monogram#12 #10) ──
@@ -5146,9 +5224,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // + an inner introducer rule that opens the body at the header EOL); only two things change: the
     // `while` bound is `\1 {N}` (parent+N) instead of `\1[ \t]` (parent+1), and the inner rule paints
     // the body via `contentName` instead of the funky auto-detect (the floor is already known). Emitted
-    // for digits 1–9 in both value position (`key: |N`, nested, and doc-root `|N` / `--- |N` — `bsVp`
-    // admits the optional `---` / key / properties) and sequence position (`- a: |N`, whose floor adds
-    // the dash column via `\3` — same as `-seq`). Ranked above the auto-detect variants (scopeOrder).
+    // for digits 1–9 in VALUE position (`key: |N`, nested, and doc-root `|N` / `--- |N` — `bsVp` admits
+    // the optional `---` / key / properties). The SEQUENCE-position explicit floor (`- a: |N`) is no
+    // longer a separate region: it is the `seqLatchExplicit(n)` latch carried inside the unified §2a⁗
+    // `${bsKey}-seq` region above. Ranked above the auto-detect value variant (scopeOrder).
     for (let n = 1; n <= 9; n++) {
       repository[`${bsKey}-explicit-${n}`] = emitIndentRegion({
         lookahead: `(?=${bsVp}${introClass}${bsDigitAlt(n)}[\\t ]*(?:#|$))`,
@@ -5156,13 +5235,6 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         patterns: [bsExplicitIntroRule(n), ...bsHeaderIncs],
       });
       topPatterns.push({ include: `#${bsKey}-explicit-${n}` });
-      repository[`${bsKey}-explicit-seq-${n}`] = emitIndentRegion({
-        lookahead: `(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+${bsProp}${introClass}${bsDigitAlt(n)}[\\t ]*(?:#|$))`,
-        beginCaptures: { '2': { name: `punctuation.${langName}` } },
-        cont: `\\1[ \\t]\\3 {${n}}`,
-        patterns: [bsExplicitIntroRule(n), ...bsHeaderIncs],
-      });
-      topPatterns.push({ include: `#${bsKey}-explicit-seq-${n}` });
     }
 
     // ── 2a′. Multi-line PLAIN scalar continuation (monogram#12 §6/§7) ──
@@ -8128,12 +8200,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     //   • the plain `blockscalar` is the fallback (bare `|`, `key: |`, `--- |` with an indented body).
     const bsRank = grammar.indent?.blockScalar?.token.toLowerCase();
     // EXPLICIT-indent block scalars (`|N`, §2a‴) must out-rank their auto-detect counterparts so a
-    // `|N` header takes the digit-aware floor. The sequence variant (`- a: |N`) ranks above the value
-    // variant: a `- …: |N` line matches BOTH (the value `bsVp` admits a leading `- `), and only the
-    // sequence floor adds the dash column, so it must win. Both stay below `blockscalar-key` (0.55) so a
-    // `? |N` explicit-key block scalar still scopes its `?` as the map key. (`-explicit-seq-` is tested
-    // before `-explicit-` because the seq keys also start with the value prefix.)
-    if (bsRank && key.startsWith(`${bsRank}-explicit-seq-`)) return 0.45;
+    // `|N` header takes the digit-aware floor. The unified sequence region (`${bsRank}-seq`, §2a⁗) ranks
+    // above the value `-explicit-` variant: a `- …: |N` line matches BOTH (the value `bsVp` admits a
+    // leading `- `), and only the sequence region carries the dash column, so it must win. It stays below
+    // `blockscalar-key` (0.55) so a `? |N` explicit-key block scalar still scopes its `?` as the map key
+    // (and `-seq` requires a leading dash its lookahead forbids for `? |`, so they never truly collide).
     if (bsRank && key.startsWith(`${bsRank}-explicit-`)) return 0.57;
     if (bsRank && key === `${bsRank}-seq`) return 0.5;
     if (key === 'blockscalar-key') return 0.55;

@@ -96,7 +96,11 @@ export const cases: Issue12Case[] = [
 
   { id: '#14', title: 'a `#` line BELOW a `|2` block scalar\'s content indent is a comment, not block string',
     src: '-  -  abc:  |2  #comment\n         # string 9\n        # string 8\n       #comment 7\n      #comment 6\n     #comment 5\n    #comment 4\n', at: '#comment 7', col: 0,
-    should: (s) => isComment(s), why: 'explicit indent 2 fixes the content indent at parent+2 (column 8 here); `# string 9`/8 (indent 9/8) are body but `#comment 7`/6/5 (indent <8) are comments. ROOT CAUSE (a known limit, not a quick fix): the block-scalar content floor is a FLAT per-line regex `\\1[ \\t]\\3 {N}` that re-asserts ONE sequence dash as a whitespace column — a compact-NESTED sequence (`-  -  …: |N`) needs one backref pair PER dash, which a single regex cannot express for ARBITRARY depth (a bounded d=2,3 just moves the bug to d=4). The fix is the official grammar shape: nested column-carrying while-regions (each `- ` opens a child region carrying its column), a separate gen-tm YAML-derivation refactor', bug: true },
+    should: (s) => isComment(s), why: 'explicit indent 2 fixes the content indent at parent+2 (column 8 here); `# string 9`/8 (indent 9/8) are body but `#comment 7`/6/5 (indent <8) are comments. FIXED by gen-tm §2a⁗: a COMPACT-NESTED block scalar uses a column-CARRYING nested region (each `- ` opens a `\\G`-relative child that consumes its level\'s indent, so the content floor is additive over the enclosing dash columns — depth-general, verified d=1..8), replacing the flat `\\1[ \\t]\\3 {N}` floor that counted only ONE dash' },
+
+  { id: '#14b', title: 'a compact-seq mapping with MIXED block-scalar indicators scopes every key (`- a: |2` then sibling `b: |`)',
+    src: '- aaa: |2\n    xxx\n  bbb: |\n    yyy\n', at: 'bbb', col: 0,
+    should: (s) => /entity\.name\.tag/.test(s), why: 'the entry\'s mapping has two keys with DIFFERENT indicators (`|2` explicit, `|` auto, per yaml-test-suite 4WA9). The unified §2a⁗ seq region carries ALL latches (explicit |N + auto fallback), so the sibling key `bbb` and its `|` are scoped — not swallowed to meta.stream, which is what a per-indicator seq region did (it had only the `|2` latch, so the auto `|` sibling found none). Locks the regression scope-gap caught when the per-digit regions were unified' },
 
   { id: '#15', title: 'a `#` line at column 0 inside a root `|` block scalar is string content, not a comment',
     src: ' | # comment\n# string\n', at: '# string', col: 0,
