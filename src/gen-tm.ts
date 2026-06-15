@@ -69,11 +69,16 @@ function escapeForCharClass(s: string): string {
   return s.replace(/[\[\]\\^-]/g, '\\$&');
 }
 
-/** A CASE-INSENSITIVE, Onigmo-PORTABLE pattern matching `s` regardless of letter case.
- *  Each cased letter becomes a two-char class (`s` → `[Ss]`); other chars are escaped as
- *  usual. We do NOT use an inline `(?i)` flag — vscode-textmate/Onigmo does not honor inline
- *  case flags reliably (the tm-diagnostics gate rejects them). Used by the markup emitter so a
- *  raw-text element (`<SCRIPT>`/`<Script>`) matches the same set the lexer folds via `.toLowerCase()`. */
+/** An ASCII-CASE-INSENSITIVE pattern matching `s` regardless of letter case. Each cased letter
+ *  becomes a two-char class (`s` → `[Ss]`); other chars are escaped as usual. We keep the explicit
+ *  char-class rather than an inline `(?i:…)` flag for CORRECTNESS, not byte-thrift (issue #43): both
+ *  engines compile `(?i:)`, but `(?i:)` in (vscode-)oniguruma applies full UNICODE case-folding —
+ *  `(?i:style)` also matches `ſtyle` (U+017F LONG S ≡ s), `(?i:k)` matches the Kelvin sign U+212A, etc.
+ *  HTML tag-name matching is ASCII-case-insensitive ONLY (the spec ASCII-lowercases names, and our
+ *  lexer folds via `.toLowerCase()`, which leaves `ſ` alone), so `(?i:style)` would OVER-match a
+ *  non-style element `<ſtyle>` and wrongly embed CSS. The per-char class matches EXACTLY the set the
+ *  lexer folds (`<SCRIPT>`/`<Script>` but never `<ſcript>`) — keeping the highlighter consistent with
+ *  the parser by construction. Used by the markup emitter for every raw-text element/close tag. */
 function caseFoldLiteral(s: string): string {
   let out = '';
   for (const ch of s) {
@@ -999,7 +1004,8 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  *     the union fixes (`<T = [a, b],>`, `<T = (a, b),>` — bracket defaults WITH a
  *     trailing comma) already work WITHOUT it, and the fn-type default
  *     `<T = (a: number) => b,>` is missed by a DIFFERENT mechanism (the `>` inside
- *     `=>` ends `balancedAngles` early), which this skip does not touch.
+ *     `=>` ends the top-level type-param head-scan early, so its trailing comma is
+ *     unreachable), which this skip does not touch.
  *
  *     Why the union regresses: the disambiguation's "top-level comma ⇒ arrow"
  *     heuristic is itself an approximation of tsc's rule (tsc disambiguates a
@@ -1035,10 +1041,8 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  *     would BROADEN this regex; the curated tail stays literal on purpose.
  */
 interface JsxDisambigDelims {
-  topComma: string;        // top-level-comma scan body: `(?:…opaque…)*,`
   topTypeParam: string;    // "is a type-param list" body: top-level comma OR constraint keyword
-  balancedAngles: string;  // recursive balanced `<…>` named group `(?<B>…)`
-  arrowParamShape: string; // the arrow-shaped `(` confirm after `>`
+  arrowEndConfirm: string; // DEPTH-INDEPENDENT "…> ( arrow-params" end-confirm (no `\g<>`)
 }
 
 /**
@@ -1113,7 +1117,7 @@ function detectTypeParamConstraintKeywords(grammar: CstGrammar, typeArgRule: str
   return [...keywords];
 }
 
-function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null, typeArgRule: string | null): JsxDisambigDelims {
+function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null, typeArgRule: string | null, closeTok: string | null): JsxDisambigDelims {
   // `<` / `>` from the prec table — the generic delimiters. detectAngleBracketAmbiguity
   // (the only caller's gate) already proved this grammar declares BOTH as prec
   // operators, so reading them back here sources the chars from the grammar's own
@@ -1146,8 +1150,6 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   const constraintKeywords = detectTypeParamConstraintKeywords(grammar, typeArgRule);
   const constraintAlts = constraintKeywords.map(kw => `${skip}\\b${escapeRegex(kw)}\\b\\s*(?!=)`);
   const topTypeParam = constraintAlts.length ? `(?:${topComma}|${constraintAlts.join('|')})` : topComma;
-  // Recursive balanced `<…>` (Oniguruma named-group recursion).
-  const balancedAngles = `(?<B>[^${oc}]*(?:${escapeRegex(open)}\\g<B>${escapeRegex(close)}[^${oc}]*)*)`;
   // Arrow-shaped param list after `>`: the `(`/`)` are the arrow rule's own param
   // delimiters (detectArrowParamDelims); the tail is the curated first-token shapes
   // (see doc comment for why the parens derive but the tail stays literal). The
@@ -1155,7 +1157,33 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   // confirm — so both read from the same derived delimiter.
   const [pOpen, pClose] = paramParens ? [paramParens.open, paramParens.close] : ['(', ')'];
   const arrowParamShape = `${escapeRegex(pOpen)}\\s*(?:${escapeRegex(pClose)}|\\.\\.\\.|${identRegex}\\s*[:,?${escapeForCharClass(pClose)}]|[{\\[]|$)`;
-  return { topComma, topTypeParam, balancedAngles, arrowParamShape };
+  // The "this `<…>` closes on a `>` that opens an arrow param list" end-confirm.
+  //
+  // The OLD form balanced the WHOLE `<…>` span with an Oniguruma `\g<>` subroutine
+  // (`(?<B>[^<>]*(?:<\g<B>>[^<>]*)*)>arrowParamShape`) to land on the MATCHING `>` and
+  // check its follow. Oniguruma caps `\g<>` recursion at ~20 levels, so a generic
+  // arrow nested ≥20 deep (`<T extends W0<W1<…<X>…>>(p) =>`) FLIPPED to a JSX element
+  // — a depth cliff with no analogue in the disambiguation question (the comma /
+  // constraint signal that proves "type-param, not tag" lives at the HEAD, depth 0).
+  //
+  // Depth-INDEPENDENT replacement: the head signal (`topTypeParam`) already separates a
+  // type-param list from a tag; this confirm only needs SOME later `>` followed by an
+  // arrow-shaped `(`, found by a NON-recursive scan. The scan must not wander across a
+  // JSX close-tag (`</`) into a following call — `<Foo extends>x</Foo>(z)` (a boolean
+  // `extends` attr that `topTypeParam` matches, then an unrelated `(z)`) is NOT a
+  // generic arrow, and the old balanced form rejected it because the `>` after `extends`
+  // is followed by `x`, not `(`. Bounding the scan to stop at the close-tag `</` (which
+  // a real type-param region can never contain — a type cannot begin with `/`) recovers
+  // that discipline without recursion. The close glyph is the grammar's own JSX
+  // close-token (detectJsx's `closeTok`), not a hardcoded literal; a non-JSX grammar
+  // passes null and the bound degrades to the plain non-recursive scan (its source has
+  // no `</`, so the bound is a no-op there anyway). This is STRICTLY ≥ the balanced
+  // form's power: it additionally accepts arrows whose constraint/default contains an
+  // inner `=>`/`(` (`<T extends Foo<() => R>>(p) =>`), which the old `[^<>]`-balance
+  // mis-rejected (a known false-negative, see the doc comment above).
+  const closeGuard = closeTok ? `(?:(?!${escapeRegex(closeTok)})[^${escapeForCharClass(close)}])` : `[^${escapeForCharClass(close)}]`;
+  const arrowEndConfirm = `${closeGuard}*(?:${escapeRegex(close)}${closeGuard}*)*?${escapeRegex(close)}\\s*${arrowParamShape}`;
+  return { topTypeParam, arrowEndConfirm };
 }
 
 /**
@@ -1296,11 +1324,12 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   // Only a TS-family JSX grammar (one whose `<…>` is also a generic delimiter, so
   // #arrow-type-parameters exists) needs the carve-out. A plain JS `.jsx` grammar
   // has no generics, so `disambig` is null there and the guard stays empty — its
-  // output is unchanged. The building-blocks (top-level type-param scan, balanced-angle,
-  // arrow-param-shape) are derived from the grammar by jsxDisambigDelims and SHARED
-  // with #arrow-type-parameters' positive guard so the two can never drift.
+  // output is unchanged. The building-blocks (top-level type-param scan, the
+  // depth-independent arrow end-confirm) are derived from the grammar by
+  // jsxDisambigDelims and SHARED with #arrow-type-parameters' positive guard so the
+  // two can never drift.
   const notArrowTypeParams = disambig
-    ? `(?!<(?=${disambig.topTypeParam})(?=${disambig.balancedAngles}>\\s*${disambig.arrowParamShape}))`
+    ? `(?!<(?=${disambig.topTypeParam})(?=${disambig.arrowEndConfirm}))`
     : '';
 
   // Expression-start lookbehind (JSX `<` is never preceded by a value operand).
@@ -1699,42 +1728,6 @@ function buildConfirmPattern(tokens: string[]): string {
   return `[${tokens.map(escapeRegex).join('')}]`;
 }
 
-/**
- * Check if a rule has a recursive generic alternative:
- *   Ident '<' sep(Self, ',') '>'
- */
-function hasRecursiveGeneric(expr: RuleExpr, selfName: string): boolean {
-  if (expr.type === 'alt') {
-    return expr.items.some(item => hasRecursiveGeneric(item, selfName));
-  }
-  if (expr.type === 'seq') {
-    for (let i = 0; i < expr.items.length - 2; i++) {
-      if (expr.items[i].type === 'literal' && (expr.items[i] as { value: string }).value === '<' &&
-          expr.items[i + 1].type === 'sep') {
-        const sep = expr.items[i + 1] as { type: 'sep'; element: RuleExpr; delimiter: string };
-        if (sep.element.type === 'ref' && sep.element.name === selfName &&
-            expr.items[i + 2]?.type === 'literal' && (expr.items[i + 2] as { value: string }).value === '>') {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * Build Oniguruma recursive regex for type arguments.
- *
- * From:  Type = Ident | Ident '<' sep(Type, ',') '>'
- * Build: (?<T>IDENT(?:\s*<\s*\g<T>(?:\s*,\s*\g<T>)*\s*>)?)
- */
-function buildRecursiveTypeRegex(grammar: CstGrammar, typeName: string, identRegex: string): string {
-  const typeRule = grammar.rules.find(r => r.name === typeName);
-  if (typeRule && hasRecursiveGeneric(typeRule.body, typeName)) {
-    return `(?<T>${identRegex}(?:\\s*<\\s*\\g<T>(?:\\s*,\\s*\\g<T>)*\\s*>)?)`;
-  }
-  return `(?<T>${identRegex})`;
-}
 
 /**
  * Detect an angle-bracket TYPE-ASSERTION (cast) alternative:
@@ -1785,9 +1778,27 @@ function generateAngleBracketPatterns(
   identRegex: string,
   identToken: TokenDecl | undefined,
 ): Record<string, TmPattern> {
-  // Build recursive type regex
-  const typeRegex = buildRecursiveTypeRegex(grammar, ambiguity.innerRuleName, identRegex);
   const confirm = buildConfirmPattern(ambiguity.confirmTokens);
+
+  // DEPTH-INDEPENDENT single-line type-arg confirm — a flat char class that accepts the
+  // SAME single-line content the old recursive type regex did (nested IDENT generics with
+  // `,` separators), but at ANY nesting depth. The old confirm used an Oniguruma `\g<T>`
+  // subroutine (buildRecursiveTypeRegex) to recurse into nested `<…>`, and Oniguruma caps
+  // `\g<>` recursion at ~20 levels: a generic call nested ≥20 deep (`f<W0<W1<…<X>…>>(0)`)
+  // then failed this confirm lookahead, fell through to the speculative
+  // #generic-call-multiline scope, and the outer `<` lost its `meta.generic`/typeparameters
+  // scope (a depth cliff). The confirm only needs to find a same-line `>` that closes onto
+  // the call `(`-confirm — NOT to build the parse tree (the begin/end region + #type-inner
+  // do that) — so a flat class star suffices and has no recursion ceiling. Its alphabet is
+  // the recursion-free part of the type regex: identifier chars (`\w`, the token's extra
+  // ident chars, and the Unicode id classes unicodeWidenIdentPattern also adds), the angle
+  // brackets, the type-param separator, and whitespace. Expression-only operators
+  // (`*`, `+`, `&&`, …) are NOT in the set, so `a<b*c>(d)` still reads as a comparison —
+  // discrimination identical to the recursive form (verified), only the depth cap is gone.
+  const idExtra = identExtraClass(identToken);
+  const sepClass = escapeForCharClass(ambiguity.separator);
+  const typeArgScanClass = `[\\w${idExtra}${UNICODE_ID_CONTINUE}<>${sepClass}\\s]`;
+  const typeArgConfirm = `${typeArgScanClass}*>`;
 
   // Lookbehind: generic '<' must follow identifier / ] / )
   // Derives extra ident chars (e.g. $) from the Ident token IR.
@@ -1842,7 +1853,7 @@ function generateAngleBracketPatterns(
   // ── Layer 1: single-line generic call ──
   result['generic-call'] = {
     name: `meta.generic.${langName}`,
-    begin: `${lookbehind}(<)(?=\\s*${typeRegex}\\s*(?:,\\s*\\g<T>)*\\s*>\\s*${confirm})`,
+    begin: `${lookbehind}(<)(?=\\s*${typeArgConfirm}\\s*${confirm})`,
     beginCaptures: { '1': { name: tpBegin } },
     end: '(>)',
     endCaptures: { '1': { name: tpEnd } },
@@ -1852,7 +1863,7 @@ function generateAngleBracketPatterns(
   // ── Layer 2: EOL generic (> at end of line, confirm on next) ──
   result['generic-call-eol'] = {
     name: `meta.generic.${langName}`,
-    begin: `${lookbehind}(<)(?=\\s*${typeRegex}\\s*(?:,\\s*\\g<T>)*\\s*>\\s*$)`,
+    begin: `${lookbehind}(<)(?=\\s*${typeArgConfirm}\\s*$)`,
     beginCaptures: { '1': { name: tpBegin } },
     end: '(>)',
     endCaptures: { '1': { name: tpEnd } },
@@ -1951,11 +1962,16 @@ function generateTypeCastPattern(
   // Casts after a keyword that ends in a letter (`return <T>x`) stay a comparison
   // here — rare, and never a regression (they were unhighlighted before too).
   const notAfter = notAfterValueWithOptionalWhitespace('\\w$)\\]');
-  // Type-shaped, balanced-angle inner content (kept to type characters so an
-  // ordinary `a < b > c` comparison — whose operands are arbitrary expressions —
-  // is not swallowed). `\g<TC>` recurses for nested generics like `<Array<T>>`.
-  const typeChars = '[\\w$.,\\[\\]\\s|&]';
-  const typeContent = `(?<TC>${typeChars}*(?:<\\g<TC>>${typeChars}*)*)`;
+  // Type-shaped inner content, scanned FLAT to the closer (no `\g<>` recursion → no Oniguruma
+  // ~20-level subroutine cap, which formerly FLIPPED a cast over a d>=20 nested generic to a
+  // comparison). The begin only needs to FIND the `>operand` closer, not balance the type —
+  // #type-inner parses the body — so a flat class star over the type alphabet (now including the
+  // angle brackets so `<Array<Set<…>>>` is scanned, not balanced) suffices. Expression-only
+  // operators (`*`, `+`, …) stay OUT of the class, so `a < b * c > d` is not swallowed —
+  // discrimination identical to the recursive form. Mirrors the generic-call/arrow flat-confirm
+  // migration (typeArgConfirm / arrowEndConfirm); the cast was the one confirmer it never reached.
+  const typeChars = '[\\w$.,\\[\\]\\s|&<>]';
+  const typeContent = `${typeChars}*`;
   // Content must START with a type-start char (identifier / `(` paren-type /
   // `{` object-type / `[` tuple-type) — never a digit or operator.
   const typeStart = `[[:alpha:]_$({\\[]`;
@@ -3889,16 +3905,25 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   // Capture-embed: the start-tag attributes (`lang="ts"`, …) are re-tokenized by #attribute
   // instead of being lumped; the body is re-tokenized by the embedded grammar.
   const attrCap = { patterns: [{ include: '#attribute' }] };
-  const emitRaw = (key: string, tag: string, embed: string, langVal?: string) => {
+  const emitRaw = (key: string, tag: string, embed: string, langVal?: string, forceClose = true) => {
     // HTML tag names are CASE-INSENSITIVE; the lexer folds case (`.toLowerCase()`), so the
     // raw-text open/close PATTERNS must match `<SCRIPT>`/`<Script>` too — else the body falls
     // through to the generic #tag rule and the highlighter invents tags inside it (bug). We
     // case-fold the tag literal per-character (`script`→`[Ss][Cc]…`, Onigmo-portable, no `(?i)`)
     // for every MATCH; repository keys and meta `name`s stay the canonical lowercase `tag`.
     const tagRe = caseFoldLiteral(tag);
+    // The `lang="<val>"` matcher CAPTURES the open quote and BACK-REFERENCES it for the close, so
+    // the two quotes MUST be the same char — a malformed `lang="ts'` / `lang='ts"` is NOT a match
+    // (two independent `["']` classes would accept the mismatched pair). The quote opens its OWN
+    // capture group right INSIDE the `attrs` group (always group 3, after `<`=1 and the name=2), so
+    // the quote is group 4 (= `quoteGroup`) and every capture DOWNSTREAM of `attrs` shifts by 1 when
+    // a langVal is present — `g(n)` renumbers those maps relative to that offset rather than hardcoding.
+    const quoteGroup = 4;                                                     // (`<`)1 (name)2 (attrs)3 (quote)4
+    const extra = langVal ? 1 : 0;
     const attrs = langVal
-      ? `([^${ccClose}]*\\blang\\s*=\\s*["']${langVal}["'][^${ccClose}]*)`   // start tag carries lang="<val>"
+      ? `([^${ccClose}]*\\blang\\s*=\\s*(["'])${langVal}\\${quoteGroup}[^${ccClose}]*)`   // start tag carries lang="<val>" (quotes back-ref'd)
       : `([^${ccClose}]*)`;
+    const g = (n: number) => String(n + (n >= quoteGroup ? extra : 0));      // capture index after the `attrs`(3)+quote(4) group shifts by `extra`
     const bodyCap = { name: embed, patterns: [{ include: embed }] };          // capture re-tokenized as the embed
     // (1) single-line `<tag …>BODY</tag>` — one regex bounds the body at `</tag>` (so even
     //     a mid-construct embed can't escape), body + attrs re-tokenized via capture-embed.
@@ -3906,9 +3931,9 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
       name: `meta.${tag}.${L}`,
       match: `(${o})(${tagRe})\\b${attrs}(${c})(.*?)(${o}${slash})(${tagRe})\\s*(${c})`,
       captures: {
-        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose },
-        '5': bodyCap,
-        '6': { name: sOpen }, '7': { name: sName }, '8': { name: sClose },
+        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, [g(4)]: { name: sClose },
+        [g(5)]: bodyCap,
+        [g(6)]: { name: sOpen }, [g(7)]: { name: sName }, [g(8)]: { name: sClose },
       },
     };
     // (1b) single-line OPEN+BODY then `</tag` whose `>` is DEFERRED to a later line — the whole
@@ -3926,73 +3951,108 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
       name: `meta.${tag}.${L}`,
       begin: `(${o})(${tagRe})\\b${attrs}(${c})(.*?)(${o}${slash})(${tagRe})(?=\\s*$)`,
       beginCaptures: {
-        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose },
-        '5': bodyCap, '6': { name: sOpen }, '7': { name: sName },
+        '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, [g(4)]: { name: sClose },
+        [g(5)]: bodyCap, [g(6)]: { name: sOpen }, [g(7)]: { name: sName },
       },
-      end: `(${c})`, endCaptures: { '1': { name: sClose } },
-    };
-    // (2) multi-line `begin/while` — the `while` re-checks each line and DROPS the region
-    //     (popping any open embedded region) at the first line CONTAINING `</tag>` (the `.*`
-    //     reaches it anywhere on the line, not just `^\s*` at the start). So the close wins even
-    //     MID-LINE: a `</script>` after a JS `//` comment (tmbundle#85) — or inside a JS string —
-    //     still closes the element, matching parse5 / the HTML tokenizer, which close at the FIRST
-    //     `</script>` regardless of embedded-language context. The embed stays ONE continuous
-    //     region across lines (the `while` only TESTS, never re-anchors), so a multi-line template
-    //     literal / block comment in the body is unbroken; only a line that actually contains the
-    //     close tag drops. The close-tag test is `</tag` then ws / `>` / END-OF-LINE (`$`): the EOL
-    //     alternative drops a line whose `</tag` has its `>` DEFERRED to a later line (tmbundle#97),
-    //     so that line leaves the embed and the sibling `#<key>-close-ml` re-embeds its pre-close
-    //     content. CRUCIALLY the line-start drop FORCE-UNWINDS a still-open embedded region
-    //     (e.g. a trailing unterminated `type T =` whose body would otherwise read `</script>` as
-    //     `< script >` type-args) — an `end:(?=</tag)` lookahead can NOT do this (the innermost open
-    //     embed region's patterns are evaluated before any outer `end`), so the `while` is load-
-    //     bearing here (#5538/#2060, #65/#74). The dropped close LINE's pre-close content is then
-    //     re-embedded by the sibling `#<key>-close` rule below. The close tag is matched by host #tag.
-    repository[key] = {
-      name: `meta.${tag}.${L}`,
-      begin: `(${o})(${tagRe})\\b${attrs}(${c})`,
-      beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, '4': { name: sClose } },
-      while: `^(?!.*${o}${slash}${tagRe}(?:[\\s${ccClose}]|$))`,
-      contentName: embed,
-      patterns: [{ include: embed }],
-    };
-    // (3) CLOSE LINE with leading content — `BODY</tag>` where BODY shares the close's line (the
-    //     open tag was on an earlier line, so this is NOT the `-inline` single-line shape; and the
-    //     `begin/while` above DROPS this line because it contains the close). Without this, that
-    //     pre-close BODY falls to plain host text (the #2060 / #5538 same-line-close gap). Here it is
-    //     re-tokenized as a BOUNDED capture-embed: BODY is captured up to the close and run through
-    //     the embed in ISOLATION, so the embed's own greedy line-comment / regex / unterminated
-    //     construct physically cannot reach across the close — the close stays clean tag punctuation
-    //     AND its preceding code is highlighted. The BODY needs ≥1 char before the close, so a BARE
-    //     close line (just `</tag>`) does NOT match here — it stays on the `begin/while` force-unwind
-    //     path (preserving #5538's open-type unwind). The BODY is a tempered-greedy run
-    //     `(?:(?!<tag\b).)+?` — any char that does NOT begin a `<tag` OPEN, so the rule cannot fire on
-    //     a single-line `<tag>…</tag>` (that whole line is the `-inline` shape, claimed earlier) nor
-    //     swallow a following block's open tag, yet a bare `<` in the body (`a < b`) is fine. Agnostic:
-    //     keys only on the tag + `<`/`/`/`>` delimiters (DATA), never on the embed's syntax.
-    repository[`${key}-close`] = {
-      name: `meta.${tag}.${L}`,
-      match: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})\\s*(${c})`,
-      captures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName }, '5': { name: sClose } },
-    };
-    // (3b) ORPHAN CLOSE LINE whose `>` is DEFERRED — `BODY</tag` ending the line, the `>` on a later
-    //     one (the case-(3) sibling but with the close `>` split off, the tmbundle#97 deferred-`>`
-    //     shape after the body sits on its own line). The widened `begin/while` (2) drops this line
-    //     (its `</tag` is at end-of-line), so it lands here: a bounded `begin/end` that capture-embeds
-    //     BODY (so the embed can't reach the close), opens at `</tag` with only whitespace after it
-    //     (`(?=\s*$)` → the `>` is deferred), and `end`s at the deferred `>`. Same tempered-greedy
-    //     BODY run as (3) so it can't swallow a following block's `<tag` OPEN; agnostic to the embed.
-    repository[`${key}-close-ml`] = {
-      name: `meta.${tag}.${L}`,
-      begin: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})(?=\\s*$)`,
-      beginCaptures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName } },
       end: `(${c})`, endCaptures: { '1': { name: sClose } },
     };
     top.push({ include: `#${key}-inline` });      // single-line first, then multi-line
     top.push({ include: `#${key}-inline-ml` });   // single-line open+body+</tag with a DEFERRED `>` (#97)
-    top.push({ include: `#${key}` });
-    top.push({ include: `#${key}-close` });        // orphan close line (BODY</tag>) — after the open-tag rules
-    top.push({ include: `#${key}-close-ml` });     // orphan close line with a DEFERRED `>` (#97)
+    const closeAhead = `${o}${slash}${tagRe}(?:[\\s${ccClose}]|$)`;       // `</tag` then ws / `>` / EOL (a DEFERRED `>` on a later line, tmbundle#97)
+    if (forceClose) {
+      // (2) multi-line `begin/while` — the `while` re-checks each line and DROPS the region
+      //     (popping any open embedded region) at the first line CONTAINING `</tag>` (the `.*`
+      //     reaches it anywhere on the line, not just `^\s*` at the start). So the close wins even
+      //     MID-LINE: a `</script>` after a JS `//` comment (tmbundle#85) — or inside a JS string —
+      //     still closes the element, matching parse5 / the HTML tokenizer, which close at the FIRST
+      //     `</script>` regardless of embedded-language context. The embed stays ONE continuous
+      //     region across lines (the `while` only TESTS, never re-anchors), so a multi-line template
+      //     literal / block comment in the body is unbroken; only a line that actually contains the
+      //     close tag drops. The close-tag test is `</tag` then ws / `>` / END-OF-LINE (`$`): the EOL
+      //     alternative drops a line whose `</tag` has its `>` DEFERRED to a later line (tmbundle#97),
+      //     so that line leaves the embed and the sibling `#<key>-close-ml` re-embeds its pre-close
+      //     content. CRUCIALLY the line-start drop FORCE-UNWINDS a still-open embedded region
+      //     (e.g. a trailing unterminated `type T =` whose body would otherwise read `</script>` as
+      //     `< script >` type-args) — an `end:(?=</tag)` lookahead can NOT do this (the innermost open
+      //     embed region's patterns are evaluated before any outer `end`), so the `while` is load-
+      //     bearing here (#5538/#2060, #65/#74). The dropped close LINE's pre-close content is then
+      //     re-embedded by the sibling `#<key>-close` rule below. The close tag is matched by host #tag.
+      //     This is the `forceClose` shape — for a body that can swallow the close mid-line (JS): it
+      //     CANNOT keep a non-first DIALECT's close-line content in its own dialect (the dropped line
+      //     leaves the region and lands on a lang-INDEPENDENT close rule — only the first fires). That
+      //     is the dual of #85: mid-line force-close OR dialect-correct close lines, not both. Script
+      //     takes force-close; a well-behaved embed (CSS) takes the `else` branch (dialect-correct).
+      repository[key] = {
+        name: `meta.${tag}.${L}`,
+        begin: `(${o})(${tagRe})\\b${attrs}(${c})`,
+        beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, [g(4)]: { name: sClose } },
+        while: `^(?!.*${closeAhead})`,
+        contentName: embed,
+        patterns: [{ include: embed }],
+      };
+      // (3) CLOSE LINE with leading content — `BODY</tag>` where BODY shares the close's line (the
+      //     open tag was on an earlier line, so this is NOT the `-inline` single-line shape; and the
+      //     `begin/while` above DROPS this line because it contains the close). Without this, that
+      //     pre-close BODY falls to plain host text (the #2060 / #5538 same-line-close gap). Here it is
+      //     re-tokenized as a BOUNDED capture-embed: BODY is captured up to the close and run through
+      //     the embed in ISOLATION, so the embed's own greedy line-comment / regex / unterminated
+      //     construct physically cannot reach across the close — the close stays clean tag punctuation
+      //     AND its preceding code is highlighted. The BODY needs ≥1 char before the close, so a BARE
+      //     close line (just `</tag>`) does NOT match here — it stays on the `begin/while` force-unwind
+      //     path (preserving #5538's open-type unwind). The BODY is a tempered-greedy run
+      //     `(?:(?!<tag\b).)+?` — any char that does NOT begin a `<tag` OPEN, so the rule cannot fire on
+      //     a single-line `<tag>…</tag>` (that whole line is the `-inline` shape, claimed earlier) nor
+      //     swallow a following block's open tag, yet a bare `<` in the body (`a < b`) is fine. Agnostic:
+      //     keys only on the tag + `<`/`/`/`>` delimiters (DATA), never on the embed's syntax.
+      top.push({ include: `#${key}` });
+      // The close-line rules (3)/(3b) key on the TAG ONLY (a close line carries no `lang=`), so emitting
+      // them per dialect yields byte-identical regex where only the first-included fires and the rest are
+      // dead (monogram#43 "will never match" / "all raw embedded languages"). Emit them ONCE — on the
+      // lang-less call (`langVal === undefined`), with the default embed — and skip them for every dialect.
+      if (langVal === undefined) {
+      repository[`${key}-close`] = {
+        name: `meta.${tag}.${L}`,
+        match: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})\\s*(${c})`,
+        captures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName }, '5': { name: sClose } },
+      };
+      // (3b) ORPHAN CLOSE LINE whose `>` is DEFERRED — `BODY</tag` ending the line, the `>` on a later
+      //     one (the case-(3) sibling but with the close `>` split off, the tmbundle#97 deferred-`>`
+      //     shape after the body sits on its own line). The widened `begin/while` (2) drops this line
+      //     (its `</tag` is at end-of-line), so it lands here: a bounded `begin/end` that capture-embeds
+      //     BODY (so the embed can't reach the close), opens at `</tag` with only whitespace after it
+      //     (`(?=\s*$)` → the `>` is deferred), and `end`s at the deferred `>`. Same tempered-greedy
+      //     BODY run as (3) so it can't swallow a following block's `<tag` OPEN; agnostic to the embed.
+      repository[`${key}-close-ml`] = {
+        name: `meta.${tag}.${L}`,
+        begin: `^(\\s*)((?:(?!${o}${tagRe}\\b).)+?)(${o}${slash})(${tagRe})(?=\\s*$)`,
+        beginCaptures: { '2': bodyCap, '3': { name: sOpen }, '4': { name: sName } },
+        end: `(${c})`, endCaptures: { '1': { name: sClose } },
+      };
+      top.push({ include: `#${key}-close` });        // orphan close line (BODY</tag>) — once per tag, lang-independent
+      top.push({ include: `#${key}-close-ml` });     // orphan close line with a DEFERRED `>` (#97)
+      }
+    } else {
+      // (2′) WELL-BEHAVED embed (no greedy construct can swallow the close, e.g. CSS) — a single
+      //     `begin/end` region with a LOOKAHEAD `end` that never CONSUMES the close tag. Because the
+      //     embed (`contentName`/`patterns`) stays active right up to `</tag`, a WITH-CONTENT close
+      //     line (`BODY</tag>`, the open tag on an earlier line) is tokenised by THIS region's embed —
+      //     so it keeps its own DIALECT (issue #43); the lang-independent top-level close rules of the
+      //     `forceClose` path (which only the first-listed dialect could win) are GONE. The `</tag`
+      //     punctuation is left for the host `#tag` rule. The lookahead `(?:[\s>]|$)` after `</tag`
+      //     also covers the deferred-`>` (#97) shape (the `$`/ws alternatives), so no separate close-ml
+      //     rule is needed. This is the official Vue grammar's `multi-line-style-tag-stuff` body shape,
+      //     generalised to the config delimiters. Safe ONLY for embeds that cannot force-close mid-line
+      //     (see `forceClose` doc on RawEmbed) — script keeps the `if` branch.
+      repository[key] = {
+        name: `meta.${tag}.${L}`,
+        begin: `(${o})(${tagRe})\\b${attrs}(${c})`,
+        beginCaptures: { '1': { name: sOpen }, '2': { name: sName }, '3': attrCap, [g(4)]: { name: sClose } },
+        end: `(?=${closeAhead})`,
+        contentName: embed,
+        patterns: [{ include: embed }],
+      };
+      top.push({ include: `#${key}` });
+    }
   };
   // Multi-line START TAG variant — `<script\n  lang="ts"\n>` (force-expand-multiline
   // formatting; vuejs/language-tools#3999). A TextMate `begin` is single-line, so the entries
@@ -4057,11 +4117,18 @@ function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: s
   for (const tag of m.rawText?.tags ?? []) {
     const spec = m.rawText!.embed?.[tag] ?? (tokScope(m.rawText!.token) ?? `source.${L}`);
     if (typeof spec === 'string') {
+      // A bare-string embed has no dialects (no per-dialect close collision) — keep the `begin/while`
+      // force-close shape (a single-blob `source.js`/`source.css` body still needs #85/#5538 fidelity).
       emitRaw(`raw-${tag}`, tag, spec);
     } else {
+      // Whether the embed can swallow the close mid-line (script) or is well-behaved (style). All of
+      // a tag's dialects share one verdict (the lang on the open tag selects scope, not close shape),
+      // so derive `forceClose` ONCE and pass it to every dialect's emit. Default false = dialect-correct
+      // close lines via lookahead-`end` (issue #43); script opts in to the `while` (RawEmbed.forceClose).
+      const forceClose = spec.forceClose ?? false;
       // lang-specific regions FIRST (they require the matching lang= attr), default LAST.
-      for (const [langVal, langEmbed] of Object.entries(spec.lang ?? {})) emitRaw(`raw-${tag}-${langVal}`, tag, langEmbed, langVal);
-      emitRaw(`raw-${tag}`, tag, spec.default);
+      for (const [langVal, langEmbed] of Object.entries(spec.lang ?? {})) emitRaw(`raw-${tag}-${langVal}`, tag, langEmbed, langVal, forceClose);
+      emitRaw(`raw-${tag}`, tag, spec.default, undefined, forceClose);
     }
     emitRawMultiline(tag, spec);   // multi-line start-tag variant (one per tag, all langs inside)
   }
@@ -4589,14 +4656,19 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // ── 1. Detect angle bracket ambiguity ──
   const angleBracket = detectAngleBracketAmbiguity(grammar);
   const angleBracketExclude = new Set(angleBracket ? ['<', '>'] : []);
+  // JSX/TSX dialect — detected here (ahead of its own section below) so its derived
+  // close-tag token (`</`) can bound the depth-independent generic-arrow end-confirm
+  // in jsxDisambigDelims. Null for a non-JSX grammar (no such token).
+  const jsx = detectJsx(grammar);
   // The `.tsx` generic-arrow ⇄ JSX-tag disambiguation building-blocks, derived ONCE
   // from the grammar's declarations (generic `<`/`>`, the `sep` `,`, the `string`
-  // quotes) and SHARED by both sides so they can't drift: #arrow-type-parameters'
-  // positive begin guard (below) and its inverse — the carve-out appended to the JSX
-  // expression-start trigger in generateJsxPatterns. Built only when `<…>` is a
-  // generic delimiter; null for a plain JS `.jsx` grammar (no generics).
+  // quotes, the JSX close-tag) and SHARED by both sides so they can't drift:
+  // #arrow-type-parameters' positive begin guard (below) and its inverse — the
+  // carve-out appended to the JSX expression-start trigger in generateJsxPatterns.
+  // Built only when `<…>` is a generic delimiter; null for a plain JS `.jsx` grammar
+  // (no generics).
   const angleDisambig = angleBracket
-    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar), angleBracket.innerRuleName)
+    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar), angleBracket.innerRuleName, jsx?.closeTok ?? null)
     : null;
 
   if (angleBracket) {
@@ -4621,11 +4693,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // comparison is added later in the ordering pass
   }
 
-  // ── 1a. Detect JSX/TSX dialect ──
+  // ── 1a. Emit JSX/TSX dialect patterns ──
   // Purely additive: emitted only when the grammar declares the JSX delimiter
-  // tokens (`/>` and `</`) plus an element production. A non-JSX grammar yields
-  // null here, so no JSX patterns are emitted and its output is unchanged.
-  const jsx = detectJsx(grammar);
+  // tokens (`/>` and `</`) plus an element production (detected as `jsx` above). A
+  // non-JSX grammar yields null, so no JSX patterns are emitted and output is unchanged.
   // Token names whose scoping is OWNED by the JSX patterns (the `/>` and `</`
   // delimiters are scoped as tag punctuation inside the JSX begins/ends, so they
   // must NOT also get a flat `variable.other` token match in Section 2).
@@ -5033,6 +5104,87 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // key-colon/property, so the lookahead fails. The key arm matches up to the FIRST `: ` separator.
     const bsProp = '(?:[&!][^\\t\\n\\f\\r \\[\\]{},]*[\\t ]+)*';
     const bsVp = `(?:(?:${docAlt})[\\t ]+)?(?:${compactCls}[\\t ]+)*(?:[^\\n]*?${kvSep}[\\t ]+)?${bsProp}`;
+    // ── 2a⁗. COMPACT-NESTED block scalar — a column-CARRYING nested region (monogram#12 #14) ──
+    // A `|N`/`>N` (or auto-detect `|`) block scalar whose mapping sits inside a COMPACT block sequence
+    // (`-  -  abc: |2`) has a content floor of `dashPrefixWidth + N`, where `dashPrefixWidth` is the full
+    // width of the `(- )+` prefix. That width grows ONE column-group per dash, so a FLAT per-line floor
+    // (`\1[ \t]\3 {N}`, which captures only the FIRST dash's column) is correct only at depth 1 and
+    // over-paints every deeper comment/dedent line at depth ≥ 2 — the bug a single backref pair cannot
+    // express for arbitrary depth (a bounded d=2,3 just moves the wall to d=4).
+    //
+    // The fix is the maintained RedCMD YAML grammar's shape: each `- ` opens its OWN `\G`-anchored child
+    // region that re-asserts (and CONSUMES) its level's indentation each line, so the rule stack carries
+    // the column down through arbitrary nesting and the block scalar's floor is expressed RELATIVE to the
+    // innermost level's advanced `\G` (additive over the enclosing columns) rather than an absolute
+    // per-line formula. Unlike the §2c #block-sequence (which stays zero-width on continuation lines so a
+    // nested level can reclaim its own sibling), THIS region's value is a single block scalar — there are
+    // no per-level siblings to reclaim — so its `while` CONSUMES `\1[ \t]\3` (this level's indent + the
+    // dash's own column + the run after the dash) each line, advancing `\G` to exactly `dashPrefixWidth`
+    // before the innermost latch runs. Portable Oniguruma only (no `{\N}` backref-as-count, no
+    // variable-length lookbehind): the dash level is `\G`-relative and self-recursive (one level per
+    // dash), and the explicit-N latch uses a LITERAL `{N}` floor (one region per digit, as §2a‴).
+    //
+    // The dash level opens ONLY on a real block-scalar header — `(?:dash )*… key: … |/> (#|$)` — so a
+    // plain compact nest (`- - a`, `- - k: v`) never matches it and still falls to §2c #block-sequence.
+    // The level body self-includes (deeper dashes); its `bsHeaderIncs` scope the inline `key:`/anchor/tag
+    // on the header line FIRST (they match further LEFT than the latch, which is not `\G`-anchored), so by
+    // the time the cursor reaches the introducer the latch opens there; and #comment handles a dedented
+    // comment line (after the consuming `while` strips this level's indent, a line shallower than the
+    // content floor is a real comment).
+    const seqDash = detectBlockSequence(grammar)?.indicator;
+    const seqDashRe = seqDash ? escapeRegex(seqDash) : '';
+    // The leading-indicator class for the header lookahead (`-`/`?`): a compact item may be preceded by
+    // further sequence dashes or an explicit-key `?` before the `key: |` (`- ? k: |`). Derived from the
+    // compact indicators, same as the value-prefix elsewhere; falls back to the dash alone.
+    const seqLeadCls = (ind.compactIndicators ?? []).length ? compactCls : `[${seqDashRe}]`;
+    // The header lookahead a dash level requires: optional further compact indicators, then a key + `:`
+    // separator + optional node properties + the block-scalar introducer (auto-detect `intro`, or the
+    // explicit `introClass${bsDigitAlt(n)}`), then a blank/comment rest-of-line.
+    const seqHeader = (header: string) =>
+      `(?=(?:${seqLeadCls}[\\t ]+)*[^\\n]*?${kvSep}[\\t ]+${bsProp}${header}[\\t ]*(?:#|$))`;
+    // The innermost latch — IDENTICAL in shape to `bsIntroRule`: a whitespace-only `[\t ]*` lead-in (NOT
+    // `\G`-anchored) so it matches the `|`/`>` introducer AFTER `bsHeaderIncs` have scoped the inline
+    // header (`key:`/anchor/tag). Two flaws of a `\G`-anchored skip the no-`\G` form avoids: a `\G[^…]*`
+    // skip SWALLOWS `key:` as unscoped region body, and a `\G[\t ]*` (with `\G`) never fires at all,
+    // because after a sub-match (`#key`/`#punctuation`) vscode-textmate does NOT re-anchor `\G` to the
+    // post-sub-match position. Without `\G` the latch competes by LEFTMOST: `#key`/`#punctuation` (and a
+    // deeper `#selfKey` dash, which IS `\G`-anchored at the line start) all match further left, so the
+    // latch only wins once the cursor reaches the introducer. AUTO-DETECT (`intro`) runs the funky body
+    // (floors at the first content line, relative to the consuming `while`'s advanced `\G`); EXPLICIT
+    // (`|N`) uses a LITERAL `{N}` floor — ` {N}` admits a body line at exactly the floor (deeper/at-floor
+    // is content), `[\t ]*$` keeps blanks, and a SHALLOWER line (a dedented comment/sibling) releases it.
+    const seqLatchAuto = {
+      begin: `[\\t ]*(${intro})(?=[\\t ]*(?:#|$))([\\t ]*.*)`,
+      beginCaptures: { '1': { name: bsIndicator }, '2': { patterns: commentIncs } },
+      while: '\\G',
+      patterns: funkyBody(bsContent),
+    };
+    const seqLatchExplicit = (n: number) => ({
+      begin: `[\\t ]*(${introClass}${bsDigitAlt(n)})(?=[\\t ]*(?:#|$))([\\t ]*.*)`,
+      beginCaptures: { '1': { name: bsIndicator }, '2': { patterns: commentIncs } },
+      while: `\\G(?> {${n}}(?=[\\t ]|[\\t ]*${cmtLit}?)|[\\t ]*$)`,
+      patterns: [{ begin: '$', while: '\\G', contentName: bsContent }],
+    });
+    // EVERY compact-sequence block-scalar level carries the FULL latch set, because a single `- ` entry's
+    // mapping can mix indicators across its keys (`- aaa: |2` … `  bbb: |` — the §2a⁗ regression scope-gap
+    // caught: a per-indicator region opened by `|2` had only the `|2` latch, so the sibling `bbb: |`
+    // auto-scalar found no latch and fell to meta.stream). The EXPLICIT `|N` latches (digit 1-9) are
+    // listed FIRST so a `|N` key takes the precise `{N}` floor; the AUTO latch is the fallback for a plain
+    // `|`/`>`/`|-` (whose floor auto-detects from the first body line). Each latch keys on the block
+    // scalar's OWN indicator, independent of which key opened the enclosing dash level.
+    const seqLatches = [...Array.from({ length: 9 }, (_, i) => seqLatchExplicit(i + 1)), seqLatchAuto];
+    // The consuming dash-level region: `\G`-anchored (nests via the meta.stream `\G` re-anchor), opens on
+    // one compact dash whose line carries a block-scalar header, CONSUMES `\1[ \t]\3` each line (so `\G`
+    // advances by this level's width), and its body self-includes (deeper dash) + every latch + header
+    // includes + #comment. `selfKey` is its own repository key (for the self-include). The opener `header`
+    // is the AUTO `intro` (it admits `|`/`>`/`|N`), so ONE region handles all indicators; the body's
+    // ordered latches pick the right floor per key.
+    const emitSeqBlockScalar = (selfKey: string, header: string, latches: TmPattern[]): TmPattern => ({
+      begin: `\\G( *+)(${seqDashRe})([\\t ]+)${seqHeader(header)}`,
+      beginCaptures: { '2': { name: `punctuation.${langName}` } },
+      while: '\\G(?>\\1[\\t ]\\3|[\\t ]*$)',
+      patterns: [{ include: `#${selfKey}` }, ...latches, ...bsHeaderIncs, ...commentIncs],
+    });
     // Expose the introducer / inner-rule / header-includes to §2b (the `? |` explicit-key variant).
     bsIntro = intro;
     bsFunkyIntroRule = bsIntroRule;
@@ -5065,23 +5217,22 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const docMarkAlt = docMarkers.map(escapeRegex).join('|');
       const docMark = `(?:${docMarkAlt})(?=[\\t ]|$)`;
       repository[`${bsKey}-doc`] = {
-        begin: `^()(?=(?:${docMark}[\\t ]+)?${intro}[\\t ]*(?:#|$))`,
+        // `^([\\t ]*)` (not `^()`) so a leading-whitespace root introducer (` | …`) still routes
+        // here — a `#`-led body line at column 0 is then block-scalar string, not a comment (#12/#15).
+        begin: `^([\\t ]*)(?=(?:${docMark}[\\t ]+)?${intro}[\\t ]*(?:#|$))`,
         while: `\\G(?!${docMark})`,
         patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
       };
       topPatterns.push({ include: `#${bsKey}-doc` });
     }
-    // Sequence entry whose mapping VALUE is the block scalar (`- a: |` … `  b:`): bound siblings at the
-    // KEY column, not the dash column, else the next entry key is swallowed. The begin consumes the
-    // leading indent `\1` AND the dash + its trailing spaces `\3`, and the bound `\1[ \t]\3[ \t]` is
-    // one column past the key. A pure-space backref (`\1`, `\3`) standing in for the dash column keeps
-    // it portable (no literal `- ` backref, which would never match space-indented body lines).
-    repository[`${bsKey}-seq`] = emitIndentRegion({
-      lookahead: `(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+${bsProp}${intro}[\\t ]*(?:#|$))`,
-      beginCaptures: { '2': { name: `punctuation.${langName}` } },
-      cont: '\\1[ \\t]\\3[ \\t]',
-      patterns: [bsIntroRule(bsIndicator, bsContent), ...bsHeaderIncs],
-    });
+    // Sequence entry whose mapping VALUE is a block scalar (`- a: |` / `- a: |N` … `  b: …`): the §2a⁗
+    // consuming dash-level region. Each `- ` opens a `\G`-relative child carrying its column, so a COMPACT
+    // nest (`-  -  a: |`) accumulates the correct content indent through the recursion (the flat
+    // `\1[ \t]\3[ \t]`/`\1[ \t]\3 {N}` floors it replaces counted only ONE dash → over-painted depth ≥ 2,
+    // monogram#12 #14). ONE region opens on the AUTO `intro` (admits `|`/`>`/`|N`) and its body carries
+    // ALL latches (`seqLatches`: explicit `{N}` floors + auto fallback), so every key of the entry's
+    // mapping — even with mixed indicators — takes the right floor. Self-includes `#${bsKey}-seq`.
+    repository[`${bsKey}-seq`] = emitSeqBlockScalar(`${bsKey}-seq`, intro, seqLatches);
     topPatterns.push({ include: `#${bsKey}-seq` });
 
     // ── 2a‴. EXPLICIT-indent block scalars (`|N` / `>N`, monogram#12 #10) ──
@@ -5096,9 +5247,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // + an inner introducer rule that opens the body at the header EOL); only two things change: the
     // `while` bound is `\1 {N}` (parent+N) instead of `\1[ \t]` (parent+1), and the inner rule paints
     // the body via `contentName` instead of the funky auto-detect (the floor is already known). Emitted
-    // for digits 1–9 in both value position (`key: |N`, nested, and doc-root `|N` / `--- |N` — `bsVp`
-    // admits the optional `---` / key / properties) and sequence position (`- a: |N`, whose floor adds
-    // the dash column via `\3` — same as `-seq`). Ranked above the auto-detect variants (scopeOrder).
+    // for digits 1–9 in VALUE position (`key: |N`, nested, and doc-root `|N` / `--- |N` — `bsVp` admits
+    // the optional `---` / key / properties). The SEQUENCE-position explicit floor (`- a: |N`) is no
+    // longer a separate region: it is the `seqLatchExplicit(n)` latch carried inside the unified §2a⁗
+    // `${bsKey}-seq` region above. Ranked above the auto-detect value variant (scopeOrder).
     for (let n = 1; n <= 9; n++) {
       repository[`${bsKey}-explicit-${n}`] = emitIndentRegion({
         lookahead: `(?=${bsVp}${introClass}${bsDigitAlt(n)}[\\t ]*(?:#|$))`,
@@ -5106,13 +5258,6 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         patterns: [bsExplicitIntroRule(n), ...bsHeaderIncs],
       });
       topPatterns.push({ include: `#${bsKey}-explicit-${n}` });
-      repository[`${bsKey}-explicit-seq-${n}`] = emitIndentRegion({
-        lookahead: `(-)([ \\t]+)(?=(?:[-?][\\t ]+)*[^\\n]*?:[\\t ]+${bsProp}${introClass}${bsDigitAlt(n)}[\\t ]*(?:#|$))`,
-        beginCaptures: { '2': { name: `punctuation.${langName}` } },
-        cont: `\\1[ \\t]\\3 {${n}}`,
-        patterns: [bsExplicitIntroRule(n), ...bsHeaderIncs],
-      });
-      topPatterns.push({ include: `#${bsKey}-explicit-seq-${n}` });
     }
 
     // ── 2a′. Multi-line PLAIN scalar continuation (monogram#12 §6/§7) ──
@@ -5163,6 +5308,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // a real key separator (`http://x` keeps its glued `:` → still plain content). Used as a NEGATIVE
       // lookahead to bound the fold at the first sibling/comment line, matching the parser's foldedPlain.
       const structAhead = `(?:${cmtLit}|${compactAlt}|${flowEx}*?${kvSep}(?:[\\t ]|$))`;
+      // Fold-RELEASE variant (drops the `-`/`?` compact arm from structAhead, like §2c's foldExclude):
+      // once an inline plain value has started, a strictly-deeper line (the `\\1[ \\t]+` already
+      // guarantees it) that begins with `-`/`?` is plain-scalar CONTENT (a multi-line fold), not a
+      // sibling node — only a comment or a real `key:` separator ends the fold. (monogram#12 AB8U.)
+      const foldRelease = `(?:${cmtLit}|${flowEx}*?${kvSep}(?:[\\t ]|$))`;
       // ── VALUE-POSITION guard (the closed transform's hinge) ──
       // The IR-derived value-positions (valuePositions): the structural introducers (`-`/`?`/`:`) that
       // open an indented value block. A FOLD region must YIELD at a value-position — the indented block
@@ -5255,9 +5405,15 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       const continuationRule = { match: '\\G[\\t ]+(?:[^#\\n]|#(?<=[^\\t\\n\\f\\r ]#))*', name: plainContent };
       // Emitted only when the grammar actually has a DEEPER fold (`Indent <leaf> … Dedent`).
       if (fold.hasDeeper) {
+        // An explicit key whose value is a block sequence (`? - x` on one line) is NOT a foldable
+        // plain scalar — the `-` is a sequence item indicator the #block-sequence region must claim.
+        // Guard the plain fold from opening on that head (both indicators are grammar-derived, so the
+        // six non-indent grammars regenerate byte-identical). (monogram#12 M5DY.)
+        const ekInd = detectExplicitKey(grammar)?.indicator, seqInd = detectBlockSequence(grammar)?.indicator;
+        const seqInKeyGuard = (ekInd && seqInd) ? `(?!${escapeRegex(ekInd)}[\\t ]+${escapeRegex(seqInd)}[\\t ])` : '';
         repository['plain-continuation'] = emitIndentRegion({
-          lookahead: `(?=${plainVp})`,
-          cont: `\\1[ \\t]+(?!${structAhead})`,
+          lookahead: `(?=${seqInKeyGuard}${plainVp})`,
+          cont: `\\1[ \\t]+(?!${foldRelease})`,
           blankFirst: true,
           patterns: [continuationRule, ...plainHeaderIncs],
         });
@@ -5285,7 +5441,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // the guard is the explicit-key instance of "a fold yields to a value-position".
         repository['explicit-key-continuation'] = emitIndentRegion({
           lookahead: `(?=${escapeRegex(ekFold.indicator)}[\\t ]+(?=${plainSrc})${keyColonGuard})`,
-          cont: `\\1[ \\t]+(?!${structAhead})`,
+          cont: `\\1[ \\t]+(?!${foldRelease})`,
           blankFirst: true,
           patterns: [ekContRule, ...plainHeaderIncs],
         });
@@ -5342,55 +5498,43 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // indicator's column, which no `\1`-relative backref can express (the prefix is `- `, not spaces) and
       // no possessive `[ \t]++` can split from the deeper-fold case `x: y\n  - b` (same line, must fold).
       //
-      // The fix mirrors the maintained RedCMD YAML grammar's block-sequence: a `\G`-anchored region whose
-      // rule stack carries the indent depth, RE-OPENED per compact level (its body self-includes
-      // #block-sequence, so `- - - a` nests three deep). The meta.stream wrapper re-anchors `\G` at every
-      // line, so each level's captures pin ITS OWN inner indicator column and reclaim only siblings AT that
-      // column. We emit it ONLY for the COMPACT case (a dash followed by ANOTHER dash on the same line) —
-      // `begin … (?=([\t ]+)${dash}[\t ])` — so a single `- a`, a `- key: v` mapping item, a `- {…}`/`- "…"`/
-      // `- |` value, etc. are UNTOUCHED (still handled by the top-level token includes + the §2a′ fold),
-      // confining this region to exactly the bug's shape. The compact re-anchor `(?=((?<=${reanchor}) )?+)`
-      // (a FIXED-width lookbehind — portable, unlike RedCMD's variable-length `(?<![^\t ][\t ]*+:|---)`,
-      // which is rejected by Onigmo / GitHub-Linguist) lets the inner dash open right after the outer `- `.
+      // The fix carries the inner indicator column by CONSUMPTION — the same idiom as the §2a⁗ block-scalar
+      // region — instead of a per-line lookahead RECONSTRUCTION. A `\G`-anchored region opens per compact
+      // level and CONSUMES its level's width each line, so the RULE STACK (one frame per `- `) carries the
+      // true column through ARBITRARY depth, with no single-frame capture to saturate. We emit it ONLY for
+      // the COMPACT case (a dash followed by ANOTHER dash on the same line) — `begin … (?=${dash}[\t ])` —
+      // so a single `- a`, a `- key: v` mapping item, a `- {…}`/`- "…"`/`- |` value, etc. are UNTOUCHED
+      // (still handled by the top-level token includes + the §2a′ fold), confining this region to the
+      // compact-nesting shape.
       //
-      // The inner indicator's column is reconstructed PORTABLY as `\1\2 \4`: the outer indent (`\1\2`) +
-      // one literal space for the dash's own column + the captured indicator run `\4` (the run of spaces
-      // between the outer dash and the inner one — group 4 in the begin's lookahead, so a multi-space
-      // compact `-  - x` pins correctly too). The `while` then STAYS on: (arm 0) a COMPACT sibling at the
-      // column `(?=\1\2 \4${dash}[\t ]+${dash}[\t ])` — a zero-width lookahead that keeps the region alive
-      // WITHOUT consuming, so the body RE-DISPATCHES the compact `- - …` line from line start and a nested
-      // #block-sequence opens there capturing its OWN `( *+)` indent (the non-first-item generalization of
-      // monogram#24 — see below); (arm 1) a dash AT EXACTLY that column `(\1\2 \4)(?=${dash}[\t ]|${dash}$)`
-      // — a non-compact sibling item, reclaimed as `punctuation`; (arm 2) a line STRICTLY DEEPER than the
-      // column `(?=\1\2 \4[\t ])` — a zero-width lookahead that keeps the region alive WITHOUT consuming (so
-      // a nested deeper #block-sequence, if its own begin matched on the header line, gets first claim on its
-      // own sibling before the fold), with the deeper line scoped by the body's #block-fold rule (a plain
-      // continuation) or #block-value (a structured value); or (arm 3) a blank line. It RELEASES on a dedent
-      // OR a non-dash line at the column (a sibling mapping/scalar), so a column-0 `key:` after the sequence
-      // is NOT swallowed.
+      // begin `\G( *+)(${dash})([\t ]+)(?=${dash}[\t ])` consumes THIS level's leading indent (`\1`), its
+      // dash (group 2, scoped `punctuation`) and the inter-dash run (`\3`, so a multi-space `-  - x` and a
+      // mixed `- -  - x` each carry their own run width), then requires a following dash. Being `\G`-relative
+      // its body self-include re-opens it at the post-run cursor, so `- - - - a` stacks one consuming frame
+      // per inline dash, each advancing `\G` past its own column. while `\G(?>\1[\t ]\3|[\t ]*$)` consumes
+      // this level's width (indent + the dash's own column + the run) on each continuation line, or stays on
+      // a blank line. The continuation cursor, after all stacked frames consume, lands at exactly the inner
+      // node column.
       //
-      // NON-FIRST-ITEM compact nesting (`- - a\n  - - b\n    - c` → `[["a",["b","c"]]]`): the inner compact
-      // sequence `- - b` is opened by the SECOND outer item, on a CONTINUATION line. A consuming reclaim arm
-      // (arm 1) would eat that line's leading indent before the body ran, so the nested #block-sequence would
-      // open mid-line with `( *+)=""` and reconstruct its sibling column too shallow (the `    - c` sibling
-      // would fall through to the fold → painted string). Arm 0 is the fix: a compact sibling is reclaimed
-      // ZERO-WIDTH, so the body re-dispatches from line start and the nested #block-sequence captures the
-      // FULL indent (`( *+)="  "`), pinning `    - c` at the right column. On the FIRST outer item the inner
-      // dashes are inline on the header line, so each level's begin already captures its offset — that case
-      // worked before; arm 0 extends the same column-correct open to a sibling-opened nest.
-      //
-      // A deeper line that is NOT a nested sibling folds into the item's plain scalar: the body's
-      // #block-fold rule (`^([\t ]+)(?=[^\t\r\n#])(plain run)`, anchored at LINE START so it never fires on
-      // the header line's inline inner item, which sits past column 0) scopes it `string.unquoted`. So
-      // `- - a\n   - b` (`[["a - b"]]` — the deeper `- b` folds) is `string`, while `- - a\n  - b` and
-      // `- - - a\n    - b` (a same-column sibling at the inner OR a deeper-nested level) stay `punctuation`.
-      // This resolves monogram#24's deeper-irregular residual without a variable-length lookbehind.
+      // RECLAIM vs FOLD falls out of the consume — no per-column lookahead, no saturating reconstruction.
+      // A continuation line whose indent the stacked whiles fully consume leaves `\G` AT a dash (a
+      // same-column sibling): the body scopes it `punctuation`. A line STRICTLY DEEPER leaves residual
+      // leading whitespace at the carried `\G`, which the body's #block-fold — re-anchored from `^` to `\G`
+      // so it tests the CARRIED mid-line cursor, not line start — folds to `string.unquoted` (a plain-scalar
+      // continuation). This `\G`-coupling is what splits the oracle-opposite pair the old saturated single
+      // column could not: after `- - - - a` (d=4, 3 consuming frames carry to col 6) a sibling at col 8 has
+      // residual whitespace → fold; after `- - - - - a` (d=5, 4 frames carry to col 8) the col-8 dash sits
+      // AT the carried cursor → punctuation. Both are correct at every depth because the carry is per-level
+      // recursive, not a fixed-arity formula (verified d=1..12, uniform and mixed compaction, vs the eemeli
+      // CST oracle — test/yaml-deepest-sibling-probe.ts). A sibling-opened multi-line nest
+      // (`- - a\n  - - b\n    - c`) works the same way: each line re-anchors via the meta.stream wrapper and
+      // the consume carries its column. The region RELEASES on a dedent or a non-dash line at the column, so
+      // a column-0 `key:` after the sequence is not swallowed. Portable Oniguruma only — no variable-length
+      // lookbehind (RedCMD's `(?<![^\t ][\t ]*+:|---)` is rejected by Onigmo / GitHub-Linguist), no
+      // cross-frame backref; the carry is pure `\G`-relative consumption.
       const blockSeq = detectBlockSequence(grammar);
       if (blockSeq) {
         const dash = escapeRegex(blockSeq.indicator);
-        // The compact re-anchor lookbehind class: the compact indicators (`-`/`?`) plus the key/value
-        // separator (`:`) — exactly the single chars a nested node may sit immediately after on one line.
-        const reanchor = `[${[...(ind.compactIndicators ?? []), ind.keyValueSeparator ?? ':'].map(escapeForCharClass).join('')}]`;
         // The item's plain VALUE folds across DEEPER lines (a multi-line plain scalar) but releases at a
         // same-column sibling (reclaimed by the sequence `while`). Opens only on a BARE plain head (not a
         // key/indicator/comment — those are scoped by the dispatch includes), then an inner string region
@@ -5405,18 +5549,16 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
           ],
         };
         // The region SHELL (begin/while/captures); its body `patterns` is filled at the END (after the
-        // top-level dispatch is built + ordered), since the item content reuses that full dispatch. Group 4
-        // (`([\t ]+)`, in the begin's lookahead) captures the indicator run between the outer and inner
-        // dashes, so the `while` can reconstruct the inner column as `\1\2 \4` (outer indent + the dash's
-        // own column + the run). Arm 0 keeps the region alive ZERO-WIDTH on a COMPACT sibling at the column
-        // (so the body re-dispatches it from line start, opening a column-correct nested #block-sequence);
-        // arm 1 reclaims a same-column NON-compact sibling (`punctuation`); arm 2 is a zero-width lookahead
-        // that keeps the region alive on a strictly-deeper line (deferring to a nested level's sibling-
-        // reclaim, then to the body's #block-fold / #block-value rules); arm 3 is a blank line.
+        // top-level dispatch is built + ordered), since the item content reuses that full dispatch. The
+        // begin consumes `( *+)` (this level's indent, `\1`) + the dash (group 2, `punctuation`) + `([\t ]+)`
+        // (the inter-dash run, `\3`); the `while` `\G(?>\1[\t ]\3|[\t ]*$)` consumes that same width each
+        // continuation line, carrying the column by CONSUMPTION (no `\1\2 \4` reconstruction to saturate).
+        // A fully-consumed line lands `\G` AT a sibling dash (body → punctuation); a strictly-deeper line
+        // keeps residual whitespace there (body's `\G`-anchored #block-fold → string); a blank line stays.
         repository['block-sequence'] = {
-          begin: `(?=((?<=${reanchor}) )?+)\\G( *+)(${dash})(?=([\\t ]+)${dash}[\\t ])`,
-          beginCaptures: { '3': { name: `punctuation.${langName}` } },
-          while: `\\G(?>(?=\\1\\2 \\4${dash}[\\t ]+${dash}[\\t ])|(\\1\\2 \\4)(?=${dash}[\\t ]|${dash}$)|(?=\\1\\2 \\4[\\t ])|[\\t ]*$)`,
+          begin: `\\G( *+)(${dash})([\\t ]+)(?=${dash}[\\t ])`,
+          beginCaptures: { '2': { name: `punctuation.${langName}` } },
+          while: `\\G(?>\\1[\\t ]\\3|[\\t ]*$)`,
           patterns: [],
         };
         // ── A block-mapping VALUE introduced by `${kvSep}`-at-EOL, INSIDE a compact item (`- key:` then an
@@ -5455,7 +5597,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // #block-sequence instead of folding. (monogram#24 deeper residual.)
         const foldExclude = `(?:${cmtLit}|${flowEx}*?${kvSep}(?:[\\t ]|$))`;
         repository['block-fold'] = {
-          match: `^([\\t ]+)(?=[^\\t\\r\\n${cmtCc}])(?!${foldExclude})((?:[^${cmtCc}\\n]|${cmtLit}(?<=[^\\t\\n\\f\\r ]${cmtLit}))*)`,
+          match: `\\G([\\t ]+)(?=[^\\t\\r\\n${cmtCc}])(?!${foldExclude})((?:[^${cmtCc}\\n]|${cmtLit}(?<=[^\\t\\n\\f\\r ]${cmtLit}))*)`,
           captures: { '2': { name: plainContent } },
         };
         topPatterns.push({ include: '#block-sequence' });
@@ -6424,8 +6566,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // line, the whole type-param list (which may then close on a later line)
       // is scoped; the begin/end persists across lines until the matching `>`.
       if (angleBracket && angleDisambig) {
-        const balancedAngles = angleDisambig.balancedAngles;
-        const arrowParamShape = angleDisambig.arrowParamShape;
+        const arrowEndConfirm = angleDisambig.arrowEndConfirm;
         const arrowPos = `(?:(?<=\\basync\\s)|${notAfterValueWithOptionalWhitespace('\\w$)\\]}')})`;
         // JSX-dialect disambiguator: in a `.tsx`/`.jsx` grammar a bare `<Foo>(…`
         // is a JSX element, so a generic-arrow type-param list is only recognised
@@ -6445,7 +6586,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         const topComma = jsx ? `(?=${angleDisambig.topTypeParam})` : '';
         repository['arrow-type-parameters'] = {
           name: `meta.type.parameters.${langName}`,
-          begin: `${arrowPos}(<)${topComma}(?=${balancedAngles}>\\s*${arrowParamShape})`,
+          begin: `${arrowPos}(<)${topComma}(?=${arrowEndConfirm})`,
           beginCaptures: {
             '1': { name: `punctuation.definition.typeparameters.begin.${langName}` },
           },
@@ -6468,7 +6609,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // meta.parameters.arrow); the wrapper is unnamed. Same trigger position (and -7 rank)
         // as the old top-level #arrow-type-parameters, so all angle-bracket precedence holds.
         repository['generic-arrow-function'] = {
-          begin: `${arrowPos}(?=<${topComma}${balancedAngles}>\\s*${arrowParamShape})`,
+          begin: `${arrowPos}(?=<${topComma}${arrowEndConfirm})`,
           end: '(?<=\\))',
           patterns: [
             { include: '#arrow-type-parameters' },
@@ -8067,12 +8208,11 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     //   • the plain `blockscalar` is the fallback (bare `|`, `key: |`, `--- |` with an indented body).
     const bsRank = grammar.indent?.blockScalar?.token.toLowerCase();
     // EXPLICIT-indent block scalars (`|N`, §2a‴) must out-rank their auto-detect counterparts so a
-    // `|N` header takes the digit-aware floor. The sequence variant (`- a: |N`) ranks above the value
-    // variant: a `- …: |N` line matches BOTH (the value `bsVp` admits a leading `- `), and only the
-    // sequence floor adds the dash column, so it must win. Both stay below `blockscalar-key` (0.55) so a
-    // `? |N` explicit-key block scalar still scopes its `?` as the map key. (`-explicit-seq-` is tested
-    // before `-explicit-` because the seq keys also start with the value prefix.)
-    if (bsRank && key.startsWith(`${bsRank}-explicit-seq-`)) return 0.45;
+    // `|N` header takes the digit-aware floor. The unified sequence region (`${bsRank}-seq`, §2a⁗) ranks
+    // above the value `-explicit-` variant: a `- …: |N` line matches BOTH (the value `bsVp` admits a
+    // leading `- `), and only the sequence region carries the dash column, so it must win. It stays below
+    // `blockscalar-key` (0.55) so a `? |N` explicit-key block scalar still scopes its `?` as the map key
+    // (and `-seq` requires a leading dash its lookahead forbids for `? |`, so they never truly collide).
     if (bsRank && key.startsWith(`${bsRank}-explicit-`)) return 0.57;
     if (bsRank && key === `${bsRank}-seq`) return 0.5;
     if (key === 'blockscalar-key') return 0.55;

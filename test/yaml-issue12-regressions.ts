@@ -37,6 +37,7 @@ const notDirective = (s: string) => !/keyword\.other\.directive/.test(s);
 const notFlowPunct = (s: string) => !/punctuation\.separator|punctuation\.definition\.(sequence|mapping)/.test(s);
 const isDirectiveish = (s: string) => /keyword\.other\.directive|support|storage\.type|string\.unquoted\.directive|constant\.numeric/.test(s);
 const isEscapeOrInvalid = (s: string) => /constant\.character\.escape|invalid/.test(s);
+const isPunct = (s: string) => /punctuation/.test(s);   // any punctuation (block/flow indicator, separator)
 
 export const cases: Issue12Case[] = [
   { id: '#1', title: '`,` inside an `ns-global-tag-prefix` is directive content, not flow punctuation',
@@ -78,6 +79,36 @@ export const cases: Issue12Case[] = [
   { id: '#10', title: 'a `#` line inside a `|5` block scalar body is string content, not a comment',
     src: 'abc: |5\n      # string 6\n     # string 5\n    #comment 4\n   #comment 3\n', at: '# string 5', col: 0,
     should: (s) => isBlockString(s), why: 'with explicit indent 5, the `# string 5` line (indent 5) is block-scalar body; CST puts it inside the `block-scalar`, only `#comment 4` (indent 4 < 5) ends it' },
+
+  // ── RedCMD's SECOND #12 comment (issuecomment-4675696975) — six more repros. Each SHOULD-BE is
+  //    grounded in the independent `yaml`-package CST (the type at the marked offset), not Monogram. ──
+  { id: '#11', title: 'M5DY: the `-` of a block-sequence entry inside an explicit (`?`) key is punctuation, not a string',
+    src: '? - Detroit Tigers\n  - Chicago cubs\n:\n  - 2001-07-23\n', at: '- Chicago', col: 0,
+    should: (s) => isPunct(s) && !isString(s), why: 'CST: `seq-item-ind`. The `? - …\\n  - …` complex key is a block sequence; the official grammar scopes the `-` punctuation.definition.block.sequence.item. Monogram folds the whole entry into string.unquoted' },
+
+  { id: '#12', title: '6CA3: a TAB-indented top-level flow `[` is flow punctuation, not a string',
+    src: '---\n\n\t[\n\t]\n', at: '\t[', col: 1,
+    should: (s) => isPunct(s) && !isString(s), why: 'CST: `flow-seq-start`. Current Monogram scopes this CORRECTLY (punctuation.definition.sequence) — RedCMD\'s screenshot predates a fix; kept as a regression lock' },
+
+  { id: '#13', title: 'AB8U: an over-indented `-` continuation line is plain-scalar content, not a second sequence entry',
+    src: '- single multiline\n - sequence entry\n', at: '- sequence', col: 0,
+    should: (s) => isString(s) && !isPunct(s), why: 'CST: one `scalar` token `single multiline\\n - sequence entry` — the `- single multiline` entry value is a multi-line plain scalar; the indented `-` folds into it, it is NOT a sequence indicator' },
+
+  { id: '#14', title: 'a `#` line BELOW a `|2` block scalar\'s content indent is a comment, not block string',
+    src: '-  -  abc:  |2  #comment\n         # string 9\n        # string 8\n       #comment 7\n      #comment 6\n     #comment 5\n    #comment 4\n', at: '#comment 7', col: 0,
+    should: (s) => isComment(s), why: 'explicit indent 2 fixes the content indent at parent+2 (column 8 here); `# string 9`/8 (indent 9/8) are body but `#comment 7`/6/5 (indent <8) are comments. FIXED by gen-tm §2a⁗: a COMPACT-NESTED block scalar uses a column-CARRYING nested region (each `- ` opens a `\\G`-relative child that consumes its level\'s indent, so the content floor is additive over the enclosing dash columns — depth-general, verified d=1..8), replacing the flat `\\1[ \\t]\\3 {N}` floor that counted only ONE dash' },
+
+  { id: '#14b', title: 'a compact-seq mapping with MIXED block-scalar indicators scopes every key (`- a: |2` then sibling `b: |`)',
+    src: '- aaa: |2\n    xxx\n  bbb: |\n    yyy\n', at: 'bbb', col: 0,
+    should: (s) => /entity\.name\.tag/.test(s), why: 'the entry\'s mapping has two keys with DIFFERENT indicators (`|2` explicit, `|` auto, per yaml-test-suite 4WA9). The unified §2a⁗ seq region carries ALL latches (explicit |N + auto fallback), so the sibling key `bbb` and its `|` are scoped — not swallowed to meta.stream, which is what a per-indicator seq region did (it had only the `|2` latch, so the auto `|` sibling found none). Locks the regression scope-gap caught when the per-digit regions were unified' },
+
+  { id: '#15', title: 'a `#` line at column 0 inside a root `|` block scalar is string content, not a comment',
+    src: ' | # comment\n# string\n', at: '# string', col: 0,
+    should: (s) => isString(s) && notComment(s), why: 'CST: block-scalar body. A root `|` auto-detects content indent from the first body line (`# string`, indent 0); `#` inside a block scalar is LITERAL, not a comment' },
+
+  { id: '#16', title: 'DBG4 (spec 7.10): a plain scalar `::vector` is a string, not a mapping',
+    src: '- ::vector\n', at: '::vector', col: 0,
+    should: (s) => isString(s) && !isPunct(s), why: 'CST: one `scalar` token `::vector` — a `:` not followed by a space is plain-scalar content, not a mapping indicator. Current Monogram scopes it CORRECTLY (string.unquoted); kept as a regression lock' },
 ];
 
 // ── runner ────────────────────────────────────────────────────────────────────
