@@ -77,7 +77,7 @@ This matters because `tsc`'s *parser* is not the same thing as the language. It 
 | TSX | 96.7% · 65.7% | 95.6% vs 95.4% |
 | HTML | 95.3% · 49.3% | 100.0% vs 98.8% |
 | YAML | 100.0% · 73.9% | 100.0% vs 99.5% |
-| Vue | — | 98.8% vs 98.0% |
+| Vue | — | 98.0% vs 98.0% |
 <!-- coverage:end -->
 
 Measured against the *maintained* official grammar where it matters, not a dead bundle: JS/TS use Microsoft's maintained [TypeScript-TmLanguage](https://github.com/microsoft/TypeScript-TmLanguage); YAML uses the maintained [RedCMD/YAML-Syntax-Highlighter](https://github.com/RedCMD/YAML-Syntax-Highlighter) that VS Code switched to ([microsoft/vscode#232244](https://github.com/microsoft/vscode/pull/232244)); only HTML's baseline is the unmaintained [textmate/html.tmbundle](https://github.com/textmate/html.tmbundle) — the #203212 case Monogram targets.
