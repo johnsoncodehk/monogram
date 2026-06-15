@@ -1002,7 +1002,8 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  *     the union fixes (`<T = [a, b],>`, `<T = (a, b),>` — bracket defaults WITH a
  *     trailing comma) already work WITHOUT it, and the fn-type default
  *     `<T = (a: number) => b,>` is missed by a DIFFERENT mechanism (the `>` inside
- *     `=>` ends `balancedAngles` early), which this skip does not touch.
+ *     `=>` ends the top-level type-param head-scan early, so its trailing comma is
+ *     unreachable), which this skip does not touch.
  *
  *     Why the union regresses: the disambiguation's "top-level comma ⇒ arrow"
  *     heuristic is itself an approximation of tsc's rule (tsc disambiguates a
@@ -1038,10 +1039,8 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
  *     would BROADEN this regex; the curated tail stays literal on purpose.
  */
 interface JsxDisambigDelims {
-  topComma: string;        // top-level-comma scan body: `(?:…opaque…)*,`
   topTypeParam: string;    // "is a type-param list" body: top-level comma OR constraint keyword
-  balancedAngles: string;  // recursive balanced `<…>` named group `(?<B>…)`
-  arrowParamShape: string; // the arrow-shaped `(` confirm after `>`
+  arrowEndConfirm: string; // DEPTH-INDEPENDENT "…> ( arrow-params" end-confirm (no `\g<>`)
 }
 
 /**
@@ -1116,7 +1115,7 @@ function detectTypeParamConstraintKeywords(grammar: CstGrammar, typeArgRule: str
   return [...keywords];
 }
 
-function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null, typeArgRule: string | null): JsxDisambigDelims {
+function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null, typeArgRule: string | null, closeTok: string | null): JsxDisambigDelims {
   // `<` / `>` from the prec table — the generic delimiters. detectAngleBracketAmbiguity
   // (the only caller's gate) already proved this grammar declares BOTH as prec
   // operators, so reading them back here sources the chars from the grammar's own
@@ -1149,8 +1148,6 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   const constraintKeywords = detectTypeParamConstraintKeywords(grammar, typeArgRule);
   const constraintAlts = constraintKeywords.map(kw => `${skip}\\b${escapeRegex(kw)}\\b\\s*(?!=)`);
   const topTypeParam = constraintAlts.length ? `(?:${topComma}|${constraintAlts.join('|')})` : topComma;
-  // Recursive balanced `<…>` (Oniguruma named-group recursion).
-  const balancedAngles = `(?<B>[^${oc}]*(?:${escapeRegex(open)}\\g<B>${escapeRegex(close)}[^${oc}]*)*)`;
   // Arrow-shaped param list after `>`: the `(`/`)` are the arrow rule's own param
   // delimiters (detectArrowParamDelims); the tail is the curated first-token shapes
   // (see doc comment for why the parens derive but the tail stays literal). The
@@ -1158,7 +1155,33 @@ function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: s
   // confirm — so both read from the same derived delimiter.
   const [pOpen, pClose] = paramParens ? [paramParens.open, paramParens.close] : ['(', ')'];
   const arrowParamShape = `${escapeRegex(pOpen)}\\s*(?:${escapeRegex(pClose)}|\\.\\.\\.|${identRegex}\\s*[:,?${escapeForCharClass(pClose)}]|[{\\[]|$)`;
-  return { topComma, topTypeParam, balancedAngles, arrowParamShape };
+  // The "this `<…>` closes on a `>` that opens an arrow param list" end-confirm.
+  //
+  // The OLD form balanced the WHOLE `<…>` span with an Oniguruma `\g<>` subroutine
+  // (`(?<B>[^<>]*(?:<\g<B>>[^<>]*)*)>arrowParamShape`) to land on the MATCHING `>` and
+  // check its follow. Oniguruma caps `\g<>` recursion at ~20 levels, so a generic
+  // arrow nested ≥20 deep (`<T extends W0<W1<…<X>…>>(p) =>`) FLIPPED to a JSX element
+  // — a depth cliff with no analogue in the disambiguation question (the comma /
+  // constraint signal that proves "type-param, not tag" lives at the HEAD, depth 0).
+  //
+  // Depth-INDEPENDENT replacement: the head signal (`topTypeParam`) already separates a
+  // type-param list from a tag; this confirm only needs SOME later `>` followed by an
+  // arrow-shaped `(`, found by a NON-recursive scan. The scan must not wander across a
+  // JSX close-tag (`</`) into a following call — `<Foo extends>x</Foo>(z)` (a boolean
+  // `extends` attr that `topTypeParam` matches, then an unrelated `(z)`) is NOT a
+  // generic arrow, and the old balanced form rejected it because the `>` after `extends`
+  // is followed by `x`, not `(`. Bounding the scan to stop at the close-tag `</` (which
+  // a real type-param region can never contain — a type cannot begin with `/`) recovers
+  // that discipline without recursion. The close glyph is the grammar's own JSX
+  // close-token (detectJsx's `closeTok`), not a hardcoded literal; a non-JSX grammar
+  // passes null and the bound degrades to the plain non-recursive scan (its source has
+  // no `</`, so the bound is a no-op there anyway). This is STRICTLY ≥ the balanced
+  // form's power: it additionally accepts arrows whose constraint/default contains an
+  // inner `=>`/`(` (`<T extends Foo<() => R>>(p) =>`), which the old `[^<>]`-balance
+  // mis-rejected (a known false-negative, see the doc comment above).
+  const closeGuard = closeTok ? `(?:(?!${escapeRegex(closeTok)})[^${escapeForCharClass(close)}])` : `[^${escapeForCharClass(close)}]`;
+  const arrowEndConfirm = `${closeGuard}*(?:${escapeRegex(close)}${closeGuard}*)*?${escapeRegex(close)}\\s*${arrowParamShape}`;
+  return { topTypeParam, arrowEndConfirm };
 }
 
 /**
@@ -1299,11 +1322,12 @@ function generateJsxPatterns(langName: string, identRegex: string, jsx: JsxInfo,
   // Only a TS-family JSX grammar (one whose `<…>` is also a generic delimiter, so
   // #arrow-type-parameters exists) needs the carve-out. A plain JS `.jsx` grammar
   // has no generics, so `disambig` is null there and the guard stays empty — its
-  // output is unchanged. The building-blocks (top-level type-param scan, balanced-angle,
-  // arrow-param-shape) are derived from the grammar by jsxDisambigDelims and SHARED
-  // with #arrow-type-parameters' positive guard so the two can never drift.
+  // output is unchanged. The building-blocks (top-level type-param scan, the
+  // depth-independent arrow end-confirm) are derived from the grammar by
+  // jsxDisambigDelims and SHARED with #arrow-type-parameters' positive guard so the
+  // two can never drift.
   const notArrowTypeParams = disambig
-    ? `(?!<(?=${disambig.topTypeParam})(?=${disambig.balancedAngles}>\\s*${disambig.arrowParamShape}))`
+    ? `(?!<(?=${disambig.topTypeParam})(?=${disambig.arrowEndConfirm}))`
     : '';
 
   // Expression-start lookbehind (JSX `<` is never preceded by a value operand).
@@ -1702,42 +1726,6 @@ function buildConfirmPattern(tokens: string[]): string {
   return `[${tokens.map(escapeRegex).join('')}]`;
 }
 
-/**
- * Check if a rule has a recursive generic alternative:
- *   Ident '<' sep(Self, ',') '>'
- */
-function hasRecursiveGeneric(expr: RuleExpr, selfName: string): boolean {
-  if (expr.type === 'alt') {
-    return expr.items.some(item => hasRecursiveGeneric(item, selfName));
-  }
-  if (expr.type === 'seq') {
-    for (let i = 0; i < expr.items.length - 2; i++) {
-      if (expr.items[i].type === 'literal' && (expr.items[i] as { value: string }).value === '<' &&
-          expr.items[i + 1].type === 'sep') {
-        const sep = expr.items[i + 1] as { type: 'sep'; element: RuleExpr; delimiter: string };
-        if (sep.element.type === 'ref' && sep.element.name === selfName &&
-            expr.items[i + 2]?.type === 'literal' && (expr.items[i + 2] as { value: string }).value === '>') {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * Build Oniguruma recursive regex for type arguments.
- *
- * From:  Type = Ident | Ident '<' sep(Type, ',') '>'
- * Build: (?<T>IDENT(?:\s*<\s*\g<T>(?:\s*,\s*\g<T>)*\s*>)?)
- */
-function buildRecursiveTypeRegex(grammar: CstGrammar, typeName: string, identRegex: string): string {
-  const typeRule = grammar.rules.find(r => r.name === typeName);
-  if (typeRule && hasRecursiveGeneric(typeRule.body, typeName)) {
-    return `(?<T>${identRegex}(?:\\s*<\\s*\\g<T>(?:\\s*,\\s*\\g<T>)*\\s*>)?)`;
-  }
-  return `(?<T>${identRegex})`;
-}
 
 /**
  * Detect an angle-bracket TYPE-ASSERTION (cast) alternative:
@@ -1788,9 +1776,27 @@ function generateAngleBracketPatterns(
   identRegex: string,
   identToken: TokenDecl | undefined,
 ): Record<string, TmPattern> {
-  // Build recursive type regex
-  const typeRegex = buildRecursiveTypeRegex(grammar, ambiguity.innerRuleName, identRegex);
   const confirm = buildConfirmPattern(ambiguity.confirmTokens);
+
+  // DEPTH-INDEPENDENT single-line type-arg confirm — a flat char class that accepts the
+  // SAME single-line content the old recursive type regex did (nested IDENT generics with
+  // `,` separators), but at ANY nesting depth. The old confirm used an Oniguruma `\g<T>`
+  // subroutine (buildRecursiveTypeRegex) to recurse into nested `<…>`, and Oniguruma caps
+  // `\g<>` recursion at ~20 levels: a generic call nested ≥20 deep (`f<W0<W1<…<X>…>>(0)`)
+  // then failed this confirm lookahead, fell through to the speculative
+  // #generic-call-multiline scope, and the outer `<` lost its `meta.generic`/typeparameters
+  // scope (a depth cliff). The confirm only needs to find a same-line `>` that closes onto
+  // the call `(`-confirm — NOT to build the parse tree (the begin/end region + #type-inner
+  // do that) — so a flat class star suffices and has no recursion ceiling. Its alphabet is
+  // the recursion-free part of the type regex: identifier chars (`\w`, the token's extra
+  // ident chars, and the Unicode id classes unicodeWidenIdentPattern also adds), the angle
+  // brackets, the type-param separator, and whitespace. Expression-only operators
+  // (`*`, `+`, `&&`, …) are NOT in the set, so `a<b*c>(d)` still reads as a comparison —
+  // discrimination identical to the recursive form (verified), only the depth cap is gone.
+  const idExtra = identExtraClass(identToken);
+  const sepClass = escapeForCharClass(ambiguity.separator);
+  const typeArgScanClass = `[\\w${idExtra}${UNICODE_ID_CONTINUE}<>${sepClass}\\s]`;
+  const typeArgConfirm = `${typeArgScanClass}*>`;
 
   // Lookbehind: generic '<' must follow identifier / ] / )
   // Derives extra ident chars (e.g. $) from the Ident token IR.
@@ -1845,7 +1851,7 @@ function generateAngleBracketPatterns(
   // ── Layer 1: single-line generic call ──
   result['generic-call'] = {
     name: `meta.generic.${langName}`,
-    begin: `${lookbehind}(<)(?=\\s*${typeRegex}\\s*(?:,\\s*\\g<T>)*\\s*>\\s*${confirm})`,
+    begin: `${lookbehind}(<)(?=\\s*${typeArgConfirm}\\s*${confirm})`,
     beginCaptures: { '1': { name: tpBegin } },
     end: '(>)',
     endCaptures: { '1': { name: tpEnd } },
@@ -1855,7 +1861,7 @@ function generateAngleBracketPatterns(
   // ── Layer 2: EOL generic (> at end of line, confirm on next) ──
   result['generic-call-eol'] = {
     name: `meta.generic.${langName}`,
-    begin: `${lookbehind}(<)(?=\\s*${typeRegex}\\s*(?:,\\s*\\g<T>)*\\s*>\\s*$)`,
+    begin: `${lookbehind}(<)(?=\\s*${typeArgConfirm}\\s*$)`,
     beginCaptures: { '1': { name: tpBegin } },
     end: '(>)',
     endCaptures: { '1': { name: tpEnd } },
@@ -4637,14 +4643,19 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
   // ── 1. Detect angle bracket ambiguity ──
   const angleBracket = detectAngleBracketAmbiguity(grammar);
   const angleBracketExclude = new Set(angleBracket ? ['<', '>'] : []);
+  // JSX/TSX dialect — detected here (ahead of its own section below) so its derived
+  // close-tag token (`</`) can bound the depth-independent generic-arrow end-confirm
+  // in jsxDisambigDelims. Null for a non-JSX grammar (no such token).
+  const jsx = detectJsx(grammar);
   // The `.tsx` generic-arrow ⇄ JSX-tag disambiguation building-blocks, derived ONCE
   // from the grammar's declarations (generic `<`/`>`, the `sep` `,`, the `string`
-  // quotes) and SHARED by both sides so they can't drift: #arrow-type-parameters'
-  // positive begin guard (below) and its inverse — the carve-out appended to the JSX
-  // expression-start trigger in generateJsxPatterns. Built only when `<…>` is a
-  // generic delimiter; null for a plain JS `.jsx` grammar (no generics).
+  // quotes, the JSX close-tag) and SHARED by both sides so they can't drift:
+  // #arrow-type-parameters' positive begin guard (below) and its inverse — the
+  // carve-out appended to the JSX expression-start trigger in generateJsxPatterns.
+  // Built only when `<…>` is a generic delimiter; null for a plain JS `.jsx` grammar
+  // (no generics).
   const angleDisambig = angleBracket
-    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar), angleBracket.innerRuleName)
+    ? jsxDisambigDelims(grammar, identPattern, angleBracket.separator, detectArrowParamDelims(grammar), angleBracket.innerRuleName, jsx?.closeTok ?? null)
     : null;
 
   if (angleBracket) {
@@ -4669,11 +4680,10 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
     // comparison is added later in the ordering pass
   }
 
-  // ── 1a. Detect JSX/TSX dialect ──
+  // ── 1a. Emit JSX/TSX dialect patterns ──
   // Purely additive: emitted only when the grammar declares the JSX delimiter
-  // tokens (`/>` and `</`) plus an element production. A non-JSX grammar yields
-  // null here, so no JSX patterns are emitted and its output is unchanged.
-  const jsx = detectJsx(grammar);
+  // tokens (`/>` and `</`) plus an element production (detected as `jsx` above). A
+  // non-JSX grammar yields null, so no JSX patterns are emitted and output is unchanged.
   // Token names whose scoping is OWNED by the JSX patterns (the `/>` and `</`
   // delimiters are scoped as tag punctuation inside the JSX begins/ends, so they
   // must NOT also get a flat `variable.other` token match in Section 2).
@@ -6557,8 +6567,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
       // line, the whole type-param list (which may then close on a later line)
       // is scoped; the begin/end persists across lines until the matching `>`.
       if (angleBracket && angleDisambig) {
-        const balancedAngles = angleDisambig.balancedAngles;
-        const arrowParamShape = angleDisambig.arrowParamShape;
+        const arrowEndConfirm = angleDisambig.arrowEndConfirm;
         const arrowPos = `(?:(?<=\\basync\\s)|${notAfterValueWithOptionalWhitespace('\\w$)\\]}')})`;
         // JSX-dialect disambiguator: in a `.tsx`/`.jsx` grammar a bare `<Foo>(…`
         // is a JSX element, so a generic-arrow type-param list is only recognised
@@ -6578,7 +6587,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         const topComma = jsx ? `(?=${angleDisambig.topTypeParam})` : '';
         repository['arrow-type-parameters'] = {
           name: `meta.type.parameters.${langName}`,
-          begin: `${arrowPos}(<)${topComma}(?=${balancedAngles}>\\s*${arrowParamShape})`,
+          begin: `${arrowPos}(<)${topComma}(?=${arrowEndConfirm})`,
           beginCaptures: {
             '1': { name: `punctuation.definition.typeparameters.begin.${langName}` },
           },
@@ -6601,7 +6610,7 @@ export function generateTmLanguage(grammar: CstGrammar, langName: string): TmGra
         // meta.parameters.arrow); the wrapper is unnamed. Same trigger position (and -7 rank)
         // as the old top-level #arrow-type-parameters, so all angle-bracket precedence holds.
         repository['generic-arrow-function'] = {
-          begin: `${arrowPos}(?=<${topComma}${balancedAngles}>\\s*${arrowParamShape})`,
+          begin: `${arrowPos}(?=<${topComma}${arrowEndConfirm})`,
           end: '(?<=\\))',
           patterns: [
             { include: '#arrow-type-parameters' },
