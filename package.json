@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts vue.ts && node src/cli.ts yaml.ts",
+    "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts yaml.ts",
     "test": "node test/check.ts",
     "check": "node test/check.ts",
     "gate:generative": "node test/generative.ts",
@@ -24,7 +24,6 @@
     "metric:scope-gap:tsx": "node test/scope-gap-run.ts tsx",
     "metric:scope-gap:html": "node test/scope-gap-run.ts html",
     "metric:scope-gap:yaml": "node test/scope-gap-run.ts yaml",
-    "metric:scope-gap:vue": "node test/scope-gap-run.ts vue",
     "metric:src-coverage:ts": "node test/src-coverage-run.ts ts",
     "metric:src-coverage:js": "node test/src-coverage-run.ts js",
     "metric:src-coverage:jsx": "node test/src-coverage-run.ts jsx",
@@ -42,17 +41,11 @@
     "ledger:issues:dry": "node test/gap-issues.ts --dry-run",
     "bench:perf": "node test/perf-bench.ts",
     "bench:issues": "node test/issue-table.ts --write",
-    "bench:html-official": "node test/html-bench.ts",
-    "bench:vue-official": "node test/vue-bench.ts",
-    "bench:vue-issues": "node test/vue-issues.ts",
-    "bench:vue-dropin": "node test/vue-dropin.ts",
-    "bench:vue-generic-dropin": "node test/vue-generic-dropin.ts"
+    "bench:html-official": "node test/html-bench.ts"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "@vscode/tree-sitter-wasm": "^0.3.1",
-    "@vue/compiler-dom": "^3.5.35",
-    "@vue/compiler-sfc": "^3.5.35",
     "acorn": "^8.16.0",
     "parse5": "^8.0.1",
     "tree-sitter-cli": "^0.26.9",

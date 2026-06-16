@@ -49,7 +49,6 @@ function bench(rows, parseA, parseB) {
 // ── JavaScript vs acorn ──
 const jsFiles = [
   'node_modules/acorn/dist/acorn.js',
-  'node_modules/@vue/compiler-core/dist/compiler-core.cjs.js',
   'node_modules/parse5/dist/parser/index.js',
   'node_modules/typescript/lib/typescript.js',
 ].map((p) => ({ name: p.split('/').pop(), code: readFileSync(resolve(REPO, p), 'utf-8') }));

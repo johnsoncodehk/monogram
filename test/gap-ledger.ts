@@ -46,7 +46,6 @@ import onig from 'vscode-oniguruma';
 import ts from 'typescript';
 import { parseAllDocuments } from 'yaml';
 import { parseFragment } from 'parse5';
-import sfcCompiler from '@vue/compiler-sfc';
 import { createParser, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
@@ -92,23 +91,6 @@ const htmlAccepts = (text: string): boolean => {
     return hasEl(frag.childNodes ?? []);
   } catch { return false; }
 };
-// Vue SFC: the template markup sub-language IS HTML — vue-oracle.ts composes parse5 over the template
-// content as its markup authority. @vue/compiler-sfc only does SFC BLOCK splitting; a bare template-
-// level markup fragment (what the generator emits for the vue grammar — `<a b="c"/>`, not a full
-// `<template>…</template>` SFC) is NOT a top-level SFC block, so the SFC parser reports no template.
-// The right neutral verdict for such markup is therefore parse5's (the template arbiter): if the SFC
-// parser DID isolate a <template> block, validate ITS content with parse5; otherwise the whole input
-// is template-level markup → validate it directly with parse5. (A <script>/<style>-only SFC has no
-// markup to grade here; it is accepted as a valid block.)
-const vueAccepts = (text: string): boolean => {
-  try {
-    const { descriptor } = sfcCompiler.parse(text);
-    if (descriptor.template) return htmlAccepts(descriptor.template.content ?? '');
-    if (descriptor.script || descriptor.scriptSetup || (descriptor.styles ?? []).length) return true;
-    return htmlAccepts(text);   // bare template-level markup — parse5 is the arbiter (as in vue-oracle.ts)
-  } catch { return false; }
-};
-
 const LANGS: LangCfg[] = [
   { name: 'yaml', module: '../yaml.ts', scopeName: 'source.yaml', tmPath: 'yaml.tmLanguage.json', oracleAccepts: yamlAccepts },
   { name: 'typescript', module: '../typescript.ts', scopeName: 'source.ts', tmPath: 'typescript.tmLanguage.json', oracleAccepts: tsAccepts(ts.ScriptKind.TS) },
@@ -117,8 +99,6 @@ const LANGS: LangCfg[] = [
   { name: 'javascriptreact', module: '../javascriptreact.ts', scopeName: 'source.js.jsx', tmPath: 'javascriptreact.tmLanguage.json', oracleAccepts: tsAccepts(ts.ScriptKind.JSX) },
   { name: 'html', module: '../html.ts', scopeName: 'text.html.basic', tmPath: 'html.tmLanguage.json',
     tmExtra: { 'source.js': 'javascript.tmLanguage.json', 'source.css': 'html.tmLanguage.json' }, oracleAccepts: htmlAccepts },
-  { name: 'vue', module: '../vue.ts', scopeName: 'text.html.vue', tmPath: 'vue.tmLanguage.json',
-    tmExtra: { 'text.html.basic': 'html.tmLanguage.json', 'source.js': 'javascript.tmLanguage.json', 'source.ts': 'typescript.tmLanguage.json', 'source.tsx': 'typescriptreact.tmLanguage.json' }, oracleAccepts: vueAccepts },
 ];
 
 // ── shared vscode-textmate tokenizer (one WASM load) ─────────────────────────────────────────────

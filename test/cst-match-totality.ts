@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { emitParser } from '../src/emit-parser.ts';
 import { generateInputs } from './grammar-gen.ts';
 
-const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'vue'];
+const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
 
 let nodes = 0;
 let misses = 0;

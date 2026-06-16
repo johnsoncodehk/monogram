@@ -507,8 +507,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     [R.litString, ['source.yaml', 'keyword.control.flow.block-scalar.yaml'], 'exact', 'block-scalar indicator as scalar literal'],
     // HTML <svg> tag name correctly nested under an invalid.illegal overlay region.
     [R.tagName, ['text.html', 'meta.tag.metadata.svg', 'entity.name.tag.svg', 'invalid.illegal.unrecognized-tag.html'], 'exact', 'svg tag name with an illegal overlay innermost'],
-    // a Vue cast leak: the value `msg` correctly painted, deeper scope is just a meta wrapper.
-    [R.valueRef, ['text.html.vue', 'source.ts', 'meta.cast.expr.ts', 'variable.other.readwrite.ts'], 'family', 'value under a cast meta wrapper'],
     // THE GUARD: a value mis-painted as a generic — innermost is the type-name scope and the
     // only matching ancestors are COARSE region markers (meta.type.parameters, source). Nothing
     // role-bearing rescues it → still WRONG. (This is exactly #978/#859.)

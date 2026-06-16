@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import { generateInputs } from './grammar-gen.ts';
 
-const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'vue'];
+const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
 
 let leaves = 0;
 let bad = 0;

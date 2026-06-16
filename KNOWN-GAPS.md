@@ -14,7 +14,7 @@ commits) so the ledger is deterministic and commit-trackable.
 
 Regenerate: `node test/gap-ledger.ts --write` · verify up-to-date: `node test/gap-ledger.ts --check`.
 
-**0 gaps** across 7 grammars · 0 dropped.
+**0 gaps** across 6 grammars · 0 dropped.
 
 _No gaps currently surface._ The generative check reports no valid-input flat-highlighter
 divergence on the derived corpus. (This is the ledger MECHANISM; it lists what the check finds.)
