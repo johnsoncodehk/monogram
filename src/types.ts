@@ -312,10 +312,12 @@ export interface IndentConfig {
     explicitKey?: string;  // the flow `?` explicit-key indicator (e.g. punctuation.definition.key-value)
   };
   comment?: string;       // line-comment introducer ignored for indentation (e.g. '#')
-  // The mapping KEY/VALUE separator literal (YAML `:`). Used by the derived highlighter's multi-line
-  // plain-scalar fold regions (gen-tm §2a′/§2a″) to recognise a `key:`-led line as STRUCTURAL (a
-  // sibling that ends a fold) vs a bare plain-scalar continuation. Declared here (not hardcoded in the
-  // generator) so the YAML region code stays data-driven. Absent → defaults to ':'.
+  // The mapping KEY/VALUE separator literal (YAML `:`). The ONE source of truth for "what glyph
+  // separates a mapping key from its value": BOTH the lexer's key-line sniffs (`lineHasKeySeparator`,
+  // `startsBlockStructuralNode`, the compact-key pairing) AND the derived highlighter's multi-line
+  // plain-scalar fold regions (gen-tm §2a′/§2a″) recognise a `key:`-led line as STRUCTURAL from this
+  // field — so parser and highlighter agree for ANY separator. Declared here (not hardcoded) so the
+  // region code stays data-driven. Absent → defaults to ':'.
   keyValueSeparator?: string;
   // Block scalars (YAML `|` / `>`): when the rest of a line is an introducer + indicators, the
   // following more-indented lines are verbatim content emitted as ONE token (like raw-text, but
@@ -327,10 +329,29 @@ export interface IndentConfig {
   // control sigil, not content; absent → the block-scalar token's own scope (introducer reads as the
   // body string). The body always keeps the token scope; only the introducer capture is re-scoped.
   blockScalar?: { introducers: string[]; token: string; documentMarkers?: string[]; indicatorScope?: string };
-  // Set false to disable the YAML flow `:` key-separator carve-out (a `:` glued after a quoted
-  // scalar / flow-close is forced punctuation). Indentation grammars with `:name`-shaped tokens
-  // (bound-attribute shorthand) need those to survive after values. Default true (YAML behavior).
-  flowColonSeparator?: boolean;
+  // Flow `:` key-separator carve-out MEMBERSHIP: token TYPES after which a `:` glued inside a flow
+  // collection is the `key: value` SEPARATOR (forced `:` punctuation), never the start of a `:`-led
+  // plain scalar. A quoted scalar / flow-close can never run past its closer, so a `:` immediately
+  // after one is unambiguously the separator (YAML: the quoted-key tokens). This is an EXPLICIT,
+  // mode-neutral list — the carve-out is OFF unless a token is named here. (Was derived from the
+  // `string` flag, which silently enlisted every string-region token; an indentation grammar with
+  // `:name`-shaped tokens after values keeps `string: true` for region scoping / auto-close
+  // derivation WITHOUT being dragged into separator emission.) Flow-CLOSE delimiters (`flowClose`)
+  // are always part of the carve-out — a `:` after `]`/`}` is structurally the separator regardless.
+  // Absent / empty → no carve-out (the `:` lexes normally). The separator glyph itself is
+  // `keyValueSeparator`. yaml-test-suite 5MUD / 5T43 / 9MMW / C2DT / K3WX.
+  flowSeparatorAfterTokens?: string[];
+  // Plain-scalar CONTINUATION fold MEMBERSHIP: the token TYPES that participate in YAML's plain-scalar
+  // folding — a more-indented line right after one of these LEAF scalars (or an adjacent one inside a
+  // flow collection) is a CONTINUATION of that scalar, not a new node. Drives the block-context fold
+  // (a deeper line after a plain leaf), the flow illegal-head continuation, and the flow multi-line
+  // merge post-pass. The LAST-named token is the generic catch-all used as the emitted CONTINUATION
+  // token type and whose `pattern` matches a folded body (declaration order is specific-before-general,
+  // so the broadest plain is last). This is an EXPLICIT, mode-neutral list — folding is OFF unless a
+  // token is named here. (Was derived from `blockPattern`, which gave YAML plain-scalar folding to ANY
+  // block-pattern token; an indentation grammar can now carry a `blockPattern` token WITHOUT inheriting
+  // the fold.) Absent / empty → no folding. yaml-test-suite 3MYT / A2M4 / AB8U / FBC9 / JTV5 / UT92.
+  foldTokens?: string[];
   // A comment introducer immediately followed by this string is NOT a comment line — it falls
   // through to ordinary tokenization (e.g. comment '//' + commentExcept '!' → `//!` doc-comment
   // lines lex as real tokens and stay visible to the indent stack, while `//` lines vanish).

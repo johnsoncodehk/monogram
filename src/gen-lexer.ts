@@ -256,25 +256,28 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
   // exclusions, filtered ONCE here instead of re-tested per matcher per position.
   const scanMatchers = tokenMatchers.filter(tm =>
     tm.name !== templateTokenName && !markupTokenNames.has(tm.name) && !indentTokenNames.has(tm.name));
-  // String-literal token names (the `string`-flagged tokens — quoted scalars in YAML). Used by the
-  // flow mapping-separator guard below: a quoted scalar can never run past its closing quote, so a
-  // `:` immediately after one (inside flow) is ALWAYS the mapping `key: value` separator, never the
-  // start of a plain scalar — derived from the `string` flag, not a hardcoded token name.
-  const stringTokenNames = new Set(grammar.tokens.filter(t => t.string).map(t => t.name));
-  // Plain-scalar token names: the tokens carrying a block-context pattern variant (`blockPattern`).
-  // In YAML these are exactly the UNQUOTED scalar family (plain / key / number / boolean-null) — the
-  // ones whose flow-vs-block forms differ because flow indicators are content in block. Used by the
-  // flow multi-line-plain FOLD post-pass: a plain scalar folded across a flow-internal newline arrives
-  // as ADJACENT plain tokens (a space-separated plain is already one token; only a NEWLINE splits it),
-  // which the post-pass re-merges. Derived from `blockPattern`, not a hardcoded token name.
-  const plainScalarTokenNames = new Set(grammar.tokens.filter(t => tokenBlockPatternSource(t)).map(t => t.name));
-  // The generic (catch-all) plain-scalar token: the LAST-declared blockPattern token. Declaration
-  // order is specific-before-general (YAML: Key, Num, BoolNull, Plain — the typed/key shapes win
-  // earlier, so the broadest string-valued plain is necessarily last). Used as the type emitted for
-  // a folded plain-scalar CONTINUATION line — a more-indented line after a plain LEAF whose leading
-  // glyph (`-`/`&`/`!`/`[`/`?`/`*`) is plain CONTENT here, not structure (so it can't be lexed by
-  // the plain head pattern, which forbids those starts). Null when no blockPattern token exists.
-  const plainContinuationTokenName = [...grammar.tokens].reverse().find(t => tokenBlockPatternSource(t))?.name ?? null;
+  // Flow mapping-separator carve-out MEMBERSHIP (IndentConfig.flowSeparatorAfterTokens). A `:` glued
+  // (inside flow) right after one of these tokens is ALWAYS the mapping `key: value` separator, never
+  // the start of a `:`-led plain scalar — a quoted scalar / flow-close can never run past its closer.
+  // EXPLICIT list now (was derived from the `string` flag, which silently enlisted every string-region
+  // token); the carve-out is OFF when the list is absent. See the flow `:` guard below.
+  const flowSeparatorAfterTokens = new Set(indent?.flowSeparatorAfterTokens ?? []);
+  // Plain-scalar FOLD MEMBERSHIP (IndentConfig.foldTokens). The token TYPES that participate in YAML's
+  // plain-scalar continuation folding — in YAML the UNQUOTED scalar family (plain / key / number /
+  // boolean-null). EXPLICIT list now (was derived from `blockPattern`, which gave folding to ANY
+  // block-pattern token); folding is OFF when the list is absent. Used by: the block-context fold (a
+  // deeper line after a plain leaf), the flow illegal-head continuation, and the flow multi-line merge
+  // post-pass — a plain scalar folded across a flow-internal newline arrives as ADJACENT plain tokens
+  // (a NEWLINE splits it), which the post-pass re-merges.
+  const foldTokens = indent?.foldTokens ?? [];
+  const plainScalarTokenNames = new Set(foldTokens);
+  // The generic (catch-all) plain-scalar token: the LAST-named fold token. Declaration order is
+  // specific-before-general (YAML: Key, Num, BoolNull, Plain — the typed/key shapes win earlier, so
+  // the broadest string-valued plain is necessarily last). Used as the type emitted for a folded
+  // plain-scalar CONTINUATION line — a more-indented line after a plain LEAF whose leading glyph
+  // (`-`/`&`/`!`/`[`/`?`/`*`) is plain CONTENT here, not structure (so it can't be lexed by the plain
+  // head pattern, which forbids those starts). Null when no fold token is declared.
+  const plainContinuationTokenName = foldTokens.length ? foldTokens[foldTokens.length - 1] : null;
   // The generic plain token's FLOW pattern (its `pattern`, not the block variant) — used by the flow
   // illegal-head continuation fallback: a char that no token can START here (e.g. YAML's `%`/`@`/backtick,
   // illegal as a plain START) is, when it follows a plain scalar inside a flow collection, mid-scalar
@@ -282,7 +285,8 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
   // pattern at the next position), emit it as a plain-continuation token, and let the flow fold post-pass
   // merge it with the preceding scalar. Compiled once; null when no generic plain token exists.
   const plainFlowRe = (() => {
-    const t = [...grammar.tokens].reverse().find(t => tokenBlockPatternSource(t));
+    if (!plainContinuationTokenName) return null;
+    const t = grammar.tokens.find(t => t.name === plainContinuationTokenName);
     return t ? new RegExp(`^(?:${tokenPatternSource(t)})`) : null;
   })();
   // Does the line content starting at `start` carry a KEY SEPARATOR — an unquoted `:` followed by
@@ -306,7 +310,22 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
   const kBlockScalarTok = kOf(indent?.blockScalar?.token ?? null);
   const kRawBlockTok = kOf(indent?.rawBlock?.token ?? null);
   const kPlainCont = kOf(plainContinuationTokenName);
-  const tColon = puLitOf.get(':') ?? 0;
+  // The mapping KEY/VALUE separator (IndentConfig.keyValueSeparator, default `:`) — the ONE source of
+  // truth shared with gen-tm for every "is this a mapping-key line" sniff in the lexer. `kKvSep` is its
+  // punctuation-literal intern, for the flow-`:` carve-out push.
+  const keyValueSep = indent?.keyValueSeparator ?? ':';
+  const kKvSep = puLitOf.get(keyValueSep) ?? 0;
+  // Is `src` at `i` a mapping KEY separator — the `keyValueSeparator` literal followed by whitespace /
+  // EOL / a flow indicator (`,`/`[`/`]`/`{`/`}`)? The single shared test behind every key-line sniff
+  // (`lineHasKeySeparator`, `startsBlockStructuralNode`) so they read the separator from ONE place
+  // (the config) rather than each hardcoding `:`. Returns the index PAST the separator on a hit (so
+  // the caller can resume), or -1 on no match.
+  function keySepAt(src: string, i: number): number {
+    if (!src.startsWith(keyValueSep, i)) return -1;
+    const n = src[i + keyValueSep.length];
+    return (n === undefined || n === ' ' || n === '\t' || n === '\n' || n === '\r'
+            || n === ',' || n === '[' || n === ']' || n === '{' || n === '}') ? i + keyValueSep.length : -1;
+  }
 
   function lineHasKeySeparator(src: string, start: number): boolean {
     for (let i = start; i < src.length; i++) {
@@ -327,7 +346,7 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
         if (src[i] !== "'") break; continue;
       }
       if ((ch === ' ' || ch === '\t') && src[i + 1] === '#') break;            // trailing comment → any sep would be earlier
-      if (ch === ':') { const n = src[i + 1]; if (n === undefined || n === ' ' || n === '\t' || n === '\n' || n === '\r' || n === ',' || n === '[' || n === ']' || n === '{' || n === '}') return true; }
+      if (keySepAt(src, i) >= 0) return true;
     }
     return false;
   }
@@ -392,18 +411,19 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
   function startsBlockStructuralNode(src: string, start: number, allowProperty = true): boolean {
     const c0 = src[start];
     if (c0 === '[' || c0 === '{' || c0 === '*') return false;               // flow collection / alias → not indentation
-    if ((c0 === '-' || c0 === '?' || c0 === ':') && sepAfter(src[start + 1])) return true; // indicator / empty key
+    if (c0 !== undefined && compactIndicatorSet.has(c0) && sepAfter(src[start + 1])) return true; // compact indicator (`-`/`?`)
+    if (src.startsWith(keyValueSep, start) && sepAfter(src[start + keyValueSep.length])) return true; // empty key (`:` then ws/EOL)
     if ((c0 === '&' || c0 === '!') && allowProperty) return true;          // node property → establishes a node here
     if (c0 === '&' || c0 === '!') return false;                            // property after `:` → inline value, legal
-    // Scalar key sniff: scan the line for an unquoted `:` followed by ws/EOL/flow-indicator (a
-    // block key separator), skipping over "…"/'…' regions and stopping at a ` #` comment / EOL.
+    // Scalar key sniff: scan the line for an unquoted key separator followed by ws/EOL/flow-indicator,
+    // skipping over "…"/'…' regions and stopping at a ` #` comment / EOL.
     for (let i = start; i < src.length; i++) {
       const ch = src[i];
       if (ch === '\n' || ch === '\r') break;
       if (ch === '"') { i++; while (i < src.length && src[i] !== '"' && src[i] !== '\n') { if (src[i] === '\\') i++; i++; } continue; }
       if (ch === "'") { i++; while (i < src.length && src[i] !== '\n') { if (src[i] === "'" && src[i + 1] !== "'") break; if (src[i] === "'") i++; i++; } continue; }
       if ((ch === ' ' || ch === '\t') && src[i + 1] === '#') break;          // trailing comment → key sep would be earlier
-      if (ch === ':') { const n = src[i + 1]; if (n === undefined || n === ' ' || n === '\t' || n === '\n' || n === '\r' || n === ',' || n === '[' || n === ']' || n === '{' || n === '}') return true; }
+      if (keySepAt(src, i) >= 0) return true;
     }
     return false;
   }
@@ -424,8 +444,8 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
       } else break;
     }
     if (i >= src.length || src[i] === '\n' || src[i] === '\r') return false;   // property alone on the line → no nest
-    if ((src[i] === '-' || src[i] === '?') && sepAfter(src[i + 1])) return true; // nested indicator
-    return startsBlockStructuralNode(src, i, false);                            // a mapping key (the `:`-sniff)
+    if (src[i] !== undefined && compactIndicatorSet.has(src[i]) && sepAfter(src[i + 1])) return true; // nested compact indicator
+    return startsBlockStructuralNode(src, i, false);                            // a mapping key (the key-separator sniff)
   }
 
   // Scan from inside a template span to its next boundary: an interpolation hole
@@ -544,7 +564,11 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
             // The §7.4 / multi-line-flow bookkeeping is indent-only (a newline grammar has no stack).
             if (flowDepth === 0 && indent) {
               const prevTok = tokens[tokens.length - 2];   // the token before this just-pushed open
-              flowValueIndent = (prevTok && prevTok.type === '' && (prevTok.text === ':' || prevTok.text === '-'))
+              // value/item position: a flow opened right after the key/value separator (map value) or a
+              // sequence-item indicator. The `-` here is the seq-item lead specifically (NOT every
+              // compactIndicator — `?` is an explicit KEY, not a value position); classifying it from
+              // config is the (D) indicator-role split, deferred — see issue #44.
+              flowValueIndent = (prevTok && prevTok.type === '' && (prevTok.text === keyValueSep || prevTok.text === '-'))
                 ? indentStack[indentStack.length - 1] : -1;
               flowSawNewline = false;                      // start tracking whether this flow spans >1 line
             }
@@ -776,10 +800,10 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
           // while `-`/`?` include them (`-\t&a x` IS an error). Block context only (flowDepth===0).
           if (indent && flowDepth === 0) {   // §6.1 tab-after-indicator error is YAML-specific
             const prev = tokens[tokens.length - 1];
-            const isIndicator = prev && prev.type === '' && (prev.text === '-' || prev.text === '?' || prev.text === ':');
+            const isIndicator = prev && prev.type === '' && (compactIndicatorSet.has(prev.text) || prev.text === keyValueSep);
             if (isIndicator) {
               let q = pos; while (q < source.length && (source[q] === ' ' || source[q] === '\t')) q++;
-              if (source.slice(pos, q).includes('\t') && startsBlockStructuralNode(source, q, prev!.text !== ':')) {
+              if (source.slice(pos, q).includes('\t') && startsBlockStructuralNode(source, q, prev!.text !== keyValueSep)) {
                 throw new Error(`Tab character used in indentation at offset ${pos}`);
               }
             }
@@ -1046,14 +1070,16 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
       // the separator — emit it as the `:` punctuation literal here. Gated on flow (block-context `:`
       // separators are handled by the KEY-position lookaheads). yaml-test-suite 5MUD / 5T43 / 9MMW
       // / C2DT / K3WX (quoted key) and the flow-collection-key cohort.
-      // flowColonSeparator: false disables the YAML `"key":value` / `}: value` flow
-      // separator carve-out, for indentation grammars with `:name`-shaped tokens that
-      // may legally follow a quoted value or a flow-close delimiter.
-      if (indent && indent.flowColonSeparator !== false && flowDepth > 0 && source[pos] === ':') {
+      // Declaring flowSeparatorAfterTokens (a non-empty list — YAML: the quoted-key tokens) ENABLES
+      // the carve-out; it then fires after a NAMED token OR after any flow-CLOSE delimiter (`]`/`}`,
+      // which structurally can't run past its closer either). An indentation grammar that declares no
+      // such tokens gets no carve-out at all, so a `:name`-shaped token survives after values in flow.
+      // The separator glyph is keyValueSeparator (default `:`).
+      if (indent && flowDepth > 0 && flowSeparatorAfterTokens.size && source.startsWith(keyValueSep, pos)) {
         const prevTok = tokens[tokens.length - 1];
-        if (prevTok && (stringTokenNames.has(prevTok.type) || (prevTok.type === '' && flowCloseSet.has(prevTok.text)))) {
-          push(mkPu(':', pos, tColon));
-          pos += 1;
+        if (prevTok && (flowSeparatorAfterTokens.has(prevTok.type) || (prevTok.type === '' && flowCloseSet.has(prevTok.text)))) {
+          push(mkPu(keyValueSep, pos, kKvSep));
+          pos += keyValueSep.length;
           continue;
         }
       }
@@ -1213,7 +1239,7 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
               let q = i; while (q < source.length && source[q] === ' ') q++;
               return q > i && source[q] === '-' && sepAfter(source[q + 1]);
             };
-            const colonPairsExplicit = wasLineLead && lit === ':' && currentLineCol === lastExplicitKeyCol;
+            const colonPairsExplicit = wasLineLead && lit === keyValueSep && currentLineCol === lastExplicitKeyCol;
             const compactColon = colonPairsExplicit && dashAfter(pos);
             // A line-lead `:` at its `?`'s column USES UP that pairing — the explicit entry now has its
             // value, so a SECOND `: …` at the same column (`? a\n: - b\n: - c`, yaml-test-suite cousin) is

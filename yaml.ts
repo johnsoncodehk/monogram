@@ -628,6 +628,15 @@ const indent: IndentConfig = {
   },
   comment: '#',
   keyValueSeparator: ':',
+  // Flow `:` carve-out: a `:` glued (inside flow) after a quoted scalar / quoted key — or after a
+  // flow-close `]`/`}` — is the `key: value` separator, never a `:`-led plain. The quoted-key tokens
+  // opt IN explicitly (decoupled from the `string` flag, which scopes string regions / derives
+  // auto-close delimiters and no longer enlists a token here).
+  flowSeparatorAfterTokens: ['DQuote', 'SQuote', 'DQuoteKey', 'SQuoteKey'],
+  // Plain-scalar continuation fold participants — the UNQUOTED scalar family. The LAST (Plain) is the
+  // generic catch-all (folded-continuation token type + flow body pattern). Opt IN explicitly
+  // (decoupled from the `blockPattern` flag, which now only selects the block-context match variant).
+  foldTokens: ['Key', 'Num', 'BoolNull', 'Plain'],
   blockScalar: { introducers: ['|', '>'], token: 'BlockScalar', documentMarkers: ['---', '...'], indicatorScope: 'keyword.control.flow.block-scalar' },
   compactIndicators: ['-', '?'],
   // Tag-handle per-document membership (§6.8.2 / §6.9.1): a named handle `!h!` used by a Tag must
