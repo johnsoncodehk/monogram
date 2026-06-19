@@ -4,6 +4,12 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Nightly + on-demand FULL run: the tree-sitter job below only generates when tree-sitter/**
+  # changed (the materialized grammar is its sole input), so these backstop the one input it can't
+  # see in that diff — a tree-sitter-cli bump (lockfile) — and re-verify the "beats official" claim.
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -53,43 +59,69 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need history to diff against the base for the path gate below
+
+      # `tree-sitter generate` is ~5 min for the TS grammar (issue #46: the state count is at the
+      # floor for a unified-grammar-derived parser, so the cost is irreducible) — but the generated
+      # parser is a PURE FUNCTION of the committed tree-sitter/** (grammar.js + scanner.c + queries),
+      # and the `test` job fails if those drift from the grammar sources, so EVERY grammar change
+      # necessarily lands as a tree-sitter/** diff. Re-running generate when nothing under
+      # tree-sitter/** changed is pure waste, so gate the expensive steps on it. The job still RUNS
+      # (reports success) — only the steps are skipped — so a required status check is never pending.
+      # schedule / workflow_dispatch force the full run regardless (the lockfile/cli-bump backstop).
+      - name: Did the tree-sitter inputs change?
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "forced full run (${{ github.event_name }})"; exit 0
+          fi
+          if [ "${{ github.event_name }}" = "pull_request" ]; then base="${{ github.event.pull_request.base.sha }}"; else base="${{ github.event.before }}"; fi
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the gate"; exit 0
+          fi
+          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/'; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "tree-sitter/** changed — running the gate"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"; echo "no tree-sitter/** change — skipping generate/build/bench"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.changed.outputs.value == 'true'
         with:
           node-version: 24
-      - run: npm ci
+      - if: steps.changed.outputs.value == 'true'
+        run: npm ci
 
-      # Cheap LR-conflict gate: `tree-sitter generate` (no wasm) for every derived
-      # grammar that is a tree-sitter target, so a conflict introduced by a grammar
-      # change is caught even for the dialects whose wasm is not built below (tsx/js/jsx)
-      # — exactly the gap that let an unresolved `type`/`class_heritage` conflict ship.
-      # yaml is now included (issue #3): its indent/scalar tokens are wired as tree-sitter
-      # externals and the C indentation scanner is implemented, so its grammar generates + builds.
-      - name: Generate every derived tree-sitter grammar (conflict gate, no wasm)
+      # Conflict gate: `tree-sitter generate` for every derived grammar IN PARALLEL (was sequential
+      # ~12 min; parallel ≈ the slowest single grammar, ts/tsx ~5 min). A conflict introduced by a
+      # grammar change is caught even for the dialects whose wasm is not built below (tsx/js/jsx) —
+      # exactly the gap that once let an unresolved `type`/`class_heritage` conflict ship. yaml
+      # included (issue #3): its indent/scalar externals + C scanner make it generate + build.
+      - name: Generate every derived tree-sitter grammar (parallel conflict gate)
+        if: steps.changed.outputs.value == 'true'
         run: |
-          for g in typescript typescriptreact javascript javascriptreact html yaml; do
-            echo "── tree-sitter generate: $g"
-            ( cd "tree-sitter/$g" && npx tree-sitter generate )
+          langs=(typescript typescriptreact javascript javascriptreact html yaml)
+          pids=()
+          for g in "${langs[@]}"; do
+            ( cd "tree-sitter/$g" && npx tree-sitter generate ) >"/tmp/gen-$g.log" 2>&1 &
+            pids+=($!)
           done
+          fail=0
+          for i in "${!langs[@]}"; do
+            if wait "${pids[$i]}"; then echo "✓ ${langs[$i]}"; else echo "✗ ${langs[$i]}"; cat "/tmp/gen-${langs[$i]}.log"; fail=1; fi
+          done
+          exit $fail
 
-      - name: Build the derived tree-sitter grammar to wasm
+      # Build the gated wasms FROM the parser.c just generated (no re-generate) and run the accuracy
+      # benches: ts must beat official (the thesis proof), html vs parse5. The YAML wasm is built to
+      # prove its C indentation scanner compiles + links; its accuracy bench needs the yaml-test-suite
+      # checkout, so it runs in the readme-bench workflow.
+      - name: Build wasm + accuracy gate (typescript / html / yaml)
+        if: steps.changed.outputs.value == 'true'
         run: |
-          cd tree-sitter/typescript
-          npx tree-sitter generate
-          npx tree-sitter build --wasm .
-      - name: Tree-sitter accuracy gate (≥ floor, must beat official)
-        run: node test/treesitter-bench.ts
-      - name: Build + gate the derived HTML tree-sitter grammar (v1, vs parse5)
-        run: |
-          cd tree-sitter/html
-          npx tree-sitter generate
-          npx tree-sitter build --wasm .
-          cd ../..
+          ( cd tree-sitter/typescript && npx tree-sitter build --wasm . )
+          ( cd tree-sitter/html       && npx tree-sitter build --wasm . )
+          ( cd tree-sitter/yaml       && npx tree-sitter build --wasm . )
+          node test/treesitter-bench.ts
           node test/html-treesitter.ts
-      # The derived YAML tree-sitter (issue #3) — build the wasm (its C indentation scanner must
-      # compile + link). The accuracy bench (test/treesitter-yaml-bench.ts) needs the yaml-test-suite
-      # checkout, so it runs in the readme-bench workflow where the suite is already cloned.
-      - name: Build the derived YAML tree-sitter grammar to wasm
-        run: |
-          cd tree-sitter/yaml
-          npx tree-sitter generate
-          npx tree-sitter build --wasm .
