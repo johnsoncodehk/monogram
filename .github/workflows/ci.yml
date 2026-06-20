@@ -51,6 +51,64 @@ jobs:
       - name: Test
         run: npm run check
 
+  # Engine-parity BREADTH guard. The `test` job already runs the three parity gates
+  # (emit-parser-verify / emit-reject-messages / emit-lexer-verify) on the corpus-free
+  # in-repo corpus — that is the standing mechanism that forces a gen-parser change to
+  # propagate to emit-parser. This job adds the full external TS corpus for breadth, so a
+  # divergence on some construct the in-repo corpus does not exercise still gets caught.
+  # Gated on parser/grammar changes (like the treesitter job) so it doesn't clone the
+  # corpus on doc-only pushes; schedule / workflow_dispatch force the full run.
+  emit-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # need history to diff against the base for the path gate below
+
+      - name: Did the parser/grammar inputs change?
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "forced full run (${{ github.event_name }})"; exit 0
+          fi
+          if [ "${{ github.event_name }}" = "pull_request" ]; then base="${{ github.event.pull_request.base.sha }}"; else base="${{ github.event.before }}"; fi
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the gate"; exit 0
+          fi
+          if git diff --name-only "$base" HEAD | grep -qE '^src/|^[^/]+\.ts$|^test/emit-'; then
+            echo "value=true" >> "$GITHUB_OUTPUT"; echo "parser/grammar changed — running the breadth gate"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"; echo "no parser/grammar change — skipping the corpus clone"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.changed.outputs.value == 'true'
+        with:
+          node-version: 24
+      - if: steps.changed.outputs.value == 'true'
+        run: npm ci
+
+      # Pinned-SHA, shallow, sparse clone of the TS conformance corpus to the fixed path the
+      # parity gates auto-detect (same pin + technique as the readme-bench workflow).
+      - name: Clone the pinned TS corpus
+        if: steps.changed.outputs.value == 'true'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ts-repo; mkdir -p /tmp/ts-repo
+          git -C /tmp/ts-repo init -q
+          git -C /tmp/ts-repo remote add origin https://github.com/microsoft/TypeScript
+          git -C /tmp/ts-repo config core.sparseCheckout true
+          printf 'tests/cases/\n' > /tmp/ts-repo/.git/info/sparse-checkout
+          git -C /tmp/ts-repo fetch -q --depth 1 --filter=blob:none origin 6fbce89821d93a5b761581d9ac540455f38e9acb
+          git -C /tmp/ts-repo checkout -q FETCH_HEAD
+
+      - name: Engine-parity over the full corpus
+        if: steps.changed.outputs.value == 'true'
+        run: |
+          node test/emit-parser-verify.ts all
+          node test/emit-reject-messages.ts
+          node test/emit-lexer-verify.ts
+
   # The derived tree-sitter highlighter is the strongest thesis proof (a real GLR
   # parser from the same grammar, beating the official hand-written one). Build its
   # wasm and gate the accuracy so the 95.9% is verified, not just claimed. The

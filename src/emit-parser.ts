@@ -24,151 +24,31 @@
 // DEFINITION object. createParser is the correctness oracle — the emitted parser
 // must reproduce its CST byte-for-byte.
 
-import type { CstGrammar, RuleExpr, RuleDecl, PrecLevel } from './types.ts';
+import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { isKeywordLiteral, collectLiterals } from './grammar-utils.ts';
+import { analyzeGrammar, findEntryRule, type Sec } from './grammar-analysis.ts';
 import { emitLexer } from './emit-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
-// ── Static analysis (re-derived; mirrors gen-parser.ts exactly) ──
-
-interface OpInfo {
-  lbp: number;
-  rbp: number;
-  assoc: 'left' | 'right' | 'none';
-  position: 'infix' | 'prefix' | 'postfix';
-  requireTarget?: boolean;
-}
+// ── Static analysis ──
+// The STRUCTURAL analysis (precedence, NUD/LED + atom/continuation classification, left
+// recursion, nullability) is single-sourced in grammar-analysis.ts and shared with the
+// interpreter; the emitter layers the emit-only pieces on top: the reserved-aware "qualKeys"
+// FIRST sets, the SECOND-token dispatch, ledMeta/nudCap/contMeta, and the integer token
+// vocabulary.
 
 type FirstTok = { lit: string } | { tok: string } | null;
 type MixfixInfo = { openLit: string; sepLit: string };
 
-function hasMarker(expr: RuleExpr): boolean {
-  if (expr.type === 'op' || expr.type === 'prefix' || expr.type === 'postfix') return true;
-  if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(hasMarker);
-  if (expr.type === 'quantifier' || expr.type === 'group') return hasMarker(expr.body);
-  if (expr.type === 'sep') return hasMarker(expr.element);
-  return false;
-}
-
-function findEntryRule(grammar: CstGrammar): string {
-  return grammar.rules[grammar.rules.length - 1].name;
-}
-
-/** Build the full static analysis createParser performs, returned as plain data. */
+/** Build the full static analysis the emitter needs, returned as plain data. */
 function analyze(grammar: CstGrammar) {
-  const tokenNames = new Set(grammar.tokens.map(t => t.name));
-
-  // Precedence table — identical to gen-parser.ts.
-  const opTable = new Map<string, OpInfo>();
-  const prefixOps = new Map<string, OpInfo>();
-  const noUnaryLhsOps = new Set<string>();
-  const postfixOpValues = new Set<string>();
-  // Infix/postfix ops whose operand must be a valid assignment target (LHS) — see
-  // PrecOperator.requireTarget. Keyed like noUnaryLhsOps for the byte-table dispatch.
-  const requireTargetOps = new Set<string>();
-  for (let i = 0; i < grammar.precs.length; i++) {
-    const level = grammar.precs[i];
-    const bp = (i + 1) * 2;
-    for (const op of level.operators) {
-      if (op.position === 'prefix') {
-        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix', requireTarget: op.requireTarget });
-        if (op.requireTarget) requireTargetOps.add(op.value);
-      } else if (op.position === 'postfix') {
-        postfixOpValues.add(op.value);
-        opTable.set(op.value, { lbp: bp, rbp: 0, assoc: level.assoc, position: 'postfix', requireTarget: op.requireTarget });
-        if (op.requireTarget) requireTargetOps.add(op.value);
-      } else {
-        const lbp = bp;
-        const rbp = level.assoc === 'right' ? bp - 1 : bp;
-        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix', requireTarget: op.requireTarget });
-        if (op.noUnaryLhs) noUnaryLhsOps.add(op.value);
-        if (op.requireTarget) requireTargetOps.add(op.value);
-      }
-    }
-  }
-
-  // Alternative-form LED binding powers (mirrors gen-parser.ts — the two engines must
-  // resolve IDENTICAL lbp numbers or their CSTs diverge).
-  const ledPrecByConnector = new Map<string, { lbp: number; rhsBp: number | null }>();
-  for (const lp of grammar.ledPrecs ?? []) {
-    const anchorOp = lp.sameAs ?? lp.below;
-    if (!anchorOp) throw new Error(`ledPrec ${lp.connector}: needs sameAs or below`);
-    const op = opTable.get(anchorOp);
-    if (!op) throw new Error(`ledPrec ${lp.connector}: anchor ${JSON.stringify(anchorOp)} is not a ladder operator`);
-    const lbp = lp.sameAs !== undefined ? op.lbp : op.lbp - 1;
-    ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
-  }
-
-  // Binary / relational / conditional connectors — the MIDDLE child of a `$ op $` (or
-  // alternative-form) LED. A node whose child[1] is one of these is a binary expression,
-  // NOT a LeftHandSideExpression, so it is not a valid assignment target (`a + b = c`,
-  // `a in b = c`, `a as T = b` are spec grammar errors). Ladder INFIX ops carry the
-  // operator as an operator-tag leaf; the alternative-form binary LEDs (`in`/`instanceof`/
-  // `as`/`satisfies`/`?`) carry it as a keyword/punct leaf — both land at child[1].
-  const binaryConnectors = new Set<string>();
-  for (const [v, info] of opTable) if (info.position === 'infix') binaryConnectors.add(v);
-  for (const k of ledPrecByConnector.keys()) binaryConnectors.add(k);
-
-  // Pratt rules.
-  const prattRules = new Set<string>();
-  for (const rule of grammar.rules) if (hasMarker(rule.body)) prattRules.add(rule.name);
-
-  function classifyAlts(rule: RuleDecl) {
-    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-    const nuds: RuleExpr[] = [];
-    const leds: { expr: RuleExpr; items: RuleExpr[]; notLeftLeaf?: string[] }[] = [];
-    for (const alt of alts) {
-      const items = alt.type === 'seq' ? alt.items : [alt];
-      // A LED arm may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`
-      // (`[notLeftLeaf('void',…), $, '.', Ident]`). Strip it into LED metadata; the self-ref is
-      // then the next item and `led.items` is everything after it — identical to a plain LED.
-      const guard = items[0]?.type === 'notLeftLeaf' ? items[0].words : undefined;
-      const head = guard ? 1 : 0;
-      if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
-        leds.push({ expr: alt, items: items.slice(head + 1), notLeftLeaf: guard });
-      } else nuds.push(alt);
-    }
-    return { nuds, leds };
-  }
-  function classifyLeftRec(rule: RuleDecl) {
-    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-    const atoms: RuleExpr[] = [];
-    const continuations: RuleExpr[][] = [];
-    const contNotLeftLeaf: (string[] | null)[] = [];
-    for (const alt of alts) {
-      const items = alt.type === 'seq' ? alt.items : [alt];
-      // A continuation may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`.
-      // Strip it into per-continuation metadata; the self-ref is the next item.
-      const guard = items[0]?.type === 'notLeftLeaf' ? items[0].words : undefined;
-      const head = guard ? 1 : 0;
-      if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
-        continuations.push(items.slice(head + 1));
-        contNotLeftLeaf.push(guard ?? null);
-      } else atoms.push(alt);
-    }
-    return { atoms, continuations, contNotLeftLeaf };
-  }
-  function isLeftRecursive(rule: RuleDecl): boolean {
-    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-    return alts.some(alt => {
-      const items = alt.type === 'seq' ? alt.items : [alt];
-      const head = items[0]?.type === 'notLeftLeaf' ? 1 : 0;
-      return items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name;
-    });
-  }
-
-  const maxBp = (grammar.precs.length + 1) * 2;
-  const ruleByName = new Map<string, RuleDecl>(grammar.rules.map(r => [r.name, r]));
-  const leftRecSet = new Set<string>(grammar.rules.filter(isLeftRecursive).map(r => r.name));
-  const prattClassified = new Map<string, ReturnType<typeof classifyAlts>>();
-  const leftRecClassified = new Map<string, ReturnType<typeof classifyLeftRec>>();
-  for (const rule of grammar.rules) {
-    if (prattRules.has(rule.name)) prattClassified.set(rule.name, classifyAlts(rule));
-    else if (leftRecSet.has(rule.name)) leftRecClassified.set(rule.name, classifyLeftRec(rule));
-  }
-
-  const templateTokenName = grammar.tokens.find(t => t.template)?.name;
-  const templateTokenNames = new Set<string>(grammar.tokens.filter(t => t.template).map(t => t.name));
+  const {
+    tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
+    ledPrecByConnector, binaryConnectors, connectorLbp,
+    prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
+    nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
+    exprSecond,
+  } = analyzeGrammar(grammar);
 
   // First-token dispatch.
   function firstTokenOf(alt: RuleExpr): FirstTok {
@@ -236,13 +116,6 @@ function analyze(grammar: CstGrammar) {
   // `a || () => {}`), and once parsed it admits NO led (so `() => {} || a` leaves `|| a`
   // unconsumed and the parse rejects). `cap[i]` is the binding-power threshold for nud i
   // (null = uncapped). The connector's lbp resolves from the ladder or the ledPrec table.
-  const connectorLbp = (connector: string): number => {
-    const op = opTable.get(connector);
-    if (op) return op.lbp;
-    const lp = ledPrecByConnector.get(connector);
-    if (lp) return lp.lbp;
-    throw new Error(`capExpr: connector ${JSON.stringify(connector)} is not a ladder operator or ledPrec connector`);
-  };
   const nudCap = new Map<string, (number | null)[]>();
   for (const [ruleName, { nuds }] of prattClassified.entries()) {
     nudCap.set(ruleName, nuds.map(nud =>
@@ -255,27 +128,6 @@ function analyze(grammar: CstGrammar) {
     contMeta.set(ruleName, continuations.map(c => mixfixOf(c, ruleName)));
   }
 
-  // Nullability.
-  const nullableRules = new Set<string>();
-  function exprNullable(e: RuleExpr): boolean {
-    switch (e.type) {
-      case 'literal': return false;
-      case 'ref': return tokenNames.has(e.name) ? false : nullableRules.has(e.name);
-      case 'seq': return e.items.every(exprNullable);
-      case 'alt': return e.items.some(exprNullable);
-      case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true;
-      case 'group': return exprNullable(e.body);
-      case 'not': return true;
-      case 'sep': return true;
-      default: return true;
-    }
-  }
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const rule of grammar.rules) {
-      if (!nullableRules.has(rule.name) && exprNullable(rule.body)) { nullableRules.add(rule.name); changed = true; }
-    }
-  }
 
   // FIRST sets.
   //
@@ -392,180 +244,10 @@ function analyze(grammar: CstGrammar) {
     for (const alt of alts) { altDeepFirst.set(alt, exprFirst(alt)); altNullable.set(alt, exprNullable(alt)); }
   }
 
-  // SECOND sets: the keys admissible as a match's SECOND token, plus whether a
-  // one-token match exists (len1). Refines the longest-match dispatch: an admitted
-  // alternative whose SECOND set excludes the actual second token — and that cannot
-  // end after one token — provably fails, so its arm can be skipped. Over-approximated
-  // everywhere (unknown shapes → TOP, no guard exclusions applied at depth 2), and
-  // op/prefix/postfix pratt items are one-op-token consumers with known literal sets.
-  type Sec = { s: Set<string> | null; len1: boolean };
-  const SEC_TOP: Sec = { s: null, len1: true };
-  const ruleSecond = new Map<string, Sec>();
-  const opKeys = new Set<string>([...opTable.keys(), ...postfixOpValues]);
-  // SECOND inputs use PLAIN FIRST semantics (no reserved-qualified keys, prefix → top),
-  // an exact mirror of gen-parser's exprFirst: the interpreter computes the same SECOND
-  // sets, and the prune decisions must be ENGINE-IDENTICAL — an arm skipped by only one
-  // engine would consume a token in the other and skew the farthest-position error state
-  // (the emit-reject-messages gate caught exactly this).
-  const firstSetsPlain = new Map<string, Set<string> | null>();
-  function exprFirstPlain(e: RuleExpr): Set<string> | null {
-    switch (e.type) {
-      case 'literal': return new Set([e.value]);
-      case 'ref': {
-        if (tokenNames.has(e.name)) return new Set([e.name]);
-        return firstSetsPlain.has(e.name) ? firstSetsPlain.get(e.name)! : new Set();
-      }
-      case 'seq': {
-        const acc = new Set<string>();
-        for (const item of e.items) {
-          if (item.type === 'prefix') return null;
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
-          const f = exprFirstPlain(item);
-          if (f === null) return null;
-          for (const k of f) acc.add(k);
-          if (!exprNullable(item)) return acc;
-        }
-        return acc;
-      }
-      case 'alt': {
-        const acc = new Set<string>();
-        for (const item of e.items) {
-          const f = exprFirstPlain(item);
-          if (f === null) return null;
-          for (const k of f) acc.add(k);
-        }
-        return acc;
-      }
-      case 'quantifier': case 'group': return exprFirstPlain(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Set();
-      case 'sep': return exprFirstPlain(e.element);
-      default: return null;
-    }
-  }
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const rule of grammar.rules) {
-      const prev = firstSetsPlain.get(rule.name);
-      if (prev === null) continue;
-      const next = exprFirstPlain(rule.body);
-      if (next === null) { firstSetsPlain.set(rule.name, null); changed = true; continue; }
-      const merged = prev ? new Set(prev) : new Set<string>();
-      let grew = false;
-      for (const k of next) if (!merged.has(k)) { merged.add(k); grew = true; }
-      if (grew || prev === undefined) { firstSetsPlain.set(rule.name, merged); changed = true; }
-    }
-  }
-  // FIRST of a seq suffix for second-token purposes (op items consume an op literal;
-  // zero-width skipped; nullable items scanned through), and its nullability.
-  function suffixFirst(items: RuleExpr[], j: number): Set<string> | null {
-    const acc = new Set<string>();
-    for (let i = j; i < items.length; i++) {
-      const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
-      if (item.type === 'op' || item.type === 'postfix') { for (const k of opKeys) acc.add(k); return acc; }
-      if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
-      const f = exprFirstPlain(item);
-      if (f === null) return null;
-      for (const k of f) acc.add(k);
-      if (!exprNullable(item)) return acc;
-    }
-    return acc;
-  }
-  function suffixNullable(items: RuleExpr[], j: number): boolean {
-    for (let i = j; i < items.length; i++) {
-      const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
-      if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
-      if (!exprNullable(item)) return false;
-    }
-    return true;
-  }
-  function exprSecond(e: RuleExpr): Sec {
-    switch (e.type) {
-      case 'literal': return { s: new Set(), len1: true };
-      case 'ref':
-        if (tokenNames.has(e.name)) return { s: new Set(), len1: true };
-        return ruleSecond.get(e.name) ?? { s: new Set(), len1: false };
-      case 'seq': {
-        const acc = new Set<string>();
-        let len1 = false;
-        const items = e.items;
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
-          let isec: Sec;
-          let itemNullable: boolean;
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
-            isec = { s: new Set(), len1: true };
-            itemNullable = false;
-          } else {
-            isec = exprSecond(item);
-            itemNullable = exprNullable(item);
-          }
-          if (isec.s === null) return SEC_TOP;
-          for (const k of isec.s) acc.add(k);
-          if (isec.len1) {
-            const rf = suffixFirst(items, i + 1);
-            if (rf === null) return SEC_TOP;
-            for (const k of rf) acc.add(k);
-            if (suffixNullable(items, i + 1)) len1 = true;
-          }
-          if (!itemNullable) return { s: acc, len1 };
-        }
-        return { s: acc, len1 };
-      }
-      case 'alt': {
-        const acc = new Set<string>();
-        let len1 = false;
-        for (const item of e.items) {
-          const sec = exprSecond(item);
-          if (sec.s === null) return SEC_TOP;
-          for (const k of sec.s) acc.add(k);
-          len1 ||= sec.len1;
-        }
-        return { s: acc, len1 };
-      }
-      case 'quantifier': {
-        const sec = exprSecond(e.body);
-        if (sec.s === null) return SEC_TOP;
-        const acc = new Set(sec.s);
-        if (e.kind !== '?' && sec.len1) {
-          const bf = exprFirstPlain(e.body);
-          if (bf === null) return SEC_TOP;
-          for (const k of bf) acc.add(k);
-        }
-        return { s: acc, len1: sec.len1 };
-      }
-      case 'group': return exprSecond(e.body);
-      case 'sep': {
-        const sec = exprSecond(e.element);
-        if (sec.s === null) return SEC_TOP;
-        const acc = new Set(sec.s);
-        if (sec.len1) acc.add(e.delimiter);
-        return { s: acc, len1: sec.len1 };
-      }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf':
-        return { s: new Set(), len1: false };
-      case 'op': case 'prefix': case 'postfix':
-        return { s: new Set(), len1: true };
-      default: return SEC_TOP;
-    }
-  }
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const rule of grammar.rules) {
-      const prev = ruleSecond.get(rule.name);
-      if (prev && prev.s === null && prev.len1) continue;
-      const next = exprSecond(rule.body);
-      let nv: Sec;
-      if (!prev) nv = next;
-      else if (next.s === null || prev.s === null) nv = { s: null, len1: prev.len1 || next.len1 };
-      else nv = { s: new Set([...prev.s, ...next.s]), len1: prev.len1 || next.len1 };
-      const grew = !prev || (nv.s === null) !== (prev.s === null) || nv.len1 !== prev.len1
-        || (nv.s !== null && prev.s !== null && nv.s.size > prev.s.size);
-      if (grew) { ruleSecond.set(rule.name, nv); changed = true; }
-    }
-  }
+  // SECOND-token dispatch: the per-rule SECOND sets (and the plain FIRST they feed off) are
+  // single-sourced in grammar-analysis.ts and destructured above as exprSecond; altSecond
+  // below precomputes each alternative's dispatch keys from it (the emitter's own reserved-
+  // aware qualKeys FIRST, used for the FIRST dispatch, stays separate above).
   const altSecond = new Map<RuleExpr, Sec>();
   for (const rule of grammar.rules) {
     const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
@@ -1810,6 +1492,16 @@ let absChar = new Int32Array(8192);
 let absTok = new Int32Array(8192);
 let rowCap = 8192;
 let nodeN = 0;
+// Arena reclamation (issue #45 C1): edit() only APPENDS rows (old ones become unreachable
+// garbage), and only a full parse resets the cursor. arenaLiveBaseline is nodeN right after the
+// last full parse (the compacted live size); when an edit would push nodeN past
+// factor×baseline + min, that edit re-parses fresh instead (see editCore) — bounding a
+// long edit session at ~factor× the live tree.
+let arenaLiveBaseline = 0;
+let arenaCompactions = 0;
+let arenaCompactFactor = 3;
+let arenaCompactMin = 4096;
+let arenaInPlaceShrink = 0;   // surgery splices that fit a SHRUNK kid count in place (C2)
 let kids = new Int32Array(16384);
 // A node child's RELATIVE coordinates live in the PARENT's kids stream (parallel to
 // kids), not on the child row: a memo-reused subtree can be a child of several
@@ -3568,8 +3260,15 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
     }
   } else {
     const n2k = nD - removed + f;
-    if (kidN + n2k > kidCap) growKids(n2k);
-    const ks = kidN;
+    // f < removed (a SHRINK, e.g. deleting a list element) fits the OLD range in place: the
+    // suffix shifts LEFT, an overlap-safe forward copy, so target csD and grow the arena by
+    // nothing (issue #45 C2). f > removed (a GROW) cannot fit, so it relocates to the arena end
+    // and leaves the old range as garbage the C1 compaction later reclaims. The per-kid
+    // transforms — prefix normalize, new kids, suffix copy, boundary remap — are identical.
+    const inPlace = f < removed;
+    let ks;
+    if (inPlace) { ks = csD; arenaInPlaceShrink++; }
+    else { if (kidN + n2k > kidCap) growKids(n2k); ks = kidN; }
     for (let k = 0; k < Da; k++) {
       kids[ks + k] = kids[csD + k];
       // NORMALIZE prefix rels to absolute while copying: the boundary remap below
@@ -3597,7 +3296,7 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
       kidRel[ks + Da + f + (k - j)] = kidRel[csD + k];
       kidTokRel[ks + Da + f + (k - j)] = kidTokRel[csD + k];
     }
-    kidN = ks + n2k;
+    if (!inPlace) kidN = ks + n2k;   // in-place reuses the old range; it adds no rows
     rowStart[D] = ks;
     rowCount[D] = n2k;
     // remap the end-relative boundary into the relocated range (suffix kids kept
@@ -3868,6 +3567,7 @@ function parseCore(source, entryRule) {
   const root = runParse(entryRule);
   lastRoot = root;
   lastRootTok = rootTokBase;
+  arenaLiveBaseline = nodeN;   // the compacted live size (see arena reclamation note)
   return root;
 }
 
@@ -4176,7 +3876,14 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     memoGen = new Array(MEMO_RULES);
   }
   memoGenCur++;
-  adoptRoot = lastRoot;
+  // C1: bound arena growth. The arena only appends across edits, so when nodeN has grown well
+  // past the live tree, drop incremental reuse for THIS edit — reset the arena cursor and parse
+  // the (already re-lexed) full stream with NO adoption/surgery. runParse restarts at pos 0, so
+  // the result is byte-identical to a fresh parse (incremental ≡ fresh); pure reclamation, paid
+  // as one slower edit. Skipped while recovering (the recovery loop owns the arena cursor).
+  const compact = !recovering && nodeN > arenaLiveBaseline * arenaCompactFactor + arenaCompactMin;
+  if (compact) { nodeN = 0; kidN = 0; arenaCompactions++; }
+  adoptRoot = compact ? -1 : lastRoot;
   adoptRootTok = lastRootTok;
   adoptDmgStart = p;
   adoptDmgOldEnd = dOldEnd;
@@ -4184,7 +3891,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   adoptPath.length = 0;
   adoptBase.length = 0;
   adoptRunPos = -1;
-  const sroot = recovering ? -1 : trySurgery(p, dOldEnd, tokenDelta, charDelta);
+  const sroot = (recovering || compact) ? -1 : trySurgery(p, dOldEnd, tokenDelta, charDelta);
   if (sroot >= 0) {
     adoptRoot = -1;
     rootCharBase = toff(adoptRootTok);
@@ -4243,8 +3950,11 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
             for (let i = 0; i < lexSnap.length; i++) docLex.push(lexSnap[i]);
             recoverBars = bars;
             memoGenCur++;
-            adoptPath.length = 0;
-            adoptBase.length = 0;
+            // adoptPath/adoptBase PERSIST across recovery attempts (C4): adoptRoot is the
+            // pre-edit tree, fixed for the whole loop, so the navigation cache stays valid;
+            // adoptSeek self-truncates to the prefix containing the new q. Bars change the
+            // adoption DECISION (re-evaluated per call), not the cache. Only the per-attempt
+            // run-extension state resets.
             adoptRunPos = -1;
             scn = 0;
             root = runParse(entryRule);
@@ -4263,8 +3973,11 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
             docLex.length = 0;
             for (let i = 0; i < lexSnap.length; i++) docLex.push(lexSnap[i]);
             memoGenCur++;
-            adoptPath.length = 0;
-            adoptBase.length = 0;
+            // adoptPath/adoptBase PERSIST across recovery attempts (C4): adoptRoot is the
+            // pre-edit tree, fixed for the whole loop, so the navigation cache stays valid;
+            // adoptSeek self-truncates to the prefix containing the new q. Bars change the
+            // adoption DECISION (re-evaluated per call), not the cache. Only the per-attempt
+            // run-extension state resets.
             adoptRunPos = -1;
             scn = 0;
             root = runParse(entryRule);
@@ -4287,6 +4000,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   adoptRoot = -1;
   lastRoot = root;
   lastRootTok = rootTokBase;
+  if (compact) arenaLiveBaseline = nodeN;   // reset the compacted-size baseline (see C1)
   return root;
 }
 
@@ -4296,6 +4010,11 @@ export { tokenize };
 // raw tree/tokenAt views read the ACTIVE doc — they are gate/debug surfaces) ──
 export function parse(source, entryRule) { activate(docDefault); return parseCore(source, entryRule); }
 export function parseEdited(entryRule, edits) { activate(docDefault); return editCore(entryRule, edits); }
+// Arena reclamation introspection + budget override — TEST HOOKS (issue #45 C1). __arenaStats
+// reports the live arena, the compacted-size baseline, and how many edits re-parsed to reclaim;
+// __setArenaBudget lowers the factor/min so a gate can force compaction deterministically.
+export function __arenaStats() { return { nodeN, kidN, baseline: arenaLiveBaseline, compactions: arenaCompactions, inPlaceShrink: arenaInPlaceShrink }; }
+export function __setArenaBudget(factor, min) { arenaCompactFactor = factor; arenaCompactMin = min; }
 export function visit(entry, fns, charBase, tokBase) { activate(docDefault); return visitCore(entry, fns, charBase, tokBase); }
 // ── Handle API: explicit trees over per-instance documents ──
 // const p = createParser(); const cst = p.parse(text); p.edit(cst, next[, edits]);
