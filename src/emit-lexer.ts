@@ -266,6 +266,13 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  lexCore(source, 0, -1, 0, -1, 0, 0);`);
   emit(`  return tokN;`);
   emit(`}`);
+  // Verification of the WINDOWED path (issue #45 B2): emit-lexer-verify only exercises a FULL
+  // lex (emit ≡ createLexer), and gen-lexer has no windowed counterpart to diff against — but the
+  // windowed re-lex IS independently checked at the tree level. incremental-verify / exhaustive-
+  // edits compare an edited parse (whose tokens come from this windowed re-lex) to a FRESH FULL
+  // parse of the same text, byte-identical: a wrong windowed token would change the tree (or its
+  // newlineBefore/commentBefore-driven shape) and fail there. So the oracle is the fresh full
+  // parse, applied transitively through the parser.
   emit(`// The lexer core, parameterized for WINDOWED re-lexing: start at startPos with`);
   emit(`// the previous token's (k, t) as the regex-context seed (-1 = none / file start)`);
   emit(`// and EMPTY template/paren stacks (the caller restarts only at depth-0 safe`);
