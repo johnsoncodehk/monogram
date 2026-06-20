@@ -166,6 +166,37 @@ for (const f of FILES) {
   }
 }
 
+// ── C1: arena reclamation (compaction) ──
+// A long edit session only APPENDS arena rows; the engine re-parses fresh when the arena
+// outgrows the live tree, reclaiming the garbage. Verify that path actually fires AND every
+// compacted edit is byte-identical to a fresh parse. Budget lowered so a handful of edits force
+// it; corpus-free (an in-repo source). A separate module instance so the lowered budget and the
+// compaction counter don't leak into the sessions above.
+{
+  type Stats = { compactions: number; nodeN: number; baseline: number };
+  const cMod = (await import(emPath + '?compact=' + process.pid)) as Em & { __arenaStats(): Stats; __setArenaBudget(f: number, m: number): void };
+  const cSes = cMod.createParser();
+  cMod.__setArenaBudget(1, 256);   // compact once nodeN exceeds baseline + 256
+  let ctext = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf-8');
+  const ccst = cSes.parse(ctext);
+  let cEqual = 0, cMis = 0;
+  for (let k = 0; k < 120; k++) {
+    const { next, edit } = mutate(ctext);
+    steps++;
+    const fc = freshP.parse(next);
+    cSes.edit(ccst, [edit]);
+    if (fc.errors.length > 0) withErrors++;
+    const a = JSON.stringify(objectify(freshP.tree, (fns) => freshP.visit(fc, fns))) + JSON.stringify(fc.errors);
+    const b = JSON.stringify(objectify(cSes.tree, (fns) => cSes.visit(ccst, fns))) + JSON.stringify(ccst.errors);
+    if (a === b) { cEqual++; equal++; }
+    else { cMis++; mismatch++; if (failures.length < 5) failures.push(`compact step ${k}: tree/errors diverge`); }
+    ctext = next;
+  }
+  const cs = cMod.__arenaStats();
+  console.log(`arena reclamation: ${cEqual}/${cEqual + cMis} edits ≡ fresh · ${cs.compactions} compactions fired (budget 1×+256)`);
+  if (cs.compactions === 0) { console.error('✗ arena compaction never fired — the C1 reclamation path went untested'); process.exit(1); }
+}
+
 console.log(`incremental ≡ fresh: ${equal} equal (${withErrors} recovered with errors) · ${mismatch} MISMATCH  (${steps} steps over ${FILES.length} files)`);
 if (tInc > 0) console.log(`time: incremental ${tInc.toFixed(1)}ms vs fresh ${tFresh.toFixed(1)}ms → ${(tFresh / tInc).toFixed(2)}× faster on accepted edits`);
 for (const s of failures) console.log('  ✗ ' + s);

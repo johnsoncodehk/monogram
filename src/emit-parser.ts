@@ -1492,6 +1492,15 @@ let absChar = new Int32Array(8192);
 let absTok = new Int32Array(8192);
 let rowCap = 8192;
 let nodeN = 0;
+// Arena reclamation (issue #45 C1): edit() only APPENDS rows (old ones become unreachable
+// garbage), and only a full parse resets the cursor. arenaLiveBaseline is nodeN right after the
+// last full parse (the compacted live size); when an edit would push nodeN past
+// factor×baseline + min, that edit re-parses fresh instead (see editCore) — bounding a
+// long edit session at ~factor× the live tree.
+let arenaLiveBaseline = 0;
+let arenaCompactions = 0;
+let arenaCompactFactor = 3;
+let arenaCompactMin = 4096;
 let kids = new Int32Array(16384);
 // A node child's RELATIVE coordinates live in the PARENT's kids stream (parallel to
 // kids), not on the child row: a memo-reused subtree can be a child of several
@@ -3550,6 +3559,7 @@ function parseCore(source, entryRule) {
   const root = runParse(entryRule);
   lastRoot = root;
   lastRootTok = rootTokBase;
+  arenaLiveBaseline = nodeN;   // the compacted live size (see arena reclamation note)
   return root;
 }
 
@@ -3858,7 +3868,14 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     memoGen = new Array(MEMO_RULES);
   }
   memoGenCur++;
-  adoptRoot = lastRoot;
+  // C1: bound arena growth. The arena only appends across edits, so when nodeN has grown well
+  // past the live tree, drop incremental reuse for THIS edit — reset the arena cursor and parse
+  // the (already re-lexed) full stream with NO adoption/surgery. runParse restarts at pos 0, so
+  // the result is byte-identical to a fresh parse (incremental ≡ fresh); pure reclamation, paid
+  // as one slower edit. Skipped while recovering (the recovery loop owns the arena cursor).
+  const compact = !recovering && nodeN > arenaLiveBaseline * arenaCompactFactor + arenaCompactMin;
+  if (compact) { nodeN = 0; kidN = 0; arenaCompactions++; }
+  adoptRoot = compact ? -1 : lastRoot;
   adoptRootTok = lastRootTok;
   adoptDmgStart = p;
   adoptDmgOldEnd = dOldEnd;
@@ -3866,7 +3883,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   adoptPath.length = 0;
   adoptBase.length = 0;
   adoptRunPos = -1;
-  const sroot = recovering ? -1 : trySurgery(p, dOldEnd, tokenDelta, charDelta);
+  const sroot = (recovering || compact) ? -1 : trySurgery(p, dOldEnd, tokenDelta, charDelta);
   if (sroot >= 0) {
     adoptRoot = -1;
     rootCharBase = toff(adoptRootTok);
@@ -3969,6 +3986,7 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   adoptRoot = -1;
   lastRoot = root;
   lastRootTok = rootTokBase;
+  if (compact) arenaLiveBaseline = nodeN;   // reset the compacted-size baseline (see C1)
   return root;
 }
 
@@ -3978,6 +3996,11 @@ export { tokenize };
 // raw tree/tokenAt views read the ACTIVE doc — they are gate/debug surfaces) ──
 export function parse(source, entryRule) { activate(docDefault); return parseCore(source, entryRule); }
 export function parseEdited(entryRule, edits) { activate(docDefault); return editCore(entryRule, edits); }
+// Arena reclamation introspection + budget override — TEST HOOKS (issue #45 C1). __arenaStats
+// reports the live arena, the compacted-size baseline, and how many edits re-parsed to reclaim;
+// __setArenaBudget lowers the factor/min so a gate can force compaction deterministically.
+export function __arenaStats() { return { nodeN, kidN, baseline: arenaLiveBaseline, compactions: arenaCompactions }; }
+export function __setArenaBudget(factor, min) { arenaCompactFactor = factor; arenaCompactMin = min; }
 export function visit(entry, fns, charBase, tokBase) { activate(docDefault); return visitCore(entry, fns, charBase, tokBase); }
 // ── Handle API: explicit trees over per-instance documents ──
 // const p = createParser(); const cst = p.parse(text); p.edit(cst, next[, edits]);
