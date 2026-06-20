@@ -30,7 +30,7 @@ import type { CstGrammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { buildRoleMap, leafRoles, spanBuckets, scopeAt, GEN_OPTS, type TmTok, type Bucket } from './generative-detect.ts';
 import {
-  checkReachability, tokenCensus, leafCoverage, loadTmFromObject, tmTokenize,
+  checkReachability, tokenCensus, literalDischarge, leafCoverage, loadTmFromObject, tmTokenize,
   type TmGrammarJson,
 } from './tm-completeness.ts';
 
@@ -104,6 +104,8 @@ function structuralCatches(g: CstGrammar, mutated: TmGrammarJson): string[] {
   const c = tokenCensus(g, mutated);
   if (c.orphans.length) hits.push(`token-census:orphan(${c.orphans.join(',')})`);
   if (c.neutered.length) hits.push(`token-census:neutered(${c.neutered.join(',')})`);
+  const ld = literalDischarge(g, mutated);
+  if (ld.gaps.length) hits.push(`literal-discharge(${ld.gaps.slice(0, 3).join(',')})`);
   return hits;
 }
 // load that survives an invalid mutated grammar (a broken regex) — a grammar that fails

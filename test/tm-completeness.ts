@@ -337,6 +337,61 @@ export function leafCoverage(grammar: CstGrammar, tm: vsctm.IGrammar, opts = GEN
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  STRUCTURAL literal discharge — DECIDABLE keyword completeness (no corpus)
+//
+//  Every alphabetic literal/operator the grammar consumes bears a keyword-scope obligation.
+//  It is discharged iff it appears, as a SCOPED word, in some REACHABLE pattern whose scope
+//  is a keyword family. This is a finite, structural check on the emitted artifact — the
+//  a-priori (not corpus-witnessed) proof that every keyword is scoped. It asks only whether a
+//  scoping pattern is PRESENT (completeness); whether its guard fires correctly is soundness.
+// ════════════════════════════════════════════════════════════════════════════
+const KEYWORD_FAMILY = /^(keyword|storage|constant\.language|support\.(type|class|function|constant)|variable\.language|entity\.name\.(type|tag)|punctuation\.definition\.keyword)/;
+
+// every reachable pattern NODE (root ∪ export surfaces), the same closure as checkReachability
+function reachableNodes(g: CstGrammar, tmJson: TmGrammarJson): any[] {
+  const scope = tmJson.scopeName ?? `source.${g.name}`;
+  const repo = (tmJson.repository ?? {}) as Record<string, any>;
+  const reached = new Set<string>(); const queue: string[] = []; const out: any[] = [];
+  const visit = (node: any): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    out.push(node);
+    if (typeof node.include === 'string') { const inc: string = node.include; if (inc.startsWith('#')) queue.push(inc.slice(1)); else if (inc.startsWith(scope + '#')) queue.push(inc.slice(scope.length + 1)); }
+    if (node.patterns) visit(node.patterns);
+    for (const c of ['captures', 'beginCaptures', 'endCaptures', 'whileCaptures']) if (node[c]) for (const v of Object.values(node[c])) visit(v);
+  };
+  visit(tmJson.patterns ?? []);
+  if (g.expressionRule) queue.push('expression');
+  for (const k of Object.keys(g.canonicalRepoNames ?? {})) queue.push(k);
+  while (queue.length) { const k = queue.shift()!; if (reached.has(k)) continue; reached.add(k); if (repo[k]) visit(repo[k]); }
+  return out;
+}
+// the alphabetic words a node SCOPES under a keyword-family scope (lookarounds + `\b`/`\w`-escapes
+// stripped so a word-boundary doesn't fuse with the word, e.g. `\bfrom\b` → `from`, not `bfrom`)
+function scopedAtoms(nodes: any[]): Set<string> {
+  const out = new Set<string>();
+  const keywordScoped = (n: any): boolean => (typeof n.name === 'string' && KEYWORD_FAMILY.test(n.name))
+    || (['captures', 'beginCaptures', 'endCaptures'] as const).some(c => n[c] && Object.values(n[c]).some((cc: any) => typeof cc?.name === 'string' && KEYWORD_FAMILY.test(cc.name)));
+  for (const n of nodes) {
+    if (!keywordScoped(n)) continue;
+    const re = (n.match ?? n.begin ?? '') as string;
+    const cleaned = re.replace(/\(\?<?[=!][^)]*\)/g, ' ').replace(/\\[a-zA-Z]/g, ' ');
+    for (const w of cleaned.match(/[A-Za-z][A-Za-z0-9_$]*/g) ?? []) out.add(w);
+  }
+  return out;
+}
+export interface LiteralDischarge { obl: number; gaps: string[] }
+export function literalDischarge(g: CstGrammar, tmJson: TmGrammarJson): LiteralDischarge {
+  const scoped = scopedAtoms(reachableNodes(g, tmJson));
+  const lits = new Set<string>();
+  for (const r of g.rules) for (const l of collectLiterals(r.body)) if (isKeywordLiteral(l)) lits.add(l.replace(/^@/, ''));
+  for (const p of g.precs) for (const o of p.operators) if (isKeywordLiteral(o.value)) lits.add(o.value);
+  for (const lp of g.ledPrecs ?? []) if (isKeywordLiteral(lp.connector)) lits.add(lp.connector);
+  const gaps = [...lits].filter(l => !scoped.has(l)).sort();
+  return { obl: lits.size, gaps };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  LAYER A (cont.) — the literal-collection backbone is total + drops nothing consumed
 //
 //  The flat keyword/operator scoping in gen-tm.ts is driven by the SHARED primitive
@@ -439,21 +494,16 @@ const GRAMMARS: GrammarCfg[] = [
 interface LedgerRow {
   name: string;
   tokenObl: number; tokenDisch: number;        // non-skip tokens, each → a discharge path
-  litObl: number;                              // distinct keyword literals (painted ⇐ leaf coverage)
-  opObl: number;                               // distinct Pratt operators
+  litObl: number; litDisch: number;            // alphabetic keyword literals, each → a reachable keyword-scoped pattern (structural)
   keyObl: number; keyReach: number;            // repository keys, each → reachable
-  leafObl: number; leafPaint: number;          // empirical content/keyword leaves, each → painted
+  leafObl: number; leafPaint: number;          // empirical content/keyword leaves (the corpus cross-check)
 }
-function ledgerRow(name: string, g: CstGrammar, tmJson: TmGrammarJson, r: ReachResult, tc: TokenCensus, cov: CoverageResult): LedgerRow {
-  const lits = new Set<string>();
-  for (const rule of g.rules) for (const l of collectLiterals(rule.body)) if (isKeywordLiteral(l)) lits.add(l);
-  const ops = new Set<string>();
-  for (const p of g.precs) for (const o of p.operators) ops.add(o.value);
-  for (const lp of g.ledPrecs ?? []) ops.add(lp.connector);
+function ledgerRow(name: string, g: CstGrammar, r: ReachResult, tc: TokenCensus, ld: LiteralDischarge, cov: CoverageResult): LedgerRow {
+  const nonSkip = g.tokens.filter(t => !t.flags.includes('skip')).length;
   return {
     name,
-    tokenObl: g.tokens.filter(t => !t.flags.includes('skip')).length, tokenDisch: g.tokens.filter(t => !t.flags.includes('skip')).length - tc.orphans.length,
-    litObl: lits.size, opObl: ops.size,
+    tokenObl: nonSkip, tokenDisch: nonSkip - tc.orphans.length - tc.neutered.length,
+    litObl: ld.obl, litDisch: ld.obl - ld.gaps.length,
     keyObl: r.repoKeys, keyReach: r.repoKeys - r.dead.length,
     leafObl: cov.den, leafPaint: cov.painted,
   };
@@ -464,21 +514,23 @@ function renderLedger(rows: LedgerRow[]): string {
   const L: string[] = [];
   L.push('<!-- COMPLETENESS-LEDGER:START — auto-generated by `node test/tm-completeness.ts --write`; do not edit by hand. -->');
   L.push('');
-  L.push('| Grammar | Tokens | Keyword literals | Operators | Repo keys (reachable) | Leaf obligations (painted) |');
-  L.push('|---|---:|---:|---:|---:|---:|');
-  const sum = { t: 0, td: 0, lit: 0, op: 0, k: 0, kr: 0, lf: 0, lp: 0 };
+  L.push('| Grammar | Tokens | Keyword literals | Repo keys (reachable) | Leaf cross-check (corpus) |');
+  L.push('|---|---:|---:|---:|---:|');
+  const sum = { t: 0, td: 0, lit: 0, ld: 0, k: 0, kr: 0, lf: 0, lp: 0 };
   for (const r of rows) {
-    L.push(`| ${r.name} | ${r.tokenDisch}/${r.tokenObl} | ${r.litObl} | ${r.opObl} | ${r.keyReach}/${r.keyObl} | ${r.leafPaint}/${r.leafObl} |`);
-    sum.t += r.tokenObl; sum.td += r.tokenDisch; sum.lit += r.litObl; sum.op += r.opObl;
+    L.push(`| ${r.name} | ${r.tokenDisch}/${r.tokenObl} | ${r.litDisch}/${r.litObl} | ${r.keyReach}/${r.keyObl} | ${r.leafPaint}/${r.leafObl} |`);
+    sum.t += r.tokenObl; sum.td += r.tokenDisch; sum.lit += r.litObl; sum.ld += r.litDisch;
     sum.k += r.keyObl; sum.kr += r.keyReach; sum.lf += r.leafObl; sum.lp += r.leafPaint;
   }
-  L.push(`| **total** | **${sum.td}/${sum.t}** | **${sum.lit}** | **${sum.op}** | **${sum.kr}/${sum.k}** | **${sum.lp}/${sum.lf}** |`);
+  L.push(`| **total** | **${sum.td}/${sum.t}** | **${sum.ld}/${sum.lit}** | **${sum.kr}/${sum.k}** | **${sum.lp}/${sum.lf}** |`);
   L.push('');
-  // the fixed denominator = every measured obligation (token-discharge + key-reachability + leaf-painting)
-  const den = sum.t + sum.k + sum.lf, num = sum.td + sum.kr + sum.lp;
-  L.push(`**Fixed-denominator completeness: ${num}/${den} = ${(100 * num / den).toFixed(2)}%** ` +
-    `(token discharge ${sum.td}/${sum.t} · repository reachability ${sum.kr}/${sum.k} · leaf painting ${sum.lp}/${sum.lf}). ` +
-    `Keyword literals (${sum.lit}) and Pratt operators (${sum.op}) are discharged through the leaf-painting column. ` +
+  // the DECIDABLE fixed denominator = the structural obligations (token discharge + keyword-literal
+  // discharge + repository reachability), checked a-priori on the emitted artifact, no corpus. The
+  // leaf cross-check is the redundant corpus witness (the soundness-axis dual), reported separately.
+  const den = sum.t + sum.k + sum.lit, num = sum.td + sum.kr + sum.ld;
+  L.push(`**Decidable completeness: ${num}/${den} = ${(100 * num / den).toFixed(2)}%** ` +
+    `(token discharge ${sum.td}/${sum.t} · keyword-literal discharge ${sum.ld}/${sum.lit} · repository reachability ${sum.kr}/${sum.k}) — ` +
+    `a structural check on the emitted artifact, no corpus. Leaf cross-check (corpus, redundant): ${sum.lp}/${sum.lf}. ` +
     `${num === den ? '**0 open completeness gaps.**' : `**${den - num} OPEN GAP(S).**`}`);
   L.push('');
   L.push('<!-- COMPLETENESS-LEDGER:END -->');
@@ -519,14 +571,16 @@ async function main(): Promise<void> {
     const tc = tokenCensus(g, tmJson);
     check(`token-completeness(${cfg.name}): every non-skip token has a discharge path`, tc.orphans.length === 0, `orphans: ${tc.orphans.join(' ')}`);
     check(`token-completeness(${cfg.name}): no flat token is neutered to the bare root scope`, tc.neutered.length === 0, `neutered: ${tc.neutered.join(' ')}`);
+    const ld = literalDischarge(g, tmJson);
+    check(`literal-completeness(${cfg.name}): every keyword literal/operator is in a reachable keyword-scoped pattern`, ld.gaps.length === 0, `undischarged: ${ld.gaps.join(' ')}`);
     const tm = await loadTmFromFiles(cfg.scopeName, { [cfg.scopeName]: cfg.tm, ...(cfg.tmExtra ?? {}) });
     let cov: CoverageResult = { den: 0, painted: 0, uncovered: [] };
     if (tm) cov = leafCoverage(g, tm);
-    check(`coverage(${cfg.name}): every content/keyword obligation leaf is painted`, cov.painted === cov.den,
+    check(`coverage cross-check(${cfg.name}): every content/keyword obligation leaf is painted`, cov.painted === cov.den,
       cov.uncovered.map(u => `"${u.text}"(${u.want})`).slice(0, 8).join(' '));
-    rows.push(ledgerRow(cfg.name, g, tmJson, r, tc, cov));
+    rows.push(ledgerRow(cfg.name, g, r, tc, ld, cov));
     const pct = cov.den ? (100 * cov.painted / cov.den).toFixed(2) : '—';
-    console.log(`  ${cfg.name.padEnd(17)} repo ${String(r.repoKeys).padStart(3)} · dead ${r.dead.length} · tokens ${tc.total - tc.skip - tc.orphans.length}/${tc.total - tc.skip} · leaf-coverage ${cov.painted}/${cov.den} = ${pct}%`);
+    console.log(`  ${cfg.name.padEnd(17)} repo ${String(r.repoKeys).padStart(3)} · dead ${r.dead.length} · tokens ${tc.total - tc.skip - tc.orphans.length}/${tc.total - tc.skip} · keyword-literals ${ld.obl - ld.gaps.length}/${ld.obl} · leaf-xcheck ${cov.painted}/${cov.den}`);
     if (cov.uncovered.length) for (const u of cov.uncovered.slice(0, 6)) console.log(`      UNCOVERED "${u.text}" want ${u.want} ctx …${u.ctx}…`);
   }
 

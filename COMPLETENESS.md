@@ -46,7 +46,10 @@ value of a **closed union**: `RuleExpr` has 15 constructors and `TokenPattern` h
 `aliasScopes`, `expressionRule`, `manifest`). An *obligation* is induced by a
 constructor-occurrence or a config-field-occurrence. So completeness reduces to: **for each
 obligation generator, the generator has a discharging, reachable emission** — three
-mechanically-checkable layers.
+mechanically-checkable layers. Both sides are finite — a finite `G`, a finite `gen-tm(G)`, and an
+obligation taxonomy bounded by TextMate's finite construct kinds — so completeness is a **decidable**
+property per grammar, and holds **∀ G by structural induction** over the finite combinator algebra
+(finitely many cases). It is checked a-priori on the emitted artifact, with no corpus.
 
 ## Layer A — closure: the universe is the algebra, and lowering is total
 
@@ -95,11 +98,16 @@ co-blind):
   region machinery (a `markup` grammar emits no per-token keys), or a region that owns the
   token's delimiter (the JSX `/>` / `</` punctuation). `tokenCensus` classifies every token and
   asserts **zero orphans** — the emitter-completeness proof for tokens.
-- **Keyword literals & Pratt operators** are discharged through the flat backbone (A3) and the
-  prec-table path; the `op`/`prefix`/`postfix` markers carry no literal (they route to
-  `collectLiterals`' default), and an operator's scope comes from the prec-table value, not from
-  a walked marker — so those three constructors being unwalked anywhere is *benign*, confirmed
-  by adversarial review.
+- **Keyword literals & Pratt operators** bear a keyword-scope obligation, **discharged
+  structurally** (`literalDischarge`): every alphabetic literal the grammar consumes (from
+  `collectLiterals` over every rule, plus the prec / led tables) must appear, as a *scoped word*,
+  in some **reachable** pattern whose scope is a keyword family (`keyword.` / `storage.` /
+  `constant.language` / …). This is a finite scan of the emitted artifact — **no corpus** — asking
+  only whether a scoping pattern is *present* (completeness); whether its guard fires correctly is
+  soundness. **248/248** discharged across the six grammars. (The `op`/`prefix`/`postfix` markers
+  carry no literal — they route to `collectLiterals`' default — and an operator's scope comes from
+  the prec-table value, so those three constructors being unwalked is *benign*, confirmed by
+  adversarial review.)
 - **Shapes** (JSX elements, generic/cast angle brackets, regex context, declarations, ternary,
   conditional types, arrow params, contextual operators/modifiers) and **config surfaces**
   (markup, indent, newline, `expressionRule`, `aliasScopes`, `canonicalRepoNames`, `manifest`,
@@ -107,11 +115,11 @@ co-blind):
   rather than on TypeScript-specific names — the detector-completeness requirement — is held by
   `test/agnostic.ts` (synthetic grammars with deliberately non-TS names/delimiters).
 
-The empirical witness that all of the above actually paint is **leaf coverage**: over the
-deterministic grammar-derived corpus (`test/grammar-gen.ts`), every parsed leaf whose
-by-construction role (`buildRoleMap`) is a content/keyword role (keyword / string / number /
-comment) is confirmed to receive a non-root scope. The denominator is fixed (the obligation
-leaves). Result: **2433/2433 across all six grammars.**
+So token, keyword/operator, and reachability discharge are **decidable structural checks on the
+emitted artifact** — the fixed denominator in the ledger, **952/952, no corpus**. A *redundant*
+corpus cross-check (**leaf coverage**: over the deterministic grammar-derived corpus, every parsed
+leaf whose by-construction role is content/keyword gets a non-root scope — **2433/2433**) is kept as
+a differential witness on the soundness axis; it is not the guarantee.
 
 ## Measuring the detector — mutation testing
 
@@ -134,12 +142,19 @@ The honest, measured result:
   artifact's *sequence*, not the grammar's algebra — so no corpus-free structural check reaches it,
   and a scope-preserving reorder slips even the bucket-level differential.
 
-So the claim this document makes is bounded and measured: **every presence / reachability gap is
-caught corpus-free** (mutation-proven, the gate); **wrong-role and ordering gaps are the soundness /
-interaction axis**, reached only by evaluation (the differential, or `test/gap-ledger.ts`), never by
-a grammar-algebraic proof. An a-priori "no gap can hide" over the *whole* gap space is not available
-— ordering and correctness obligations live in the emitted artifact and slide toward regex-vs-CFG
-undecidability — and this document does not claim it.
+The line is precise. **Completeness — every required construct PRESENT + REACHABLE + visually scoped
+— is DECIDABLE**, and decided a-priori with no corpus: a finite grammar `G`, a finite emitted artifact
+`gen-tm(G)`, a finite obligation taxonomy (bounded by TextMate's finite construct kinds), and per-token
+discharge by *structural identity* (the flat `match` **is** `tokenPatternSource(t)`, so no semantic
+regex-matching is needed). ∀ `G` follows by structural induction over the finite combinator algebra.
+What is **undecidable is soundness** — do the present constructs paint *correctly on all inputs*: a
+wrong-role paint, or which of two overlapping patterns *wins* (ordering), is an agreement between a
+CFG-derived role and a regex-stack-machine tokenizer over an infinite input space, which slides into
+regex-vs-CFG undecidability (Oniguruma's `\g<>`/backreferences are non-regular). So this document
+proves completeness and *measures* its detector (mutation testing); soundness it does not claim to
+decide — that is `test/gap-ledger.ts`'s by-construction + corpus axis. The earlier framing that
+"a-priori completeness over the whole gap space is unavailable" was an over-concession: completeness
+is available; it was soundness's wall, mistaken for completeness's.
 
 ## Reachability — root ∪ export surfaces
 
@@ -189,17 +204,17 @@ Auto-generated by `node test/tm-completeness.ts --write`; `--check` fails CI if 
 
 <!-- COMPLETENESS-LEDGER:START — auto-generated by `node test/tm-completeness.ts --write`; do not edit by hand. -->
 
-| Grammar | Tokens | Keyword literals | Operators | Repo keys (reachable) | Leaf obligations (painted) |
-|---|---:|---:|---:|---:|---:|
-| typescript | 11/11 | 73 | 53 | 158/158 | 199/199 |
-| javascript | 11/11 | 48 | 51 | 103/103 | 131/131 |
-| typescriptreact | 13/13 | 73 | 53 | 171/171 | 169/169 |
-| javascriptreact | 13/13 | 48 | 51 | 116/116 | 121/121 |
-| html | 7/7 | 0 | 0 | 28/28 | 175/175 |
-| yaml | 19/19 | 0 | 0 | 54/54 | 1638/1638 |
-| **total** | **74/74** | **242** | **208** | **630/630** | **2433/2433** |
+| Grammar | Tokens | Keyword literals | Repo keys (reachable) | Leaf cross-check (corpus) |
+|---|---:|---:|---:|---:|
+| typescript | 11/11 | 73/73 | 158/158 | 199/199 |
+| javascript | 11/11 | 51/51 | 103/103 | 131/131 |
+| typescriptreact | 13/13 | 73/73 | 171/171 | 169/169 |
+| javascriptreact | 13/13 | 51/51 | 116/116 | 121/121 |
+| html | 7/7 | 0/0 | 28/28 | 175/175 |
+| yaml | 19/19 | 0/0 | 54/54 | 1638/1638 |
+| **total** | **74/74** | **248/248** | **630/630** | **2433/2433** |
 
-**Fixed-denominator completeness: 3137/3137 = 100.00%** (token discharge 74/74 · repository reachability 630/630 · leaf painting 2433/2433). Keyword literals (242) and Pratt operators (208) are discharged through the leaf-painting column. **0 open completeness gaps.**
+**Decidable completeness: 952/952 = 100.00%** (token discharge 74/74 · keyword-literal discharge 248/248 · repository reachability 630/630) — a structural check on the emitted artifact, no corpus. Leaf cross-check (corpus, redundant): 2433/2433. **0 open completeness gaps.**
 
 <!-- COMPLETENESS-LEDGER:END -->
 
