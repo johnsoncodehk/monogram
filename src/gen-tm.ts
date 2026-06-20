@@ -3110,6 +3110,13 @@ function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar): strin
     if (e.type === 'literal' && isKeywordLiteral(e.value)) keywords.push(e.value);
     if (e.type === 'seq' || e.type === 'alt') e.items.forEach(walk);
     if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
+    // A keyword reached through a `sep` sub-list of the element is just as direct as one in a
+    // seq/alt — recurse into its element so it is hoisted too (e.g. a type-param whose constraint
+    // is a `&`-separated list carrying a keyword). `not` stays omitted on purpose: a literal under
+    // a negative lookahead is a forbidden word, not present at the site, so it bears no scope; and
+    // `ref` stays unresolved (like collectLiterals) so a constraint TYPE's own keywords — `keyof`,
+    // `typeof` — are NOT mis-hoisted to type-parameter keyword scope.
+    if (e.type === 'sep') walk(e.element);
   }
   walk(elementBody);
   return [...new Set(keywords)];
