@@ -922,16 +922,17 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
   }
   if (!selfCloseTok || !closeTok) return null;
 
-  // Confirm the JSX element production: a `<` literal directly before a rule ref.
+  // Confirm the JSX element production: a `<` literal directly before a rule ref, matched on the
+  // NORMALISED branches so an opt/alt/group factoring of the element production still qualifies.
   let hasElementShape = false;
   const walk = (e: RuleExpr): void => {
-    if (e.type === 'seq') {
-      for (let i = 0; i < e.items.length - 1; i++) {
-        if (e.items[i].type === 'literal' && (e.items[i] as { value: string }).value === '<' &&
-            e.items[i + 1].type === 'ref') hasElementShape = true;
+    for (const items of expandAlts(e)) {
+      for (let i = 0; i < items.length - 1; i++) {
+        if (items[i].type === 'literal' && (items[i] as { value: string }).value === '<' &&
+            items[i + 1].type === 'ref') hasElementShape = true;
       }
-      e.items.forEach(walk);
-    } else if (e.type === 'alt') e.items.forEach(walk);
+    }
+    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(walk);
     else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
     else if (e.type === 'sep') walk(e.element);
   };
@@ -2242,8 +2243,10 @@ function detectConditionalType(grammar: CstGrammar): string | null {
 
   function walk(expr: RuleExpr): void {
     if (connector) return;
-    if (expr.type === 'seq') { checkSeq(expr.items); expr.items.forEach(walk); }
-    else if (expr.type === 'alt') expr.items.forEach(walk);
+    // run the 7-window over the NORMALISED branches (mirrors detectTernary): expandAlts
+    // canonicalises an opt-tail / grouped / alt-split conditional `?:` into the flat adjacency.
+    for (const items of expandAlts(expr)) { checkSeq(items); if (connector) return; }
+    if (expr.type === 'seq' || expr.type === 'alt') expr.items.forEach(walk);
     else if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
     else if (expr.type === 'sep') walk(expr.element);
   }
@@ -3112,10 +3115,18 @@ function isAngleBracketSepRule(body: RuleExpr): boolean {
 }
 
 function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar): string[] {
-  if (body.type !== 'seq' || body.items.length !== 3) return [];
-  const sep = body.items[1];
-  if (sep.type !== 'sep') return [];
-  let elementBody: RuleExpr = sep.element;
+  // Find the `'<' sep '>'` adjacency in any NORMALISED branch (so a trailing `opt(',')` or an
+  // alt-wrapped body still surfaces it — the same expansion isAngleBracketSepRule uses), then hoist
+  // the element's keywords. Without this the keyword sub-pattern (the `\bextends\b` scoping inside
+  // `<…>`) is dropped for those equivalent factorings even though the region itself is still emitted.
+  let elementBody: RuleExpr | null = null;
+  for (const items of expandAlts(body)) {
+    const i = items.findIndex(x => x.type === 'literal' && (x as { value: string }).value === '<');
+    if (i >= 0 && items[i + 1]?.type === 'sep' && items[i + 2]?.type === 'literal' && (items[i + 2] as { value: string }).value === '>') {
+      elementBody = (items[i + 1] as { element: RuleExpr }).element; break;
+    }
+  }
+  if (!elementBody) return [];
   if (elementBody.type === 'ref') {
     const rule = grammar.rules.find(r => r.name === (elementBody as { name: string }).name);
     if (rule) elementBody = rule.body;
@@ -3151,13 +3162,15 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
   function isBlockRule(name: string): boolean {
     const rule = grammar.rules.find(r => r.name === name);
     if (!rule) return false;
-    const body = rule.body;
-    if (body.type === 'seq' && body.items.length >= 2) {
-      return body.items[0].type === 'literal' && (body.items[0] as { value: string }).value === '{' &&
-             body.items[body.items.length - 1].type === 'literal' &&
-             (body.items[body.items.length - 1] as { value: string }).value === '}';
-    }
-    return false;
+    // A rule is a block body only if EVERY normalised branch is `{ … }`-bounded — i.e. it is
+    // ALWAYS a brace block. `.some` would over-match a rule that is only SOMETIMES a block (a
+    // `Type` whose value can be an inline object type), mis-classifying a `type X = …` alias as a
+    // brace-body declaration. `.every` recovers the alt-of-blocks factoring without that regression.
+    const branches = expandAlts(rule.body);
+    return branches.length > 0 && branches.every(items =>
+      items.length >= 2 &&
+      items[0].type === 'literal' && (items[0] as { value: string }).value === '{' &&
+      items[items.length - 1].type === 'literal' && (items[items.length - 1] as { value: string }).value === '}');
   }
 
   function containsLiteral(expr: RuleExpr, value: string): boolean {
