@@ -4,11 +4,13 @@
 // the conformance corpus. This is the lexer counterpart of emit-parser-verify (which
 // compares CSTs and is therefore blind to equal-on-both-sides lexer bugs only when the
 // lexers are SHARED; with an emitted lexer the streams must be compared directly).
-//   node test/emit-lexer-verify.ts            # full conformance corpus
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+// HARD gate = the in-repo corpus (test/emit-corpus.ts); the optional /tmp/ts-repo corpus
+// is also swept when present. Corpus-free, so it runs in `npm run check` everywhere.
+//   node test/emit-lexer-verify.ts            # in-repo corpus (+ /tmp/ts-repo if present)
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createLexer } from '../src/gen-lexer.ts';
 import { emitParser } from '../src/emit-parser.ts';
+import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 
 const grammar = (await import('../typescript.ts')).default;
 
@@ -31,44 +33,49 @@ const kPunct = Number(src.match(/const K_PUNCT = (\d+);/)![1]);
 const kFallback = Number(src.match(/const K_NAMED_FALLBACK = (\d+);/)![1]);
 const ref = createLexer(grammar, { typeKind: tk, kwLit: kw, puLit: pu, punctKind: kPunct, namedFallback: kFallback });
 
-const files: string[] = [];
-(function walk(d: string) {
-  for (const e of readdirSync(d)) {
-    const p = join(d, e);
-    const s = statSync(p);
-    if (s.isDirectory()) walk(p);
-    else if (p.endsWith('.ts')) files.push(p);
-  }
-})('/tmp/ts-repo/tests/cases/conformance');
-
-let same = 0, diff = 0, bothThrow = 0, throwMismatch = 0;
-for (const f of files) {
-  const code = readFileSync(f, 'utf8');
-  // The emitted tokenize fills struct-of-arrays columns and returns the count;
-  // tokenAt(i) reconstructs the per-token object view for the comparison.
-  let a: any[] | null = null, bn: number | null = null, ea: string | null = null, eb: string | null = null;
-  try { a = ref.tokenize(code); } catch (e) { ea = String(e); }
-  try { bn = emitted.tokenize(code); } catch (e) { eb = String(e); }
-  if (ea !== null || eb !== null) {
-    if (ea !== null && ea === eb) { bothThrow++; continue; }
-    throwMismatch++;
-    console.log('THROW MISMATCH', f, '\n  ref :', ea, '\n  emit:', eb);
-    continue;
-  }
-  if (a!.length !== bn!) { diff++; console.log('LEN DIFF', f, a!.length, bn); continue; }
-  let ok = true;
-  for (let i = 0; i < a!.length; i++) {
-    const x = a![i], y = emitted.tokenAt(i);
-    if (x.type !== y.type || x.text !== y.text || x.offset !== y.offset || x.k !== y.k || x.t !== y.t
-        || x.newlineBefore !== y.newlineBefore || x.commentBefore !== y.commentBefore
-        || x.multilineFlowBefore !== y.multilineFlowBefore) {
-      ok = false;
-      console.log('TOK DIFF', f, 'at', i, JSON.stringify(x), JSON.stringify(y));
-      break;
+function sweep(label: string, samples: { name: string; code: string }[]) {
+  let same = 0, diff = 0, bothThrow = 0, throwMismatch = 0;
+  for (const { name, code } of samples) {
+    // The emitted tokenize fills struct-of-arrays columns and returns the count;
+    // tokenAt(i) reconstructs the per-token object view for the comparison.
+    let a: any[] | null = null, bn: number | null = null, ea: string | null = null, eb: string | null = null;
+    try { a = ref.tokenize(code); } catch (e) { ea = String(e); }
+    try { bn = emitted.tokenize(code); } catch (e) { eb = String(e); }
+    if (ea !== null || eb !== null) {
+      if (ea !== null && ea === eb) { bothThrow++; continue; }
+      throwMismatch++;
+      console.log('THROW MISMATCH', name, '\n  ref :', ea, '\n  emit:', eb);
+      continue;
     }
+    if (a!.length !== bn!) { diff++; console.log('LEN DIFF', name, a!.length, bn); continue; }
+    let ok = true;
+    for (let i = 0; i < a!.length; i++) {
+      const x = a![i], y = emitted.tokenAt(i);
+      if (x.type !== y.type || x.text !== y.text || x.offset !== y.offset || x.k !== y.k || x.t !== y.t
+          || x.newlineBefore !== y.newlineBefore || x.commentBefore !== y.commentBefore
+          || x.multilineFlowBefore !== y.multilineFlowBefore) {
+        ok = false;
+        console.log('TOK DIFF', name, 'at', i, JSON.stringify(x), JSON.stringify(y));
+        break;
+      }
+    }
+    ok ? same++ : diff++;
   }
-  ok ? same++ : diff++;
+  console.log(`${label}: samples=${samples.length} same=${same} bothThrow(sameMsg)=${bothThrow} diff=${diff} throwMismatch=${throwMismatch}`);
+  return diff + throwMismatch;
 }
-console.log(`files=${files.length} same=${same} bothThrow(sameMsg)=${bothThrow} diff=${diff} throwMismatch=${throwMismatch}`);
-if (diff > 0 || throwMismatch > 0) process.exit(1);
+
+// ── 1) HARD gate: in-repo corpus ──
+let bad = sweep('in-repo corpus', inRepoCorpus());
+
+// ── 2) Optional breadth: external corpus ──
+const ext = externalTsFiles();
+if (ext.length) {
+  const samples = ext.map((f) => { try { return { name: f, code: readFileSync(f, 'utf8') }; } catch { return null; } }).filter(Boolean) as { name: string; code: string }[];
+  bad += sweep('external corpus', samples);
+} else {
+  console.log('external corpus (/tmp/ts-repo) absent — in-repo gate only');
+}
+
+if (bad > 0) process.exit(1);
 console.log('✓ emitted lexer ≡ createLexer (full token streams + error messages)');

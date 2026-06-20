@@ -228,5 +228,10 @@ first-error agreement 57.5%.
   determinism on an invalid corpus, a char-by-char typing session, and
   exact-match diagnostic pins (synthesis quality must not silently regress to
   absorption).
-- `test/emit-parser-verify.ts` / `test/emit-lexer-verify.ts` — emitted runtime
-  ≡ interpreter on the corpus, token streams and error messages included.
+- `test/emit-parser-verify.ts` / `test/emit-reject-messages.ts` /
+  `test/emit-lexer-verify.ts` — the emitted runtime ≡ the interpreter (CST,
+  token streams, and reject messages). They run on a corpus-free in-repo corpus
+  (`test/emit-corpus.ts`: curated snippets + the repo's own sources), so they are
+  part of `npm run check` on every machine — the mechanism that forces a
+  gen-parser change to propagate to emit-parser. The CI `emit-parity` job adds the
+  full external TS corpus for breadth.
