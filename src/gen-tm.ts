@@ -3134,7 +3134,11 @@ function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar): strin
   }
   const keywords: string[] = [];
   function walk(e: RuleExpr) {
-    if (e.type === 'literal' && isKeywordLiteral(e.value)) keywords.push(e.value);
+    // collect a literal the element CONSUMES that bears a scope obligation: a keyword, OR any
+    // literal the grammar declares a scope for (e.g. a `&` separator scoped punctuation.separator)
+    // — so a declared-scope PUNCTUATION inside the element keeps its scope inside `<…>` too, not
+    // only keywords. The emit site picks the right boundary (`\b` for words, none for punctuation).
+    if (e.type === 'literal' && (isKeywordLiteral(e.value) || grammar.scopeOverrides.has(e.value))) keywords.push(e.value);
     if (e.type === 'seq' || e.type === 'alt') e.items.forEach(walk);
     if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
     // A keyword reached through a `sep` sub-list of the element is just as direct as one in a
@@ -6563,12 +6567,15 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         { include: '#declaration-type-params' },
       ];
       for (const kw of allTypeParamKws) {
+        // `=` and `,` are the type-param's STRUCTURAL punctuation, emitted by the dedicated
+        // handlers below — skip them here so they are not double-emitted.
+        if (kw === '=' || kw === ',') continue;
         const scope = getScope(scopeOverrides,kw);
         if (scope) {
-          tpInner.push({
-            match: `\\b${escapeRegex(kw)}\\b`,
-            name: `${scope}.${langName}`,
-          });
+          // a word literal is `\b`-bounded; a punctuation literal (e.g. `&`) must NOT be — `\b&\b`
+          // never matches. Pick the boundary by the literal's class.
+          const m = isKeywordLiteral(kw) ? `\\b${escapeRegex(kw)}\\b` : escapeRegex(kw);
+          tpInner.push({ match: m, name: `${scope}.${langName}` });
         }
       }
       tpInner.push({ include: '#type-inner' });
