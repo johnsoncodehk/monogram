@@ -3950,8 +3950,11 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
             for (let i = 0; i < lexSnap.length; i++) docLex.push(lexSnap[i]);
             recoverBars = bars;
             memoGenCur++;
-            adoptPath.length = 0;
-            adoptBase.length = 0;
+            // adoptPath/adoptBase PERSIST across recovery attempts (C4): adoptRoot is the
+            // pre-edit tree, fixed for the whole loop, so the navigation cache stays valid;
+            // adoptSeek self-truncates to the prefix containing the new q. Bars change the
+            // adoption DECISION (re-evaluated per call), not the cache. Only the per-attempt
+            // run-extension state resets.
             adoptRunPos = -1;
             scn = 0;
             root = runParse(entryRule);
@@ -3970,8 +3973,11 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
             docLex.length = 0;
             for (let i = 0; i < lexSnap.length; i++) docLex.push(lexSnap[i]);
             memoGenCur++;
-            adoptPath.length = 0;
-            adoptBase.length = 0;
+            // adoptPath/adoptBase PERSIST across recovery attempts (C4): adoptRoot is the
+            // pre-edit tree, fixed for the whole loop, so the navigation cache stays valid;
+            // adoptSeek self-truncates to the prefix containing the new q. Bars change the
+            // adoption DECISION (re-evaluated per call), not the cache. Only the per-attempt
+            // run-extension state resets.
             adoptRunPos = -1;
             scn = 0;
             root = runParse(entryRule);
