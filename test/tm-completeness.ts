@@ -477,6 +477,53 @@ async function regionKeywordProbe(): Promise<void> {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  SHAPE ROBUSTNESS — a shape-detector must fire on EVERY equivalent factoring
+//
+//  The ~24 shape detectors in gen-tm.ts recognise a construct (ternary / call / generic
+//  type-params / …) by its structure. A detector that matches one FIXED factoring (a flat
+//  5-window ternary, an inline `(`, a 3-item `<sep>`) silently drops the SAME construct
+//  written an equivalent way (an `opt`-tail, a separate args rule, a trailing comma) — the
+//  detector-fragility class the gap-hunt surfaced. The root-cause fix is to match a NORMALISED
+//  form (expandAlts + FIRST); this gate holds it: for each construct, several equivalent
+//  factorings must ALL emit the same region key. It BITES if a detector regresses to a fixed
+//  shape (a factoring loses the region).
+// ════════════════════════════════════════════════════════════════════════════
+function checkShapeRobustness(): void {
+  const Id = token(plus(range('a', 'z')), { identifier: true });
+  const emits = (key: string, build: () => Record<string, any>): boolean => {
+    try { return !!(generateTmLanguage(defineGrammar(build() as any) as any) as any).repository[key]; }
+    catch { return false; }
+  };
+  // each construct, in several EQUIVALENT factorings; the region key must be present in all.
+  const constructs: { name: string; key: string; factorings: { label: string; build: () => Record<string, any> }[] }[] = [
+    {
+      name: 'ternary', key: 'ternary-expression', factorings: [
+        { label: 'flat', build: () => { const E = rule((s: any) => [[Id, '?', s, ':', s], [Id]]); const P = rule(() => [[many(E)]]); return { name: 't1', scopeName: 'source.t1', tokens: { Id }, rules: { E, P }, entry: P }; } },
+        { label: 'opt-tail', build: () => { const E = rule((s: any) => [[Id, opt('?', s, ':', s)]]); const P = rule(() => [[many(E)]]); return { name: 't2', scopeName: 'source.t2', tokens: { Id }, rules: { E, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: 'call', key: 'function-call', factorings: [
+        { label: 'inline', build: () => { const A = rule(() => [[Id]]); const E = rule((s: any) => [[A, '(', sep(s, ','), ')'], [A]]); const P = rule(() => [[many(E)]]); return { name: 'c1', scopeName: 'source.c1', tokens: { Id }, rules: { A, E, P }, entry: P }; } },
+        { label: 'args-rule', build: () => { const A = rule(() => [[Id]]); const CA = rule((s: any) => [['(', sep(s, ','), ')']]); const C = rule((s: any) => [[A, CA], [A]]); const E = rule((s: any) => [[C]]); const P = rule(() => [[many(E)]]); return { name: 'c2', scopeName: 'source.c2', tokens: { Id }, rules: { A, CA, C, E, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: 'generic-type-params', key: 'declaration-type-params', factorings: [
+        { label: '3-item', build: () => { const T = rule(() => [[Id]]); const Pm = rule(() => [[Id, opt('extends', T)]]); const TP = rule(() => [['<', sep(Pm, ','), '>']]); const D = rule(() => [['fn', Id, opt(TP), '{', '}']]); const P = rule(() => [[many(D)]]); return { name: 'g1', scopeName: 'source.g1', tokens: { Id }, prec: [none('<', '>')], scopes: { 'storage.type.function': ['fn'], 'keyword.operator.expression.extends': ['extends'] }, rules: { T, Pm, TP, D, P }, entry: P }; } },
+        { label: 'trailing-comma', build: () => { const T = rule(() => [[Id]]); const Pm = rule(() => [[Id, opt('extends', T)]]); const TP = rule(() => [['<', sep(Pm, ','), opt(','), '>']]); const D = rule(() => [['fn', Id, opt(TP), '{', '}']]); const P = rule(() => [[many(D)]]); return { name: 'g2', scopeName: 'source.g2', tokens: { Id }, prec: [none('<', '>')], scopes: { 'storage.type.function': ['fn'], 'keyword.operator.expression.extends': ['extends'] }, rules: { T, Pm, TP, D, P }, entry: P }; } },
+      ],
+    },
+  ];
+  for (const c of constructs) {
+    const results = c.factorings.map(f => ({ label: f.label, ok: emits(c.key, f.build) }));
+    const allEmit = results.every(r => r.ok);
+    check(`shape-robustness: \`${c.name}\` emits #${c.key} for every equivalent factoring`, allEmit,
+      results.filter(r => !r.ok).map(r => r.label).join(', '));
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  driver
 // ════════════════════════════════════════════════════════════════════════════
 interface GrammarCfg { name: string; module: string; scopeName: string; tm: string; tmExtra?: Record<string, string> }
@@ -558,6 +605,9 @@ async function main(): Promise<void> {
   console.log('── Layer A: no consumed literal is silently dropped (collectLiterals backbone) ──');
   checkCollectLiteralsClosure();
   await regionKeywordProbe();
+
+  console.log('── Shape robustness: detectors fire on every equivalent factoring ──');
+  checkShapeRobustness();
 
   console.log('── Reachability · token completeness · Layer B1 leaf coverage ──');
   const rows: LedgerRow[] = [];

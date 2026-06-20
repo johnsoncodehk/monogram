@@ -1997,20 +1997,22 @@ function generateTypeCastPattern(
  * identifiers before '(' as entity.name.function.
  */
 function detectCallExpression(grammar: CstGrammar): boolean {
+  const byName = new Map(grammar.rules.map(r => [r.name, r.body]));
+  // A call is a ref (the callee) immediately followed by something that STARTS with `(` — the
+  // arg list. Checking FIRST(next) instead of a literal `(` makes the detection transparent to
+  // factoring: the args may be the literal `(` directly, OR a separate rule (`CallArgs = '(' … ')'`)
+  // referenced after the callee — both have `(` in their FIRST set.
+  const startsWithParen = (e: RuleExpr) => firstLiterals(e, byName).has('(');
   function checkSeq(items: RuleExpr[]): boolean {
     for (let i = 0; i < items.length - 1; i++) {
-      if (items[i].type === 'ref' &&
-          items[i + 1].type === 'literal' &&
-          (items[i + 1] as { value: string }).value === '(') {
-        return true;
-      }
+      if (items[i].type === 'ref' && startsWithParen(items[i + 1])) return true;
     }
     return false;
   }
 
   function walk(expr: RuleExpr): boolean {
-    if (expr.type === 'seq') return checkSeq(expr.items) || expr.items.some(walk);
-    if (expr.type === 'alt') return expr.items.some(walk);
+    if (expandAlts(expr).some(checkSeq)) return true;   // normalized factorings (opt/alt/group)
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
     return false;
@@ -2185,9 +2187,13 @@ function detectTernary(grammar: CstGrammar): boolean {
     return false;
   }
 
+  // Match on the NORMALIZED forms (expandAlts canonicalises equivalent factorings — an
+  // `opt('?', $, ':', $)` tail, an alt-split, a group — into the same flat adjacency), plus a
+  // recurse into `sep` elements (expandAlts treats `sep` as opaque). So a ternary written any of
+  // those equivalent ways is detected, not only the one flat 5-window factoring.
   function walk(expr: RuleExpr): boolean {
-    if (expr.type === 'seq') return checkSeq(expr.items) || expr.items.some(walk);
-    if (expr.type === 'alt') return expr.items.some(walk);
+    if (expandAlts(expr).some(checkSeq)) return true;
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
     return false;
@@ -3093,11 +3099,16 @@ interface DeclInfo {
 }
 
 function isAngleBracketSepRule(body: RuleExpr): boolean {
-  if (body.type !== 'seq' || body.items.length !== 3) return false;
-  const [first, second, third] = body.items;
-  return first.type === 'literal' && first.value === '<' &&
-         second.type === 'sep' && second.delimiter === ',' &&
-         third.type === 'literal' && third.value === '>';
+  // Match on the NORMALIZED forms so an equivalent factoring — a trailing `opt(',')`, an
+  // alt-split, a group wrapper — reduces to the same `'<' sep '>'` adjacency. expandAlts keeps
+  // `sep` opaque (it is in its default case), so the sep node survives the expansion.
+  return expandAlts(body).some(items => {
+    if (items.length !== 3) return false;
+    const [first, second, third] = items;
+    return first.type === 'literal' && first.value === '<' &&
+           second.type === 'sep' && second.delimiter === ',' &&
+           third.type === 'literal' && third.value === '>';
+  });
 }
 
 function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar): string[] {
