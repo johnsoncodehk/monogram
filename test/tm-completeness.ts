@@ -41,7 +41,7 @@ import {
   tsRelax, capExpr, awaitCtx, yieldCtx, asyncGenCtx, resetCtx, op, prefix, postfix,
   sameLine, noCommentBefore, noMultilineFlowBefore, notLeftLeaf,
   oneOf, noneOf, seq, altPattern, optPattern, star, plus, repeat,
-  followedBy, notFollowedBy, precededBy, notPrecededBy, start, end, never, anyChar, range, none,
+  followedBy, notFollowedBy, precededBy, notPrecededBy, start, end, never, anyChar, range, none, left,
 } from '../src/api.ts';
 import { tokenPatternToRegex, tokenPatternIsNever, tokenPatternLiteralText } from '../src/token-pattern.ts';
 import { collectLiterals, isKeywordLiteral } from '../src/grammar-utils.ts';
@@ -495,38 +495,231 @@ async function regionKeywordProbe(): Promise<void> {
 //  factorings must ALL emit the same region key. It BITES if a detector regresses to a fixed
 //  shape (a factoring loses the region).
 // ════════════════════════════════════════════════════════════════════════════
+
+// Shared .tsx scaffolding for the `type-param-constraint` construct: a JSX grammar (so the
+// generic-arrow ⇄ JSX `extends` disambiguation guard is emitted at all) whose ONLY varying part
+// is the type-param rule body, produced by `mkTParam(CType)` (CType is the registered constraint
+// type rule). Mirrors the angle-bracket disambiguation fixtures in test/agnostic.ts.
+function tpcGrammar(
+  name: string, SelfEnd: any, CloseTg: any, Id: any,
+  mkTParam: (CType: any) => any,
+): Record<string, any> {
+  const Type: any = rule(() => [[Id]]);
+  const CType: any = rule(() => [[Id]]);                         // the constraint's TYPE rule (REGISTERED)
+  const TParam = rule(() => [mkTParam(CType)]);
+  const TP = rule(() => [['<', sep(TParam, ','), '>']]);
+  const Param = rule(() => [[Id, opt(':', Type)]]);
+  const Decl = rule(() => [['fn', Id, opt(TP), '(', sep(Param, ','), ')', '{', '}']]);   // emits #arrow-type-parameters
+  const Arrow = rule(() => [[opt(TP), '(', sep(Param, ','), ')', '=>', Id]]);
+  const Call = rule(() => [[Id, '<', sep(Type, ','), '>', '(', sep(Id, ','), ')']]);
+  const Attr = rule(() => [[Id, opt('=', Id)]]);
+  const Elem = rule(() => [['<', Id, many(Attr), alt(SelfEnd, ['>', CloseTg, Id, '>'])]]);
+  const E = rule(() => [Id, Call, Arrow, Elem]);
+  const S = rule(() => [Decl, E]);
+  const Prog = rule(() => [[many(S)]]);
+  return {
+    name, scopeName: `source.${name}`,
+    tokens: { SelfEnd, CloseTg, Id }, prec: [none('<', '>')],
+    scopes: { 'storage.type.function': ['fn'], 'keyword.operator.expression.extends': ['extends'] },
+    rules: { Type, CType, TParam, TP, Param, Decl, Arrow, Call, Attr, Elem, E, S, Prog }, entry: Prog,
+  };
+}
+
 function checkShapeRobustness(): void {
   const Id = token(plus(range('a', 'z')), { identifier: true });
-  const emits = (key: string, build: () => Record<string, any>): boolean => {
-    try { return !!(generateTmLanguage(defineGrammar(build() as any) as any) as any).repository[key]; }
+  // JSX delimiter tokens — needed by the constructs whose discharge only fires in a .tsx
+  // grammar (the generic-arrow ⇄ JSX disambiguation, e.g. type-param-constraint below).
+  const SelfEnd = token(seq('/', '>'));   // />
+  const CloseTg = token(seq('<', '/'));   // </
+  // A construct's obligation is "discharged" iff `observable(tm)` is true. Most are a
+  // repository-key presence; some (the disambiguation guards) are a substring of an
+  // emitted regex — `keyObs(k)` is the common case, an explicit `observable` the rest.
+  const keyObs = (key: string) => (tm: any) => !!tm.repository[key];
+  const emits = (observable: (tm: any) => boolean, build: () => Record<string, any>): boolean => {
+    try { return !!observable(generateTmLanguage(defineGrammar(build() as any) as any) as any); }
     catch { return false; }
   };
-  // each construct, in several EQUIVALENT factorings; the region key must be present in all.
-  const constructs: { name: string; key: string; factorings: { label: string; build: () => Record<string, any> }[] }[] = [
+  // each construct, in several EQUIVALENT factorings; the obligation must discharge in all.
+  // `xfail` records factorings a detector is KNOWN to drop today (issue #51 residual fragility):
+  // the assertion tolerates exactly those, so the gate goes RED on a NEW drop or once a fix lands
+  // and the xfail goes stale — never a silent false-green, never a permanent red.
+  const constructs: { name: string; key?: string; observable: (tm: any) => boolean; xfail?: string[]; factorings: { label: string; build: () => Record<string, any> }[] }[] = [
     {
-      name: 'ternary', key: 'ternary-expression', factorings: [
+      name: 'ternary', key: 'ternary-expression', observable: keyObs('ternary-expression'), factorings: [
         { label: 'flat', build: () => { const E = rule((s: any) => [[Id, '?', s, ':', s], [Id]]); const P = rule(() => [[many(E)]]); return { name: 't1', scopeName: 'source.t1', tokens: { Id }, rules: { E, P }, entry: P }; } },
         { label: 'opt-tail', build: () => { const E = rule((s: any) => [[Id, opt('?', s, ':', s)]]); const P = rule(() => [[many(E)]]); return { name: 't2', scopeName: 'source.t2', tokens: { Id }, rules: { E, P }, entry: P }; } },
       ],
     },
     {
-      name: 'call', key: 'function-call', factorings: [
+      name: 'call', key: 'function-call', observable: keyObs('function-call'), factorings: [
         { label: 'inline', build: () => { const A = rule(() => [[Id]]); const E = rule((s: any) => [[A, '(', sep(s, ','), ')'], [A]]); const P = rule(() => [[many(E)]]); return { name: 'c1', scopeName: 'source.c1', tokens: { Id }, rules: { A, E, P }, entry: P }; } },
         { label: 'args-rule', build: () => { const A = rule(() => [[Id]]); const CA = rule((s: any) => [['(', sep(s, ','), ')']]); const C = rule((s: any) => [[A, CA], [A]]); const E = rule((s: any) => [[C]]); const P = rule(() => [[many(E)]]); return { name: 'c2', scopeName: 'source.c2', tokens: { Id }, rules: { A, CA, C, E, P }, entry: P }; } },
       ],
     },
     {
-      name: 'generic-type-params', key: 'declaration-type-params', factorings: [
+      name: 'generic-type-params', key: 'declaration-type-params', observable: keyObs('declaration-type-params'), factorings: [
         { label: '3-item', build: () => { const T = rule(() => [[Id]]); const Pm = rule(() => [[Id, opt('extends', T)]]); const TP = rule(() => [['<', sep(Pm, ','), '>']]); const D = rule(() => [['fn', Id, opt(TP), '{', '}']]); const P = rule(() => [[many(D)]]); return { name: 'g1', scopeName: 'source.g1', tokens: { Id }, prec: [none('<', '>')], scopes: { 'storage.type.function': ['fn'], 'keyword.operator.expression.extends': ['extends'] }, rules: { T, Pm, TP, D, P }, entry: P }; } },
         { label: 'trailing-comma', build: () => { const T = rule(() => [[Id]]); const Pm = rule(() => [[Id, opt('extends', T)]]); const TP = rule(() => [['<', sep(Pm, ','), opt(','), '>']]); const D = rule(() => [['fn', Id, opt(TP), '{', '}']]); const P = rule(() => [[many(D)]]); return { name: 'g2', scopeName: 'source.g2', tokens: { Id }, prec: [none('<', '>')], scopes: { 'storage.type.function': ['fn'], 'keyword.operator.expression.extends': ['extends'] }, rules: { T, Pm, TP, D, P }, entry: P }; } },
       ],
     },
+    // ── conditional-type (detectConditionalType, key #type-conditional) ──
+    // `{type:true}` rule with `ref KW ref ? ref : ref`. detectConditionalType runs its
+    // 7-window over expandAlts(body), so opt-tail / alt-split normalise to the same flat
+    // adjacency. ROBUST (all factorings emit).
+    {
+      name: 'conditional-type', key: 'type-conditional', observable: keyObs('type-conditional'), factorings: [
+        { label: 'canonical', build: () => { const T: any = rule(() => [[Id, 'extends', Id, '?', Id, ':', Id], [Id]], { type: true }); const Ann = rule(() => [[Id, ':', T]]); const P = rule(() => [[many(Ann)]]); return { name: 'cd1', scopeName: 'source.cd1', tokens: { Id }, scopes: { 'keyword.operator.expression.extends': ['extends'] }, rules: { T, Ann, P }, entry: P }; } },
+        { label: 'opt-tail', build: () => { const T: any = rule(() => [[Id, opt('extends', Id, '?', Id, ':', Id)]], { type: true }); const Ann = rule(() => [[Id, ':', T]]); const P = rule(() => [[many(Ann)]]); return { name: 'cd2', scopeName: 'source.cd2', tokens: { Id }, scopes: { 'keyword.operator.expression.extends': ['extends'] }, rules: { T, Ann, P }, entry: P }; } },
+        { label: 'alt-split', build: () => { const T: any = rule(() => [alt([Id, 'extends', Id, '?', Id, ':', Id], [Id])], { type: true }); const Ann = rule(() => [[Id, ':', T]]); const P = rule(() => [[many(Ann)]]); return { name: 'cd3', scopeName: 'source.cd3', tokens: { Id }, scopes: { 'keyword.operator.expression.extends': ['extends'] }, rules: { T, Ann, P }, entry: P }; } },
+      ],
+    },
+    // ── generic-call (detectAngleBracketAmbiguity, key #generic-call) ──
+    // `<` sep(ref) `>` CONFIRM (the confirm token is the item after `>`). The detector walks
+    // expandAlts(body), so the `(args)` confirm written as an opt-tail or reached through an
+    // alt() still surfaces the `< sep > (` adjacency. Needs `<`/`>` in the prec table. ROBUST.
+    {
+      name: 'generic-call', key: 'generic-call', observable: keyObs('generic-call'), factorings: [
+        { label: 'canonical', build: () => { const T = rule(() => [[Id]]); const Call = rule(() => [[Id, '<', sep(T, ','), '>', '(', sep(Id, ','), ')']]); const E = rule(() => [Id, Call]); const P = rule(() => [[many(E)]]); return { name: 'gc1', scopeName: 'source.gc1', tokens: { Id }, prec: [none('<', '>')], rules: { T, Call, E, P }, entry: P }; } },
+        { label: 'opt-tail', build: () => { const T = rule(() => [[Id]]); const Call = rule(() => [[Id, '<', sep(T, ','), '>', opt('(', sep(Id, ','), ')')]]); const E = rule(() => [Id, Call]); const P = rule(() => [[many(E)]]); return { name: 'gc2', scopeName: 'source.gc2', tokens: { Id }, prec: [none('<', '>')], rules: { T, Call, E, P }, entry: P }; } },
+        { label: 'alt-confirm', build: () => { const T = rule(() => [[Id]]); const Call = rule(() => [[Id, '<', sep(T, ','), '>', alt(['(', sep(Id, ','), ')'], [Id])]]); const E = rule(() => [Id, Call]); const P = rule(() => [[many(E)]]); return { name: 'gc3', scopeName: 'source.gc3', tokens: { Id }, prec: [none('<', '>')], rules: { T, Call, E, P }, entry: P }; } },
+      ],
+    },
+    // ── angle-cast (detectAngleBracketCast, key #type-cast) ──
+    // 4-window `<` ref(@type) `>` operand. The cast head written as its OWN rule
+    // (`CastHead = '<' Type '>'`, used as `[CastHead, operand]`) hides the `<`/`>` across the ref
+    // boundary; detectAngleBracketCast now resolves a ref to such a cast-head rule by name (like
+    // detectCallExpression reaches its args through a separate rule), so `via-ref` is robust too.
+    {
+      name: 'angle-cast', key: 'type-cast', observable: keyObs('type-cast'), factorings: [
+        { label: 'canonical', build: () => { const T = rule(() => [[Id]], { type: true }); const Call = rule(() => [[Id, '<', sep(T, ','), '>', '(', sep(Id, ','), ')']]); const Cast = rule(() => [['<', T, '>', Id]]); const E = rule(() => [Id, Cast, Call]); const P = rule(() => [[many(E)]]); return { name: 'ac1', scopeName: 'source.ac1', tokens: { Id }, prec: [none('<', '>')], rules: { T, Call, Cast, E, P }, entry: P }; } },
+        { label: 'opt-operand', build: () => { const T = rule(() => [[Id]], { type: true }); const Call = rule(() => [[Id, '<', sep(T, ','), '>', '(', sep(Id, ','), ')']]); const Cast = rule(() => [['<', T, '>', opt(Id)]]); const E = rule(() => [Id, Cast, Call]); const P = rule(() => [[many(E)]]); return { name: 'ac3', scopeName: 'source.ac3', tokens: { Id }, prec: [none('<', '>')], rules: { T, Call, Cast, E, P }, entry: P }; } },
+        { label: 'via-ref', build: () => { const T = rule(() => [[Id]], { type: true }); const Call = rule(() => [[Id, '<', sep(T, ','), '>', '(', sep(Id, ','), ')']]); const CastHead = rule(() => [['<', T, '>']]); const Cast = rule(() => [[CastHead, Id]]); const E = rule(() => [Id, Cast, Call]); const P = rule(() => [[many(E)]]); return { name: 'ac2', scopeName: 'source.ac2', tokens: { Id }, prec: [none('<', '>')], rules: { T, Call, CastHead, Cast, E, P }, entry: P }; } },
+      ],
+    },
+    // ── type-param-constraint (detectTypeParamConstraintKeywords) ──
+    // observable: the constraint keyword (`extends`) appears in the #arrow-type-parameters begin
+    // guard (the .tsx generic-arrow ⇄ JSX disambiguation `topTypeParam`) — so this needs a JSX
+    // grammar (`/>`,`</` tokens) and a generic-arrow shape. detectTypeParamConstraintKeywords now
+    // reads the constraint as the OPTIONAL `[kw, type]` segment by which one expandAlts branch
+    // extends a prefix-shorter sibling, so `alt([name, kw, type],[name])` (optionality via an alt
+    // branch, not `?`) and `opt(kw, sep(type,'&'))` (the type behind a `sep`) are robust too — while
+    // a leading modifier (whose own optionality is NOT a prefix extension) is still excluded.
+    {
+      name: 'type-param-constraint', key: 'arrow-type-parameters[extends]',
+      observable: (tm: any) => ((tm.repository['arrow-type-parameters']?.begin as string) ?? '').includes('\\bextends\\b'),
+      factorings: [
+        { label: 'canonical', build: () => tpcGrammar('tpc1', SelfEnd, CloseTg, Id, (CType) => [Id, opt('extends', CType)]) },
+        { label: 'alt-split', build: () => tpcGrammar('tpc2', SelfEnd, CloseTg, Id, (CType) => alt([Id, 'extends', CType], [Id])) },
+        { label: 'sep-constraint', build: () => tpcGrammar('tpc3', SelfEnd, CloseTg, Id, (CType) => [Id, opt('extends', sep(CType, '&'))]) },
+      ],
+    },
+    {
+      name: "bare-arrow", observable: (tm => !!tm.repository['arrow-parameter'] && JSON.stringify(tm.repository['arrow-parameter']).includes('variable.parameter')),
+      factorings: [
+        { label: "canonical", build: () => { const E = rule((s) => [[Id, '=>', s], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'ba1', scopeName: 'source.ba1', tokens: { Id }, rules: { E, P }, entry: P }; } },
+        { label: "opt-tail", build: () => { const E = rule((s) => [[Id, opt('=>', s)]]); const P = rule(() => [[many(E)]]); return { name: 'ba2', scopeName: 'source.ba2', tokens: { Id }, rules: { E, P }, entry: P }; } },
+        { label: "via-ref", build: () => { const Ar = rule((s) => [[Id, '=>', s]]); const E = rule((s) => [Ar, [Id]]); const P = rule(() => [[many(E)]]); return { name: 'ba3', scopeName: 'source.ba3', tokens: { Id }, rules: { Ar, E, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: "property-access", observable: (tm => !!tm.repository['property-access'] && JSON.stringify(tm.repository['property-access']).includes('entity.other.property')),
+      factorings: [
+        { label: "canonical", build: () => { const E = rule((s) => [[Id, many('.', Id)], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'pa1', scopeName: 'source.pa1', tokens: { Id }, rules: { E, P }, entry: P }; } },
+        { label: "opt-tail", build: () => { const E = rule((s) => [[Id, opt('.', Id)]]); const P = rule(() => [[many(E)]]); return { name: 'pa2', scopeName: 'source.pa2', tokens: { Id }, rules: { E, P }, entry: P }; } },
+        { label: "via-ref", build: () => { const Acc = rule(() => [['.', Id]]); const E = rule(() => [[Id, many(Acc)], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'pa3', scopeName: 'source.pa3', tokens: { Id }, rules: { Acc, E, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: "paren-arrow", observable: (tm => { const r = tm.repository['arrow-function-params']; return !!r && JSON.stringify(r).includes('variable.parameter'); }),
+      factorings: [
+        { label: "canonical", build: () => { const Pm = rule(() => [[Id]]); const E = rule((s) => [['(', sep(Pm, ','), ')', '=>', s], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'pra1', scopeName: 'source.pra1', tokens: { Id }, rules: { Pm, E, P }, entry: P }; } },
+        { label: "opt-tail", build: () => { const Pm = rule(() => [[Id]]); const Ty = rule(() => [[Id]]); const E = rule((s) => [['(', sep(Pm, ','), ')', opt(':', Ty), '=>', s], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'pra2', scopeName: 'source.pra2', tokens: { Id }, rules: { Pm, Ty, E, P }, entry: P }; } },
+        { label: "alt-split", build: () => { const Pm = rule(() => [[Id]]); const E = rule((s) => [alt(['(', sep(Pm, ','), ')', '=>', s], [Id])]); const P = rule(() => [[many(E)]]); return { name: 'pra3', scopeName: 'source.pra3', tokens: { Id }, rules: { Pm, E, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: "direct-param-keyword", observable: (tm => !!tm.repository['ctor-declaration'] && !!tm.repository['declaration-params']),
+      factorings: [
+        { label: "canonical", build: () => { const Pm = rule(() => [[Id]]); const Blk = rule(() => [['{', '}']]); const D = rule(() => [['fn', Id, '(', sep(Pm, ','), ')', Blk]]); const Ctor = rule(() => [['ctor', '(', sep(Pm, ','), ')', Blk]]); const Mem = rule(() => [D, Ctor]); const Body = rule(() => [['{', many(Mem), '}']]); const Cls = rule(() => [['cls', Id, Body]]); const P = rule(() => [[many(Cls)]]); return { name: 'dpk1', scopeName: 'source.dpk1', tokens: { Id }, scopes: { 'storage.type.function': ['fn', 'ctor'], 'storage.type.class': ['cls'] }, rules: { Pm, Blk, D, Ctor, Mem, Body, Cls, P }, entry: P }; } },
+        { label: "alt-split", build: () => { const Pm = rule(() => [[Id]]); const Blk = rule(() => [['{', '}']]); const D = rule(() => [['fn', Id, '(', sep(Pm, ','), ')', Blk]]); const Ctor = rule(() => [alt(['ctor', '(', sep(Pm, ','), ')', Blk], ['ctor', '(', ')', Blk])]); const Mem = rule(() => [D, Ctor]); const Body = rule(() => [['{', many(Mem), '}']]); const Cls = rule(() => [['cls', Id, Body]]); const P = rule(() => [[many(Cls)]]); return { name: 'dpk2', scopeName: 'source.dpk2', tokens: { Id }, scopes: { 'storage.type.function': ['fn', 'ctor'], 'storage.type.class': ['cls'] }, rules: { Pm, Blk, D, Ctor, Mem, Body, Cls, P }, entry: P }; } },
+        { label: "opt-tail", build: () => { const Pm = rule(() => [[Id]]); const Blk = rule(() => [['{', '}']]); const D = rule(() => [['fn', Id, '(', sep(Pm, ','), ')', Blk]]); const Ctor = rule(() => [['ctor', '(', opt(sep(Pm, ',')), ')', Blk]]); const Mem = rule(() => [D, Ctor]); const Body = rule(() => [['{', many(Mem), '}']]); const Cls = rule(() => [['cls', Id, Body]]); const P = rule(() => [[many(Cls)]]); return { name: 'dpk3', scopeName: 'source.dpk3', tokens: { Id }, scopes: { 'storage.type.function': ['fn', 'ctor'], 'storage.type.class': ['cls'] }, rules: { Pm, Blk, D, Ctor, Mem, Body, Cls, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: "constructor-keyword", observable: (tm => !!tm.repository['new-expression'] && JSON.stringify(tm.repository['new-expression']).includes('keyword.operator.expression.new')),
+      factorings: [
+        { label: "canonical", build: () => { const Ty = rule(() => [[Id]]); const NewE = rule((s) => [['new', Ty, '(', sep(s, ','), ')'], [Id]]); const P = rule(() => [[many(NewE)]]); return { name: 'ck1', scopeName: 'source.ck1', tokens: { Id }, scopes: { 'keyword.operator.expression.new': ['new'] }, rules: { Ty, NewE, P }, entry: P }; } },
+        { label: "opt-call-tail", build: () => { const Ty = rule(() => [[Id]]); const NewE = rule((s) => [['new', Ty, opt('(', sep(s, ','), ')')], [Id]]); const P = rule(() => [[many(NewE)]]); return { name: 'ck2', scopeName: 'source.ck2', tokens: { Id }, scopes: { 'keyword.operator.expression.new': ['new'] }, rules: { Ty, NewE, P }, entry: P }; } },
+        { label: "alt-split", build: () => { const Ty = rule(() => [[Id]]); const TArgs = rule(() => [['<', sep(Ty, ','), '>']]); const NewE = rule((s) => [['new', Ty, opt(alt([TArgs], ['(', sep(s, ','), ')']))], [Id]]); const P = rule(() => [[many(NewE)]]); return { name: 'ck3', scopeName: 'source.ck3', tokens: { Id }, prec: [none('<', '>')], scopes: { 'keyword.operator.expression.new': ['new'] }, rules: { Ty, TArgs, NewE, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: "block-declaration", observable: (tm => !!tm.repository['declaration-body']),
+      factorings: [
+        { label: "canonical", build: () => { const M = rule(() => [[Id]]); const Body = rule(() => [['{', many(M), '}']]); const D = rule(() => [['class', Id, Body]]); const P = rule(() => [[many(alt(D, Id))]]); return { name: 'b1', scopeName: 'source.b1', tokens: { Id }, scopes: { 'storage.type.class': ['class'] }, rules: { M, Body, D, P }, entry: P }; } },
+        { label: "alt-split", build: () => { const M = rule(() => [[Id]]); const Body = rule(() => [['{', many(M), '}'], ['{', '}']]); const D = rule(() => [['class', Id, Body]]); const P = rule(() => [[many(alt(D, Id))]]); return { name: 'b2', scopeName: 'source.b2', tokens: { Id }, scopes: { 'storage.type.class': ['class'] }, rules: { M, Body, D, P }, entry: P }; } },
+        { label: "opt-tail", build: () => { const M = rule(() => [[Id]]); const Body = rule(() => [['{', opt(many(M)), '}']]); const D = rule(() => [['class', Id, Body]]); const P = rule(() => [[many(alt(D, Id))]]); return { name: 'b3', scopeName: 'source.b3', tokens: { Id }, scopes: { 'storage.type.class': ['class'] }, rules: { M, Body, D, P }, entry: P }; } },
+        { label: "via-ref", build: () => { const M = rule(() => [[Id]]); const Body = rule(() => [['{', many(M), '}']]); const D = rule(() => [['class', Id, opt(Body)]]); const P = rule(() => [[many(alt(D, Id))]]); return { name: 'b4', scopeName: 'source.b4', tokens: { Id }, scopes: { 'storage.type.class': ['class'] }, rules: { M, Body, D, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: "class-declaration-head", observable: (tm => { const r = tm.repository['class-declaration']; return !!r && JSON.stringify(r.beginCaptures ?? {}).includes('entity.name.type.class'); }),
+      factorings: [
+        { label: "canonical", build: () => { const M = rule(() => [[Id]]); const D = rule(() => [['class', Id, '{', many(M), '}']]); const P = rule(() => [[many(alt(D, Id))]]); return { name: 'h1', scopeName: 'source.h1', tokens: { Id }, scopes: { 'storage.type.class': ['class'] }, rules: { M, D, P }, entry: P }; } },
+        { label: "via-ref", build: () => { const M = rule(() => [[Id]]); const Body = rule(() => [['{', many(M), '}']]); const D = rule(() => [['class', Id, Body]]); const P = rule(() => [[many(alt(D, Id))]]); return { name: 'h2', scopeName: 'source.h2', tokens: { Id }, scopes: { 'storage.type.class': ['class'] }, rules: { M, Body, D, P }, entry: P }; } },
+        { label: "type-params", build: () => { const T = rule(() => [[Id]]); const TP = rule(() => [['<', sep(T, ','), '>']]); const M = rule(() => [[Id]]); const D = rule(() => [['class', Id, opt(TP), '{', many(M), '}']]); const P = rule(() => [[many(alt(D, Id))]]); return { name: 'h3', scopeName: 'source.h3', tokens: { Id }, prec: [none('<', '>')], scopes: { 'storage.type.class': ['class'] }, rules: { T, TP, M, D, P }, entry: P }; } },
+        { label: "alt-split", build: () => { const M = rule(() => [[Id]]); const D = rule(() => [[opt('abstract'), 'class', Id, '{', many(M), '}']]); const P = rule(() => [[many(alt(D, Id))]]); return { name: 'h4', scopeName: 'source.h4', tokens: { Id }, scopes: { 'storage.type.class': ['class'], 'storage.modifier': ['abstract'] }, rules: { M, D, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: "regex-literal", observable: (tm => !!tm.repository['regex-literal']),
+      factorings: [
+        { label: "canonical", build: () => { const Re = token(seq('/', plus(range('a','z')), '/'), { regex: true }); const Ex = rule(() => [Id, Re]); const P = rule(() => [[many(Ex)]]); return { name: 'r1', scopeName: 'source.r1', tokens: { Id, Re }, prec: [left('/')], rules: { Ex, P }, entry: P }; } },
+        { label: "alt-split", build: () => { const Re = token(seq('/', plus(range('a','z')), '/'), { regex: true }); const Ex = rule(() => [Id, Re]); const P = rule(() => [[many(Ex)]]); return { name: 'r2', scopeName: 'source.r2', tokens: { Id, Re }, prec: [none('/')], rules: { Ex, P }, entry: P }; } },
+        { label: "via-ref", build: () => { const Re = token(seq('/', plus(range('a','z')), '/'), { regex: true }); const Ex = rule(() => [Id, Re]); const P = rule(() => [[many(Ex)]]); return { name: 'r3', scopeName: 'source.r3', tokens: { Id, Re }, prec: [left('/=')], rules: { Ex, P }, entry: P }; } },
+      ],
+    },
+    {
+      name: "block-sequence", observable: (tm => !!tm.repository['block-sequence']),
+      factorings: [
+        { label: "canonical", build: () => { const ph = noneOf(' ', '\t', '\n', ':', '-', '?', ',', '[', ']', '{', '}', '#'); const PB = star(noneOf(':', '\n', ',', '[', ']', '{', '}')); const KS = followedBy(seq(star(oneOf(' ', '\t')), ':')); const Plain = token(seq(ph, PB), { scope: 'string.unquoted', blockPattern: seq(ph, PB) }); const Key = token(seq(ph, PB, KS), { scope: 'entity.name.tag', blockPattern: seq(ph, PB, KS) }); const BlockScalar = token(never(), { scope: 'string.unquoted.block' }); const Indent = token(never(), {}), Dedent = token(never(), {}), Newline = token(never(), {}); const Item = rule(() => [['-', Key, Plain]]); const Seq = rule(() => [[Item, many(Newline, Item)]]); const Fold = rule(() => [[Plain, many(Newline, Plain)]]); const Node = rule(() => [Seq, Fold, Key, Plain, BlockScalar]); const Doc = rule(() => [[many(Node)]]); return { name: 'bseqA', scopeName: 'source.bseqA', tokens: { Key, Plain, BlockScalar, Indent, Dedent, Newline }, indent: { indentToken: 'Indent', dedentToken: 'Dedent', newlineToken: 'Newline', flowOpen: ['[', '{'], flowClose: [']', '}'], comment: '#', keyValueSeparator: ':', foldTokens: ['Key', 'Plain'], compactIndicators: ['-', '?'], blockScalar: { introducers: ['|', '>'], token: 'BlockScalar', documentMarkers: ['---', '...'], indicatorScope: 'keyword.control.flow.block-scalar' } }, rules: { Item, Seq, Fold, Node, Doc }, entry: Doc }; } },
+        { label: "plus-arity", build: () => { const ph = noneOf(' ', '\t', '\n', ':', '-', '?', ',', '[', ']', '{', '}', '#'); const PB = star(noneOf(':', '\n', ',', '[', ']', '{', '}')); const KS = followedBy(seq(star(oneOf(' ', '\t')), ':')); const Plain = token(seq(ph, PB), { scope: 'string.unquoted', blockPattern: seq(ph, PB) }); const Key = token(seq(ph, PB, KS), { scope: 'entity.name.tag', blockPattern: seq(ph, PB, KS) }); const BlockScalar = token(never(), { scope: 'string.unquoted.block' }); const Indent = token(never(), {}), Dedent = token(never(), {}), Newline = token(never(), {}); const Item = rule(() => [['-', Key, Plain]]); const Seq = rule(() => [[Item, Newline, Item, many(Newline, Item)]]); const Fold = rule(() => [[Plain, many(Newline, Plain)]]); const Node = rule(() => [Seq, Fold, Key, Plain, BlockScalar]); const Doc = rule(() => [[many(Node)]]); return { name: 'bseqB', scopeName: 'source.bseqB', tokens: { Key, Plain, BlockScalar, Indent, Dedent, Newline }, indent: { indentToken: 'Indent', dedentToken: 'Dedent', newlineToken: 'Newline', flowOpen: ['[', '{'], flowClose: [']', '}'], comment: '#', keyValueSeparator: ':', foldTokens: ['Key', 'Plain'], compactIndicators: ['-', '?'], blockScalar: { introducers: ['|', '>'], token: 'BlockScalar', documentMarkers: ['---', '...'], indicatorScope: 'keyword.control.flow.block-scalar' } }, rules: { Item, Seq, Fold, Node, Doc }, entry: Doc }; } },
+      ],
+    },
+    {
+      name: "explicit-key", observable: (tm => !!tm.repository['explicit-key']),
+      factorings: [
+        { label: "canonical", build: () => { const ph = noneOf(' ', '\t', '\n', ':', '-', '?', ',', '[', ']', '{', '}', '#'); const PB = star(noneOf(':', '\n', ',', '[', ']', '{', '}')); const KS = followedBy(seq(star(oneOf(' ', '\t')), ':')); const Plain = token(seq(ph, PB), { scope: 'string.unquoted' }); const Key = token(seq(ph, PB, KS), { scope: 'entity.name.tag' }); const Indent = token(never(), {}), Dedent = token(never(), {}), Newline = token(never(), {}); const ExplicitEntry = rule(() => [['?', Key, opt(':', Plain)]]); const ExplicitMapping = rule(() => [[ExplicitEntry, many(Newline, ExplicitEntry)]]); const Node = rule(() => [ExplicitMapping, Plain]); const Doc = rule(() => [[many(Node)]]); return { name: 'ekA', scopeName: 'source.ekA', tokens: { Key, Plain, Indent, Dedent, Newline }, indent: { indentToken: 'Indent', dedentToken: 'Dedent', newlineToken: 'Newline', flowOpen: ['[', '{'], flowClose: [']', '}'], comment: '#', keyValueSeparator: ':', foldTokens: ['Key', 'Plain'], compactIndicators: ['-', '?'] }, rules: { ExplicitEntry, ExplicitMapping, Node, Doc }, entry: Doc }; } },
+        { label: "opt-tail (many-quantified equivalent)", build: () => { const ph = noneOf(' ', '\t', '\n', ':', '-', '?', ',', '[', ']', '{', '}', '#'); const PB = star(noneOf(':', '\n', ',', '[', ']', '{', '}')); const KS = followedBy(seq(star(oneOf(' ', '\t')), ':')); const Plain = token(seq(ph, PB), { scope: 'string.unquoted' }); const Key = token(seq(ph, PB, KS), { scope: 'entity.name.tag' }); const Indent = token(never(), {}), Dedent = token(never(), {}), Newline = token(never(), {}); const ExplicitEntry = rule(() => [['?', Key, many(':', Plain)]]); const ExplicitMapping = rule(() => [[ExplicitEntry, many(Newline, ExplicitEntry)]]); const Node = rule(() => [ExplicitMapping, Plain]); const Doc = rule(() => [[many(Node)]]); return { name: 'ekB', scopeName: 'source.ekB', tokens: { Key, Plain, Indent, Dedent, Newline }, indent: { indentToken: 'Indent', dedentToken: 'Dedent', newlineToken: 'Newline', flowOpen: ['[', '{'], flowClose: [']', '}'], comment: '#', keyValueSeparator: ':', foldTokens: ['Key', 'Plain'], compactIndicators: ['-', '?'] }, rules: { ExplicitEntry, ExplicitMapping, Node, Doc }, entry: Doc }; } },
+      ],
+    },
+    {
+      name: "flow-mapping", observable: (tm => !!tm.repository['flow-mapping']),
+      factorings: [
+        { label: "canonical", build: () => { const ph = noneOf(' ', '\t', '\n', ':', '-', '?', ',', '[', ']', '{', '}', '#'); const PB = star(noneOf(':', '\n', ',', '[', ']', '{', '}')); const KS = followedBy(seq(star(oneOf(' ', '\t')), ':')); const Plain = token(seq(ph, PB), { scope: 'string.unquoted' }); const Key = token(seq(ph, PB, KS), { scope: 'entity.name.tag' }); const Indent = token(never(), {}), Dedent = token(never(), {}), Newline = token(never(), {}); const FlowEntry = rule(() => [[Key, ':', Plain]]); const FlowMap = rule(() => [['{', sep(FlowEntry, ','), '}']]); const FlowSeq = rule(() => [['[', sep(Plain, ','), ']']]); const Node = rule(() => [FlowMap, FlowSeq, Plain]); const Doc = rule(() => [[many(Node)]]); const fs = { byOpen: { '{': { begin: 'punctuation.definition.mapping.begin', end: 'punctuation.definition.mapping.end', separator: 'punctuation.separator.mapping' }, '[': { begin: 'punctuation.definition.sequence.begin', end: 'punctuation.definition.sequence.end', separator: 'punctuation.separator.sequence' } }, keyValue: 'punctuation.separator.key-value' }; return { name: 'fmA', scopeName: 'source.fmA', tokens: { Key, Plain, Indent, Dedent, Newline }, indent: { indentToken: 'Indent', dedentToken: 'Dedent', newlineToken: 'Newline', flowOpen: ['[', '{'], flowClose: [']', '}'], comment: '#', keyValueSeparator: ':', flowScopes: fs, foldTokens: ['Key', 'Plain'], compactIndicators: ['-', '?'] }, rules: { FlowEntry, FlowMap, FlowSeq, Node, Doc }, entry: Doc }; } },
+        { label: "trailing-comma", build: () => { const ph = noneOf(' ', '\t', '\n', ':', '-', '?', ',', '[', ']', '{', '}', '#'); const PB = star(noneOf(':', '\n', ',', '[', ']', '{', '}')); const KS = followedBy(seq(star(oneOf(' ', '\t')), ':')); const Plain = token(seq(ph, PB), { scope: 'string.unquoted' }); const Key = token(seq(ph, PB, KS), { scope: 'entity.name.tag' }); const Indent = token(never(), {}), Dedent = token(never(), {}), Newline = token(never(), {}); const FlowEntry = rule(() => [[Key, ':', Plain]]); const FlowMap = rule(() => [['{', sep(FlowEntry, ','), opt(','), '}']]); const FlowSeq = rule(() => [['[', sep(Plain, ','), ']']]); const Node = rule(() => [FlowMap, FlowSeq, Plain]); const Doc = rule(() => [[many(Node)]]); const fs = { byOpen: { '{': { begin: 'punctuation.definition.mapping.begin', end: 'punctuation.definition.mapping.end', separator: 'punctuation.separator.mapping' }, '[': { begin: 'punctuation.definition.sequence.begin', end: 'punctuation.definition.sequence.end', separator: 'punctuation.separator.sequence' } }, keyValue: 'punctuation.separator.key-value' }; return { name: 'fmB', scopeName: 'source.fmB', tokens: { Key, Plain, Indent, Dedent, Newline }, indent: { indentToken: 'Indent', dedentToken: 'Dedent', newlineToken: 'Newline', flowOpen: ['[', '{'], flowClose: [']', '}'], comment: '#', keyValueSeparator: ':', flowScopes: fs, foldTokens: ['Key', 'Plain'], compactIndicators: ['-', '?'] }, rules: { FlowEntry, FlowMap, FlowSeq, Node, Doc }, entry: Doc }; } },
+      ],
+    },
+    {
+      name: "markup-tag", observable: (tm => !!tm.repository['tag']),
+      factorings: [
+        { label: "canonical", build: () => { const Id = token(plus(range('a', 'z')), { identifier: true }); const Text = token(never(), { scope: 'text' }); const Tag = rule(() => [['<', Id, '>']]); const Doc = rule(() => [[many(alt(Tag, Id))]]); return { name: 'mkA', scopeName: 'text.mkA', tokens: { Id, Text }, markup: { textToken: 'Text', tagOpen: '<', tagClose: '>', closeMarker: '/' }, rules: { Tag, Doc }, entry: Doc }; } },
+        { label: "alt-split (open/self-close/close element)", build: () => { const Id = token(plus(range('a', 'z')), { identifier: true }); const Text = token(never(), { scope: 'text' }); const SelfEnd = token(seq('/', '>')); const CloseTg = token(seq('<', '/')); const Tag = rule(() => [['<', Id, alt(SelfEnd, ['>', CloseTg, Id, '>'])]]); const Doc = rule(() => [[many(alt(Tag, Id))]]); return { name: 'mkB', scopeName: 'text.mkB', tokens: { SelfEnd, CloseTg, Id, Text }, markup: { textToken: 'Text', tagOpen: '<', tagClose: '>', closeMarker: '/' }, rules: { Tag, Doc }, entry: Doc }; } },
+      ],
+    },
   ];
   for (const c of constructs) {
-    const results = c.factorings.map(f => ({ label: f.label, ok: emits(c.key, f.build) }));
-    const allEmit = results.every(r => r.ok);
-    check(`shape-robustness: \`${c.name}\` emits #${c.key} for every equivalent factoring`, allEmit,
-      results.filter(r => !r.ok).map(r => r.label).join(', '));
+    const xfail = new Set(c.xfail ?? []);
+    const results = c.factorings.map(f => ({ label: f.label, ok: emits(c.observable, f.build) }));
+    // PASS unless a factoring NOT on the xfail list drops, OR a factoring ON it unexpectedly
+    // started discharging (stale xfail — the fix may have landed; drop the annotation).
+    const newDrops = results.filter(r => !r.ok && !xfail.has(r.label)).map(r => r.label);
+    const staleXfail = results.filter(r => r.ok && xfail.has(r.label)).map(r => r.label);
+    check(`shape-robustness: \`${c.name}\` discharges #${c.key ?? c.name} for every equivalent factoring`,
+      newDrops.length === 0 && staleXfail.length === 0,
+      [newDrops.length ? `drops: ${newDrops.join(', ')}` : '',
+       staleXfail.length ? `stale xfail (now discharges, remove): ${staleXfail.join(', ')}` : '',
+       xfail.size ? `(known #51 drops still expected: ${[...xfail].join(', ')})` : ''].filter(Boolean).join('  '));
   }
 }
 

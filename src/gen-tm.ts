@@ -1091,33 +1091,33 @@ function detectTypeParamConstraintKeywords(grammar: CstGrammar, typeArgRule: str
   };
   for (const rule of grammar.rules) for (const seq of expandAlts(rule.body)) scanForTypeParamSep(seq);
 
-  // In each such rule, find OPTIONAL `[<word-literal>, <ref>]` pairs — the constraint.
-  // The literal must be a WORD (starts with a letter/`_`) so it is `\b`-bounded; a
-  // punctuation lead like `=` (the default) is excluded on purpose (see doc above).
+  // In each such rule, find the constraint keyword: the WORD literal that BEGINS an OPTIONAL
+  // `[keyword, type…]` segment. "Optional" is read structurally from expandAlts(body): the constraint
+  // is exactly the segment by which one branch EXTENDS a prefix-shorter sibling — so `opt(kw, type)`
+  // (a `?` body), a separate alt branch `alt([…, kw, type], […])`, and a `sep`-wrapped type ALL reduce
+  // to "branch B = branch A ++ [kw, …]". The keyword is `B[len(A)]` when it is a word literal. This
+  // reads the OPTIONALITY (the distinguishing fact), so a LEADING modifier (`const`/`in`/`out`, whose
+  // own optionality makes `[name]` vs `[const,name]` — NOT a prefix pair) is not mistaken for it, and a
+  // punctuation lead like `=` (the default) is excluded by the word test.
   const keywords = new Set<string>();
   const isWord = (s: string) => /^[A-Za-z_]/.test(s);
-  const scanConstraint = (expr: RuleExpr): void => {
-    if (expr.type === 'quantifier') {
-      if (expr.kind === '?' && expr.body.type === 'seq') {
-        const its = expr.body.items;
-        if (its.length >= 2 && its[0].type === 'literal' && its[1].type === 'ref') {
-          const lit = (its[0] as { value: string }).value;
-          if (isWord(lit)) keywords.add(lit);
-        }
-      }
-      scanConstraint(expr.body);
-    } else if (expr.type === 'seq' || expr.type === 'alt') {
-      for (const it of (expr as { items: RuleExpr[] }).items) scanConstraint(it);
-    } else if (expr.type === 'group') {
-      scanConstraint((expr as { body: RuleExpr }).body);
-    } else if (expr.type === 'sep') {
-      // a constraint keyword reached through a `&`/`,`-separated sub-list is just as direct —
-      // recurse into the element (mirrors getTypeParamElementKeywords' `sep` arm).
-      scanConstraint((expr as { element: RuleExpr }).element);
-    }
-  };
+  const sig = (e: RuleExpr): string =>
+    e.type === 'literal' ? 'L:' + (e as { value: string }).value
+    : e.type === 'ref' ? 'R:' + (e as { name: string }).name
+    : e.type === 'sep' ? 'S:' + sig((e as { element: RuleExpr }).element)
+    : e.type === 'seq' || e.type === 'alt' ? e.type + '[' + (e as { items: RuleExpr[] }).items.map(sig).join(',') + ']'
+    : e.type === 'quantifier' ? 'Q' + (e as { kind: string }).kind + sig((e as { body: RuleExpr }).body)
+    : (e.type === 'group' || e.type === 'not') ? e.type[0] + sig((e as { body: RuleExpr }).body)
+    : e.type;
   for (const rule of grammar.rules) {
-    if (sepElementRules.has(rule.name)) scanConstraint(rule.body);
+    if (!sepElementRules.has(rule.name)) continue;
+    const branches = expandAlts(rule.body);
+    for (const a of branches) for (const b of branches) {
+      if (b.length <= a.length) continue;
+      if (!a.every((it, i) => sig(it) === sig(b[i]))) continue;   // a is a strict prefix of b
+      const head = b[a.length];
+      if (head.type === 'literal' && isWord((head as { value: string }).value)) keywords.add((head as { value: string }).value);
+    }
   }
   return [...keywords];
 }
@@ -1748,15 +1748,40 @@ function detectAngleBracketCast(grammar: CstGrammar): string | null {
   );
   if (typeRuleNameSet.size === 0) return null;
 
+  const ruleByName = new Map(grammar.rules.map(r => [r.name, r] as const));
+  // a "cast head" is a rule whose EVERY expanded branch is exactly `'<' <typeRef> '>'` — the author
+  // factored the angle-cast prefix into its own rule. Recover the type name (null if not that shape).
+  const castHeadType = (body: RuleExpr): string | null => {
+    const branches = expandAlts(body);
+    if (!branches.length) return null;
+    let ty: string | null = null;
+    for (const items of branches) {
+      if (items.length === 3 && items[0].type === 'literal' && (items[0] as { value: string }).value === '<' &&
+          items[1].type === 'ref' && typeRuleNameSet.has((items[1] as { name: string }).name) &&
+          items[2].type === 'literal' && (items[2] as { value: string }).value === '>') {
+        ty = (items[1] as { name: string }).name;
+      } else return null;
+    }
+    return ty;
+  };
   let found: string | null = null;
   const walkSeq = (items: RuleExpr[]): void => {
-    for (let i = 0; i + 3 < items.length; i++) {
-      const a = items[i], b = items[i + 1], c = items[i + 2], d = items[i + 3];
-      if (a.type === 'literal' && a.value === '<' &&
-          b.type === 'ref' && typeRuleNameSet.has(b.name) &&
-          c.type === 'literal' && c.value === '>' &&
-          d /* an operand follows the cast */) {
-        found = b.name;
+    for (let i = 0; i + 1 < items.length; i++) {
+      const a = items[i];
+      // inline `'<' <type> '>' operand`
+      if (i + 3 < items.length) {
+        const b = items[i + 1], c = items[i + 2], d = items[i + 3];
+        if (a.type === 'literal' && a.value === '<' &&
+            b.type === 'ref' && typeRuleNameSet.has(b.name) &&
+            c.type === 'literal' && c.value === '>' && d /* an operand follows the cast */) {
+          found = b.name;
+        }
+      }
+      // via a cast-head RULE: `[<castHeadRef>, operand]` — the `<…>` is hidden behind the ref boundary,
+      // so resolve it by name (mirrors detectCallExpression reaching its args through a separate rule).
+      if (a.type === 'ref' && ruleByName.has(a.name)) {
+        const ty = castHeadType(ruleByName.get(a.name)!.body);
+        if (ty) found = ty;
       }
     }
   };
