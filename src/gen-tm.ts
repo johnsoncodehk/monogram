@@ -2049,10 +2049,10 @@ function detectPropertyAccess(
   }
 
   function walk(expr: RuleExpr): void {
-    if (expr.type === 'seq') { checkSeq(expr.items); expr.items.forEach(walk); }
-    if (expr.type === 'alt') expr.items.forEach(walk);
-    if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
-    if (expr.type === 'sep') walk(expr.element);
+    for (const items of expandAlts(expr)) checkSeq(items);   // normalized factorings
+    if (expr.type === 'seq' || expr.type === 'alt') expr.items.forEach(walk);
+    else if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
+    else if (expr.type === 'sep') walk(expr.element);
   }
 
   for (const rule of grammar.rules) walk(rule.body);
@@ -2079,8 +2079,8 @@ function detectBareArrowParam(grammar: CstGrammar, tokenNames: Set<string>): boo
   }
 
   function walk(expr: RuleExpr): boolean {
-    if (expr.type === 'seq') return checkSeq(expr.items) || expr.items.some(walk);
-    if (expr.type === 'alt') return expr.items.some(walk);
+    if (expandAlts(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
     return false;
@@ -2112,8 +2112,8 @@ function detectParenArrowParams(grammar: CstGrammar): boolean {
   }
 
   function walk(expr: RuleExpr): boolean {
-    if (expr.type === 'seq') return checkSeq(expr.items) || expr.items.some(walk);
-    if (expr.type === 'alt') return expr.items.some(walk);
+    if (expandAlts(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
     return false;
@@ -2159,8 +2159,8 @@ function detectArrowParamDelims(grammar: CstGrammar): { open: string; close: str
     return false;
   }
   function walk(expr: RuleExpr): boolean {
-    if (expr.type === 'seq') return checkSeq(expr.items) || expr.items.some(walk);
-    if (expr.type === 'alt') return expr.items.some(walk);
+    if (expandAlts(expr).some(checkSeq)) return true;   // normalized factorings (opt-tail / alt / group)
+    if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(walk);
     if (expr.type === 'quantifier' || expr.type === 'group') return walk(expr.body);
     if (expr.type === 'sep') return walk(expr.element);
     return false;
@@ -2289,9 +2289,10 @@ function detectDirectParamKeywords(
   }
 
   function walk(expr: RuleExpr): void {
-    if (expr.type === 'seq') { checkSeq(expr.items); expr.items.forEach(walk); }
-    if (expr.type === 'alt') expr.items.forEach(walk);
-    if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
+    for (const items of expandAlts(expr)) checkSeq(items);   // normalized factorings
+    if (expr.type === 'seq' || expr.type === 'alt') expr.items.forEach(walk);
+    else if (expr.type === 'quantifier' || expr.type === 'group') walk(expr.body);
+    else if (expr.type === 'sep') walk(expr.element);
   }
 
   for (const rule of grammar.rules) walk(rule.body);
