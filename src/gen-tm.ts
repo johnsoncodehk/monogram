@@ -3626,10 +3626,13 @@ function detectBlockSequence(grammar: CstGrammar): { indicator: string } | null 
   let indicator: string | null = null;
   const visit = (e: RuleExpr): void => {
     if (e.type === 'seq') {
-      // `[item, (Newline item)*]`: first element + a `*`/`+` over a `[Newline, item]` seq
-      if (e.items.length >= 2) {
-        const head = e.items[0];
-        const q = e.items[1];
+      // `[…, item, (Newline item)*, …]`: an item ADJACENT to a `*`/`+` over a `[Newline, item]` seq.
+      // Scanned pairwise (any k, not only items[0]/items[1]) so a leading element before the
+      // sequence pattern does not hide it. NOT routed through expandAlts on purpose — that would
+      // expand the `(Newline item)*` quantifier this match depends on.
+      for (let k = 0; k + 1 < e.items.length; k++) {
+        const head = e.items[k];
+        const q = e.items[k + 1];
         if (q.type === 'quantifier' && (q.kind === '*' || q.kind === '+') && q.body.type === 'seq'
           && q.body.items.length >= 2 && q.body.items[0].type === 'ref' && q.body.items[0].name === newlineToken) {
           const ind = itemIndicator(head);
