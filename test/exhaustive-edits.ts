@@ -35,7 +35,7 @@ const emPath = '/tmp/emitted-exhaustive.mjs';
 writeFileSync(emPath, emitParser(g));
 type Cst = { root: number; errors: object[] };
 type Parser = { parse(s: string): Cst; edit(c: Cst, e: object[]): void; visit(c: Cst, fns: object): void; tree: import('./emitted-obj.ts').TreeView };
-const em = (await import(emPath + '?v=' + process.pid)) as { createParser(): Parser };
+const em = (await import(emPath + '?v=' + process.pid)) as { createParser(): Parser; __arenaStats(): { inPlaceShrink: number } };
 
 const ALPHABET = ['a', '0', '(', ')', ',', '+', ';', ' '];
 const MAXLEN = Number(process.env.EXH_MAXLEN ?? 4);   // ~330k steps; EXH_MAXLEN=5 for the 3.2M-step deep run
@@ -69,6 +69,11 @@ for (let L = 0; L <= MAXLEN; L++) {
     }
   }
 }
-console.log(`exhaustive-edits: ${docs} documents ≤${MAXLEN} chars × every 1-char edit = ${edits} steps · ${mismatches} mismatches`);
+// The deletions in this list-shaped grammar shrink kid counts, so the C2 in-place-shrink
+// surgery branch must actually fire here — otherwise the 0-mismatch result would only prove
+// the path is UNREACHABLE, not correct.
+const inPlaceShrink = em.__arenaStats().inPlaceShrink;
+console.log(`exhaustive-edits: ${docs} documents ≤${MAXLEN} chars × every 1-char edit = ${edits} steps · ${mismatches} mismatches · ${inPlaceShrink} in-place shrink splices`);
 if (mismatches > 0) { console.error('✗ edit ≢ fresh inside the exhaustive bound'); process.exit(1); }
+if (inPlaceShrink === 0) { console.error('✗ the in-place shrink surgery path (C2) never fired — coverage gap'); process.exit(1); }
 console.log('✓ edit ≡ fresh holds COMPLETELY within the bound (tree + errors, byte-identical)');

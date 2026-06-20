@@ -1501,6 +1501,7 @@ let arenaLiveBaseline = 0;
 let arenaCompactions = 0;
 let arenaCompactFactor = 3;
 let arenaCompactMin = 4096;
+let arenaInPlaceShrink = 0;   // surgery splices that fit a SHRUNK kid count in place (C2)
 let kids = new Int32Array(16384);
 // A node child's RELATIVE coordinates live in the PARENT's kids stream (parallel to
 // kids), not on the child row: a memo-reused subtree can be a child of several
@@ -3259,8 +3260,15 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
     }
   } else {
     const n2k = nD - removed + f;
-    if (kidN + n2k > kidCap) growKids(n2k);
-    const ks = kidN;
+    // f < removed (a SHRINK, e.g. deleting a list element) fits the OLD range in place: the
+    // suffix shifts LEFT, an overlap-safe forward copy, so target csD and grow the arena by
+    // nothing (issue #45 C2). f > removed (a GROW) cannot fit, so it relocates to the arena end
+    // and leaves the old range as garbage the C1 compaction later reclaims. The per-kid
+    // transforms — prefix normalize, new kids, suffix copy, boundary remap — are identical.
+    const inPlace = f < removed;
+    let ks;
+    if (inPlace) { ks = csD; arenaInPlaceShrink++; }
+    else { if (kidN + n2k > kidCap) growKids(n2k); ks = kidN; }
     for (let k = 0; k < Da; k++) {
       kids[ks + k] = kids[csD + k];
       // NORMALIZE prefix rels to absolute while copying: the boundary remap below
@@ -3288,7 +3296,7 @@ function trySurgery(dmgA, dmgB, tokD, chrD) {
       kidRel[ks + Da + f + (k - j)] = kidRel[csD + k];
       kidTokRel[ks + Da + f + (k - j)] = kidTokRel[csD + k];
     }
-    kidN = ks + n2k;
+    if (!inPlace) kidN = ks + n2k;   // in-place reuses the old range; it adds no rows
     rowStart[D] = ks;
     rowCount[D] = n2k;
     // remap the end-relative boundary into the relocated range (suffix kids kept
@@ -3999,7 +4007,7 @@ export function parseEdited(entryRule, edits) { activate(docDefault); return edi
 // Arena reclamation introspection + budget override — TEST HOOKS (issue #45 C1). __arenaStats
 // reports the live arena, the compacted-size baseline, and how many edits re-parsed to reclaim;
 // __setArenaBudget lowers the factor/min so a gate can force compaction deterministically.
-export function __arenaStats() { return { nodeN, kidN, baseline: arenaLiveBaseline, compactions: arenaCompactions }; }
+export function __arenaStats() { return { nodeN, kidN, baseline: arenaLiveBaseline, compactions: arenaCompactions, inPlaceShrink: arenaInPlaceShrink }; }
 export function __setArenaBudget(factor, min) { arenaCompactFactor = factor; arenaCompactMin = min; }
 export function visit(entry, fns, charBase, tokBase) { activate(docDefault); return visitCore(entry, fns, charBase, tokBase); }
 // ── Handle API: explicit trees over per-instance documents ──
