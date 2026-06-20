@@ -1,7 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  token-dfa.ts — derive a char-code DFA matcher from a token's structured pattern IR
-//  (src/token-pattern.ts), as the forward path to a scanner that dispatches on char
-//  codes instead of executing a regex per token (issue #5).
+//  (src/token-pattern.ts): a scanner that dispatches on char codes instead of executing a
+//  regex per token (issue #5). KEPT as the measurement behind that issue — `compileTokenDfa`
+//  is exercised only by test/token-dfa-verify.ts, which found a GENERIC DFA interpreter to be
+//  net-negative vs V8's JIT-compiled sticky regex on all 12 TS tokens (Ident 0.30×). The
+//  emitter that would have turned the DFA into specialized straight-line JS was never wired in
+//  (zero callers) and is removed; revisit from this measurement if char-code scanning is
+//  pursued again.
 //
 //  The lexer matches one token at a time, anchored at `pos`, taking that token's
 //  greedy/longest match (sticky `re.lastIndex = pos; re.exec(s)`). This compiles the
@@ -279,82 +284,7 @@ export interface TokenDfa {
   match(s: string, pos: number): number;
 }
 
-// The compiled DFA + any trailing char-class assertion, exposed so a code emitter can
-// turn it into specialized straight-line JS (a generic interpreter over this structure
-// is SLOWER than V8's regex — the win is in emitting tight char-code branches).
-export type { DfaState };
-export interface CompiledTokenDfa { states: DfaState[]; trailing: { ranges: Range[]; negate: boolean } | null }
-
-export function buildTokenDfaRaw(pattern: TokenPattern): CompiledTokenDfa | null {
-  try {
-    const look = trailingLookahead(pattern);
-    const nfa = new Nfa();
-    const [start, accept] = build(nfa, look ? look.body : pattern);
-    const states = buildDfa(nfa, start, accept);
-    return { states, trailing: look ? { ranges: look.ranges, negate: look.negate } : null };
-  } catch (e) {
-    if (e instanceof UnsupportedPattern) return null;
-    throw e;
-  }
-}
-
-// ── DFA → specialized straight-line JS ──
-// A GENERIC interpreter over the DFA is slower than V8's JIT-compiled regex; the win is
-// in emitting tight char-code branches (measured ~1.3–1.6× over the sticky regex on the
-// common tokens). Above this many DFA states the emitted switch stops paying off (a large
-// escape-heavy token like a string literal lands ~even with the regex), so we decline and
-// the caller keeps the regex — correctness is identical either way.
-const MAX_SCANNER_STATES = 64;
-
-function rangesCond(ranges: Range[], v: string): string {
-  return ranges.map(r => r.lo === r.hi ? `${v}===${r.lo}` : `${v}>=${r.lo}&&${v}<=${r.hi}`).join('||');
-}
-
-/**
- * Emit a token scanner as a JS function BODY with parameters `(s, pos, re)`: returns the
- * match length at `pos` (byte-identical to the token's sticky regex), or -1. `re` is the
- * token's own regex, used only on the rare trailing-lookahead retry. Returns null when the
- * pattern is outside the supported subset or its DFA is too large (caller keeps the regex).
- */
-export function emitTokenScannerBody(pattern: TokenPattern): string | null {
-  const compiled = buildTokenDfaRaw(pattern);
-  if (!compiled) return null;
-  const { states, trailing } = compiled;
-  if (states.length > MAX_SCANNER_STATES) return null;
-  const accept = states.map(s => s.accept);
-  const L: string[] = [];
-  L.push(`const n=s.length;let i=pos,st=0,acc=${accept[0] ? 0 : -1};`);
-  L.push(`for(;;){if(i>=n)break;const c=s.charCodeAt(i);switch(st){`);
-  states.forEach((state, si) => {
-    if (state.edges.length === 0) { L.push(`case ${si}:break;`); return; }
-    let body = `case ${si}:{`;
-    for (const e of state.edges) {
-      const cond = rangesCond(e.ranges, 'c');
-      body += `if(${e.ranges.length > 1 ? `(${cond})` : cond}){st=${e.to};i++;${accept[e.to] ? 'acc=i-pos;' : ''}continue;}`;
-    }
-    L.push(body + 'break;}');
-  });
-  L.push('}break;}');
-  if (trailing) {
-    // longest accept = acc; a trailing `(?!class)`/`(?=class)` may force a shorter match —
-    // rare (well-formed input ends the token at a boundary), so defer that to the regex.
-    L.push('if(acc<0)return -1;const at=pos+acc;const cc=at<n?s.charCodeAt(at):-1;');
-    L.push(`const present=at<n&&(${rangesCond(trailing.ranges, 'cc')});`);
-    L.push(`if(${trailing.negate ? '!present' : 'present'})return acc;`);
-    L.push('re.lastIndex=pos;const m=re.exec(s);return m?m[0].length:-1;');
-  } else {
-    L.push('return acc;');
-  }
-  return L.join('');
-}
-
-/** Runtime-compile a token scanner (for the interpreted lexer). Null = keep the regex. */
-export function compileTokenScanner(pattern: TokenPattern, regex: RegExp): ((s: string, pos: number) => number) | null {
-  const body = emitTokenScannerBody(pattern);
-  if (body === null) return null;
-  const fn = new Function('s', 'pos', 're', body) as (s: string, pos: number, re: RegExp) => number;
-  return (s, pos) => fn(s, pos, regex);
-}
+// `DfaState` / `buildDfa` are consumed by `compileTokenDfa` below (the measured interpreter).
 
 // A trailing `(?!class)` / `(?=class)` over a single char class is the only look-around
 // the numeric tokens use; supported by retrying shorter body matches until the assertion

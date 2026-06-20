@@ -95,6 +95,10 @@ export const CURATED_TS: string[] = [
   `abstract class AC { abstract m(): void; protected readonly p = 1; private q?: string; }`,
   `class PP { constructor(public readonly a: number, private b: string) {} }`,
   `import type { T } from "m"; import { type U, value } from "m"; export type { T };`,
+  // — non-ASCII whitespace + chars (exercises the lexer's cc>127 dispatch) —
+  `const a =  1; const b = 2;`,           // U+00A0 nbsp, U+2003 em-space between tokens
+  `const c = 3; const d = 4; const e = 5;`,    // U+2028 / U+2029 line separators
+  `const sigma = α + β; const n = "café — naïve ≡ x";`, // non-ASCII identifiers + string/punct
 ];
 
 // ── 1b) Deliberately malformed snippets ─────────────────────────────────────────────────

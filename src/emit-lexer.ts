@@ -28,6 +28,23 @@ export interface LexerSymtab {
 
 const J = (v: unknown) => JSON.stringify(v);
 
+// The resync retract one-liner is emitted at two points in the relex loop (mid-loop and the
+// post-loop EOF check); a single producer keeps the two from drifting (#45 B3).
+const resyncRetractLine = (indent: string): string =>
+  `${indent}if (wndHit >= 0) { tokN--; while (docLex.length > lexDiagBase && docLex[docLex.length - 1].offset >= tkOff[tokN]) docLex.length--; return wndHit; }`;
+
+// The non-ASCII members of JS \s (the /u-free set), baked as a charCode test so a
+// non-whitespace cc>127 (e.g. a Unicode identifier char) skips the LX_WS regex entirely. The
+// regex `/\s+/y` matches at pos iff the lead char is \s, and ASCII \s is handled by the char
+// loop, so `cc>127 && lxNonAsciiWs(cc)` is EXACTLY "the regex would match here" → byte-
+// identical, minus the wasted exec on the common non-whitespace case (#45 B4).
+const NON_ASCII_WS_FN =
+  `function lxNonAsciiWs(cc) { return cc === 0xa0 || cc === 0x1680 || (cc >= 0x2000 && cc <= 0x200a) || cc === 0x2028 || cc === 0x2029 || cc === 0x202f || cc === 0x205f || cc === 0x3000 || cc === 0xfeff; }`;
+// The non-ASCII whitespace fallback, emitted at the two sites that need it (after an ASCII run,
+// and as the lead char). `cont` appends the `continue` the lead-char site needs.
+const nonAsciiWsConsume = (v: string, cont: boolean, indent: string): string =>
+  `${indent}if (${v} > 127 && lxNonAsciiWs(${v})) { LX_WS.lastIndex = pos; const m = LX_WS.exec(source); if (m !== null) { if (m[0].includes('\\n')) pendingNl = true; pos += m[0].length;${cont ? ' continue;' : ''} } }`;
+
 export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   // Out of scope: the markup / indentation / newline state machines.
   if (grammar.markup || grammar.indent || grammar.newline) return null;
@@ -103,6 +120,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// ── Emitted lexer (emit-lexer.ts): specialized tokenize for this grammar ──`);
   for (const m of matchers) emit(`const ${m.re} = new RegExp(${J(`(?:${m.pattern})`)}, ${J(m.flags)});`);
   emit(`const LX_WS = /\\s+/y;`);
+  emit(NON_ASCII_WS_FN);
   emit(`// window-truncation retry: a matcher failing at the WINDOW edge is not a lex`);
   emit(`// error — the caller re-materializes a larger window (truncation cannot fake a`);
   emit(`// resync: suffix-zone equality makes a cut token's END mismatch the old one)`);
@@ -359,7 +377,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`    // resync retracts the duplicated token push — and any lexer diagnostics
     // emitted FOR it (the old stream's persisted entry survives via the shift;
     // keeping the window's copy too double-reports the same character)`);
-  emit(`    if (wndHit >= 0) { tokN--; while (docLex.length > lexDiagBase && docLex[docLex.length - 1].offset >= tkOff[tokN]) docLex.length--; return wndHit; }`);
+  emit(resyncRetractLine('    '));
   emit(`    const cc = source.charCodeAt(pos);`);
   emit(`    // whitespace: ASCII \\s run by char loop; a non-ASCII candidate falls back to the regex`);
   emit(`    if (cc === 32 || (cc >= 9 && cc <= 13)) {`);
@@ -369,18 +387,10 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`        pos++;`);
   emit(`        wc = source.charCodeAt(pos);`);
   emit(`      } while (wc === 32 || (wc >= 9 && wc <= 13));`);
-  emit(`      if (wc > 127) {`);
-  emit(`        LX_WS.lastIndex = pos;`);
-  emit(`        const m = LX_WS.exec(source);`);
-  emit(`        if (m !== null) { if (m[0].includes('\\n')) pendingNl = true; pos += m[0].length; }`);
-  emit(`      }`);
+  emit(`${nonAsciiWsConsume('wc', false, '      ')}`);
   emit(`      continue;`);
   emit(`    }`);
-  emit(`    if (cc > 127) {`);
-  emit(`      LX_WS.lastIndex = pos;`);
-  emit(`      const m = LX_WS.exec(source);`);
-  emit(`      if (m !== null) { if (m[0].includes('\\n')) pendingNl = true; pos += m[0].length; continue; }`);
-  emit(`    }`);
+  emit(`${nonAsciiWsConsume('cc', true, '    ')}`);
   if (templateToken) {
     const tplCloseT = kwFirstCcs.has(tplInterpClose.charCodeAt(0)) ? 'lexKwT(source, startPos, r.end)' : '0';
     const tplOpenT = kwFirstCcs.has(tplOpen.charCodeAt(0)) ? 'lexKwT(source, startPos, r.end)' : '0';
@@ -610,7 +620,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`    }`);
   emit(`    throw new Error("Unexpected character at offset " + pos + ": '" + source[pos] + "'");`);
   emit(`  }`);
-  emit(`  if (wndHit >= 0) { tokN--; while (docLex.length > lexDiagBase && docLex[docLex.length - 1].offset >= tkOff[tokN]) docLex.length--; return wndHit; }`);
+  emit(resyncRetractLine('  '));
   emit(`  return hasMore ? -2 : -1;`);
   emit(`}`);
   emit(`// Windowed-relex restart anchor: the last token B ending at/before the damage`);
