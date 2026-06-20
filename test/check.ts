@@ -37,6 +37,7 @@ const GATES: Gate[] = [
   { group: 'conformance', name: 'html', args: ['test/html-conformance.ts'] },
   { group: 'highlighter', name: 'tm-guards', args: ['test/tm-highlight-guards.ts'] },
   { group: 'highlighter', name: 'tm-completeness', args: ['test/tm-completeness.ts', '--check'] },
+  { group: 'highlighter', name: 'tm-mutation', args: ['test/tm-mutation.ts'] },
   { group: 'highlighter', name: 'tm-diagnostics', args: ['test/redcmd-tm-diagnostics.ts'] },
   { group: 'highlighter', name: 'angle-depth', args: ['test/angle-depth-probe.ts'] },
   { group: 'highlighter', name: 'html-monarch', args: ['test/html-monarch.ts'] },

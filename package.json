@@ -39,6 +39,7 @@
     "completeness": "node test/tm-completeness.ts",
     "completeness:check": "node test/tm-completeness.ts --check",
     "completeness:write": "node test/tm-completeness.ts --write",
+    "completeness:mutation": "node test/tm-mutation.ts",
     "ledger:selftest": "node test/gap-ledger-selftest.ts",
     "ledger:issues": "node test/gap-issues.ts",
     "ledger:issues:dry": "node test/gap-issues.ts --dry-run",

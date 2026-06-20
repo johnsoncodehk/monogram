@@ -180,7 +180,7 @@ function checkTokenPatternClosure(): void {
 //  REACHABILITY — every emitted repo key reachable from root ∪ export surfaces
 // ════════════════════════════════════════════════════════════════════════════
 
-interface TmGrammarJson { patterns?: unknown[]; repository?: Record<string, unknown>; scopeName?: string }
+export interface TmGrammarJson { patterns?: unknown[]; repository?: Record<string, unknown>; scopeName?: string }
 
 // The DECLARED export surfaces of a grammar — repository keys an external embedder reaches
 // not from the root but by an explicit `<scope>#<key>` include: the #expression sub-grammar
@@ -193,9 +193,9 @@ function exportSurfaceKeys(g: CstGrammar): string[] {
   return out;
 }
 
-interface ReachResult { repoKeys: number; reached: number; dead: string[]; danglingWithSource: string[] }
+export interface ReachResult { repoKeys: number; reached: number; dead: string[]; danglingWithSource: string[] }
 
-function checkReachability(g: CstGrammar, tm: TmGrammarJson): ReachResult {
+export function checkReachability(g: CstGrammar, tm: TmGrammarJson): ReachResult {
   const scope = tm.scopeName ?? g.scopeName ?? `source.${g.name}`;
   const repo = tm.repository ?? {};
   const reached = new Set<string>();
@@ -242,17 +242,25 @@ function checkReachability(g: CstGrammar, tm: TmGrammarJson): ReachResult {
 //  grammar emits no per-token keys — generateMarkupTm owns text/tag/attr), or a region that
 //  owns the token's delimiter (the JSX `/>` / `</` punctuation, scoped inside the JSX patterns).
 //  An ORPHAN — a non-skip token with no discharge path — is an emitter-completeness gap.
-interface TokenCensus { total: number; skip: number; byPath: Record<string, number>; orphans: string[] }
-function tokenCensus(g: CstGrammar, tmJson: TmGrammarJson): TokenCensus {
+export interface TokenCensus { total: number; skip: number; byPath: Record<string, number>; orphans: string[]; neutered: string[] }
+export function tokenCensus(g: CstGrammar, tmJson: TmGrammarJson): TokenCensus {
   const repo = tmJson.repository ?? {};
+  const root = tmJson.scopeName ?? `source.${g.name}`;
   const full = JSON.stringify(tmJson);
   const byPath: Record<string, number> = {};
   const orphans: string[] = [];
+  const neutered: string[] = [];   // a flat token whose entry exists but paints only the bare root (no visual scope)
   let skip = 0;
   const bump = (p: string) => byPath[p] = (byPath[p] ?? 0) + 1;
+  // a flat `{name, match}` entry discharges its scope obligation only if `name` is a real
+  // visual scope — not the bare document root and not empty. An entry whose name was reduced
+  // to the root scope is a "neuter" gap (the token tokenises but reads as inert document text),
+  // structurally visible without any corpus.
+  const flatNeutered = (e: any): boolean => !e.begin && !e.patterns && (!e.name || String(e.name).split(' ').every((s: string) => s === root || !s));
   for (const t of g.tokens) {
     if (t.flags.includes('skip')) { skip++; continue; }
-    if (repo[t.name.toLowerCase()]) { bump('flat'); continue; }
+    const flat = repo[t.name.toLowerCase()];
+    if (flat) { if (flatNeutered(flat)) neutered.push(`${t.name}→${(flat as any).name ?? '∅'}`); else bump('flat'); continue; }
     if (t.flags.includes('regex')) { bump('regex-family'); continue; }
     if (tokenPatternIsNever(t)) { bump('engine-emitted'); continue; }
     if (g.markup) { bump('markup-region'); continue; }                 // generateMarkupTm owns it
@@ -260,7 +268,7 @@ function tokenCensus(g: CstGrammar, tmJson: TmGrammarJson): TokenCensus {
     if (delim && full.includes(JSON.stringify(delim).slice(1, -1))) { bump('region-owned'); continue; }
     orphans.push(`${t.name}[${t.flags.join(',') || '-'}]`);
   }
-  return { total: g.tokens.length, skip, byPath, orphans };
+  return { total: g.tokens.length, skip, byPath, orphans, neutered };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -272,7 +280,7 @@ const require = createRequire(import.meta.url);
 const wasmBin = readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
 await loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + wasmBin.byteLength));
 
-async function loadTmFromObject(scopeName: string, grammars: Record<string, object>): Promise<vsctm.IGrammar | null> {
+export async function loadTmFromObject(scopeName: string, grammars: Record<string, object>): Promise<vsctm.IGrammar | null> {
   const reg = new Registry({
     onigLib: Promise.resolve({ createOnigScanner: (p: string[]) => new OnigScanner(p), createOnigString: (s: string) => new OnigString(s) }),
     loadGrammar: async (sn: string) => grammars[sn] ? parseRawGrammar(JSON.stringify(grammars[sn]), sn + '.json') : null,
@@ -287,7 +295,7 @@ async function loadTmFromFiles(scopeName: string, files: Record<string, string>)
   });
   return reg.loadGrammar(scopeName);
 }
-function tmTokenize(grammar: vsctm.IGrammar, text: string): TmTok[] {
+export function tmTokenize(grammar: vsctm.IGrammar, text: string): TmTok[] {
   const toks: TmTok[] = []; let rs = INITIAL, off = 0;
   for (const line of text.split('\n')) { const r = grammar.tokenizeLine(line, rs); for (const t of r.tokens) toks.push({ start: off + t.startIndex, end: off + t.endIndex, scopes: t.scopes }); rs = r.ruleStack; off += line.length + 1; }
   return toks;
@@ -307,9 +315,9 @@ function tmTokenize(grammar: vsctm.IGrammar, text: string): TmTok[] {
 // ════════════════════════════════════════════════════════════════════════════
 const CONTENT_OBLIGATION = new Set<Bucket>(['keyword', 'string', 'number', 'comment']);
 
-interface CoverageResult { den: number; painted: number; uncovered: { text: string; want: string; ctx: string }[] }
+export interface CoverageResult { den: number; painted: number; uncovered: { text: string; want: string; ctx: string }[] }
 
-function leafCoverage(grammar: CstGrammar, tm: vsctm.IGrammar, opts = GEN_OPTS): CoverageResult {
+export function leafCoverage(grammar: CstGrammar, tm: vsctm.IGrammar, opts = GEN_OPTS): CoverageResult {
   const { parse } = createParser(grammar);
   const roleOf = buildRoleMap(grammar);
   const inputs = generateInputs(grammar, opts);
@@ -510,6 +518,7 @@ async function main(): Promise<void> {
     check(`reachability(${cfg.name}): no dangling self-#refs with present source`, r.danglingWithSource.length === 0, r.danglingWithSource.join(', '));
     const tc = tokenCensus(g, tmJson);
     check(`token-completeness(${cfg.name}): every non-skip token has a discharge path`, tc.orphans.length === 0, `orphans: ${tc.orphans.join(' ')}`);
+    check(`token-completeness(${cfg.name}): no flat token is neutered to the bare root scope`, tc.neutered.length === 0, `neutered: ${tc.neutered.join(' ')}`);
     const tm = await loadTmFromFiles(cfg.scopeName, { [cfg.scopeName]: cfg.tm, ...(cfg.tmExtra ?? {}) });
     let cov: CoverageResult = { den: 0, painted: 0, uncovered: [] };
     if (tm) cov = leafCoverage(g, tm);
