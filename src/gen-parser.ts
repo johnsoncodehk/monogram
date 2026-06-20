@@ -1,5 +1,6 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
+import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { createLexer, type Token } from './gen-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
@@ -21,14 +22,6 @@ export interface CstLeaf {
 export type CstChild = CstNode | CstLeaf;
 
 // ── Precedence info ──
-
-interface OpInfo {
-  lbp: number;
-  rbp: number;
-  assoc: 'left' | 'right' | 'none';
-  position: 'infix' | 'prefix' | 'postfix';
-  requireTarget?: boolean;
-}
 
 // ── Parser ──
 
@@ -104,288 +97,17 @@ export function createParser(grammar: CstGrammar) {
   }
   const markupContainer = detectMarkupContainer();
 
-  // Build precedence table
-  const opTable = new Map<string, OpInfo>();
-  const prefixOps = new Map<string, OpInfo>();
-  // Infix ops whose LEFT operand may not be a bare unary-prefix expression (e.g. `**`).
-  // A prefix op that is NOT also a postfix op is a "pure unary" prefix (`-`/`!`/`typeof`…)
-  // as opposed to an update (`++`/`--`, which are both prefix and postfix); only the
-  // pure-unary ones are forbidden before a noUnaryLhs operator.
-  const noUnaryLhsOps = new Set<string>();
-  const postfixOpValues = new Set<string>();
+  const {
+    opTable, prefixOps, noUnaryLhsOps, postfixOpValues,
+    ledPrecByConnector, binaryConnectors, nudCapOf,
+    prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
+    nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
+    firstSets, exprFirst, exprSecond,
+  } = analyzeGrammar(grammar);
 
-  for (let i = 0; i < grammar.precs.length; i++) {
-    const level = grammar.precs[i];
-    const bp = (i + 1) * 2;
-    for (const op of level.operators) {
-      if (op.position === 'prefix') {
-        prefixOps.set(op.value, {
-          lbp: 0,
-          rbp: level.assoc === 'right' ? bp - 1 : bp,
-          assoc: level.assoc,
-          position: 'prefix',
-          requireTarget: op.requireTarget,
-        });
-      } else if (op.position === 'postfix') {
-        postfixOpValues.add(op.value);
-        opTable.set(op.value, {
-          lbp: bp,
-          rbp: 0,
-          assoc: level.assoc,
-          position: 'postfix',
-          requireTarget: op.requireTarget,
-        });
-      } else {
-        const lbp = bp;
-        const rbp = level.assoc === 'right' ? bp - 1 : bp;
-        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix', requireTarget: op.requireTarget });
-        if (op.noUnaryLhs) noUnaryLhsOps.add(op.value);
-      }
-    }
-  }
-
-  // Alternative-form LED binding powers (see LedPrec in types.ts): resolve the ladder
-  // anchors to concrete lbp numbers. Levels are spaced 2 apart, so `below` (lbp-1) sits
-  // BETWEEN two ladder levels without colliding with any op's lbp/rbp.
-  const ledPrecByConnector = new Map<string, { lbp: number; rhsBp: number | null }>();
-  for (const lp of grammar.ledPrecs ?? []) {
-    const anchorOp = lp.sameAs ?? lp.below;
-    if (!anchorOp) throw new Error(`ledPrec ${lp.connector}: needs sameAs or below`);
-    const op = opTable.get(anchorOp);
-    if (!op) throw new Error(`ledPrec ${lp.connector}: anchor ${JSON.stringify(anchorOp)} is not a ladder operator`);
-    const lbp = lp.sameAs !== undefined ? op.lbp : op.lbp - 1;
-    ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
-  }
-  // Binary / relational / conditional connectors (the MIDDLE child of a `$ op $` LED) —
-  // a node with one at child[1] is not a LeftHandSideExpression, so not an assignment target
-  // (`a + b = c`, `a in b = c`). Ladder INFIX ops + alternative-form binary LEDs.
-  const binaryConnectors = new Set<string>();
-  for (const [v, info] of opTable) if (info.position === 'infix') binaryConnectors.add(v);
-  for (const k of ledPrecByConnector.keys()) binaryConnectors.add(k);
-
-  // A `cap`-group NUD (an ArrowFunction — the lowest-precedence AssignmentExpression)
-  // parses only when minBp is LOOSER than the named connector's binding power; the value
-  // resolves from the ladder or the ledPrec table. See parsePratt for enforcement.
-  const connectorLbp = (connector: string): number => {
-    const op = opTable.get(connector);
-    if (op) return op.lbp;
-    const lp = ledPrecByConnector.get(connector);
-    if (lp) return lp.lbp;
-    throw new Error(`capExpr: connector ${JSON.stringify(connector)} is not a ladder operator or ledPrec connector`);
-  };
-  const nudCapOf = (nud: RuleExpr): number | null =>
-    nud.type === 'group' && nud.capBelow !== undefined ? connectorLbp(nud.capBelow) : null;
-
-  // Classify rules: which use Pratt parsing
-  const prattRules = new Set<string>();
-  for (const rule of grammar.rules) {
-    if (hasMarker(rule.body)) prattRules.add(rule.name);
-  }
-
-  // For Pratt rules, split alternatives into NUD (atoms/prefix) and LED (left-recursive)
-  function classifyAlts(rule: RuleDecl) {
-    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-    const nuds: RuleExpr[] = [];
-    const leds: { expr: RuleExpr; items: RuleExpr[]; notLeftLeaf?: string[] }[] = [];
-
-    for (const alt of alts) {
-      const items = alt.type === 'seq' ? alt.items : [alt];
-      // A LED arm may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`
-      // (`[notLeftLeaf('void',…), $, '.', Ident]`). Strip it into LED metadata; the self-ref is
-      // the next item and `led.items` is everything after it — identical to a plain LED.
-      const guard = items[0]?.type === 'notLeftLeaf' ? items[0].words : undefined;
-      const head = guard ? 1 : 0;
-      if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
-        // Left-recursive: LED
-        leds.push({ expr: alt, items: items.slice(head + 1), notLeftLeaf: guard });
-      } else if (items.length >= 2 && items[0]?.type === 'prefix') {
-        // prefix $ → NUD with prefix handling
-        nuds.push(alt);
-      } else {
-        nuds.push(alt);
-      }
-    }
-    return { nuds, leds };
-  }
-
-  // For non-Pratt left-recursive rules, split into atoms and continuations
-  function classifyLeftRec(rule: RuleDecl) {
-    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-    const atoms: RuleExpr[] = [];
-    const continuations: RuleExpr[][] = [];
-    const contNotLeftLeaf: (string[] | null)[] = [];
-
-    for (const alt of alts) {
-      const items = alt.type === 'seq' ? alt.items : [alt];
-      // A continuation may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`.
-      // Strip it into per-continuation metadata; the self-ref is the next item.
-      const guard = items[0]?.type === 'notLeftLeaf' ? items[0].words : undefined;
-      const head = guard ? 1 : 0;
-      if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
-        continuations.push(items.slice(head + 1));
-        contNotLeftLeaf.push(guard ?? null);
-      } else {
-        atoms.push(alt);
-      }
-    }
-    return { atoms, continuations, contNotLeftLeaf };
-  }
-
-  // ── Left recursion = a left-corner cycle ──
-  // What "left-recursive" MEANS in this engine is the left-corner relation, not the
-  // syntactic `items[0]===self` shape. A rule is left-recursive iff it can derive
-  // ITSELF as its leftmost symbol without consuming input — i.e. it can reach itself
-  // through the transitive closure of the left-corner edge map below. That relation is
-  // the single source of truth: it captures DIRECT recursion (A → A …), INDIRECT cycles
-  // (A → B → A) and recursion HIDDEN behind a nullable prefix (A → opt(x) A …) alike,
-  // all of which re-enter the rule at the same input position. The narrower syntactic
-  // test `items[0]===self` is NOT the definition; it only identifies which alternatives
-  // the local atom/continuation (and Pratt NUD/LED) transform can peel into an iterative
-  // loop — see classifyAlts/classifyLeftRec and the residual graph below.
-  //
-  // Nullability feeds the left-corner edges (a nullable leftmost element passes through
-  // to the next), so compute it first. op/prefix/postfix consume an operator token, so
-  // they are left-edge BARRIERS, not pass-through.
-  const nullableRules = new Set<string>();
-  function exprNullable(e: RuleExpr): boolean {
-    switch (e.type) {
-      case 'literal': return false;
-      case 'ref': return tokenNames.has(e.name) ? false : nullableRules.has(e.name);
-      case 'seq': return e.items.every(exprNullable);
-      case 'alt': return e.items.some(exprNullable);
-      case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true;
-      case 'group': return exprNullable(e.body);
-      case 'not': return true;                                   // zero-width assertion: consumes nothing
-      case 'sep': return true;                                   // sep matches zero elements
-      default: return true;                                      // op/prefix/postfix markers don't consume
-    }
-  }
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const rule of grammar.rules) {
-      if (!nullableRules.has(rule.name) && exprNullable(rule.body)) { nullableRules.add(rule.name); changed = true; }
-    }
-  }
-  // The set of rules reachable at the LEFT CORNER of an expression: every rule ref that
-  // could be the leftmost symbol, looking through nullable prefixes and stopping at the
-  // first non-nullable element or operator barrier.
-  function leftRuleRefs(e: RuleExpr): Set<string> {
-    switch (e.type) {
-      case 'ref': return tokenNames.has(e.name) ? new Set() : new Set([e.name]);
-      case 'seq': {
-        const acc = new Set<string>();
-        for (const item of e.items) {
-          if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') break;  // consumes an operator token → barrier
-          for (const r of leftRuleRefs(item)) acc.add(r);
-          if (!exprNullable(item)) break;            // a non-nullable element ends the left edge
-        }
-        return acc;
-      }
-      case 'alt': { const acc = new Set<string>(); for (const b of e.items) for (const r of leftRuleRefs(b)) acc.add(r); return acc; }
-      case 'quantifier': case 'group': return leftRuleRefs(e.body);
-      case 'sep': return leftRuleRefs(e.element);
-      default: return new Set();                     // literal / not / sameLine / … : no leftmost rule ref
-    }
-  }
-  function altsOf(rule: RuleDecl): RuleExpr[] {
-    return rule.body.type === 'alt' ? rule.body.items : [rule.body];
-  }
-  function itemsOf(alt: RuleExpr): RuleExpr[] {
-    return alt.type === 'seq' ? alt.items : [alt];
-  }
-  // Does this alternative begin with a DIRECT self-reference (`A → A …`)? This is the
-  // ONLY thing `items[0]===self` decides: which alts the local transform peels into an
-  // iterative loop (and so which edges drop out of the residual graph). It is no longer
-  // a standalone definition of "is this rule left-recursive".
-  function peelsDirect(rule: RuleDecl, alt: RuleExpr): boolean {
-    const items = itemsOf(alt);
-    // A leading zero-width `notLeftLeaf(...)` head-leaf guard precedes the self `$` in a LED arm;
-    // the arm is still DIRECT left-recursion (the local Pratt transform peels it), so look past it.
-    const head = items[0]?.type === 'notLeftLeaf' ? 1 : 0;
-    return items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name;
-  }
-  // The PURE left-corner edge map, over ALL alternatives (nothing pre-excluded). This is
-  // the relation that DEFINES left recursion.
-  const leftCorner = new Map<string, Set<string>>();
-  for (const rule of grammar.rules) {
-    const edges = new Set<string>();
-    for (const alt of altsOf(rule)) for (const r of leftRuleRefs(alt)) edges.add(r);
-    leftCorner.set(rule.name, edges);
-  }
-  // The RESIDUAL left-corner edge map: same as `leftCorner` but with each rule's direct
-  // `items[0]===self` alts removed — those are exactly the edges the local transform
-  // turns into an iterative loop instead of a recursive descent. A left-recursive rule
-  // is HANDLEABLE iff peeling its direct self-alts breaks every cycle through it, i.e. it
-  // can no longer reach itself in this residual graph.
-  const residualCorner = new Map<string, Set<string>>();
-  for (const rule of grammar.rules) {
-    const edges = new Set<string>();
-    for (const alt of altsOf(rule)) {
-      if (peelsDirect(rule, alt)) continue;          // peeled into an iterative loop → not a recursive descent
-      for (const r of leftRuleRefs(alt)) edges.add(r);
-    }
-    residualCorner.set(rule.name, edges);
-  }
-  // Find a cycle start → … → start in a left-corner graph, returned as a path naming the
-  // genuinely-recursive edges; null if `start` cannot reach itself.
-  function cornerCycle(graph: Map<string, Set<string>>, start: string): string[] | null {
-    const stack: { node: string; path: string[] }[] = [{ node: start, path: [start] }];
-    const seen = new Set<string>();
-    while (stack.length) {
-      const { node, path } = stack.pop()!;
-      for (const next of graph.get(node) ?? []) {
-        if (next === start) return [...path, next];
-        if (!seen.has(next)) { seen.add(next); stack.push({ node: next, path: [...path, next] }); }
-      }
-    }
-    return null;
-  }
-  // THE definition of left recursion: the rule reaches itself through the transitive
-  // closure of the pure left-corner relation.
-  function isLeftRecursive(rule: RuleDecl): boolean {
-    return cornerCycle(leftCorner, rule.name) !== null;
-  }
-
-  // Maximum binding power for non-operator LED patterns (member access, call, etc.)
-  const maxBp = (grammar.precs.length + 1) * 2;
   const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)
 
-  // ── Precomputed per-rule analysis ──
-  // Rule lookup, left-recursion, and the NUD/LED (Pratt) / atom-continuation
-  // (left-rec) classification are functions of the static grammar only, so we
-  // compute them ONCE here instead of re-deriving them on every parse call.
-  //
-  // Left-recursive rules split two ways against the local transform:
-  //   • HANDLEABLE — peeling the direct `items[0]===self` alts breaks every cycle (the
-  //     residual graph is acyclic for this rule). These go in `leftRecSet`, and
-  //     classifyLeftRec / parseLeftRec (or the Pratt NUD/LED path) handle them unchanged.
-  //   • UNHANDLEABLE — a cycle survives in the residual graph (an INDIRECT cycle, or one
-  //     HIDDEN behind a nullable prefix so its first item is not a bare self-ref). The
-  //     local transform cannot peel it, recursive descent would not terminate, so we
-  //     reject it at build time with a diagnostic naming the residual cycle. This is the
-  //     correct product behavior — the engine does not parse indirect/hidden LR.
-  const ruleByName = new Map<string, RuleDecl>(grammar.rules.map(r => [r.name, r]));
-  const leftRecSet = new Set<string>();
-  for (const rule of grammar.rules) {
-    if (!isLeftRecursive(rule)) continue;            // not left-recursive (per the relation): ordinary rule
-    const residual = cornerCycle(residualCorner, rule.name);
-    if (residual) {
-      throw new Error(
-        `Unhandled left recursion in rule '${rule.name}': it can derive itself as its leftmost `
-        + `symbol without consuming input (left-corner cycle ${residual.join(' → ')}). The engine `
-        + `transforms only DIRECT left recursion (an alternative beginning with the rule itself); `
-        + `this cycle is indirect or hidden behind a nullable prefix, so recursive descent would `
-        + `not terminate. Break the cycle or rewrite it as a direct left-recursive/precedence rule.`,
-      );
-    }
-    leftRecSet.add(rule.name);                       // handleable: the residual graph is acyclic
-  }
-  const prattClassified = new Map<string, ReturnType<typeof classifyAlts>>();
-  const leftRecClassified = new Map<string, ReturnType<typeof classifyLeftRec>>();
-  for (const rule of grammar.rules) {
-    if (prattRules.has(rule.name)) prattClassified.set(rule.name, classifyAlts(rule));
-    else if (leftRecSet.has(rule.name)) leftRecClassified.set(rule.name, classifyLeftRec(rule));
-  }
+
   // Per-LED binding-power lookup (object-keyed like ledFirst): a led whose first
   // connector literal has a declared LedPrec is precedence-gated; chainRhs leds must
   // end in a self-operand (the trailing ref the chain re-parses at the level's bp).
@@ -412,10 +134,6 @@ export function createParser(grammar: CstGrammar) {
     for (const led of leds) if (led.notLeftLeaf) ledNotLeftLeaf.set(led, new Set(led.notLeftLeaf));
   }
 
-  // The template token(s): the parser routes their tokens to the interpolation-aware
-  // parseTemplateExpr path (the lexer owns producing them — see gen-lexer.ts).
-  const templateTokenName = grammar.tokens.find(t => t.template)?.name;
-  const templateTokenNames = new Set<string>(grammar.tokens.filter(t => t.template).map(t => t.name));
 
   // ── First-token dispatch ──
   // The single token an expression MUST begin with, if statically knowable (a leading
@@ -539,61 +257,9 @@ export function createParser(grammar: CstGrammar) {
     }
   }
 
-  // ── FIRST sets ──
-  // The set of tokens each rule can begin with (null = "anything" — left-recursive
-  // / prefix-operator rules, which can't be characterized). Used to skip parsing a
-  // non-nullable rule reference outright when the lookahead can't start it — this
-  // is what stops e.g. DecoratorExpr/TypeParams being speculatively parsed (and
-  // failing) at every member/parameter position. (Nullability and the left-corner
-  // relation that DEFINES left recursion are computed earlier, above leftRecSet.)
-  const firstSets = new Map<string, Set<string> | null>();   // null = top (anything)
-  function exprFirst(e: RuleExpr): Set<string> | null {
-    switch (e.type) {
-      case 'literal': return new Set([e.value]);
-      case 'ref': {
-        if (tokenNames.has(e.name)) return new Set([e.name]);
-        return firstSets.has(e.name) ? firstSets.get(e.name)! : new Set();  // unresolved → empty this round
-      }
-      case 'seq': {
-        const acc = new Set<string>();
-        for (const item of e.items) {
-          if (item.type === 'prefix') return null;               // prefix op → any operator token: give up
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;  // non-consuming here
-          const f = exprFirst(item);
-          if (f === null) return null;
-          for (const k of f) acc.add(k);
-          if (!exprNullable(item)) return acc;                   // stop at first non-nullable element
-        }
-        return acc;
-      }
-      case 'alt': {
-        const acc = new Set<string>();
-        for (const item of e.items) {
-          const f = exprFirst(item);
-          if (f === null) return null;
-          for (const k of f) acc.add(k);
-        }
-        return acc;
-      }
-      case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Set();  // zero-width: contributes no FIRST tokens
-      case 'sep': return exprFirst(e.element);
-      default: return null;
-    }
-  }
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const rule of grammar.rules) {
-      const prev = firstSets.get(rule.name);
-      if (prev === null) continue;                               // null is terminal
-      const next = exprFirst(rule.body);
-      if (next === null) { firstSets.set(rule.name, null); changed = true; continue; }
-      const merged = prev ? new Set(prev) : new Set<string>();
-      let grew = false;
-      for (const k of next) if (!merged.has(k)) { merged.add(k); grew = true; }
-      if (grew || prev === undefined) { firstSets.set(rule.name, merged); changed = true; }
-    }
-  }
+  // FIRST sets (plain) and the SECOND-token dispatch are single-sourced in
+  // grammar-analysis.ts and destructured above; ruleMightStart / altMightStart /
+  // altMightSecond below are the interpreter's dispatch built on top of them.
   // Can a (non-nullable) rule possibly begin with this token? Used to skip dead parseRule calls.
   function ruleMightStart(name: string, tok: Token | null): boolean {
     if (!tok || nullableRules.has(name)) return true;
@@ -639,130 +305,7 @@ export function createParser(grammar: CstGrammar) {
     return false;
   }
 
-  // ── SECOND-token dispatch refinement ──
-  // The keys admissible as a match's SECOND token, plus whether a one-token match
-  // exists (len1). An admitted alternative whose SECOND set excludes the actual second
-  // token — and that cannot end after one token — provably fails, so its arm is
-  // skipped before it runs (a labeled-statement arm without a ':' second token, an
-  // arrow head without '=>', …). Over-approximated everywhere: unknown shapes → top,
-  // op/prefix/postfix pratt items are one-op-token consumers with known literal sets.
-  // MUST stay algorithm-identical to emit-parser.ts's copy (same plain FIRST inputs):
-  // the prune decisions are engine-identical by construction, which the
-  // emit-reject-messages gate depends on (an arm skipped by only one engine would
-  // advance the farthest-position error state in the other).
-  type Sec = { s: Set<string> | null; len1: boolean };
-  const SEC_TOP: Sec = { s: null, len1: true };
-  const ruleSecond = new Map<string, Sec>();
-  const secOpKeys = new Set<string>([...opTable.keys(), ...postfixOpValues]);
-  function suffixFirst(items: RuleExpr[], j: number): Set<string> | null {
-    const acc = new Set<string>();
-    for (let i = j; i < items.length; i++) {
-      const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
-      if (item.type === 'op' || item.type === 'postfix') { for (const k of secOpKeys) acc.add(k); return acc; }
-      if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
-      const f = exprFirst(item);
-      if (f === null) return null;
-      for (const k of f) acc.add(k);
-      if (!exprNullable(item)) return acc;
-    }
-    return acc;
-  }
-  function suffixNullable(items: RuleExpr[], j: number): boolean {
-    for (let i = j; i < items.length; i++) {
-      const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
-      if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
-      if (!exprNullable(item)) return false;
-    }
-    return true;
-  }
-  function exprSecond(e: RuleExpr): Sec {
-    switch (e.type) {
-      case 'literal': return { s: new Set(), len1: true };
-      case 'ref':
-        if (tokenNames.has(e.name)) return { s: new Set(), len1: true };
-        return ruleSecond.get(e.name) ?? { s: new Set(), len1: false };
-      case 'seq': {
-        const acc = new Set<string>();
-        let len1 = false;
-        const items = e.items;
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
-          let isec: Sec;
-          let itemNullable: boolean;
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
-            isec = { s: new Set(), len1: true };
-            itemNullable = false;
-          } else {
-            isec = exprSecond(item);
-            itemNullable = exprNullable(item);
-          }
-          if (isec.s === null) return SEC_TOP;
-          for (const k of isec.s) acc.add(k);
-          if (isec.len1) {
-            const rf = suffixFirst(items, i + 1);
-            if (rf === null) return SEC_TOP;
-            for (const k of rf) acc.add(k);
-            if (suffixNullable(items, i + 1)) len1 = true;
-          }
-          if (!itemNullable) return { s: acc, len1 };
-        }
-        return { s: acc, len1 };
-      }
-      case 'alt': {
-        const acc = new Set<string>();
-        let len1 = false;
-        for (const item of e.items) {
-          const sec = exprSecond(item);
-          if (sec.s === null) return SEC_TOP;
-          for (const k of sec.s) acc.add(k);
-          len1 ||= sec.len1;
-        }
-        return { s: acc, len1 };
-      }
-      case 'quantifier': {
-        const sec = exprSecond(e.body);
-        if (sec.s === null) return SEC_TOP;
-        const acc = new Set(sec.s);
-        if (e.kind !== '?' && sec.len1) {
-          const bf = exprFirst(e.body);
-          if (bf === null) return SEC_TOP;
-          for (const k of bf) acc.add(k);
-        }
-        return { s: acc, len1: sec.len1 };
-      }
-      case 'group': return exprSecond(e.body);
-      case 'sep': {
-        const sec = exprSecond(e.element);
-        if (sec.s === null) return SEC_TOP;
-        const acc = new Set(sec.s);
-        if (sec.len1) acc.add(e.delimiter);
-        return { s: acc, len1: sec.len1 };
-      }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf':
-        return { s: new Set(), len1: false };
-      case 'op': case 'prefix': case 'postfix':
-        return { s: new Set(), len1: true };
-      default: return SEC_TOP;
-    }
-  }
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const rule of grammar.rules) {
-      const prev = ruleSecond.get(rule.name);
-      if (prev && prev.s === null && prev.len1) continue;
-      const next = exprSecond(rule.body);
-      let nv: Sec;
-      if (!prev) nv = next;
-      else if (next.s === null || prev.s === null) nv = { s: null, len1: prev.len1 || next.len1 };
-      else nv = { s: new Set([...prev.s, ...next.s]), len1: prev.len1 || next.len1 };
-      const grew = !prev || (nv.s === null) !== (prev.s === null) || nv.len1 !== prev.len1
-        || (nv.s !== null && prev.s !== null && nv.s.size > prev.s.size);
-      if (grew) { ruleSecond.set(rule.name, nv); changed = true; }
-    }
-  }
+
   // null = always try (nullable / top / len1 / empty — the emit tables' always rows).
   const altSecondDispatch = new Map<RuleExpr, string[] | null>();
   for (const rule of grammar.rules) {
@@ -1647,18 +1190,6 @@ export function createParser(grammar: CstGrammar) {
 }
 
 // ── Helpers ──
-
-function hasMarker(expr: RuleExpr): boolean {
-  if (expr.type === 'op' || expr.type === 'prefix' || expr.type === 'postfix') return true;
-  if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(hasMarker);
-  if (expr.type === 'quantifier' || expr.type === 'group') return hasMarker(expr.body);
-  if (expr.type === 'sep') return hasMarker(expr.element);
-  return false;
-}
-
-function findEntryRule(grammar: CstGrammar): string {
-  return grammar.rules[grammar.rules.length - 1].name;
-}
 
 function childOffset(child: CstChild): number {
   return child.offset;
