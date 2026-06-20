@@ -1109,6 +1109,10 @@ function detectTypeParamConstraintKeywords(grammar: CstGrammar, typeArgRule: str
       for (const it of (expr as { items: RuleExpr[] }).items) scanConstraint(it);
     } else if (expr.type === 'group') {
       scanConstraint((expr as { body: RuleExpr }).body);
+    } else if (expr.type === 'sep') {
+      // a constraint keyword reached through a `&`/`,`-separated sub-list is just as direct —
+      // recurse into the element (mirrors getTypeParamElementKeywords' `sep` arm).
+      scanConstraint((expr as { element: RuleExpr }).element);
     }
   };
   for (const rule of grammar.rules) {
@@ -3157,6 +3161,7 @@ function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclI
     if (expr.type === 'ref') return isBlockRule(expr.name);
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(containsBlockRef);
     if (expr.type === 'quantifier' || expr.type === 'group') return containsBlockRef(expr.body);
+    if (expr.type === 'sep') return containsBlockRef(expr.element);
     return false;
   }
 
