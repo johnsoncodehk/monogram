@@ -48,8 +48,11 @@ constructor-occurrence or a config-field-occurrence. So completeness reduces to:
 obligation generator, the generator has a discharging, reachable emission** — three
 mechanically-checkable layers. Both sides are finite — a finite `G`, a finite `gen-tm(G)`, and an
 obligation taxonomy bounded by TextMate's finite construct kinds — so completeness is a **decidable**
-property per grammar, and holds **∀ G by structural induction** over the finite combinator algebra
-(finitely many cases). It is checked a-priori on the emitted artifact, with no corpus.
+property **per grammar**, checked a-priori on the emitted artifact with no corpus. The **algebra
+closure** (Layer A) is what holds ∀ G by structural induction (the lowering/compilation is total over
+the finite combinator algebra); the per-grammar **discharge** is then executed on the shipped set — a
+decidable check run on concrete grammars, with the closure as its inductive backbone, not a mechanised
+∀-G proof of discharge.
 
 ## Layer A — closure: the universe is the algebra, and lowering is total
 
@@ -142,19 +145,35 @@ The honest, measured result:
   artifact's *sequence*, not the grammar's algebra — so no corpus-free structural check reaches it,
   and a scope-preserving reorder slips even the bucket-level differential.
 
-The line is precise. **Completeness — every required construct PRESENT + REACHABLE + visually scoped
-— is DECIDABLE**, and decided a-priori with no corpus: a finite grammar `G`, a finite emitted artifact
-`gen-tm(G)`, a finite obligation taxonomy (bounded by TextMate's finite construct kinds), and per-token
-discharge by *structural identity* (the flat `match` **is** `tokenPatternSource(t)`, so no semantic
-regex-matching is needed). ∀ `G` follows by structural induction over the finite combinator algebra.
-What is **undecidable is soundness** — do the present constructs paint *correctly on all inputs*: a
-wrong-role paint, or which of two overlapping patterns *wins* (ordering), is an agreement between a
-CFG-derived role and a regex-stack-machine tokenizer over an infinite input space, which slides into
-regex-vs-CFG undecidability (Oniguruma's `\g<>`/backreferences are non-regular). So this document
-proves completeness and *measures* its detector (mutation testing); soundness it does not claim to
-decide — that is `test/gap-ledger.ts`'s by-construction + corpus axis. The earlier framing that
-"a-priori completeness over the whole gap space is unavailable" was an over-concession: completeness
-is available; it was soundness's wall, mistaken for completeness's.
+The line is precise — and narrower than an earlier draft of it claimed (an adversarial review of
+that draft is owed these corrections). **Completeness — every required construct PRESENT + REACHABLE
++ visually scoped — is checked structurally, no corpus**, and for a fixed `G` it is DECIDABLE (finite
+`G`, finite `gen-tm(G)`, an obligation taxonomy bounded by TextMate's finite construct kinds). Three
+honest bounds on that:
+
+- **Presence, not identity.** The discharge is *presence* — a reachable repository entry whose scope
+  is non-root — not a deeper *identity* of the matcher. The flat `match` is *derived from*
+  `tokenPatternSource(t)` (widened to `identPattern` for the identifier token, so not literally equal);
+  `tokenCensus` checks the entry exists and carries a visual scope, it does **not** re-verify the regex
+  recognises the right bytes — that is soundness. (For markup grammars the census additionally checks
+  that a token's *explicitly declared* scope is actually emitted, closing a co-blind path a review
+  found — an unmodelled `<?…?>` construct that fell through to the bare root.)
+- **Verified on the shipped set, not run ∀ G.** The Layer-A closure (A1/A2) is the inductive backbone
+  — the algebra IS closed and lowering/compilation IS total ∀ G — but the per-grammar *discharge* is
+  EXECUTED on the six shipped grammars plus synthetic witnesses, not run as a quantified proof over all `G`.
+- **Ordering is decidable, not undecidable.** Which of two overlapping patterns *wins* is, for a fixed
+  `G`, a finite index read (the emitted `patterns` list is finite, the winner is leftmost-by-order, and
+  gen-tm computes that order by a deterministic sort). It is simply **not reachable by a corpus-free
+  structural fold over the grammar** — a measurement limit, the wording §"Measuring the detector" uses,
+  NOT undecidability. (An earlier draft called ordering "undecidable"; that was the same impossibility-
+  without-proof over-claim the project guards against.)
+
+What is genuinely beyond an a-priori check is **soundness** — whether the present constructs paint
+*correctly on all inputs* (a wrong-role paint): a CFG-derived role vs a regex-stack-machine tokenizer
+over an infinite input space. That is handled by-construction + `test/gap-ledger.ts`'s corpus, not
+claimed decided here. So the honest scope: a structural **presence** proof, **decidable per grammar**,
+**executed on the shipped set**, with the algebra-closure as its inductive backbone — and the detector's
+power **measured** (mutation testing), not proven, for the shape class.
 
 ## Reachability — root ∪ export surfaces
 

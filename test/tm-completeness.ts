@@ -263,7 +263,14 @@ export function tokenCensus(g: CstGrammar, tmJson: TmGrammarJson): TokenCensus {
     if (flat) { if (flatNeutered(flat)) neutered.push(`${t.name}→${(flat as any).name ?? '∅'}`); else bump('flat'); continue; }
     if (t.flags.includes('regex')) { bump('regex-family'); continue; }
     if (tokenPatternIsNever(t)) { bump('engine-emitted'); continue; }
-    if (g.markup) { bump('markup-region'); continue; }                 // generateMarkupTm owns it
+    if (g.markup) {
+      // generateMarkupTm owns the ROLE-based markup tokens (text / tag / attr — no explicit `scope`).
+      // But a markup token with an EXPLICITLY declared scope (a construct generateMarkupTm may not
+      // model, e.g. a `<?…?>` processing instruction) must actually have that scope emitted — else it
+      // falls through to the bare document root, the same neuter gap the token-stream path catches.
+      if (t.scope && !full.includes(t.scope)) { orphans.push(`${t.name}[markup-unmodeled:${t.scope}]`); continue; }
+      bump('markup-region'); continue;
+    }
     const delim = tokenPatternLiteralText(t);                          // a region owns this token's delimiter?
     if (delim && full.includes(JSON.stringify(delim).slice(1, -1))) { bump('region-owned'); continue; }
     orphans.push(`${t.name}[${t.flags.join(',') || '-'}]`);
