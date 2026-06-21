@@ -13,7 +13,7 @@ import { emitParser } from '../src/emit-parser.ts';
 import { objectify } from './emitted-obj.ts';
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-multidoc.mjs';
+const emPath = '/tmp/emitted-multidoc.mts';
 writeFileSync(emPath, emitParser(grammar));
 type Edit = { start: number; end: number; text: string };
 type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };

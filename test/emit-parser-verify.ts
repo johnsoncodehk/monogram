@@ -21,7 +21,7 @@ const grammar = (await import('../typescript.ts')).default;
 const oracle = createParser(grammar);
 
 // Emit, write to /tmp, import the standalone module.
-const EMITTED = '/tmp/emitted-parser.mjs';
+const EMITTED = '/tmp/emitted-parser.mts';
 writeFileSync(EMITTED, emitParser(grammar));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 

@@ -11,7 +11,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { emitParser } from '../src/emit-parser.ts';
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-incremental.mjs';
+const emPath = '/tmp/emitted-incremental.mts';
 writeFileSync(emPath, emitParser(grammar));
 type Edit = { start: number; end: number; text: string };
 type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };

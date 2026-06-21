@@ -17,7 +17,7 @@ import { emitParser } from '../src/emit-parser.ts';
 import ts from 'typescript';
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-recovery-conf.mjs';
+const emPath = '/tmp/emitted-recovery-conf.mts';
 writeFileSync(emPath, emitParser(grammar));
 type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };
 const em = (await import(emPath + '?v=' + process.pid)) as { createParser(): { parse(s: string): Cst } };

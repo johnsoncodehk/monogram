@@ -31,7 +31,7 @@ const g = defineGrammar({
   rules: { Expr, Stmt, Program }, entry: Program,
 });
 
-const emPath = '/tmp/emitted-exhaustive.mjs';
+const emPath = '/tmp/emitted-exhaustive.mts';
 writeFileSync(emPath, emitParser(g));
 type Cst = { root: number; errors: object[] };
 type Parser = { parse(s: string): Cst; edit(c: Cst, e: object[]): void; visit(c: Cst, fns: object): void; tree: import('./emitted-obj.ts').TreeView };

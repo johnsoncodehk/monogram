@@ -51,7 +51,7 @@ function checkTree(em: Emitted, root: number, src: string, matchers: Record<stri
 for (const name of GRAMMARS) {
   const grammar = (await import(`../${name}.ts`)).default;
   const matchers = (await import(`../${name}.cst-match.ts`)).MATCHERS;
-  const emPath = `/tmp/emitted-totality-${name}.mjs`;
+  const emPath = `/tmp/emitted-totality-${name}.mts`;
   writeFileSync(emPath, emitParser(grammar));
   const em = (await import(emPath + '?v=' + process.pid)) as Emitted;
   let parsed = 0;

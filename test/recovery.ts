@@ -17,7 +17,7 @@ import { emitParser } from '../src/emit-parser.ts';
 import { objectify } from './emitted-obj.ts';
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-recovery.mjs';
+const emPath = '/tmp/emitted-recovery.mts';
 writeFileSync(emPath, emitParser(grammar));
 type Edit = { start: number; end: number; text: string };
 type Diag = { offset: number; end: number; message: string; related?: { offset: number; end: number; message: string } };

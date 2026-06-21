@@ -26,7 +26,7 @@ const TreeSitter = require(TS_BENCH + '/node_modules/tree-sitter');
 const TSLang = require(TS_BENCH + '/node_modules/tree-sitter-typescript').typescript;
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-h2h.mjs';
+const emPath = '/tmp/emitted-h2h.mts';
 writeFileSync(emPath, emitParser(grammar));
 const { createParser } = await import(emPath + '?v=' + process.pid);
 

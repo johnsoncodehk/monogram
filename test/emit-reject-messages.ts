@@ -23,7 +23,7 @@ import { readFileSync, writeFileSync } from 'fs';
 const grammar = (await import('../typescript.ts')).default;
 const oracle = createParser(grammar);
 
-const EMITTED = '/tmp/emitted-parser-msg.mjs';
+const EMITTED = '/tmp/emitted-parser-msg.mts';
 writeFileSync(EMITTED, emitParser(grammar));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 

@@ -15,7 +15,7 @@ import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 const grammar = (await import('../typescript.ts')).default;
 
 // The reference: createLexer with the SAME intern config the emitted parser bakes.
-const EMITTED = '/tmp/emit-lexer-verify-parser.mjs';
+const EMITTED = '/tmp/emit-lexer-verify-parser.mts';
 writeFileSync(EMITTED, emitParser(grammar));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 const src = readFileSync(EMITTED, 'utf-8');
