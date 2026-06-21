@@ -656,7 +656,7 @@ class Emitter {
         // A suppress-carrying group stages the LED-connector exclusion for the next
         // parseRule, then matches its body (same as matchExpr 'group').
         const pre = (expr.suppress && expr.suppress.length)
-          ? `suppressNext = new Set(${J(expr.suppress)});`
+          ? `suppressNext = new Set<string>(${J(expr.suppress)});`
           : ``;
         return [pre, this.matchInto(expr.body, onFail)].filter(Boolean).join('\n');
       }
@@ -1143,9 +1143,9 @@ export function emitParser(grammar: CstGrammar): string {
   // TYPE_KIND: tok.type → int. LIT_KW / LIT_PU: tok.text → keyword / punct literal int.
   // Every token is BORN with tok.k (type kind) + tok.t (literal kind) and the stamp
   // flags — one monomorphic shape, one allocation, no post-pass.
-  e.emit(`const TYPE_KIND = new Map(${J([...st.typeKind])});`);
-  e.emit(`const LIT_KW = new Map(${J([...st.kwLitKind])});`);
-  e.emit(`const LIT_PU = new Map(${J([...st.puLitKind])});`);
+  e.emit(`const TYPE_KIND = new Map<string, number>(${J([...st.typeKind])});`);
+  e.emit(`const LIT_KW = new Map<string, number>(${J([...st.kwLitKind])});`);
+  e.emit(`const LIT_PU = new Map<string, number>(${J([...st.puLitKind])});`);
   e.emit(`const K_PUNCT = ${st.KIND_PUNCT};`);
   e.emit(`const K_TEMPLATE_HEAD = ${st.KIND_TEMPLATE_HEAD};`);
   e.emit(`const K_TEMPLATE_MIDDLE = ${st.KIND_TEMPLATE_HEAD + 1};`);
@@ -1158,15 +1158,15 @@ export function emitParser(grammar: CstGrammar): string {
   if (lexSrc) {
     e.emit(lexSrc);
   } else {
-    e.emit(`const { tokenize } = createLexer(LEX_GRAMMAR, {`);
+    e.emit(`const { tokenize } = createLexer(LEX_GRAMMAR as any, {`);
     e.emit(`  typeKind: TYPE_KIND, kwLit: LIT_KW, puLit: LIT_PU,`);
     e.emit(`  punctKind: K_PUNCT, namedFallback: K_NAMED_FALLBACK,`);
     e.emit(`});`);
   }
   e.emit(``);
   // Baked maps. Emit as object literals → Map.
-  e.emit(`const opTable = new Map(${J([...a.opTable])});`);
-  e.emit(`const prefixOps = new Map(${J([...a.prefixOps])});`);
+  e.emit(`const opTable = new Map<string, any>(${J([...a.opTable])});`);
+  e.emit(`const prefixOps = new Map<string, any>(${J([...a.prefixOps])});`);
   // The same op tables re-keyed by the literal int (tok.t): the Pratt loops look an
   // operator up for EVERY token they reach, and tok.t is already interned — an array
   // load replaces the string-keyed Map.get. Equivalent because a token's text can equal
@@ -1189,7 +1189,7 @@ export function emitParser(grammar: CstGrammar): string {
     e.emit(`const OP_BY_T: (OpInfo | null)[] = ${J(byT(a.opTable))};`);
     e.emit(`const PREFIX_BY_T: (OpInfo | null)[] = ${J(byT(a.prefixOps))};`);
   }
-  e.emit(`const noUnaryLhsOps = new Set(${J([...a.noUnaryLhsOps])});`);
+  e.emit(`const noUnaryLhsOps = new Set<string>(${J([...a.noUnaryLhsOps])});`);
   {
     let tSize = 1;
     for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
@@ -1214,8 +1214,8 @@ export function emitParser(grammar: CstGrammar): string {
     }
     e.emit(`const REQTGT_T = Uint8Array.from([${rt.join(',')}]);`);
   }
-  e.emit(`const postfixOpValues = new Set(${J([...a.postfixOpValues])});`);
-  e.emit(`const binaryConnectors = new Set(${J([...a.binaryConnectors])});`);
+  e.emit(`const postfixOpValues = new Set<string>(${J([...a.postfixOpValues])});`);
+  e.emit(`const binaryConnectors = new Set<string>(${J([...a.binaryConnectors])});`);
   // Assignment-target shape test (ECMAScript AssignmentTargetType): a node id is NOT a
   // valid LHS target iff its outermost form is a prefix-op (prefix-unary OR prefix-update
   // `++x`) — head kid is an operator-tag leaf in prefixOps — or a postfix-update (`x++`) —
@@ -1255,8 +1255,8 @@ export function emitParser(grammar: CstGrammar): string {
   e.emit(`  }`);
   e.emit(`  return '';`);
   e.emit(`}`);
-  e.emit(`const tokenNames = new Set(${J([...a.tokenNames])});`);
-  e.emit(`const templateTokenNames = new Set(${J([...a.templateTokenNames])});`);
+  e.emit(`const tokenNames = new Set<string>(${J([...a.tokenNames])});`);
+  e.emit(`const templateTokenNames = new Set<string>(${J([...a.templateTokenNames])});`);
   e.emit(`const templateTokenName = ${J(a.templateTokenName ?? null)};`);
   e.emit(`const maxBp = ${a.maxBp};`);
   e.emit(`const ENTRY = ${J(entry)};`);
@@ -1280,7 +1280,7 @@ export function emitParser(grammar: CstGrammar): string {
   }
   // (recovery sync closers are threaded per-loop from the enclosing seq — see
   // quantFollowT; a global closer table froze top-level recovery at any ']'.)
-  e.emit(`const prattRuleNames = new Set(${J([...a.prattRules])});`);
+  e.emit(`const prattRuleNames = new Set<string>(${J([...a.prattRules])});`);
   // The expression rule the template-interpolation fallback (findExprRule) picks:
   // first pratt rule that isn't Type, in declaration order. Bake the resolved name.
   const exprRuleName = (() => {
@@ -1432,7 +1432,7 @@ let srcLenP1 = 1;
 let negFrom = 0x7fffffff;
 function toff(i: number) { const v = tkOff[i]; return v < 0 ? v + srcLenP1 : v; }
 function tend(i: number) { const v = tkEnd[i]; return v < 0 ? v + srcLenP1 : v; }
-${e.soa ? '' : 'let tkText = [];   // fallback-lexer text column (synthetic tokens are not source spans)'}
+${e.soa ? '' : 'let tkText: string[] = [];   // fallback-lexer text column (synthetic tokens are not source spans)'}
 function growTok() {
   tkCap *= 2;
   const k = new ${K_ARR}(tkCap); k.set(tkK); tkK = k;
@@ -1743,7 +1743,7 @@ function matchPuLitGT(pu: number, vs?: number) {
     const end0 = tend(pos);
     ${e.soa ? '' : 'const restText = tkText[pos].slice(1);'}
     if (tokN === tkCap) growTok();
-    parenCachePos = -1;
+    ${e.soa ? 'parenCachePos = -1;' : ''}   // invalidate the paren-stack cache (soa emitted lexer only)
     // token indices shift past this point: the OLD-TREE adoption mapping
     // (adoptDmg*/adoptDelta, frozen at edit start) is no longer valid — turn
     // adoption off for the remainder of this parse (the '>' split is rare; the
@@ -2003,7 +2003,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_lr); }`);
   // notLeftLeaf head-leaf word sets (module-level, built once) for this rule's gated continuations.
   contNotLeftLeaf.forEach((words, i) => {
-    if (words) e.emit(`const _NLLC_${sn}_${i} = new Set(${J(words)});`);
+    if (words) e.emit(`const _NLLC_${sn}_${i} = new Set<string>(${J(words)});`);
   });
   e.emit(`function ${ruleFn}_lr(_minBp: number) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
@@ -2068,7 +2068,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_pratt); }`);
   // notLeftLeaf head-leaf word sets (module-level, built once) for this rule's gated LED arms.
   meta.notLeftLeaf.forEach((words, i) => {
-    if (words) e.emit(`const _NLL_${sn}_${i} = new Set(${J(words)});`);
+    if (words) e.emit(`const _NLL_${sn}_${i} = new Set<string>(${J(words)});`);
   });
   e.emit(`function ${ruleFn}_pratt(minBp: number) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
@@ -3574,7 +3574,7 @@ function swapBuffers() {
   x = tkPd; tkPd = altPd!; altPd = x;
   x = tkCap; tkCap = altCap; altCap = x;
 }
-${e.soa ? '' : 'let altText = [];'}
+${e.soa ? '' : 'let altText: string[] = [];'}
 
 function parseCore(source: string, entryRule?: string) {
   adoptRoot = -1;
@@ -3696,14 +3696,16 @@ function editCore(entryRule: string | undefined, edits?: Edit[]) {
     editDmgE = dE;
   }
 
-${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // Damage envelope from the composed changes: prefix coordinates are shared, the
-  // old end comes back through the total delta.
+  // old end comes back through the total delta. The shared post-fork settle
+  // (shiftDiags) and the soa window both read these, so they live OUTSIDE the
+  // lex fork — the non-soa branch reads cs/ceOld/charDelta too.
   const newLen = docLen;
   const cs = editDmgS < newLen ? editDmgS : newLen;
   const ceNew = editDmgE < cs ? cs : editDmgE;
   const ceOld = ceNew - (newLen - oldLen);
   const charDelta = newLen - oldLen;
+${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
   // Restart anchor: the last token B ending at/before the damage whose recorded
   // depths are zero and whose shape carries no cross-token lexer flag (')' control-
   // head, postfix-ambiguous op). B = -1 restarts at the file head — always sound.
@@ -3866,8 +3868,8 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
     altOff = new Int32Array(tkCap); altEnd = new Int32Array(tkCap); altFl = new Uint8Array(tkCap);
     altDp = new Uint8Array(tkCap); altPd = new Uint16Array(tkCap);
   }
-  tkK = altK; tkT = altT; tkOff = altOff; tkEnd = altEnd; tkFl = altFl;
-  { const _d = tkDp; tkDp = altDp; altDp = _d; const _q = tkPd; tkPd = altPd; altPd = _q; }
+  tkK = altK!; tkT = altT!; tkOff = altOff!; tkEnd = altEnd!; tkFl = altFl!;
+  { const _d = tkDp; tkDp = altDp!; altDp = _d; const _q = tkPd; tkPd = altPd!; altPd = _q; }
   tkText = altText; tkText.length = 0;
   altK = oK; altT = oT; altOff = oOff; altEnd = oEnd; altFl = oFl;
   altText = oText;
@@ -3876,7 +3878,6 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
                        // from an earlier totality-net edit would go stale
   lexInto(flattenDoc());
   const nN = tokN;
-  const charDelta = docLen - oldLen;
   const minN = oN < nN ? oN : nN;
   let p = 0;
   while (p < minN && oK[p] === tkK[p] && oT[p] === tkT[p] && oFl[p] === tkFl[p]

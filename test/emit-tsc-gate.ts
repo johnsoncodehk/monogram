@@ -11,37 +11,38 @@
 //     emitted parser by stripping types, and the CST-identity gate (emit-parser-verify)
 //     proves the stripped runtime is byte-for-byte the interpreter.
 //
-// SCOPE: the self-contained emit path — soa token columns + an emitted lexer — which
-// is every grammar WITHOUT markup / indent / newline modes (emitLexer covers them).
-// The ts/js family (+ the jsx/tsx variants) goes through it and is enforced here.
-// yaml / html take the FALLBACK path (emitLexer returns null → the parser imports
-// createLexer) plus the non-soa piece-text layer; that path carries additional
-// untyped surface and a pre-existing latent scope issue the gate surfaced (the
-// non-soa editCore branch references cs/ceOld/parenCachePos declared only in the soa
-// branch). Typing it is tracked separately — listed as DEFERRED below, not silently
-// dropped.
+// Both emit paths are covered: the self-contained path (soa columns + an emitted
+// lexer — the ts/js family) and the fallback path (yaml/html: emitLexer returns null
+// so the parser imports createLexer, plus the non-soa piece-text layer). Checking
+// every grammar is what forces grammar-specific emission (token width, soa vs piece
+// layer, empty vocab sets, the fallback createLexer contract) to stay type-sound —
+// and it already paid off: the fallback editCore branch referenced cs/ceOld/
+// parenCachePos declared only in the soa branch (unreached at runtime, invisible
+// until this gate), now hoisted/gated correctly.
 import { emitParser } from '../src/emit-parser.ts';
 import { writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import type { CstGrammar } from '../src/types.ts';
 
-// Enforced: the self-contained soa + emitted-lexer path.
-const CHECKED: Array<[string, string]> = [
+const GRAMMARS: Array<[string, string]> = [
   ['typescript', '../typescript.ts'],
   ['javascript', '../javascript.ts'],
   ['typescriptreact', '../typescriptreact.ts'],
   ['javascriptreact', '../javascriptreact.ts'],
+  ['yaml', '../yaml.ts'],
+  ['html', '../html.ts'],
 ];
-// Deferred: the fallback-lexer / non-soa path (logged, not gated yet).
-const DEFERRED = ['yaml', 'html'];
 
+// --allowImportingTsExtensions: the fallback-lexer grammars import createLexer from
+// '…/src/gen-lexer.ts' (an absolute path baked at emit time); harmless for the
+// self-contained grammars, which import nothing.
 const TSC_FLAGS = [
-  '--strict', '--noEmit', '--target', 'ES2022',
-  '--module', 'ES2022', '--moduleResolution', 'Bundler', '--skipLibCheck',
+  '--strict', '--noEmit', '--target', 'ES2022', '--module', 'ES2022',
+  '--moduleResolution', 'Bundler', '--skipLibCheck', '--allowImportingTsExtensions',
 ];
 
 let failures = 0;
-for (const [name, path] of CHECKED) {
+for (const [name, path] of GRAMMARS) {
   let grammar: CstGrammar;
   try {
     grammar = (await import(path)).default;
@@ -63,10 +64,9 @@ for (const [name, path] of CHECKED) {
     if (errs.length > 30) console.log(`      … and ${errs.length - 30} more`);
   }
 }
-console.log(`  deferred (fallback-lexer / non-soa path, not yet typed): ${DEFERRED.join(', ')}`);
 
 if (failures > 0) {
   console.error(`\n✗ emitted parser fails strict type-check for ${failures} grammar(s)`);
   process.exit(1);
 }
-console.log('\n✓ emitted parser type-checks under tsc --strict (soa + emitted-lexer family)');
+console.log('\n✓ emitted parser type-checks under tsc --strict for every grammar');
