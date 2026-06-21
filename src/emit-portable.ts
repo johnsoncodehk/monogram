@@ -19,7 +19,7 @@
 // and a Pratt expression engine with operator precedence/associativity, prefix unary,
 // bracket NUDs (grouping, array), and mixfix LEDs (call / member / index) tried before
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
-// parser. This is enough to derive a real JavaScript-subset parser (examples/minijs.ts).
+// parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';

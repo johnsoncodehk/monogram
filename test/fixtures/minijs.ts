@@ -16,7 +16,7 @@
 import {
   token, rule, defineGrammar, left, right, op, prefix, alt,
   seq, oneOf, range, star, sep, opt, many, altPattern, noneOf, anyChar,
-} from '../src/api.ts';
+} from '../../src/api.ts';
 
 const digit = range('0', '9');
 const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_', '$');

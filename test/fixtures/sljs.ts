@@ -5,7 +5,7 @@
 import {
   token, rule, defineGrammar, left, op,
   seq, oneOf, range, star, opt, many, altPattern, noneOf, sameLine,
-} from '../src/api.ts';
+} from '../../src/api.ts';
 
 const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_', '$');
 const idCont = oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'), '_', '$');

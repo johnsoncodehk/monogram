@@ -15,7 +15,7 @@
 import {
   token, rule, defineGrammar, left, right, op, prefix,
   seq, oneOf, range, star, many,
-} from '../src/api.ts';
+} from '../../src/api.ts';
 
 const digit = range('0', '9');
 const identStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');

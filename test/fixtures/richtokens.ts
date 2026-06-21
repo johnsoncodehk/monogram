@@ -9,7 +9,7 @@
 import {
   token, rule, defineGrammar,
   seq, oneOf, range, star, plus, repeat, optPattern, altPattern, noneOf, anyChar, notFollowedBy, many,
-} from '../src/api.ts';
+} from '../../src/api.ts';
 
 const digit = range('0', '9');
 const hexDigit = oneOf(digit, range('a', 'f'), range('A', 'F'));

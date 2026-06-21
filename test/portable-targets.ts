@@ -21,7 +21,7 @@ import type { CstGrammar } from '../src/types.ts';
 type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
 const CASES: Case[] = [
   {
-    grammar: 'calc', path: '../examples/calc.ts',
+    grammar: 'calc', path: './fixtures/calc.ts',
     accept: [
       '1;', 'a;', '', '1 + 2 * 3;', '1 * 2 + 3;', '1 - 2 - 3;', 'a / b / c;', '1 + 2 + 3 + 4;',
       '-a;', '-(-a);', '- - a;', '-a * b;', '-a + b * c;', '-(a + b) * c;',
@@ -31,7 +31,7 @@ const CASES: Case[] = [
     reject: ['1 +;', '(1;', '1 2;', 'let = 1;', ') ;', '* a;', 'let x 1;'],
   },
   {
-    grammar: 'minijs', path: '../examples/minijs.ts',
+    grammar: 'minijs', path: './fixtures/minijs.ts',
     accept: [
       '1;', 'a;', '', 'x = 1 + 2 * 3;', '-a * b + 1;', '(1 + 2) * 3;',
       'foo(a, b);', 'a.b.c;', 'a[0][1];', 'f()()();', 'a.b(c).d[e];',
@@ -50,7 +50,7 @@ const CASES: Case[] = [
     // The general token-pattern matcher (stateless real-JS token tier): \u-escaped
     // identifiers, the decimal/hex number family with a boundary, both-quote strings —
     // compiled to a backtracking-free matcher in all three targets.
-    grammar: 'richtokens', path: '../examples/richtokens.ts',
+    grammar: 'richtokens', path: './fixtures/richtokens.ts',
     accept: [
       '123', '0xFF', '1_000_000', '3.14', 'foo', 'bar_$x9', '"hi"', "'single'",
       '"esc\\"q\\n"', '123 0xa foo "s" 3.14', '0xDEADbeef 42 _id $x cafe // line\n 7',
@@ -62,7 +62,7 @@ const CASES: Case[] = [
     // The STATEFUL regex-vs-division lexer: `/` is a regex in expression context, division
     // after a value. Exercises every branch of prevIsValue — after `=`/keyword/`(`-head
     // (regex) vs after value/`)`/`]`/member/call (division), plus regex escapes & classes.
-    grammar: 'regexjs', path: '../examples/regexjs.ts',
+    grammar: 'regexjs', path: './fixtures/regexjs.ts',
     accept: [
       'a / b;', 'var r = /abc/g;', 'return /re/;', 'if (x) /re/;', '(a + b) / c;',
       'a.b / c;', 'foo(x) / y;', '[1, 2] / 3;', 'var x = a / b / c;',
@@ -76,7 +76,7 @@ const CASES: Case[] = [
     // STATEFUL template literals: the `${…}` interpolation split (head/middle/tail) with a
     // brace-depth stack — adjacent/multiple holes, exprs in holes, nested templates, and a
     // nested `{…}` object inside a hole (which must NOT close the hole).
-    grammar: 'templatejs', path: '../examples/templatejs.ts',
+    grammar: 'templatejs', path: './fixtures/templatejs.ts',
     accept: [
       'var a = `hello`;', 'var b = `hi ${name}!`;', 'var c = `${x}${y}`;',
       'var d = `a${ x + 1 }b${ y * 2 }c`;', 'var e = `outer ${ `inner ${z}` } end`;',
@@ -89,7 +89,7 @@ const CASES: Case[] = [
   {
     // General (non-literal) inline alt: object keys are alt(Ident | Str | Number) — a
     // backtracking alternation of token refs inside a rule sequence.
-    grammar: 'altjs', path: '../examples/altjs.ts',
+    grammar: 'altjs', path: './fixtures/altjs.ts',
     accept: [
       '{a: 1};', '{"k": 2};', '{1: x};', '{a: 1, "b": 2, 3: c};', '{x: 1 + 2 * 3};',
       '({nested: {inner: 1}});', '{};', 'a + b;', '{k: (1 + 2)};',
@@ -99,7 +99,7 @@ const CASES: Case[] = [
   {
     // General Pratt NUD sequences: a reserved-word-guarded identifier (`not(kw)… Ident`,
     // a zero-width negative lookahead) and a quantifier-first class expression.
-    grammar: 'nudjs', path: '../examples/nudjs.ts',
+    grammar: 'nudjs', path: './fixtures/nudjs.ts',
     accept: [
       'x;', 'foo + bar;', 'class C {};', 'class {};', 'class C extends B {};',
       '@dec class C { m(){} };', 'new Foo;', 'new C();', 'a.b.c;',
@@ -111,7 +111,7 @@ const CASES: Case[] = [
     // Postfix-operator LED (`x++`/`x--`) + the access-tail closure: once a postfix binds, the
     // operand is an update expression, so a further postfix or an access tail (`.`/`[`/`(`)
     // can't attach (`a++--`, `a++.b` are ill-formed; `(a++).b` is fine).
-    grammar: 'postjs', path: '../examples/postjs.ts',
+    grammar: 'postjs', path: './fixtures/postjs.ts',
     accept: [
       'x++;', 'x--;', 'a + b++;', '++x;', 'x++ + y;', 'a.b++;', '(x)++;', '--a.b;',
       'x++ * 2;', '(a++).b;', 'x.y.z++;',
@@ -121,7 +121,7 @@ const CASES: Case[] = [
   {
     // A grouped sub-sequence `seq` step: comma lists as `star([',', $])` (e.g. `many(',', $)`),
     // the array/argument-list shape javascript.ts uses.
-    grammar: 'seqjs', path: '../examples/seqjs.ts',
+    grammar: 'seqjs', path: './fixtures/seqjs.ts',
     accept: [
       '[1, 2, 3];', '[];', '[1];', 'f(1, 2);', 'f();', '[a + b, c];',
       'f(g(1, 2), 3);', '(x);', 'f(a)(b, c);', '[[1,2],[3,4]];',
@@ -132,7 +132,7 @@ const CASES: Case[] = [
     // The `sameLine` zero-width assertion (no line terminator before the next token):
     // `return` takes a value only on the same line. Also verifies the lexer's newline-before
     // tracking across a block comment that spans a newline.
-    grammar: 'sljs', path: '../examples/sljs.ts',
+    grammar: 'sljs', path: './fixtures/sljs.ts',
     accept: [
       'return 1;', 'return;', 'return 1 + 2;', '1 + 2;', 'return /* c */ 1;',
       '(a);', 'return (1);',
@@ -143,7 +143,7 @@ const CASES: Case[] = [
     // capBelow (assignment-level) arrow functions: a NUD parsed only when minBp < the
     // connector's bp, admitting NO led once parsed; the `(x) => y` vs `(x)` ambiguity is
     // resolved by longest-match ordering (the arrow is tried first, falls back to grouping).
-    grammar: 'arrowjs', path: '../examples/arrowjs.ts',
+    grammar: 'arrowjs', path: './fixtures/arrowjs.ts',
     accept: [
       'x => x;', '(a, b) => a + b;', '() => {};', 'x = (() => 1);', 'f(() => 1, 2);',
       '(x);', 'a + b;', 'x => y => x;', '(() => 2);', '(a) => a;', 'x = y => y;', 'foo();',
@@ -154,7 +154,7 @@ const CASES: Case[] = [
   {
     // Precedence-gated mixfix LEDs: ternary `? :` (binds below the operators) and the
     // chain-rhs relational leds `in`/`instanceof` (`a in b in c` left-chains).
-    grammar: 'ledjs', path: '../examples/ledjs.ts',
+    grammar: 'ledjs', path: './fixtures/ledjs.ts',
     accept: [
       'a == b ? c : d;', 'a ? b : c ? d : e;', 'a + b ? c : d - e;', 'a in b;',
       'a in b in c;', 'x instanceof Y;', 'a < b in c;', '1 + 2 * 3 ? 4 : 5;',
@@ -165,7 +165,7 @@ const CASES: Case[] = [
   {
     // The no-`in` (suppress) context: a `for (binding in iterable)` head parses its binding
     // with the `in` led disabled, so `in` belongs to the for-head, not the binding.
-    grammar: 'noinjs', path: '../examples/noinjs.ts',
+    grammar: 'noinjs', path: './fixtures/noinjs.ts',
     accept: [
       'for (x in y) z;', 'x in y;', 'for (a.b in c) d;', 'a in b in c;',
       'for ((x) in y) z;', 'for (x in y) a in b;', 'for (x in a in b) z;',

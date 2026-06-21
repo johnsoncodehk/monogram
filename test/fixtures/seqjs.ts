@@ -4,7 +4,7 @@
 import {
   token, rule, defineGrammar, left, op,
   seq, oneOf, range, star, opt, many,
-} from '../src/api.ts';
+} from '../../src/api.ts';
 // `many(',', $)` is the rule-level `(',' Expr)*` — a star whose body is the sequence
 // `, Expr`, exactly the shape javascript.ts uses for comma lists.
 
