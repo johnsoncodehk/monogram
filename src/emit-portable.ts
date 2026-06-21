@@ -51,7 +51,8 @@ export type Step =
   | { t: 'sep'; elem: Step; delim: string }                     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][] }                            // inline alternation of sub-sequences (backtracking)
-  | { t: 'not'; steps: Step[] };                                // zero-width negative lookahead (consumes nothing)
+  | { t: 'not'; steps: Step[] }                                 // zero-width negative lookahead (consumes nothing)
+  | { t: 'seq'; steps: Step[] };                                // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
 export type Alt = Step[];
 
 export type RdRule = { kind: 'rd'; name: string; alts: Alt[] };
@@ -141,6 +142,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
       case 'group': { const ss = altSteps(e.body); if (ss.length !== 1) throw new Error('portable: group must reduce to a single step'); return ss[0]; }
       case 'not': return { t: 'not', steps: altSteps(e.body) };   // zero-width negative lookahead
+      case 'seq': return { t: 'seq', steps: e.items.map(stepOf) };  // grouped sub-sequence (star/sep body)
       case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
       case 'quantifier':
         if (e.kind === '*') return { t: 'star', step: stepOf(e.body) };
@@ -298,6 +300,7 @@ function buildPratt(
   // a self-ref inside a NUD/LED sub-sequence is a fresh parse of this rule
   function stepOfPratt(e: RuleExpr): Step {
     if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
+    if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'not') return { t: 'not', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
     if (e.type === 'group' && !e.capBelow && !e.ctxMode && !e.suppress && e.body.type !== 'seq') return stepOfPratt(e.body);
     if (e.type === 'sep') return { t: 'sep', elem: stepOfPratt(e.element), delim: e.delimiter };

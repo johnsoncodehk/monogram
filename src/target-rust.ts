@@ -180,6 +180,7 @@ function stepCond(s: Step): string {
     case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}], &mut kids)`;
     case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(self, &mut kids)`;
     case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(self, &mut kids)`;
+    case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
   }
 }
 // A backtracking inline alternation rendered as an immediately-applied closure over (p, k),
@@ -203,6 +204,7 @@ function stepCondP(s: Step): string {
     case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}], k)`;
     case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(p, k)`;
     case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(p, k)`;
+    case 'seq': return `(${s.steps.length ? s.steps.map(stepCondP).join(' && ') : 'true'})`;
   }
 }
 

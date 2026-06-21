@@ -121,6 +121,16 @@ const CASES: Case[] = [
     ],
     reject: ['a++--;', 'a++.b;', 'a++ ++;', '++;'],
   },
+  {
+    // A grouped sub-sequence `seq` step: comma lists as `star([',', $])` (e.g. `many(',', $)`),
+    // the array/argument-list shape javascript.ts uses.
+    grammar: 'seqjs', path: '../examples/seqjs.ts',
+    accept: [
+      '[1, 2, 3];', '[];', '[1];', 'f(1, 2);', 'f();', '[a + b, c];',
+      'f(g(1, 2), 3);', '(x);', 'f(a)(b, c);', '[[1,2],[3,4]];',
+    ],
+    reject: ['[1 2];', 'f(1,);', '[, 1];', 'f(1 2);'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>
