@@ -62,6 +62,7 @@ export type PrattRule = {
   prefix: Array<{ op: string; rbp: number }>;         // NUD: prefix op then operand at rbp
   binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
+  postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led
 };
 export type RuleIR = RdRule | PrattRule;
 
@@ -251,6 +252,7 @@ function buildPratt(
   const nudBrackets: Bracket[] = [];
   let sawPrefix = false, sawBinary = false;
   const leds: Bracket[] = [];
+  const postfixToks: string[] = [];
   for (const alt of alts) {
     const items = alt.type === 'seq' ? alt.items : [alt];
     const startsSelf = items[0].type === 'ref' && items[0].name === name;
@@ -265,6 +267,7 @@ function buildPratt(
     const rest = items.slice(1);
     if (rest[0].type === 'op') { sawBinary = true; continue; }
     if (rest[0].type === 'literal') { leds.push({ first: rest[0].value, steps: rest.map((it) => stepOfPratt(it)) }); continue; }
+    if (rest.length === 1 && rest[0].type === 'ref' && a.tokenNames.has(rest[0].name)) { postfixToks.push(rest[0].name); continue; }  // postfix token (tagged template)
     throw new Error(`portable: Pratt LED shape not in scope (rule ${name})`);
   }
   // a self-ref inside a NUD/LED sub-sequence is a fresh parse of this rule
@@ -280,5 +283,5 @@ function buildPratt(
   const binary = sawBinary
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp }))
     : [];
-  return { kind: 'pratt', name, nudToks, nudBrackets, prefix, binary, leds };
+  return { kind: 'pratt', name, nudToks, nudBrackets, prefix, binary, leds, postfixToks };
 }

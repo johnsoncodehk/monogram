@@ -40,6 +40,7 @@ const Expr = rule(($) => [
   [$, op, $],
   [$, '(', opt(sep($, ',')), ')'],
   [$, '.', Ident],
+  [$, Template],                        // tagged template — a postfix-token LED
 ]);
 
 const Block = rule(($) => [['{', many(Stmt), '}']]);

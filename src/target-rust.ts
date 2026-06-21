@@ -225,6 +225,11 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
                 }
                 self.pos = led_save; break;
             }`;
+  const postfixArm = (tok: string) => {
+    const tplPart = tpl && tok === tpl.token ? `
+            if t.kind == "$templateHead" { if let Some(n) = self.match_template() { left = node(${J(r.name)}, vec![left, n]); continue; } }` : '';
+    return `            if t.kind == ${J(tok)} { self.pos += 1; let leaf = Cst::leaf(t.kind, t.off, t.end); left = node(${J(r.name)}, vec![left, leaf]); continue; }${tplPart}`;
+  };
   return `    fn parse_${r.name}(&mut self) -> Option<Cst> { self.${r.name}_bp(0) }
     fn ${r.name}_bin(op: &str) -> Option<(i64, i64)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
     fn ${r.name}_pre(op: &str) -> Option<i64> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
@@ -234,6 +239,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
         loop {
             let t = match self.peek() { Some(t) => t, None => break };
 ${r.leds.map(ledArm).join('\n')}
+${r.postfixToks.map(postfixArm).join('\n')}
             let (lbp, rbp) = match Parser::${r.name}_bin(t.text) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
             let led_save = self.pos;

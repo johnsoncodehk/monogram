@@ -191,6 +191,12 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
       if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.name)}, kids); continue; }
       pos = ledSave; break;
     }`;
+  // A postfix token (e.g. a tagged template) binds like a mixfix led: `left X` → node(left, X).
+  const postfixArm = (tok: string) => {
+    const tplPart = tpl && tok === tpl.token ? `
+    if (t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.name)}, children: [left, node], offset: left.offset, end: node.end }; continue; } }` : '';
+    return `    if (t.kind === ${J(tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.name)}, children: [left, leaf], offset: left.offset, end: leaf.end }; continue; }${tplPart}`;
+  };
   return `const ${r.name}_BIN: Record<string, { lbp: number; rbp: number }> = ${BIN};
 const ${r.name}_PRE: Record<string, number> = ${PRE};
 const ${r.name}_ATOM = ${atom};
@@ -202,6 +208,7 @@ function ${r.name}_bp(minBp: number): Node | null {
     const t = peek();
     if (t === null) break;
 ${r.leds.map(ledArm).join('\n')}
+${r.postfixToks.map(postfixArm).join('\n')}
     const info = ${r.name}_BIN[t.text];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;

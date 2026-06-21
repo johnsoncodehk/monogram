@@ -206,6 +206,17 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
 \t\t\tpos = ledSave; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break
 \t\t}`;
+  const postfixArm = (tok: string) => {
+    const tplPart = tpl && tok === tpl.token ? `
+\t\tif t.Kind == "$templateHead" {
+\t\t\tnode := matchTemplate()
+\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
+\t\t}` : '';
+    return `\t\tif t.Kind == ${J(tok)} {
+\t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf(t.Kind, t.Off, t.End)); pos++
+\t\t\tleft = finish(${J(r.name)}, sb, nodes[left].Offset); continue
+\t\t}${tplPart}`;
+  };
   return `var ${r.name}BIN = map[string]bp{${bin}}
 var ${r.name}PRE = map[string]int{${pre}}
 var ${r.name}ATOM = map[string]bool{${atoms}}
@@ -217,6 +228,7 @@ func ${r.name}bp(minBp int) int32 {
 \t\tt := peek()
 \t\tif t == nil { break }
 ${r.leds.map(ledArm).join('\n')}
+${r.postfixToks.map(postfixArm).join('\n')}
 \t\tinfo, ok := ${r.name}BIN[t.Text]
 \t\tif !ok || info.lbp <= minBp { break }
 \t\tledSave := pos; sb := len(scratch)

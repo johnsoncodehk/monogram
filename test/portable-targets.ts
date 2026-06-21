@@ -85,8 +85,9 @@ const CASES: Case[] = [
       'var d = `a${ x + 1 }b${ y * 2 }c`;', 'var e = `outer ${ `inner ${z}` } end`;',
       'var f = `${ {a} }`;', 'var f2 = `${ {a, b} } and ${ c }`;', 'var g = `no holes $ here`;',
       'f(`${a}`, `${b}`);', 'var h = `${a}${b}${c}`;', 'return `${ {x, y} }`;',
+      'tag`hello`;', 'tag`${a}${b}`;', 'String.raw`a${b}c`.length;', 'x.tag`${y}`;',  // tagged (postfix-token LED)
     ],
-    reject: ['var x = `${ }`;', 'var y = `${a`;', '`${a} ${}`;', 'tag`${a}`;'],
+    reject: ['var x = `${ }`;', 'var y = `${a`;', '`${a} ${}`;'],
   },
 ];
 
