@@ -11,7 +11,7 @@
 // returns it. Sub-sequence combinators (star/opt/sep) take non-capturing fn pointers
 // `fn(&mut Parser, &mut Vec<Cst>) -> bool`, threading the parser + kids as params (so nothing
 // is captured, sidestepping the borrow checker).
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target, TplCfg } from './emit-portable.ts';
 import type { TokenPattern } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -47,11 +47,12 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
+function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
-  const stateful = rxTok !== undefined;
+  const stateful = rxTok !== undefined || tplTok !== undefined;
+  if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
   const push = (endE: string) => (t.skip ? '' : stateful ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}); ` : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE} }); `);
-  const gate = stateful && name === rxTok ? '!st.prev_is_value() && ' : '';
+  const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
   if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
             while e < n { let cc = b[e] as u32; if !${rangeCond('cc', t.cont)} { break } e += 1; }
@@ -80,11 +81,15 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
   const rx = ir.regexCtx;
-  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken)).join('\n');
+  const tpl = ir.tpl;
+  const stateful = !!(rx || tpl);
+  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken, tpl?.token)).join('\n');
   const puncts = ir.puncts.map((p) =>
-    `        if src[pos..].starts_with(${J(p)}) { ${rx ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length} });`} pos += ${p.length}; continue; }`).join('\n');
+    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length} });`} pos += ${p.length}; continue; }`).join('\n');
   const rsArr = (a: string[]) => `&[${a.map(J).join(', ')}]`;
-  const rxPreamble = rx ? `const _DIVT: &[&str] = ${rsArr(rx.divisionTexts)};
+  // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
+  // templates, or both share one LexState.
+  const rxConsts = rx ? `const _DIVT: &[&str] = ${rsArr(rx.divisionTexts)};
 const _DIVK: &[&str] = ${rsArr(rx.divisionTypes)};
 const _RXT: &[&str] = ${rsArr(rx.regexTexts)};
 const _PHK: &[&str] = ${rsArr(rx.parenHeadKw)};
@@ -92,28 +97,62 @@ const _MEM: &[&str] = ${rsArr(rx.memberAccess)};
 const _PAV: &[&str] = ${rsArr(rx.postfixAfterValue)};
 const _IDENT: &str = ${J(rx.identToken)};
 fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }
-struct LexState<'a> { toks: Vec<Tok<'a>>, prev_text: &'a str, prev_kind: &'static str, bp_text: &'a str, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
-impl<'a> LexState<'a> {
-    fn prev_is_value(&self) -> bool {
+` : '';
+  const tplFn = tpl ? `fn _scan_tpl_span(s: &str, mut p: usize) -> (bool, usize) {
+    let n = s.len();
+    while p < n {
+        if s[p..].starts_with(${J(tpl.interpOpen)}) { return (true, p + ${tpl.interpOpen.length}); }
+        if s.as_bytes()[p] == 92 { p += 2; continue; }
+        if s[p..].starts_with(${J(tpl.open)}) { return (false, p + ${tpl.open.length}); }
+        p += 1;
+    }
+    (false, p)
+}
+` : '';
+  const fields = ['toks: Vec<Tok<\'a>>',
+    rx ? 'prev_text: &\'a str, prev_kind: &\'static str, bp_text: &\'a str, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
+    tpl ? 'template_stack: Vec<i64>' : ''].filter(Boolean).join(', ');
+  const prevIsValue = rx ? `    fn prev_is_value(&self) -> bool {
         if !self.has_prev { return false; }
         if _in(_PAV, self.prev_text) { return self.last_bang; }
         let is_expr_kw = self.prev_kind == _IDENT && _in(_RXT, self.prev_text);
         let is_paren_head = self.prev_text == ")" && self.last_close;
         !is_expr_kw && !is_paren_head && (_in(_DIVK, self.prev_kind) || _in(_DIVT, self.prev_text))
     }
-    fn emit(&mut self, kind: &'static str, text: &'a str, off: usize, end: usize) {
-        if text == "(" { let is_member = self.has_prev2 && _in(_MEM, self.bp_text); self.paren_head.push(!is_member && self.prev_kind == _IDENT && _in(_PHK, self.prev_text)); }
+` : '';
+  const emitHooks = [
+    rx ? `        if text == "(" { let is_member = self.has_prev2 && _in(_MEM, self.bp_text); self.paren_head.push(!is_member && self.prev_kind == _IDENT && _in(_PHK, self.prev_text)); }
         else if text == ")" { self.last_close = self.paren_head.pop().unwrap_or(false); }
-        if _in(_PAV, text) { self.last_bang = self.prev_is_value(); }
-        self.toks.push(Tok { kind, text, off, end });
-        self.bp_text = self.prev_text; self.has_prev2 = self.has_prev; self.prev_kind = kind; self.prev_text = text; self.has_prev = true;
+        if _in(_PAV, text) { self.last_bang = self.prev_is_value(); }` : '',
+    tpl ? `        if !self.template_stack.is_empty() { if text == ${J(tpl.braceOpen)} { *self.template_stack.last_mut().unwrap() += 1; } else if text == ${J(tpl.interpClose)} { *self.template_stack.last_mut().unwrap() -= 1; } }` : '',
+  ].filter(Boolean).join('\n');
+  const emitTail = rx ? `
+        self.bp_text = self.prev_text; self.has_prev2 = self.has_prev; self.prev_kind = kind; self.prev_text = text; self.has_prev = true;` : '';
+  const stateImpl = stateful ? `struct LexState<'a> { ${fields} }
+impl<'a> LexState<'a> {
+${prevIsValue}    fn emit(&mut self, kind: &'static str, text: &'a str, off: usize, end: usize) {
+${emitHooks}
+        self.toks.push(Tok { kind, text, off, end });${emitTail}
     }
 }
 ` : '';
-  const open = rx
-    ? `    let mut st = LexState { toks: Vec::new(), prev_text: "", prev_kind: "", bp_text: "", has_prev: false, has_prev2: false, paren_head: Vec::new(), last_close: false, last_bang: false };`
-    : `    let mut toks: Vec<Tok> = Vec::new();`;
-  return `${defs.length ? defs.join('\n') + '\n' : ''}${rxPreamble}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+  const initFields = ['toks: Vec::new()',
+    rx ? 'prev_text: "", prev_kind: "", bp_text: "", has_prev: false, has_prev2: false, paren_head: Vec::new(), last_close: false, last_bang: false' : '',
+    tpl ? 'template_stack: Vec::new()' : ''].filter(Boolean).join(', ');
+  const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();`;
+  const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && src[pos..].starts_with(${J(tpl.interpClose)}) && *st.template_stack.last().unwrap() == 0 {
+            st.template_stack.pop();
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length});
+            if interp { st.emit("$templateMiddle", &src[pos..e], pos, e); st.template_stack.push(0); } else { st.emit("$templateTail", &src[pos..e], pos, e); }
+            pos = e; continue;
+        }
+        if src[pos..].starts_with(${J(tpl.open)}) {
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length});
+            if interp { st.emit("$templateHead", &src[pos..e], pos, e); st.template_stack.push(0); } else { st.emit(${J(tpl.token)}, &src[pos..e], pos, e); }
+            pos = e; continue;
+        }
+` : '';
+  return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
     let b = src.as_bytes();
     let n = b.len();
 ${open}
@@ -121,11 +160,11 @@ ${open}
     while pos < n {
         let c = b[pos] as u32;
         if c == 32 || c == 9 || c == 10 || c == 13 { pos += 1; continue; }
-${toks}
+${tplDispatch}${toks}
 ${puncts}
         panic!("lex error at {}", pos);
     }
-    ${rx ? 'st.toks' : 'toks'}
+    ${stateful ? 'st.toks' : 'toks'}
 }`;
 }
 
@@ -164,7 +203,12 @@ ${r.alts.map(alt).join('\n')}
     }`;
 }
 
-function prattRule(r: PrattRule): string {
+function prattRule(r: PrattRule, tpl: TplCfg | null): string {
+  const tplNud = tpl && r.nudToks.includes(tpl.token)
+    ? `        if t.kind == "$templateHead" {
+            return self.match_template().map(|n| { let (o, e) = (n.offset, n.end); Cst::node(${J(r.name)}, vec![n], o, e) });
+        }\n`
+    : '';
   const binArms = r.binary.map((b) => `${J(b.op)} => Some((${b.lbp}, ${b.rbp}))`).join(', ');
   const preArms = r.prefix.map((p) => `${J(p.op)} => Some(${p.rbp})`).join(', ');
   const atomArm = r.nudToks.map(J).join(' | ');
@@ -202,7 +246,7 @@ ${r.leds.map(ledArm).join('\n')}
     }
     fn ${r.name}_nud(&mut self) -> Option<Cst> {
         let t = self.peek()?;
-        if Parser::${r.name}_atom(t.kind) {
+${tplNud}        if Parser::${r.name}_atom(t.kind) {
             self.pos += 1;
             return Some(Cst::node(${J(r.name)}, vec![Cst::leaf(t.kind, t.off, t.end)], t.off, t.end));
         }
@@ -223,7 +267,24 @@ export const rustTarget: Target = {
   name: 'rust',
   ext: 'rs',
   render(ir: ParserIR): string {
-    const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r) : rdRule(r))).join('\n\n');
+    const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
+    const matchTemplate = ir.tpl ? `    fn match_template(&mut self) -> Option<Cst> {
+        let t = self.peek()?;
+        if t.kind != "$templateHead" { return None; }
+        let save = self.pos; self.pos += 1;
+        let mut children: Vec<Cst> = vec![Cst::leaf("$templateHead", t.off, t.end)];
+        loop {
+            let expr = match self.parse_${ir.tpl.interpRule}() { Some(e) => e, None => { self.pos = save; return None; } };
+            children.push(expr);
+            let next = match self.peek() { Some(x) => x, None => { self.pos = save; return None; } };
+            if next.kind == "$templateMiddle" { children.push(Cst::leaf("$templateMiddle", next.off, next.end)); self.pos += 1; continue; }
+            if next.kind == "$templateTail" { children.push(Cst::leaf("$templateTail", next.off, next.end)); self.pos += 1; break; }
+            self.pos = save; return None;
+        }
+        let o = children[0].offset; let e = children[children.len() - 1].end;
+        Some(Cst::node("$template", children, o, e))
+    }
+` : '';
     return `// GENERATED by emit-portable.ts (rustTarget) — parser for grammar "${ir.grammarName}".
 #![allow(non_snake_case)]
 use std::io::Read;
@@ -279,7 +340,7 @@ impl<'a> Parser<'a> {
         false
     }
 
-${ruleFns}
+${matchTemplate}${ruleFns}
 }
 
 fn write_json(c: &Cst, out: &mut String) {

@@ -4,7 +4,7 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target, TplCfg } from './emit-portable.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
@@ -41,12 +41,13 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
+function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
-  const stateful = rxTok !== undefined;
-  // `emit(...)` threads the regex-context state in stateful mode; a plain push otherwise.
+  const stateful = rxTok !== undefined || tplTok !== undefined;
+  if (tplTok !== undefined && name === tplTok) return '';   // template token is scanned by the state machine
+  // `emit(...)` threads the lexer state in stateful mode; a plain push otherwise.
   const push = (endExpr: string) => (t.skip ? '' : `${stateful ? 'emit' : 'push'}(${J(name)}, src.slice(pos, ${endExpr}), pos, ${endExpr}); `);
-  const gate = stateful && name === rxTok ? '!prevIsValue() && ' : '';
+  const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   if (t.kind === 'run') return `    if (${gate}${rangeCond('c', t.first)}) {
       let e = pos + 1;
       while (e < n) { const cc = src.charCodeAt(e); if (!${rangeCond('cc', t.cont)}) break; e++; }
@@ -75,12 +76,15 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
   const rx = ir.regexCtx;
-  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken)).join('\n');
-  const pushFn = rx ? 'emit' : 'push';
+  const tpl = ir.tpl;
+  const stateful = !!(rx || tpl);
+  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken, tpl?.token)).join('\n');
+  const pushFn = stateful ? 'emit' : 'push';
   const puncts = ir.puncts.map((p) =>
     `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}('', ${J(p)}, pos, pos + ${p.length}); pos += ${p.length}; continue; }`).join('\n');
   const set = (a: string[]) => `new Set([${a.map(J).join(', ')}])`;
-  const stateBlock = rx ? `  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  // Per-feature pieces of the shared `emit`, so a grammar can have regex, templates, or both.
+  const rxState = rx ? `  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
   const parenHead: boolean[] = [];
   let lastClose = false, lastBang = false;
   const _divT = ${set(rx.divisionTexts)}, _divK = ${set(rx.divisionTypes)}, _rxT = ${set(rx.regexTexts)};
@@ -93,22 +97,53 @@ function lexer(ir: ParserIR): string {
     const isParenHead = prevText === ')' && lastClose;
     return !isExprKw && !isParenHead && (_divK.has(prevKind) || _divT.has(prevText));
   }
-  function emit(kind: string, text: string, off: number, end: number): void {
-    if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
-    else if (text === ')') { lastClose = parenHead.pop() ?? false; }
-    if (_pav.has(text)) lastBang = prevIsValue();
-    toks.push({ kind, text, off, end });
-    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;
+` : '';
+  const tplState = tpl ? `  const templateStack: number[] = [];
+  function scanTplSpan(p: number): { interp: boolean; end: number } {
+    while (p < n) {
+      if (src.startsWith(${J(tpl.interpOpen)}, p)) return { interp: true, end: p + ${tpl.interpOpen.length} };
+      if (src.charCodeAt(p) === 92) { p += 2; continue; }
+      if (src.startsWith(${J(tpl.open)}, p)) return { interp: false, end: p + ${tpl.open.length} };
+      p++;
+    }
+    return { interp: false, end: p };
   }
+` : '';
+  const emitHooks = [
+    rx ? `    if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
+    else if (text === ')') { lastClose = parenHead.pop() ?? false; }
+    if (_pav.has(text)) lastBang = prevIsValue();` : '',
+    tpl ? `    if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }` : '',
+  ].filter(Boolean).join('\n');
+  const emitTail = rx ? `\n    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;` : '';
+  const emitFn = stateful ? `  function emit(kind: string, text: string, off: number, end: number): void {
+${emitHooks}
+    toks.push({ kind, text, off, end });${emitTail}
+  }
+` : '';
+  // Template dispatch runs at the top of the loop, before token/punct scanning.
+  const tplDispatch = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
+      templateStack.pop();
+      const sp = scanTplSpan(pos + ${tpl.interpClose.length});
+      if (sp.interp) { emit('$templateMiddle', src.slice(pos, sp.end), pos, sp.end); templateStack.push(0); }
+      else emit('$templateTail', src.slice(pos, sp.end), pos, sp.end);
+      pos = sp.end; continue;
+    }
+    if (src.startsWith(${J(tpl.open)}, pos)) {
+      const sp = scanTplSpan(pos + ${tpl.open.length});
+      if (sp.interp) { emit('$templateHead', src.slice(pos, sp.end), pos, sp.end); templateStack.push(0); }
+      else emit(${J(tpl.token)}, src.slice(pos, sp.end), pos, sp.end);
+      pos = sp.end; continue;
+    }
 ` : '';
   return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
-${defs.length ? '  _s = src;\n' : ''}${stateBlock}${rx ? '' : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end }); };\n'}  while (pos < n) {
+${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${stateful ? emitFn : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end }); };\n'}  while (pos < n) {
     const c = src.charCodeAt(pos);
     if (c === 32 || c === 9 || c === 10 || c === 13) { pos++; continue; }
-${toks}
+${tplDispatch}${toks}
 ${puncts}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));
   }
@@ -139,7 +174,10 @@ ${r.alts.map(alt).join('\n')}
 }`;
 }
 
-function prattRule(r: PrattRule): string {
+function prattRule(r: PrattRule, tpl: TplCfg | null): string {
+  const tplNud = tpl && r.nudToks.includes(tpl.token)
+    ? `  if (t.kind === '$templateHead') { const node = matchTemplate(); return node === null ? null : { rule: ${J(r.name)}, children: [node], offset: node.offset, end: node.end }; }\n`
+    : '';
   const BIN = `{ ${r.binary.map((b) => `${J(b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${J(p.op)}: ${p.rbp}`).join(', ')} }`;
   const atom = `new Set([${r.nudToks.map(J).join(', ')}])`;
@@ -178,7 +216,7 @@ ${r.leds.map(ledArm).join('\n')}
 function ${r.name}_nud(): Node | null {
   const t = peek();
   if (t === null) return null;
-  if (${r.name}_ATOM.has(t.kind)) { pos++; return { rule: ${J(r.name)}, children: [{ tokenType: t.kind, offset: t.off, end: t.end }], offset: t.off, end: t.end }; }
+${tplNud}  if (${r.name}_ATOM.has(t.kind)) { pos++; return { rule: ${J(r.name)}, children: [{ tokenType: t.kind, offset: t.off, end: t.end }], offset: t.off, end: t.end }; }
 ${r.nudBrackets.map(bracketNud).join('\n')}
   const pbp = ${r.name}_PRE[t.text];
   if (pbp !== undefined) {
@@ -196,7 +234,26 @@ export const tsTarget: Target = {
   name: 'typescript',
   ext: 'ts',
   render(ir: ParserIR): string {
-    const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r) : rdRule(r))).join('\n\n');
+    const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
+    const matchTemplate = ir.tpl ? `function matchTemplate(): Cst | null {
+  const t = peek();
+  if (t === null || t.kind !== '$templateHead') return null;
+  const children: Cst[] = [];
+  const save = pos; pos++;
+  children.push({ tokenType: '$templateHead', offset: t.off, end: t.end });
+  for (;;) {
+    const expr = parse${ir.tpl.interpRule}();
+    if (expr === null) { pos = save; return null; }
+    children.push(expr);
+    const next = peek();
+    if (next === null) { pos = save; return null; }
+    if (next.kind === '$templateMiddle') { pos++; children.push({ tokenType: '$templateMiddle', offset: next.off, end: next.end }); continue; }
+    if (next.kind === '$templateTail') { pos++; children.push({ tokenType: '$templateTail', offset: next.off, end: next.end }); break; }
+    pos = save; return null;
+  }
+  return { rule: '$template', children, offset: children[0].offset, end: children[children.length - 1].end };
+}
+` : '';
     return `// GENERATED by emit-portable.ts (tsTarget) — parser for grammar "${ir.grammarName}".
 import { readFileSync } from 'node:fs';
 
@@ -250,7 +307,7 @@ function altLit(opts: [string, string][], kids: Cst[]): boolean {
   return false;
 }
 
-${ruleFns}
+${matchTemplate}${ruleFns}
 
 const src = readFileSync(0, 'utf8');
 toks = lex(src);

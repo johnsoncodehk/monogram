@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target, TplCfg } from './emit-portable.ts';
 import type { TokenPattern } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -44,11 +44,12 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
+function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
-  const stateful = rxTok !== undefined;
+  const stateful = rxTok !== undefined || tplTok !== undefined;
+  if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
   const push = (endE: string) => (t.skip ? '' : stateful ? `emit(${J(name)}, src[pos:${endE}], pos, ${endE}); ` : `toks = append(toks, Tok{${J(name)}, src[pos:${endE}], pos, ${endE}}); `);
-  const gate = stateful && name === rxTok ? '!prevIsValue() && ' : '';
+  const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   if (t.kind === 'run') return `\t\tif ${gate}${rangeCond('c', t.first)} {
 \t\t\te := pos + 1
 \t\t\tfor e < n { cc := int(src[e]); if !${rangeCond('cc', t.cont)} { break }; e++ }
@@ -77,12 +78,14 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
   const rx = ir.regexCtx;
-  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken)).join('\n');
-  const pushPunct = rx ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length})` : (p: string) => `toks = append(toks, Tok{"", ${J(p)}, pos, pos + ${p.length}})`;
+  const tpl = ir.tpl;
+  const stateful = !!(rx || tpl);
+  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken, tpl?.token)).join('\n');
+  const pushPunct = stateful ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length})` : (p: string) => `toks = append(toks, Tok{"", ${J(p)}, pos, pos + ${p.length}})`;
   const puncts = ir.puncts.map((p) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`).join('\n');
   const goMap = (a: string[]) => `map[string]bool{${a.map((x) => `${J(x)}: true`).join(', ')}}`;
-  const stateBlock = rx ? `\tprevText, prevKind, bpText := "", "", ""
+  const rxState = rx ? `\tprevText, prevKind, bpText := "", "", ""
 \thasPrev, hasPrev2 := false, false
 \tparenHead := []bool{}
 \tlastClose, lastBang := false, false
@@ -100,27 +103,56 @@ function lexer(ir: ParserIR): string {
 \t\tisParenHead := prevText == ")" && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKind] || _divT[prevText])
 \t}
-\temit := func(kind, text string, off, end int) {
-\t\tif text == "(" {
+` : '';
+  const tplState = tpl ? `\ttemplateStack := []int{}
+\tscanTplSpan := func(p int) (bool, int) {
+\t\tfor p < n {
+\t\t\tif strings.HasPrefix(src[p:], ${J(tpl.interpOpen)}) { return true, p + ${tpl.interpOpen.length} }
+\t\t\tif src[p] == 92 { p += 2; continue }
+\t\t\tif strings.HasPrefix(src[p:], ${J(tpl.open)}) { return false, p + ${tpl.open.length} }
+\t\t\tp++
+\t\t}
+\t\treturn false, p
+\t}
+\t_ = scanTplSpan
+` : '';
+  const emitHooks = [
+    rx ? `\t\tif text == "(" {
 \t\t\tisMember := hasPrev2 && _mem[bpText]
 \t\t\tparenHead = append(parenHead, !isMember && prevKind == IDENT && _phK[prevText])
 \t\t} else if text == ")" {
 \t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
-\t\tif _pav[text] { lastBang = prevIsValue() }
-\t\ttoks = append(toks, Tok{kind, text, off, end})
-\t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true
+\t\tif _pav[text] { lastBang = prevIsValue() }` : '',
+    tpl ? `\t\tif len(templateStack) > 0 { if text == ${J(tpl.braceOpen)} { templateStack[len(templateStack)-1]++ } else if text == ${J(tpl.interpClose)} { templateStack[len(templateStack)-1]-- } }` : '',
+  ].filter(Boolean).join('\n');
+  const emitTail = rx ? `\n\t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true` : '';
+  const emitFn = stateful ? `\temit := func(kind, text string, off, end int) {
+${emitHooks}
+\t\ttoks = append(toks, Tok{kind, text, off, end})${emitTail}
 \t}
-\t_ = bpText; _ = hasPrev2; _ = lastBang; _ = prevIsValue
+\t_ = emit
+` : '';
+  const tplDispatch = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
+\t\t\ttemplateStack = templateStack[:len(templateStack)-1]
+\t\t\tinterp, e := scanTplSpan(pos + ${tpl.interpClose.length})
+\t\t\tif interp { emit("$templateMiddle", src[pos:e], pos, e); templateStack = append(templateStack, 0) } else { emit("$templateTail", src[pos:e], pos, e) }
+\t\t\tpos = e; continue
+\t\t}
+\t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
+\t\t\tinterp, e := scanTplSpan(pos + ${tpl.open.length})
+\t\t\tif interp { emit("$templateHead", src[pos:e], pos, e); templateStack = append(templateStack, 0) } else { emit(${J(tpl.token)}, src[pos:e], pos, e) }
+\t\t\tpos = e; continue
+\t\t}
 ` : '';
   return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
 \ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
-${stateBlock}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
+${rxState}${tplState}${emitFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
 \t\tc := int(src[pos])
 \t\tif c == 32 || c == 9 || c == 10 || c == 13 { pos++; continue }
-${toks}
+${tplDispatch}${toks}
 ${puncts}
 \t\tpanic(fmt.Sprintf("lex error at %d", pos))
 \t}
@@ -151,7 +183,15 @@ ${r.alts.map(alt).join('\n')}
 }`;
 }
 
-function prattRule(r: PrattRule): string {
+function prattRule(r: PrattRule, tpl: TplCfg | null): string {
+  const tplNud = tpl && r.nudToks.includes(tpl.token)
+    ? `\tif t.Kind == "$templateHead" {
+\t\tnode := matchTemplate()
+\t\tif node < 0 { return -1 }
+\t\tsb := len(scratch); scratch = append(scratch, node)
+\t\treturn finish(${J(r.name)}, sb, nodes[node].Offset)
+\t}\n`
+    : '';
   const bin = r.binary.map((b) => `${J(b.op)}: {${b.lbp}, ${b.rbp}}`).join(', ');
   const pre = r.prefix.map((p) => `${J(p.op)}: ${p.rbp}`).join(', ');
   const atoms = r.nudToks.map((k) => `${J(k)}: true`).join(', ');
@@ -192,7 +232,7 @@ ${r.leds.map(ledArm).join('\n')}
 func ${r.name}nud() int32 {
 \tt := peek()
 \tif t == nil { return -1 }
-\tif ${r.name}ATOM[t.Kind] {
+${tplNud}\tif ${r.name}ATOM[t.Kind] {
 \t\tsb := len(scratch); scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
 \t\treturn finish(${J(r.name)}, sb, t.Off)
 \t}
@@ -213,7 +253,25 @@ export const goTarget: Target = {
   name: 'go',
   ext: 'go',
   render(ir: ParserIR): string {
-    const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r) : rdRule(r))).join('\n\n');
+    const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
+    const matchTemplate = ir.tpl ? `func matchTemplate() int32 {
+\tt := peek()
+\tif t == nil || t.Kind != "$templateHead" { return -1 }
+\tsb := len(scratch); nb := len(nodes); kb := len(kids); save := pos
+\tscratch = append(scratch, mkLeaf("$templateHead", t.Off, t.End)); pos++
+\tfor {
+\t\texpr := parse${ir.tpl.interpRule}()
+\t\tif expr < 0 { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
+\t\tscratch = append(scratch, expr)
+\t\tnext := peek()
+\t\tif next == nil { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
+\t\tif next.Kind == "$templateMiddle" { scratch = append(scratch, mkLeaf("$templateMiddle", next.Off, next.End)); pos++; continue }
+\t\tif next.Kind == "$templateTail" { scratch = append(scratch, mkLeaf("$templateTail", next.Off, next.End)); pos++; break }
+\t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1
+\t}
+\treturn finish("$template", sb, t.Off)
+}
+` : '';
     return `// GENERATED by emit-portable.ts (goTarget) — parser for grammar "${ir.grammarName}".
 package main
 
@@ -296,7 +354,7 @@ func altLit(opts [][2]string) bool {
 \treturn false
 }
 
-${ruleFns}
+${matchTemplate}${ruleFns}
 
 func writeJSON(id int32, b *strings.Builder) {
 \tnd := &nodes[id]

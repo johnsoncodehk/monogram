@@ -75,6 +75,19 @@ const CASES: Case[] = [
     // (`var ;` is VALID — `var` is an identifier, so it's the expression statement `var;`.)
     reject: ['a / ;', 'if (x /re/;', '/re/', '* a;', 'a = = b;'],
   },
+  {
+    // STATEFUL template literals: the `${…}` interpolation split (head/middle/tail) with a
+    // brace-depth stack — adjacent/multiple holes, exprs in holes, nested templates, and a
+    // nested `{…}` object inside a hole (which must NOT close the hole).
+    grammar: 'templatejs', path: '../examples/templatejs.ts',
+    accept: [
+      'var a = `hello`;', 'var b = `hi ${name}!`;', 'var c = `${x}${y}`;',
+      'var d = `a${ x + 1 }b${ y * 2 }c`;', 'var e = `outer ${ `inner ${z}` } end`;',
+      'var f = `${ {a} }`;', 'var f2 = `${ {a, b} } and ${ c }`;', 'var g = `no holes $ here`;',
+      'f(`${a}`, `${b}`);', 'var h = `${a}${b}${c}`;', 'return `${ {x, y} }`;',
+    ],
+    reject: ['var x = `${ }`;', 'var y = `${a`;', '`${a} ${}`;', 'tag`${a}`;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>

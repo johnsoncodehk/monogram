@@ -80,6 +80,20 @@ export type RegexCtx = {
   postfixAfterValue: string[]; // ambiguous postfix/prefix ops (e.g. `!`): value only in postfix
 };
 
+// Template literals with `${…}` interpolation: a STATEFUL lexer split. A `` ` `` opens a
+// span scanned to the next `${` (→ $templateHead) or closing `` ` `` (→ the whole token,
+// no substitution); a `}` that closes a hole resumes the span (→ $templateMiddle / Tail).
+// A `templateStack` of brace-depths tracks which `}` closes the hole vs. a nested `{…}`.
+// The parser assembles head·expr·(middle·expr)*·tail into a synthetic `$template` node.
+export type TplCfg = {
+  token: string;        // the token flagged `template`; its NoSubstitution form is a plain leaf
+  open: string;         // `` ` ``
+  interpOpen: string;   // `${`
+  interpClose: string;  // `}`
+  braceOpen: string;    // `{` — a nested one deepens the hole, so its `}` is not the closer
+  interpRule: string;   // the rule that parses each `${…}` hole (the Pratt expression rule)
+};
+
 export type ParserIR = {
   grammarName: string;
   entry: string;
@@ -87,6 +101,7 @@ export type ParserIR = {
   puncts: string[];      // punctuation literals, longest-first (maximal munch)
   rules: RuleIR[];
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
+  tpl: TplCfg | null;          // null unless the grammar has a template token
 };
 
 export interface Target {
@@ -163,7 +178,24 @@ function buildIR(grammar: CstGrammar): ParserIR {
     };
   }
 
-  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, rules, regexCtx };
+  // Template literals (only if the grammar declares a template token). The interpolation
+  // holes are parsed by the Pratt expression rule — the rule that carries operator leds.
+  let tpl: TplCfg | null = null;
+  const tplTok = grammar.tokens.find((t) => t.template);
+  if (tplTok && tplTok.template) {
+    const prattName = rules.find((r) => r.kind === 'pratt')?.name;
+    if (!prattName) throw new Error('portable: a template token needs a Pratt expression rule to parse its interpolations');
+    tpl = {
+      token: tplTok.name,
+      open: tplTok.template.open,
+      interpOpen: tplTok.template.interpOpen,
+      interpClose: tplTok.template.interpClose,
+      braceOpen: tplTok.template.interpOpen.slice(-1),
+      interpRule: prattName,
+    };
+  }
+
+  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, rules, regexCtx, tpl };
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,
