@@ -61,6 +61,20 @@ const CASES: Case[] = [
     ],
     reject: ['12abc', '0x', '"unterminated', '3.', '#'],   // ($ is a valid identifier start, not a reject)
   },
+  {
+    // The STATEFUL regex-vs-division lexer: `/` is a regex in expression context, division
+    // after a value. Exercises every branch of prevIsValue — after `=`/keyword/`(`-head
+    // (regex) vs after value/`)`/`]`/member/call (division), plus regex escapes & classes.
+    grammar: 'regexjs', path: '../examples/regexjs.ts',
+    accept: [
+      'a / b;', 'var r = /abc/g;', 'return /re/;', 'if (x) /re/;', '(a + b) / c;',
+      'a.b / c;', 'foo(x) / y;', '[1, 2] / 3;', 'var x = a / b / c;',
+      'var re = /[a-z]+/i; x / y;', 'f(/re/, a / b);', 'var z = /a\\/b/;',
+      'var d = /\\d+\\w/g;', 'var k = /[\\]]/;', 'if (a) /x/; else b / c;',
+    ],
+    // (`var ;` is VALID — `var` is an identifier, so it's the expression statement `var;`.)
+    reject: ['a / ;', 'if (x /re/;', '/re/', '* a;', 'a = = b;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>

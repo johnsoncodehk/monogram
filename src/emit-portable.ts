@@ -65,12 +65,28 @@ export type PrattRule = {
 };
 export type RuleIR = RdRule | PrattRule;
 
+// Stateful regex-vs-division disambiguation (the JS `/` problem): a `/` starts a regex
+// literal in expression context but is division after a value. The lexer threads the
+// previous token + a control-head paren stack to decide; the predicate sets are baked
+// from the grammar's `regexContext`. Mirrors gen-lexer.ts's prevIsValue exactly.
+export type RegexCtx = {
+  regexToken: string;          // the token flagged `regex`, gated on expression context
+  identToken: string;          // identifier token kind (for the keyword-vs-value test)
+  divisionTypes: string[];     // prev TOKEN KINDS after which `/` is division
+  divisionTexts: string[];     // prev TEXTS after which `/` is division
+  regexTexts: string[];        // expression-start keywords (a `/` after them is a regex)
+  parenHeadKw: string[];       // keywords whose `(` is a control head (regex after its `)`)
+  memberAccess: string[];      // accessors that make a following keyword a member name, not a head
+  postfixAfterValue: string[]; // ambiguous postfix/prefix ops (e.g. `!`): value only in postfix
+};
+
 export type ParserIR = {
   grammarName: string;
   entry: string;
   tokens: LexTok[];      // for the char scanner, tried in declaration order
   puncts: string[];      // punctuation literals, longest-first (maximal munch)
   rules: RuleIR[];
+  regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
 };
 
 export interface Target {
@@ -130,7 +146,24 @@ function buildIR(grammar: CstGrammar): ParserIR {
     return { kind: 'rd', name: r.name, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)] };
   });
 
-  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, rules };
+  // Regex-vs-division context (only if the grammar declares a regex token + config).
+  let regexCtx: RegexCtx | null = null;
+  const rxTok = grammar.tokens.find((t) => t.flags.includes('regex'));
+  const rxCfg = grammar.tokens.find((t) => t.regexContext)?.regexContext;
+  if (rxTok && rxCfg) {
+    regexCtx = {
+      regexToken: rxTok.name,
+      identToken: grammar.tokens.find((t) => t.identifier)?.name ?? '',
+      divisionTypes: [...(rxCfg.divisionAfterTypes ?? [])],
+      divisionTexts: [...(rxCfg.divisionAfterTexts ?? [])],
+      regexTexts: [...(rxCfg.regexAfterTexts ?? [])],
+      parenHeadKw: [...(rxCfg.regexAfterParenKeywords ?? [])],
+      memberAccess: [...(rxCfg.memberAccessTexts ?? [])],
+      postfixAfterValue: [...(rxCfg.postfixAfterValueTexts ?? [])],
+    };
+  }
+
+  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, rules, regexCtx };
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,

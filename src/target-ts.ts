@@ -18,7 +18,7 @@ import type { TokenPattern } from './types.ts';
 function ccCond(p: Extract<TokenPattern, { type: 'charClass' }>): string {
   const parts = p.items.map((it) =>
     it.type === 'char' ? `cc === ${it.value.charCodeAt(0)}` : `cc >= ${it.from.charCodeAt(0)} && cc <= ${it.to.charCodeAt(0)}`);
-  const inSet = parts.length === 1 ? parts[0] : '(' + parts.join(' || ') + ')';
+  const inSet = '(' + parts.join(' || ') + ')';
   return p.negate ? `!${inSet}` : inSet;
 }
 function compilePat(p: TokenPattern, defs: string[]): string {
@@ -41,44 +41,71 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[]): string {
+function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
   const name = (t as { name: string }).name;
-  const push = (endExpr: string) => (t.skip ? '' : `toks.push({ kind: ${J(name)}, text: src.slice(pos, ${endExpr}), off: pos, end: ${endExpr} }); `);
-  if (t.kind === 'run') return `    if (${rangeCond('c', t.first)}) {
+  const stateful = rxTok !== undefined;
+  // `emit(...)` threads the regex-context state in stateful mode; a plain push otherwise.
+  const push = (endExpr: string) => (t.skip ? '' : `${stateful ? 'emit' : 'push'}(${J(name)}, src.slice(pos, ${endExpr}), pos, ${endExpr}); `);
+  const gate = stateful && name === rxTok ? '!prevIsValue() && ' : '';
+  if (t.kind === 'run') return `    if (${gate}${rangeCond('c', t.first)}) {
       let e = pos + 1;
       while (e < n) { const cc = src.charCodeAt(e); if (!${rangeCond('cc', t.cont)}) break; e++; }
       ${push('e')}pos = e; continue;
     }`;
-  if (t.kind === 'string') return `    if (c === ${t.delim.charCodeAt(0)}) {
+  if (t.kind === 'string') return `    if (${gate}c === ${t.delim.charCodeAt(0)}) {
       let e = pos + 1;
       while (e < n) { const ch = src.charCodeAt(e); if (ch === 92) { e += 2; continue; } if (ch === ${t.delim.charCodeAt(0)}) { e++; break; } e++; }
       ${push('e')}pos = e; continue;
     }`;
-  if (t.kind === 'line') return `    if (src.startsWith(${J(t.prefix)}, pos)) {
+  if (t.kind === 'line') return `    if (${gate}src.startsWith(${J(t.prefix)}, pos)) {
       let e = pos + ${t.prefix.length};
       while (e < n && src.charCodeAt(e) !== 10) e++;
       ${push('e')}pos = e; continue;
     }`;
-  if (t.kind === 'block') return `    if (src.startsWith(${J(t.open)}, pos)) {
+  if (t.kind === 'block') return `    if (${gate}src.startsWith(${J(t.open)}, pos)) {
       let e = pos + ${t.open.length};
       while (e < n && !src.startsWith(${J(t.close)}, e)) e++;
       if (e < n) e += ${t.close.length};
       ${push('e')}pos = e; continue;
     }`;
   const m = compilePat(t.pattern, defs);
-  return `    { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
+  return `    if (${gate}true) { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
 }
 
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
-  const toks = ir.tokens.map((t) => scanTok(t, defs)).join('\n');
+  const rx = ir.regexCtx;
+  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken)).join('\n');
+  const pushFn = rx ? 'emit' : 'push';
   const puncts = ir.puncts.map((p) =>
-    `    if (src.startsWith(${J(p)}, pos)) { toks.push({ kind: '', text: ${J(p)}, off: pos, end: pos + ${p.length} }); pos += ${p.length}; continue; }`).join('\n');
+    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}('', ${J(p)}, pos, pos + ${p.length}); pos += ${p.length}; continue; }`).join('\n');
+  const set = (a: string[]) => `new Set([${a.map(J).join(', ')}])`;
+  const stateBlock = rx ? `  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  const parenHead: boolean[] = [];
+  let lastClose = false, lastBang = false;
+  const _divT = ${set(rx.divisionTexts)}, _divK = ${set(rx.divisionTypes)}, _rxT = ${set(rx.regexTexts)};
+  const _phK = ${set(rx.parenHeadKw)}, _mem = ${set(rx.memberAccess)}, _pav = ${set(rx.postfixAfterValue)};
+  const IDENT = ${J(rx.identToken)};
+  function prevIsValue(): boolean {
+    if (!hasPrev) return false;
+    if (_pav.has(prevText)) return lastBang;
+    const isExprKw = prevKind === IDENT && _rxT.has(prevText);
+    const isParenHead = prevText === ')' && lastClose;
+    return !isExprKw && !isParenHead && (_divK.has(prevKind) || _divT.has(prevText));
+  }
+  function emit(kind: string, text: string, off: number, end: number): void {
+    if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
+    else if (text === ')') { lastClose = parenHead.pop() ?? false; }
+    if (_pav.has(text)) lastBang = prevIsValue();
+    toks.push({ kind, text, off, end });
+    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;
+  }
+` : '';
   return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
-${defs.length ? '  _s = src;\n' : ''}  while (pos < n) {
+${defs.length ? '  _s = src;\n' : ''}${stateBlock}${rx ? '' : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end }); };\n'}  while (pos < n) {
     const c = src.charCodeAt(pos);
     if (c === 32 || c === 9 || c === 10 || c === 13) { pos++; continue; }
 ${toks}

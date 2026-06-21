@@ -24,7 +24,7 @@ const rangeCond = (v: string, rs: CharRange[]) =>
 function ccCondRs(p: Extract<TokenPattern, { type: 'charClass' }>): string {
   const parts = p.items.map((it) =>
     it.type === 'char' ? `cc == ${it.value.charCodeAt(0)}` : `(${it.from.charCodeAt(0)}..=${it.to.charCodeAt(0)}).contains(&cc)`);
-  const inSet = parts.length === 1 ? parts[0] : '(' + parts.join(' || ') + ')';
+  const inSet = '(' + parts.join(' || ') + ')';
   return p.negate ? `!${inSet}` : inSet;
 }
 function compilePat(p: TokenPattern, defs: string[]): string {
@@ -47,43 +47,76 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[]): string {
+function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
   const name = (t as { name: string }).name;
-  const push = (endE: string) => (t.skip ? '' : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE} }); `);
-  if (t.kind === 'run') return `        if ${rangeCond('c', t.first)} {
+  const stateful = rxTok !== undefined;
+  const push = (endE: string) => (t.skip ? '' : stateful ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}); ` : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE} }); `);
+  const gate = stateful && name === rxTok ? '!st.prev_is_value() && ' : '';
+  if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
             while e < n { let cc = b[e] as u32; if !${rangeCond('cc', t.cont)} { break } e += 1; }
             ${push('e')}pos = e; continue;
         }`;
-  if (t.kind === 'string') return `        if c == ${t.delim.charCodeAt(0)} {
+  if (t.kind === 'string') return `        if ${gate}c == ${t.delim.charCodeAt(0)} {
             let mut e = pos + 1;
             while e < n { let ch = b[e] as u32; if ch == 92 { e += 2; continue } if ch == ${t.delim.charCodeAt(0)} { e += 1; break } e += 1; }
             ${push('e')}pos = e; continue;
         }`;
-  if (t.kind === 'line') return `        if src[pos..].starts_with(${J(t.prefix)}) {
+  if (t.kind === 'line') return `        if ${gate}src[pos..].starts_with(${J(t.prefix)}) {
             let mut e = pos + ${t.prefix.length};
             while e < n && b[e] != 10 { e += 1; }
             ${push('e')}pos = e; continue;
         }`;
-  if (t.kind === 'block') return `        if src[pos..].starts_with(${J(t.open)}) {
+  if (t.kind === 'block') return `        if ${gate}src[pos..].starts_with(${J(t.open)}) {
             let mut e = pos + ${t.open.length};
             while e < n && !src[e..].starts_with(${J(t.close)}) { e += 1; }
             if e < n { e += ${t.close.length}; }
             ${push('e')}pos = e; continue;
         }`;
   const m = compilePat(t.pattern, defs);
-  return `        { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
+  return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
 }
 
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
-  const toks = ir.tokens.map((t) => scanTok(t, defs)).join('\n');
+  const rx = ir.regexCtx;
+  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken)).join('\n');
   const puncts = ir.puncts.map((p) =>
-    `        if src[pos..].starts_with(${J(p)}) { toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length} }); pos += ${p.length}; continue; }`).join('\n');
-  return `${defs.length ? defs.join('\n') + '\n' : ''}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+    `        if src[pos..].starts_with(${J(p)}) { ${rx ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length} });`} pos += ${p.length}; continue; }`).join('\n');
+  const rsArr = (a: string[]) => `&[${a.map(J).join(', ')}]`;
+  const rxPreamble = rx ? `const _DIVT: &[&str] = ${rsArr(rx.divisionTexts)};
+const _DIVK: &[&str] = ${rsArr(rx.divisionTypes)};
+const _RXT: &[&str] = ${rsArr(rx.regexTexts)};
+const _PHK: &[&str] = ${rsArr(rx.parenHeadKw)};
+const _MEM: &[&str] = ${rsArr(rx.memberAccess)};
+const _PAV: &[&str] = ${rsArr(rx.postfixAfterValue)};
+const _IDENT: &str = ${J(rx.identToken)};
+fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }
+struct LexState<'a> { toks: Vec<Tok<'a>>, prev_text: &'a str, prev_kind: &'static str, bp_text: &'a str, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
+impl<'a> LexState<'a> {
+    fn prev_is_value(&self) -> bool {
+        if !self.has_prev { return false; }
+        if _in(_PAV, self.prev_text) { return self.last_bang; }
+        let is_expr_kw = self.prev_kind == _IDENT && _in(_RXT, self.prev_text);
+        let is_paren_head = self.prev_text == ")" && self.last_close;
+        !is_expr_kw && !is_paren_head && (_in(_DIVK, self.prev_kind) || _in(_DIVT, self.prev_text))
+    }
+    fn emit(&mut self, kind: &'static str, text: &'a str, off: usize, end: usize) {
+        if text == "(" { let is_member = self.has_prev2 && _in(_MEM, self.bp_text); self.paren_head.push(!is_member && self.prev_kind == _IDENT && _in(_PHK, self.prev_text)); }
+        else if text == ")" { self.last_close = self.paren_head.pop().unwrap_or(false); }
+        if _in(_PAV, text) { self.last_bang = self.prev_is_value(); }
+        self.toks.push(Tok { kind, text, off, end });
+        self.bp_text = self.prev_text; self.has_prev2 = self.has_prev; self.prev_kind = kind; self.prev_text = text; self.has_prev = true;
+    }
+}
+` : '';
+  const open = rx
+    ? `    let mut st = LexState { toks: Vec::new(), prev_text: "", prev_kind: "", bp_text: "", has_prev: false, has_prev2: false, paren_head: Vec::new(), last_close: false, last_bang: false };`
+    : `    let mut toks: Vec<Tok> = Vec::new();`;
+  return `${defs.length ? defs.join('\n') + '\n' : ''}${rxPreamble}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
     let b = src.as_bytes();
     let n = b.len();
-    let mut toks: Vec<Tok> = Vec::new();
+${open}
     let mut pos = 0usize;
     while pos < n {
         let c = b[pos] as u32;
@@ -92,7 +125,7 @@ ${toks}
 ${puncts}
         panic!("lex error at {}", pos);
     }
-    toks
+    ${rx ? 'st.toks' : 'toks'}
 }`;
 }
 

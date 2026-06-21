@@ -21,7 +21,7 @@ const rangeCond = (v: string, rs: CharRange[]) =>
 function ccCondGo(p: Extract<TokenPattern, { type: 'charClass' }>): string {
   const parts = p.items.map((it) =>
     it.type === 'char' ? `cc == ${it.value.charCodeAt(0)}` : `cc >= ${it.from.charCodeAt(0)} && cc <= ${it.to.charCodeAt(0)}`);
-  const inSet = parts.length === 1 ? parts[0] : '(' + parts.join(' || ') + ')';
+  const inSet = '(' + parts.join(' || ') + ')';
   return p.negate ? `!${inSet}` : inSet;
 }
 function compilePat(p: TokenPattern, defs: string[]): string {
@@ -44,44 +44,80 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[]): string {
+function scanTok(t: LexTok, defs: string[], rxTok?: string): string {
   const name = (t as { name: string }).name;
-  const push = (endE: string) => (t.skip ? '' : `toks = append(toks, Tok{${J(name)}, src[pos:${endE}], pos, ${endE}}); `);
-  if (t.kind === 'run') return `\t\tif ${rangeCond('c', t.first)} {
+  const stateful = rxTok !== undefined;
+  const push = (endE: string) => (t.skip ? '' : stateful ? `emit(${J(name)}, src[pos:${endE}], pos, ${endE}); ` : `toks = append(toks, Tok{${J(name)}, src[pos:${endE}], pos, ${endE}}); `);
+  const gate = stateful && name === rxTok ? '!prevIsValue() && ' : '';
+  if (t.kind === 'run') return `\t\tif ${gate}${rangeCond('c', t.first)} {
 \t\t\te := pos + 1
 \t\t\tfor e < n { cc := int(src[e]); if !${rangeCond('cc', t.cont)} { break }; e++ }
 \t\t\t${push('e')}pos = e; continue
 \t\t}`;
-  if (t.kind === 'string') return `\t\tif c == ${t.delim.charCodeAt(0)} {
+  if (t.kind === 'string') return `\t\tif ${gate}c == ${t.delim.charCodeAt(0)} {
 \t\t\te := pos + 1
 \t\t\tfor e < n { ch := int(src[e]); if ch == 92 { e += 2; continue }; if ch == ${t.delim.charCodeAt(0)} { e++; break }; e++ }
 \t\t\t${push('e')}pos = e; continue
 \t\t}`;
-  if (t.kind === 'line') return `\t\tif strings.HasPrefix(src[pos:], ${J(t.prefix)}) {
+  if (t.kind === 'line') return `\t\tif ${gate}strings.HasPrefix(src[pos:], ${J(t.prefix)}) {
 \t\t\te := pos + ${t.prefix.length}
 \t\t\tfor e < n && src[e] != 10 { e++ }
 \t\t\t${push('e')}pos = e; continue
 \t\t}`;
-  if (t.kind === 'block') return `\t\tif strings.HasPrefix(src[pos:], ${J(t.open)}) {
+  if (t.kind === 'block') return `\t\tif ${gate}strings.HasPrefix(src[pos:], ${J(t.open)}) {
 \t\t\te := pos + ${t.open.length}
 \t\t\tfor e < n && !strings.HasPrefix(src[e:], ${J(t.close)}) { e++ }
 \t\t\tif e < n { e += ${t.close.length} }
 \t\t\t${push('e')}pos = e; continue
 \t\t}`;
   const m = compilePat(t.pattern, defs);
-  return `\t\tif e := ${m}(pos); e > pos { ${push('e')}pos = e; continue }`;
+  return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(pos); e > pos { ${push('e')}pos = e; continue } }`;
 }
 
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
-  const toks = ir.tokens.map((t) => scanTok(t, defs)).join('\n');
+  const rx = ir.regexCtx;
+  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken)).join('\n');
+  const pushPunct = rx ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length})` : (p: string) => `toks = append(toks, Tok{"", ${J(p)}, pos, pos + ${p.length}})`;
   const puncts = ir.puncts.map((p) =>
-    `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { toks = append(toks, Tok{"", ${J(p)}, pos, pos + ${p.length}}); pos += ${p.length}; continue }`).join('\n');
+    `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`).join('\n');
+  const goMap = (a: string[]) => `map[string]bool{${a.map((x) => `${J(x)}: true`).join(', ')}}`;
+  const stateBlock = rx ? `\tprevText, prevKind, bpText := "", "", ""
+\thasPrev, hasPrev2 := false, false
+\tparenHead := []bool{}
+\tlastClose, lastBang := false, false
+\t_divT := ${goMap(rx.divisionTexts)}
+\t_divK := ${goMap(rx.divisionTypes)}
+\t_rxT := ${goMap(rx.regexTexts)}
+\t_phK := ${goMap(rx.parenHeadKw)}
+\t_mem := ${goMap(rx.memberAccess)}
+\t_pav := ${goMap(rx.postfixAfterValue)}
+\tconst IDENT = ${J(rx.identToken)}
+\tprevIsValue := func() bool {
+\t\tif !hasPrev { return false }
+\t\tif _pav[prevText] { return lastBang }
+\t\tisExprKw := prevKind == IDENT && _rxT[prevText]
+\t\tisParenHead := prevText == ")" && lastClose
+\t\treturn !isExprKw && !isParenHead && (_divK[prevKind] || _divT[prevText])
+\t}
+\temit := func(kind, text string, off, end int) {
+\t\tif text == "(" {
+\t\t\tisMember := hasPrev2 && _mem[bpText]
+\t\t\tparenHead = append(parenHead, !isMember && prevKind == IDENT && _phK[prevText])
+\t\t} else if text == ")" {
+\t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
+\t\t}
+\t\tif _pav[text] { lastBang = prevIsValue() }
+\t\ttoks = append(toks, Tok{kind, text, off, end})
+\t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true
+\t}
+\t_ = bpText; _ = hasPrev2; _ = lastBang; _ = prevIsValue
+` : '';
   return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
 \ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
-${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
+${stateBlock}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
 \t\tc := int(src[pos])
 \t\tif c == 32 || c == 9 || c == 10 || c == 13 { pos++; continue }
 ${toks}
