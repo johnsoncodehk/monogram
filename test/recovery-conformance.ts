@@ -13,12 +13,12 @@
 import { writeFileSync, readFileSync } from 'node:fs';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import ts from 'typescript';
 
 const grammar = (await import('../typescript.ts')).default;
 const emPath = '/tmp/emitted-recovery-conf.mts';
-writeFileSync(emPath, emitParser(grammar));
+writeFileSync(emPath, emitParser(grammar, jsTarget));
 type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };
 const em = (await import(emPath + '?v=' + process.pid)) as { createParser(): { parse(s: string): Cst } };
 const p = em.createParser();

@@ -45,7 +45,7 @@ const NON_ASCII_WS_FN =
 const nonAsciiWsConsume = (v: string, cont: boolean, indent: string): string =>
   `${indent}if (${v} > 127 && lxNonAsciiWs(${v})) { LX_WS.lastIndex = pos; const m = LX_WS.exec(source); if (m !== null) { if (m[0].includes('\\n')) pendingNl = true; pos += m[0].length;${cont ? ' continue;' : ''} } }`;
 
-export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
+export function emitSoaLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   // Out of scope: the markup / indentation / newline state machines.
   if (grammar.markup || grammar.indent || grammar.newline) return null;
   if (grammar.tokens.some(t => tokenBlockPatternSource(t) || t.blockOnly)) return null;

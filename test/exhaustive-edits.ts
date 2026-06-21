@@ -9,7 +9,7 @@
 //   node --max-old-space-size=4096 test/exhaustive-edits.ts
 import { writeFileSync } from 'node:fs';
 import { token, rule, defineGrammar, many, opt, sep, plus, oneOf, range, seq, star, noneOf } from '../src/api.ts';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { objectify } from './emitted-obj.ts';
 
 // A deliberately bracket-and-list-shaped grammar: parens force synthesis and
@@ -32,7 +32,7 @@ const g = defineGrammar({
 });
 
 const emPath = '/tmp/emitted-exhaustive.mts';
-writeFileSync(emPath, emitParser(g));
+writeFileSync(emPath, emitParser(g, jsTarget));
 type Cst = { root: number; errors: object[] };
 type Parser = { parse(s: string): Cst; edit(c: Cst, e: object[]): void; visit(c: Cst, fns: object): void; tree: import('./emitted-obj.ts').TreeView };
 const em = (await import(emPath + '?v=' + process.pid)) as { createParser(): Parser; __arenaStats(): { inPlaceShrink: number } };

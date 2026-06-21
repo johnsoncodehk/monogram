@@ -13,7 +13,7 @@
 //   node test/cst-match-totality.ts
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { generateInputs } from './grammar-gen.ts';
 
 const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
@@ -52,7 +52,7 @@ for (const name of GRAMMARS) {
   const grammar = (await import(`../${name}.ts`)).default;
   const matchers = (await import(`../${name}.cst-match.ts`)).MATCHERS;
   const emPath = `/tmp/emitted-totality-${name}.mts`;
-  writeFileSync(emPath, emitParser(grammar));
+  writeFileSync(emPath, emitParser(grammar, jsTarget));
   const em = (await import(emPath + '?v=' + process.pid)) as Emitted;
   let parsed = 0;
   for (const input of generateInputs(grammar, { depth: 5, nestDepth: 5, cap: 7, fuzzRounds: 250, maxInputs: 1500, seed: 5 })) {

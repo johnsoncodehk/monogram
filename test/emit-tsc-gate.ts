@@ -19,7 +19,7 @@
 // and it already paid off: the fallback editCore branch referenced cs/ceOld/
 // parenCachePos declared only in the soa branch (unreached at runtime, invisible
 // until this gate), now hoisted/gated correctly.
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import type { CstGrammar } from '../src/types.ts';
@@ -51,7 +51,7 @@ for (const [name, path] of GRAMMARS) {
     continue;
   }
   const out = `/tmp/emit-tsc-gate-${name}.ts`;
-  writeFileSync(out, emitParser(grammar));
+  writeFileSync(out, emitParser(grammar, jsTarget));
   try {
     execFileSync('npx', ['tsc', ...TSC_FLAGS, out], { stdio: 'pipe' });
     console.log(`  ${name}: ✓ emitted parser type-checks (tsc --strict)`);

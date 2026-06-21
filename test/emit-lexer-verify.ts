@@ -9,14 +9,14 @@
 //   node test/emit-lexer-verify.ts            # in-repo corpus (+ /tmp/ts-repo if present)
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createLexer } from '../src/gen-lexer.ts';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 
 const grammar = (await import('../typescript.ts')).default;
 
 // The reference: createLexer with the SAME intern config the emitted parser bakes.
 const EMITTED = '/tmp/emit-lexer-verify-parser.mts';
-writeFileSync(EMITTED, emitParser(grammar));
+writeFileSync(EMITTED, emitParser(grammar, jsTarget));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 const src = readFileSync(EMITTED, 'utf-8');
 if (src.includes('createLexer(')) {

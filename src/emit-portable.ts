@@ -1,6 +1,6 @@
 // ── emit-portable ──
 //
-// The target-agnostic emitter (issue #6). `emitPortableParser(grammar, target)` derives
+// The target-agnostic emitter (issue #6). `emitParser(grammar, target)` (see emit.ts) derives
 // a COMPLETE, self-contained parser in the target's language from the same CstGrammar the
 // TS engine uses. It is the agnosticism proof: ONE analysis → ONE intermediate form (IR)
 // → N language renderings, all producing the byte-identical CST the interpreter does.
@@ -120,17 +120,12 @@ export type ParserIR = {
   tpl: TplCfg | null;          // null unless the grammar has a template token
 };
 
-export interface Target {
-  name: string;
-  ext: string;                       // emitted file extension (no dot)
-  render(ir: ParserIR): string;      // the complete, compilable source
-}
-
-export function emitPortableParser(grammar: CstGrammar, target: Target): string {
-  // Apply the [Await]/[Yield] context fork exactly as createParser does, so `await`/`yield`
-  // are keywords inside async/generator bodies and identifiers outside — name-forked into
-  // $A/$Y/$AY rule families. Every other consumer (and the portable parser) sees plain rules.
-  return target.render(buildIR(withAwaitYield(grammar)));
+// The target-agnostic parse plan for a grammar. Applies the [Await]/[Yield] context fork
+// exactly as createParser does (so `await`/`yield` are keywords inside async/generator bodies
+// and identifiers outside — name-forked into $A/$Y/$AY rule families), then builds the IR each
+// portable Target (ts/go/rust) renders. The `Target` contract itself lives in emit.ts.
+export function portableIR(grammar: CstGrammar): ParserIR {
+  return buildIR(withAwaitYield(grammar));
 }
 
 // ── buildIR: grammar + analysis → the target-agnostic parse plan ──

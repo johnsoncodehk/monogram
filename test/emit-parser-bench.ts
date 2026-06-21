@@ -9,14 +9,14 @@
 //   node test/emit-parser-bench.ts            # the 4 bench files, N=20
 //   node test/emit-parser-bench.ts <N>        # custom timed-run count
 import { createParser } from '../src/gen-parser.ts';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { readFileSync, writeFileSync } from 'fs';
 
 const grammar = (await import('../typescript.ts')).default;
 const oracle = createParser(grammar);
 
 const EMITTED = '/tmp/emitted-parser.mts';
-writeFileSync(EMITTED, emitParser(grammar));
+writeFileSync(EMITTED, emitParser(grammar, jsTarget));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 
 const N = Number(process.argv[2]) || 20;

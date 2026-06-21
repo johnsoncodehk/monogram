@@ -1,4 +1,4 @@
-// Gate: the TARGET-AGNOSTIC emitter (issue #6) — `emitPortableParser(grammar, target)`
+// Gate: the TARGET-AGNOSTIC emitter (issue #6) — `emitParser(grammar, target)`
 // derives a parser in EACH target language that produces the byte-identical CST the
 // interpreter (createParser) does. The agnosticism proof by EXECUTION: every grammar is
 // rendered to TypeScript, Go, and Rust; the Go/Rust sources are COMPILED and RUN, and each
@@ -15,10 +15,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
-import { emitPortableParser } from '../src/emit-portable.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { rustTarget } from '../src/target-rust.ts';
+import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
@@ -243,19 +240,19 @@ for (const c of CASES) {
   const runners: Array<{ label: string; run: (src: string) => Outcome }> = [];
 
   const tsFile = `${dir}/p.ts`;
-  writeFileSync(tsFile, emitPortableParser(grammar, tsTarget));
+  writeFileSync(tsFile, emitParser(grammar, tsTarget));
   runners.push({ label: 'typescript', run: (src) => runProc('node', [tsFile], src) });
 
   if (HAS_GO && !c.tsOnly) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
-    writeFileSync(`${gdir}/main.go`, emitPortableParser(grammar, goTarget));
+    writeFileSync(`${gdir}/main.go`, emitParser(grammar, goTarget));
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
     execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });
     runners.push({ label: 'go', run: (src) => runProc(`${gdir}/p`, [], src) });
   }
   if (HAS_RUST && !c.tsOnly) {
     const rfile = `${dir}/main.rs`;
-    writeFileSync(rfile, emitPortableParser(grammar, rustTarget));
+    writeFileSync(rfile, emitParser(grammar, rustTarget));
     execFileSync('rustc', ['-O', '-A', 'warnings', rfile, '-o', `${dir}/pr`], { stdio: 'pipe' });
     runners.push({ label: 'rust', run: (src) => runProc(`${dir}/pr`, [], src) });
   }

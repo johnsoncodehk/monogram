@@ -11,10 +11,10 @@ import { fileURLToPath } from 'node:url';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ts = (await import(REPO + '/node_modules/typescript/lib/typescript.js')).default;
-const { emitParser } = await import(REPO + '/src/emit-parser.ts');
+const { emitParser, jsTarget } = await import(REPO + '/src/emit.ts');
 const grammar = (await import(REPO + '/typescript.ts')).default;
 
-writeFileSync('/tmp/emitted-current.mjs', emitParser(grammar));
+writeFileSync('/tmp/emitted-current.mjs', emitParser(grammar, jsTarget));
 const emitted = await import('/tmp/emitted-current.mjs?v=' + Date.now());
 
 const paths = [

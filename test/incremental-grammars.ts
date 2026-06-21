@@ -13,7 +13,7 @@
 //
 //   node test/incremental-grammars.ts
 import { writeFileSync } from 'node:fs';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { objectify } from './emitted-obj.ts';
 
@@ -85,7 +85,7 @@ const failures: string[] = [];
 for (const name of GRAMMARS) {
   const grammar = (await import(`../${name}.ts`)).default;
   const emPath = `/tmp/emitted-incr-${name}.mts`;
-  writeFileSync(emPath, emitParser(grammar));
+  writeFileSync(emPath, emitParser(grammar, jsTarget));
   const em = (await import(emPath + '?v=' + process.pid)) as Em;
   const session = em.createParser();
   const fresh = em.createParser();

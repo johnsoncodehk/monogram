@@ -1,7 +1,7 @@
 // The Rust Target for emit-portable. Renders the same language-agnostic ParserIR as
 // tsTarget/goTarget into a self-contained Rust program (no external crates — the lexer is
 // regex-free, so it compiles with rustc alone, no Cargo/network). Its CST JSON is checked
-// byte-for-byte against the interpreter, so `emitPortableParser(grammar, rustTarget)` is a
+// byte-for-byte against the interpreter, so `emitParser(grammar, rustTarget)` is a
 // real, verified Rust parser derived from the same grammar definition.
 //
 // Rust ownership note: a CST node is OWNED (moved), unlike the TS/Go pointer trees. In the
@@ -11,8 +11,10 @@
 // returns it. Sub-sequence combinators (star/opt/sep) take non-capturing fn pointers
 // `fn(&mut Parser, &mut Vec<Cst>) -> bool`, threading the parser + kids as params (so nothing
 // is captured, sidestepping the borrow checker).
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target, TplCfg } from './emit-portable.ts';
-import type { TokenPattern } from './types.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg } from './emit-portable.ts';
+import { portableIR } from './emit-portable.ts';
+import type { Target } from './emit.ts';
+import type { TokenPattern, CstGrammar } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
@@ -312,7 +314,11 @@ ${r.nudSeqs.map((seq) => `        { let save = self.pos; let mut kids: Vec<Cst> 
 export const rustTarget: Target = {
   name: 'rust',
   ext: 'rs',
-  render(ir: ParserIR): string {
+  emitLexer(grammar: CstGrammar): string {
+    return lexer(portableIR(grammar));
+  },
+  emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
+    const ir = portableIR(grammar);
     const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
     const matchTemplate = ir.tpl ? `    fn match_template(&mut self) -> Option<Cst> {
         let t = self.peek()?;
@@ -350,7 +356,7 @@ impl Cst {
 // offset/end inferred from first/last child (children non-empty).
 fn node(rule: &'static str, kids: Vec<Cst>) -> Cst { let o = kids[0].offset; let e = kids[kids.len() - 1].end; Cst::node(rule, kids, o, e) }
 
-${lexer(ir)}
+${lexerSrc ?? ''}
 
 struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool, suppress_next: Vec<&'static str>, src: &'a str }
 impl<'a> Parser<'a> {

@@ -17,10 +17,10 @@ import { fileURLToPath } from 'node:url';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const acorn = await import(REPO + '/node_modules/acorn/dist/acorn.mjs');
 const parse5 = await import(REPO + '/node_modules/parse5/dist/index.js');
-const { emitParser } = await import(REPO + '/src/emit-parser.ts');
+const { emitParser, jsTarget } = await import(REPO + '/src/emit.ts');
 
-writeFileSync('/tmp/emitted-peers-js.mjs', emitParser((await import(REPO + '/javascript.ts')).default));
-writeFileSync('/tmp/emitted-peers-html.mjs', emitParser((await import(REPO + '/html.ts')).default));
+writeFileSync('/tmp/emitted-peers-js.mjs', emitParser((await import(REPO + '/javascript.ts')).default, jsTarget));
+writeFileSync('/tmp/emitted-peers-html.mjs', emitParser((await import(REPO + '/html.ts')).default, jsTarget));
 const monoJs = await import('/tmp/emitted-peers-js.mjs?v=' + Date.now());
 const monoHtml = await import('/tmp/emitted-peers-html.mjs?v=' + Date.now());
 

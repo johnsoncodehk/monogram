@@ -1,7 +1,7 @@
 // The Go Target for emit-portable. Renders the same language-agnostic ParserIR as tsTarget
 // into a self-contained Go program (Go stdlib only — the lexer is regex-free, so it compiles
 // with no module dependencies). Its CST JSON is checked byte-for-byte against the interpreter,
-// so `emitPortableParser(grammar, goTarget)` is a real, verified Go parser derived from the
+// so `emitParser(grammar, goTarget)` is a real, verified Go parser derived from the
 // same grammar definition.
 //
 // ARENA allocation (to minimise GC pressure, as tsgo does): nodes live in a flat `nodes []Node`,
@@ -9,8 +9,10 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target, TplCfg } from './emit-portable.ts';
-import type { TokenPattern } from './types.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg } from './emit-portable.ts';
+import { portableIR } from './emit-portable.ts';
+import type { Target } from './emit.ts';
+import type { TokenPattern, CstGrammar } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
@@ -290,7 +292,11 @@ ${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes);
 export const goTarget: Target = {
   name: 'go',
   ext: 'go',
-  render(ir: ParserIR): string {
+  emitLexer(grammar: CstGrammar): string {
+    return lexer(portableIR(grammar));
+  },
+  emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
+    const ir = portableIR(grammar);
     const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
     const matchTemplate = ir.tpl ? `func matchTemplate() int32 {
 \tt := peek()
@@ -344,7 +350,7 @@ var nodes []Node
 var kids []int32
 var scratch []int32
 
-${lexer(ir)}
+${lexerSrc ?? ''}
 
 func peek() *Tok {
 \tif pos < len(toks) { return &toks[pos] }

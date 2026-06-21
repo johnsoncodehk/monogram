@@ -27,7 +27,8 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { isKeywordLiteral, collectLiterals } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, type Sec } from './grammar-analysis.ts';
-import { emitLexer } from './emit-lexer.ts';
+import { emitSoaLexer } from './emit-lexer.ts';
+import type { Target } from './emit.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── Static analysis ──
@@ -1092,7 +1093,28 @@ class Emitter {
 
 // ── Top-level emit ──
 
-export function emitParser(grammar: CstGrammar): string {
+// The `js` Target: the optimized SoA-int parser/lexer, wrapped behind the same two-method
+// Target contract as the portable ts/go/rust targets (see emit.ts). `emitJsLexer` derives the
+// standalone lexer; `emitJsParser` embeds whatever lexer source it is handed. Splitting the
+// lexer COMPUTATION from its EMBEDDING leaves the emitted bytes identical (both re-derive the
+// same deterministic symtab), so `emit-parser-verify` stays byte-for-byte.
+export const jsTarget: Target = {
+  name: 'javascript',
+  ext: 'js',
+  emitLexer: emitJsLexer,
+  emitParser: emitJsParser,
+};
+
+export function emitJsLexer(grammar: CstGrammar): string | null {
+  grammar = withAwaitYield(grammar);
+  const st = analyze(grammar).symtab;
+  return emitSoaLexer(grammar, {
+    typeKind: st.typeKind, kwLitKind: st.kwLitKind, puLitKind: st.puLitKind,
+    KIND_PUNCT: st.KIND_PUNCT, KIND_NAMED_FALLBACK: st.KIND_NAMED_FALLBACK,
+  });
+}
+
+export function emitJsParser(grammar: CstGrammar, lexSrc: string | null): string {
   // [Await]/[Yield] context: name-fork the body-reachable rule closure into $A/$Y/$AY
   // families (see await-yield-fork.ts). No-op for a grammar with no ctx markers. Done
   // HERE (not at grammar export) so the forks exist ONLY in the parser's rule identity
@@ -1127,11 +1149,8 @@ export function emitParser(grammar: CstGrammar): string {
   // The lexer: EMITTED (specialized, standalone — see emit-lexer.ts) when the grammar
   // is a plain token stream; the data-driven createLexer runtime otherwise
   // (markup/indent/newline state machines stay interpreter-only).
+  // `lexSrc` is handed in by the Target façade (emitParser reuses emitLexer) — see emit.ts.
   const st = a.symtab;
-  const lexSrc = emitLexer(grammar, {
-    typeKind: st.typeKind, kwLitKind: st.kwLitKind, puLitKind: st.puLitKind,
-    KIND_PUNCT: st.KIND_PUNCT, KIND_NAMED_FALLBACK: st.KIND_NAMED_FALLBACK,
-  });
   e.soa = lexSrc !== null;
   if (!lexSrc) {
     e.emit(`import { createLexer } from ${J(resolveLexerImport())};`);

@@ -4,7 +4,10 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target, TplCfg } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg } from './emit-portable.ts';
+import { portableIR } from './emit-portable.ts';
+import type { Target } from './emit.ts';
+import type { CstGrammar } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
@@ -267,7 +270,11 @@ ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${se
 export const tsTarget: Target = {
   name: 'typescript',
   ext: 'ts',
-  render(ir: ParserIR): string {
+  emitLexer(grammar: CstGrammar): string {
+    return lexer(portableIR(grammar));
+  },
+  emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
+    const ir = portableIR(grammar);
     const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
     const matchTemplate = ir.tpl ? `function matchTemplate(): Cst | null {
   const t = peek();
@@ -296,7 +303,7 @@ type Leaf = { tokenType: string; offset: number; end: number };
 type Node = { rule: string; children: Cst[]; offset: number; end: number };
 type Cst = Node | Leaf;
 
-${lexer(ir)}
+${lexerSrc ?? ''}
 
 let toks: Tok[] = [];
 let pos = 0;
