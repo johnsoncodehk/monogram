@@ -48,7 +48,7 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): st
   const name = (t as { name: string }).name;
   const stateful = rxTok !== undefined || tplTok !== undefined;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
-  const push = (endE: string) => (t.skip ? '' : stateful ? `emit(${J(name)}, src[pos:${endE}], pos, ${endE}); ` : `toks = append(toks, Tok{${J(name)}, src[pos:${endE}], pos, ${endE}}); `);
+  const push = (endE: string) => (t.skip ? `if strings.Contains(src[pos:${endE}], "\\n") { pendingNl = true }; ` : stateful ? `emit(${J(name)}, src[pos:${endE}], pos, ${endE}); ` : `pushTok(${J(name)}, src[pos:${endE}], pos, ${endE}); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   if (t.kind === 'run') return `\t\tif ${gate}${rangeCond('c', t.first)} {
 \t\t\te := pos + 1
@@ -81,7 +81,7 @@ function lexer(ir: ParserIR): string {
   const tpl = ir.tpl;
   const stateful = !!(rx || tpl);
   const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken, tpl?.token)).join('\n');
-  const pushPunct = stateful ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length})` : (p: string) => `toks = append(toks, Tok{"", ${J(p)}, pos, pos + ${p.length}})`;
+  const pushPunct = stateful ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length})` : (p: string) => `pushTok("", ${J(p)}, pos, pos + ${p.length})`;
   const puncts = ir.puncts.map((p) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`).join('\n');
   const goMap = (a: string[]) => `map[string]bool{${a.map((x) => `${J(x)}: true`).join(', ')}}`;
@@ -129,7 +129,7 @@ function lexer(ir: ParserIR): string {
   const emitTail = rx ? `\n\t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true` : '';
   const emitFn = stateful ? `\temit := func(kind, text string, off, end int) {
 ${emitHooks}
-\t\ttoks = append(toks, Tok{kind, text, off, end})${emitTail}
+\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false${emitTail}
 \t}
 \t_ = emit
 ` : '';
@@ -145,13 +145,17 @@ ${emitHooks}
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
+  const pushTokFn = stateful ? '' : `\tpushTok := func(kind, text string, off, end int) { toks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false }\n\t_ = pushTok\n`;
   return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
 \ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
-${rxState}${tplState}${emitFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
+\tpendingNl := false
+\t_ = pendingNl
+${rxState}${tplState}${emitFn}${pushTokFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
 \t\tc := int(src[pos])
-\t\tif c == 32 || c == 9 || c == 10 || c == 13 { pos++; continue }
+\t\tif c == 32 || c == 9 { pos++; continue }
+\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }
 ${tplDispatch}${toks}
 ${puncts}
 \t\tpanic(fmt.Sprintf("lex error at %d", pos))
@@ -172,6 +176,7 @@ function stepCond(s: Step): string {
     case 'alt': return `func() bool { ${s.branches.map((br) => `{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${br.length ? br.map(stepCond).join(' && ') : 'true'} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('; ')}; return false }()`;
     case 'not': return `func() bool { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); m := ${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return !m }()`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
+    case 'sameLine': return `func() bool { t := peek(); return t != nil && !t.Nl }()`;
   }
 }
 
@@ -310,6 +315,7 @@ import (
 type Tok struct {
 \tKind, Text string
 \tOff, End   int
+\tNl         bool
 }
 // Arena node: an int32 index into nodes; children are a flat range in kids.
 type Node struct {

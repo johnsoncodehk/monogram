@@ -52,7 +52,8 @@ export type Step =
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][] }                            // inline alternation of sub-sequences (backtracking)
   | { t: 'not'; steps: Step[] }                                 // zero-width negative lookahead (consumes nothing)
-  | { t: 'seq'; steps: Step[] };                                // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
+  | { t: 'seq'; steps: Step[] }                                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
+  | { t: 'sameLine' };                                          // zero-width: the next token is on the same line (no preceding newline)
 export type Alt = Step[];
 
 export type RdRule = { kind: 'rd'; name: string; alts: Alt[] };
@@ -142,6 +143,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
       case 'group': { const ss = altSteps(e.body); if (ss.length !== 1) throw new Error('portable: group must reduce to a single step'); return ss[0]; }
       case 'not': return { t: 'not', steps: altSteps(e.body) };   // zero-width negative lookahead
+      case 'sameLine': return { t: 'sameLine' };                  // zero-width no-newline assertion
       case 'seq': return { t: 'seq', steps: e.items.map(stepOf) };  // grouped sub-sequence (star/sep body)
       case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
       case 'quantifier':
@@ -301,6 +303,7 @@ function buildPratt(
   function stepOfPratt(e: RuleExpr): Step {
     if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
+    if (e.type === 'sameLine') return { t: 'sameLine' };
     if (e.type === 'not') return { t: 'not', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
     if (e.type === 'group' && !e.capBelow && !e.ctxMode && !e.suppress && e.body.type !== 'seq') return stepOfPratt(e.body);
     if (e.type === 'sep') return { t: 'sep', elem: stepOfPratt(e.element), delim: e.delimiter };

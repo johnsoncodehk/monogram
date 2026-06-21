@@ -131,6 +131,17 @@ const CASES: Case[] = [
     ],
     reject: ['[1 2];', 'f(1,);', '[, 1];', 'f(1 2);'],
   },
+  {
+    // The `sameLine` zero-width assertion (no line terminator before the next token):
+    // `return` takes a value only on the same line. Also verifies the lexer's newline-before
+    // tracking across a block comment that spans a newline.
+    grammar: 'sljs', path: '../examples/sljs.ts',
+    accept: [
+      'return 1;', 'return;', 'return 1 + 2;', '1 + 2;', 'return /* c */ 1;',
+      '(a);', 'return (1);',
+    ],
+    reject: ['return\n1;', 'return\nx;', 'return /*\n*/ 1;', 'return // c\n 1;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>

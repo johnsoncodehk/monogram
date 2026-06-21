@@ -51,7 +51,8 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): st
   const name = (t as { name: string }).name;
   const stateful = rxTok !== undefined || tplTok !== undefined;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
-  const push = (endE: string) => (t.skip ? '' : stateful ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}); ` : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE} }); `);
+  const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
+  const push = (endE: string) => (t.skip ? `if src[pos..${endE}].contains('\\n') { ${nlVar} = true; } ` : stateful ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}); ` : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE}, nl: pending_nl }); pending_nl = false; `);
   const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
   if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
@@ -85,7 +86,7 @@ function lexer(ir: ParserIR): string {
   const stateful = !!(rx || tpl);
   const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken, tpl?.token)).join('\n');
   const puncts = ir.puncts.map((p) =>
-    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length} });`} pos += ${p.length}; continue; }`).join('\n');
+    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl }); pending_nl = false;`} pos += ${p.length}; continue; }`).join('\n');
   const rsArr = (a: string[]) => `&[${a.map(J).join(', ')}]`;
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState.
@@ -109,7 +110,7 @@ fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }
     (false, p)
 }
 ` : '';
-  const fields = ['toks: Vec<Tok<\'a>>',
+  const fields = ['toks: Vec<Tok<\'a>>', 'pending_nl: bool',
     rx ? 'prev_text: &\'a str, prev_kind: &\'static str, bp_text: &\'a str, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
     tpl ? 'template_stack: Vec<i64>' : ''].filter(Boolean).join(', ');
   const prevIsValue = rx ? `    fn prev_is_value(&self) -> bool {
@@ -132,14 +133,15 @@ fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }
 impl<'a> LexState<'a> {
 ${prevIsValue}    fn emit(&mut self, kind: &'static str, text: &'a str, off: usize, end: usize) {
 ${emitHooks}
-        self.toks.push(Tok { kind, text, off, end });${emitTail}
+        self.toks.push(Tok { kind, text, off, end, nl: self.pending_nl }); self.pending_nl = false;${emitTail}
     }
 }
 ` : '';
-  const initFields = ['toks: Vec::new()',
+  const initFields = ['toks: Vec::new()', 'pending_nl: false',
     rx ? 'prev_text: "", prev_kind: "", bp_text: "", has_prev: false, has_prev2: false, paren_head: Vec::new(), last_close: false, last_bang: false' : '',
     tpl ? 'template_stack: Vec::new()' : ''].filter(Boolean).join(', ');
-  const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();`;
+  const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
+  const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && src[pos..].starts_with(${J(tpl.interpClose)}) && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length});
@@ -159,7 +161,8 @@ ${open}
     let mut pos = 0usize;
     while pos < n {
         let c = b[pos] as u32;
-        if c == 32 || c == 9 || c == 10 || c == 13 { pos += 1; continue; }
+        if c == 32 || c == 9 { pos += 1; continue; }
+        if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }
 ${tplDispatch}${toks}
 ${puncts}
         panic!("lex error at {}", pos);
@@ -181,6 +184,7 @@ function stepCond(s: Step): string {
     case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(self, &mut kids)`;
     case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(self, &mut kids)`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
+    case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
   }
 }
 // A backtracking inline alternation rendered as an immediately-applied closure over (p, k),
@@ -205,6 +209,7 @@ function stepCondP(s: Step): string {
     case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(p, k)`;
     case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(p, k)`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCondP).join(' && ') : 'true'})`;
+    case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
   }
 }
 
@@ -318,7 +323,7 @@ use std::io::Read;
 // Zero-alloc tokens: kind is a known grammar name (&'static str), text is a slice of the
 // source. Tok is Copy, so peek() copies pointers — no per-peek heap work.
 #[derive(Clone, Copy)]
-struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize }
+struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool }
 
 // CST nodes hold only &'static str labels (rule names / token-type tags are all literals)
 // + usize spans — no per-node String allocation.
