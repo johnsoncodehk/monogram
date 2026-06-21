@@ -12,42 +12,75 @@
 // `fn(&mut Parser, &mut Vec<Cst>) -> bool`, threading the parser + kids as params (so nothing
 // is captured, sidestepping the borrow checker).
 import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target } from './emit-portable.ts';
+import type { TokenPattern } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `(${lo}..=${hi}).contains(&${v})`)).join(' || ') + ')';
 
-function scanTok(t: LexTok): string {
-  const push = t.skip ? '' : `toks.push(Tok { kind: ${J((t as { name: string }).name)}, text: &src[pos..e], off: pos, end: e }); `;
+// Compile a token-pattern AST to backtracking-free matcher fns `_mN(s, p) -> i64`
+// (new position, or -1). Named functions (Rust closures can't recurse); the source is
+// threaded as a param (Rust has no convenient module-level mutable string).
+function ccCondRs(p: Extract<TokenPattern, { type: 'charClass' }>): string {
+  const parts = p.items.map((it) =>
+    it.type === 'char' ? `cc == ${it.value.charCodeAt(0)}` : `(${it.from.charCodeAt(0)}..=${it.to.charCodeAt(0)}).contains(&cc)`);
+  const inSet = parts.length === 1 ? parts[0] : '(' + parts.join(' || ') + ')';
+  return p.negate ? `!${inSet}` : inSet;
+}
+function compilePat(p: TokenPattern, defs: string[]): string {
+  const name = `_m${defs.length}`;
+  defs.push('');
+  let body: string;
+  if (typeof p === 'string') {
+    body = `if (p as usize) <= s.len() && s[p as usize..].starts_with(${J(p)}) { p + ${p.length} } else { -1 }`;
+  } else switch (p.type) {
+    case 'anyChar': body = `if (p as usize) < s.len() { p + 1 } else { -1 }`; break;
+    case 'charClass': body = `let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ${ccCondRs(p)} { p + 1 } else { -1 }`; break;
+    case 'seq': { const ms = p.items.map((x) => compilePat(x, defs)); body = `let mut p = p; ${ms.map((m) => `p = ${m}(s, p); if p < 0 { return -1; }`).join(' ')} p`; break; }
+    case 'alt': { const ms = p.items.map((x) => compilePat(x, defs)); body = `${ms.map((m) => `{ let r = ${m}(s, p); if r >= 0 { return r; } }`).join(' ')} -1`; break; }
+    case 'repeat': { const m = compilePat(p.body, defs); const mx = p.max !== undefined ? ` if c >= ${p.max} { break; }` : ''; body = `let mut q = p; let mut c = 0i64; loop { let r = ${m}(s, q); if r < 0 || r == q { break; } q = r; c += 1;${mx} } if c >= ${p.min} { q } else { -1 }`; break; }
+    case 'lookahead': { const m = compilePat(p.body, defs); body = `let r = ${m}(s, p); if ${p.negate ? 'r < 0' : 'r >= 0'} { p } else { -1 }`; break; }
+    case 'anchor': body = p.kind === 'start' ? `if p == 0 { p } else { -1 }` : `if p as usize == s.len() { p } else { -1 }`; break;
+    default: throw new Error(`portable Rust lexer: pattern '${(p as { type: string }).type}' unsupported`);
+  }
+  defs[Number(name.slice(2))] = `fn ${name}(s: &str, p: i64) -> i64 { ${body} }`;
+  return name;
+}
+
+function scanTok(t: LexTok, defs: string[]): string {
+  const name = (t as { name: string }).name;
+  const push = (endE: string) => (t.skip ? '' : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE} }); `);
   if (t.kind === 'run') return `        if ${rangeCond('c', t.first)} {
             let mut e = pos + 1;
             while e < n { let cc = b[e] as u32; if !${rangeCond('cc', t.cont)} { break } e += 1; }
-            ${push}pos = e; continue;
+            ${push('e')}pos = e; continue;
         }`;
   if (t.kind === 'string') return `        if c == ${t.delim.charCodeAt(0)} {
             let mut e = pos + 1;
             while e < n { let ch = b[e] as u32; if ch == 92 { e += 2; continue } if ch == ${t.delim.charCodeAt(0)} { e += 1; break } e += 1; }
-            ${push}pos = e; continue;
+            ${push('e')}pos = e; continue;
         }`;
   if (t.kind === 'line') return `        if src[pos..].starts_with(${J(t.prefix)}) {
             let mut e = pos + ${t.prefix.length};
             while e < n && b[e] != 10 { e += 1; }
-            ${push}pos = e; continue;
+            ${push('e')}pos = e; continue;
         }`;
   if (t.kind === 'block') return `        if src[pos..].starts_with(${J(t.open)}) {
             let mut e = pos + ${t.open.length};
             while e < n && !src[e..].starts_with(${J(t.close)}) { e += 1; }
             if e < n { e += ${t.close.length}; }
-            ${push}pos = e; continue;
+            ${push('e')}pos = e; continue;
         }`;
-  throw new Error(`portable Rust lexer: general 'pattern' tokens not yet supported (token ${t.name}) — the stateless-token matcher is implemented in the TS target only so far`);
+  const m = compilePat(t.pattern, defs);
+  return `        { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
 }
 
 function lexer(ir: ParserIR): string {
-  const toks = ir.tokens.map(scanTok).join('\n');
+  const defs: string[] = [];
+  const toks = ir.tokens.map((t) => scanTok(t, defs)).join('\n');
   const puncts = ir.puncts.map((p) =>
     `        if src[pos..].starts_with(${J(p)}) { toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length} }); pos += ${p.length}; continue; }`).join('\n');
-  return `fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+  return `${defs.length ? defs.join('\n') + '\n' : ''}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
     let b = src.as_bytes();
     let n = b.len();
     let mut toks: Vec<Tok> = Vec::new();

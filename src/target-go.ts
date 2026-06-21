@@ -10,46 +10,78 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target } from './emit-portable.ts';
+import type { TokenPattern } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
 
-function scanTok(t: LexTok): string {
-  const push = t.skip ? '' : `toks = append(toks, Tok{${J((t as { name: string }).name)}, src[pos:e], pos, e}); `;
+// Compile a token-pattern AST to backtracking-free package-level matcher funcs
+// `_mN(p int) int` (new position, or -1) over the module-level source `_s`.
+function ccCondGo(p: Extract<TokenPattern, { type: 'charClass' }>): string {
+  const parts = p.items.map((it) =>
+    it.type === 'char' ? `cc == ${it.value.charCodeAt(0)}` : `cc >= ${it.from.charCodeAt(0)} && cc <= ${it.to.charCodeAt(0)}`);
+  const inSet = parts.length === 1 ? parts[0] : '(' + parts.join(' || ') + ')';
+  return p.negate ? `!${inSet}` : inSet;
+}
+function compilePat(p: TokenPattern, defs: string[]): string {
+  const name = `_m${defs.length}`;
+  defs.push('');
+  let body: string;
+  if (typeof p === 'string') {
+    body = `{ if p <= len(_s) && strings.HasPrefix(_s[p:], ${J(p)}) { return p + ${p.length} }; return -1 }`;
+  } else switch (p.type) {
+    case 'anyChar': body = `{ if p < len(_s) { return p + 1 }; return -1 }`; break;
+    case 'charClass': body = `{ if p >= len(_s) { return -1 }; cc := int(_s[p]); if ${ccCondGo(p)} { return p + 1 }; return -1 }`; break;
+    case 'seq': { const ms = p.items.map((x) => compilePat(x, defs)); body = `{ ${ms.map((m) => `p = ${m}(p); if p < 0 { return -1 }`).join('; ')}; return p }`; break; }
+    case 'alt': { const ms = p.items.map((x) => compilePat(x, defs)); body = `{ ${ms.map((m) => `if r := ${m}(p); r >= 0 { return r }`).join('; ')}; return -1 }`; break; }
+    case 'repeat': { const m = compilePat(p.body, defs); const mx = p.max !== undefined ? `; if c >= ${p.max} { break }` : ''; body = `{ q, c := p, 0; for { r := ${m}(q); if r < 0 || r == q { break }; q = r; c++${mx} }; if c >= ${p.min} { return q }; return -1 }`; break; }
+    case 'lookahead': { const m = compilePat(p.body, defs); body = `{ r := ${m}(p); if ${p.negate ? 'r < 0' : 'r >= 0'} { return p }; return -1 }`; break; }
+    case 'anchor': body = p.kind === 'start' ? `{ if p == 0 { return p }; return -1 }` : `{ if p == len(_s) { return p }; return -1 }`; break;
+    default: throw new Error(`portable Go lexer: pattern '${(p as { type: string }).type}' unsupported`);
+  }
+  defs[Number(name.slice(2))] = `func ${name}(p int) int ${body}`;
+  return name;
+}
+
+function scanTok(t: LexTok, defs: string[]): string {
+  const name = (t as { name: string }).name;
+  const push = (endE: string) => (t.skip ? '' : `toks = append(toks, Tok{${J(name)}, src[pos:${endE}], pos, ${endE}}); `);
   if (t.kind === 'run') return `\t\tif ${rangeCond('c', t.first)} {
 \t\t\te := pos + 1
 \t\t\tfor e < n { cc := int(src[e]); if !${rangeCond('cc', t.cont)} { break }; e++ }
-\t\t\t${push}pos = e; continue
+\t\t\t${push('e')}pos = e; continue
 \t\t}`;
   if (t.kind === 'string') return `\t\tif c == ${t.delim.charCodeAt(0)} {
 \t\t\te := pos + 1
 \t\t\tfor e < n { ch := int(src[e]); if ch == 92 { e += 2; continue }; if ch == ${t.delim.charCodeAt(0)} { e++; break }; e++ }
-\t\t\t${push}pos = e; continue
+\t\t\t${push('e')}pos = e; continue
 \t\t}`;
   if (t.kind === 'line') return `\t\tif strings.HasPrefix(src[pos:], ${J(t.prefix)}) {
 \t\t\te := pos + ${t.prefix.length}
 \t\t\tfor e < n && src[e] != 10 { e++ }
-\t\t\t${push}pos = e; continue
+\t\t\t${push('e')}pos = e; continue
 \t\t}`;
   if (t.kind === 'block') return `\t\tif strings.HasPrefix(src[pos:], ${J(t.open)}) {
 \t\t\te := pos + ${t.open.length}
 \t\t\tfor e < n && !strings.HasPrefix(src[e:], ${J(t.close)}) { e++ }
 \t\t\tif e < n { e += ${t.close.length} }
-\t\t\t${push}pos = e; continue
+\t\t\t${push('e')}pos = e; continue
 \t\t}`;
-  throw new Error(`portable Go lexer: general 'pattern' tokens not yet supported (token ${t.name}) — the stateless-token matcher is implemented in the TS target only so far`);
+  const m = compilePat(t.pattern, defs);
+  return `\t\tif e := ${m}(pos); e > pos { ${push('e')}pos = e; continue }`;
 }
 
 function lexer(ir: ParserIR): string {
-  const toks = ir.tokens.map(scanTok).join('\n');
+  const defs: string[] = [];
+  const toks = ir.tokens.map((t) => scanTok(t, defs)).join('\n');
   const puncts = ir.puncts.map((p) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { toks = append(toks, Tok{"", ${J(p)}, pos, pos + ${p.length}}); pos += ${p.length}; continue }`).join('\n');
-  return `func lex(src string) []Tok {
+  return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
 \ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
-\tfor pos < n {
+${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
 \t\tc := int(src[pos])
 \t\tif c == 32 || c == 9 || c == 10 || c == 13 { pos++; continue }
 ${toks}

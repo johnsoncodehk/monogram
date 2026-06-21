@@ -51,9 +51,9 @@ const CASES: Case[] = [
   },
   {
     // The general token-pattern matcher (stateless real-JS token tier): \u-escaped
-    // identifiers, the decimal/hex number family with a boundary, both-quote strings.
-    // TS-only for now — the Go/Rust port of the pattern matcher is the next stage.
-    grammar: 'richtokens', path: '../examples/richtokens.ts', tsOnly: true,
+    // identifiers, the decimal/hex number family with a boundary, both-quote strings —
+    // compiled to a backtracking-free matcher in all three targets.
+    grammar: 'richtokens', path: '../examples/richtokens.ts',
     accept: [
       '123', '0xFF', '1_000_000', '3.14', 'foo', 'bar_$x9', '"hi"', "'single'",
       '"esc\\"q\\n"', '123 0xa foo "s" 3.14', '0xDEADbeef 42 _id $x cafe // line\n 7',
