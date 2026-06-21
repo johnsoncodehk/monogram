@@ -232,8 +232,9 @@ var ${r.name}POST = map[string]int{${post}}
 var ${r.name}ATOM = map[string]bool{${atoms}}
 func parse${r.name}() int32 { return ${r.name}bp(0) }
 func ${r.name}bp(minBp int) int32 {
-\tleft := ${r.name}nud()
+\tleft := ${r.name}nud(minBp)
 \tif left < 0 { return -1 }
+\tif _capped { return left }
 \ttailClosed := false
 \tfor {
 \t\tt := peek()
@@ -256,9 +257,11 @@ ${r.postfixToks.map(postfixArm).join('\n')}
 \t}
 \treturn left
 }
-func ${r.name}nud() int32 {
+func ${r.name}nud(minBp int) int32 {
+\t_capped = false
 \tt := peek()
 \tif t == nil { return -1 }
+${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { _capped = true; return finish(${J(r.name)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 ${tplNud}\tif ${r.name}ATOM[t.Kind] {
 \t\tsb := len(scratch); scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
 \t\treturn finish(${J(r.name)}, sb, t.Off)
@@ -327,6 +330,7 @@ type bp struct{ lbp, rbp int }
 
 var toks []Tok
 var pos int
+var _capped bool
 var nodes []Node
 var kids []int32
 var scratch []int32
@@ -375,7 +379,11 @@ func opt(body func() bool) bool {
 }
 func sepBy(elem func() bool, delim string) bool {
 \tif !elem() { return false }
-\tfor { sp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if matchLit(delim, "$punct") && elem() { continue }; pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break }
+\tfor {
+\t\tsp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
+\t\tif !matchLit(delim, "$punct") { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break }
+\t\tif !elem() { break }   // a trailing delimiter is allowed — keep the pushed delim and stop
+\t}
 \treturn true
 }
 func altLit(opts [][2]string) bool {

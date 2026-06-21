@@ -64,6 +64,7 @@ export type PrattRule = {
   nudToks: string[];                                  // NUD: a bare token wrapped in a node
   nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
   nudSeqs: Step[][];                                  // NUD: a general sequence (guarded ident, class expr), tried with backtracking
+  nudCapped: Array<{ steps: Step[]; capBp: number }>; // NUD: an assignment-level capped sequence (arrow function) — parsed only when minBp < capBp, admits no led
   prefix: Array<{ op: string; rbp: number }>;         // NUD: prefix op then operand at rbp
   binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
@@ -259,6 +260,7 @@ function buildPratt(
   const nudToks: string[] = [];
   const nudBrackets: Bracket[] = [];
   const nudSeqs: Step[][] = [];
+  const nudCapped: Array<{ steps: Step[]; capBp: number }> = [];
   let sawPrefix = false, sawBinary = false, sawPostfix = false;
   const leds: Bracket[] = [];
   const ledAccessTail: boolean[] = [];
@@ -270,15 +272,24 @@ function buildPratt(
       // NUD
       if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) { nudToks.push(items[0].name); continue; }
       if (items[0].type === 'prefix') { sawPrefix = true; continue; }
+      // A capExpr (arrow function): an assignment-level group{capBelow}. ctxMode in its body
+      // is treated as transparent (the await/yield fork is not modelled in the portable parser).
+      if (items.length === 1 && items[0].type === 'group' && items[0].capBelow !== undefined) {
+        const capBp = a.nudCapOf(items[0]);
+        if (capBp === null) throw new Error(`portable: capBelow connector '${items[0].capBelow}' has no binding power (rule ${name})`);
+        const b = items[0].body;
+        nudCapped.push({ steps: (b.type === 'seq' ? b.items : [b]).map((it) => stepOfPratt(it)), capBp });
+        continue;
+      }
       if (items[0].type === 'literal') { nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); continue; }
       // A single transparent group unwraps to its body (an explicit grouping of the NUD sequence).
       let nudItems = items;
-      if (items.length === 1 && items[0].type === 'group' && !items[0].capBelow && !items[0].ctxMode && !items[0].suppress) {
+      if (items.length === 1 && items[0].type === 'group' && !items[0].suppress) {
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
       }
-      // capBelow / ctxMode (arrow functions, await/yield context) are a deeper construct — defer.
-      if (nudItems.some((it) => it.type === 'group' && (it.capBelow || it.ctxMode || it.suppress))) {
-        throw new Error(`portable: Pratt NUD with capBelow/ctxMode/suppress not yet in scope (rule ${name}) — arrow functions etc.`);
+      // A no-`in`/suppress group is a deeper construct — defer.
+      if (nudItems.some((it) => it.type === 'group' && it.suppress)) {
+        throw new Error(`portable: Pratt NUD with suppress (no-in context) not yet in scope (rule ${name})`);
       }
       nudSeqs.push(nudItems.map((it) => stepOfPratt(it)));   // general NUD sequence (guarded ident, class expr)
       continue;
@@ -305,7 +316,8 @@ function buildPratt(
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
     if (e.type === 'not') return { t: 'not', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
-    if (e.type === 'group' && !e.capBelow && !e.ctxMode && !e.suppress && e.body.type !== 'seq') return stepOfPratt(e.body);
+    // ctxMode (await/yield) is transparent to the portable parser (no fork); unwrap a non-seq group.
+    if (e.type === 'group' && !e.capBelow && !e.suppress && e.body.type !== 'seq') return stepOfPratt(e.body);
     if (e.type === 'sep') return { t: 'sep', elem: stepOfPratt(e.element), delim: e.delimiter };
     if (e.type === 'quantifier' && e.kind === '?') return { t: 'opt', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
     if (e.type === 'quantifier' && e.kind === '*') return { t: 'star', step: stepOfPratt(e.body) };
@@ -319,5 +331,5 @@ function buildPratt(
   const postfix = sawPostfix
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp }))
     : [];
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, prefix, binary, leds, ledAccessTail, postfixToks, postfix };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudCapped, prefix, binary, leds, ledAccessTail, postfixToks, postfix };
 }

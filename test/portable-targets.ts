@@ -142,6 +142,18 @@ const CASES: Case[] = [
     ],
     reject: ['return\n1;', 'return\nx;', 'return /*\n*/ 1;', 'return // c\n 1;'],
   },
+  {
+    // capBelow (assignment-level) arrow functions: a NUD parsed only when minBp < the
+    // connector's bp, admitting NO led once parsed; the `(x) => y` vs `(x)` ambiguity is
+    // resolved by longest-match ordering (the arrow is tried first, falls back to grouping).
+    grammar: 'arrowjs', path: '../examples/arrowjs.ts',
+    accept: [
+      'x => x;', '(a, b) => a + b;', '() => {};', 'x = (() => 1);', 'f(() => 1, 2);',
+      '(x);', 'a + b;', 'x => y => x;', '(() => 2);', '(a) => a;', 'x = y => y;', 'foo();',
+      '(a,) => b;', '(a, b,) => a;',   // trailing comma in params (sep allows a trailing delimiter)
+    ],
+    reject: ['=> x;', 'x => ;', '1 + () => 2;', '(,) => b;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>

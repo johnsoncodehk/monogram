@@ -257,7 +257,8 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
     fn ${r.name}_post(op: &str) -> Option<i64> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
     fn ${r.name}_atom(kind: &str) -> bool { matches!(kind, ${atomArm || '""'}) }
     fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Cst> {
-        let mut left = self.${r.name}_nud()?;
+        let mut left = self.${r.name}_nud(min_bp)?;
+        if self.capped { return Some(left); }
         let mut tail_closed = false;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };
@@ -274,8 +275,10 @@ ${r.postfixToks.map(postfixArm).join('\n')}
         }
         Some(left)
     }
-    fn ${r.name}_nud(&mut self) -> Option<Cst> {
+    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Cst> {
+        self.capped = false;
         let t = self.peek()?;
+${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let mut kids: Vec<Cst> = Vec::new(); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { self.capped = true; return Some(self.branch(${J(r.name)}, kids, save)); } self.pos = save; }`).join('\n')}
 ${tplNud}        if Parser::${r.name}_atom(t.kind) {
             self.pos += 1;
             return Some(Cst::node(${J(r.name)}, vec![Cst::leaf(t.kind, t.off, t.end)], t.off, t.end));
@@ -337,7 +340,7 @@ fn node(rule: &'static str, kids: Vec<Cst>) -> Cst { let o = kids[0].offset; let
 
 ${lexer(ir)}
 
-struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize }
+struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool }
 impl<'a> Parser<'a> {
     fn peek(&self) -> Option<Tok<'a>> { if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None } }
     fn branch(&self, rule: &'static str, kids: Vec<Cst>, save: usize) -> Cst {
@@ -363,7 +366,11 @@ impl<'a> Parser<'a> {
     }
     fn sep_by(&mut self, elem: fn(&mut Parser<'a>, &mut Vec<Cst>) -> bool, delim: &str, kids: &mut Vec<Cst>) -> bool {
         if !elem(self, kids) { return false; }
-        loop { let sp = self.pos; let before = kids.len(); if self.match_lit(delim, "$punct", kids) && elem(self, kids) { continue; } self.pos = sp; kids.truncate(before); break; }
+        loop {
+            let sp = self.pos; let before = kids.len();
+            if !self.match_lit(delim, "$punct", kids) { self.pos = sp; kids.truncate(before); break; }
+            if !elem(self, kids) { break; }   // a trailing delimiter is allowed — keep the pushed delim and stop
+        }
         true
     }
     fn alt_lit(&mut self, opts: &[(&str, &'static str)], kids: &mut Vec<Cst>) -> bool {
@@ -390,15 +397,15 @@ fn main() {
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
     if let Some(iters) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) {
         // black_box on the input + result so the optimizer can't elide the lex/parse.
-        for _ in 0..3 { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0 }; std::hint::black_box(p.parse_${ir.entry}()); }
+        for _ in 0..3 { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false }; std::hint::black_box(p.parse_${ir.entry}()); }
         let t = std::time::Instant::now();
-        for _ in 0..iters { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0 }; std::hint::black_box(p.parse_${ir.entry}()); }
+        for _ in 0..iters { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false }; std::hint::black_box(p.parse_${ir.entry}()); }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
     let toks = lex(&src);
     let n = toks.len();
-    let mut p = Parser { toks, pos: 0 };
+    let mut p = Parser { toks, pos: 0, capped: false };
     match p.parse_${ir.entry}() {
         Some(root) if p.pos == n => { let mut out = String::new(); write_json(&root, &mut out); print!("{}", out); }
         _ => { eprintln!("parse error (pos {}/{})", p.pos, n); std::process::exit(1); }

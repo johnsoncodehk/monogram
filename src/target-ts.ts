@@ -212,8 +212,9 @@ const ${r.name}_POST: Record<string, number> = ${POST};
 const ${r.name}_ATOM = ${atom};
 function parse${r.name}(): Node | null { return ${r.name}_bp(0); }
 function ${r.name}_bp(minBp: number): Node | null {
-  let left = ${r.name}_nud();
+  let left = ${r.name}_nud(minBp);
   if (left === null) return null;
+  if (_capped) return left;   // an assignment-level arrow admits no led
   let tailClosed = false;
   for (;;) {
     const t = peek();
@@ -233,9 +234,11 @@ ${r.postfixToks.map(postfixArm).join('\n')}
   }
   return left;
 }
-function ${r.name}_nud(): Node | null {
+function ${r.name}_nud(minBp: number): Node | null {
+  _capped = false;
   const t = peek();
   if (t === null) return null;
+${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: Cst[] = []; if (${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'}) { _capped = true; return branch(${J(r.name)}, kids, save); } pos = save; }`).join('\n')}
 ${tplNud}  if (${r.name}_ATOM.has(t.kind)) { pos++; return { rule: ${J(r.name)}, children: [{ tokenType: t.kind, offset: t.off, end: t.end }], offset: t.off, end: t.end }; }
 ${r.nudBrackets.map(bracketNud).join('\n')}
   const pbp = ${r.name}_PRE[t.text];
@@ -287,6 +290,7 @@ ${lexer(ir)}
 
 let toks: Tok[] = [];
 let pos = 0;
+let _capped = false;
 function peek(): Tok | null { return pos < toks.length ? toks[pos] : null; }
 function branch(rule: string, kids: Cst[], save: number): Node {
   const offset = kids.length > 0 ? kids[0].offset : (save < toks.length ? toks[save].off : 0);
@@ -320,7 +324,11 @@ function opt(body: () => boolean, kids: Cst[]): boolean {
 }
 function sepBy(elem: () => boolean, delim: string, kids: Cst[]): boolean {
   if (!elem()) return false;
-  for (;;) { const sp = pos; const before = kids.length; if (matchLit(delim, '$punct', kids) && elem()) continue; pos = sp; kids.length = before; break; }
+  for (;;) {
+    const sp = pos; const before = kids.length;
+    if (!matchLit(delim, '$punct', kids)) { pos = sp; kids.length = before; break; }
+    if (!elem()) break;   // a trailing delimiter is allowed — keep the pushed delim and stop
+  }
   return true;
 }
 function altLit(opts: [string, string][], kids: Cst[]): boolean {
