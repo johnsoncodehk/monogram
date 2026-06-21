@@ -188,29 +188,35 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
       if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.name)}, kids);
       pos = save; return null;
     }`;
-  const ledArm = (b: Bracket) => `    if (t.text === ${J(b.first)}) {
+  // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand.
+  const ledArm = (b: Bracket, accessTail: boolean) => `    if (${accessTail ? '!tailClosed && ' : ''}t.text === ${J(b.first)}) {
       const ledSave = pos; const kids: Cst[] = [left];
       if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.name)}, kids); continue; }
       pos = ledSave; break;
     }`;
-  // A postfix token (e.g. a tagged template) binds like a mixfix led: `left X` → node(left, X).
+  // A postfix token (e.g. a tagged template) binds like a mixfix led: `left X` → node(left, X). Also an access tail.
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-    if (t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.name)}, children: [left, node], offset: left.offset, end: node.end }; continue; } }` : '';
-    return `    if (t.kind === ${J(tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.name)}, children: [left, leaf], offset: left.offset, end: leaf.end }; continue; }${tplPart}`;
+    if (!tailClosed && t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.name)}, children: [left, node], offset: left.offset, end: node.end }; continue; } }` : '';
+    return `    if (!tailClosed && t.kind === ${J(tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.name)}, children: [left, leaf], offset: left.offset, end: leaf.end }; continue; }${tplPart}`;
   };
+  const POST = `{ ${r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ')} }`;
   return `const ${r.name}_BIN: Record<string, { lbp: number; rbp: number }> = ${BIN};
 const ${r.name}_PRE: Record<string, number> = ${PRE};
+const ${r.name}_POST: Record<string, number> = ${POST};
 const ${r.name}_ATOM = ${atom};
 function parse${r.name}(): Node | null { return ${r.name}_bp(0); }
 function ${r.name}_bp(minBp: number): Node | null {
   let left = ${r.name}_nud();
   if (left === null) return null;
+  let tailClosed = false;
   for (;;) {
     const t = peek();
     if (t === null) break;
-${r.leds.map(ledArm).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
+    const post = ${r.name}_POST[t.text];
+    if (!tailClosed && post !== undefined && post > minBp) { pos++; const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; left = { rule: ${J(r.name)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; continue; }
     const info = ${r.name}_BIN[t.text];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;

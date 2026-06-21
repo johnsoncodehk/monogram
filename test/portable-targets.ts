@@ -110,6 +110,17 @@ const CASES: Case[] = [
     ],
     reject: ['if;', 'class;', 'new;', 'return + 1;'],   // reserved words can't be bare identifiers
   },
+  {
+    // Postfix-operator LED (`x++`/`x--`) + the access-tail closure: once a postfix binds, the
+    // operand is an update expression, so a further postfix or an access tail (`.`/`[`/`(`)
+    // can't attach (`a++--`, `a++.b` are ill-formed; `(a++).b` is fine).
+    grammar: 'postjs', path: '../examples/postjs.ts',
+    accept: [
+      'x++;', 'x--;', 'a + b++;', '++x;', 'x++ + y;', 'a.b++;', '(x)++;', '--a.b;',
+      'x++ * 2;', '(a++).b;', 'x.y.z++;',
+    ],
+    reject: ['a++--;', 'a++.b;', 'a++ ++;', '++;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>

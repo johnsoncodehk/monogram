@@ -65,7 +65,9 @@ export type PrattRule = {
   prefix: Array<{ op: string; rbp: number }>;         // NUD: prefix op then operand at rbp
   binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
-  postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led
+  ledAccessTail: boolean[];                           // parallel to leds: a "closed punct-connector" tail (member/call/index) — disabled once a postfix binds
+  postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
+  postfix: Array<{ op: string; lbp: number }>;        // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
 };
 export type RuleIR = RdRule | PrattRule;
 
@@ -253,8 +255,9 @@ function buildPratt(
   const nudToks: string[] = [];
   const nudBrackets: Bracket[] = [];
   const nudSeqs: Step[][] = [];
-  let sawPrefix = false, sawBinary = false;
+  let sawPrefix = false, sawBinary = false, sawPostfix = false;
   const leds: Bracket[] = [];
+  const ledAccessTail: boolean[] = [];
   const postfixToks: string[] = [];
   for (const alt of alts) {
     const items = alt.type === 'seq' ? alt.items : [alt];
@@ -279,7 +282,16 @@ function buildPratt(
     // LED (starts with self): `$ op $` (binary, op slot + trailing self) or `$ <lit> …` (mixfix)
     const rest = items.slice(1);
     if (rest[0].type === 'op') { sawBinary = true; continue; }
-    if (rest[0].type === 'literal') { leds.push({ first: rest[0].value, steps: rest.map((it) => stepOfPratt(it)) }); continue; }
+    if (rest[0].type === 'postfix') { sawPostfix = true; continue; }   // postfix operator (`x++`)
+    if (rest[0].type === 'literal') {
+      const steps = rest.map((it) => stepOfPratt(it));
+      const last = steps[steps.length - 1];
+      const lastIsOperand = last !== undefined && last.t === 'rule' && last.name === name;   // open binary/ternary operand
+      const wordConnector = /^[A-Za-z]/.test(rest[0].value);                                  // `in`/`instanceof`/`as` — not a tail
+      leds.push({ first: rest[0].value, steps });
+      ledAccessTail.push(!lastIsOperand && !wordConnector);
+      continue;
+    }
     if (rest.length === 1 && rest[0].type === 'ref' && a.tokenNames.has(rest[0].name)) { postfixToks.push(rest[0].name); continue; }  // postfix token (tagged template)
     throw new Error(`portable: Pratt LED shape not in scope (rule ${name})`);
   }
@@ -298,5 +310,8 @@ function buildPratt(
   const binary = sawBinary
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp }))
     : [];
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, prefix, binary, leds, postfixToks };
+  const postfix = sawPostfix
+    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp }))
+    : [];
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, prefix, binary, leds, ledAccessTail, postfixToks, postfix };
 }

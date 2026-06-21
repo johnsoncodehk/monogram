@@ -202,7 +202,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.name)}, sb, t.Off) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1
 \t}`;
-  const ledArm = (b: Bracket) => `\t\tif t.Text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}t.Text == ${J(b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
 \t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
@@ -210,27 +210,34 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\t}`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-\t\tif t.Kind == "$templateHead" {
+\t\tif !tailClosed && t.Kind == "$templateHead" {
 \t\t\tnode := matchTemplate()
 \t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
 \t\t}` : '';
-    return `\t\tif t.Kind == ${J(tok)} {
+    return `\t\tif !tailClosed && t.Kind == ${J(tok)} {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf(t.Kind, t.Off, t.End)); pos++
 \t\t\tleft = finish(${J(r.name)}, sb, nodes[left].Offset); continue
 \t\t}${tplPart}`;
   };
+  const post = r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ');
   return `var ${r.name}BIN = map[string]bp{${bin}}
 var ${r.name}PRE = map[string]int{${pre}}
+var ${r.name}POST = map[string]int{${post}}
 var ${r.name}ATOM = map[string]bool{${atoms}}
 func parse${r.name}() int32 { return ${r.name}bp(0) }
 func ${r.name}bp(minBp int) int32 {
 \tleft := ${r.name}nud()
 \tif left < 0 { return -1 }
+\ttailClosed := false
 \tfor {
 \t\tt := peek()
 \t\tif t == nil { break }
-${r.leds.map(ledArm).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
+\t\tif post, ok := ${r.name}POST[t.Text]; ok && !tailClosed && post > minBp {
+\t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End)); pos++; tailClosed = true
+\t\t\tleft = finish(${J(r.name)}, sb, nodes[left].Offset); continue
+\t\t}
 \t\tinfo, ok := ${r.name}BIN[t.Text]
 \t\tif !ok || info.lbp <= minBp { break }
 \t\tledSave := pos; sb := len(scratch)

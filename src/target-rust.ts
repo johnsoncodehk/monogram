@@ -230,7 +230,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             if ${b.steps.map(stepCond).join(' && ')} { return Some(node(${J(r.name)}, kids)); }
             self.pos = save; return None;
         }`;
-  const ledArm = (b: Bracket) => `            if t.text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean) => `            if ${accessTail ? '!tail_closed && ' : ''}t.text == ${J(b.first)} {
                 let led_save = self.pos; let mut kids: Vec<Cst> = Vec::new();
                 if ${b.steps.map(stepCond).join(' && ')} {
                     let mut full = vec![left]; full.append(&mut kids);
@@ -240,19 +240,23 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             }`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-            if t.kind == "$templateHead" { if let Some(n) = self.match_template() { left = node(${J(r.name)}, vec![left, n]); continue; } }` : '';
-    return `            if t.kind == ${J(tok)} { self.pos += 1; let leaf = Cst::leaf(t.kind, t.off, t.end); left = node(${J(r.name)}, vec![left, leaf]); continue; }${tplPart}`;
+            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { left = node(${J(r.name)}, vec![left, n]); continue; } }` : '';
+    return `            if !tail_closed && t.kind == ${J(tok)} { self.pos += 1; let leaf = Cst::leaf(t.kind, t.off, t.end); left = node(${J(r.name)}, vec![left, leaf]); continue; }${tplPart}`;
   };
+  const postArms = r.postfix.map((p) => `${J(p.op)} => Some(${p.lbp})`).join(', ');
   return `    fn parse_${r.name}(&mut self) -> Option<Cst> { self.${r.name}_bp(0) }
     fn ${r.name}_bin(op: &str) -> Option<(i64, i64)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
     fn ${r.name}_pre(op: &str) -> Option<i64> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_post(op: &str) -> Option<i64> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
     fn ${r.name}_atom(kind: &str) -> bool { matches!(kind, ${atomArm || '""'}) }
     fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Cst> {
         let mut left = self.${r.name}_nud()?;
+        let mut tail_closed = false;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };
-${r.leds.map(ledArm).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
+            if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { self.pos += 1; let op_leaf = Cst::leaf("$operator", t.off, t.end); left = node(${J(r.name)}, vec![left, op_leaf]); tail_closed = true; continue; } }
             let (lbp, rbp) = match Parser::${r.name}_bin(t.text) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
             let led_save = self.pos;
