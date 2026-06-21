@@ -375,8 +375,7 @@ typescript.ts                one grammar (TypeScript combinator API)
         ├─ src/gen-tm.ts ───────────▶ typescript.tmLanguage.json            (TextMate highlighter)
         ├─ src/gen-vscode-config.ts ▶ typescript.language-configuration.json (editor behavior)
         ├─ src/gen-treesitter.ts ───▶ tree-sitter/  (grammar.js + highlights.scm + scanner.c)
-        ├─ src/gen-monarch.ts ──────▶ typescript.monarch.json
-        └─ src/gen-ast-types.ts ────▶ typescript.cst-types.ts
+        └─ src/gen-monarch.ts ──────▶ typescript.monarch.json
 
 shared  src/grammar-utils.ts          structural helpers used across stages
         src/api.ts, types.ts          the grammar's combinator + type surface

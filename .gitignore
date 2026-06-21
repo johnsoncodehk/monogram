@@ -18,7 +18,6 @@ tree-sitter/*/src/node-types.json
 tree-sitter/*/src/tree_sitter/
 tree-sitter/*/*.wasm
 
-# Generated CST consumer artifacts (npm run gen) — derived from the grammar, not
+# Generated CST consumer artifact (npm run gen) — derived from the grammar, not
 # committed: generate locally / in CI before typecheck and gates.
-*.cst-types.ts
 *.cst-match.ts

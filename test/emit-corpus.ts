@@ -136,11 +136,11 @@ export const CURATED_TS_INVALID: string[] = [
 ];
 
 // ── 2) The repo's own hand-written .ts sources ──────────────────────────────────────────
-// Excludes generated artifacts (*.cst-match.ts / *.cst-types.ts) and caps file size so the
-// gate stays fast (the byte-identical CST compare is O(tree size); a 250 KB cap keeps the
-// rich, deeply-nested sources like emit-parser.ts while dropping the multi-hundred-KB ones).
+// Excludes generated artifacts (*.cst-match.ts) and caps file size so the gate stays fast
+// (the byte-identical CST compare is O(tree size); a 250 KB cap keeps the rich, deeply-
+// nested sources like emit-parser.ts while dropping the multi-hundred-KB ones).
 const SIZE_CAP = 250 * 1024;
-const isGenerated = (f: string) => f.endsWith('.cst-match.ts') || f.endsWith('.cst-types.ts') || f.endsWith('.d.ts');
+const isGenerated = (f: string) => f.endsWith('.cst-match.ts') || f.endsWith('.d.ts');
 
 export function repoTsFiles(): string[] {
   const out: string[] = [];
