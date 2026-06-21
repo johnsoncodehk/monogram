@@ -1,21 +1,43 @@
 // The TypeScript Target for emit-portable. Renders the language-agnostic ParserIR into a
-// self-contained TS parser: a char-class lexer, a backtracking recursive-descent core, a
-// Pratt expression engine, and a CST→JSON printer over stdin. It is the reference rendering
-// — its CST is checked byte-for-byte against the interpreter (createParser), so a divergence
-// in the portable logic shows up here before Go/Rust are even compiled.
-import type { ParserIR, RdRule, PrattRule, Step, CharRange, Target } from './emit-portable.ts';
+// self-contained TS parser: a char-class/string/comment lexer, a backtracking recursive-
+// descent core, a Pratt expression engine (prefix + binary precedence + mixfix call/member/
+// index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
+// is checked byte-for-byte against the interpreter (createParser), so a divergence in the
+// portable logic surfaces here before Go/Rust are compiled.
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target } from './emit-portable.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
-  rs.map(([lo, hi]) => (lo === hi ? `${v} === ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ');
+  '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} === ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
+
+function scanTok(t: LexTok): string {
+  const push = t.skip ? '' : `toks.push({ kind: ${J((t as { name: string }).name)}, text: src.slice(pos, e), off: pos, end: e }); `;
+  if (t.kind === 'run') return `    if (${rangeCond('c', t.first)}) {
+      let e = pos + 1;
+      while (e < n) { const cc = src.charCodeAt(e); if (!${rangeCond('cc', t.cont)}) break; e++; }
+      ${push}pos = e; continue;
+    }`;
+  if (t.kind === 'string') return `    if (c === ${t.delim.charCodeAt(0)}) {
+      let e = pos + 1;
+      while (e < n) { const ch = src.charCodeAt(e); if (ch === 92) { e += 2; continue; } if (ch === ${t.delim.charCodeAt(0)}) { e++; break; } e++; }
+      ${push}pos = e; continue;
+    }`;
+  if (t.kind === 'line') return `    if (src.startsWith(${J(t.prefix)}, pos)) {
+      let e = pos + ${t.prefix.length};
+      while (e < n && src.charCodeAt(e) !== 10) e++;
+      ${push}pos = e; continue;
+    }`;
+  return `    if (src.startsWith(${J(t.open)}, pos)) {
+      let e = pos + ${t.open.length};
+      while (e < n && !src.startsWith(${J(t.close)}, e)) e++;
+      if (e < n) e += ${t.close.length};
+      ${push}pos = e; continue;
+    }`;
+}
 
 function lexer(ir: ParserIR): string {
-  const cases = ir.tokens.map((t) => `    if (${rangeCond('c', t.first)}) {
-      let e = pos + 1;
-      while (e < n) { const cc = src.charCodeAt(e); if (!(${rangeCond('cc', t.cont)})) break; e++; }
-      toks.push({ kind: ${J(t.name)}, text: src.slice(pos, e), off: pos, end: e }); pos = e; continue;
-    }`).join('\n');
-  const punctChecks = ir.puncts.map((p) =>
+  const toks = ir.tokens.map(scanTok).join('\n');
+  const puncts = ir.puncts.map((p) =>
     `    if (src.startsWith(${J(p)}, pos)) { toks.push({ kind: '', text: ${J(p)}, off: pos, end: pos + ${p.length} }); pos += ${p.length}; continue; }`).join('\n');
   return `function lex(src: string): Tok[] {
   const toks: Tok[] = [];
@@ -24,42 +46,54 @@ function lexer(ir: ParserIR): string {
   while (pos < n) {
     const c = src.charCodeAt(pos);
     if (c === 32 || c === 9 || c === 10 || c === 13) { pos++; continue; }
-${cases}
-${punctChecks}
+${toks}
+${puncts}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));
   }
   return toks;
 }`;
 }
 
-function rdRule(r: RdRule): string {
-  const alt = (steps: Step[]) => {
-    const conds = steps.map(stepCond).join(' && ');
-    return `  { const kids: Cst[] = []; if (${conds}) return branch(${J(r.name)}, kids, save); pos = save; }`;
-  };
-  return `function parse${r.name}(): Node | null {
-  const save = pos;
-${r.alts.map(alt).join('\n')}
-  return null;
-}`;
-}
+// A Step as a boolean expression (appends to the in-scope `kids`).
 function stepCond(s: Step): string {
   switch (s.t) {
     case 'lit': return `matchLit(${J(s.value)}, ${J(s.ttype)}, kids)`;
     case 'tok': return `matchTok(${J(s.name)}, kids)`;
     case 'rule': return `callRule(parse${s.name}, kids)`;
     case 'star': return `star(() => ${stepCond(s.step)}, kids)`;
+    case 'opt': return `opt(() => ${s.steps.map(stepCond).join(' && ')}, kids)`;
+    case 'sep': return `sepBy(() => ${stepCond(s.elem)}, ${J(s.delim)}, kids)`;
+    case 'altlit': return `altLit([${s.opts.map((o) => `[${J(o.value)}, ${J(o.ttype)}]`).join(', ')}], kids)`;
   }
+}
+
+function rdRule(r: RdRule): string {
+  const alt = (steps: Step[]) =>
+    `  { const kids: Cst[] = []; if (${steps.map(stepCond).join(' && ')}) return branch(${J(r.name)}, kids, save); pos = save; }`;
+  return `function parse${r.name}(): Node | null {
+  const save = pos;
+${r.alts.map(alt).join('\n')}
+  return null;
+}`;
 }
 
 function prattRule(r: PrattRule): string {
   const BIN = `{ ${r.binary.map((b) => `${J(b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${J(p.op)}: ${p.rbp}`).join(', ')} }`;
-  const atomSet = `new Set([${r.atomToks.map(J).join(', ')}])`;
-  const group = r.group;
+  const atom = `new Set([${r.nudToks.map(J).join(', ')}])`;
+  const bracketNud = (b: Bracket) => `    if (t.text === ${J(b.first)}) {
+      const save = pos; const kids: Cst[] = [];
+      if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.name)}, kids);
+      pos = save; return null;
+    }`;
+  const ledArm = (b: Bracket) => `    if (t.text === ${J(b.first)}) {
+      const ledSave = pos; const kids: Cst[] = [left];
+      if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.name)}, kids); continue; }
+      pos = ledSave; break;
+    }`;
   return `const ${r.name}_BIN: Record<string, { lbp: number; rbp: number }> = ${BIN};
 const ${r.name}_PRE: Record<string, number> = ${PRE};
-const ${r.name}_ATOM = ${atomSet};
+const ${r.name}_ATOM = ${atom};
 function parse${r.name}(): Node | null { return ${r.name}_bp(0); }
 function ${r.name}_bp(minBp: number): Node | null {
   let left = ${r.name}_nud();
@@ -67,6 +101,7 @@ function ${r.name}_bp(minBp: number): Node | null {
   for (;;) {
     const t = peek();
     if (t === null) break;
+${r.leds.map(ledArm).join('\n')}
     const info = ${r.name}_BIN[t.text];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
@@ -82,14 +117,7 @@ function ${r.name}_nud(): Node | null {
   const t = peek();
   if (t === null) return null;
   if (${r.name}_ATOM.has(t.kind)) { pos++; return { rule: ${J(r.name)}, children: [{ tokenType: t.kind, offset: t.off, end: t.end }], offset: t.off, end: t.end }; }
-${group ? `  if (t.text === ${J(group.open)}) {
-    const save = pos; pos++;
-    const inner = ${r.name}_bp(0);
-    const c = peek();
-    if (inner === null || c === null || c.text !== ${J(group.close)}) { pos = save; return null; }
-    pos++;
-    return { rule: ${J(r.name)}, children: [{ tokenType: '$punct', offset: t.off, end: t.end }, inner, { tokenType: '$punct', offset: c.off, end: c.end }], offset: t.off, end: c.end };
-  }` : ''}
+${r.nudBrackets.map(bracketNud).join('\n')}
   const pbp = ${r.name}_PRE[t.text];
   if (pbp !== undefined) {
     const save = pos; pos++;
@@ -120,11 +148,13 @@ ${lexer(ir)}
 let toks: Tok[] = [];
 let pos = 0;
 function peek(): Tok | null { return pos < toks.length ? toks[pos] : null; }
-function curOff(): number { return pos < toks.length ? toks[pos].off : (toks.length > 0 ? toks[toks.length - 1].end : 0); }
 function branch(rule: string, kids: Cst[], save: number): Node {
-  const offset = kids.length > 0 ? kids[0].offset : (save < toks.length ? toks[save].off : curOff());
+  const offset = kids.length > 0 ? kids[0].offset : (save < toks.length ? toks[save].off : 0);
   const end = kids.length > 0 ? kids[kids.length - 1].end : offset;
   return { rule, children: kids, offset, end };
+}
+function node(rule: string, kids: Cst[]): Node {
+  return { rule, children: kids, offset: kids[0].offset, end: kids[kids.length - 1].end };
 }
 function matchLit(value: string, ttype: string, kids: Cst[]): boolean {
   const t = peek();
@@ -145,10 +175,21 @@ function star(once: () => boolean, kids: Cst[]): boolean {
   for (;;) { const sp = pos; const before = kids.length; if (!once()) { pos = sp; kids.length = before; break; } }
   return true;
 }
+function opt(body: () => boolean, kids: Cst[]): boolean {
+  const sp = pos; const before = kids.length; if (!body()) { pos = sp; kids.length = before; } return true;
+}
+function sepBy(elem: () => boolean, delim: string, kids: Cst[]): boolean {
+  if (!elem()) return false;
+  for (;;) { const sp = pos; const before = kids.length; if (matchLit(delim, '$punct', kids) && elem()) continue; pos = sp; kids.length = before; break; }
+  return true;
+}
+function altLit(opts: [string, string][], kids: Cst[]): boolean {
+  for (const [v, tt] of opts) if (matchLit(v, tt, kids)) return true;
+  return false;
+}
 
 ${ruleFns}
 
-function offsetEnd(n: Cst): number { return n.end; }
 const src = readFileSync(0, 'utf8');
 toks = lex(src);
 pos = 0;

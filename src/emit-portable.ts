@@ -5,52 +5,67 @@
 // TS engine uses. It is the agnosticism proof: ONE analysis → ONE intermediate form (IR)
 // → N language renderings, all producing the byte-identical CST the interpreter does.
 //
-// SHARED + target-agnostic (here): the grammar ANALYSIS (reused from grammar-analysis.ts)
-// and `buildIR` — the parse plan as plain data (recursive-descent rules as alternative
-// step-lists, the Pratt rule as NUD-atom / prefix / binary tables, the char-class lexer
-// specs, the literal vocabulary, the entry rule). PER-TARGET (a Target): `render(ir)` —
-// the language's lexer + CST runtime + the rendering of each IR node. Adding a language is
-// implementing one Target; nothing here changes.
+// SHARED + target-agnostic (here): the grammar ANALYSIS (reused from grammar-analysis.ts),
+// the LEXER specs (derived from token-pattern.ts's structural recognizers — char runs,
+// quote-delimited strings, line/block comments — so NO regex engine is needed and the
+// emitted Go/Rust compile offline), and `buildIR` — the parse plan as plain data
+// (recursive-descent rules as alternative step-lists; the Pratt rule as NUD atoms/brackets/
+// prefix + binary tables + mixfix LEDs). PER-TARGET (a Target): `render(ir)` — the
+// language's lexer + CST runtime + the rendering of each IR node. Adding a language is
+// implementing one Target.
 //
-// SCOPE (the verifiable core): char-class tokens (`charClass` then `star(charClass)`), a
-// recursive-descent + backtracking-alternation + `*` body, and a Pratt expression engine
-// with operator PRECEDENCE/associativity + prefix unary + parenthesised grouping. The
-// portable lexer is a dependency-free char scanner (no regex), so the emitted Go/Rust
-// compile offline. Richer surface (mixfix/postfix LEDs, `sep`/`opt`, lexer lookahead,
-// left-recursion beyond Pratt) is the documented next increment; buildIR THROWS on a
-// construct it does not model rather than emit a wrong parser.
-import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+// SCOPE: char-run / quote-string / line+block-comment tokens; recursive descent with
+// backtracking alternation, `*`/`?` quantifiers, `sep`, and inline literal-alternation;
+// and a Pratt expression engine with operator precedence/associativity, prefix unary,
+// bracket NUDs (grouping, array), and mixfix LEDs (call / member / index) tried before
+// operators. buildIR THROWS on a construct outside this set rather than emit a wrong
+// parser. This is enough to derive a real JavaScript-subset parser (examples/minijs.ts).
+import type { CstGrammar, RuleExpr, TokenDecl } from './types.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import {
+  tokenPatternCharLoop, tokenPatternQuoteDelimAndEscape,
+  tokenPatternBlockDelimiters, tokenPatternLiteralPrefix,
+} from './token-pattern.ts';
 
 // ── Intermediate representation (plain data; every Target renders THIS) ──
 
 export type CharRange = [number, number];   // inclusive char-code range
-export type TokenSpec = { name: string; first: CharRange[]; cont: CharRange[] };
+export type LexTok =
+  | { kind: 'run'; name: string; first: CharRange[]; cont: CharRange[]; skip: boolean }   // ident/number char run
+  | { kind: 'string'; name: string; delim: string; skip: boolean }                        // delim..delim, `\` escapes next
+  | { kind: 'line'; name: string; prefix: string; skip: boolean }                         // prefix..end-of-line
+  | { kind: 'block'; name: string; open: string; close: string; skip: boolean };          // open..close
 
+export type Lit = { value: string; ttype: '$keyword' | '$punct' };
 export type Step =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
   | { t: 'tok'; name: string }                                  // match a token kind
   | { t: 'rule'; name: string }                                 // call a rule, append its node
-  | { t: 'star'; step: Step };                                  // repeat the inner step 0+ times
+  | { t: 'star'; step: Step }                                   // repeat inner 0+
+  | { t: 'opt'; steps: Step[] }                                 // optional sub-sequence
+  | { t: 'sep'; elem: Step; delim: string }                     // elem (delim elem)*
+  | { t: 'altlit'; opts: Lit[] };                               // inline alternation of literals
 export type Alt = Step[];
 
 export type RdRule = { kind: 'rd'; name: string; alts: Alt[] };
+export type Bracket = { first: string; steps: Step[] };          // a literal-led sequence (grouping/array; LED call/index)
 export type PrattRule = {
   kind: 'pratt';
   name: string;
-  atomToks: string[];                                  // NUD: a bare token (Number/Ident) wrapped in a node
-  group: { open: string; close: string } | null;      // NUD: '(' Expr ')'
-  prefix: Array<{ op: string; rbp: number }>;          // NUD: prefix op then operand parsed at rbp
+  nudToks: string[];                                  // NUD: a bare token wrapped in a node
+  nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
+  prefix: Array<{ op: string; rbp: number }>;         // NUD: prefix op then operand at rbp
   binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
+  leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
 };
 export type RuleIR = RdRule | PrattRule;
 
 export type ParserIR = {
   grammarName: string;
   entry: string;
-  tokens: TokenSpec[];   // named tokens, for the char scanner (tried in declaration order)
-  puncts: string[];      // punctuation literals, sorted longest-first (maximal munch)
+  tokens: LexTok[];      // for the char scanner, tried in declaration order
+  puncts: string[];      // punctuation literals, longest-first (maximal munch)
   rules: RuleIR[];
 };
 
@@ -70,15 +85,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const a = analyzeGrammar(grammar);
   const tokenNames = a.tokenNames;
 
-  // Lexer token specs: each token must be `charClass` then `star(charClass)` (the portable
-  // scanner's shape). Anything else is out of the verifiable core → throw, don't mis-lex.
-  const tokens: TokenSpec[] = grammar.tokens.map((t) => {
-    const { first, cont } = charClassFirstCont(t);
-    return { name: t.name, first, cont };
-  });
-
-  // Literal vocabulary, split keyword (alpha — lexed as an identifier, matched by text) vs
-  // punctuation (lexed as its own token). Puncts longest-first for maximal munch.
+  const tokens: LexTok[] = grammar.tokens.map((t) => lexTok(t));
   const lits = new Set<string>();
   for (const r of grammar.rules) for (const l of collectLiterals(r.body)) lits.add(l);
   for (const lv of grammar.precs) for (const o of lv.operators) lits.add(o.value);
@@ -86,88 +93,110 @@ function buildIR(grammar: CstGrammar): ParserIR {
 
   const litTtype = (v: string): '$keyword' | '$punct' => (isKeywordLiteral(v) ? '$keyword' : '$punct');
 
-  const rules: RuleIR[] = grammar.rules.map((r) => {
-    if (a.prattRules.has(r.name)) return buildPratt(r.name, r.body, a);
-    return { kind: 'rd', name: r.name, alts: buildRdAlts(r.body) };
-  });
-
-  function buildRdAlts(body: RuleExpr): Alt[] {
-    if (body.type === 'alt') return body.items.map(altSteps);
-    return [altSteps(body)];
+  // RuleExpr → Step. `selfName` (when set) maps a self-ref to a fresh rule call.
+  function stepOf(e: RuleExpr): Step {
+    switch (e.type) {
+      case 'literal': return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
+      case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
+      case 'group': { const ss = altSteps(e.body); if (ss.length !== 1) throw new Error('portable: group must reduce to a single step'); return ss[0]; }
+      case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
+      case 'quantifier':
+        if (e.kind === '*') return { t: 'star', step: stepOf(e.body) };
+        if (e.kind === '?') return { t: 'opt', steps: altSteps(e.body) };
+        if (e.kind === '+') throw new Error("portable: '+' not yet modeled (use '*')");
+        break;
+      case 'alt': {
+        const opts: Lit[] = [];
+        for (const it of e.items) {
+          if (it.type !== 'literal') throw new Error('portable: inline alt must be all literals');
+          opts.push({ value: it.value, ttype: litTtype(it.value) });
+        }
+        return { t: 'altlit', opts };
+      }
+    }
+    throw new Error(`portable: rd construct '${e.type}' not in scope`);
   }
   function altSteps(e: RuleExpr): Step[] {
-    if (e.type === 'seq') return e.items.flatMap(stepOf);
-    return stepOf(e);
+    if (e.type === 'seq') return e.items.map(stepOf);
+    return [stepOf(e)];
   }
-  function stepOf(e: RuleExpr): Step[] {
-    switch (e.type) {
-      case 'literal': return [{ t: 'lit', value: e.value, ttype: litTtype(e.value) }];
-      case 'ref': return [tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name }];
-      case 'quantifier': {
-        if (e.kind !== '*') throw new Error(`portable: quantifier '${e.kind}' not in the verifiable core (only '*')`);
-        const inner = stepOf(e.body);
-        if (inner.length !== 1) throw new Error('portable: `*` body must be a single step (a rule/token ref)');
-        return [{ t: 'star', step: inner[0] }];
-      }
-      case 'group': return altSteps(e.body);
-      default: throw new Error(`portable: rd construct '${e.type}' not in the verifiable core`);
-    }
-  }
+
+  const rules: RuleIR[] = grammar.rules.map((r) => {
+    if (a.prattRules.has(r.name)) return buildPratt(r.name, r.body, a, stepOf, altSteps, litTtype);
+    return { kind: 'rd', name: r.name, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)] };
+  });
 
   return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, rules };
 }
 
-// A Pratt rule's alternatives, classified into NUD atoms / grouping / prefix and LED binary.
-// The binding powers come from the analysis (opTable/prefixOps), so precedence is single-
-// sourced with the interpreter.
-function buildPratt(name: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>): PrattRule {
-  const alts = body.type === 'alt' ? body.items : [body];
-  const atomToks: string[] = [];
-  let group: { open: string; close: string } | null = null;
-  let sawPrefix = false;
-  let sawBinary = false;
-  for (const alt of alts) {
-    const items = alt.type === 'seq' ? alt.items : [alt];
-    if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) {
-      atomToks.push(items[0].name);                                  // [Token]
-    } else if (items.length === 3 && items[0].type === 'literal' && items[2].type === 'literal'
-               && items[1].type === 'ref' && items[1].name === name) {
-      group = { open: items[0].value, close: items[2].value };       // [ '(' $ ')' ]
-    } else if (items.length === 2 && items[0].type === 'prefix' && items[1].type === 'ref' && items[1].name === name) {
-      sawPrefix = true;                                              // [ prefix $ ]
-    } else if (items.length === 3 && items[0].type === 'ref' && items[0].name === name
-               && items[1].type === 'op' && items[2].type === 'ref' && items[2].name === name) {
-      sawBinary = true;                                              // [ $ op $ ]
-    } else {
-      throw new Error(`portable: Pratt alt shape not in the verifiable core (rule ${name})`);
-    }
+// Classify a token into a portable scanner spec via the structural recognizers.
+function lexTok(t: TokenDecl): LexTok {
+  const skip = t.flags.includes('skip');
+  const qs = tokenPatternQuoteDelimAndEscape(t);
+  if (qs) return { kind: 'string', name: t.name, delim: qs.delim, skip };
+  const bd = tokenPatternBlockDelimiters(t);
+  if (bd) return { kind: 'block', name: t.name, open: bd[0], close: bd[1], skip };
+  const loop = tokenPatternCharLoop(t);
+  if (loop) {
+    if (loop.bail.length > 0 || loop.bailNonAscii) throw new Error(`portable: token ${t.name} has a complex continuation (bail) — out of scope`);
+    return { kind: 'run', name: t.name, first: codesToRanges(loop.first), cont: codesToRanges(loop.cont), skip };
   }
-  const prefix = sawPrefix
-    ? [...a.prefixOps.entries()].map(([op, info]) => ({ op, rbp: info.rbp }))
-    : [];
-  const binary = sawBinary
-    ? [...a.opTable.entries()]
-        .filter(([, info]) => info.position === 'infix')
-        .map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp }))
-    : [];
-  return { kind: 'pratt', name, atomToks, group, prefix, binary };
+  const prefix = tokenPatternLiteralPrefix(t);
+  if (prefix) return { kind: 'line', name: t.name, prefix, skip };   // prefix with no distinct suffix → to end-of-line
+  throw new Error(`portable: token ${t.name} shape not recognized by the portable lexer`);
 }
 
-// Extract a token's (first-char, continue-char) code ranges from a `charClass` then
-// `star(charClass)` pattern. Throws for any other shape (out of the verifiable core).
-function charClassFirstCont(t: TokenDecl): { first: CharRange[]; cont: CharRange[] } {
-  const p = t.pattern;
-  if (typeof p === 'string' || p.type !== 'seq' || p.items.length !== 2) throw new Error(`portable: token ${t.name} not [charClass, star(charClass)]`);
-  const head = p.items[0];
-  const tail = p.items[1];
-  if (typeof tail === 'string' || tail.type !== 'repeat' || tail.min !== 0) throw new Error(`portable: token ${t.name} tail is not star(charClass)`);
-  return { first: classRanges(head, t.name), cont: classRanges(tail.body, t.name) };
+function codesToRanges(codes: number[]): CharRange[] {
+  const s = [...new Set(codes)].sort((x, y) => x - y);
+  const out: CharRange[] = [];
+  for (const c of s) {
+    const last = out[out.length - 1];
+    if (last && c === last[1] + 1) last[1] = c;
+    else out.push([c, c]);
+  }
+  return out;
 }
-function classRanges(p: TokenPattern, tok: string): CharRange[] {
-  if (typeof p === 'string' || p.type !== 'charClass' || p.negate) throw new Error(`portable: token ${tok} uses a non-positive char class`);
-  return p.items.map((it): CharRange => {
-    if (it.type === 'char') return [it.value.charCodeAt(0), it.value.charCodeAt(0)];
-    if (it.type === 'range') return [it.from.charCodeAt(0), it.to.charCodeAt(0)];
-    throw new Error(`portable: token ${tok} char-class item '${(it as { type: string }).type}' unsupported`);
-  });
+
+// A Pratt rule's alternatives → NUD atoms/brackets/prefix + binary + mixfix LEDs.
+// Binding powers come from the analysis (opTable/prefixOps), single-sourced with the interpreter.
+function buildPratt(
+  name: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
+  stepOf: (e: RuleExpr) => Step, altSteps: (e: RuleExpr) => Step[],
+  litTtype: (v: string) => '$keyword' | '$punct',
+): PrattRule {
+  const alts = body.type === 'alt' ? body.items : [body];
+  const nudToks: string[] = [];
+  const nudBrackets: Bracket[] = [];
+  let sawPrefix = false, sawBinary = false;
+  const leds: Bracket[] = [];
+  for (const alt of alts) {
+    const items = alt.type === 'seq' ? alt.items : [alt];
+    const startsSelf = items[0].type === 'ref' && items[0].name === name;
+    if (!startsSelf) {
+      // NUD
+      if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) { nudToks.push(items[0].name); continue; }
+      if (items[0].type === 'prefix') { sawPrefix = true; continue; }
+      if (items[0].type === 'literal') { nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); continue; }
+      throw new Error(`portable: Pratt NUD shape not in scope (rule ${name})`);
+    }
+    // LED (starts with self): `$ op $` (binary, op slot + trailing self) or `$ <lit> …` (mixfix)
+    const rest = items.slice(1);
+    if (rest[0].type === 'op') { sawBinary = true; continue; }
+    if (rest[0].type === 'literal') { leds.push({ first: rest[0].value, steps: rest.map((it) => stepOfPratt(it)) }); continue; }
+    throw new Error(`portable: Pratt LED shape not in scope (rule ${name})`);
+  }
+  // a self-ref inside a NUD/LED sub-sequence is a fresh parse of this rule
+  function stepOfPratt(e: RuleExpr): Step {
+    if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
+    if (e.type === 'sep') return { t: 'sep', elem: stepOfPratt(e.element), delim: e.delimiter };
+    if (e.type === 'quantifier' && e.kind === '?') return { t: 'opt', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
+    if (e.type === 'quantifier' && e.kind === '*') return { t: 'star', step: stepOfPratt(e.body) };
+    if (e.type === 'literal') return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
+    return stepOf(e);
+  }
+  const prefix = sawPrefix ? [...a.prefixOps.entries()].map(([op, info]) => ({ op, rbp: info.rbp })) : [];
+  const binary = sawBinary
+    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp }))
+    : [];
+  return { kind: 'pratt', name, nudToks, nudBrackets, prefix, binary, leds };
 }
