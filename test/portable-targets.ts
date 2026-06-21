@@ -176,6 +176,25 @@ const CASES: Case[] = [
     ],
     reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;'],
   },
+  {
+    // The REAL javascript.ts grammar (89 rules after the [Await]/[Yield] fork) — the proof
+    // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
+    // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's
+    // UTF-16 offsets for ASCII; non-ASCII offset units differ inherently).
+    grammar: 'javascript', path: '../javascript.ts',
+    accept: [
+      'var x = 1, y = 2;', 'function f(a, b) { return a + b; }', 'const g = (x) => x * 2;',
+      'x => x + 1;', 'a ? b : c;', 'a.b.c();', 'f(g(1, 2), 3);', '[1, 2, 3].map(f);',
+      'for (let i = 0; i < n; i++) x();', 'for (const k in obj) { y(); }', 'while (x) { z(); }',
+      'if (a) b(); else c();', 'class C extends B { m() {} get p() { return 1; } }', 'a++; b--;',
+      'typeof x; void 0;', 'new Foo(1, 2); new.target;', 'a ?? b; a?.b?.c;',
+      'try { f(); } catch (e) { g(); } finally { h(); }', 'switch (x) { case 1: f(); break; default: g(); }',
+      'a instanceof B; a in obj;', '(function () {})(); (() => {})();', 'x = a && b || c;',
+      'do { x(); } while (y);', 'function* gen() { yield* o(); }', 'const { a, b: c, ...r } = o;',
+      'const [p, , q, ...z] = arr;', 'label: for (;;) { break label; }', 'async function h() { await x; }',
+    ],
+    reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>

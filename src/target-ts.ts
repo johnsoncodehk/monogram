@@ -144,8 +144,8 @@ ${emitHooks}
   let pendingNl = false;
 ${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${stateful ? emitFn : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false; };\n'}  while (pos < n) {
     const c = src.charCodeAt(pos);
-    if (c === 32 || c === 9) { pos++; continue; }
-    if (c === 10 || c === 13) { pendingNl = true; pos++; continue; }
+    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
+    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
 ${tplDispatch}${toks}
 ${puncts}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));
@@ -175,7 +175,7 @@ function stepCond(s: Step): string {
 
 function rdRule(r: RdRule): string {
   const alt = (steps: Step[]) =>
-    `  { const kids: Cst[] = []; if (${steps.map(stepCond).join(' && ')}) return branch(${J(r.name)}, kids, save); pos = save; }`;
+    `  { const kids: Cst[] = []; if (${steps.map(stepCond).join(' && ')}) return branch(${J(r.cstName)}, kids, save); pos = save; }`;
   return `function parse${r.name}(): Node | null {
   const save = pos;
 ${r.alts.map(alt).join('\n')}
@@ -185,28 +185,28 @@ ${r.alts.map(alt).join('\n')}
 
 function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
-    ? `  if (t.kind === '$templateHead') { const node = matchTemplate(); return node === null ? null : { rule: ${J(r.name)}, children: [node], offset: node.offset, end: node.end }; }\n`
+    ? `  if (t.kind === '$templateHead') { const node = matchTemplate(); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end }; }\n`
     : '';
   const BIN = `{ ${r.binary.map((b) => `${J(b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${J(p.op)}: ${p.rbp}`).join(', ')} }`;
   const atom = `new Set([${r.nudToks.map(J).join(', ')}])`;
   const bracketNud = (b: Bracket) => `    if (t.text === ${J(b.first)}) {
       const save = pos; const kids: Cst[] = [];
-      if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.name)}, kids);
+      if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.cstName)}, kids);
       pos = save;   // fall through to the next NUD alternative (e.g. another '${b.first}'-led form)
     }`;
   // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
   // a precedence-gated led (ternary/in/instanceof) binds only when its lbp > minBp.
   const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}(_mySup === null || !_mySup.has(${J(b.first)})) && t.text === ${J(b.first)}) {
       const ledSave = pos; const kids: Cst[] = [left];
-      if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.name)}, kids); continue; }
+      if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue; }
       pos = ledSave; break;
     }`;
   // A postfix token (e.g. a tagged template) binds like a mixfix led: `left X` → node(left, X). Also an access tail.
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-    if (!tailClosed && t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.name)}, children: [left, node], offset: left.offset, end: node.end }; continue; } }` : '';
-    return `    if (!tailClosed && t.kind === ${J(tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.name)}, children: [left, leaf], offset: left.offset, end: leaf.end }; continue; }${tplPart}`;
+    if (!tailClosed && t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end }; continue; } }` : '';
+    return `    if (!tailClosed && t.kind === ${J(tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end }; continue; }${tplPart}`;
   };
   const POST = `{ ${r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ')} }`;
   return `const ${r.name}_BIN: Record<string, { lbp: number; rbp: number }> = ${BIN};
@@ -226,7 +226,7 @@ function ${r.name}_bp(minBp: number): Node | null {
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
     const post = ${r.name}_POST[t.text];
-    if (!tailClosed && post !== undefined && post > minBp) { pos++; const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; left = { rule: ${J(r.name)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; continue; }
+    if (!tailClosed && post !== undefined && post > minBp) { pos++; const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; continue; }
     const info = ${r.name}_BIN[t.text];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
@@ -234,7 +234,7 @@ ${r.postfixToks.map(postfixArm).join('\n')}
     const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
     const rhs = ${r.name}_bp(info.rbp);
     if (rhs === null) { pos = ledSave; break; }
-    left = { rule: ${J(r.name)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end };
+    left = { rule: ${J(r.cstName)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end };
   }
   return left;
 }
@@ -242,8 +242,11 @@ function ${r.name}_nud(minBp: number): Node | null {
   _capped = false;
   const t = peek();
   if (t === null) return null;
-${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: Cst[] = []; if (${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'}) { _capped = true; return branch(${J(r.name)}, kids, save); } pos = save; }`).join('\n')}
-${tplNud}  if (${r.name}_ATOM.has(t.kind)) { pos++; return { rule: ${J(r.name)}, children: [{ tokenType: t.kind, offset: t.off, end: t.end }], offset: t.off, end: t.end }; }
+${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: Cst[] = []; if (${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'}) { _capped = true; return branch(${J(r.cstName)}, kids, save); } pos = save; }`).join('\n')}
+  // Below is non-capped: a sub-parse may leave _capped set (e.g. grouping a capped arrow),
+  // so force it false after — only the capped arms above produce a capped node.
+  const _r = ((): Node | null => {
+${tplNud}  if (${r.name}_ATOM.has(t.kind)) { pos++; return { rule: ${J(r.cstName)}, children: [{ tokenType: t.kind, offset: t.off, end: t.end }], offset: t.off, end: t.end }; }
 ${r.nudBrackets.map(bracketNud).join('\n')}
   const pbp = ${r.name}_PRE[t.text];
   if (pbp !== undefined) {
@@ -251,10 +254,13 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
     const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
     const operand = ${r.name}_bp(pbp);
     if (operand === null) { pos = save; return null; }
-    return { rule: ${J(r.name)}, children: [opLeaf, operand], offset: t.off, end: operand.end };
+    return { rule: ${J(r.cstName)}, children: [opLeaf, operand], offset: t.off, end: operand.end };
   }
-${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${seq.length ? seq.map(stepCond).join(' && ') : 'true'}) return branch(${J(r.name)}, kids, save); pos = save; }`).join('\n')}
+${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${seq.length ? seq.map(stepCond).join(' && ') : 'true'}) return branch(${J(r.cstName)}, kids, save); pos = save; }`).join('\n')}
   return null;
+  })();
+  _capped = false;
+  return _r;
 }`;
 }
 

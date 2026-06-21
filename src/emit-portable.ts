@@ -21,6 +21,7 @@
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (examples/minijs.ts).
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+import { withAwaitYield } from './await-yield-fork.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import {
@@ -58,11 +59,12 @@ export type Step =
   | { t: 'suppress'; connectors: string[]; steps: Step[] };     // parse the body with these LED connectors disabled (no-`in` context)
 export type Alt = Step[];
 
-export type RdRule = { kind: 'rd'; name: string; alts: Alt[] };
+export type RdRule = { kind: 'rd'; name: string; cstName: string; alts: Alt[] };
 export type Bracket = { first: string; steps: Step[] };          // a literal-led sequence (grouping/array; LED call/index)
 export type PrattRule = {
   kind: 'pratt';
-  name: string;
+  name: string;       // the (possibly $A/$Y-forked) rule name — used for the parse fn names
+  cstName: string;    // the CANON name — the CST node label (a fork collapses to its base)
   nudToks: string[];                                  // NUD: a bare token wrapped in a node
   nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
   nudSeqs: Step[][];                                  // NUD: a general sequence (guarded ident, class expr), tried with backtracking
@@ -123,7 +125,10 @@ export interface Target {
 }
 
 export function emitPortableParser(grammar: CstGrammar, target: Target): string {
-  return target.render(buildIR(grammar));
+  // Apply the [Await]/[Yield] context fork exactly as createParser does, so `await`/`yield`
+  // are keywords inside async/generator bodies and identifiers outside — name-forked into
+  // $A/$Y/$AY rule families. Every other consumer (and the portable parser) sees plain rules.
+  return target.render(buildIR(withAwaitYield(grammar)));
 }
 
 // ── buildIR: grammar + analysis → the target-agnostic parse plan ──
@@ -174,8 +179,12 @@ function buildIR(grammar: CstGrammar): ParserIR {
   }
 
   const rules: RuleIR[] = grammar.rules.map((r) => {
-    if (a.prattRules.has(r.name)) return buildPratt(r.name, r.body, a, stepOf, altSteps, litTtype);
-    return { kind: 'rd', name: r.name, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)] };
+    const cstName = (r as { canon?: string }).canon ?? r.name;   // a forked $A/$Y rule labels its CST node with the base name
+    // Pratt rules AND left-recursive non-Pratt rules (e.g. NewTarget, TS Type) both parse as
+    // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
+    // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
+    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, altSteps, litTtype);
+    return { kind: 'rd', name: r.name, cstName, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)] };
   });
 
   // Regex-vs-division context (only if the grammar declares a regex token + config).
@@ -212,7 +221,30 @@ function buildIR(grammar: CstGrammar): ParserIR {
     };
   }
 
-  return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, rules, regexCtx, tpl };
+  // The [Await]/[Yield] fork names rules `Expr$A`/`Expr$Y` — `$` is a valid TS identifier but
+  // NOT a Go/Rust one. Sanitize every rule-IDENTIFIER use (`$`→`_`) for the emitted parse-fn
+  // names; the CST node label (cstName) keeps the canon base name, so the tree is unchanged.
+  const san = (n: string) => n.replace(/\$/g, '_');
+  const sanStep = (s: Step): void => {
+    if (s.t === 'rule' || s.t === 'ruleBp') s.name = san(s.name);
+    else if (s.t === 'star') sanStep(s.step);
+    else if (s.t === 'opt' || s.t === 'not' || s.t === 'seq' || s.t === 'suppress') s.steps.forEach(sanStep);
+    else if (s.t === 'sep') sanStep(s.elem);
+    else if (s.t === 'alt') s.branches.forEach((b) => b.forEach(sanStep));
+  };
+  for (const r of rules) {
+    r.name = san(r.name);
+    if (r.kind === 'rd') r.alts.forEach((alt) => alt.forEach(sanStep));
+    else {
+      r.nudBrackets.forEach((b) => b.steps.forEach(sanStep));
+      r.nudSeqs.forEach((seq) => seq.forEach(sanStep));
+      r.nudCapped.forEach((c) => c.steps.forEach(sanStep));
+      r.leds.forEach((b) => b.steps.forEach(sanStep));
+    }
+  }
+  if (tpl) tpl.interpRule = san(tpl.interpRule);
+
+  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, rules, regexCtx, tpl };
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,
@@ -259,7 +291,7 @@ function codesToRanges(codes: number[]): CharRange[] {
 // A Pratt rule's alternatives → NUD atoms/brackets/prefix + binary + mixfix LEDs.
 // Binding powers come from the analysis (opTable/prefixOps), single-sourced with the interpreter.
 function buildPratt(
-  name: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
+  name: string, cstName: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
   stepOf: (e: RuleExpr) => Step, altSteps: (e: RuleExpr) => Step[],
   litTtype: (v: string) => '$keyword' | '$punct',
 ): PrattRule {
@@ -344,5 +376,5 @@ function buildPratt(
   const postfix = sawPostfix
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp }))
     : [];
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudCapped, prefix, binary, leds, ledAccessTail, ledLbp, postfixToks, postfix };
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudCapped, prefix, binary, leds, ledAccessTail, ledLbp, postfixToks, postfix };
 }

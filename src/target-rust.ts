@@ -219,7 +219,7 @@ function stepCondP(s: Step): string {
 
 function rdRule(r: RdRule): string {
   const alt = (steps: Step[]) =>
-    `        { let mut kids: Vec<Cst> = Vec::new(); if ${steps.map(stepCond).join(' && ')} { return Some(self.branch(${J(r.name)}, kids, save)); } self.pos = save; }`;
+    `        { let mut kids: Vec<Cst> = Vec::new(); if ${steps.map(stepCond).join(' && ')} { return Some(self.branch(${J(r.cstName)}, kids, save)); } self.pos = save; }`;
   return `    fn parse_${r.name}(&mut self) -> Option<Cst> {
         let save = self.pos;
 ${r.alts.map(alt).join('\n')}
@@ -230,7 +230,7 @@ ${r.alts.map(alt).join('\n')}
 function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
     ? `        if t.kind == "$templateHead" {
-            return self.match_template().map(|n| { let (o, e) = (n.offset, n.end); Cst::node(${J(r.name)}, vec![n], o, e) });
+            return self.match_template().map(|n| { let (o, e) = (n.offset, n.end); Cst::node(${J(r.cstName)}, vec![n], o, e) });
         }\n`
     : '';
   const binArms = r.binary.map((b) => `${J(b.op)} => Some((${b.lbp}, ${b.rbp}))`).join(', ');
@@ -238,21 +238,21 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const atomArm = r.nudToks.map(J).join(' | ');
   const bracketNud = (b: Bracket) => `        if t.text == ${J(b.first)} {
             let save = self.pos; let mut kids: Vec<Cst> = Vec::new();
-            if ${b.steps.map(stepCond).join(' && ')} { return Some(node(${J(r.name)}, kids)); }
+            if ${b.steps.map(stepCond).join(' && ')} { return Some(node(${J(r.cstName)}, kids)); }
             self.pos = save;   // fall through to the next NUD alternative
         }`;
   const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}!my_sup.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
                 let led_save = self.pos; let mut kids: Vec<Cst> = Vec::new();
                 if ${b.steps.map(stepCond).join(' && ')} {
                     let mut full = vec![left]; full.append(&mut kids);
-                    left = node(${J(r.name)}, full); continue;
+                    left = node(${J(r.cstName)}, full); continue;
                 }
                 self.pos = led_save; break;
             }`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { left = node(${J(r.name)}, vec![left, n]); continue; } }` : '';
-    return `            if !tail_closed && t.kind == ${J(tok)} { self.pos += 1; let leaf = Cst::leaf(t.kind, t.off, t.end); left = node(${J(r.name)}, vec![left, leaf]); continue; }${tplPart}`;
+            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { left = node(${J(r.cstName)}, vec![left, n]); continue; } }` : '';
+    return `            if !tail_closed && t.kind == ${J(tok)} { self.pos += 1; let leaf = Cst::leaf(t.kind, t.off, t.end); left = node(${J(r.cstName)}, vec![left, leaf]); continue; }${tplPart}`;
   };
   const postArms = r.postfix.map((p) => `${J(p.op)} => Some(${p.lbp})`).join(', ');
   return `    fn parse_${r.name}(&mut self) -> Option<Cst> { self.${r.name}_bp(0) }
@@ -270,35 +270,41 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             let t = match self.peek() { Some(t) => t, None => break };
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
-            if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { self.pos += 1; let op_leaf = Cst::leaf("$operator", t.off, t.end); left = node(${J(r.name)}, vec![left, op_leaf]); tail_closed = true; continue; } }
+            if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { self.pos += 1; let op_leaf = Cst::leaf("$operator", t.off, t.end); left = node(${J(r.cstName)}, vec![left, op_leaf]); tail_closed = true; continue; } }
             let (lbp, rbp) = match Parser::${r.name}_bin(t.text) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
             let led_save = self.pos;
             self.pos += 1;
             let op_leaf = Cst::leaf("$operator", t.off, t.end);
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.pos = led_save; break; } };
-            left = node(${J(r.name)}, vec![left, op_leaf, rhs]);
+            left = node(${J(r.cstName)}, vec![left, op_leaf, rhs]);
         }
         Some(left)
     }
     fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Cst> {
         self.capped = false;
         let t = self.peek()?;
-${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let mut kids: Vec<Cst> = Vec::new(); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { self.capped = true; return Some(self.branch(${J(r.name)}, kids, save)); } self.pos = save; }`).join('\n')}
+${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let mut kids: Vec<Cst> = Vec::new(); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { self.capped = true; return Some(self.branch(${J(r.cstName)}, kids, save)); } self.pos = save; }`).join('\n')}
+        // non-capped: a sub-parse may leave capped set (grouping a capped arrow); force it false after
+        let r = self.${r.name}_nud_rest(t);
+        self.capped = false;
+        r
+    }
+    fn ${r.name}_nud_rest(&mut self, t: Tok<'a>) -> Option<Cst> {
 ${tplNud}        if Parser::${r.name}_atom(t.kind) {
             self.pos += 1;
-            return Some(Cst::node(${J(r.name)}, vec![Cst::leaf(t.kind, t.off, t.end)], t.off, t.end));
+            return Some(Cst::node(${J(r.cstName)}, vec![Cst::leaf(t.kind, t.off, t.end)], t.off, t.end));
         }
 ${r.nudBrackets.map(bracketNud).join('\n')}
         if let Some(pbp) = Parser::${r.name}_pre(t.text) {
             let save = self.pos; self.pos += 1;
             let op_leaf = Cst::leaf("$operator", t.off, t.end);
             match self.${r.name}_bp(pbp) {
-                Some(operand) => { let (o, e) = (t.off, operand.end); return Some(Cst::node(${J(r.name)}, vec![op_leaf, operand], o, e)); }
+                Some(operand) => { let (o, e) = (t.off, operand.end); return Some(Cst::node(${J(r.cstName)}, vec![op_leaf, operand], o, e)); }
                 None => { self.pos = save; return None; }
             }
         }
-${r.nudSeqs.map((seq) => `        { let save = self.pos; let mut kids: Vec<Cst> = Vec::new(); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return Some(self.branch(${J(r.name)}, kids, save)); } self.pos = save; }`).join('\n')}
+${r.nudSeqs.map((seq) => `        { let save = self.pos; let mut kids: Vec<Cst> = Vec::new(); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return Some(self.branch(${J(r.cstName)}, kids, save)); } self.pos = save; }`).join('\n')}
         None
     }`;
 }

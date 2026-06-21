@@ -154,8 +154,8 @@ ${emitHooks}
 \t_ = pendingNl
 ${rxState}${tplState}${emitFn}${pushTokFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
 \t\tc := int(src[pos])
-\t\tif c == 32 || c == 9 { pos++; continue }
-\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }
+\t\tif c == 10 || c == 13 || c == 8232 || c == 8233 { pendingNl = true; pos++; continue }
+\t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
 ${tplDispatch}${toks}
 ${puncts}
 \t\tpanic(fmt.Sprintf("lex error at %d", pos))
@@ -184,7 +184,7 @@ function stepCond(s: Step): string {
 
 function rdRule(r: RdRule): string {
   const alt = (steps: Step[]) =>
-    `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.name)}, sb, offAt(save)) }
+    `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save)) }
 \tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
   return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
@@ -199,7 +199,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\tnode := matchTemplate()
 \t\tif node < 0 { return -1 }
 \t\tsb := len(scratch); scratch = append(scratch, node)
-\t\treturn finish(${J(r.name)}, sb, nodes[node].Offset)
+\t\treturn finish(${J(r.cstName)}, sb, nodes[node].Offset)
 \t}\n`
     : '';
   const bin = r.binary.map((b) => `${J(b.op)}: {${b.lbp}, ${b.rbp}}`).join(', ');
@@ -207,24 +207,24 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const atoms = r.nudToks.map((k) => `${J(k)}: true`).join(', ');
   const bracketNud = (b: Bracket) => `\tif t.Text == ${J(b.first)} {
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
-\t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.name)}, sb, t.Off) }
+\t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
   const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}!_mySup[${J(b.first)}] && t.Text == ${J(b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
-\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
+\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue }
 \t\t\tpos = ledSave; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break
 \t\t}`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
 \t\tif !tailClosed && t.Kind == "$templateHead" {
 \t\t\tnode := matchTemplate()
-\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
+\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue }
 \t\t}` : '';
     return `\t\tif !tailClosed && t.Kind == ${J(tok)} {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf(t.Kind, t.Off, t.End)); pos++
-\t\t\tleft = finish(${J(r.name)}, sb, nodes[left].Offset); continue
+\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue
 \t\t}${tplPart}`;
   };
   const post = r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ');
@@ -246,7 +246,7 @@ ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
 \t\tif post, ok := ${r.name}POST[t.Text]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End)); pos++; tailClosed = true
-\t\t\tleft = finish(${J(r.name)}, sb, nodes[left].Offset); continue
+\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue
 \t\t}
 \t\tinfo, ok := ${r.name}BIN[t.Text]
 \t\tif !ok || info.lbp <= minBp { break }
@@ -256,7 +256,7 @@ ${r.postfixToks.map(postfixArm).join('\n')}
 \t\trhs := ${r.name}bp(info.rbp)
 \t\tif rhs < 0 { pos = ledSave; scratch = scratch[:sb]; break }
 \t\tscratch = append(scratch, rhs)
-\t\tleft = finish(${J(r.name)}, sb, nodes[left].Offset)
+\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset)
 \t}
 \treturn left
 }
@@ -264,10 +264,11 @@ func ${r.name}nud(minBp int) int32 {
 \t_capped = false
 \tt := peek()
 \tif t == nil { return -1 }
-${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { _capped = true; return finish(${J(r.name)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { _capped = true; return finish(${J(r.cstName)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+\t_r := func() int32 {   // non-capped: a sub-parse may leave _capped set; force it false after
 ${tplNud}\tif ${r.name}ATOM[t.Kind] {
 \t\tsb := len(scratch); scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
-\t\treturn finish(${J(r.name)}, sb, t.Off)
+\t\treturn finish(${J(r.cstName)}, sb, t.Off)
 \t}
 ${r.nudBrackets.map(bracketNud).join('\n')}
 \tif pbp, ok := ${r.name}PRE[t.Text]; ok {
@@ -276,10 +277,13 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
 \t\toperand := ${r.name}bp(pbp)
 \t\tif operand < 0 { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
 \t\tscratch = append(scratch, operand)
-\t\treturn finish(${J(r.name)}, sb, t.Off)
+\t\treturn finish(${J(r.cstName)}, sb, t.Off)
 \t}
-${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return finish(${J(r.name)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return finish(${J(r.cstName)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \treturn -1
+\t}()
+\t_capped = false
+\treturn _r
 }`;
 }
 
