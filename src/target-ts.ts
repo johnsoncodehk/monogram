@@ -197,7 +197,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
     }`;
   // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
   // a precedence-gated led (ternary/in/instanceof) binds only when its lbp > minBp.
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}(_mySup === null || !_mySup.has(${J(b.first)})) && t.text === ${J(b.first)}) {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!${J(nll)}.includes(headLeafText(left)) && ` : ''}(_mySup === null || !_mySup.has(${J(b.first)})) && t.text === ${J(b.first)}) {
       const ledSave = pos; const kids: Cst[] = [left];
       if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue; }
       pos = ledSave; break;
@@ -223,7 +223,7 @@ function ${r.name}_bp(minBp: number): Node | null {
   for (;;) {
     const t = peek();
     if (t === null) break;
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
     const post = ${r.name}_POST[t.text];
     if (!tailClosed && post !== undefined && post > minBp) { pos++; const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; continue; }
@@ -302,7 +302,13 @@ let toks: Tok[] = [];
 let pos = 0;
 let _capped = false;
 let _suppressNext: Set<string> | null = null;
+let _src = '';
 function peek(): Tok | null { return pos < toks.length ? toks[pos] : null; }
+function headLeafText(node: Cst): string {
+  let n: Cst = node;
+  while ('children' in n && n.children.length > 0) n = n.children[0];
+  return _src.slice(n.offset, n.end);
+}
 function branch(rule: string, kids: Cst[], save: number): Node {
   const offset = kids.length > 0 ? kids[0].offset : (save < toks.length ? toks[save].off : 0);
   const end = kids.length > 0 ? kids[kids.length - 1].end : offset;
@@ -350,6 +356,7 @@ function altLit(opts: [string, string][], kids: Cst[]): boolean {
 ${matchTemplate}${ruleFns}
 
 const src = readFileSync(0, 'utf8');
+_src = src;
 toks = lex(src);
 pos = 0;
 const root = parse${ir.entry}();

@@ -241,7 +241,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             if ${b.steps.map(stepCond).join(' && ')} { return Some(node(${J(r.cstName)}, kids)); }
             self.pos = save;   // fall through to the next NUD alternative
         }`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}!my_sup.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], &left) && ` : ''}!my_sup.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
                 let led_save = self.pos; let mut kids: Vec<Cst> = Vec::new();
                 if ${b.steps.map(stepCond).join(' && ')} {
                     let mut full = vec![left]; full.append(&mut kids);
@@ -268,7 +268,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
         let mut tail_closed = false;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
             if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { self.pos += 1; let op_leaf = Cst::leaf("$operator", t.off, t.end); left = node(${J(r.cstName)}, vec![left, op_leaf]); tail_closed = true; continue; } }
             let (lbp, rbp) = match Parser::${r.name}_bin(t.text) { Some(x) => x, None => break };
@@ -352,9 +352,15 @@ fn node(rule: &'static str, kids: Vec<Cst>) -> Cst { let o = kids[0].offset; let
 
 ${lexer(ir)}
 
-struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool, suppress_next: Vec<&'static str> }
+struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool, suppress_next: Vec<&'static str>, src: &'a str }
 impl<'a> Parser<'a> {
     fn peek(&self) -> Option<Tok<'a>> { if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None } }
+    fn head_leaf_text(&self, node: &Cst) -> &'a str {
+        let mut n = node;
+        while !n.children.is_empty() { n = &n.children[0]; }
+        &self.src[n.offset..n.end]
+    }
+    fn nll_blocked(&self, words: &[&str], node: &Cst) -> bool { let h = self.head_leaf_text(node); words.iter().any(|w| *w == h) }
     fn branch(&self, rule: &'static str, kids: Vec<Cst>, save: usize) -> Cst {
         let offset = if !kids.is_empty() { kids[0].offset } else if save < self.toks.len() { self.toks[save].off } else { 0 };
         let end = if !kids.is_empty() { kids[kids.len() - 1].end } else { offset };
@@ -409,15 +415,15 @@ fn main() {
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
     if let Some(iters) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) {
         // black_box on the input + result so the optimizer can't elide the lex/parse.
-        for _ in 0..3 { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new() }; std::hint::black_box(p.parse_${ir.entry}()); }
+        for _ in 0..3 { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src: &src }; std::hint::black_box(p.parse_${ir.entry}()); }
         let t = std::time::Instant::now();
-        for _ in 0..iters { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new() }; std::hint::black_box(p.parse_${ir.entry}()); }
+        for _ in 0..iters { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src: &src }; std::hint::black_box(p.parse_${ir.entry}()); }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
     let toks = lex(&src);
     let n = toks.len();
-    let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new() };
+    let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src: &src };
     match p.parse_${ir.entry}() {
         Some(root) if p.pos == n => { let mut out = String::new(); write_json(&root, &mut out); print!("{}", out); }
         _ => { eprintln!("parse error (pos {}/{})", p.pos, n); std::process::exit(1); }

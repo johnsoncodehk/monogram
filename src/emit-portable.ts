@@ -74,6 +74,8 @@ export type PrattRule = {
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledAccessTail: boolean[];                           // parallel to leds: a "closed punct-connector" tail (member/call/index) — disabled once a postfix binds
   ledLbp: Array<number | null>;                       // parallel to leds: precedence gate (ternary/in/instanceof) — bind only when lbp > minBp; null = bind maximally tight
+  ledSameLine: boolean[];                             // parallel to leds: a leading `sameLine` guard (TS type tails) — the connector must be on the operand's line
+  ledNotLeftLeaf: Array<string[] | null>;             // parallel to leds: skip this led when the left node's head-leaf text is in this set (`void.x` etc.)
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
   postfix: Array<{ op: string; lbp: number }>;        // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
 };
@@ -304,9 +306,17 @@ function buildPratt(
   const leds: Bracket[] = [];
   const ledAccessTail: boolean[] = [];
   const ledLbp: Array<number | null> = [];
+  const ledSameLine: boolean[] = [];
+  const ledNotLeftLeaf: Array<string[] | null> = [];
   const postfixToks: string[] = [];
   for (const alt of alts) {
-    const items = alt.type === 'seq' ? alt.items : [alt];
+    let items = alt.type === 'seq' ? alt.items : [alt];
+    // A left-recursive continuation may carry a leading `notLeftLeaf(words)` head-leaf guard
+    // before the self `$` — strip it and attach the word set to the led it produces.
+    let nllWords: string[] | null = null;
+    if (items[0].type === 'notLeftLeaf' && items[1]?.type === 'ref' && items[1].name === name) {
+      nllWords = items[0].words; items = items.slice(1);
+    }
     const startsSelf = items[0].type === 'ref' && items[0].name === name;
     if (!startsSelf) {
       // NUD
@@ -331,9 +341,11 @@ function buildPratt(
       continue;
     }
     // LED (starts with self): `$ op $` (binary, op slot + trailing self) or `$ <lit> …` (mixfix)
-    const rest = items.slice(1);
-    if (rest[0].type === 'op') { sawBinary = true; continue; }
-    if (rest[0].type === 'postfix') { sawPostfix = true; continue; }   // postfix operator (`x++`)
+    const restAll = items.slice(1);
+    const hasSameLine = restAll[0]?.type === 'sameLine';   // a TS type tail: `$ sameLine '<' …`
+    const rest = hasSameLine ? restAll.slice(1) : restAll;
+    if (!hasSameLine && rest[0].type === 'op') { sawBinary = true; continue; }
+    if (!hasSameLine && rest[0].type === 'postfix') { sawPostfix = true; continue; }   // postfix operator (`x++`)
     if (rest[0].type === 'literal') {
       const conn = rest[0].value;
       const prec = a.ledPrecByConnector.get(conn);   // { lbp, rhsBp } for ternary/in/instanceof
@@ -346,6 +358,8 @@ function buildPratt(
       leds.push({ first: conn, steps });
       ledAccessTail.push(!lastIsOperand && !wordConnector);
       ledLbp.push(prec ? prec.lbp : null);
+      ledSameLine.push(hasSameLine);
+      ledNotLeftLeaf.push(nllWords);
       continue;
     }
     if (rest.length === 1 && rest[0].type === 'ref' && a.tokenNames.has(rest[0].name)) { postfixToks.push(rest[0].name); continue; }  // postfix token (tagged template)
@@ -376,5 +390,5 @@ function buildPratt(
   const postfix = sawPostfix
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp }))
     : [];
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudCapped, prefix, binary, leds, ledAccessTail, ledLbp, postfixToks, postfix };
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudCapped, prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, postfixToks, postfix };
 }

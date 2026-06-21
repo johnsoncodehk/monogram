@@ -210,7 +210,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}!_mySup[${J(b.first)}] && t.Text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.Nl && ' : ''}${nll ? `!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left)) && ` : ''}!_mySup[${J(b.first)}] && t.Text == ${J(b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
 \t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue }
@@ -242,7 +242,7 @@ func ${r.name}bp(minBp int) int32 {
 \tfor {
 \t\tt := peek()
 \t\tif t == nil { break }
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
 \t\tif post, ok := ${r.name}POST[t.Text]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End)); pos++; tailClosed = true
@@ -338,6 +338,7 @@ type bp struct{ lbp, rbp int }
 var toks []Tok
 var pos int
 var _capped bool
+var _src string
 var _suppressNext map[string]bool
 var nodes []Node
 var kids []int32
@@ -412,7 +413,14 @@ func writeJSON(id int32, b *strings.Builder) {
 \tfmt.Fprintf(b, "],\\"offset\\":%d,\\"end\\":%d}", nd.Offset, nd.End)
 }
 
+func headLeafText(id int32) string {
+\tfor !nodes[id].IsLeaf && nodes[id].KidCount > 0 { id = kids[nodes[id].KidStart] }
+\treturn _src[nodes[id].Offset:nodes[id].End]
+}
+func _inW(ws []string, s string) bool { for _, w := range ws { if w == s { return true } }; return false }
+
 func parseOnce(src string) int32 {
+\t_src = src
 \ttoks = lex(src)
 \tpos = 0
 \tnodes = nodes[:0]; kids = kids[:0]; scratch = scratch[:0]

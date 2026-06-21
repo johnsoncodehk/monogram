@@ -195,6 +195,20 @@ const CASES: Case[] = [
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;'],
   },
+  {
+    // The real typescript.ts grammar — the second, most complex full language proving the
+    // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
+    grammar: 'typescript', path: '../typescript.ts',
+    accept: [
+      'const a: number = 1;', 'let s: string;', 'type Alias = { a: number; b?: string };',
+      'type U = "a" | "b" | "c";', 'function gen2<T, U extends T>(x: T, y: U): T { return x; }',
+      'interface I<T> extends A<T> { m(x: T): T; }', 'const c = x as const;',
+      'function isStr(x: unknown): x is string { return true; }', 'enum E { A, B, C }',
+      'const n = maybe!;', 'let arr: number[];', 'type Fn = (x: number) => string;',
+      'class C<in out T> { value!: T; }',
+    ],
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>
