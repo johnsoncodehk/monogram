@@ -178,7 +178,13 @@ function stepCond(s: Step): string {
     case 'opt': return `self.opt(|p, k| ${s.steps.map(stepCondP).join(' && ')}, &mut kids)`;
     case 'sep': return `self.sep_by(|p, k| ${stepCondP(s.elem)}, ${J(s.delim)}, &mut kids)`;
     case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}], &mut kids)`;
+    case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(self, &mut kids)`;
   }
+}
+// A backtracking inline alternation rendered as an immediately-applied closure over (p, k),
+// so it composes identically whether it sits at top level or already inside a closure.
+function altBody(branches: Step[][]): string {
+  return `${branches.map((br) => `{ let sp = p.pos; let bk = k.len(); if ${br.length ? br.map(stepCondP).join(' && ') : 'true'} { return true; } p.pos = sp; k.truncate(bk); }`).join(' ')} false`;
 }
 // Inside a closure: uses `p` and `k`.
 function stepCondP(s: Step): string {
@@ -190,6 +196,7 @@ function stepCondP(s: Step): string {
     case 'opt': return `p.opt(|p, k| ${s.steps.map(stepCondP).join(' && ')}, k)`;
     case 'sep': return `p.sep_by(|p, k| ${stepCondP(s.elem)}, ${J(s.delim)}, k)`;
     case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}], k)`;
+    case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(p, k)`;
   }
 }
 

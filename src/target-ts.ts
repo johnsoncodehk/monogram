@@ -161,6 +161,7 @@ function stepCond(s: Step): string {
     case 'opt': return `opt(() => ${s.steps.map(stepCond).join(' && ')}, kids)`;
     case 'sep': return `sepBy(() => ${stepCond(s.elem)}, ${J(s.delim)}, kids)`;
     case 'altlit': return `altLit([${s.opts.map((o) => `[${J(o.value)}, ${J(o.ttype)}]`).join(', ')}], kids)`;
+    case 'alt': return `(() => { ${s.branches.map((br) => `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map(stepCond).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`).join(' ')} return false; })()`;
   }
 }
 

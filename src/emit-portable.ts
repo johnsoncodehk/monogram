@@ -49,7 +49,8 @@ export type Step =
   | { t: 'star'; step: Step }                                   // repeat inner 0+
   | { t: 'opt'; steps: Step[] }                                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string }                     // elem (delim elem)*
-  | { t: 'altlit'; opts: Lit[] };                               // inline alternation of literals
+  | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
+  | { t: 'alt'; branches: Step[][] };                           // inline alternation of sub-sequences (backtracking)
 export type Alt = Step[];
 
 export type RdRule = { kind: 'rd'; name: string; alts: Alt[] };
@@ -142,12 +143,10 @@ function buildIR(grammar: CstGrammar): ParserIR {
         if (e.kind === '+') throw new Error("portable: '+' not yet modeled (use '*')");
         break;
       case 'alt': {
-        const opts: Lit[] = [];
-        for (const it of e.items) {
-          if (it.type !== 'literal') throw new Error('portable: inline alt must be all literals');
-          opts.push({ value: it.value, ttype: litTtype(it.value) });
+        if (e.items.every((it) => it.type === 'literal')) {   // fast path: all-literal alternation
+          return { t: 'altlit', opts: e.items.map((it) => ({ value: (it as { value: string }).value, ttype: litTtype((it as { value: string }).value) })) };
         }
-        return { t: 'altlit', opts };
+        return { t: 'alt', branches: e.items.map(altSteps) };   // general: backtracking over sub-sequences
       }
     }
     throw new Error(`portable: rd construct '${e.type}' not in scope`);

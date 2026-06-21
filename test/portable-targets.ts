@@ -89,6 +89,16 @@ const CASES: Case[] = [
     ],
     reject: ['var x = `${ }`;', 'var y = `${a`;', '`${a} ${}`;'],
   },
+  {
+    // General (non-literal) inline alt: object keys are alt(Ident | Str | Number) — a
+    // backtracking alternation of token refs inside a rule sequence.
+    grammar: 'altjs', path: '../examples/altjs.ts',
+    accept: [
+      '{a: 1};', '{"k": 2};', '{1: x};', '{a: 1, "b": 2, 3: c};', '{x: 1 + 2 * 3};',
+      '({nested: {inner: 1}});', '{};', 'a + b;', '{k: (1 + 2)};',
+    ],
+    reject: ['{a:};', '{: 1};', '{a 1};', '{a: 1,, b: 2};'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>
