@@ -3,6 +3,12 @@
 // with no module dependencies). Its CST JSON is checked byte-for-byte against the interpreter,
 // so `emitPortableParser(grammar, goTarget)` is a real, verified Go parser derived from the
 // same grammar definition.
+//
+// ARENA allocation (to minimise GC pressure, as tsgo does): nodes live in a flat `nodes []Node`,
+// their children in a flat `kids []int32`, and in-progress children accumulate on a `scratch`
+// stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
+// slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
+// warmed parser allocates ~nothing per parse.
 import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, Target } from './emit-portable.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -39,7 +45,7 @@ function lexer(ir: ParserIR): string {
   const puncts = ir.puncts.map((p) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { toks = append(toks, Tok{"", ${J(p)}, pos, pos + ${p.length}}); pos += ${p.length}; continue }`).join('\n');
   return `func lex(src string) []Tok {
-\ttoks := []Tok{}
+\ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
 \tfor pos < n {
@@ -55,23 +61,24 @@ ${puncts}
 
 function stepCond(s: Step): string {
   switch (s.t) {
-    case 'lit': return `matchLit(${J(s.value)}, ${J(s.ttype)}, &kids)`;
-    case 'tok': return `matchTok(${J(s.name)}, &kids)`;
-    case 'rule': return `callRule(parse${s.name}, &kids)`;
-    case 'star': return `star(func() bool { return ${stepCond(s.step)} }, &kids)`;
-    case 'opt': return `opt(func() bool { return ${s.steps.map(stepCond).join(' && ')} }, &kids)`;
-    case 'sep': return `sepBy(func() bool { return ${stepCond(s.elem)} }, ${J(s.delim)}, &kids)`;
-    case 'altlit': return `altLit([][2]string{${s.opts.map((o) => `{${J(o.value)}, ${J(o.ttype)}}`).join(', ')}}, &kids)`;
+    case 'lit': return `matchLit(${J(s.value)}, ${J(s.ttype)})`;
+    case 'tok': return `matchTok(${J(s.name)})`;
+    case 'rule': return `callRule(parse${s.name})`;
+    case 'star': return `star(func() bool { return ${stepCond(s.step)} })`;
+    case 'opt': return `opt(func() bool { return ${s.steps.map(stepCond).join(' && ')} })`;
+    case 'sep': return `sepBy(func() bool { return ${stepCond(s.elem)} }, ${J(s.delim)})`;
+    case 'altlit': return `altLit([][2]string{${s.opts.map((o) => `{${J(o.value)}, ${J(o.ttype)}}`).join(', ')}})`;
   }
 }
 
 function rdRule(r: RdRule): string {
   const alt = (steps: Step[]) =>
-    `\t{ kids := []*Cst{}; if ${steps.map(stepCond).join(' && ')} { return branch(${J(r.name)}, kids, save) }; pos = save }`;
-  return `func parse${r.name}() *Cst {
-\tsave := pos
+    `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.name)}, sb, offAt(save)) }
+\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
+  return `func parse${r.name}() int32 {
+\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 ${r.alts.map(alt).join('\n')}
-\treturn nil
+\treturn -1
 }`;
 }
 
@@ -80,53 +87,56 @@ function prattRule(r: PrattRule): string {
   const pre = r.prefix.map((p) => `${J(p.op)}: ${p.rbp}`).join(', ');
   const atoms = r.nudToks.map((k) => `${J(k)}: true`).join(', ');
   const bracketNud = (b: Bracket) => `\tif t.Text == ${J(b.first)} {
-\t\tsave := pos; kids := []*Cst{}
-\t\tif ${b.steps.map(stepCond).join(' && ')} { return node(${J(r.name)}, kids) }
-\t\tpos = save; return nil
+\t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
+\t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.name)}, sb, t.Off) }
+\t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1
 \t}`;
   const ledArm = (b: Bracket) => `\t\tif t.Text == ${J(b.first)} {
-\t\t\tledSave := pos; kids := []*Cst{left}
-\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = node(${J(r.name)}, kids); continue }
-\t\t\tpos = ledSave; break
+\t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
+\t\t\tscratch = append(scratch, left)
+\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
+\t\t\tpos = ledSave; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break
 \t\t}`;
   return `var ${r.name}BIN = map[string]bp{${bin}}
 var ${r.name}PRE = map[string]int{${pre}}
 var ${r.name}ATOM = map[string]bool{${atoms}}
-func parse${r.name}() *Cst { return ${r.name}bp(0) }
-func ${r.name}bp(minBp int) *Cst {
+func parse${r.name}() int32 { return ${r.name}bp(0) }
+func ${r.name}bp(minBp int) int32 {
 \tleft := ${r.name}nud()
-\tif left == nil { return nil }
+\tif left < 0 { return -1 }
 \tfor {
 \t\tt := peek()
 \t\tif t == nil { break }
 ${r.leds.map(ledArm).join('\n')}
 \t\tinfo, ok := ${r.name}BIN[t.Text]
 \t\tif !ok || info.lbp <= minBp { break }
-\t\tledSave := pos
+\t\tledSave := pos; sb := len(scratch)
+\t\tscratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End))
 \t\tpos++
-\t\topLeaf := &Cst{IsLeaf: true, TokenType: "$operator", Offset: t.Off, End: t.End}
 \t\trhs := ${r.name}bp(info.rbp)
-\t\tif rhs == nil { pos = ledSave; break }
-\t\tleft = &Cst{Rule: ${J(r.name)}, Children: []*Cst{left, opLeaf, rhs}, Offset: left.Offset, End: rhs.End}
+\t\tif rhs < 0 { pos = ledSave; scratch = scratch[:sb]; break }
+\t\tscratch = append(scratch, rhs)
+\t\tleft = finish(${J(r.name)}, sb, nodes[left].Offset)
 \t}
 \treturn left
 }
-func ${r.name}nud() *Cst {
+func ${r.name}nud() int32 {
 \tt := peek()
-\tif t == nil { return nil }
+\tif t == nil { return -1 }
 \tif ${r.name}ATOM[t.Kind] {
-\t\tpos++
-\t\treturn &Cst{Rule: ${J(r.name)}, Children: []*Cst{{IsLeaf: true, TokenType: t.Kind, Offset: t.Off, End: t.End}}, Offset: t.Off, End: t.End}
+\t\tsb := len(scratch); scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
+\t\treturn finish(${J(r.name)}, sb, t.Off)
 \t}
 ${r.nudBrackets.map(bracketNud).join('\n')}
 \tif pbp, ok := ${r.name}PRE[t.Text]; ok {
-\t\tsave := pos; pos++
-\t\topLeaf := &Cst{IsLeaf: true, TokenType: "$operator", Offset: t.Off, End: t.End}
+\t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
+\t\tscratch = append(scratch, mkLeaf("$operator", t.Off, t.End)); pos++
 \t\toperand := ${r.name}bp(pbp)
-\t\tif operand == nil { pos = save; return nil }
-\t\treturn &Cst{Rule: ${J(r.name)}, Children: []*Cst{opLeaf, operand}, Offset: t.Off, End: operand.End}
+\t\tif operand < 0 { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
+\t\tscratch = append(scratch, operand)
+\t\treturn finish(${J(r.name)}, sb, t.Off)
 \t}
-\treturn nil
+\treturn -1
 }`;
 }
 
@@ -151,77 +161,90 @@ type Tok struct {
 \tKind, Text string
 \tOff, End   int
 }
-type Cst struct {
-\tRule      string
-\tChildren  []*Cst
-\tIsLeaf    bool
-\tTokenType string
-\tOffset    int
-\tEnd       int
+// Arena node: an int32 index into nodes; children are a flat range in kids.
+type Node struct {
+\tRule, TokenType string
+\tIsLeaf          bool
+\tKidStart, KidCount, Offset, End int
 }
 type bp struct{ lbp, rbp int }
 
-${lexer(ir)}
-
 var toks []Tok
 var pos int
+var nodes []Node
+var kids []int32
+var scratch []int32
+
+${lexer(ir)}
 
 func peek() *Tok {
 \tif pos < len(toks) { return &toks[pos] }
 \treturn nil
 }
-func branch(rule string, kids []*Cst, save int) *Cst {
-\toffset := 0
-\tif len(kids) > 0 { offset = kids[0].Offset } else if save < len(toks) { offset = toks[save].Off }
-\tend := offset
-\tif len(kids) > 0 { end = kids[len(kids)-1].End }
-\treturn &Cst{Rule: rule, Children: kids, Offset: offset, End: end}
+func offAt(i int) int { if i < len(toks) { return toks[i].Off }; return 0 }
+func mkLeaf(ttype string, off, end int) int32 {
+\tnodes = append(nodes, Node{TokenType: ttype, IsLeaf: true, Offset: off, End: end})
+\treturn int32(len(nodes) - 1)
 }
-func node(rule string, kids []*Cst) *Cst {
-\treturn &Cst{Rule: rule, Children: kids, Offset: kids[0].Offset, End: kids[len(kids)-1].End}
+// Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
+func finish(rule string, sb, fallbackOff int) int32 {
+\tnn := len(scratch)
+\tkidStart := len(kids)
+\toff, end := fallbackOff, fallbackOff
+\tif nn > sb { off = nodes[scratch[sb]].Offset; end = nodes[scratch[nn-1]].End }
+\tkids = append(kids, scratch[sb:nn]...)
+\tscratch = scratch[:sb]
+\tnodes = append(nodes, Node{Rule: rule, KidStart: kidStart, KidCount: nn - sb, Offset: off, End: end})
+\treturn int32(len(nodes) - 1)
 }
-func matchLit(value, ttype string, kids *[]*Cst) bool {
-\tt := peek()
-\tif t == nil || t.Text != value { return false }
-\t*kids = append(*kids, &Cst{IsLeaf: true, TokenType: ttype, Offset: t.Off, End: t.End}); pos++; return true
+func matchLit(value, ttype string) bool {
+\tif pos < len(toks) && toks[pos].Text == value { scratch = append(scratch, mkLeaf(ttype, toks[pos].Off, toks[pos].End)); pos++; return true }
+\treturn false
 }
-func matchTok(name string, kids *[]*Cst) bool {
-\tt := peek()
-\tif t == nil || t.Kind != name { return false }
-\t*kids = append(*kids, &Cst{IsLeaf: true, TokenType: name, Offset: t.Off, End: t.End}); pos++; return true
+func matchTok(name string) bool {
+\tif pos < len(toks) && toks[pos].Kind == name { scratch = append(scratch, mkLeaf(name, toks[pos].Off, toks[pos].End)); pos++; return true }
+\treturn false
 }
-func callRule(fn func() *Cst, kids *[]*Cst) bool {
-\tn := fn()
-\tif n == nil { return false }
-\t*kids = append(*kids, n); return true
+func callRule(fn func() int32) bool {
+\tid := fn()
+\tif id < 0 { return false }
+\tscratch = append(scratch, id); return true
 }
-func star(once func() bool, kids *[]*Cst) bool {
-\tfor { sp := pos; before := len(*kids); if !once() { pos = sp; *kids = (*kids)[:before]; break } }
+func star(once func() bool) bool {
+\tfor { sp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if !once() { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break } }
 \treturn true
 }
-func opt(body func() bool, kids *[]*Cst) bool {
-\tsp := pos; before := len(*kids); if !body() { pos = sp; *kids = (*kids)[:before] }; return true
+func opt(body func() bool) bool {
+\tsp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if !body() { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }; return true
 }
-func sepBy(elem func() bool, delim string, kids *[]*Cst) bool {
+func sepBy(elem func() bool, delim string) bool {
 \tif !elem() { return false }
-\tfor { sp := pos; before := len(*kids); if matchLit(delim, "$punct", kids) && elem() { continue }; pos = sp; *kids = (*kids)[:before]; break }
+\tfor { sp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if matchLit(delim, "$punct") && elem() { continue }; pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break }
 \treturn true
 }
-func altLit(opts [][2]string, kids *[]*Cst) bool {
-\tfor _, o := range opts { if matchLit(o[0], o[1], kids) { return true } }
+func altLit(opts [][2]string) bool {
+\tfor _, o := range opts { if matchLit(o[0], o[1]) { return true } }
 \treturn false
 }
 
 ${ruleFns}
 
-func writeJSON(c *Cst, b *strings.Builder) {
-\tif c.IsLeaf {
-\t\tfmt.Fprintf(b, "{\\"tokenType\\":%q,\\"offset\\":%d,\\"end\\":%d}", c.TokenType, c.Offset, c.End)
+func writeJSON(id int32, b *strings.Builder) {
+\tnd := &nodes[id]
+\tif nd.IsLeaf {
+\t\tfmt.Fprintf(b, "{\\"tokenType\\":%q,\\"offset\\":%d,\\"end\\":%d}", nd.TokenType, nd.Offset, nd.End)
 \t\treturn
 \t}
-\tfmt.Fprintf(b, "{\\"rule\\":%q,\\"children\\":[", c.Rule)
-\tfor i, k := range c.Children { if i > 0 { b.WriteByte(',') }; writeJSON(k, b) }
-\tfmt.Fprintf(b, "],\\"offset\\":%d,\\"end\\":%d}", c.Offset, c.End)
+\tfmt.Fprintf(b, "{\\"rule\\":%q,\\"children\\":[", nd.Rule)
+\tfor i := 0; i < nd.KidCount; i++ { if i > 0 { b.WriteByte(',') }; writeJSON(kids[nd.KidStart+i], b) }
+\tfmt.Fprintf(b, "],\\"offset\\":%d,\\"end\\":%d}", nd.Offset, nd.End)
+}
+
+func parseOnce(src string) int32 {
+\ttoks = lex(src)
+\tpos = 0
+\tnodes = nodes[:0]; kids = kids[:0]; scratch = scratch[:0]
+\treturn parse${ir.entry}()
 }
 
 func main() {
@@ -230,17 +253,15 @@ func main() {
 \t// Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
 \tif len(os.Args) > 1 {
 \t\tif iters, err := strconv.Atoi(os.Args[1]); err == nil && iters > 0 {
-\t\t\tfor i := 0; i < 3; i++ { toks = lex(src); pos = 0; parse${ir.entry}() }
+\t\t\tfor i := 0; i < 3; i++ { parseOnce(src) }
 \t\t\tt0 := time.Now()
-\t\t\tfor i := 0; i < iters; i++ { toks = lex(src); pos = 0; parse${ir.entry}() }
+\t\t\tfor i := 0; i < iters; i++ { parseOnce(src) }
 \t\t\tfmt.Printf("%.4f\\n", float64(time.Since(t0).Nanoseconds())/1e6/float64(iters))
 \t\t\treturn
 \t\t}
 \t}
-\ttoks = lex(src)
-\tpos = 0
-\troot := parse${ir.entry}()
-\tif root == nil || pos != len(toks) {
+\troot := parseOnce(src)
+\tif root < 0 || pos != len(toks) {
 \t\tfmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", pos, len(toks))
 \t\tos.Exit(1)
 \t}
