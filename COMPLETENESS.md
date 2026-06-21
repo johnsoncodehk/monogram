@@ -215,6 +215,41 @@ recognised and scoped; what is refined at the frontier is *which* role at the am
 Improving that precision (var-width forms for the `vscode-oniguruma`-only grammars, `\g<>` for the
 arrow region) is a separate, soundness-gated change. **The completeness obligation is discharged.**
 
+## Soundness — no ceiling, audited not assumed
+
+Completeness is *presence*; soundness is *correctness* — does each present construct read the
+*right* scope on every input. Soundness is not decided here (`test/scope-gap.ts` / `gap-ledger`), but
+one structural question about it **is** settled: does gen-tm have a *ceiling* — a scope obligation no
+TextMate grammar can reproduce, the wall the naive "regex < CFG" intuition predicts? By exhaustive
+audit the answer is **no ceiling on well-formed input** — and the reason is not that TextMate is
+omnipotent but that gen-tm's *obligation space* is itself TextMate-bounded:
+
+- **The obligation is the role map, not the parse.** A scope in Monogram is `f(token type)` [lex-time]
+  or `f(literal text)` [`scopeOverrides`], plus a finite set of shape-detectors — there is no general
+  *rule-context → scope* channel. So even when the CST encodes unbounded context (a cross-serial index,
+  a depth parity), the highlighting obligation does not read it; there is nothing for TextMate to fail
+  to reproduce. Two such candidates, built and run through `createParser` + the role map, both
+  *dissolve* at the obligation layer.
+- **The dichotomy.** A context-dependent scope is therefore one of: *lex-local* (a plain match),
+  *bounded* (a fixed-width neighborhood), or *delimiter-carried recursion* — unbounded nesting whose
+  every level has a **consumable** delimiter (`{`, `<`, `-`), so a `\G`/`\g<>`/self-include reproduces
+  it to unbounded depth (the YAML compact block-sequence: 0 mismatch d=1..12). The only shape that
+  *would* be a ceiling — unbounded, **non-delimiter**, parser-assigned context — is unconstructable
+  here: a delimiter-less depth scope is one the *parser itself* cannot assign from finite roles.
+- **The audit.** Every context-dependent scope channel was enumerated (independently re-derived from
+  the emitted grammar — 78 keyword/identifier heads — and ground-truthed with `vscode-oniguruma` at
+  deep nesting): each is lex-local, bounded, or delimiter-carried; the ceiling shape occurs **zero**
+  times. Delimiter-carried reproduction was confirmed frame-per-level with no fixed-arity cap (enum
+  d=25, generic d=60, JSX d=20, template `${}` d=20).
+
+Honest bounds: this is **well-formed-input** soundness, and **strong evidence + a structural argument,
+not a closed-form ∀-grammar proof** — it audits the channels gen-tm *emits* and infers "unbounded"
+from monotone frame growth verified to depth 60. `highlighter ≡ parser` thus holds on well-formed
+input but is **not a total equivalence**: broken/partial input still has local region-leaks where a
+regex region's heuristic boundary diverges from the parse. The audit *derived* two such over-accepts
+the corpus was blind to — an enum brace-leak and a `module`/`namespace`/`type` declaration-keyword
+over-accept — and root-caused both in gen-tm. They were fixable bugs, not ceilings.
+
 ## The proof ledger
 
 The fixed denominator is every measured obligation (token discharge + repository reachability +
