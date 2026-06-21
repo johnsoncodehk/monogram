@@ -4,7 +4,7 @@
 // chains, arrays, and the common statement forms), so the emitted Rust parser can
 // be benchmarked against oxc on the same bytes.
 //
-// Derived from ONE definition by emitPortableParser into TypeScript, Go, and Rust;
+// Derived from ONE definition by emitParser(grammar, target) into TypeScript, Go, and Rust;
 // the cross-language gate proves all three produce the byte-identical CST that the
 // interpreter (createParser) does. The portable lexer is regex-free (char scanner
 // driven by token-pattern.ts's structural recognizers), so the Go/Rust output

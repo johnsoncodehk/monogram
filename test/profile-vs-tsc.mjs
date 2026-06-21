@@ -14,8 +14,8 @@ const ts = (await import(REPO + '/node_modules/typescript/lib/typescript.js')).d
 const { emitParser, jsTarget } = await import(REPO + '/src/emit.ts');
 const grammar = (await import(REPO + '/typescript.ts')).default;
 
-writeFileSync('/tmp/emitted-current.mjs', emitParser(grammar, jsTarget));
-const emitted = await import('/tmp/emitted-current.mjs?v=' + Date.now());
+writeFileSync('/tmp/emitted-current.mts', emitParser(grammar, jsTarget));
+const emitted = await import('/tmp/emitted-current.mts?v=' + Date.now());
 
 const paths = [
   '/tmp/ts-repo/tests/cases/conformance/parser/ecmascript5/RealWorld/parserharness.ts',

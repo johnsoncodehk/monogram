@@ -156,8 +156,8 @@ ${emitHooks}
 \t_ = pendingNl
 ${rxState}${tplState}${emitFn}${pushTokFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
 \t\tc := int(src[pos])
-\t\tif c == 10 || c == 13 || c == 8232 || c == 8233 { pendingNl = true; pos++; continue }
-\t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
+\t\tif c == 10 { pendingNl = true; pos++; continue }   // only LF (10) is newline-before (matches the interpreter); CR is plain whitespace
+\t\tif c == 13 || c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
 ${tplDispatch}${toks}
 ${puncts}
 \t\tpanic(fmt.Sprintf("lex error at %d", pos))

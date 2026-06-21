@@ -147,8 +147,10 @@ ${emitHooks}
   let pendingNl = false;
 ${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${stateful ? emitFn : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false; };\n'}  while (pos < n) {
     const c = src.charCodeAt(pos);
-    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
-    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
+    // Only LF (char 10) sets newline-before, matching the interpreter (gen-lexer.ts: only wc === 10).
+    // CR/LS/PS are whitespace but NOT newline-before there, so a lone CR must not flip sameLine.
+    if (c === 10) { pendingNl = true; pos++; continue; }
+    if (c === 13 || c === 8232 || c === 8233 || c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
 ${tplDispatch}${toks}
 ${puncts}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));

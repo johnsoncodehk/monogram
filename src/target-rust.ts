@@ -163,8 +163,8 @@ ${open}
     let mut pos = 0usize;
     while pos < n {
         let c = b[pos] as u32;
-        if c == 32 || c == 9 { pos += 1; continue; }
-        if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }
+        if c == 32 || c == 9 || c == 13 { pos += 1; continue; }   // CR is plain whitespace, NOT newline-before
+        if c == 10 { ${nlVar} = true; pos += 1; continue; }   // only LF (10) is newline-before (matches the interpreter)
 ${tplDispatch}${toks}
 ${puncts}
         panic!("lex error at {}", pos);

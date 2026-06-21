@@ -136,8 +136,11 @@ const CASES: Case[] = [
     accept: [
       'return 1;', 'return;', 'return 1 + 2;', '1 + 2;', 'return /* c */ 1;',
       '(a);', 'return (1);',
+      // Only `\n` is newline-before — a lone `\r` is plain whitespace, so `return` still takes its
+      // same-line operand (matches the interpreter; was a portable-lexer bug). CRLF still has the `\n`.
+      'return\r1;',
     ],
-    reject: ['return\n1;', 'return\nx;', 'return /*\n*/ 1;', 'return // c\n 1;'],
+    reject: ['return\n1;', 'return\nx;', 'return /*\n*/ 1;', 'return // c\n 1;', 'return\r\n1;'],
   },
   {
     // capBelow (assignment-level) arrow functions: a NUD parsed only when minBp < the

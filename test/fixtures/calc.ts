@@ -5,7 +5,7 @@
 // backtracking alternation, quantifiers (opt/many/sep), recursion (grouping), and —
 // the crux — a Pratt expression engine with operator PRECEDENCE and associativity
 // (`1 + 2 * 3` must group as `1 + (2 * 3)`), prefix unary, and a left-associative
-// call/postfix continuation. emitPortableParser derives a TS, Go, and Rust parser
+// call/postfix continuation. emitParser(grammar, target) derives a TS, Go, and Rust parser
 // from THIS one definition; the cross-language gate proves all three produce the
 // byte-identical CST the interpreter (createParser) does.
 //

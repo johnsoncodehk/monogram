@@ -340,15 +340,13 @@ const Regex = token(seq(
 
 ### The emitted parser need not be JS — Go, Rust, native
 
-The grammar also derives a **standalone parser in another language**. [`emitPortableParser(grammar, target)`](src/emit-portable.ts) runs one analysis into one language-agnostic IR, and each `Target` renders it — including its own regex-free lexer, so the output has no dependency on the JS runtime and compiles offline:
+The grammar also derives a **standalone parser in another language**. [`emitParser(grammar, target)`](src/emit.ts) runs one analysis into one language-agnostic IR, and each `Target` renders it — including its own regex-free lexer (`emitParser` reuses `emitLexer(grammar, target)`), so the output has no dependency on the JS runtime and compiles offline:
 
 ```ts
-import { emitPortableParser } from './src/emit-portable.ts';
-import { goTarget } from './src/target-go.ts';
-import { rustTarget } from './src/target-rust.ts';
+import { emitParser, goTarget, rustTarget } from './src/emit.ts';
 
-writeFileSync('parser.go', emitPortableParser(grammar, goTarget));   // `go build`, no deps
-writeFileSync('parser.rs', emitPortableParser(grammar, rustTarget)); // `rustc`, no crates
+writeFileSync('parser.go', emitParser(grammar, goTarget));   // `go build`, no deps
+writeFileSync('parser.rs', emitParser(grammar, rustTarget)); // `rustc`, no crates
 ```
 
 The proof is the full languages: the real [`javascript.ts`](javascript.ts) and [`typescript.ts`](typescript.ts) grammars — including the `[Await]/[Yield]` fork, left recursion, the regex/division and template state machines, arrow functions, and the TS type grammar — emit to **TypeScript, Go, and Rust**, and every CST is byte-identical to the reference interpreter. [`test/portable-targets.ts`](test/portable-targets.ts) compiles and runs all three for sixteen grammars (the two real languages plus focused fixtures) on every CI run. The Rust output reaches [oxc](https://github.com/oxc-project/oxc) throughput and the Go output beats [tsgo](https://github.com/microsoft/typescript-go) on the same corpus (an arena keeps both near zero-allocation). Byte-based Go/Rust use UTF-8 offsets — identical to the JS interpreter's for ASCII; non-ASCII offset units differ inherently.
