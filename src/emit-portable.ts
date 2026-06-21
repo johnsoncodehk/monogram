@@ -142,7 +142,11 @@ function buildIR(grammar: CstGrammar): ParserIR {
     switch (e.type) {
       case 'literal': return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
       case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
-      case 'group': { const ss = altSteps(e.body); if (ss.length !== 1) throw new Error('portable: group must reduce to a single step'); return ss[0]; }
+      case 'group': {   // transparent (ctxMode is invisible to the portable parser); only no-in `suppress` is deferred
+        if (e.suppress) throw new Error('portable: group with suppress (no-in context) not yet in scope');
+        const ss = altSteps(e.body);
+        return ss.length === 1 ? ss[0] : { t: 'seq', steps: ss };
+      }
       case 'not': return { t: 'not', steps: altSteps(e.body) };   // zero-width negative lookahead
       case 'sameLine': return { t: 'sameLine' };                  // zero-width no-newline assertion
       case 'seq': return { t: 'seq', steps: e.items.map(stepOf) };  // grouped sub-sequence (star/sep body)
@@ -316,8 +320,10 @@ function buildPratt(
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
     if (e.type === 'not') return { t: 'not', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
-    // ctxMode (await/yield) is transparent to the portable parser (no fork); unwrap a non-seq group.
-    if (e.type === 'group' && !e.capBelow && !e.suppress && e.body.type !== 'seq') return stepOfPratt(e.body);
+    // ctxMode (await/yield) is transparent to the portable parser (no fork); unwrap the group.
+    if (e.type === 'group' && !e.capBelow && !e.suppress) {
+      return e.body.type === 'seq' ? { t: 'seq', steps: e.body.items.map(stepOfPratt) } : stepOfPratt(e.body);
+    }
     if (e.type === 'sep') return { t: 'sep', elem: stepOfPratt(e.element), delim: e.delimiter };
     if (e.type === 'quantifier' && e.kind === '?') return { t: 'opt', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
     if (e.type === 'quantifier' && e.kind === '*') return { t: 'star', step: stepOfPratt(e.body) };
