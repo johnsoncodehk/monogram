@@ -220,16 +220,16 @@
       "include": "#scope-storage-type"
     },
     {
-      "include": "#scope-storage-type-interface"
+      "include": "#scope-storage-type-interface-decl"
     },
     {
-      "include": "#scope-storage-type-type"
+      "include": "#scope-storage-type-type-decl"
     },
     {
       "include": "#scope-storage-type-enum"
     },
     {
-      "include": "#scope-storage-type-namespace"
+      "include": "#scope-storage-type-namespace-decl"
     },
     {
       "include": "#scope-storage-type-function-arrow"
@@ -1716,6 +1716,9 @@
       },
       "patterns": [
         {
+          "include": "#code-block"
+        },
+        {
           "include": "#enum-member"
         },
         {
@@ -2612,20 +2615,20 @@
       "match": "\\b(debugger|with)\\b",
       "name": "keyword.control.ts"
     },
-    "scope-storage-type-interface": {
-      "match": "\\b(interface)\\b",
+    "scope-storage-type-interface-decl": {
+      "match": "\\b(interface)\\b(?!\\s*(?:\\.|\\?\\.))",
       "name": "storage.type.interface.ts"
     },
-    "scope-storage-type-type": {
-      "match": "\\b(type)\\b",
+    "scope-storage-type-type-decl": {
+      "match": "\\b(type)\\b(?!\\s*(?:\\.|\\?\\.))",
       "name": "storage.type.type.ts"
     },
     "scope-storage-type-enum": {
       "match": "\\b(enum)\\b",
       "name": "storage.type.enum.ts"
     },
-    "scope-storage-type-namespace": {
-      "match": "\\b(module|namespace)\\b",
+    "scope-storage-type-namespace-decl": {
+      "match": "\\b(module|namespace)\\b(?!\\s*(?:\\.|\\?\\.))",
       "name": "storage.type.namespace.ts"
     },
     "scope-support-variable": {
@@ -2816,8 +2819,8 @@
       "match": "\\b(async)\\b",
       "name": "storage.modifier.ts"
     },
-    "expr-scope-storage-type-namespace": {
-      "match": "\\b(module)\\b",
+    "expr-scope-storage-type-namespace-decl": {
+      "match": "\\b(module)\\b(?!\\s*(?:\\.|\\?\\.))",
       "name": "storage.type.namespace.ts"
     },
     "expression": {
@@ -2988,7 +2991,7 @@
           "include": "#scope-storage-type-class"
         },
         {
-          "include": "#expr-scope-storage-type-namespace"
+          "include": "#expr-scope-storage-type-namespace-decl"
         },
         {
           "include": "#scope-storage-type-function-arrow"

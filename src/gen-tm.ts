@@ -6732,9 +6732,21 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
             // enum-body is the same `{ … }` bracket region; only its body differs (members are
             // NAMES via #enum-member, not statements). CALLER predicate: a brace-bodied decl
             // whose keyword scope ends in `.enum`.
+            //
+            // A member INITIALIZER may itself contain a nested `{…}` (an object literal,
+            // `A = { x: 1 }`). Like every brace region (see #code-block / #declaration-body),
+            // the body must consume an inner balanced `{…}` as a UNIT, or the inner `}` matches
+            // this region's `end: \}` and prematurely closes the enum body — leaking the
+            // following members out of enum scope (`B` reads as a plain variable, not an
+            // enummember). The nested brace is NOT another enum body but an ordinary
+            // expression-context block, so the balancing recurse target is `#code-block`
+            // (a self-balancing `{}` with no member-name scoping), listed FIRST so an inner
+            // `{` opens it before `#enum-member`/`$self` can mis-handle the brace. `#code-block`
+            // is emitted unconditionally above whenever any declaration exists, so it is always
+            // present here.
             repository['enum-body'] = emitBracketRegion({
               openLit: '\\{', closeLit: '\\}', beginCapName: blockCapName, endCapName: blockCapName,
-              bodyPatterns: [{ include: '#enum-member' }, { include: '$self' }],
+              bodyPatterns: [{ include: '#code-block' }, { include: '#enum-member' }, { include: '$self' }],
             });
           }
           innerPatterns.push({ include: '#enum-body' });
@@ -7860,6 +7872,34 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       // lookahead. The rest of the group keeps the unconditional flat match.
       const ctxModKws = kws.filter(k => contextualModifiers.has(k) && !alwaysBeforeString(k) && !ctxOpSet.has(k));
       const ctxModSet = new Set(ctxModKws);
+      // Contextual DECLARATION keywords: a `storage.type.*` keyword whose keyword role
+      // is owned by a positional `*-declaration` rule (it appears in
+      // `declarationKeywords`) AND which is non-reserved (the grammar proves it a valid
+      // identifier somewhere — no not()-guard forbids it). Such a word doubles as a
+      // property-access BASE: `module.exports`, `namespace.foo`, `type.foo`,
+      // `interface.foo` — there the word is an ordinary identifier, NOT the namespace/
+      // type-alias keyword. The declaration rule already paints the keyword use
+      // positionally (`module X {}`, `type X = …`, even the string-named `module "x"
+      // {}` / `declare module "foo"` forms — those reach the keyword scope only through
+      // the flat match), so the flat match must ABSTAIN exactly when the word is
+      // immediately followed by a member accessor (`.`/`?.`); the word then falls
+      // through to identifier/property scoping. A declaration head always puts
+      // whitespace + a name/string/`{` after the keyword (never `.`/`?.`), so the guard
+      // never suppresses a real declaration — every form, including the string-named
+      // and `import`/`export type` modifier uses, keeps its scope (they are not
+      // accessor-adjacent). Unlike the support.class abstain below, NO call `(` is
+      // excluded: a declaration keyword is never call-adjacent, and the witness/official
+      // guard is the `.`-adjacency. Mirrors the official grammar's `(?<!\.)` keyword
+      // guard. Keyed on the scope family + the declaration-rule/reserved sets, never on
+      // a specific word.
+      const accessorOpeners = [
+        propAccess.hasDot ? '\\.' : undefined,
+        propAccess.hasOptionalChain ? '\\?\\.' : undefined,
+      ].filter((x): x is string => !!x);
+      const ctxDeclKws = (scope === 'storage.type' || scope.startsWith('storage.type.')) && accessorOpeners.length > 0
+        ? kws.filter(k => declarationKeywords.has(k) && !reservedWordsForCtx.has(k) && !alwaysBeforeString(k) && !ctxOpSet.has(k) && !ctxModSet.has(k))
+        : [];
+      const ctxDeclSet = new Set(ctxDeclKws);
       // Drop keywords whose keyword role is owned by a dedicated declaration context
       // (e.g. `constructor` → #constructor-declaration in class bodies). They double
       // as identifiers everywhere else, so the flat match must not paint them.
@@ -7867,7 +7907,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       // scoped positionally by #import-export-all — never in the flat match, which
       // would mis-paint their ordinary-identifier uses (`const defer`, `defer()`,
       // `import defer from "m"`).
-      const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k) && !ctxModSet.has(k) && !contextDeclaredKws.has(k) && !phaseModifierKws.has(k));
+      const globalKws = kws.filter(k => !alwaysBeforeString(k) && !ctxOpSet.has(k) && !ctxModSet.has(k) && !ctxDeclSet.has(k) && !contextDeclaredKws.has(k) && !phaseModifierKws.has(k));
       if (globalKws.length > 0) {
         // A `support.class` group names BUILTIN CLASS/TYPE identifiers (Object, Array,
         // Promise, …) — but, unlike a true keyword, those words also appear as runtime
@@ -7923,6 +7963,18 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
           name: `${scope}.${langName}`,
         };
         topPatterns.push({ include: `#${mkey}` });
+      }
+      // Contextual declaration keywords (see ctxDeclKws above): one accessor-guarded
+      // entry, placed at the same position as the flat group so a real declaration-head
+      // keyword still wins, while a `.`/`?.`-adjacent property-access base falls through
+      // to identifier/property scoping.
+      if (ctxDeclKws.length > 0) {
+        const dkey = `${key}-decl`;
+        repository[dkey] = {
+          match: `\\b(${ctxDeclKws.map(escapeRegex).join('|')})\\b(?!\\s*(?:${accessorOpeners.join('|')}))`,
+          name: `${scope}.${langName}`,
+        };
+        topPatterns.push({ include: `#${dkey}` });
       }
       for (const kw of beforeStringKws) {
         const ckey = `${key}-${kw.replace(/[^a-z0-9]/gi, '')}`;
