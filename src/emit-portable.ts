@@ -54,7 +54,8 @@ export type Step =
   | { t: 'alt'; branches: Step[][] }                            // inline alternation of sub-sequences (backtracking)
   | { t: 'not'; steps: Step[] }                                 // zero-width negative lookahead (consumes nothing)
   | { t: 'seq'; steps: Step[] }                                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
-  | { t: 'sameLine' };                                          // zero-width: the next token is on the same line (no preceding newline)
+  | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
+  | { t: 'suppress'; connectors: string[]; steps: Step[] };     // parse the body with these LED connectors disabled (no-`in` context)
 export type Alt = Step[];
 
 export type RdRule = { kind: 'rd'; name: string; alts: Alt[] };
@@ -144,9 +145,9 @@ function buildIR(grammar: CstGrammar): ParserIR {
     switch (e.type) {
       case 'literal': return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
       case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
-      case 'group': {   // transparent (ctxMode is invisible to the portable parser); only no-in `suppress` is deferred
-        if (e.suppress) throw new Error('portable: group with suppress (no-in context) not yet in scope');
+      case 'group': {   // transparent (ctxMode is invisible to the portable parser)
         const ss = altSteps(e.body);
+        if (e.suppress && e.suppress.length) return { t: 'suppress', connectors: e.suppress, steps: ss };   // no-`in` context
         return ss.length === 1 ? ss[0] : { t: 'seq', steps: ss };
       }
       case 'not': return { t: 'not', steps: altSteps(e.body) };   // zero-width negative lookahead
@@ -156,7 +157,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       case 'quantifier':
         if (e.kind === '*') return { t: 'star', step: stepOf(e.body) };
         if (e.kind === '?') return { t: 'opt', steps: altSteps(e.body) };
-        if (e.kind === '+') throw new Error("portable: '+' not yet modeled (use '*')");
+        if (e.kind === '+') return { t: 'seq', steps: [stepOf(e.body), { t: 'star', step: stepOf(e.body) }] };   // x+ = x x*
         break;
       case 'alt': {
         if (e.items.every((it) => it.type === 'literal')) {   // fast path: all-literal alternation
@@ -289,14 +290,10 @@ function buildPratt(
         continue;
       }
       if (items[0].type === 'literal') { nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); continue; }
-      // A single transparent group unwraps to its body (an explicit grouping of the NUD sequence).
+      // A single transparent (non-suppress) group unwraps to its body (an explicit grouping).
       let nudItems = items;
       if (items.length === 1 && items[0].type === 'group' && !items[0].suppress) {
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
-      }
-      // A no-`in`/suppress group is a deeper construct — defer.
-      if (nudItems.some((it) => it.type === 'group' && it.suppress)) {
-        throw new Error(`portable: Pratt NUD with suppress (no-in context) not yet in scope (rule ${name})`);
       }
       nudSeqs.push(nudItems.map((it) => stepOfPratt(it)));   // general NUD sequence (guarded ident, class expr)
       continue;
@@ -328,13 +325,15 @@ function buildPratt(
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
     if (e.type === 'not') return { t: 'not', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
+    if (e.type === 'group' && e.suppress && e.suppress.length) return { t: 'suppress', connectors: e.suppress, steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
     // ctxMode (await/yield) is transparent to the portable parser (no fork); unwrap the group.
-    if (e.type === 'group' && !e.capBelow && !e.suppress) {
+    if (e.type === 'group' && !e.capBelow) {
       return e.body.type === 'seq' ? { t: 'seq', steps: e.body.items.map(stepOfPratt) } : stepOfPratt(e.body);
     }
     if (e.type === 'sep') return { t: 'sep', elem: stepOfPratt(e.element), delim: e.delimiter };
     if (e.type === 'quantifier' && e.kind === '?') return { t: 'opt', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
     if (e.type === 'quantifier' && e.kind === '*') return { t: 'star', step: stepOfPratt(e.body) };
+    if (e.type === 'quantifier' && e.kind === '+') return { t: 'seq', steps: [stepOfPratt(e.body), { t: 'star', step: stepOfPratt(e.body) }] };
     if (e.type === 'literal') return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
     return stepOf(e);
   }

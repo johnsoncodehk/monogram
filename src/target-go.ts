@@ -178,6 +178,7 @@ function stepCond(s: Step): string {
     case 'not': return `func() bool { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); m := ${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return !m }()`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := peek(); return t != nil && !t.Nl }()`;
+    case 'suppress': return `func() bool { _suppressNext = map[string]bool{${s.connectors.map((c) => `${J(c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}); _suppressNext = nil; return _r }()`;
   }
 }
 
@@ -207,9 +208,9 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const bracketNud = (b: Bracket) => `\tif t.Text == ${J(b.first)} {
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.name)}, sb, t.Off) }
-\t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1
+\t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}t.Text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}!_mySup[${J(b.first)}] && t.Text == ${J(b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
 \t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
@@ -233,6 +234,7 @@ var ${r.name}POST = map[string]int{${post}}
 var ${r.name}ATOM = map[string]bool{${atoms}}
 func parse${r.name}() int32 { return ${r.name}bp(0) }
 func ${r.name}bp(minBp int) int32 {
+\t_mySup := _suppressNext; _suppressNext = nil; _ = _mySup
 \tleft := ${r.name}nud(minBp)
 \tif left < 0 { return -1 }
 \tif _capped { return left }
@@ -332,6 +334,7 @@ type bp struct{ lbp, rbp int }
 var toks []Tok
 var pos int
 var _capped bool
+var _suppressNext map[string]bool
 var nodes []Node
 var kids []int32
 var scratch []int32
@@ -379,7 +382,7 @@ func opt(body func() bool) bool {
 \tsp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if !body() { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }; return true
 }
 func sepBy(elem func() bool, delim string) bool {
-\tif !elem() { return false }
+\tif !elem() { return true }   // the whole separated list is optional — zero elements is valid
 \tfor {
 \t\tsp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\tif !matchLit(delim, "$punct") { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break }

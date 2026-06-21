@@ -169,6 +169,7 @@ function stepCond(s: Step): string {
     case 'not': return `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
+    case 'suppress': return `(() => { _suppressNext = new Set([${s.connectors.map(J).join(', ')}]); const _r = (${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}); _suppressNext = null; return _r; })()`;
   }
 }
 
@@ -192,11 +193,11 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const bracketNud = (b: Bracket) => `    if (t.text === ${J(b.first)}) {
       const save = pos; const kids: Cst[] = [];
       if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.name)}, kids);
-      pos = save; return null;
+      pos = save;   // fall through to the next NUD alternative (e.g. another '${b.first}'-led form)
     }`;
   // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
   // a precedence-gated led (ternary/in/instanceof) binds only when its lbp > minBp.
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}t.text === ${J(b.first)}) {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}(_mySup === null || !_mySup.has(${J(b.first)})) && t.text === ${J(b.first)}) {
       const ledSave = pos; const kids: Cst[] = [left];
       if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.name)}, kids); continue; }
       pos = ledSave; break;
@@ -214,6 +215,7 @@ const ${r.name}_POST: Record<string, number> = ${POST};
 const ${r.name}_ATOM = ${atom};
 function parse${r.name}(): Node | null { return ${r.name}_bp(0); }
 function ${r.name}_bp(minBp: number): Node | null {
+  const _mySup = _suppressNext; _suppressNext = null;   // no-in: consume the suppressed-connector set for this led loop
   let left = ${r.name}_nud(minBp);
   if (left === null) return null;
   if (_capped) return left;   // an assignment-level arrow admits no led
@@ -293,6 +295,7 @@ ${lexer(ir)}
 let toks: Tok[] = [];
 let pos = 0;
 let _capped = false;
+let _suppressNext: Set<string> | null = null;
 function peek(): Tok | null { return pos < toks.length ? toks[pos] : null; }
 function branch(rule: string, kids: Cst[], save: number): Node {
   const offset = kids.length > 0 ? kids[0].offset : (save < toks.length ? toks[save].off : 0);
@@ -325,7 +328,7 @@ function opt(body: () => boolean, kids: Cst[]): boolean {
   const sp = pos; const before = kids.length; if (!body()) { pos = sp; kids.length = before; } return true;
 }
 function sepBy(elem: () => boolean, delim: string, kids: Cst[]): boolean {
-  if (!elem()) return false;
+  if (!elem()) return true;   // the whole separated list is optional — zero elements is valid
   for (;;) {
     const sp = pos; const before = kids.length;
     if (!matchLit(delim, '$punct', kids)) { pos = sp; kids.length = before; break; }

@@ -186,6 +186,7 @@ function stepCond(s: Step): string {
     case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(self, &mut kids)`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
+    case 'suppress': return `{ self.suppress_next = vec![${s.connectors.map(J).join(', ')}]; let _r = (${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}); self.suppress_next = Vec::new(); _r }`;
   }
 }
 // A backtracking inline alternation rendered as an immediately-applied closure over (p, k),
@@ -212,6 +213,7 @@ function stepCondP(s: Step): string {
     case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(p, k)`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCondP).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
+    case 'suppress': return `{ p.suppress_next = vec![${s.connectors.map(J).join(', ')}]; let _r = (${s.steps.length ? s.steps.map(stepCondP).join(' && ') : 'true'}); p.suppress_next = Vec::new(); _r }`;
   }
 }
 
@@ -237,9 +239,9 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const bracketNud = (b: Bracket) => `        if t.text == ${J(b.first)} {
             let save = self.pos; let mut kids: Vec<Cst> = Vec::new();
             if ${b.steps.map(stepCond).join(' && ')} { return Some(node(${J(r.name)}, kids)); }
-            self.pos = save; return None;
+            self.pos = save;   // fall through to the next NUD alternative
         }`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}t.text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}!my_sup.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
                 let led_save = self.pos; let mut kids: Vec<Cst> = Vec::new();
                 if ${b.steps.map(stepCond).join(' && ')} {
                     let mut full = vec![left]; full.append(&mut kids);
@@ -259,6 +261,8 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
     fn ${r.name}_post(op: &str) -> Option<i64> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
     fn ${r.name}_atom(kind: &str) -> bool { matches!(kind, ${atomArm || '""'}) }
     fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Cst> {
+        let my_sup = std::mem::take(&mut self.suppress_next);
+        let _ = &my_sup;
         let mut left = self.${r.name}_nud(min_bp)?;
         if self.capped { return Some(left); }
         let mut tail_closed = false;
@@ -342,7 +346,7 @@ fn node(rule: &'static str, kids: Vec<Cst>) -> Cst { let o = kids[0].offset; let
 
 ${lexer(ir)}
 
-struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool }
+struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool, suppress_next: Vec<&'static str> }
 impl<'a> Parser<'a> {
     fn peek(&self) -> Option<Tok<'a>> { if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None } }
     fn branch(&self, rule: &'static str, kids: Vec<Cst>, save: usize) -> Cst {
@@ -367,7 +371,7 @@ impl<'a> Parser<'a> {
         let sp = self.pos; let before = kids.len(); if !body(self, kids) { self.pos = sp; kids.truncate(before); } true
     }
     fn sep_by(&mut self, elem: fn(&mut Parser<'a>, &mut Vec<Cst>) -> bool, delim: &str, kids: &mut Vec<Cst>) -> bool {
-        if !elem(self, kids) { return false; }
+        if !elem(self, kids) { return true; }   // the whole separated list is optional — zero elements is valid
         loop {
             let sp = self.pos; let before = kids.len();
             if !self.match_lit(delim, "$punct", kids) { self.pos = sp; kids.truncate(before); break; }
@@ -399,15 +403,15 @@ fn main() {
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
     if let Some(iters) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) {
         // black_box on the input + result so the optimizer can't elide the lex/parse.
-        for _ in 0..3 { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false }; std::hint::black_box(p.parse_${ir.entry}()); }
+        for _ in 0..3 { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new() }; std::hint::black_box(p.parse_${ir.entry}()); }
         let t = std::time::Instant::now();
-        for _ in 0..iters { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false }; std::hint::black_box(p.parse_${ir.entry}()); }
+        for _ in 0..iters { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new() }; std::hint::black_box(p.parse_${ir.entry}()); }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
     let toks = lex(&src);
     let n = toks.len();
-    let mut p = Parser { toks, pos: 0, capped: false };
+    let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new() };
     match p.parse_${ir.entry}() {
         Some(root) if p.pos == n => { let mut out = String::new(); write_json(&root, &mut out); print!("{}", out); }
         _ => { eprintln!("parse error (pos {}/{})", p.pos, n); std::process::exit(1); }

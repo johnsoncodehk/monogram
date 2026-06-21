@@ -165,6 +165,17 @@ const CASES: Case[] = [
     ],
     reject: ['a ? b;', 'a ? : c;', 'in b;', 'a instanceof;'],
   },
+  {
+    // The no-`in` (suppress) context: a `for (binding in iterable)` head parses its binding
+    // with the `in` led disabled, so `in` belongs to the for-head, not the binding.
+    grammar: 'noinjs', path: '../examples/noinjs.ts',
+    accept: [
+      'for (x in y) z;', 'x in y;', 'for (a.b in c) d;', 'a in b in c;',
+      'for ((x) in y) z;', 'for (x in y) a in b;', 'for (x in a in b) z;',
+      '(a in b);', 'for (a in b) for (c in d) e;',
+    ],
+    reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>
