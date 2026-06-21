@@ -34,12 +34,13 @@ function scanTok(t: LexTok): string {
             while e < n && b[e] != 10 { e += 1; }
             ${push}pos = e; continue;
         }`;
-  return `        if src[pos..].starts_with(${J(t.open)}) {
+  if (t.kind === 'block') return `        if src[pos..].starts_with(${J(t.open)}) {
             let mut e = pos + ${t.open.length};
             while e < n && !src[e..].starts_with(${J(t.close)}) { e += 1; }
             if e < n { e += ${t.close.length}; }
             ${push}pos = e; continue;
         }`;
+  throw new Error(`portable Rust lexer: general 'pattern' tokens not yet supported (token ${t.name}) — the stateless-token matcher is implemented in the TS target only so far`);
 }
 
 function lexer(ir: ParserIR): string {

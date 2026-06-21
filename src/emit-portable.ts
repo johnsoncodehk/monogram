@@ -20,7 +20,7 @@
 // bracket NUDs (grouping, array), and mixfix LEDs (call / member / index) tried before
 // operators. buildIR THROWS on a construct outside this set rather than emit a wrong
 // parser. This is enough to derive a real JavaScript-subset parser (examples/minijs.ts).
-import type { CstGrammar, RuleExpr, TokenDecl } from './types.ts';
+import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import {
@@ -35,7 +35,11 @@ export type LexTok =
   | { kind: 'run'; name: string; first: CharRange[]; cont: CharRange[]; skip: boolean }   // ident/number char run
   | { kind: 'string'; name: string; delim: string; skip: boolean }                        // delim..delim, `\` escapes next
   | { kind: 'line'; name: string; prefix: string; skip: boolean }                         // prefix..end-of-line
-  | { kind: 'block'; name: string; open: string; close: string; skip: boolean };          // open..close
+  | { kind: 'block'; name: string; open: string; close: string; skip: boolean }           // open..close
+  // The general case: the raw token-pattern AST, compiled to a backtracking-free matcher
+  // by the target (no regex engine). Subsumes the fast paths above; used for the token
+  // shapes they don't cleanly recognise (escaped identifiers, the number family, …).
+  | { kind: 'pattern'; name: string; pattern: TokenPattern; skip: boolean };
 
 export type Lit = { value: string; ttype: '$keyword' | '$punct' };
 export type Step =
@@ -129,7 +133,9 @@ function buildIR(grammar: CstGrammar): ParserIR {
   return { grammarName: grammar.name ?? 'grammar', entry: findEntryRule(grammar), tokens, puncts, rules };
 }
 
-// Classify a token into a portable scanner spec via the structural recognizers.
+// Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,
+// otherwise the general `pattern` matcher. The fast paths keep the common simple tokens
+// (and the calc/minijs grammars) on tight, readable scan code in every target.
 function lexTok(t: TokenDecl): LexTok {
   const skip = t.flags.includes('skip');
   const qs = tokenPatternQuoteDelimAndEscape(t);
@@ -137,13 +143,24 @@ function lexTok(t: TokenDecl): LexTok {
   const bd = tokenPatternBlockDelimiters(t);
   if (bd) return { kind: 'block', name: t.name, open: bd[0], close: bd[1], skip };
   const loop = tokenPatternCharLoop(t);
-  if (loop) {
-    if (loop.bail.length > 0 || loop.bailNonAscii) throw new Error(`portable: token ${t.name} has a complex continuation (bail) — out of scope`);
+  if (loop && loop.bail.length === 0 && !loop.bailNonAscii) {
     return { kind: 'run', name: t.name, first: codesToRanges(loop.first), cont: codesToRanges(loop.cont), skip };
   }
-  const prefix = tokenPatternLiteralPrefix(t);
-  if (prefix) return { kind: 'line', name: t.name, prefix, skip };   // prefix with no distinct suffix → to end-of-line
-  throw new Error(`portable: token ${t.name} shape not recognized by the portable lexer`);
+  const line = lineCommentShape(t.pattern);   // PRECISE: prefix-literal then star(non-newline)
+  if (line) return { kind: 'line', name: t.name, prefix: line, skip };
+  return { kind: 'pattern', name: t.name, pattern: t.pattern, skip };
+}
+
+// A token is a line comment iff its pattern is `seq(<literal>, star(charClass excluding \n))`.
+function lineCommentShape(p: TokenPattern): string | null {
+  if (typeof p === 'string' || p.type !== 'seq' || p.items.length !== 2) return null;
+  const [head, tail] = p.items;
+  if (typeof head !== 'string') return null;
+  if (typeof tail === 'string' || tail.type !== 'repeat' || tail.min !== 0) return null;
+  const body = tail.body;
+  if (typeof body === 'string' || body.type !== 'charClass' || !body.negate) return null;
+  const excludesNl = body.items.some((it): boolean => it.type === 'char' && it.value === '\n');
+  return excludesNl ? head : null;
 }
 
 function codesToRanges(codes: number[]): CharRange[] {

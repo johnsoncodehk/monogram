@@ -32,12 +32,13 @@ function scanTok(t: LexTok): string {
 \t\t\tfor e < n && src[e] != 10 { e++ }
 \t\t\t${push}pos = e; continue
 \t\t}`;
-  return `\t\tif strings.HasPrefix(src[pos:], ${J(t.open)}) {
+  if (t.kind === 'block') return `\t\tif strings.HasPrefix(src[pos:], ${J(t.open)}) {
 \t\t\te := pos + ${t.open.length}
 \t\t\tfor e < n && !strings.HasPrefix(src[e:], ${J(t.close)}) { e++ }
 \t\t\tif e < n { e += ${t.close.length} }
 \t\t\t${push}pos = e; continue
 \t\t}`;
+  throw new Error(`portable Go lexer: general 'pattern' tokens not yet supported (token ${t.name}) — the stateless-token matcher is implemented in the TS target only so far`);
 }
 
 function lexer(ir: ParserIR): string {

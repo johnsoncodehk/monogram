@@ -21,7 +21,7 @@ import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import type { CstGrammar } from '../src/types.ts';
 
-type Case = { grammar: string; path: string; accept: string[]; reject: string[] };
+type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
 const CASES: Case[] = [
   {
     grammar: 'calc', path: '../examples/calc.ts',
@@ -48,6 +48,18 @@ const CASES: Case[] = [
     // (note: `let = 1;` is VALID minijs — no reserved-word guard, so `let` is an
     // identifier and it's an assignment expression; the oracle accepts it too.)
     reject: ['1 +;', '(1;', 'if x {}', 'foo(a,;', 'a.;', '[1,', 'function (){}'],
+  },
+  {
+    // The general token-pattern matcher (stateless real-JS token tier): \u-escaped
+    // identifiers, the decimal/hex number family with a boundary, both-quote strings.
+    // TS-only for now — the Go/Rust port of the pattern matcher is the next stage.
+    grammar: 'richtokens', path: '../examples/richtokens.ts', tsOnly: true,
+    accept: [
+      '123', '0xFF', '1_000_000', '3.14', 'foo', 'bar_$x9', '"hi"', "'single'",
+      '"esc\\"q\\n"', '123 0xa foo "s" 3.14', '0xDEADbeef 42 _id $x cafe // line\n 7',
+      '/* block */ 99 x', 'caf\\u00e9 \\u0041bc', '1_2_3 0X1F 10.5 a1 b2',
+    ],
+    reject: ['12abc', '0x', '"unterminated', '3.', '#'],   // ($ is a valid identifier start, not a reject)
   },
 ];
 
@@ -86,14 +98,14 @@ for (const c of CASES) {
   writeFileSync(tsFile, emitPortableParser(grammar, tsTarget));
   runners.push({ label: 'typescript', run: (src) => runProc('node', [tsFile], src) });
 
-  if (HAS_GO) {
+  if (HAS_GO && !c.tsOnly) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
     writeFileSync(`${gdir}/main.go`, emitPortableParser(grammar, goTarget));
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
     execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });
     runners.push({ label: 'go', run: (src) => runProc(`${gdir}/p`, [], src) });
   }
-  if (HAS_RUST) {
+  if (HAS_RUST && !c.tsOnly) {
     const rfile = `${dir}/main.rs`;
     writeFileSync(rfile, emitPortableParser(grammar, rustTarget));
     execFileSync('rustc', ['-O', '-A', 'warnings', rfile, '-o', `${dir}/pr`], { stdio: 'pipe' });

@@ -10,40 +10,75 @@ const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} === ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
 
-function scanTok(t: LexTok): string {
-  const push = t.skip ? '' : `toks.push({ kind: ${J((t as { name: string }).name)}, text: src.slice(pos, e), off: pos, end: e }); `;
+import type { TokenPattern } from './types.ts';
+
+// Compile a token-pattern AST to backtracking-free matcher functions `_mN(p): number`
+// (returns the new position, or -1 on no match). Greedy `repeat`, ordered `alt`,
+// zero-width `lookahead`/`anchor` — the regex-free token-matcher tier.
+function ccCond(p: Extract<TokenPattern, { type: 'charClass' }>): string {
+  const parts = p.items.map((it) =>
+    it.type === 'char' ? `cc === ${it.value.charCodeAt(0)}` : `cc >= ${it.from.charCodeAt(0)} && cc <= ${it.to.charCodeAt(0)}`);
+  const inSet = parts.length === 1 ? parts[0] : '(' + parts.join(' || ') + ')';
+  return p.negate ? `!${inSet}` : inSet;
+}
+function compilePat(p: TokenPattern, defs: string[]): string {
+  const name = `_m${defs.length}`;
+  defs.push('');   // reserve the slot (keeps numbering stable across recursion)
+  let body: string;
+  if (typeof p === 'string') {
+    body = `=> _s.startsWith(${J(p)}, p) ? p + ${p.length} : -1`;
+  } else switch (p.type) {
+    case 'anyChar': body = `=> p < _s.length ? p + 1 : -1`; break;
+    case 'charClass': body = `=> { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return ${ccCond(p)} ? p + 1 : -1; }`; break;
+    case 'seq': { const ms = p.items.map((x) => compilePat(x, defs)); body = `=> { ${ms.map((m) => `p = ${m}(p); if (p < 0) return -1;`).join(' ')} return p; }`; break; }
+    case 'alt': { const ms = p.items.map((x) => compilePat(x, defs)); body = `=> { ${ms.map((m) => `{ const r = ${m}(p); if (r >= 0) return r; }`).join(' ')} return -1; }`; break; }
+    case 'repeat': { const m = compilePat(p.body, defs); const mx = p.max !== undefined ? `if (c >= ${p.max}) break;` : ''; body = `=> { let q = p, c = 0; for (;;) { const r = ${m}(q); if (r < 0 || r === q) break; q = r; c++; ${mx} } return c >= ${p.min} ? q : -1; }`; break; }
+    case 'lookahead': { const m = compilePat(p.body, defs); body = `=> { const r = ${m}(p); return ${p.negate ? 'r < 0' : 'r >= 0'} ? p : -1; }`; break; }
+    case 'anchor': body = p.kind === 'start' ? `=> p === 0 ? p : -1` : `=> p === _s.length ? p : -1`; break;
+    default: throw new Error(`portable TS lexer: pattern '${(p as { type: string }).type}' unsupported`);
+  }
+  defs[Number(name.slice(2))] = `const ${name} = (p: number): number ${body};`;
+  return name;
+}
+
+function scanTok(t: LexTok, defs: string[]): string {
+  const name = (t as { name: string }).name;
+  const push = (endExpr: string) => (t.skip ? '' : `toks.push({ kind: ${J(name)}, text: src.slice(pos, ${endExpr}), off: pos, end: ${endExpr} }); `);
   if (t.kind === 'run') return `    if (${rangeCond('c', t.first)}) {
       let e = pos + 1;
       while (e < n) { const cc = src.charCodeAt(e); if (!${rangeCond('cc', t.cont)}) break; e++; }
-      ${push}pos = e; continue;
+      ${push('e')}pos = e; continue;
     }`;
   if (t.kind === 'string') return `    if (c === ${t.delim.charCodeAt(0)}) {
       let e = pos + 1;
       while (e < n) { const ch = src.charCodeAt(e); if (ch === 92) { e += 2; continue; } if (ch === ${t.delim.charCodeAt(0)}) { e++; break; } e++; }
-      ${push}pos = e; continue;
+      ${push('e')}pos = e; continue;
     }`;
   if (t.kind === 'line') return `    if (src.startsWith(${J(t.prefix)}, pos)) {
       let e = pos + ${t.prefix.length};
       while (e < n && src.charCodeAt(e) !== 10) e++;
-      ${push}pos = e; continue;
+      ${push('e')}pos = e; continue;
     }`;
-  return `    if (src.startsWith(${J(t.open)}, pos)) {
+  if (t.kind === 'block') return `    if (src.startsWith(${J(t.open)}, pos)) {
       let e = pos + ${t.open.length};
       while (e < n && !src.startsWith(${J(t.close)}, e)) e++;
       if (e < n) e += ${t.close.length};
-      ${push}pos = e; continue;
+      ${push('e')}pos = e; continue;
     }`;
+  const m = compilePat(t.pattern, defs);
+  return `    { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
 }
 
 function lexer(ir: ParserIR): string {
-  const toks = ir.tokens.map(scanTok).join('\n');
+  const defs: string[] = [];
+  const toks = ir.tokens.map((t) => scanTok(t, defs)).join('\n');
   const puncts = ir.puncts.map((p) =>
     `    if (src.startsWith(${J(p)}, pos)) { toks.push({ kind: '', text: ${J(p)}, off: pos, end: pos + ${p.length} }); pos += ${p.length}; continue; }`).join('\n');
-  return `function lex(src: string): Tok[] {
+  return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
-  while (pos < n) {
+${defs.length ? '  _s = src;\n' : ''}  while (pos < n) {
     const c = src.charCodeAt(pos);
     if (c === 32 || c === 9 || c === 10 || c === 13) { pos++; continue; }
 ${toks}
