@@ -43,7 +43,7 @@ const NON_ASCII_WS_FN =
 // The non-ASCII whitespace fallback, emitted at the two sites that need it (after an ASCII run,
 // and as the lead char). `cont` appends the `continue` the lead-char site needs.
 const nonAsciiWsConsume = (v: string, cont: boolean, indent: string): string =>
-  `${indent}if (${v} > 127 && lxNonAsciiWs(${v})) { LX_WS.lastIndex = pos; const m = LX_WS.exec(source); if (m !== null) { if (m[0].includes('\\n')) pendingNl = true; pos += m[0].length;${cont ? ' continue;' : ''} } }`;
+  `${indent}if (${v} > 127 && lxNonAsciiWs(${v})) { LX_WS.lastIndex = pos; const m = LX_WS.exec(source); if (m !== null) { if (/[\\n\\r\\u2028\\u2029]/.test(m[0])) pendingNl = true; pos += m[0].length;${cont ? ' continue;' : ''} } }`;
 
 export function emitSoaLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   // Out of scope: the markup / indentation / newline state machines.
@@ -390,7 +390,7 @@ export function emitSoaLexer(grammar: CstGrammar, st: LexerSymtab): string | nul
   emit(`    if (cc === 32 || (cc >= 9 && cc <= 13)) {`);
   emit(`      let wc = cc;`);
   emit(`      do {`);
-  emit(`        if (wc === 10) pendingNl = true;`);
+  emit(`        if (wc === 10 || wc === 13) pendingNl = true;`);   // JS line terminators LF/CR (LS/PS via the \\s regex below)
   emit(`        pos++;`);
   emit(`        wc = source.charCodeAt(pos);`);
   emit(`      } while (wc === 32 || (wc >= 9 && wc <= 13));`);
@@ -476,7 +476,7 @@ export function emitSoaLexer(grammar: CstGrammar, st: LexerSymtab): string | nul
       emit(`${ind}    }`);
     }
     if (m.skip) {
-      emit(`${ind}    if (m[0].includes('\\n')) pendingNl = true;`);
+      emit(`${ind}    if (/[\\n\\r\\u2028\\u2029]/.test(m[0])) pendingNl = true;`);
       emit(`${ind}    pos += m[0].length;`);
     } else {
       emit(`${ind}    const _e = pos + m[0].length;`);

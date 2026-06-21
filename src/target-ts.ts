@@ -50,7 +50,7 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): st
   if (tplTok !== undefined && name === tplTok) return '';   // template token is scanned by the state machine
   // `emit(...)` threads the lexer state in stateful mode; a plain push otherwise. A skipped
   // token (comment) still records a newline it spans, so `sameLine` sees it.
-  const push = (endExpr: string) => (t.skip ? `if (src.slice(pos, ${endExpr}).indexOf('\\n') >= 0) pendingNl = true; ` : `${stateful ? 'emit' : 'push'}(${J(name)}, src.slice(pos, ${endExpr}), pos, ${endExpr}); `);
+  const push = (endExpr: string) => (t.skip ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, ${endExpr}))) pendingNl = true; ` : `${stateful ? 'emit' : 'push'}(${J(name)}, src.slice(pos, ${endExpr}), pos, ${endExpr}); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   if (t.kind === 'run') return `    if (${gate}${rangeCond('c', t.first)}) {
       let e = pos + 1;
@@ -147,10 +147,9 @@ ${emitHooks}
   let pendingNl = false;
 ${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${stateful ? emitFn : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false; };\n'}  while (pos < n) {
     const c = src.charCodeAt(pos);
-    // Only LF (char 10) sets newline-before, matching the interpreter (gen-lexer.ts: only wc === 10).
-    // CR/LS/PS are whitespace but NOT newline-before there, so a lone CR must not flip sameLine.
-    if (c === 10) { pendingNl = true; pos++; continue; }
-    if (c === 13 || c === 8232 || c === 8233 || c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
+    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
+    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
+    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
 ${tplDispatch}${toks}
 ${puncts}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));

@@ -135,12 +135,12 @@ const CASES: Case[] = [
     grammar: 'sljs', path: './fixtures/sljs.ts',
     accept: [
       'return 1;', 'return;', 'return 1 + 2;', '1 + 2;', 'return /* c */ 1;',
-      '(a);', 'return (1);',
-      // Only `\n` is newline-before — a lone `\r` is plain whitespace, so `return` still takes its
-      // same-line operand (matches the interpreter; was a portable-lexer bug). CRLF still has the `\n`.
-      'return\r1;',
+      '(a);', 'return (1);', 'return\t1;',
     ],
-    reject: ['return\n1;', 'return\nx;', 'return /*\n*/ 1;', 'return // c\n 1;', 'return\r\n1;'],
+    // `\r`, LS, PS are JS line terminators just like `\n` (ASI / "no LineTerminator here"), so a
+    // `return` followed by any of them takes no operand — across all four lexers (interpreter,
+    // emitted JS, portable ts/go/rust). A `\t` (tab) is whitespace but NOT a terminator → accepted above.
+    reject: ['return\n1;', 'return\nx;', 'return /*\n*/ 1;', 'return // c\n 1;', 'return\r1;', 'return\r\n1;', 'return /*\r*/ 1;'],
   },
   {
     // capBelow (assignment-level) arrow functions: a NUD parsed only when minBp < the

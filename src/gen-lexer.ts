@@ -842,21 +842,23 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
         let wc = source.charCodeAt(pos);
         if (wc === 32 || (wc >= 9 && wc <= 13)) {
           do {
-            if (wc === 10) pendingNl = true;
+            // JS line terminators: LF, CR, LS, PS (the ECMAScript set, driving ASI / "no
+            // LineTerminator here"). LF/CR are ASCII (here); LS/PS arrive via the \s regex below.
+            if (wc === 10 || wc === 13) pendingNl = true;
             pos++;
             wc = source.charCodeAt(pos);
           } while (wc === 32 || (wc >= 9 && wc <= 13));
           if (wc > 127) {   // a Unicode space may continue the run — absorb it like the old regex did
             wsReY.lastIndex = pos;
             const wsMatch = wsReY.exec(source);
-            if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; }
+            if (wsMatch) { if (/[\n\r\u2028\u2029]/.test(wsMatch[0])) pendingNl = true; pos += wsMatch[0].length; }
           }
           continue;
         }
         if (wc > 127) {
           wsReY.lastIndex = pos;
           const wsMatch = wsReY.exec(source);
-          if (wsMatch) { if (wsMatch[0].includes('\n')) pendingNl = true; pos += wsMatch[0].length; continue; }
+          if (wsMatch) { if (/[\n\r\u2028\u2029]/.test(wsMatch[0])) pendingNl = true; pos += wsMatch[0].length; continue; }
         }
       }
 
@@ -1178,7 +1180,7 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
           if (!tm.skip) {
             push(mkNamed(tm.name, m[0], pos, tm.k));
           } else {
-            if (m[0].includes('\n')) pendingNl = true;   // a skipped comment spanning a newline still terminates the previous line
+            if (/[\n\r\u2028\u2029]/.test(m[0])) pendingNl = true;   // a skipped comment spanning a line terminator still terminates the previous line
             // An inline comment (indentation grammars) ENDS a plain scalar — flag the next token so a
             // multi-line fold won't reabsorb a post-comment line (yaml-test-suite 8XDJ / BF9H).
             if (indent?.comment && m[0].startsWith(indent.comment)) pendingComment = true;

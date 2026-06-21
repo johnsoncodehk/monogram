@@ -54,7 +54,7 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): st
   const stateful = rxTok !== undefined || tplTok !== undefined;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
-  const push = (endE: string) => (t.skip ? `if src[pos..${endE}].contains('\\n') { ${nlVar} = true; } ` : stateful ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}); ` : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE}, nl: pending_nl }); pending_nl = false; `);
+  const push = (endE: string) => (t.skip ? `if src[pos..${endE}].bytes().any(|c| c == 10 || c == 13) { ${nlVar} = true; } ` : stateful ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}); ` : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE}, nl: pending_nl }); pending_nl = false; `);
   const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
   if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
@@ -163,8 +163,8 @@ ${open}
     let mut pos = 0usize;
     while pos < n {
         let c = b[pos] as u32;
-        if c == 32 || c == 9 || c == 13 { pos += 1; continue; }   // CR is plain whitespace, NOT newline-before
-        if c == 10 { ${nlVar} = true; pos += 1; continue; }   // only LF (10) is newline-before (matches the interpreter)
+        if c == 32 || c == 9 { pos += 1; continue; }
+        if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }   // JS line terminators LF/CR (matches the interpreter; LS/PS multi-byte: non-ASCII boundary)
 ${tplDispatch}${toks}
 ${puncts}
         panic!("lex error at {}", pos);
