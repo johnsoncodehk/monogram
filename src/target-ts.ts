@@ -162,6 +162,7 @@ function stepCond(s: Step): string {
     case 'sep': return `sepBy(() => ${stepCond(s.elem)}, ${J(s.delim)}, kids)`;
     case 'altlit': return `altLit([${s.opts.map((o) => `[${J(o.value)}, ${J(o.ttype)}]`).join(', ')}], kids)`;
     case 'alt': return `(() => { ${s.branches.map((br) => `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map(stepCond).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`).join(' ')} return false; })()`;
+    case 'not': return `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
   }
 }
 
@@ -234,6 +235,7 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
     if (operand === null) { pos = save; return null; }
     return { rule: ${J(r.name)}, children: [opLeaf, operand], offset: t.off, end: operand.end };
   }
+${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${seq.length ? seq.map(stepCond).join(' && ') : 'true'}) return branch(${J(r.name)}, kids, save); pos = save; }`).join('\n')}
   return null;
 }`;
 }

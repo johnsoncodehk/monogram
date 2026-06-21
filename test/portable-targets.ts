@@ -99,6 +99,17 @@ const CASES: Case[] = [
     ],
     reject: ['{a:};', '{: 1};', '{a 1};', '{a: 1,, b: 2};'],
   },
+  {
+    // General Pratt NUD sequences: a reserved-word-guarded identifier (`not(kw)… Ident`,
+    // a zero-width negative lookahead) and a quantifier-first class expression.
+    grammar: 'nudjs', path: '../examples/nudjs.ts',
+    accept: [
+      'x;', 'foo + bar;', 'class C {};', 'class {};', 'class C extends B {};',
+      '@dec class C { m(){} };', 'new Foo;', 'new C();', 'a.b.c;',
+      'class C { @x m(){} n(){} };', 'x + class {} + y;',
+    ],
+    reject: ['if;', 'class;', 'new;', 'return + 1;'],   // reserved words can't be bare identifiers
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>

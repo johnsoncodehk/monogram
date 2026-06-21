@@ -50,7 +50,8 @@ export type Step =
   | { t: 'opt'; steps: Step[] }                                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string }                     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
-  | { t: 'alt'; branches: Step[][] };                           // inline alternation of sub-sequences (backtracking)
+  | { t: 'alt'; branches: Step[][] }                            // inline alternation of sub-sequences (backtracking)
+  | { t: 'not'; steps: Step[] };                                // zero-width negative lookahead (consumes nothing)
 export type Alt = Step[];
 
 export type RdRule = { kind: 'rd'; name: string; alts: Alt[] };
@@ -60,6 +61,7 @@ export type PrattRule = {
   name: string;
   nudToks: string[];                                  // NUD: a bare token wrapped in a node
   nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
+  nudSeqs: Step[][];                                  // NUD: a general sequence (guarded ident, class expr), tried with backtracking
   prefix: Array<{ op: string; rbp: number }>;         // NUD: prefix op then operand at rbp
   binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
@@ -136,6 +138,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       case 'literal': return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
       case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name } : { t: 'rule', name: e.name };
       case 'group': { const ss = altSteps(e.body); if (ss.length !== 1) throw new Error('portable: group must reduce to a single step'); return ss[0]; }
+      case 'not': return { t: 'not', steps: altSteps(e.body) };   // zero-width negative lookahead
       case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
       case 'quantifier':
         if (e.kind === '*') return { t: 'star', step: stepOf(e.body) };
@@ -249,6 +252,7 @@ function buildPratt(
   const alts = body.type === 'alt' ? body.items : [body];
   const nudToks: string[] = [];
   const nudBrackets: Bracket[] = [];
+  const nudSeqs: Step[][] = [];
   let sawPrefix = false, sawBinary = false;
   const leds: Bracket[] = [];
   const postfixToks: string[] = [];
@@ -260,7 +264,17 @@ function buildPratt(
       if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) { nudToks.push(items[0].name); continue; }
       if (items[0].type === 'prefix') { sawPrefix = true; continue; }
       if (items[0].type === 'literal') { nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); continue; }
-      throw new Error(`portable: Pratt NUD shape not in scope (rule ${name})`);
+      // A single transparent group unwraps to its body (an explicit grouping of the NUD sequence).
+      let nudItems = items;
+      if (items.length === 1 && items[0].type === 'group' && !items[0].capBelow && !items[0].ctxMode && !items[0].suppress) {
+        nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
+      }
+      // capBelow / ctxMode (arrow functions, await/yield context) are a deeper construct — defer.
+      if (nudItems.some((it) => it.type === 'group' && (it.capBelow || it.ctxMode || it.suppress))) {
+        throw new Error(`portable: Pratt NUD with capBelow/ctxMode/suppress not yet in scope (rule ${name}) — arrow functions etc.`);
+      }
+      nudSeqs.push(nudItems.map((it) => stepOfPratt(it)));   // general NUD sequence (guarded ident, class expr)
+      continue;
     }
     // LED (starts with self): `$ op $` (binary, op slot + trailing self) or `$ <lit> …` (mixfix)
     const rest = items.slice(1);
@@ -272,6 +286,8 @@ function buildPratt(
   // a self-ref inside a NUD/LED sub-sequence is a fresh parse of this rule
   function stepOfPratt(e: RuleExpr): Step {
     if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
+    if (e.type === 'not') return { t: 'not', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
+    if (e.type === 'group' && !e.capBelow && !e.ctxMode && !e.suppress && e.body.type !== 'seq') return stepOfPratt(e.body);
     if (e.type === 'sep') return { t: 'sep', elem: stepOfPratt(e.element), delim: e.delimiter };
     if (e.type === 'quantifier' && e.kind === '?') return { t: 'opt', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
     if (e.type === 'quantifier' && e.kind === '*') return { t: 'star', step: stepOfPratt(e.body) };
@@ -282,5 +298,5 @@ function buildPratt(
   const binary = sawBinary
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp }))
     : [];
-  return { kind: 'pratt', name, nudToks, nudBrackets, prefix, binary, leds, postfixToks };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, prefix, binary, leds, postfixToks };
 }

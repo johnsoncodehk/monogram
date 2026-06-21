@@ -179,12 +179,17 @@ function stepCond(s: Step): string {
     case 'sep': return `self.sep_by(|p, k| ${stepCondP(s.elem)}, ${J(s.delim)}, &mut kids)`;
     case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}], &mut kids)`;
     case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(self, &mut kids)`;
+    case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(self, &mut kids)`;
   }
 }
 // A backtracking inline alternation rendered as an immediately-applied closure over (p, k),
 // so it composes identically whether it sits at top level or already inside a closure.
 function altBody(branches: Step[][]): string {
   return `${branches.map((br) => `{ let sp = p.pos; let bk = k.len(); if ${br.length ? br.map(stepCondP).join(' && ') : 'true'} { return true; } p.pos = sp; k.truncate(bk); }`).join(' ')} false`;
+}
+// Zero-width negative lookahead: try the steps, restore, succeed iff they did NOT all match.
+function notBody(steps: Step[]): string {
+  return `let sp = p.pos; let bk = k.len(); let m = ${steps.length ? steps.map(stepCondP).join(' && ') : 'true'}; p.pos = sp; k.truncate(bk); !m`;
 }
 // Inside a closure: uses `p` and `k`.
 function stepCondP(s: Step): string {
@@ -197,6 +202,7 @@ function stepCondP(s: Step): string {
     case 'sep': return `p.sep_by(|p, k| ${stepCondP(s.elem)}, ${J(s.delim)}, k)`;
     case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}], k)`;
     case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(p, k)`;
+    case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(p, k)`;
   }
 }
 
@@ -272,6 +278,7 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
                 None => { self.pos = save; return None; }
             }
         }
+${r.nudSeqs.map((seq) => `        { let save = self.pos; let mut kids: Vec<Cst> = Vec::new(); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return Some(self.branch(${J(r.name)}, kids, save)); } self.pos = save; }`).join('\n')}
         None
     }`;
 }
