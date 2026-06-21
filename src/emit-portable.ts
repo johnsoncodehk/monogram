@@ -46,6 +46,7 @@ export type Step =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
   | { t: 'tok'; name: string }                                  // match a token kind
   | { t: 'rule'; name: string }                                 // call a rule, append its node
+  | { t: 'ruleBp'; name: string; bp: number }                   // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
   | { t: 'star'; step: Step }                                   // repeat inner 0+
   | { t: 'opt'; steps: Step[] }                                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string }                     // elem (delim elem)*
@@ -69,6 +70,7 @@ export type PrattRule = {
   binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledAccessTail: boolean[];                           // parallel to leds: a "closed punct-connector" tail (member/call/index) — disabled once a postfix binds
+  ledLbp: Array<number | null>;                       // parallel to leds: precedence gate (ternary/in/instanceof) — bind only when lbp > minBp; null = bind maximally tight
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
   postfix: Array<{ op: string; lbp: number }>;        // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
 };
@@ -268,6 +270,7 @@ function buildPratt(
   let sawPrefix = false, sawBinary = false, sawPostfix = false;
   const leds: Bracket[] = [];
   const ledAccessTail: boolean[] = [];
+  const ledLbp: Array<number | null> = [];
   const postfixToks: string[] = [];
   for (const alt of alts) {
     const items = alt.type === 'seq' ? alt.items : [alt];
@@ -303,12 +306,17 @@ function buildPratt(
     if (rest[0].type === 'op') { sawBinary = true; continue; }
     if (rest[0].type === 'postfix') { sawPostfix = true; continue; }   // postfix operator (`x++`)
     if (rest[0].type === 'literal') {
+      const conn = rest[0].value;
+      const prec = a.ledPrecByConnector.get(conn);   // { lbp, rhsBp } for ternary/in/instanceof
       const steps = rest.map((it) => stepOfPratt(it));
       const last = steps[steps.length - 1];
       const lastIsOperand = last !== undefined && last.t === 'rule' && last.name === name;   // open binary/ternary operand
-      const wordConnector = /^[A-Za-z]/.test(rest[0].value);                                  // `in`/`instanceof`/`as` — not a tail
-      leds.push({ first: rest[0].value, steps });
+      // chain-rhs (`in`/`instanceof`): the trailing self-operand parses at the level's bp (left-chain).
+      if (prec && prec.rhsBp !== null && lastIsOperand) steps[steps.length - 1] = { t: 'ruleBp', name, bp: prec.rhsBp };
+      const wordConnector = /^[A-Za-z]/.test(conn);                                           // `in`/`instanceof`/`as` — not a tail
+      leds.push({ first: conn, steps });
       ledAccessTail.push(!lastIsOperand && !wordConnector);
+      ledLbp.push(prec ? prec.lbp : null);
       continue;
     }
     if (rest.length === 1 && rest[0].type === 'ref' && a.tokenNames.has(rest[0].name)) { postfixToks.push(rest[0].name); continue; }  // postfix token (tagged template)
@@ -337,5 +345,5 @@ function buildPratt(
   const postfix = sawPostfix
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp }))
     : [];
-  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudCapped, prefix, binary, leds, ledAccessTail, postfixToks, postfix };
+  return { kind: 'pratt', name, nudToks, nudBrackets, nudSeqs, nudCapped, prefix, binary, leds, ledAccessTail, ledLbp, postfixToks, postfix };
 }

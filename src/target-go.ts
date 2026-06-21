@@ -169,6 +169,7 @@ function stepCond(s: Step): string {
     case 'lit': return `matchLit(${J(s.value)}, ${J(s.ttype)})`;
     case 'tok': return `matchTok(${J(s.name)})`;
     case 'rule': return `callRule(parse${s.name})`;
+    case 'ruleBp': return `callRule(func() int32 { return ${s.name}bp(${s.bp}) })`;
     case 'star': return `star(func() bool { return ${stepCond(s.step)} })`;
     case 'opt': return `opt(func() bool { return ${s.steps.map(stepCond).join(' && ')} })`;
     case 'sep': return `sepBy(func() bool { return ${stepCond(s.elem)} }, ${J(s.delim)})`;
@@ -208,7 +209,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.name)}, sb, t.Off) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1
 \t}`;
-  const ledArm = (b: Bracket, accessTail: boolean) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}t.Text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}t.Text == ${J(b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
 \t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.name)}, sb, nodes[left].Offset); continue }
@@ -239,7 +240,7 @@ func ${r.name}bp(minBp int) int32 {
 \tfor {
 \t\tt := peek()
 \t\tif t == nil { break }
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i])).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
 \t\tif post, ok := ${r.name}POST[t.Text]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End)); pos++; tailClosed = true

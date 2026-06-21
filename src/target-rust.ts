@@ -177,6 +177,7 @@ function stepCond(s: Step): string {
     case 'lit': return `self.match_lit(${J(s.value)}, ${J(s.ttype)}, &mut kids)`;
     case 'tok': return `self.match_tok(${J(s.name)}, &mut kids)`;
     case 'rule': return `self.call_rule(Parser::parse_${s.name}, &mut kids)`;
+    case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}), &mut kids)`;
     case 'star': return `self.star(|p, k| ${stepCondP(s.step)}, &mut kids)`;
     case 'opt': return `self.opt(|p, k| ${s.steps.map(stepCondP).join(' && ')}, &mut kids)`;
     case 'sep': return `self.sep_by(|p, k| ${stepCondP(s.elem)}, ${J(s.delim)}, &mut kids)`;
@@ -202,6 +203,7 @@ function stepCondP(s: Step): string {
     case 'lit': return `p.match_lit(${J(s.value)}, ${J(s.ttype)}, k)`;
     case 'tok': return `p.match_tok(${J(s.name)}, k)`;
     case 'rule': return `p.call_rule(Parser::parse_${s.name}, k)`;
+    case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}), k)`;
     case 'star': return `p.star(|p, k| ${stepCondP(s.step)}, k)`;
     case 'opt': return `p.opt(|p, k| ${s.steps.map(stepCondP).join(' && ')}, k)`;
     case 'sep': return `p.sep_by(|p, k| ${stepCondP(s.elem)}, ${J(s.delim)}, k)`;
@@ -237,7 +239,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             if ${b.steps.map(stepCond).join(' && ')} { return Some(node(${J(r.name)}, kids)); }
             self.pos = save; return None;
         }`;
-  const ledArm = (b: Bracket, accessTail: boolean) => `            if ${accessTail ? '!tail_closed && ' : ''}t.text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}t.text == ${J(b.first)} {
                 let led_save = self.pos; let mut kids: Vec<Cst> = Vec::new();
                 if ${b.steps.map(stepCond).join(' && ')} {
                     let mut full = vec![left]; full.append(&mut kids);
@@ -262,7 +264,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
         let mut tail_closed = false;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i])).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
             if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { self.pos += 1; let op_leaf = Cst::leaf("$operator", t.off, t.end); left = node(${J(r.name)}, vec![left, op_leaf]); tail_closed = true; continue; } }
             let (lbp, rbp) = match Parser::${r.name}_bin(t.text) { Some(x) => x, None => break };

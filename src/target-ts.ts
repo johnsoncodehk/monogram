@@ -160,6 +160,7 @@ function stepCond(s: Step): string {
     case 'lit': return `matchLit(${J(s.value)}, ${J(s.ttype)}, kids)`;
     case 'tok': return `matchTok(${J(s.name)}, kids)`;
     case 'rule': return `callRule(parse${s.name}, kids)`;
+    case 'ruleBp': return `callRule(() => ${s.name}_bp(${s.bp}), kids)`;
     case 'star': return `star(() => ${stepCond(s.step)}, kids)`;
     case 'opt': return `opt(() => ${s.steps.map(stepCond).join(' && ')}, kids)`;
     case 'sep': return `sepBy(() => ${stepCond(s.elem)}, ${J(s.delim)}, kids)`;
@@ -193,8 +194,9 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
       if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.name)}, kids);
       pos = save; return null;
     }`;
-  // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand.
-  const ledArm = (b: Bracket, accessTail: boolean) => `    if (${accessTail ? '!tailClosed && ' : ''}t.text === ${J(b.first)}) {
+  // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
+  // a precedence-gated led (ternary/in/instanceof) binds only when its lbp > minBp.
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}t.text === ${J(b.first)}) {
       const ledSave = pos; const kids: Cst[] = [left];
       if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.name)}, kids); continue; }
       pos = ledSave; break;
@@ -219,7 +221,7 @@ function ${r.name}_bp(minBp: number): Node | null {
   for (;;) {
     const t = peek();
     if (t === null) break;
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i])).join('\n')}
+${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
     const post = ${r.name}_POST[t.text];
     if (!tailClosed && post !== undefined && post > minBp) { pos++; const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; left = { rule: ${J(r.name)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; continue; }

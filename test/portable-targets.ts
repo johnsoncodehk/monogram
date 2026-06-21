@@ -154,6 +154,17 @@ const CASES: Case[] = [
     ],
     reject: ['=> x;', 'x => ;', '1 + () => 2;', '(,) => b;'],
   },
+  {
+    // Precedence-gated mixfix LEDs: ternary `? :` (binds below the operators) and the
+    // chain-rhs relational leds `in`/`instanceof` (`a in b in c` left-chains).
+    grammar: 'ledjs', path: '../examples/ledjs.ts',
+    accept: [
+      'a == b ? c : d;', 'a ? b : c ? d : e;', 'a + b ? c : d - e;', 'a in b;',
+      'a in b in c;', 'x instanceof Y;', 'a < b in c;', '1 + 2 * 3 ? 4 : 5;',
+      '(a ? b : c) + d;', 'a in b ? c : d;', 'a = b ? c : d;',
+    ],
+    reject: ['a ? b;', 'a ? : c;', 'in b;', 'a instanceof;'],
+  },
 ];
 
 const sortKeys = (o: unknown): unknown =>
