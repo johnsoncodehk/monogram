@@ -27,6 +27,7 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'emit-reject-messages', args: ['test/emit-reject-messages.ts'] },
   { group: 'emit-parity', name: 'emit-lexer-verify', args: ['test/emit-lexer-verify.ts'] },
   { group: 'emit-parity', name: 'emit-tsc-gate', args: ['test/emit-tsc-gate.ts'] },
+  { group: 'emit-parity', name: 'portable-targets', args: ['test/portable-targets.ts'] },
   { group: 'core', name: 'multi-doc', args: ['test/multi-doc.ts'] },
   { group: 'core', name: 'recovery', args: ['test/recovery.ts'] },
   { group: 'core', name: 'incremental-grammars', args: ['test/incremental-grammars.ts'] },
