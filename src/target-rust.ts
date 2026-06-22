@@ -415,10 +415,11 @@ fn write_json(c: &Cst, out: &mut String) {
     out.push_str(&format!("],\\"offset\\":{},\\"end\\":{}}}", c.offset, c.end));
 }
 
-// The library entry: lex + parse the whole input, returning the CST root (None on a parse
-// error / trailing input). No I/O — see emitRunner() for the stdin -> JSON wrapper.
-fn parse(src: &str) -> Option<Cst> {
-    let toks = lex(src);
+// Library entry, two composable phases. tokenize() lexes ONCE; pass its tokens (plus the src,
+// which head-leaf lookups need — Rust keeps no globals) to parse(). Want the tokens AND the
+// CST? let t = tokenize(src); parse(t, src) — no re-lexing. Just the CST? parse(tokenize(src), src).
+fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
+fn parse<'a>(toks: Vec<Tok<'a>>, src: &'a str) -> Option<Cst> {
     let n = toks.len();
     let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src };
     match p.parse_${ir.entry}() {
@@ -439,13 +440,13 @@ fn main() {
     std::io::stdin().read_to_string(&mut src).unwrap();
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
     if let Some(iters) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) {
-        for _ in 0..3 { std::hint::black_box(parse(std::hint::black_box(&src))); }
+        for _ in 0..3 { let s = std::hint::black_box(&src); std::hint::black_box(parse(tokenize(s), s)); }
         let t = std::time::Instant::now();
-        for _ in 0..iters { std::hint::black_box(parse(std::hint::black_box(&src))); }
+        for _ in 0..iters { let s = std::hint::black_box(&src); std::hint::black_box(parse(tokenize(s), s)); }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
-    match parse(&src) {
+    match parse(tokenize(&src), &src) {
         Some(root) => { let mut out = String::new(); write_json(&root, &mut out); print!("{}", out); }
         None => { eprintln!("parse error"); std::process::exit(1); }
     }

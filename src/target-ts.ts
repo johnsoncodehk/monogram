@@ -363,11 +363,13 @@ function altLit(opts: [string, string][], kids: Cst[]): boolean {
 
 ${matchTemplate}${ruleFns}
 
-// The library entry: lex + parse the whole input, returning the CST root (or null on a
-// parse error / trailing input). No I/O — see emitRunner() for the stdin → JSON wrapper.
-export function parse(src: string): Cst | null {
-  _src = src;
-  toks = lex(src);
+// Library entry, in two composable phases. tokenize() lexes ONCE; pass its tokens to parse().
+// Want both the token stream and the CST? Lex once: const t = tokenize(src); parse(t) — no
+// re-lexing. Want only the CST? parse(tokenize(src)). (tokenize also records the source for
+// head-leaf lookups.) No I/O — see emitRunner() for the stdin → JSON wrapper.
+export function tokenize(src: string): Tok[] { _src = src; return lex(src); }
+export function parse(tokens: Tok[]): Cst | null {
+  toks = tokens;
   pos = 0;
   const root = parse${ir.entry}();
   return root !== null && pos === toks.length ? root : null;
@@ -378,7 +380,7 @@ export function parse(src: string): Cst | null {
     return `// CLI runner (harness only): stdin → CST JSON. Appended to the parser library by the gate;
 // NOT part of the emitted parser. The import is hoisted, so it may follow the library code.
 import { readFileSync } from 'node:fs';
-const _root = parse(readFileSync(0, 'utf8'));
+const _root = parse(tokenize(readFileSync(0, 'utf8')));
 if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
 process.stdout.write(JSON.stringify(_root));
 `;

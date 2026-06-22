@@ -340,17 +340,18 @@ const Regex = token(seq(
 
 ### The emitted parser need not be JS — Go, Rust, native
 
-The grammar also derives a **parser library in another language**. [`emitParser(grammar, target)`](src/emit.ts) runs one analysis into one language-agnostic IR, and each `Target` renders it — including its own regex-free lexer (`emitParser` reuses `emitLexer(grammar, target)`), so the output has no dependency on the JS runtime and compiles offline. What it emits is a **library** — a `parse` entry, no I/O — that you embed and call:
+The grammar also derives a **parser library in another language**. [`emitParser(grammar, target)`](src/emit.ts) runs one analysis into one language-agnostic IR, and each `Target` renders it — including its own regex-free lexer (`emitParser` reuses `emitLexer(grammar, target)`), so the output has no dependency on the JS runtime and compiles offline. What it emits is a **library** — no I/O — exposing two composable phases, `tokenize(src)` then `parse(tokens)`, so the lexer is reused at runtime (lex once, use the tokens *and* the CST):
 
 ```ts
 import { emitParser, tsTarget, goTarget, rustTarget } from './src/emit.ts';
+writeFileSync('parser.mts', emitParser(grammar, tsTarget));   // + goTarget / rustTarget
 
-writeFileSync('parser.mts', emitParser(grammar, tsTarget));  // import { parse } → a plain CST
-writeFileSync('parser.go',  emitParser(grammar, goTarget));  // a Go parser, no deps
-writeFileSync('parser.rs',  emitParser(grammar, rustTarget)); // a Rust parser, no crates
+// in the emitted parser:
+const tokens = tokenize(src);   // lex once
+const cst    = parse(tokens);   // same tokens → CST — no re-lexing
 ```
 
-The CLI shape `test/portable-targets.ts` runs (stdin → CST JSON) is a *harness* wrapper — `target.emitRunner()`, appended by the gate to make the library executable — not part of the parser.
+Go and Rust expose the same `tokenize`/`parse` pair (Rust passes `src` to `parse` too, as it keeps no globals). The CLI shape `test/portable-targets.ts` runs (stdin → CST JSON) is a *harness* wrapper — `target.emitRunner()`, appended by the gate to make the library executable — not part of the parser.
 
 The proof is the full languages: the real [`javascript.ts`](javascript.ts) and [`typescript.ts`](typescript.ts) grammars — including the `[Await]/[Yield]` fork, left recursion, the regex/division and template state machines, arrow functions, and the TS type grammar — emit to **TypeScript, Go, and Rust**, and every CST is byte-identical to the reference interpreter. [`test/portable-targets.ts`](test/portable-targets.ts) compiles and runs all three for sixteen grammars (the two real languages plus focused fixtures) on every CI run. The Rust output reaches [oxc](https://github.com/oxc-project/oxc) throughput and the Go output beats [tsgo](https://github.com/microsoft/typescript-go) on the same corpus (an arena keeps both near zero-allocation). Byte-based Go/Rust use UTF-8 offsets — identical to the JS interpreter's for ASCII; non-ASCII offset units differ inherently.
 
