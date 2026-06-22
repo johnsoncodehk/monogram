@@ -242,20 +242,25 @@ for (const c of CASES) {
   mkdirSync(dir, { recursive: true });
   const runners: Array<{ label: string; run: (src: string) => Outcome }> = [];
 
+  // emitParser is the parser LIBRARY (exports a `parse` entry, no I/O); the executable CLI
+  // runner (stdin → CST JSON) is the target's emitRunner(), assembled in HERE — the harness's
+  // job, not the parser's. ts/rust append the runner to the library (one file); Go needs it as
+  // a SEPARATE runner.go in the same `package main` (its import rules forbid appending inline).
   const tsFile = `${dir}/p.ts`;
-  writeFileSync(tsFile, emitParser(grammar, tsTarget));
+  writeFileSync(tsFile, emitParser(grammar, tsTarget) + (tsTarget.emitRunner?.() ?? ''));
   runners.push({ label: 'typescript', run: (src) => runProc('node', [tsFile], src) });
 
   if (HAS_GO && !c.tsOnly) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
-    writeFileSync(`${gdir}/main.go`, emitParser(grammar, goTarget));
+    writeFileSync(`${gdir}/parser.go`, emitParser(grammar, goTarget));
+    writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
     execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });
     runners.push({ label: 'go', run: (src) => runProc(`${gdir}/p`, [], src) });
   }
   if (HAS_RUST && !c.tsOnly) {
     const rfile = `${dir}/main.rs`;
-    writeFileSync(rfile, emitParser(grammar, rustTarget));
+    writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
     execFileSync('rustc', ['-O', '-A', 'warnings', rfile, '-o', `${dir}/pr`], { stdio: 'pipe' });
     runners.push({ label: 'rust', run: (src) => runProc(`${dir}/pr`, [], src) });
   }

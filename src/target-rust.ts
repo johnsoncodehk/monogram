@@ -415,24 +415,39 @@ fn write_json(c: &Cst, out: &mut String) {
     out.push_str(&format!("],\\"offset\\":{},\\"end\\":{}}}", c.offset, c.end));
 }
 
+// The library entry: lex + parse the whole input, returning the CST root (None on a parse
+// error / trailing input). No I/O — see emitRunner() for the stdin -> JSON wrapper.
+fn parse(src: &str) -> Option<Cst> {
+    let toks = lex(src);
+    let n = toks.len();
+    let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src };
+    match p.parse_${ir.entry}() {
+        Some(root) if p.pos == n => Some(root),
+        _ => None,
+    }
+}
+`;
+  },
+  emitRunner(): string {
+    return `
+// CLI runner (harness only): stdin -> CST JSON + a self-bench mode. Appended to the parser
+// library by the gate (same file/crate, so it calls \`parse\`/\`write_json\` directly); NOT part
+// of the parser.
 fn main() {
+    use std::io::Read;
     let mut src = String::new();
     std::io::stdin().read_to_string(&mut src).unwrap();
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
     if let Some(iters) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) {
-        // black_box on the input + result so the optimizer can't elide the lex/parse.
-        for _ in 0..3 { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src: &src }; std::hint::black_box(p.parse_${ir.entry}()); }
+        for _ in 0..3 { std::hint::black_box(parse(std::hint::black_box(&src))); }
         let t = std::time::Instant::now();
-        for _ in 0..iters { let toks = lex(std::hint::black_box(&src)); let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src: &src }; std::hint::black_box(p.parse_${ir.entry}()); }
+        for _ in 0..iters { std::hint::black_box(parse(std::hint::black_box(&src))); }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
-    let toks = lex(&src);
-    let n = toks.len();
-    let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src: &src };
-    match p.parse_${ir.entry}() {
-        Some(root) if p.pos == n => { let mut out = String::new(); write_json(&root, &mut out); print!("{}", out); }
-        _ => { eprintln!("parse error (pos {}/{})", p.pos, n); std::process::exit(1); }
+    match parse(&src) {
+        Some(root) => { let mut out = String::new(); write_json(&root, &mut out); print!("{}", out); }
+        None => { eprintln!("parse error"); std::process::exit(1); }
     }
 }
 `;

@@ -16,7 +16,11 @@ export interface Target {
   name: string;
   ext: string;                                                  // emitted file extension (no dot)
   emitLexer(grammar: CstGrammar): string | null;               // null ⇒ runtime-lexer fallback (jsTarget markup/indent grammars)
-  emitParser(grammar: CstGrammar, lexerSrc: string | null): string;   // the parser, embedding `lexerSrc`
+  emitParser(grammar: CstGrammar, lexerSrc: string | null): string;   // the parser LIBRARY (exports a `parse` entry; no I/O)
+  // A standalone CLI harness (stdin → CST JSON) APPENDED to the library to make it
+  // executable — needed to run the compiled go/rust (and ts) parsers for verification.
+  // Not part of the parser. jsTarget omits it (it is consumed by `import`, not as a CLI).
+  emitRunner?(): string;
 }
 
 export function emitLexer(grammar: CstGrammar, target: Target): string | null {
