@@ -1101,7 +1101,8 @@ class Emitter {
 export const jsTarget: Target = {
   name: 'javascript',
   ext: 'js',
-  emitLexer: emitJsLexer,
+  embedLexer: emitJsLexer,    // the SoA lexer emitJsParser embeds (null → createLexer runtime fallback)
+  emitLexer: () => null,      // fused: lexing is part of the arena pipeline — no standalone tokenizer
   emitParser: emitJsParser,
 };
 
