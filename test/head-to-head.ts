@@ -15,7 +15,7 @@
 // so it reads through a 16KB chunk callback (its documented large-input path).
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { writeFileSync } from 'node:fs';
 import ts from 'typescript';
 
@@ -26,8 +26,8 @@ const TreeSitter = require(TS_BENCH + '/node_modules/tree-sitter');
 const TSLang = require(TS_BENCH + '/node_modules/tree-sitter-typescript').typescript;
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-h2h.mjs';
-writeFileSync(emPath, emitParser(grammar));
+const emPath = '/tmp/emitted-h2h.mts';
+writeFileSync(emPath, emitParser(grammar, jsTarget));
 const { createParser } = await import(emPath + '?v=' + process.pid);
 
 const unit = readFileSync(CORPUS, 'utf-8');

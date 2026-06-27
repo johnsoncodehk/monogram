@@ -338,6 +338,25 @@ const Regex = token(seq(
 
 [`test/agnostic.ts`](test/agnostic.ts) proves it directly — the same engine parses a toy grammar whose identifier token is `Word`, with no templates or regex. The deeper proof is [`html.ts`](html.ts): markup shares *nothing* with TypeScript's token stream, yet the same engine handles it.
 
+### The emitted parser need not be JS — Go, Rust, native
+
+The grammar also derives a **parser library in another language**. [`emitParser(grammar, target)`](src/emit.ts) runs one analysis into one language-agnostic IR, and each `Target` renders it — including its own regex-free lexer, so the output has no dependency on the JS runtime and compiles offline. What it emits is a **library** — no I/O — exposing two composable phases, `tokenize(src)` then `parse(tokens)`, so the lexer is reused at runtime (lex once, use the tokens *and* the CST):
+
+```ts
+import { emitParser, emitLexer, tsTarget, goTarget, rustTarget } from './src/emit.ts';
+writeFileSync('parser.mts', emitParser(grammar, tsTarget));   // + goTarget / rustTarget
+
+// in the emitted parser:
+const tokens = tokenize(src);   // lex once
+const cst    = parse(tokens);   // same tokens → CST — no re-lexing
+```
+
+`emitLexer(grammar, target)` is the second public emitter: a **standalone tokenizer module** (the same lexer `emitParser` embeds, alone). Go and Rust expose the same `tokenize`/`parse` pair (Rust passes `src` to `parse` too, as it keeps no globals). The CLI shape `test/portable-targets.ts` runs (stdin → CST JSON) is a *harness* wrapper — `target.emitRunner()`, appended by the gate to make the library executable — not part of the parser.
+
+`jsTarget` (the optimized JS path) has a different emitted shape by design: a zero-materialization arena parser — `parse(source)` returns an arena node handle (traverse with `visit`/`tree`, read tokens via `tokenAt`) and adds incremental `parseEdited`. Its lexer is fused into the arena pipeline, so it has no standalone tokenizer (`emitLexer(grammar, jsTarget)` is `null`).
+
+The proof is the full languages: the real [`javascript.ts`](javascript.ts) and [`typescript.ts`](typescript.ts) grammars — including the `[Await]/[Yield]` fork, left recursion, the regex/division and template state machines, arrow functions, and the TS type grammar — emit to **TypeScript, Go, and Rust**, and every CST is byte-identical to the reference interpreter. [`test/portable-targets.ts`](test/portable-targets.ts) compiles and runs all three for sixteen grammars (the two real languages plus focused fixtures) on every CI run. The Rust output reaches [oxc](https://github.com/oxc-project/oxc) throughput and the Go output beats [tsgo](https://github.com/microsoft/typescript-go) on the same corpus (an arena keeps both near zero-allocation). Byte-based Go/Rust use UTF-8 offsets — identical to the JS interpreter's for ASCII; non-ASCII offset units differ inherently.
+
 ## Adding a language
 
 A new language is **one grammar file** on the unchanged engine:
@@ -375,8 +394,7 @@ typescript.ts                one grammar (TypeScript combinator API)
         ├─ src/gen-tm.ts ───────────▶ typescript.tmLanguage.json            (TextMate highlighter)
         ├─ src/gen-vscode-config.ts ▶ typescript.language-configuration.json (editor behavior)
         ├─ src/gen-treesitter.ts ───▶ tree-sitter/  (grammar.js + highlights.scm + scanner.c)
-        ├─ src/gen-monarch.ts ──────▶ typescript.monarch.json
-        └─ src/gen-ast-types.ts ────▶ typescript.cst-types.ts
+        └─ src/gen-monarch.ts ──────▶ typescript.monarch.json
 
 shared  src/grammar-utils.ts          structural helpers used across stages
         src/api.ts, types.ts          the grammar's combinator + type surface

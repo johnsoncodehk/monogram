@@ -1,5 +1,4 @@
-// Generate per-rule, per-ARM destructurers for a grammar's CST — the VALUE-level
-// sibling of gen-ast-types.ts. For every rule it emits
+// Generate per-rule, per-ARM destructurers for a grammar's CST. For every rule it emits
 //
 //   export type <Rule>Match = { arm: 'if', expr: NodeEntry<'Expr'>, … } | …
 //   export function match<Rule>(t: TreeAccess, n: NodeEntry<'Rule'>, src: string): <Rule>Match
@@ -74,7 +73,7 @@ function sanitizeIdent(s: string): string {
 
 const J = (v: unknown) => JSON.stringify(v);
 
-export function generateCstMatch(grammar: CstGrammar, importFrom: string): string {
+export function generateCstMatch(grammar: CstGrammar): string {
   // Same [Await]/[Yield] fork the parsers apply, so the rule-id space (ruleIdOf)
   // agrees with the tree. Matchers/types are emitted for BASE rules only (a fork
   // collapses to its base via RULE_CANON); no-op without ctx markers.

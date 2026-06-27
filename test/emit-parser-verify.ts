@@ -13,7 +13,7 @@
 //   node test/emit-parser-verify.ts <N>        # external sweep stride N (default ~400 files)
 import { objectify } from './emitted-obj.ts';
 import { createParser } from '../src/gen-parser.ts';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 import { readFileSync, writeFileSync } from 'fs';
 
@@ -21,8 +21,8 @@ const grammar = (await import('../typescript.ts')).default;
 const oracle = createParser(grammar);
 
 // Emit, write to /tmp, import the standalone module.
-const EMITTED = '/tmp/emitted-parser.mjs';
-writeFileSync(EMITTED, emitParser(grammar));
+const EMITTED = '/tmp/emitted-parser.mts';
+writeFileSync(EMITTED, emitParser(grammar, jsTarget));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 
 type Outcome = { ok: true; cst: string } | { ok: false; err: string };

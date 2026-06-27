@@ -16,15 +16,15 @@
 //
 //   node test/emit-reject-messages.ts
 import { createParser } from '../src/gen-parser.ts';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 import { readFileSync, writeFileSync } from 'fs';
 
 const grammar = (await import('../typescript.ts')).default;
 const oracle = createParser(grammar);
 
-const EMITTED = '/tmp/emitted-parser-msg.mjs';
-writeFileSync(EMITTED, emitParser(grammar));
+const EMITTED = '/tmp/emitted-parser-msg.mts';
+writeFileSync(EMITTED, emitParser(grammar, jsTarget));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 
 function errOf(parse: (s: string) => unknown, code: string): string | null {
