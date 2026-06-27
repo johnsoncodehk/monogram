@@ -50,7 +50,7 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): st
   const name = (t as { name: string }).name;
   const stateful = rxTok !== undefined || tplTok !== undefined;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
-  const push = (endE: string) => (t.skip ? `if strings.ContainsAny(src[pos:${endE}], "\\n\\r") { pendingNl = true }; ` : stateful ? `emit(${J(name)}, src[pos:${endE}], pos, ${endE}); ` : `pushTok(${J(name)}, src[pos:${endE}], pos, ${endE}); `);
+  const push = (endE: string) => (t.skip ? `if strings.ContainsAny(src[pos:${endE}], "\\n\\r\\u2028\\u2029") { pendingNl = true }; ` : stateful ? `emit(${J(name)}, src[pos:${endE}], pos, ${endE}); ` : `pushTok(${J(name)}, src[pos:${endE}], pos, ${endE}); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   if (t.kind === 'run') return `\t\tif ${gate}${rangeCond('c', t.first)} {
 \t\t\te := pos + 1
@@ -156,7 +156,8 @@ ${emitHooks}
 \t_ = pendingNl
 ${rxState}${tplState}${emitFn}${pushTokFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
 \t\tc := int(src[pos])
-\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }   // JS line terminators LF/CR (matches the interpreter; LS/PS are multi-byte: non-ASCII boundary)
+\t\tif strings.HasPrefix(src[pos:], ${J('\u2028')}) || strings.HasPrefix(src[pos:], ${J('\u2029')}) { pendingNl = true; pos += 3; continue }   // LS/PS (UTF-8)
+\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }   // LF/CR
 \t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
 ${tplDispatch}${toks}
 ${puncts}

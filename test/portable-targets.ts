@@ -140,7 +140,7 @@ const CASES: Case[] = [
     // `\r`, LS, PS are JS line terminators just like `\n` (ASI / "no LineTerminator here"), so a
     // `return` followed by any of them takes no operand — across all four lexers (interpreter,
     // emitted JS, portable ts/go/rust). A `\t` (tab) is whitespace but NOT a terminator → accepted above.
-    reject: ['return\n1;', 'return\nx;', 'return /*\n*/ 1;', 'return // c\n 1;', 'return\r1;', 'return\r\n1;', 'return /*\r*/ 1;'],
+    reject: ['return\n1;', 'return\nx;', 'return /*\n*/ 1;', 'return // c\n 1;', 'return\r1;', 'return\r\n1;', 'return /*\r*/ 1;', 'return\u20281;', 'return\u2029x;'],
   },
   {
     // capBelow (assignment-level) arrow functions: a NUD parsed only when minBp < the
