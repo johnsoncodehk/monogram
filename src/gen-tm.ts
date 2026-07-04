@@ -7565,15 +7565,19 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         patterns: [...ctxOverrideIncludes, ...pairIncludes, { include: '$self' }],
       };
     }
-    // callee scope: reuse the grammar's own callee token scope when one is declared (a token
-    // whose pattern is gated on a following `(`), else the TextMate-conventional call scope
+    // callee pattern + scope: prefer the grammar's own CALLEE token (one whose pattern is
+    // gated on a following `(` — e.g. env-spec FUNCTION_NAME), else the identifier pattern.
+    // The generic ident fallback can resolve to a placeholder token in indentation grammars,
+    // so a never-matching callee skips the region entirely rather than emitting a dead rule.
     const calleeTok = grammar.tokens.find((t) => {
       const sc = t.scope ?? classifyToken(t).scope;
       return (sc.startsWith('variable.function') || sc.startsWith('entity.name.function')) && tokenPatternSource(t).includes('\\(');
     });
     const calleeScope = calleeTok?.scope ?? 'entity.name.function';
-    repository['ctx-call-args'] = {
-      begin: `(${identPattern})\\s*(\\()`,
+    const calleePattern = calleeTok ? tokenPatternSource(calleeTok) : identPattern;
+    if (!calleePattern.includes('(?!)')) {
+      repository['ctx-call-args'] = {
+      begin: `(${calleePattern})\\s*(\\()`,
       beginCaptures: {
         '1': { name: `${calleeScope}.${langName}` },
         '2': { name: `${getScope(scopeOverrides, '(') ?? 'punctuation.section.parens.begin'}.${langName}` },
@@ -7581,8 +7585,9 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       end: '\\)',
       endCaptures: { '0': { name: `${getScope(scopeOverrides, ')') ?? 'punctuation.section.parens.end'}.${langName}` } },
       patterns: [...ctxOverrideIncludes, ...pairIncludes, { include: '$self' }],
-    };
-    topPatterns.push({ include: '#ctx-call-args' });
+      };
+      topPatterns.push({ include: '#ctx-call-args' });
+    }
   }
 
   // ── 4b1a. Object method key: `key: (params) => ...` or `key: function(...)` ──
