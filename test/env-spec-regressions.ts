@@ -84,171 +84,178 @@ const check = (label: string, cond: boolean) => {
   check('parser: multiline inline quoted value is accepted without blockScalar', !threw);
 }
 
-// ---------------------------------------------------------------------------
-// Regression 4 (declared below regression 3's grammar pieces): contextualScopes +
-// lineComment.markup — context-dependent token scopes and declared comment markup.
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Regression 3: a line-comment INTRODUCER token (`lineComment` metadata) emits
-// to-end-of-line REGIONS in TextMate, not a flat 1-char rule — so comment prose
-// dims to the comment scope while `richStarters`-led comments (env-spec decorator
-// comments `# @dec(...)`) keep full token highlighting inside.
+// Regressions 3–6: structured-comment highlighting — BEHAVIORAL SPEC.
+//
+// These are written against the *rendered output* (vscode-textmate tokenization
+// of a real document), not the generated grammar's internal shape, so they pin
+// the desired outcome independently of how the generators achieve it.
+//
+// The dialect under test is an env-spec-style DSL: comments carry a decorator
+// DSL, so the PARSER must tokenize comment bodies — but a comment is still a
+// comment to a THEME. The contract, line by line:
+//
+//   KEY=fn(retry=3, plain)         KEY = env key; retry = option key (attribute,
+//                                  contextualScopes); plain = positional value
+//   # a note with **bold** mark    prose dims as comment; **bold** = markup
+//   # @dec(opt=1)                  decorator comments keep rich token scopes
+//   # @import(                     an OPEN bracket continues the construct
+//   #   first,                     across `#`-prefixed lines: content keeps its
+//   #   pick=[                     token scopes; the line-start `#` is a
+//   #     ITEM, # aside            continuation marker; `# aside` dims to EOL
+//   #   ],
+//   # )
+//   # after                        construct closed → plain dim comment again
+//
+// And all of it is HIGHLIGHT-ONLY: the parser must produce a byte-identical
+// CST whether or not the highlight metadata is declared.
 // ---------------------------------------------------------------------------
-{
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import vsctm from 'vscode-textmate';
+import onigLib from 'vscode-oniguruma';
+
+const { INITIAL, Registry, parseRawGrammar } = vsctm;
+const { loadWASM, OnigScanner, OnigString } = onigLib;
+const require = createRequire(import.meta.url);
+const wasmBin = readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
+await loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + wasmBin.byteLength));
+
+function makeDialect(withHighlightMetadata: boolean) {
   const hspace = oneOf(' ', '\t');
-  const alpha = oneOf(range('a', 'z'), range('A', 'Z'));
+  const alnum = oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'));
   const WS = token(plus(hspace), { skip: true, scope: 'meta.whitespace' });
-  const DEC_NAME = token(seq('@', plus(alpha)), { scope: 'variable.annotation' });
+  const DEC_NAME = token(seq('@', plus(alnum)), { scope: 'variable.annotation' });
   const HASH = token(seq(notPrecededBy(noneOf(' ', '\t', '\n', '\r')), '#'), {
     scope: 'comment.line',
-    lineComment: { richStarters: [DEC_NAME] },
+    ...(withHighlightMetadata ? {
+      lineComment: {
+        richStarters: [DEC_NAME],
+        continuationBrackets: [['(', ')'], ['[', ']']] as [string, string][],
+        markup: [{ pattern: seq('**', star(noneOf('*', '\n')), '**'), scope: 'markup.bold' }],
+      },
+    } : {}),
   });
-  const KEY = token(seq(plus(alpha), followedBy('=')), { scope: 'entity.name.tag' });
-  const TEXT = token(plus(noneOf(' ', '\t', '\n', '#', '=', '@')), { scope: 'string.unquoted' });
-  const Part = rule(() => [DEC_NAME, TEXT]);
-  const Comment = rule(() => [[HASH, many(Part)]]);
-  const Item = rule(() => [[KEY, '=', opt(TEXT), opt(Comment)]]);
-  const Line = rule(() => [Item, Comment]);
-  const File = rule(() => [[many(Line)]]);
-  const grammar = defineGrammar({
-    name: 'env-spec-comments',
-    tokens: { WS, HASH, DEC_NAME, KEY, TEXT },
-    rules: { Part, Comment, Item, Line, File },
-    entry: File,
-  });
-
-  const tm = generateTmLanguage(grammar);
-  const plain = tm.repository.hash;
-  const rich = tm.repository['hash-rich'];
-  check('tm: plain comment entry is a to-EOL region', !!plain && plain.end === '$');
-  check('tm: plain comment region carries the comment scope', plain?.name === 'comment.line.env-spec-comments');
-  check('tm: plain comment region has NO inner patterns (prose dims)', Array.isArray(plain?.patterns) && plain.patterns.length === 0);
-  check('tm: rich comment entry exists and is gated on the rich starter', !!rich && typeof rich.begin === 'string' && rich.begin.includes('(?=[ \\t]*'));
-  check('tm: rich comment region keeps full token highlighting via $self', JSON.stringify(rich?.patterns) === JSON.stringify([{ include: '$self' }]));
-  check('tm: rich entry is tried before the plain entry', (() => {
-    const order = tm.patterns.map((p) => (p as { include?: string }).include);
-    return order.indexOf('#hash-rich') !== -1 && order.indexOf('#hash-rich') < order.indexOf('#hash');
-  })());
-  check('tm: introducer captures as comment punctuation', JSON.stringify(plain?.beginCaptures?.['1']) === JSON.stringify({ name: 'punctuation.definition.comment.env-spec-comments' }));
-
-  // parser behavior is UNaffected by the highlight-only metadata
-  const parser = createParser(grammar);
-  let threw = false;
-  try {
-    parser.parse('KEY=val # @dec note\n# plain prose');
-  } catch {
-    threw = true;
-  }
-  check('parser: lineComment metadata does not change parsing', !threw);
-
-  // continuationBrackets: a bracket left open in a rich comment continues the construct
-  // across introducer-prefixed lines via nested begin/end regions
-  const HASH_ML = token(seq(notPrecededBy(noneOf(' ', '\t', '\n', '\r')), '#'), {
-    scope: 'comment.line',
-    lineComment: { richStarters: [DEC_NAME], continuationBrackets: [['(', ')'], ['[', ']']] },
-  });
-  const CommentMl = rule(() => [[HASH_ML, many(Part)]]);
-  const FileMl = rule(() => [[many(CommentMl)]]);
-  const mlGrammar = defineGrammar({
-    name: 'env-spec-ml',
-    tokens: { WS, HASH_ML, DEC_NAME, KEY, TEXT },
-    rules: { Part, CommentMl, FileMl },
-    entry: FileMl,
-  });
-  const tmMl = generateTmLanguage(mlGrammar);
-  const parenKey = Object.keys(tmMl.repository).find((k) => k.startsWith('hash_ml-rich-cont-') && tmMl.repository[k].begin === '\\(');
-  check('tm: continuation bracket pair emits a begin/end region', !!parenKey && tmMl.repository[parenKey!].end === '\\)');
-  const parenRegion = parenKey ? tmMl.repository[parenKey] : undefined;
-  const parenIncludes = (parenRegion?.patterns ?? []).map((pp) => (pp as { include?: string }).include);
-  check('tm: construct interior tries marker, embedded comment, nested brackets, then $self',
-    parenIncludes[0] === '#hash_ml-rich-cont-marker'
-    && parenIncludes[1] === '#hash_ml-rich-cont-comment'
-    && parenIncludes.includes('$self')
-    && parenIncludes.filter((n) => n?.startsWith('#hash_ml-rich-cont-') && n !== '#hash_ml-rich-cont-marker' && n !== '#hash_ml-rich-cont-comment').length === 2);
-  const marker = tmMl.repository['hash_ml-rich-cont-marker'];
-  check('tm: continuation marker is line-anchored and scoped as comment punctuation',
-    typeof marker?.match === 'string' && marker.match.startsWith('^[ \\t]*')
-    && JSON.stringify(marker?.captures?.['1']?.name ?? '').includes('punctuation.definition.comment'));
-  const embedded = tmMl.repository['hash_ml-rich-cont-comment'];
-  check('tm: embedded comment inside a construct dims to end-of-line', embedded?.end === '$' && Array.isArray(embedded?.patterns) && embedded.patterns.length === 0);
-  const richMl = tmMl.repository['hash_ml-rich'];
-  const richIncludes = (richMl?.patterns ?? []).map((pp) => (pp as { include?: string }).include);
-  check('tm: rich region tries construct brackets before $self', richIncludes[richIncludes.length - 1] === '$self' && richIncludes.length === 3);
-
-  // a comment token WITHOUT the metadata still emits the flat rule (no behavior change)
-  const HASH2 = token(seq(notPrecededBy(noneOf(' ', '\t', '\n', '\r')), '#'), { scope: 'comment.line' });
-  const Comment2 = rule(() => [[HASH2, many(TEXT)]]);
-  const File2 = rule(() => [[many(Comment2)]]);
-  const flatGrammar = defineGrammar({ name: 'no-metadata', tokens: { HASH2, TEXT }, rules: { Comment2, File2 }, entry: File2 });
-  const tm2 = generateTmLanguage(flatGrammar);
-  check('tm: without lineComment metadata the comment token stays a flat match', typeof tm2.repository.hash2?.match === 'string' && tm2.repository.hash2?.begin === undefined);
-}
-
-// ---------------------------------------------------------------------------
-// Regression 4: contextualScopes — token T carries scope S within rule R.
-//   tm: overrides apply inside derived construct regions (call args + continuation
-//       brackets); flat top-level rules keep the declared scope.
-//   tree-sitter: exact `(rule (token) @capture)` queries, emitted last (last-wins).
-// Plus lineComment.markup: declared doc-markup patterns inside plain comment bodies.
-// ---------------------------------------------------------------------------
-{
-  const hspace = oneOf(' ', '\t');
-  const alpha = oneOf(range('a', 'z'), range('A', 'Z'));
-  const WS = token(plus(hspace), { skip: true, scope: 'meta.whitespace' });
-  const DEC_NAME = token(seq('@', plus(alpha)), { scope: 'variable.annotation' });
-  const HASH = token(seq(notPrecededBy(noneOf(' ', '\t', '\n', '\r')), '#'), {
-    scope: 'comment.line',
-    lineComment: {
-      richStarters: [DEC_NAME],
-      continuationBrackets: [['(', ')']],
-      markup: [{ pattern: seq('**', star(noneOf('*', '\n')), '**'), scope: 'markup.bold' }],
-    },
-  });
-  const KEY = token(seq(plus(alpha), followedBy('=')), { scope: 'entity.name.tag' });
-  const FN_NAME = token(seq(plus(alpha), followedBy(seq(star(hspace), '('))), { scope: 'variable.function' });
-  const TEXT = token(plus(noneOf(' ', '\t', '\n', '#', '=', '@', '(', ')', ',')), { scope: 'string.unquoted' });
+  const KEY = token(seq(plus(alnum), followedBy('=')), { scope: 'entity.name.tag' });
+  const FN_NAME = token(seq(plus(alnum), followedBy(seq(star(hspace), '('))), { scope: 'variable.function' });
+  const TEXT = token(plus(noneOf(' ', '\t', '\n', '#', '=', '@', '(', ')', '[', ']', ',', '*')), { scope: 'string.unquoted' });
   const ArgKV = rule(() => [[KEY, '=', TEXT]]);
   const Arg = rule(() => [ArgKV, TEXT]);
-  const Args = rule(() => [['(', opt(Arg), ')']]);
+  const Args = rule(() => [['(', opt(Arg), opt(','), opt(Arg), ')']]);
   const Call = rule(() => [[FN_NAME, Args]]);
-  const Part = rule(() => [DEC_NAME, Call, TEXT, KEY, '=', ',', '(', ')']);
+  const Part = rule(() => [DEC_NAME, Call, ArgKV, TEXT, KEY, '=', ',', '(', ')', '[', ']', '**']);
   const Comment = rule(() => [[HASH, many(Part)]]);
-  const Item = rule(() => [[KEY, '=', opt(Call), opt(Comment)]]);
+  const Item = rule(() => [[KEY, '=', Call, opt(Comment)]]);
   const Line = rule(() => [Item, Comment]);
   const File = rule(() => [[many(Line)]]);
-  const grammar = defineGrammar({
-    name: 'env-spec-ctx',
+  return defineGrammar({
+    name: 'env-spec-dialect',
     tokens: { WS, HASH, DEC_NAME, KEY, FN_NAME, TEXT },
     rules: { ArgKV, Arg, Args, Call, Part, Comment, Item, Line, File },
-    contextualScopes: [{ token: KEY, within: [ArgKV], scope: 'entity.other.attribute-name' }],
+    ...(withHighlightMetadata ? {
+      contextualScopes: [{ token: KEY, within: [ArgKV], scope: 'entity.other.attribute-name' }],
+    } : {}),
     entry: File,
   });
+}
 
-  const tm = generateTmLanguage(grammar);
-  const callArgs = tm.repository['ctx-call-args'];
-  check('tm: contextualScopes derives a call-args construct region', !!callArgs && callArgs.end === '\\)');
-  const callIncludes = (callArgs?.patterns ?? []).map((pp) => (pp as { include?: string }).include);
-  check('tm: construct region tries contextual overrides before $self',
-    callIncludes[0]?.startsWith('#ctx-scope-') === true && callIncludes[callIncludes.length - 1] === '$self');
-  const override = tm.repository[callIncludes[0]!.slice(1)];
-  check('tm: the override rule carries the contextual scope',
-    override?.name === 'entity.other.attribute-name.env-spec-ctx');
-  const contParen = Object.keys(tm.repository).find((k) => k.startsWith('hash-rich-cont-') && tm.repository[k].begin === '\\(');
-  const contIncludes = contParen ? (tm.repository[contParen].patterns ?? []).map((pp) => (pp as { include?: string }).include) : [];
-  check('tm: continuation-bracket interiors include the contextual overrides',
-    contIncludes.some((n) => n?.startsWith('#ctx-scope-')));
-  check('tm: flat top-level token rule keeps the declared scope',
-    tm.repository.key?.name === 'entity.name.tag.env-spec-ctx');
-  const plain = tm.repository.hash;
-  check('tm: plain comment region carries the declared markup patterns',
-    Array.isArray(plain?.patterns) && plain.patterns.length === 1
-    && (plain.patterns[0] as { name?: string }).name === 'markup.bold.env-spec-ctx');
+const DOC = [
+  'KEY=fn(retry=3, plain)',
+  '# a note with **bold** mark',
+  '# @dec(opt=1)',
+  '# @import(',
+  '#   first,',
+  '#   pick=[',
+  '#     ITEM, # aside',
+  '#   ],',
+  '# )',
+  '# after',
+];
 
-  const ts = generateTreeSitter(grammar, 'env-spec-ctx');
-  check('tree-sitter: contextual scope emits an exact rule-scoped query, last-wins',
-    ts.highlightsScm.includes('(arg_kv (key) @attribute)')
-    && ts.highlightsScm.lastIndexOf('(arg_kv (key) @attribute)') > ts.highlightsScm.lastIndexOf('Keyword, operator, and punctuation literals'));
+async function tokenizeDoc(grammarDef: ReturnType<typeof makeDialect>) {
+  const tm = generateTmLanguage(grammarDef);
+  const registry = new Registry({
+    onigLib: Promise.resolve({
+      createOnigScanner: (p: string[]) => new OnigScanner(p),
+      createOnigString: (str: string) => new OnigString(str),
+    }),
+    loadGrammar: async (scopeName: string) => scopeName === 'source.env-spec-dialect'
+      ? parseRawGrammar(JSON.stringify(tm), 'g.json') : null,
+  });
+  const grammar = (await registry.loadGrammar('source.env-spec-dialect'))!;
+  let stack = INITIAL;
+  return DOC.map((line) => {
+    const r = grammar.tokenizeLine(line, stack);
+    stack = r.ruleStack;
+    return r.tokens.map((t) => ({ text: line.slice(t.startIndex, t.endIndex), scopes: t.scopes }));
+  });
+}
+
+type Span = { text: string; scopes: string[] };
+// the scopes painted on `text` in DOC line `lineNo` (1-based); nth occurrence via `skip`
+function paint(lines: Span[][], lineNo: number, text: string, skip = 0): string[] {
+  let seen = 0;
+  for (const span of lines[lineNo - 1]) {
+    if (span.text.includes(text) || (text.length > span.text.length && span.text.trim() !== '' && text.includes(span.text.trim()) && span.text.trim().length > 2)) {
+      if (seen === skip) return span.scopes;
+      seen += 1;
+    }
+  }
+  return [];
+}
+const has = (scopes: string[], frag: string) => scopes.some((sc) => sc.includes(frag));
+
+{
+  const lines = await tokenizeDoc(makeDialect(true));
+
+  // ── Regression 3: contextual scopes — the SAME token, three different paints ──
+  check('spec: a top-level env key keeps its declared scope', has(paint(lines, 1, 'KEY'), 'entity.name.tag'));
+  check('spec: an option key inside call args paints as an attribute name', has(paint(lines, 1, 'retry'), 'entity.other.attribute-name'));
+  check('spec: a positional arg value is NOT an attribute name', !has(paint(lines, 1, 'plain'), 'attribute-name') && has(paint(lines, 1, 'plain'), 'string.unquoted'));
+  check('spec: the callee keeps its function scope', has(paint(lines, 1, 'fn'), 'function'));
+
+  // ── Regression 4: plain comments dim; markup highlights ──
+  check('spec: plain comment prose paints as comment, not as a value string', has(paint(lines, 2, 'a note with'), 'comment.line') && !has(paint(lines, 2, 'a note with'), 'string.unquoted'));
+  check('spec: the comment introducer is comment punctuation', has(paint(lines, 2, '#'), 'punctuation.definition.comment'));
+  check('spec: declared markup highlights inside plain comments', has(paint(lines, 2, '**bold**'), 'markup.bold'));
+
+  // ── Regression 5: decorator comments stay rich ──
+  check('spec: a decorator in a rich comment keeps its annotation scope', has(paint(lines, 3, '@dec'), 'variable.annotation'));
+  check('spec: an option key inside a decorator call paints as an attribute name', has(paint(lines, 3, 'opt'), 'entity.other.attribute-name'));
+
+  // ── Regression 6: multi-line constructs — an open bracket continues the construct ──
+  check('spec: construct content on a continuation line keeps its token scope (not dimmed)', has(paint(lines, 5, 'first'), 'string.unquoted'));
+  check('spec: the line-start `#` inside a construct is a continuation marker (comment punctuation)', has(paint(lines, 5, '#'), 'punctuation.definition.comment'));
+  check('spec: a nested option key on a continuation line paints as an attribute name', has(paint(lines, 6, 'pick'), 'entity.other.attribute-name'));
+  check('spec: a nested array element keeps its token scope', has(paint(lines, 7, 'ITEM'), 'string.unquoted'));
+  check('spec: an embedded `# aside` after content dims to end-of-line', has(paint(lines, 7, 'aside'), 'comment.line') && !has(paint(lines, 7, 'aside'), 'string.unquoted'));
+  check('spec: after the construct closes, a plain comment dims again', has(paint(lines, 10, 'after'), 'comment.line') && !has(paint(lines, 10, 'after'), 'string.unquoted'));
+}
+
+// ── Highlight metadata is HIGHLIGHT-ONLY: identical CSTs with and without it ──
+{
+  const withMeta = createParser(makeDialect(true));
+  const withoutMeta = createParser(makeDialect(false));
+  const text = DOC.join('\n');
+  const a = JSON.stringify(withMeta.parse(text));
+  const b = JSON.stringify(withoutMeta.parse(text));
+  check('spec: the parser CST is byte-identical with and without highlight metadata', a === b);
+}
+
+// ── Without the metadata, generation is unchanged (the features are opt-in) ──
+{
+  const plainGrammar = makeDialect(false);
+  const tm = generateTmLanguage(plainGrammar);
+  check('spec: without lineComment metadata the comment token stays a flat match', typeof tm.repository.hash?.match === 'string' && tm.repository.hash?.begin === undefined);
+  check('spec: without contextualScopes no construct regions are derived', !Object.keys(tm.repository).some((k) => k.startsWith('ctx-')));
+}
+
+// ── tree-sitter: the same contextualScopes declaration becomes exact queries ──
+{
+  const ts = generateTreeSitter(makeDialect(true), 'env-spec-dialect');
+  check('spec: tree-sitter emits an exact rule-scoped capture for the contextual scope', ts.highlightsScm.includes('(arg_kv (key) @attribute)'));
+  check('spec: contextual captures come last (highlight resolution is last-wins)', ts.highlightsScm.lastIndexOf('(arg_kv (key) @attribute)') > ts.highlightsScm.lastIndexOf('] @'));
 }
 
 console.log(
