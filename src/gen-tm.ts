@@ -5074,6 +5074,19 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         const contBrackets = tok.lineComment.continuationBrackets ?? [];
         const bracketKeyOf = (open: string) => `${key}-rich-cont-${[...open].map((c) => c.charCodeAt(0).toString(16)).join('')}`;
         const bracketIncludes = contBrackets.map(([open]) => ({ include: `#${bracketKeyOf(open)}` }));
+        // A CALL opening a construct (`# @dec=someFn(`) must get the marker-aware interior
+        // too: a callee-anchored region (e.g. the contextualScopes call-args region reached
+        // via $self) starts matching at the CALLEE — an earlier position than the bare `(`
+        // — so without a call-aware variant here it would hijack the construct with an
+        // interior that treats line-start `#` as a comment, eat the `# )` closer, and run
+        // away past the comment block. Same interior as the paren construct, begin consumes
+        // the callee (scoped like the grammar's callee token). Tried before $self.
+        const calleeForCont = grammar.tokens.find((t) => {
+          const sc = t.scope ?? classifyToken(t).scope;
+          return (sc.startsWith('variable.function') || sc.startsWith('entity.name.function')) && tokenPatternSource(t).includes('\\(');
+        });
+        const hasParenPair = contBrackets.some(([open]) => open === '(');
+        const contCallInclude = (calleeForCont && hasParenPair) ? [{ include: `#${key}-rich-cont-call` }] : [];
         if (contBrackets.length) {
           repository[`${key}-rich-cont-marker`] = {
             match: `^[ \\t]*(${introducer})`,
@@ -5094,6 +5107,25 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
                 { include: `#${key}-rich-cont-marker` },
                 { include: `#${key}-rich-cont-comment` },
                 ...ctxOverrideIncludes,
+                ...contCallInclude,
+                ...bracketIncludes,
+                { include: '$self' },
+              ],
+            };
+          }
+          if (calleeForCont && hasParenPair) {
+            repository[`${key}-rich-cont-call`] = {
+              begin: `(${tokenPatternSource(calleeForCont)})\\s*(\\()`,
+              beginCaptures: {
+                '1': { name: `${(calleeForCont.scope ?? 'entity.name.function')}.${langName}` },
+                '2': { name: `${getScope(grammar.scopeOverrides, '(') ?? 'punctuation.section.parens.begin'}.${langName}` },
+              },
+              end: '\\)',
+              endCaptures: { '0': { name: `${getScope(grammar.scopeOverrides, ')') ?? 'punctuation.section.parens.end'}.${langName}` } },
+              patterns: [
+                { include: `#${key}-rich-cont-marker` },
+                { include: `#${key}-rich-cont-comment` },
+                ...ctxOverrideIncludes,
                 ...bracketIncludes,
                 { include: '$self' },
               ],
@@ -5105,7 +5137,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
           begin: `(${introducer})(?=[ \\t]*(?:${startLookahead}))`,
           beginCaptures: { '1': { name: commentPunct } },
           end: '$',
-          patterns: [...bracketIncludes, { include: '$self' }],
+          patterns: [...contCallInclude, ...bracketIncludes, { include: '$self' }],
         };
         topPatterns.push({ include: `#${key}-rich` });
       }

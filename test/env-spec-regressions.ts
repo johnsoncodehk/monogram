@@ -6,7 +6,7 @@
 //
 // Run with: node test/env-spec-regressions.ts
 import { createParser } from '../src/gen-parser.ts';
-import { defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy, notPrecededBy } from '../src/api.ts';
+import { alt, defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy, notPrecededBy } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
 
@@ -142,11 +142,11 @@ function makeDialect(withHighlightMetadata: boolean) {
   const TEXT = token(plus(noneOf(' ', '\t', '\n', '#', '=', '@', '(', ')', '[', ']', ',', '*')), { scope: 'string.unquoted' });
   const ArgKV = rule(() => [[KEY, '=', TEXT]]);
   const Arg = rule(() => [ArgKV, TEXT]);
-  const Args = rule(() => [['(', opt(Arg), opt(','), opt(Arg), ')']]);
+  const Args = rule(() => [['(', many(alt(Arg, ',', HASH)), ')']]);
   const Call = rule(() => [[FN_NAME, Args]]);
   const Part = rule(() => [DEC_NAME, Call, ArgKV, TEXT, KEY, '=', ',', '(', ')', '[', ']', '**']);
   const Comment = rule(() => [[HASH, many(Part)]]);
-  const Item = rule(() => [[KEY, '=', Call, opt(Comment)]]);
+  const Item = rule(() => [[KEY, '=', alt(Call, TEXT), opt(Comment)]]);
   const Line = rule(() => [Item, Comment]);
   const File = rule(() => [[many(Line)]]);
   return defineGrammar({
@@ -171,6 +171,11 @@ const DOC = [
   '#   ],',
   '# )',
   '# after',
+  '# @dec2=someFn(',
+  '#   argone,',
+  '#   keytwo=v,',
+  '# )',
+  'NEXT=ok',
 ];
 
 async function tokenizeDoc(grammarDef: ReturnType<typeof makeDialect>) {
@@ -231,6 +236,15 @@ const has = (scopes: string[], frag: string) => scopes.some((sc) => sc.includes(
   check('spec: a nested array element keeps its token scope', has(paint(lines, 7, 'ITEM'), 'string.unquoted'));
   check('spec: an embedded `# aside` after content dims to end-of-line', has(paint(lines, 7, 'aside'), 'comment.line') && !has(paint(lines, 7, 'aside'), 'string.unquoted'));
   check('spec: after the construct closes, a plain comment dims again', has(paint(lines, 10, 'after'), 'comment.line') && !has(paint(lines, 10, 'after'), 'string.unquoted'));
+
+  // ── Regression 7: a CALL opening a construct must not leak past its closer ──
+  // `# @dec2=someFn(` … `# )` — the call-args region must be continuation-aware; a
+  // naive callee-anchored region would treat `# )` as an embedded comment, never see
+  // the closer, and swallow the FOLLOWING config item into the comment.
+  check('spec: a call construct keeps continuation content rich', has(paint(lines, 12, 'argone'), 'string.unquoted'));
+  check('spec: a nested option key in a call construct paints as an attribute name', has(paint(lines, 13, 'keytwo'), 'entity.other.attribute-name'));
+  check('spec: the call construct ends at its `# )` closer', has(paint(lines, 15, 'NEXT'), 'entity.name.tag') && !has(paint(lines, 15, 'NEXT'), 'comment'));
+  check('spec: the config item after the construct is not comment-scoped at all', !has(paint(lines, 15, 'ok'), 'comment'));
 }
 
 // ── Highlight metadata is HIGHLIGHT-ONLY: identical CSTs with and without it ──
