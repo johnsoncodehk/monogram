@@ -31,6 +31,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'incremental-grammars', args: ['test/incremental-grammars.ts'] },
   { group: 'core', name: 'exhaustive-edits', args: ['test/exhaustive-edits.ts'] },
   { group: 'core', name: 'issue-cases', args: ['test/test-issues.ts'] },
+  { group: 'core', name: 'env-spec-regressions', args: ['test/env-spec-regressions.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },
   { group: 'conformance', name: 'jsx', args: ['test/jsx-conformance.ts'] },

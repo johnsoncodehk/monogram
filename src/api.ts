@@ -19,6 +19,12 @@ interface TokenOptions {
   // Highlight-only interpolation regions for ordinary string tokens (e.g. env-spec `${…}` / `$(…)`).
   // The parser/lexer stay token-based; generators re-express these as nested regions.
   interpolation?: StringInterpolation | StringInterpolation[];
+  // Highlight-only: this comment token matches only the INTRODUCER (a bare `#`) while the
+  // comment runs to end-of-line with parser-tokenized content (a structured-comment dialect).
+  // Generators emit a to-EOL region in the token's comment scope so prose dims; `richStarters`
+  // lists tokens that keep full token highlighting when one opens the comment body
+  // (e.g. env-spec `# @decorator(...)`). See TokenDecl.lineComment.
+  lineComment?: { richStarters?: TokenRef[] };
   // A regex matching exactly one well-formed escape sequence. Engine-scanned tokens
   // (templates) validate each `\`-escape against it and reject any that don't match —
   // unlike `escape` (highlight-only), this drives tokenization. Skipped in tag
@@ -547,6 +553,16 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
         ? (Array.isArray(tok.opts.interpolation) ? tok.opts.interpolation : [tok.opts.interpolation]).map((i) => ({ ...i }))
         : undefined,
       escapeValidPattern: tok.opts.escapeValid,
+      // richStarters are TokenRefs; resolve to declared names (unknown refs are a config error)
+      lineComment: tok.opts.lineComment
+        ? {
+          richStarters: (tok.opts.lineComment.richStarters ?? []).map((ref) => {
+            const refName = names.get(ref);
+            if (!refName) throw new Error(`lineComment.richStarters on token '${name}' references an undeclared token`);
+            return refName;
+          }),
+        }
+        : undefined,
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,
       identifierPrefix: tok.opts.identifierPrefix,

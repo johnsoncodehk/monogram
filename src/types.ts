@@ -23,6 +23,14 @@ export interface TokenDecl {
   scope?: string;         // @scope(...) override
   escapePattern?: TokenPattern; // @escape pattern — escape sequence pattern (highlight only)
   interpolation?: StringInterpolation[]; // highlight-only interpolation regions inside a string token (e.g. `${…}` / `$(…)`)
+  // Highlight-only: this comment-scoped token matches only the INTRODUCER (e.g. a bare `#`)
+  // while the comment runs to end-of-line with content the PARSER still tokenizes (a
+  // structured-comment dialect — env-spec decorator comments). Highlighter generators emit a
+  // to-end-of-line region carrying this token's comment scope so prose dims like any comment;
+  // `richStarters` names tokens that keep FULL token highlighting when one of them (after
+  // optional blanks) opens the comment body (`# @decorator(...)`). The lexer/parser are
+  // unaffected — exactly like `interpolation`, this is generator metadata.
+  lineComment?: { richStarters?: string[] };
   escapeValidPattern?: TokenPattern; // one well-formed escape; engine-scanned tokens reject non-matching `\`-escapes (skipped in tag position)
   embed?: string;         // @embed(lang) — embedded language scope name
   // ── Lexer hints (keep the engine language-agnostic; all optional) ──

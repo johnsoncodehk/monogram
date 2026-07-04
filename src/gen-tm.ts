@@ -5012,6 +5012,46 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       repository[key] = blockEntry;
       topPatterns.push({ include: `#${key}` });
 
+    } else if (tok.lineComment && scope.startsWith('comment.')) {
+      // ── Line-comment INTRODUCER (declared, highlight-only) ──
+      // The token matches only the marker (a bare `#`) while the comment runs to
+      // end-of-line with content the PARSER still tokenizes (a structured-comment
+      // dialect — env-spec decorator comments). A flat rule would leave the comment
+      // PROSE scoped by the ordinary text tokens (string.unquoted…), so themes render
+      // comments like code. Emit begin/end regions to `$` instead:
+      //   1. a RICH region, gated on a lookahead that one of the declared
+      //      `richStarters` opens the body (`# @decorator(...)`) — full token
+      //      highlighting applies INSIDE (via $self) on top of the comment base
+      //      scope, so structured comments keep their colors while stray text dims;
+      //   2. a PLAIN region for every other comment — no inner patterns, so the
+      //      whole body falls to the comment scope and dims like any comment.
+      // Ordering: rich is registered first so the gated form wins; both sit at this
+      // token's position in the top-level pattern list (declaration order preserved).
+      const introducer = tokenPatternSource(tok);
+      const commentPunct = `punctuation.definition.comment.${langName}`;
+      const richStarters = (tok.lineComment.richStarters ?? [])
+        .map((n) => grammar.tokens.find((t) => t.name === n))
+        .filter((t): t is TokenDecl => !!t);
+      if (richStarters.length) {
+        const startLookahead = richStarters.map((t) => `(?:${tokenPatternSource(t)})`).join('|');
+        repository[`${key}-rich`] = {
+          name: `${scope}.${langName}`,
+          begin: `(${introducer})(?=[ \\t]*(?:${startLookahead}))`,
+          beginCaptures: { '1': { name: commentPunct } },
+          end: '$',
+          patterns: [{ include: '$self' }],
+        };
+        topPatterns.push({ include: `#${key}-rich` });
+      }
+      repository[key] = {
+        name: `${scope}.${langName}`,
+        begin: `(${introducer})`,
+        beginCaptures: { '1': { name: commentPunct } },
+        end: '$',
+        patterns: [],
+      };
+      topPatterns.push({ include: `#${key}` });
+
     } else {
       // The bare-identifier catch-all is scoped `variable.other.readwrite` — the
       // TextMate convention for a mutable variable *reference* (what hand-written

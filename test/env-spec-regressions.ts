@@ -6,7 +6,7 @@
 //
 // Run with: node test/env-spec-regressions.ts
 import { createParser } from '../src/gen-parser.ts';
-import { defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy } from '../src/api.ts';
+import { defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy, notPrecededBy } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 
 let ok = 0;
@@ -81,6 +81,68 @@ const check = (label: string, cond: boolean) => {
     threw = true;
   }
   check('parser: multiline inline quoted value is accepted without blockScalar', !threw);
+}
+
+// ---------------------------------------------------------------------------
+// Regression 3: a line-comment INTRODUCER token (`lineComment` metadata) emits
+// to-end-of-line REGIONS in TextMate, not a flat 1-char rule — so comment prose
+// dims to the comment scope while `richStarters`-led comments (env-spec decorator
+// comments `# @dec(...)`) keep full token highlighting inside.
+// ---------------------------------------------------------------------------
+{
+  const hspace = oneOf(' ', '\t');
+  const alpha = oneOf(range('a', 'z'), range('A', 'Z'));
+  const WS = token(plus(hspace), { skip: true, scope: 'meta.whitespace' });
+  const DEC_NAME = token(seq('@', plus(alpha)), { scope: 'variable.annotation' });
+  const HASH = token(seq(notPrecededBy(noneOf(' ', '\t', '\n', '\r')), '#'), {
+    scope: 'comment.line',
+    lineComment: { richStarters: [DEC_NAME] },
+  });
+  const KEY = token(seq(plus(alpha), followedBy('=')), { scope: 'entity.name.tag' });
+  const TEXT = token(plus(noneOf(' ', '\t', '\n', '#', '=', '@')), { scope: 'string.unquoted' });
+  const Part = rule(() => [DEC_NAME, TEXT]);
+  const Comment = rule(() => [[HASH, many(Part)]]);
+  const Item = rule(() => [[KEY, '=', opt(TEXT), opt(Comment)]]);
+  const Line = rule(() => [Item, Comment]);
+  const File = rule(() => [[many(Line)]]);
+  const grammar = defineGrammar({
+    name: 'env-spec-comments',
+    tokens: { WS, HASH, DEC_NAME, KEY, TEXT },
+    rules: { Part, Comment, Item, Line, File },
+    entry: File,
+  });
+
+  const tm = generateTmLanguage(grammar);
+  const plain = tm.repository.hash;
+  const rich = tm.repository['hash-rich'];
+  check('tm: plain comment entry is a to-EOL region', !!plain && plain.end === '$');
+  check('tm: plain comment region carries the comment scope', plain?.name === 'comment.line.env-spec-comments');
+  check('tm: plain comment region has NO inner patterns (prose dims)', Array.isArray(plain?.patterns) && plain.patterns.length === 0);
+  check('tm: rich comment entry exists and is gated on the rich starter', !!rich && typeof rich.begin === 'string' && rich.begin.includes('(?=[ \\t]*'));
+  check('tm: rich comment region keeps full token highlighting via $self', JSON.stringify(rich?.patterns) === JSON.stringify([{ include: '$self' }]));
+  check('tm: rich entry is tried before the plain entry', (() => {
+    const order = tm.patterns.map((p) => (p as { include?: string }).include);
+    return order.indexOf('#hash-rich') !== -1 && order.indexOf('#hash-rich') < order.indexOf('#hash');
+  })());
+  check('tm: introducer captures as comment punctuation', JSON.stringify(plain?.beginCaptures?.['1']) === JSON.stringify({ name: 'punctuation.definition.comment.env-spec-comments' }));
+
+  // parser behavior is UNaffected by the highlight-only metadata
+  const parser = createParser(grammar);
+  let threw = false;
+  try {
+    parser.parse('KEY=val # @dec note\n# plain prose');
+  } catch {
+    threw = true;
+  }
+  check('parser: lineComment metadata does not change parsing', !threw);
+
+  // a comment token WITHOUT the metadata still emits the flat rule (no behavior change)
+  const HASH2 = token(seq(notPrecededBy(noneOf(' ', '\t', '\n', '\r')), '#'), { scope: 'comment.line' });
+  const Comment2 = rule(() => [[HASH2, many(TEXT)]]);
+  const File2 = rule(() => [[many(Comment2)]]);
+  const flatGrammar = defineGrammar({ name: 'no-metadata', tokens: { HASH2, TEXT }, rules: { Comment2, File2 }, entry: File2 });
+  const tm2 = generateTmLanguage(flatGrammar);
+  check('tm: without lineComment metadata the comment token stays a flat match', typeof tm2.repository.hash2?.match === 'string' && tm2.repository.hash2?.begin === undefined);
 }
 
 console.log(
