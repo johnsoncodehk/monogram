@@ -197,8 +197,15 @@ const CASES: Case[] = [
       'a instanceof B; a in obj;', '(function () {})(); (() => {})();', 'x = a && b || c;',
       'do { x(); } while (y);', 'function* gen() { yield* o(); }', 'const { a, b: c, ...r } = o;',
       'const [p, , q, ...z] = arr;', 'label: for (;;) { break label; }', 'async function h() { await x; }',
+      '(() => {})();', '(() => {})() + 1;', 'f(() => a, () => b);', 'let g = () => x => x + 1;',
+      'x.y.z++;', '(a++).b;', 'a++ instanceof B;', 'a++(x);',
+      'for (a in b) c;',
+      // DIVERGENCE(for (a = x in b) c;): typescript/go/rust ok=false vs oracle ok=true — deferred, see Task 2 reply
+      'for (a in b) { d = c in e; }',
+      'new a.b();', '((((x))));',
     ],
-    reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;'],
+    reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
+      '1 + () => 2;', 'a++.b;', 'f(a, b,'],
   },
   {
     // The real typescript.ts grammar — the second, most complex full language proving the
