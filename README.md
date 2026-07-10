@@ -351,7 +351,7 @@ const tokens = tokenize(src);   // lex once
 const cst    = parse(tokens);   // same tokens → CST — no re-lexing
 ```
 
-`emitLexer(grammar, target)` is the second public emitter: a **standalone tokenizer module** (the same lexer `emitParser` embeds, alone). Go and Rust expose the same `tokenize`/`parse` pair (Rust passes `src` to `parse` too, as it keeps no globals). The CLI shape `test/portable-targets.ts` runs (stdin → CST JSON) is a *harness* wrapper — `target.emitRunner()`, appended by the gate to make the library executable — not part of the parser.
+`emitLexer(grammar, target)` is the second public emitter: a **standalone tokenizer module** (the same lexer `emitParser` embeds, alone). Go and Rust expose the same `tokenize`/`parse` pair (Rust's `tokenize` returns a token struct that carries the source slice, as it keeps no globals). The CLI shape `test/portable-targets.ts` runs (stdin → CST JSON) is a *harness* wrapper — `target.emitRunner()`, appended by the gate to make the library executable — not part of the parser.
 
 `jsTarget` (the optimized JS path) has a different emitted shape by design: a zero-materialization arena parser — `parse(source)` returns an arena node handle (traverse with `visit`/`tree`, read tokens via `tokenAt`) and adds incremental `parseEdited`. Its lexer is fused into the arena pipeline, so it has no standalone tokenizer (`emitLexer(grammar, jsTarget)` is `null`).
 

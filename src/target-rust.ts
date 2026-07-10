@@ -473,14 +473,15 @@ fn write_json(p: &Parser, id: i32, out: &mut String) {
     out.push_str(&format!("],\\"offset\\":{},\\"end\\":{}}}", nd.offset, nd.end));
 }
 
-// Library entry, two composable phases. tokenize() lexes ONCE; pass its tokens (plus the src,
-// which head-leaf lookups need — Rust keeps no globals) to parse(). The arena (nodes/kids) lives
-// in the returned Parser so the caller can serialize (write_json) or inspect it. Want the tokens
-// AND the CST? let t = tokenize(src); parse(t, src). Just the CST? parse(tokenize(src), src).
-fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
-fn parse<'a>(toks: Vec<Tok<'a>>, src: &'a str) -> Option<(Parser<'a>, i32)> {
-    let n = toks.len();
-    let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new() };
+// Library entry, two composable phases. tokenize() lexes ONCE and returns a Tokens struct that
+// carries the source slice (head-leaf lookups need it — Rust keeps no globals). Pass it to
+// parse(). The arena (nodes/kids) lives in the returned Parser so the caller can serialize
+// (write_json) or inspect it. Just the CST? parse(tokenize(src)).
+struct Tokens<'a> { src: &'a str, toks: Vec<Tok<'a>> }
+fn tokenize<'a>(src: &'a str) -> Tokens<'a> { Tokens { src, toks: lex(src) } }
+fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
+    let n = tokens.toks.len();
+    let mut p = Parser { toks: tokens.toks, pos: 0, capped: false, suppress_next: Vec::new(), src: tokens.src, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new() };
     match p.parse_${ir.entry}() {
         Some(root) if p.pos == n => Some((p, root)),
         _ => None,
@@ -499,13 +500,13 @@ fn main() {
     std::io::stdin().read_to_string(&mut src).unwrap();
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
     if let Some(iters) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) {
-        for _ in 0..3 { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s), s) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
+        for _ in 0..3 { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s)) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
         let t = std::time::Instant::now();
-        for _ in 0..iters { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s), s) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
+        for _ in 0..iters { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s)) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
-    match parse(tokenize(&src), &src) {
+    match parse(tokenize(&src)) {
         Some((p, root)) => { let mut out = String::new(); write_json(&p, root, &mut out); print!("{}", out); }
         None => { eprintln!("parse error"); std::process::exit(1); }
     }
