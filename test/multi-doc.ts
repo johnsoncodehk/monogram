@@ -9,12 +9,12 @@
 //
 //   node test/multi-doc.ts
 import { writeFileSync } from 'node:fs';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { objectify } from './emitted-obj.ts';
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-multidoc.mjs';
-writeFileSync(emPath, emitParser(grammar));
+const emPath = '/tmp/emitted-multidoc.mts';
+writeFileSync(emPath, emitParser(grammar, jsTarget));
 type Edit = { start: number; end: number; text: string };
 type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };
 type Parser = { parse(s: string): Cst; edit(cst: Cst, edits: Edit[]): void; visit(cst: Cst, fns: object): void; tree: import('./emitted-obj.ts').TreeView };

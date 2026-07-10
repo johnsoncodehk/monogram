@@ -13,7 +13,7 @@
 //
 //   node test/incremental-grammars.ts
 import { writeFileSync } from 'node:fs';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { objectify } from './emitted-obj.ts';
 
@@ -84,8 +84,8 @@ let fails = 0;
 const failures: string[] = [];
 for (const name of GRAMMARS) {
   const grammar = (await import(`../${name}.ts`)).default;
-  const emPath = `/tmp/emitted-incr-${name}.mjs`;
-  writeFileSync(emPath, emitParser(grammar));
+  const emPath = `/tmp/emitted-incr-${name}.mts`;
+  writeFileSync(emPath, emitParser(grammar, jsTarget));
   const em = (await import(emPath + '?v=' + process.pid)) as Em;
   const session = em.createParser();
   const fresh = em.createParser();
@@ -183,7 +183,7 @@ function replaceOnce(text: string, find: string, repl: string): { next: string; 
   return { next: text.slice(0, at) + repl + text.slice(at + find.length), edit: { start: at, end: at + find.length, text: repl } };
 }
 for (const name of ['javascript', 'typescript']) {
-  const em = (await import(`/tmp/emitted-incr-${name}.mjs?v=` + process.pid)) as Em;
+  const em = (await import(`/tmp/emitted-incr-${name}.mts?v=` + process.pid)) as Em;
   const session = em.createParser();
   const fresh = em.createParser();
   for (const doc of FORK_DOCS) {

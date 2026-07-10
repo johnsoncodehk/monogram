@@ -39,13 +39,13 @@ const resyncRetractLine = (indent: string): string =>
 // loop, so `cc>127 && lxNonAsciiWs(cc)` is EXACTLY "the regex would match here" → byte-
 // identical, minus the wasted exec on the common non-whitespace case (#45 B4).
 const NON_ASCII_WS_FN =
-  `function lxNonAsciiWs(cc) { return cc === 0xa0 || cc === 0x1680 || (cc >= 0x2000 && cc <= 0x200a) || cc === 0x2028 || cc === 0x2029 || cc === 0x202f || cc === 0x205f || cc === 0x3000 || cc === 0xfeff; }`;
+  `function lxNonAsciiWs(cc: number) { return cc === 0xa0 || cc === 0x1680 || (cc >= 0x2000 && cc <= 0x200a) || cc === 0x2028 || cc === 0x2029 || cc === 0x202f || cc === 0x205f || cc === 0x3000 || cc === 0xfeff; }`;
 // The non-ASCII whitespace fallback, emitted at the two sites that need it (after an ASCII run,
 // and as the lead char). `cont` appends the `continue` the lead-char site needs.
 const nonAsciiWsConsume = (v: string, cont: boolean, indent: string): string =>
-  `${indent}if (${v} > 127 && lxNonAsciiWs(${v})) { LX_WS.lastIndex = pos; const m = LX_WS.exec(source); if (m !== null) { if (m[0].includes('\\n')) pendingNl = true; pos += m[0].length;${cont ? ' continue;' : ''} } }`;
+  `${indent}if (${v} > 127 && lxNonAsciiWs(${v})) { LX_WS.lastIndex = pos; const m = LX_WS.exec(source); if (m !== null) { if (/[\\n\\r\\u2028\\u2029]/.test(m[0])) pendingNl = true; pos += m[0].length;${cont ? ' continue;' : ''} } }`;
 
-export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
+export function emitSoaLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   // Out of scope: the markup / indentation / newline state machines.
   if (grammar.markup || grammar.indent || grammar.newline) return null;
   if (grammar.tokens.some(t => tokenBlockPatternSource(t) || t.blockOnly)) return null;
@@ -134,22 +134,22 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// min paren depth recorded over the old suffix [j, altN) (pop-on-empty = -1),`);
   emit(`// built lazily once per edit (the caller nulls it when the alt stream changes).`);
   emit(`let lexResyncPd = 0;`);
-  emit(`let altSuffMin = null;`);
-  emit(`let altSuffMinBuf = null;`);
+  emit(`let altSuffMin: Int32Array | null = null;`);
+  emit(`let altSuffMinBuf: Int32Array | null = null;`);
   emit(`// ')' pops that found an empty stack, in THIS lexCore call's token indices`);
-  emit(`let lexEmptyPops = [];`);
+  emit(`let lexEmptyPops: number[] = [];`);
   emit(`// Min OLD-stream paren depth over the tokens inside the damage itself (set by the`);
   emit(`// caller before the window lex): the old-side trajectory min starts from here.`);
   emit(`let wndOldMin0 = 0x7fffffff;`);
-  emit(`function buildAltSuffMin(lo) {`);
+  emit(`function buildAltSuffMin(lo: number) {`);
   emit(`  if (altSuffMinBuf === null || altSuffMinBuf.length < altN + 1) altSuffMinBuf = new Int32Array(altN + 1025);`);
   emit(`  altSuffMin = altSuffMinBuf;`);
-  emit(`  altSuffMin[altN] = 0x7fffffff;`);
+  emit(`  altSuffMin![altN] = 0x7fffffff;`);
   emit(`  for (let j = altN - 1; j >= lo; j--) {`);
-  emit(`    let d = altPd[j];`);
-  emit(`    if (d === 0 && altK[j] === K_PUNCT && altT[j] === ${tOf(')')} && (j === 0 || altPd[j - 1] === 0)) d = -1;`);
-  emit(`    const nx = altSuffMin[j + 1];`);
-  emit(`    altSuffMin[j] = d < nx ? d : nx;`);
+  emit(`    let d = altPd![j];`);
+  emit(`    if (d === 0 && altK![j] === K_PUNCT && altT![j] === ${tOf(')')} && (j === 0 || altPd![j - 1] === 0)) d = -1;`);
+  emit(`    const nx = altSuffMin![j + 1];`);
+  emit(`    altSuffMin![j] = d < nx ? d : nx;`);
   emit(`  }`);
   emit(`}`);
   emit(`const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;`);
@@ -175,7 +175,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   // Length window → first-charCode switch → per-keyword compare chains (shortest first);
   // returns exactly what LIT_KW.get(source.slice(a, b)) ?? 0 would — the keyword set is
   // enumerated completely and keywords are pure ASCII, so charCode compares are exact.
-  emit(`function lexKwT(source, a, b) {`);
+  emit(`function lexKwT(source: string, a: number, b: number) {`);
   const kwEntries = [...st.kwLitKind.entries()];
   if (kwEntries.length === 0) {
     emit(`  return 0;`);
@@ -205,11 +205,11 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   }
   emit(`}`);
   // identTextValid, with the per-token prefix length baked at the call site.
-  emit(`function lexIdentValid(text, prefixLen) {`);
+  emit(`function lexIdentValid(text: string, prefixLen: number) {`);
   emit(`  const body = prefixLen > 0 ? text.slice(prefixLen) : text;`);
   emit(`  if (!body.includes('\\\\')) return true;`);
   emit(`  let bad = false;`);
-  emit(`  const decoded = body.replace(LX_DECODE_ESC, (_m, braced, fixed) => {`);
+  emit(`  const decoded = body.replace(LX_DECODE_ESC, (_m: string, braced: string, fixed: string) => {`);
   emit(`    const cp = parseInt(braced ?? fixed, 16);`);
   emit(`    if (cp > 0x10FFFF) { bad = true; return ''; }`);
   emit(`    return String.fromCodePoint(cp);`);
@@ -219,7 +219,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  return m !== null && m[0].length === decoded.length;`);
   emit(`}`);
   if (templateToken) {
-    emit(`function lexTplSpan(source, pos, validateEscapes) {`);
+    emit(`function lexTplSpan(source: string, pos: number, validateEscapes: boolean) {`);
     emit(`  const tplFrom = pos;`);
     emit(`  while (pos < source.length) {`);
     emit(`    if (${startsWithExpr('source', 'pos', tplInterpOpen)}) return { endsWithInterp: true, end: pos + ${tplInterpOpen.length} };`);
@@ -256,7 +256,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   // — no per-token object, no text slice: text is materialized from the source span only
   // when a CST leaf is built. Flag bits: 1 = newlineBefore (the only stamp this emitted
   // lexer ever sets; comment/multilineFlow stamps belong to fallback-only grammars).
-  emit(`function tokenize(source) {`);
+  emit(`function tokenize(source: string) {`);
   emit(`  docPieces = [source]; docPieceOff = [0]; docLen = source.length;`);
   emit(`  docFlat = source; docCur = 0;`);
   emit(`  tokN = 0;`);
@@ -281,7 +281,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// old token (same k/t, offsets shifted by wndDelta, both depth records 0) while`);
   emit(`// the window's own stacks are empty — returns that OLD index (the duplicate push`);
   emit(`// is retracted), or -1 when lexing ran to EOF.`);
-  emit(`function lexCore(source, startPos, pvK, pvT, wndPtr0, wndMinOff, wndDelta, wndCs, initParens, srcBase, hasMore) {`);
+  emit(`function lexCore(source: string, startPos: number, pvK: number, pvT: number, wndPtr0: number, wndMinOff: number, wndDelta: number, wndCs?: number, initParens?: boolean[] | null, srcBase?: number, hasMore?: boolean) {`);
   emit(`  if (srcBase === undefined) srcBase = 0;`);
   emit(`  lexWindowMore = hasMore === true;`);
   emit(`  lexSrcBase = srcBase;`);
@@ -291,7 +291,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  let extraFl = 0;`);
   emit(`  let lastBangWasPostfix = false;`);
   emit(`  let lastCloseWasParenHead = false;`);
-  emit(`  const templateStack = [];`);
+  emit(`  const templateStack: number[] = [];`);
   emit(`  const parenHeadStack = initParens !== undefined && initParens !== null ? initParens : [];`);
   emit(`  let wndPtr = wndPtr0;`);
   emit(`  let wndHit = -1;`);
@@ -301,8 +301,8 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`  // tokens and stack ops). An entry at depth <= BOTH mins was open at the`);
   emit(`  // divergence point in both lexes - i.e. it is the SAME entry.`);
   emit(`  let dmgMinOld = wndOldMin0, dmgMinNew = -1;`);
-  emit(`  function tkPush(k, t, off, end) {`);
-  emit(`    off += srcBase; end += srcBase;`);
+  emit(`  function tkPush(k: number, t: number, off: number, end: number) {`);
+  emit(`    off += srcBase!; end += srcBase!;`);
   emit(`    if (tokN === tkCap) growTok();`);
   emit(`    tkK[tokN] = k; tkT[tokN] = t; tkOff[tokN] = off; tkEnd[tokN] = end;`);
   emit(`    tkFl[tokN] = (pendingNl ? 1 : 0) | extraFl;`);
@@ -331,20 +331,20 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`    //    adopted tkPd column by lexResyncPd to the new truth.`);
   emit(`    if (wndPtr >= 0) {`);
   emit(`      const pd = tkPd[tokN - 1];`);
-  emit(`      if (dmgMinNew < 0) { if (off >= wndCs) dmgMinNew = pd; }`);
+  emit(`      if (dmgMinNew < 0) { if (off >= wndCs!) dmgMinNew = pd; }`);
   emit(`      else if (pd < dmgMinNew) dmgMinNew = pd;`);
   emit(`      if (off >= wndMinOff) {`);
-  emit(`        while (wndPtr < altN && (altOff[wndPtr] < 0 ? altOff[wndPtr] + srcLenP1 : altOff[wndPtr]) + wndDelta < off) { if (altPd[wndPtr] < dmgMinOld) dmgMinOld = altPd[wndPtr]; wndPtr++; }`);
-  emit(`        if (wndPtr < altN && (altOff[wndPtr] < 0 ? altOff[wndPtr] + srcLenP1 : altOff[wndPtr]) + wndDelta === off && altK[wndPtr] === k && altT[wndPtr] === t`);
-  emit(`            && (altEnd[wndPtr] < 0 ? altEnd[wndPtr] + srcLenP1 : altEnd[wndPtr]) + wndDelta === end`);
+  emit(`        while (wndPtr < altN && (altOff![wndPtr] < 0 ? altOff![wndPtr] + srcLenP1 : altOff![wndPtr]) + wndDelta < off) { if (altPd![wndPtr] < dmgMinOld) dmgMinOld = altPd![wndPtr]; wndPtr++; }`);
+  emit(`        if (wndPtr < altN && (altOff![wndPtr] < 0 ? altOff![wndPtr] + srcLenP1 : altOff![wndPtr]) + wndDelta === off && altK![wndPtr] === k && altT![wndPtr] === t`);
+  emit(`            && (altEnd![wndPtr] < 0 ? altEnd![wndPtr] + srcLenP1 : altEnd![wndPtr]) + wndDelta === end`);
   emit(`            // the candidate's LEADING-TRIVIA flags must match too: the gap before`);
   emit(`            // it may sit inside the edit (newline removed/added without moving any`);
   emit(`            // token bytes), and parsers read these flags (sameLine / commentBefore)`);
-  emit(`            && altFl[wndPtr] === tkFl[tokN - 1]`);
-  emit(`            && templateStack.length === 0 && altDp[wndPtr] === 0`);
+  emit(`            && altFl![wndPtr] === tkFl[tokN - 1]`);
+  emit(`            && templateStack.length === 0 && altDp![wndPtr] === 0`);
   emit(`            && LX_PFXV[t] === 0 && LX_PARENKW[t] === 0`);
   emit(`            && !(k === K_PUNCT && (t === ${tLParen} || t === ${tRParen}))) {`);
-  emit(`          const q = altPd[wndPtr];`);
+  emit(`          const q = altPd![wndPtr];`);
   emit(`          if (q < dmgMinOld) dmgMinOld = q;`);
   emit(`          if (q === pd && pd <= dmgMinOld && pd <= dmgMinNew) {`);
   emit(`            wndHit = wndPtr;`);
@@ -358,7 +358,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`              okTail = docEmptyPops.length === 0 || docEmptyPops[docEmptyPops.length - 1] <= wndPtr;`);
   emit(`            } else {`);
   emit(`              if (altSuffMin === null) buildAltSuffMin(wndPtr0);`);
-  emit(`              okTail = altSuffMin[wndPtr + 1] >= q;`);
+  emit(`              okTail = altSuffMin![wndPtr + 1] >= q;`);
   emit(`            }`);
   emit(`            if (okTail) {`);
   emit(`              wndHit = wndPtr;`);
@@ -390,7 +390,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`    if (cc === 32 || (cc >= 9 && cc <= 13)) {`);
   emit(`      let wc = cc;`);
   emit(`      do {`);
-  emit(`        if (wc === 10) pendingNl = true;`);
+  emit(`        if (wc === 10 || wc === 13) pendingNl = true;`);   // JS line terminators LF/CR (LS/PS via the \\s regex below)
   emit(`        pos++;`);
   emit(`        wc = source.charCodeAt(pos);`);
   emit(`      } while (wc === 32 || (wc >= 9 && wc <= 13));`);
@@ -476,7 +476,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       emit(`${ind}    }`);
     }
     if (m.skip) {
-      emit(`${ind}    if (m[0].includes('\\n')) pendingNl = true;`);
+      emit(`${ind}    if (/[\\n\\r\\u2028\\u2029]/.test(m[0])) pendingNl = true;`);
       emit(`${ind}    pos += m[0].length;`);
     } else {
       emit(`${ind}    const _e = pos + m[0].length;`);
@@ -495,7 +495,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
       emit(`${ind}  extraFl = _ph ? 8 : 0; }`);
     } else if (lit === ')') {
       emit(`${ind}if (parenHeadStack.length === 0) { lastCloseWasParenHead = false; lexEmptyPops.push(tokN); }`);
-      emit(`${ind}else lastCloseWasParenHead = parenHeadStack.pop();`);
+      emit(`${ind}else lastCloseWasParenHead = parenHeadStack.pop()!;`);
     }
     if (regexCtx?.postfixAfterValueTexts?.includes(lit)) {
       emit(`${ind}lastBangWasPostfix = prevIsValue();`);
@@ -635,7 +635,7 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// lexer flag live (a control-head ')' or a postfix-ambiguous operator would`);
   emit(`// make the next token's regex-context depend on unrecoverable state). -1 = file`);
   emit(`// head (always sound, degrades to a full re-lex).`);
-  emit(`function findRestart(cs) {`);
+  emit(`function findRestart(cs: number) {`);
   emit(`  let lo = 0, hi = tokN;`);
   // STRICTLY before the damage: a token ENDING exactly at cs can be EXTENDED by
   // the edit under maximal munch ('b' + inserted 'x' = 'bx'; '=' + '=' = '==';
@@ -658,9 +658,9 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// openers at that depth are re-opened later, and the re-opener comes first`);
   emit(`// backward). The '(' records its depth INCLUDING itself, and carries its`);
   emit(`// control-head-ness as tkFl bit 8.`);
-  emit(`function reconstructParens(b) {`);
+  emit(`function reconstructParens(b: number) {`);
   emit(`  let need = b >= 0 ? tkPd[b] : 0;`);
-  emit(`  const out = new Array(need);`);
+  emit(`  const out: boolean[] = new Array(need);`);
   emit(`  for (let i = b; i >= 0 && need > 0; i--) {`);
   emit(`    if (tkK[i] === 1 && tkT[i] === ${tOf('(')} && tkPd[i] === need) { out[need - 1] = (tkFl[i] & 8) !== 0; need--; }`);
   emit(`  }`);
@@ -673,9 +673,9 @@ export function emitLexer(grammar: CstGrammar, st: LexerSymtab): string | null {
   emit(`// are splice-stable (every splice begins past its own anchor), so the baseline`);
   emit(`// stays exact; a backward jump (b < cached) falls back to the full scan.`);
   emit(`let parenCachePos = -1;`);
-  emit(`let parenCacheStack = [];`);
-  emit(`function reconstructParensCached(b) {`);
-  emit(`  let stack;`);
+  emit(`let parenCacheStack: boolean[] = [];`);
+  emit(`function reconstructParensCached(b: number) {`);
+  emit(`  let stack: boolean[];`);
   emit(`  if (b < 0) stack = [];`);
   emit(`  else if (parenCachePos >= 0 && parenCachePos <= b) {`);
   emit(`    stack = parenCacheStack;`);

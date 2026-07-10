@@ -9,14 +9,14 @@
 //   node test/emit-lexer-verify.ts            # in-repo corpus (+ /tmp/ts-repo if present)
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createLexer } from '../src/gen-lexer.ts';
-import { emitParser } from '../src/emit-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 
 const grammar = (await import('../typescript.ts')).default;
 
 // The reference: createLexer with the SAME intern config the emitted parser bakes.
-const EMITTED = '/tmp/emit-lexer-verify-parser.mjs';
-writeFileSync(EMITTED, emitParser(grammar));
+const EMITTED = '/tmp/emit-lexer-verify-parser.mts';
+writeFileSync(EMITTED, emitParser(grammar, jsTarget));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 const src = readFileSync(EMITTED, 'utf-8');
 if (src.includes('createLexer(')) {
@@ -26,9 +26,9 @@ if (src.includes('createLexer(')) {
 // Rebuild the intern config from the emitted tables' source of truth: re-emit via the
 // analyzer is private, so read the reference lexer through a tiny probe grammar parse —
 // simplest faithful route: intern maps are exactly the emitted TYPE_KIND/LIT_KW/LIT_PU.
-const tk = new Map<string, number>(JSON.parse(src.match(/const TYPE_KIND = new Map\((.*)\);/)![1]));
-const kw = new Map<string, number>(JSON.parse(src.match(/const LIT_KW = new Map\((.*)\);/)![1]));
-const pu = new Map<string, number>(JSON.parse(src.match(/const LIT_PU = new Map\((.*)\);/)![1]));
+const tk = new Map<string, number>(JSON.parse(src.match(/const TYPE_KIND = new Map(?:<[^>]*>)?\((.*)\);/)![1]));
+const kw = new Map<string, number>(JSON.parse(src.match(/const LIT_KW = new Map(?:<[^>]*>)?\((.*)\);/)![1]));
+const pu = new Map<string, number>(JSON.parse(src.match(/const LIT_PU = new Map(?:<[^>]*>)?\((.*)\);/)![1]));
 const kPunct = Number(src.match(/const K_PUNCT = (\d+);/)![1]);
 const kFallback = Number(src.match(/const K_NAMED_FALLBACK = (\d+);/)![1]);
 const ref = createLexer(grammar, { typeKind: tk, kwLit: kw, puLit: pu, punctKind: kPunct, namedFallback: kFallback });

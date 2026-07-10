@@ -29,9 +29,9 @@ jobs:
 
       - run: npm ci
 
-      # Regenerate every grammar's artifacts FIRST: the uncommitted ones
-      # (*.cst-types.ts / *.cst-match.ts, gitignored) must exist before Typecheck
-      # and the gates, which import them. Then fail if any COMMITTED artifact
+      # Regenerate every grammar's artifacts FIRST: the uncommitted one
+      # (*.cst-match.ts, gitignored) must exist before Typecheck
+      # and the gates, which import it. Then fail if any COMMITTED artifact
       # drifts from the regenerated output (someone edited a grammar but forgot
       # to regenerate). Covers all grammars (sources at the repo root) + the
       # tree-sitter packages.
