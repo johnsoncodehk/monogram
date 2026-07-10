@@ -3,7 +3,8 @@
 // The target-agnostic emitter (issue #6). `emitParser(grammar, target)` (see emit.ts) derives
 // a COMPLETE, self-contained parser in the target's language from the same CstGrammar the
 // TS engine uses. It is the agnosticism proof: ONE analysis → ONE intermediate form (IR)
-// → N language renderings, all producing the byte-identical CST the interpreter does.
+// → N language renderings that accept/reject the same inputs as the interpreter (see
+// test/portable-targets.ts: accept/reject parity plus a rule-skeleton guard on tiny inputs).
 //
 // SHARED + target-agnostic (here): the grammar ANALYSIS (reused from grammar-analysis.ts),
 // the LEXER specs (derived from token-pattern.ts's structural recognizers — char runs,
@@ -43,6 +44,12 @@ export type LexTok =
   | { kind: 'pattern'; name: string; pattern: TokenPattern; skip: boolean };
 
 export type Lit = { value: string; ttype: '$keyword' | '$punct' };
+// A FIRST signature: the literal texts and token kinds a branch can begin with, used to emit a
+// predictive switch instead of backtracking. `null` = UNPREDICTABLE (the branch leads with a
+// zero-width guard, a nullable quantifier, or a reference to an unpredictable/Pratt rule) — keep
+// backtracking for it. Computed conservatively in buildIR; targets only render a predictive
+// dispatch when every branch in an alt-list is non-null AND the signatures are pairwise disjoint.
+export type FirstSig = { lits: string[]; toks: string[] } | null;
 export type Step =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
   | { t: 'tok'; name: string }                                  // match a token kind
@@ -52,14 +59,14 @@ export type Step =
   | { t: 'opt'; steps: Step[] }                                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string }                     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
-  | { t: 'alt'; branches: Step[][] }                            // inline alternation of sub-sequences (backtracking)
+  | { t: 'alt'; branches: Step[][]; firsts?: FirstSig[]; predictive?: boolean }                            // inline alternation of sub-sequences (backtracking unless predictive)
   | { t: 'not'; steps: Step[] }                                 // zero-width negative lookahead (consumes nothing)
   | { t: 'seq'; steps: Step[] }                                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
   | { t: 'suppress'; connectors: string[]; steps: Step[] };     // parse the body with these LED connectors disabled (no-`in` context)
 export type Alt = Step[];
 
-export type RdRule = { kind: 'rd'; name: string; cstName: string; alts: Alt[] };
+export type RdRule = { kind: 'rd'; name: string; cstName: string; alts: Alt[]; altFirst: FirstSig[]; predictive: boolean };
 export type Bracket = { first: string; steps: Step[] };          // a literal-led sequence (grouping/array; LED call/index)
 export type PrattRule = {
   kind: 'pratt';
@@ -68,7 +75,10 @@ export type PrattRule = {
   nudToks: string[];                                  // NUD: a bare token wrapped in a node
   nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
   nudSeqs: Step[][];                                  // NUD: a general sequence (guarded ident, class expr), tried with backtracking
+  nudSeqFirst: FirstSig[];                            // parallel to nudSeqs: each seq's FIRST signature (null = unpredictable)
+  nudSeqPredictive: boolean;                          // all nudSeqs non-null & pairwise disjoint → render a switch
   nudCapped: Array<{ steps: Step[]; capBp: number }>; // NUD: an assignment-level capped sequence (arrow function) — parsed only when minBp < capBp, admits no led
+  nudCappedFirst: FirstSig[];                         // parallel to nudCapped: each capped seq's FIRST signature
   prefix: Array<{ op: string; rbp: number }>;         // NUD: prefix op then operand at rbp
   binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
@@ -181,8 +191,92 @@ function buildIR(grammar: CstGrammar): ParserIR {
     // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
     // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
     if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, altSteps, litTtype);
-    return { kind: 'rd', name: r.name, cstName, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)] };
+    return { kind: 'rd', name: r.name, cstName, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)], altFirst: [], predictive: false };
   });
+
+  // ── FIRST signatures + predictive flags ──
+  // Per-branch FIRST (literal texts + token kinds the branch can begin with, or null =
+  // unpredictable) feeds Phase 3's predictive switch dispatch. Computed conservatively from the
+  // Step IR: a branch is predictable iff its first CONSUMING step is a literal/token/altlit or a
+  // reference to an all-predictable rd rule. A leading zero-width guard (not/sameLine), a nullable
+  // quantifier (star/opt/sep), or a reference to a Pratt / mixed-alternative rule marks the branch
+  // unpredictable → backtracking fallback. `ruleLead` is the fixpoint of each rule's own leading
+  // FIRST (null if any alt is unpredictable); it resolves cross-rule references.
+  const ruleLead = new Map<string, FirstSig>();
+  const seqFirst = (steps: Step[]): FirstSig => {
+    if (steps.length === 0) return null;
+    const s = steps[0];
+    switch (s.t) {
+      case 'lit': return { lits: [s.value], toks: [] };
+      case 'tok': return { lits: [], toks: [s.name] };
+      case 'altlit': return { lits: s.opts.map((o) => o.value), toks: [] };
+      case 'rule': case 'ruleBp': { const f = ruleLead.get(s.name); return f === undefined ? null : f; }
+      case 'alt': {
+        const lits = new Set<string>(); const toks = new Set<string>();
+        for (const b of s.branches) { const f = seqFirst(b); if (f === null) return null; f.lits.forEach((x) => lits.add(x)); f.toks.forEach((x) => toks.add(x)); }
+        return { lits: [...lits], toks: [...toks] };
+      }
+      case 'seq': return seqFirst(s.steps);
+      case 'suppress': return seqFirst(s.steps);
+      case 'not': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
+    }
+    return null;
+  };
+  for (let changed = true, guard = 0; changed && guard <= rules.length + 2; guard++) {
+    changed = false;
+    for (const r of rules) {
+      if (r.kind === 'pratt') { if (!ruleLead.has(r.name)) { ruleLead.set(r.name, null); changed = true; } continue; }
+      const lits = new Set<string>(); const toks = new Set<string>(); let unpredictable = false;
+      for (const alt of r.alts) {
+        const f = seqFirst(alt);
+        if (f === null) { unpredictable = true; break; }
+        f.lits.forEach((x) => lits.add(x)); f.toks.forEach((x) => toks.add(x));
+      }
+      const next: FirstSig = unpredictable ? null : { lits: [...lits], toks: [...toks] };
+      const prev = ruleLead.get(r.name);
+      const same = prev === next
+        || (prev != null && next != null && prev.lits.length === next.lits.length && prev.toks.length === next.toks.length
+          && prev.lits.every((x) => next.lits.includes(x)) && prev.toks.every((x) => next.toks.includes(x)));
+      if (!same) { ruleLead.set(r.name, next); changed = true; }
+    }
+  }
+  // Two signatures are disjoint iff they share no literal text and no token kind.
+  const disjoint = (a: FirstSig, b: FirstSig): boolean =>
+    a !== null && b !== null && a.lits.every((x) => !b.lits.includes(x)) && a.toks.every((x) => !b.toks.includes(x));
+  const allDisjoint = (fs: FirstSig[]): boolean => {
+    for (let i = 0; i < fs.length; i++) if (fs[i] === null) return false;
+    for (let i = 0; i < fs.length; i++) for (let j = i + 1; j < fs.length; j++) if (!disjoint(fs[i], fs[j])) return false;
+    return true;
+  };
+  // Annotate each rule's alt-level FIRST + predictive flag, and walk nested Steps to annotate
+  // inline `alt` branches (used by Phase 3's nested switch dispatch).
+  const annotateSteps = (steps: Step[]): void => {
+    for (const s of steps) {
+      if (s.t === 'star') annotateSteps([s.step]);
+      else if (s.t === 'opt' || s.t === 'not' || s.t === 'seq' || s.t === 'suppress') annotateSteps(s.steps);
+      else if (s.t === 'sep') annotateSteps([s.elem]);
+      else if (s.t === 'alt') {
+        s.firsts = s.branches.map((b) => seqFirst(b));
+        s.predictive = allDisjoint(s.firsts);
+        s.branches.forEach(annotateSteps);
+      }
+    }
+  };
+  for (const r of rules) {
+    if (r.kind === 'rd') {
+      r.altFirst = r.alts.map((alt) => seqFirst(alt));
+      r.predictive = allDisjoint(r.altFirst);
+      r.alts.forEach(annotateSteps);
+    } else {
+      r.nudSeqFirst = r.nudSeqs.map((seq) => seqFirst(seq));
+      r.nudSeqPredictive = allDisjoint(r.nudSeqFirst);
+      r.nudCappedFirst = r.nudCapped.map((c) => seqFirst(c.steps));
+      r.nudSeqs.forEach(annotateSteps);
+      r.nudCapped.forEach((c) => annotateSteps(c.steps));
+      r.nudBrackets.forEach((b) => annotateSteps(b.steps));
+      r.leds.forEach((b) => annotateSteps(b.steps));
+    }
+  }
 
   // Regex-vs-division context (only if the grammar declares a regex token + config).
   let regexCtx: RegexCtx | null = null;
@@ -385,5 +479,5 @@ function buildPratt(
   const postfix = sawPostfix
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp }))
     : [];
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudCapped, prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, postfixToks, postfix };
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, postfixToks, postfix };
 }

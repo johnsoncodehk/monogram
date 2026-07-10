@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, FirstSig } from './emit-portable.ts';
 import { portableIR } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
@@ -17,6 +17,11 @@ import type { TokenPattern, CstGrammar } from './types.ts';
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
+
+// Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
+const firstCond = (f: FirstSig, t: string) => f
+  ? `(${f.lits.map((l) => `${t}.Text == ${J(l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.Kind == ${J(k)}`).join(' || ') || 'false'})`
+  : 'false';
 
 // Compile a token-pattern AST to backtracking-free package-level matcher funcs
 // `_mN(p int) int` (new position, or -1) over the module-level source `_s`.
@@ -177,7 +182,7 @@ function stepCond(s: Step): string {
     case 'opt': return `opt(func() bool { return ${s.steps.map(stepCond).join(' && ')} })`;
     case 'sep': return `sepBy(func() bool { return ${stepCond(s.elem)} }, ${J(s.delim)})`;
     case 'altlit': return `altLit([][2]string{${s.opts.map((o) => `{${J(o.value)}, ${J(o.ttype)}}`).join(', ')}})`;
-    case 'alt': return `func() bool { ${s.branches.map((br) => `{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${br.length ? br.map(stepCond).join(' && ') : 'true'} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('; ')}; return false }()`;
+    case 'alt': return s.predictive ? `func() bool { ${predAltBody(s.branches, s.firsts)} }()` : `func() bool { ${s.branches.map((br) => `{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${br.length ? br.map(stepCond).join(' && ') : 'true'} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('; ')}; return false }()`;
     case 'not': return `func() bool { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); m := ${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return !m }()`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := peek(); return t != nil && !t.Nl }()`;
@@ -185,7 +190,22 @@ function stepCond(s: Step): string {
   }
 }
 
+function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
+  const arms = branches.map((br, i) => `if ${firstCond(firsts![i], 't')} { if ${br.length ? br.map(stepCond).join(' && ') : 'true'} { return true } }`).join(' else ');
+  return `t := peek(); if t == nil { return false }; ${arms}; return false`;
+}
+
 function rdRule(r: RdRule): string {
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save)) } }`;
+    return `func parse${r.name}() int32 {
+\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
+\tt := peek(); if t == nil { return -1 }
+${r.alts.map(arm).join(' ')}
+\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
+\treturn -1
+}`;
+  }
   const alt = (steps: Step[]) =>
     `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save)) }
 \tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
@@ -401,7 +421,7 @@ func finish(rule string, sb, fallbackOff int) int32 {
 \treturn int32(len(nodes) - 1)
 }
 func matchLit(value, ttype string) bool {
-\tif pos < len(toks) && toks[pos].Text == value { scratch = append(scratch, mkLeaf(ttype, toks[pos].Off, toks[pos].End)); pos++; return true }
+\tif pos < len(toks) && toks[pos].Text == value { if ttype != "$punct" { scratch = append(scratch, mkLeaf(ttype, toks[pos].Off, toks[pos].End)) }; pos++; return true }
 \treturn false
 }
 func matchTok(name string) bool {

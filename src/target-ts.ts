@@ -4,7 +4,7 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, FirstSig } from './emit-portable.ts';
 import { portableIR } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
@@ -12,6 +12,11 @@ import type { CstGrammar } from './types.ts';
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} === ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
+
+// Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
+const firstCond = (f: FirstSig, t: string) => f
+  ? `(${f.lits.map((l) => `${t}.text === ${J(l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kind === ${J(k)}`).join(' || ') || 'false'})`
+  : 'false';
 
 import type { TokenPattern } from './types.ts';
 
@@ -165,11 +170,11 @@ function stepCond(s: Step): string {
     case 'tok': return `matchTok(${J(s.name)}, kids)`;
     case 'rule': return `callRule(parse${s.name}, kids)`;
     case 'ruleBp': return `callRule(() => ${s.name}_bp(${s.bp}), kids)`;
-    case 'star': return `star(() => ${stepCond(s.step)}, kids)`;
-    case 'opt': return `opt(() => ${s.steps.map(stepCond).join(' && ')}, kids)`;
-    case 'sep': return `sepBy(() => ${stepCond(s.elem)}, ${J(s.delim)}, kids)`;
+  case 'star': return `star(() => ${stepCond(s.step)}, kids)`;
+  case 'opt': return `opt(() => ${s.steps.map(stepCond).join(' && ')}, kids)`;
+  case 'sep': return `sepBy(() => ${stepCond(s.elem)}, ${J(s.delim)}, kids)`;
     case 'altlit': return `altLit([${s.opts.map((o) => `[${J(o.value)}, ${J(o.ttype)}]`).join(', ')}], kids)`;
-    case 'alt': return `(() => { ${s.branches.map((br) => `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map(stepCond).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`).join(' ')} return false; })()`;
+    case 'alt': return s.predictive ? `(() => { ${predAltBody(s.branches, s.firsts)} })()` : `(() => { ${s.branches.map((br) => `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map(stepCond).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`).join(' ')} return false; })()`;
     case 'not': return `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
@@ -177,7 +182,22 @@ function stepCond(s: Step): string {
   }
 }
 
+function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
+  const arms = branches.map((br, i) => `if (${firstCond(firsts![i], 't')}) { if (${br.length ? br.map(stepCond).join(' && ') : 'true'}) return true; }`).join(' else ');
+  return `const t = peek(); if (t === null) return false; ${arms} return false;`;
+}
+
 function rdRule(r: RdRule): string {
+  if (r.predictive) {
+  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't')}) { const kids: Cst[] = []; if (${steps.map(stepCond).join(' && ')}) return branch(${J(r.cstName)}, kids, save); }`;
+  return `function parse${r.name}(): Node | null {
+  const save = pos;
+  const t = peek(); if (t === null) return null;
+${r.alts.map(arm).join(' ')}
+  pos = save;
+  return null;
+}`;
+  }
   const alt = (steps: Step[]) =>
     `  { const kids: Cst[] = []; if (${steps.map(stepCond).join(' && ')}) return branch(${J(r.cstName)}, kids, save); pos = save; }`;
   return `function parse${r.name}(): Node | null {
@@ -196,7 +216,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const atom = `new Set([${r.nudToks.map(J).join(', ')}])`;
   const bracketNud = (b: Bracket) => `    if (t.text === ${J(b.first)}) {
       const save = pos; const kids: Cst[] = [];
-      if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.cstName)}, kids);
+      if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.cstName)}, kids, t.off);
       pos = save;   // fall through to the next NUD alternative (e.g. another '${b.first}'-led form)
     }`;
   // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
@@ -333,13 +353,13 @@ function branch(rule: string, kids: Cst[], save: number): Node {
   const end = kids.length > 0 ? kids[kids.length - 1].end : offset;
   return { rule, children: kids, offset, end };
 }
-function node(rule: string, kids: Cst[]): Node {
-  return { rule, children: kids, offset: kids[0].offset, end: kids[kids.length - 1].end };
+function node(rule: string, kids: Cst[], fallbackOff: number = 0): Node {
+  return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff };
 }
 function matchLit(value: string, ttype: string, kids: Cst[]): boolean {
   const t = peek();
   if (t === null || t.text !== value) return false;
-  kids.push({ tokenType: ttype, offset: t.off, end: t.end }); pos++; return true;
+  if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end }); pos++; return true;
 }
 function matchTok(name: string, kids: Cst[]): boolean {
   const t = peek();

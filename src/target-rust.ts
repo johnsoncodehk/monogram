@@ -1,17 +1,17 @@
 // The Rust Target for emit-portable. Renders the same language-agnostic ParserIR as
 // tsTarget/goTarget into a self-contained Rust program (no external crates — the lexer is
 // regex-free, so it compiles with rustc alone, no Cargo/network). Its CST JSON is checked
-// byte-for-byte against the interpreter, so `emitParser(grammar, rustTarget)` is a
+// against the interpreter on accept/reject parity, so `emitParser(grammar, rustTarget)` is a
 // real, verified Rust parser derived from the same grammar definition.
 //
-// Rust ownership note: a CST node is OWNED (moved), unlike the TS/Go pointer trees. In the
-// Pratt LED loop `left` can only be moved into a child vec once the continuation is known to
-// match — so a mixfix LED matches its steps into a SEPARATE kids vec first, then (on success)
-// moves `left` to the front and reassigns; on failure `left` is untouched and the loop
-// returns it. Sub-sequence combinators (star/opt/sep) take non-capturing fn pointers
-// `fn(&mut Parser, &mut Vec<Cst>) -> bool`, threading the parser + kids as params (so nothing
-// is captured, sidestepping the borrow checker).
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg } from './emit-portable.ts';
+// ARENA allocation (mirrors goTarget / tsgo / oxc): nodes live in a flat `nodes: Vec<Node>`,
+// their children in a flat `kids: Vec<i32>`, and in-progress children accumulate on a
+// `scratch: Vec<i32>` stack. A node is an `i32` index, never a heap pointer. Backtracking
+// truncates the three vecs to saved lengths; they keep capacity across parses, so a warmed
+// parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
+// combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
+// the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, FirstSig } from './emit-portable.ts';
 import { portableIR } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
@@ -19,6 +19,12 @@ import type { TokenPattern, CstGrammar } from './types.ts';
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `(${lo}..=${hi}).contains(&${v})`)).join(' || ') + ')';
+
+// Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
+// null FirstSig → 'false' (never matched here; predictive alts have all-non-null FIRSTs).
+const firstCond = (f: FirstSig, t: string) => f
+  ? `(${f.lits.map((l) => `${t}.text == ${J(l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kind == ${J(k)}`).join(' || ') || 'false'})`
+  : 'false';
 
 // Compile a token-pattern AST to backtracking-free matcher fns `_mN(s, p) -> i64`
 // (new position, or -1). Named functions (Rust closures can't recurse); the source is
@@ -174,57 +180,77 @@ ${puncts}
 }`;
 }
 
-// Top-level step: uses `self` and `&mut kids`.
+// Top-level step: uses `self`; children accumulate on `self.scratch`.
 function stepCond(s: Step): string {
   switch (s.t) {
-    case 'lit': return `self.match_lit(${J(s.value)}, ${J(s.ttype)}, &mut kids)`;
-    case 'tok': return `self.match_tok(${J(s.name)}, &mut kids)`;
-    case 'rule': return `self.call_rule(Parser::parse_${s.name}, &mut kids)`;
-    case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}), &mut kids)`;
-    case 'star': return `self.star(|p, k| ${stepCondP(s.step)}, &mut kids)`;
-    case 'opt': return `self.opt(|p, k| ${s.steps.map(stepCondP).join(' && ')}, &mut kids)`;
-    case 'sep': return `self.sep_by(|p, k| ${stepCondP(s.elem)}, ${J(s.delim)}, &mut kids)`;
-    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}], &mut kids)`;
-    case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(self, &mut kids)`;
-    case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(self, &mut kids)`;
+    case 'lit': return `self.match_lit(${J(s.value)}, ${J(s.ttype)})`;
+    case 'tok': return `self.match_tok(${J(s.name)})`;
+    case 'rule': return `self.call_rule(Parser::parse_${s.name})`;
+    case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
+    case 'star': return `self.star(|p| ${stepCondP(s.step)})`;
+    case 'opt': return `self.opt(|p| ${s.steps.map(stepCondP).join(' && ')})`;
+    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem)}, ${J(s.delim)})`;
+    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}])`;
+    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, s.firsts)} })(self)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches)} })(self)`;
+    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps)} })(self)`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ self.suppress_next = vec![${s.connectors.map(J).join(', ')}]; let _r = (${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}); self.suppress_next = Vec::new(); _r }`;
   }
 }
-// A backtracking inline alternation rendered as an immediately-applied closure over (p, k),
+// A backtracking inline alternation rendered as an immediately-applied closure over p,
 // so it composes identically whether it sits at top level or already inside a closure.
 function altBody(branches: Step[][]): string {
-  return `${branches.map((br) => `{ let sp = p.pos; let bk = k.len(); if ${br.length ? br.map(stepCondP).join(' && ') : 'true'} { return true; } p.pos = sp; k.truncate(bk); }`).join(' ')} false`;
+  return `${branches.map((br) => `{ let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); if ${br.length ? br.map(stepCondP).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); }`).join(' ')} false`;
 }
 // Zero-width negative lookahead: try the steps, restore, succeed iff they did NOT all match.
 function notBody(steps: Step[]): string {
-  return `let sp = p.pos; let bk = k.len(); let m = ${steps.length ? steps.map(stepCondP).join(' && ') : 'true'}; p.pos = sp; k.truncate(bk); !m`;
+  return `let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); let m = ${steps.length ? steps.map(stepCondP).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); !m`;
 }
-// Inside a closure: uses `p` and `k`.
+// Inside a closure: uses `p`.
 function stepCondP(s: Step): string {
   switch (s.t) {
-    case 'lit': return `p.match_lit(${J(s.value)}, ${J(s.ttype)}, k)`;
-    case 'tok': return `p.match_tok(${J(s.name)}, k)`;
-    case 'rule': return `p.call_rule(Parser::parse_${s.name}, k)`;
-    case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}), k)`;
-    case 'star': return `p.star(|p, k| ${stepCondP(s.step)}, k)`;
-    case 'opt': return `p.opt(|p, k| ${s.steps.map(stepCondP).join(' && ')}, k)`;
-    case 'sep': return `p.sep_by(|p, k| ${stepCondP(s.elem)}, ${J(s.delim)}, k)`;
-    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}], k)`;
-    case 'alt': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${altBody(s.branches)} })(p, k)`;
-    case 'not': return `(|p: &mut Parser<'a>, k: &mut Vec<Cst>| -> bool { ${notBody(s.steps)} })(p, k)`;
+    case 'lit': return `p.match_lit(${J(s.value)}, ${J(s.ttype)})`;
+    case 'tok': return `p.match_tok(${J(s.name)})`;
+    case 'rule': return `p.call_rule(Parser::parse_${s.name})`;
+    case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
+    case 'star': return `p.star(|p| ${stepCondP(s.step)})`;
+    case 'opt': return `p.opt(|p| ${s.steps.map(stepCondP).join(' && ')})`;
+    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem)}, ${J(s.delim)})`;
+    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}])`;
+    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, s.firsts)} })(p)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches)} })(p)`;
+    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps)} })(p)`;
     case 'seq': return `(${s.steps.length ? s.steps.map(stepCondP).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ p.suppress_next = vec![${s.connectors.map(J).join(', ')}]; let _r = (${s.steps.length ? s.steps.map(stepCondP).join(' && ') : 'true'}); p.suppress_next = Vec::new(); _r }`;
   }
 }
 
+// Predictive alternation: FIRST sets are disjoint, so the buffered token selects exactly one
+// branch — no save/restore per branch, no cross-branch backtracking. If the selected branch's
+// body fails, the alt fails (the enclosing rule restores pos to its own save). Parity holds
+// because disjoint EXACT FIRSTs mean no other branch could match the first token.
+function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
+  const arms = branches.map((br, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't')} { if ${br.length ? br.map(stepCondP).join(' && ') : 'true'} { return true; } }`).join('\n');
+  return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
+}
+
 function rdRule(r: RdRule): string {
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save))); } }`;
+    return `    fn parse_${r.name}(&mut self) -> Option<i32> {
+        let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
+        let t = match self.peek() { Some(t) => t, None => return None };
+${r.alts.map(arm).join('\n')}
+        self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);
+        None
+    }`;
+  }
   const alt = (steps: Step[]) =>
-    `        { let mut kids: Vec<Cst> = Vec::new(); if ${steps.map(stepCond).join(' && ')} { return Some(self.branch(${J(r.cstName)}, kids, save)); } self.pos = save; }`;
-  return `    fn parse_${r.name}(&mut self) -> Option<Cst> {
-        let save = self.pos;
+    `        if ${steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save))); }
+        self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);`;
+  return `    fn parse_${r.name}(&mut self) -> Option<i32> {
+        let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
 ${r.alts.map(alt).join('\n')}
         None
     }`;
@@ -233,37 +259,37 @@ ${r.alts.map(alt).join('\n')}
 function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
     ? `        if t.kind == "$templateHead" {
-            return self.match_template().map(|n| { let (o, e) = (n.offset, n.end); Cst::node(${J(r.cstName)}, vec![n], o, e) });
+            let n = match self.match_template() { Some(n) => n, None => return None };
+            let sb = self.scratch.len(); self.scratch.push(n);
+            return Some(self.finish(${J(r.cstName)}, sb, self.nodes[n as usize].offset));
         }\n`
     : '';
   const binArms = r.binary.map((b) => `${J(b.op)} => Some((${b.lbp}, ${b.rbp}))`).join(', ');
   const preArms = r.prefix.map((p) => `${J(p.op)} => Some(${p.rbp})`).join(', ');
   const atomArm = r.nudToks.map(J).join(' | ');
   const bracketNud = (b: Bracket) => `        if t.text == ${J(b.first)} {
-            let save = self.pos; let mut kids: Vec<Cst> = Vec::new();
-            if ${b.steps.map(stepCond).join(' && ')} { return Some(node(${J(r.cstName)}, kids)); }
-            self.pos = save;   // fall through to the next NUD alternative
+            let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
+            if ${b.steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, t.off)); }
+            self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);
         }`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], &left) && ` : ''}!my_sup.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
-                let led_save = self.pos; let mut kids: Vec<Cst> = Vec::new();
-                if ${b.steps.map(stepCond).join(' && ')} {
-                    let mut full = vec![left]; full.append(&mut kids);
-                    left = node(${J(r.cstName)}, full); continue;
-                }
-                self.pos = led_save; break;
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], left) && ` : ''}!my_sup.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
+                let led_save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
+                self.scratch.push(left);
+                if ${b.steps.map(stepCond).join(' && ')} { left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); continue; }
+                self.pos = led_save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break;
             }`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { left = node(${J(r.cstName)}, vec![left, n]); continue; } }` : '';
-    return `            if !tail_closed && t.kind == ${J(tok)} { self.pos += 1; let leaf = Cst::leaf(t.kind, t.off, t.end); left = node(${J(r.cstName)}, vec![left, leaf]); continue; }${tplPart}`;
+            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); continue; } }` : '';
+    return `            if !tail_closed && t.kind == ${J(tok)} { self.pos += 1; let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kind, t.off, t.end); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); continue; }${tplPart}`;
   };
   const postArms = r.postfix.map((p) => `${J(p.op)} => Some(${p.lbp})`).join(', ');
-  return `    fn parse_${r.name}(&mut self) -> Option<Cst> { self.${r.name}_bp(0) }
+  return `    fn parse_${r.name}(&mut self) -> Option<i32> { self.${r.name}_bp(0) }
     fn ${r.name}_bin(op: &str) -> Option<(i64, i64)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
     fn ${r.name}_pre(op: &str) -> Option<i64> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
     fn ${r.name}_post(op: &str) -> Option<i64> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
     fn ${r.name}_atom(kind: &str) -> bool { matches!(kind, ${atomArm || '""'}) }
-    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Cst> {
+    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<i32> {
         let my_sup = std::mem::take(&mut self.suppress_next);
         let _ = &my_sup;
         let mut left = self.${r.name}_nud(min_bp)?;
@@ -273,41 +299,42 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             let t = match self.peek() { Some(t) => t, None => break };
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
-            if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { self.pos += 1; let op_leaf = Cst::leaf("$operator", t.off, t.end); left = node(${J(r.cstName)}, vec![left, op_leaf]); tail_closed = true; continue; } }
+            if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { self.pos += 1; let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); tail_closed = true; continue; } }
             let (lbp, rbp) = match Parser::${r.name}_bin(t.text) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
             let led_save = self.pos;
             self.pos += 1;
-            let op_leaf = Cst::leaf("$operator", t.off, t.end);
+            let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end);
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.pos = led_save; break; } };
-            left = node(${J(r.cstName)}, vec![left, op_leaf, rhs]);
+            self.scratch.push(rhs);
+            left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset);
         }
         Some(left)
     }
-    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Cst> {
+    fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<i32> {
         self.capped = false;
         let t = self.peek()?;
-${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let mut kids: Vec<Cst> = Vec::new(); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { self.capped = true; return Some(self.branch(${J(r.cstName)}, kids, save)); } self.pos = save; }`).join('\n')}
+${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { self.capped = true; return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save))); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
         // non-capped: a sub-parse may leave capped set (grouping a capped arrow); force it false after
         let r = self.${r.name}_nud_rest(t);
         self.capped = false;
         r
     }
-    fn ${r.name}_nud_rest(&mut self, t: Tok<'a>) -> Option<Cst> {
+    fn ${r.name}_nud_rest(&mut self, t: Tok<'a>) -> Option<i32> {
 ${tplNud}        if Parser::${r.name}_atom(t.kind) {
-            self.pos += 1;
-            return Some(Cst::node(${J(r.cstName)}, vec![Cst::leaf(t.kind, t.off, t.end)], t.off, t.end));
+            let sb = self.scratch.len(); self.push_leaf(t.kind, t.off, t.end); self.pos += 1;
+            return Some(self.finish(${J(r.cstName)}, sb, t.off));
         }
 ${r.nudBrackets.map(bracketNud).join('\n')}
         if let Some(pbp) = Parser::${r.name}_pre(t.text) {
             let save = self.pos; self.pos += 1;
-            let op_leaf = Cst::leaf("$operator", t.off, t.end);
+            let sb = self.scratch.len(); self.push_leaf("$operator", t.off, t.end);
             match self.${r.name}_bp(pbp) {
-                Some(operand) => { let (o, e) = (t.off, operand.end); return Some(Cst::node(${J(r.cstName)}, vec![op_leaf, operand], o, e)); }
-                None => { self.pos = save; return None; }
+                Some(operand) => { return Some(self.finish(${J(r.cstName)}, sb, t.off)); }
+                None => { self.pos = save; self.scratch.truncate(sb); return None; }
             }
         }
-${r.nudSeqs.map((seq) => `        { let save = self.pos; let mut kids: Vec<Cst> = Vec::new(); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return Some(self.branch(${J(r.cstName)}, kids, save)); } self.pos = save; }`).join('\n')}
+${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save))); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
         None
     }`;
 }
@@ -333,21 +360,21 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
     const ir = portableIR(grammar);
     const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
-    const matchTemplate = ir.tpl ? `    fn match_template(&mut self) -> Option<Cst> {
+    const matchTemplate = ir.tpl ? `    fn match_template(&mut self) -> Option<i32> {
         let t = self.peek()?;
         if t.kind != "$templateHead" { return None; }
-        let save = self.pos; self.pos += 1;
-        let mut children: Vec<Cst> = vec![Cst::leaf("$templateHead", t.off, t.end)];
+        let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
+        self.push_leaf("$templateHead", t.off, t.end); self.pos += 1;
         loop {
-            let expr = match self.parse_${ir.tpl.interpRule}() { Some(e) => e, None => { self.pos = save; return None; } };
-            children.push(expr);
-            let next = match self.peek() { Some(x) => x, None => { self.pos = save; return None; } };
-            if next.kind == "$templateMiddle" { children.push(Cst::leaf("$templateMiddle", next.off, next.end)); self.pos += 1; continue; }
-            if next.kind == "$templateTail" { children.push(Cst::leaf("$templateTail", next.off, next.end)); self.pos += 1; break; }
-            self.pos = save; return None;
+            let expr = match self.parse_${ir.tpl.interpRule}() { Some(e) => e, None => { self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None; } };
+            self.scratch.push(expr);
+            let next = match self.peek() { Some(x) => x, None => { self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None; } };
+            if next.kind == "$templateMiddle" { self.push_leaf("$templateMiddle", next.off, next.end); self.pos += 1; continue; }
+            if next.kind == "$templateTail" { self.push_leaf("$templateTail", next.off, next.end); self.pos += 1; break; }
+            self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None;
         }
-        let o = children[0].offset; let e = children[children.len() - 1].end;
-        Some(Cst::node("$template", children, o, e))
+        let o = self.nodes[self.scratch[sb] as usize].offset;
+        Some(self.finish("$template", sb, o))
     }
 ` : '';
     return `// GENERATED by emit-portable.ts (rustTarget) — parser for grammar "${ir.grammarName}".
@@ -359,84 +386,103 @@ use std::io::Read;
 #[derive(Clone, Copy)]
 struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool }
 
-// CST nodes hold only &'static str labels (rule names / token-type tags are all literals)
-// + usize spans — no per-node String allocation.
-struct Cst { rule: &'static str, children: Vec<Cst>, is_leaf: bool, token_type: &'static str, offset: usize, end: usize }
-impl Cst {
-    fn leaf(tt: &'static str, off: usize, end: usize) -> Cst { Cst { rule: "", children: Vec::new(), is_leaf: true, token_type: tt, offset: off, end } }
-    fn node(rule: &'static str, children: Vec<Cst>, offset: usize, end: usize) -> Cst { Cst { rule, children, is_leaf: false, token_type: "", offset, end } }
-}
-// offset/end inferred from first/last child (children non-empty).
-fn node(rule: &'static str, kids: Vec<Cst>) -> Cst { let o = kids[0].offset; let e = kids[kids.len() - 1].end; Cst::node(rule, kids, o, e) }
+// Arena node: a flat record in \`nodes\`; children are a contiguous range in \`kids\` (kid_start,
+// kid_count). No per-node heap allocation — the arena grows by Vec push, and backtracking
+// truncates the three vecs (nodes/kids/scratch) to saved lengths. Nodes hold only &'static str
+// labels + usize spans: no per-node String.
+struct Node { rule: &'static str, token_type: &'static str, is_leaf: bool, kid_start: u32, kid_count: u32, offset: usize, end: usize }
 
 ${lexerSrc ?? ''}
 
-struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool, suppress_next: Vec<&'static str>, src: &'a str }
+struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool, suppress_next: Vec<&'static str>, src: &'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32> }
 impl<'a> Parser<'a> {
     fn peek(&self) -> Option<Tok<'a>> { if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None } }
-    fn head_leaf_text(&self, node: &Cst) -> &'a str {
-        let mut n = node;
-        while !n.children.is_empty() { n = &n.children[0]; }
-        &self.src[n.offset..n.end]
+    fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off } else { 0 } }
+    fn mk_leaf(&mut self, ttype: &'static str, off: usize, end: usize) -> i32 {
+        self.nodes.push(Node { rule: "", token_type: ttype, is_leaf: true, kid_start: 0, kid_count: 0, offset: off, end });
+        (self.nodes.len() - 1) as i32
     }
-    fn nll_blocked(&self, words: &[&str], node: &Cst) -> bool { let h = self.head_leaf_text(node); words.iter().any(|w| *w == h) }
-    fn branch(&self, rule: &'static str, kids: Vec<Cst>, save: usize) -> Cst {
-        let offset = if !kids.is_empty() { kids[0].offset } else if save < self.toks.len() { self.toks[save].off } else { 0 };
-        let end = if !kids.is_empty() { kids[kids.len() - 1].end } else { offset };
-        Cst::node(rule, kids, offset, end)
+    // mk_leaf + scratch.push combined: the obvious self.scratch.push(self.mk_leaf(...)) is a
+    // double mutable borrow of self, so this splits the two statements. CST compression (Phase 5):
+    // punctuation ($punct) leaves are TRIVIA — they carry no semantic content the rule node
+    // doesn't already capture — so they are NOT recorded. This cuts arena node count substantially
+    // with no loss of parse decisions or recoverable spans (a rule node's offset/end still come
+    // from its first/last KEPT child). $operator leaves are KEPT: the Pratt notLeftLeaf guard
+    // (void/typeof/delete .x blocking) reads the head leaf of a prefix-op node, which is its
+    // $operator leaf. Token-kind leaves (identifiers, literals, numbers), $keyword, and
+    // $template* parts are kept.
+    fn push_leaf(&mut self, ttype: &'static str, off: usize, end: usize) { if ttype != "$punct" { let id = self.mk_leaf(ttype, off, end); self.scratch.push(id); } }
+    // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
+    fn finish(&mut self, rule: &'static str, sb: usize, fallback_off: usize) -> i32 {
+        let nn = self.scratch.len();
+        let kid_start = self.kids.len();
+        let off = if nn > sb { self.nodes[self.scratch[sb] as usize].offset } else { fallback_off };
+        let end = if nn > sb { self.nodes[self.scratch[nn - 1] as usize].end } else { fallback_off };
+        self.kids.extend(self.scratch[sb..nn].iter().copied());
+        self.scratch.truncate(sb);
+        self.nodes.push(Node { rule, token_type: "", is_leaf: false, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset: off, end });
+        (self.nodes.len() - 1) as i32
     }
-    fn match_lit(&mut self, value: &str, ttype: &'static str, kids: &mut Vec<Cst>) -> bool {
-        match self.peek() { Some(t) if t.text == value => { kids.push(Cst::leaf(ttype, t.off, t.end)); self.pos += 1; true } _ => false }
+    fn head_leaf_text(&self, node: i32) -> &'a str {
+        let mut id = node as usize;
+        while !self.nodes[id].is_leaf && self.nodes[id].kid_count > 0 { id = self.kids[self.nodes[id].kid_start as usize] as usize; }
+        &self.src[self.nodes[id].offset..self.nodes[id].end]
     }
-    fn match_tok(&mut self, name: &'static str, kids: &mut Vec<Cst>) -> bool {
-        match self.peek() { Some(t) if t.kind == name => { kids.push(Cst::leaf(name, t.off, t.end)); self.pos += 1; true } _ => false }
+    fn nll_blocked(&self, words: &[&str], node: i32) -> bool { let h = self.head_leaf_text(node); words.iter().any(|w| *w == h) }
+    fn match_lit(&mut self, value: &str, ttype: &'static str) -> bool {
+        match self.peek() { Some(t) if t.text == value => { self.push_leaf(ttype, t.off, t.end); self.pos += 1; true } _ => false }
     }
-    fn call_rule(&mut self, f: fn(&mut Parser<'a>) -> Option<Cst>, kids: &mut Vec<Cst>) -> bool {
-        match f(self) { Some(n) => { kids.push(n); true } None => false }
+    fn match_tok(&mut self, name: &'static str) -> bool {
+        match self.peek() { Some(t) if t.kind == name => { self.push_leaf(name, t.off, t.end); self.pos += 1; true } _ => false }
     }
-    fn star(&mut self, once: fn(&mut Parser<'a>, &mut Vec<Cst>) -> bool, kids: &mut Vec<Cst>) -> bool {
-        loop { let sp = self.pos; let before = kids.len(); if !once(self, kids) { self.pos = sp; kids.truncate(before); break; } }
+    fn call_rule(&mut self, f: fn(&mut Parser<'a>) -> Option<i32>) -> bool {
+        match f(self) { Some(id) => { self.scratch.push(id); true } None => false }
+    }
+    fn star(&mut self, once: fn(&mut Parser<'a>) -> bool) -> bool {
+        loop { let sp = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if !once(self) { self.pos = sp; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break; } }
         true
     }
-    fn opt(&mut self, body: fn(&mut Parser<'a>, &mut Vec<Cst>) -> bool, kids: &mut Vec<Cst>) -> bool {
-        let sp = self.pos; let before = kids.len(); if !body(self, kids) { self.pos = sp; kids.truncate(before); } true
+    fn opt(&mut self, body: fn(&mut Parser<'a>) -> bool) -> bool {
+        let sp = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if !body(self) { self.pos = sp; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); } true
     }
-    fn sep_by(&mut self, elem: fn(&mut Parser<'a>, &mut Vec<Cst>) -> bool, delim: &str, kids: &mut Vec<Cst>) -> bool {
-        if !elem(self, kids) { return true; }   // the whole separated list is optional — zero elements is valid
+    fn sep_by(&mut self, elem: fn(&mut Parser<'a>) -> bool, delim: &str) -> bool {
+        if !elem(self) { return true; }   // the whole separated list is optional — zero elements is valid
         loop {
-            let sp = self.pos; let before = kids.len();
-            if !self.match_lit(delim, "$punct", kids) { self.pos = sp; kids.truncate(before); break; }
-            if !elem(self, kids) { break; }   // a trailing delimiter is allowed — keep the pushed delim and stop
+            let sp = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
+            if !self.match_lit(delim, "$punct") { self.pos = sp; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break; }
+            if !elem(self) { break; }   // a trailing delimiter is allowed — keep the pushed delim and stop
         }
         true
     }
-    fn alt_lit(&mut self, opts: &[(&str, &'static str)], kids: &mut Vec<Cst>) -> bool {
-        for (v, tt) in opts { if self.match_lit(v, tt, kids) { return true; } }
+    fn alt_lit(&mut self, opts: &[(&str, &'static str)]) -> bool {
+        for (v, tt) in opts { if self.match_lit(v, tt) { return true; } }
         false
     }
 
 ${matchTemplate}${ruleFns}
 }
 
-fn write_json(c: &Cst, out: &mut String) {
-    if c.is_leaf {
-        out.push_str(&format!("{{\\"tokenType\\":\\"{}\\",\\"offset\\":{},\\"end\\":{}}}", c.token_type, c.offset, c.end));
+fn write_json(p: &Parser, id: i32, out: &mut String) {
+    let nd = &p.nodes[id as usize];
+    if nd.is_leaf {
+        out.push_str(&format!("{{\\"tokenType\\":\\"{}\\",\\"offset\\":{},\\"end\\":{}}}", nd.token_type, nd.offset, nd.end));
         return;
     }
-    out.push_str(&format!("{{\\"rule\\":\\"{}\\",\\"children\\":[", c.rule));
-    for (i, k) in c.children.iter().enumerate() { if i > 0 { out.push(','); } write_json(k, out); }
-    out.push_str(&format!("],\\"offset\\":{},\\"end\\":{}}}", c.offset, c.end));
+    out.push_str(&format!("{{\\"rule\\":\\"{}\\",\\"children\\":[", nd.rule));
+    for i in 0..nd.kid_count { if i > 0 { out.push(','); } write_json(p, p.kids[nd.kid_start as usize + i as usize], out); }
+    out.push_str(&format!("],\\"offset\\":{},\\"end\\":{}}}", nd.offset, nd.end));
 }
 
 // Library entry, two composable phases. tokenize() lexes ONCE; pass its tokens (plus the src,
-// which head-leaf lookups need — Rust keeps no globals) to parse(). Want the tokens AND the
-// CST? let t = tokenize(src); parse(t, src) — no re-lexing. Just the CST? parse(tokenize(src), src).
+// which head-leaf lookups need — Rust keeps no globals) to parse(). The arena (nodes/kids) lives
+// in the returned Parser so the caller can serialize (write_json) or inspect it. Want the tokens
+// AND the CST? let t = tokenize(src); parse(t, src). Just the CST? parse(tokenize(src), src).
 fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
-fn parse<'a>(toks: Vec<Tok<'a>>, src: &'a str) -> Option<Cst> {
+fn parse<'a>(toks: Vec<Tok<'a>>, src: &'a str) -> Option<(Parser<'a>, i32)> {
     let n = toks.len();
-    let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src };
+    let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), src, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new() };
     match p.parse_${ir.entry}() {
-        Some(root) if p.pos == n => Some(root),
+        Some(root) if p.pos == n => Some((p, root)),
         _ => None,
     }
 }
@@ -453,14 +499,14 @@ fn main() {
     std::io::stdin().read_to_string(&mut src).unwrap();
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
     if let Some(iters) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) {
-        for _ in 0..3 { let s = std::hint::black_box(&src); std::hint::black_box(parse(tokenize(s), s)); }
+        for _ in 0..3 { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s), s) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
         let t = std::time::Instant::now();
-        for _ in 0..iters { let s = std::hint::black_box(&src); std::hint::black_box(parse(tokenize(s), s)); }
+        for _ in 0..iters { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s), s) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
         return;
     }
     match parse(tokenize(&src), &src) {
-        Some(root) => { let mut out = String::new(); write_json(&root, &mut out); print!("{}", out); }
+        Some((p, root)) => { let mut out = String::new(); write_json(&p, root, &mut out); print!("{}", out); }
         None => { eprintln!("parse error"); std::process::exit(1); }
     }
 }
