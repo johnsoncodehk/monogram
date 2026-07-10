@@ -200,12 +200,15 @@ const CASES: Case[] = [
       '(() => {})();', '(() => {})() + 1;', 'f(() => a, () => b);', 'let g = () => x => x + 1;',
       'x.y.z++;', '(a++).b;', 'a++ instanceof B;', 'a++(x);',
       'for (a in b) c;',
-      // DIVERGENCE(for (a = x in b) c;): typescript/go/rust ok=false vs oracle ok=true — deferred, see Task 2 reply
+      'for (a = x in b) c;',
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
+      'for (a = x + y in b) c;',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
-      '1 + () => 2;', 'a++.b;', 'f(a, b,'],
+      '1 + () => 2;', 'a++.b;', 'f(a, b,',
+      'for (a = (x in b)) c;',
+      'for (a = b ? x in c : y in d) e;'],
   },
   {
     // The real typescript.ts grammar — the second, most complex full language proving the

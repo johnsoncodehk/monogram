@@ -272,7 +272,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             if ${b.steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, t.off)); }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);
         }`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], left) && ` : ''}!my_sup.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], left) && ` : ''}!self.suppress_cur.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
                 let led_save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
                 self.scratch.push(left);
                 if ${b.steps.map(stepCond).join(' && ')} { left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); continue; }
@@ -284,14 +284,18 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
     return `            if !tail_closed && t.kind == ${J(tok)} { self.pos += 1; let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kind, t.off, t.end); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); continue; }${tplPart}`;
   };
   const postArms = r.postfix.map((p) => `${J(p.op)} => Some(${p.lbp})`).join(', ');
-  return `    fn parse_${r.name}(&mut self) -> Option<i32> { self.${r.name}_bp(0) }
+  return `    fn parse_${r.name}(&mut self) -> Option<i32> {
+        let prev = std::mem::take(&mut self.suppress_cur);
+        self.suppress_cur = std::mem::take(&mut self.suppress_next);
+        let r = self.${r.name}_bp(0);
+        self.suppress_cur = prev;
+        r
+    }
     fn ${r.name}_bin(op: &str) -> Option<(i64, i64)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
     fn ${r.name}_pre(op: &str) -> Option<i64> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
     fn ${r.name}_post(op: &str) -> Option<i64> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
     fn ${r.name}_atom(kind: &str) -> bool { matches!(kind, ${atomArm || '""'}) }
     fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<i32> {
-        let my_sup = std::mem::take(&mut self.suppress_next);
-        let _ = &my_sup;
         let mut left = self.${r.name}_nud(min_bp)?;
         if self.capped { return Some(left); }
         let mut tail_closed = false;
@@ -394,7 +398,7 @@ struct Node { rule: &'static str, token_type: &'static str, is_leaf: bool, kid_s
 
 ${lexerSrc ?? ''}
 
-struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool, suppress_next: Vec<&'static str>, src: &'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32> }
+struct Parser<'a> { toks: Vec<Tok<'a>>, pos: usize, capped: bool, suppress_next: Vec<&'static str>, suppress_cur: Vec<&'static str>, src: &'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32> }
 impl<'a> Parser<'a> {
     fn peek(&self) -> Option<Tok<'a>> { if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None } }
     fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off } else { 0 } }
@@ -481,7 +485,7 @@ struct Tokens<'a> { src: &'a str, toks: Vec<Tok<'a>> }
 fn tokenize<'a>(src: &'a str) -> Tokens<'a> { Tokens { src, toks: lex(src) } }
 fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
     let n = tokens.toks.len();
-    let mut p = Parser { toks: tokens.toks, pos: 0, capped: false, suppress_next: Vec::new(), src: tokens.src, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new() };
+    let mut p = Parser { toks: tokens.toks, pos: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: tokens.src, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new() };
     match p.parse_${ir.entry}() {
         Some(root) if p.pos == n => Some((p, root)),
         _ => None,

@@ -221,7 +221,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
     }`;
   // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
   // a precedence-gated led (ternary/in/instanceof) binds only when its lbp > minBp.
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!${J(nll)}.includes(headLeafText(left)) && ` : ''}(_mySup === null || !_mySup.has(${J(b.first)})) && t.text === ${J(b.first)}) {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!${J(nll)}.includes(headLeafText(left)) && ` : ''}(_suppressCur === null || !_suppressCur.has(${J(b.first)})) && t.text === ${J(b.first)}) {
       const ledSave = pos; const kids: Cst[] = [left];
       if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue; }
       pos = ledSave; break;
@@ -237,9 +237,13 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 const ${r.name}_PRE: Record<string, number> = ${PRE};
 const ${r.name}_POST: Record<string, number> = ${POST};
 const ${r.name}_ATOM = ${atom};
-function parse${r.name}(): Node | null { return ${r.name}_bp(0); }
+function parse${r.name}(): Node | null {
+  const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = null;
+  const r = ${r.name}_bp(0);
+  _suppressCur = prev;
+  return r;
+}
 function ${r.name}_bp(minBp: number): Node | null {
-  const _mySup = _suppressNext; _suppressNext = null;   // no-in: consume the suppressed-connector set for this led loop
   let left = ${r.name}_nud(minBp);
   if (left === null) return null;
   if (_capped) return left;   // an assignment-level arrow admits no led
@@ -341,6 +345,7 @@ let toks: Tok[] = [];
 let pos = 0;
 let _capped = false;
 let _suppressNext: Set<string> | null = null;
+let _suppressCur: Set<string> | null = null;
 let _src = '';
 function peek(): Tok | null { return pos < toks.length ? toks[pos] : null; }
 function headLeafText(node: Cst): string {

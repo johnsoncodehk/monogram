@@ -233,7 +233,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.Nl && ' : ''}${nll ? `!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left)) && ` : ''}!_mySup[${J(b.first)}] && t.Text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.Nl && ' : ''}${nll ? `!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left)) && ` : ''}!_suppressCur[${J(b.first)}] && t.Text == ${J(b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
 \t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue }
@@ -255,9 +255,15 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 var ${r.name}PRE = map[string]int{${pre}}
 var ${r.name}POST = map[string]int{${post}}
 var ${r.name}ATOM = map[string]bool{${atoms}}
-func parse${r.name}() int32 { return ${r.name}bp(0) }
+func parse${r.name}() int32 {
+\tprev := _suppressCur
+\t_suppressCur = _suppressNext
+\t_suppressNext = nil
+\tr := ${r.name}bp(0)
+\t_suppressCur = prev
+\treturn r
+}
 func ${r.name}bp(minBp int) int32 {
-\t_mySup := _suppressNext; _suppressNext = nil; _ = _mySup
 \tleft := ${r.name}nud(minBp)
 \tif left < 0 { return -1 }
 \tif _capped { return left }
@@ -394,6 +400,7 @@ var pos int
 var _capped bool
 var _src string
 var _suppressNext map[string]bool
+var _suppressCur map[string]bool
 var nodes []Node
 var kids []int32
 var scratch []int32
