@@ -102,7 +102,7 @@ const _FLOW_CLOSE: &[&str] = ${`&[${nl.flowClose.map(J).join(', ')}]`};
             while p < n && b[p] == 32 { p += 1; }
             if p >= n { pos = p; st.line_start = false; continue; }
             let ch = b[p] as u32;
-            if ch == 10 || ch == 13 || ch == 8232 || ch == 8233 {
+            if ch == 10 || ch == 13 {
                 pos = p + 1; if ch == 13 && pos < n && b[pos] == 10 { pos += 1; } continue;
             }
             if ch == 9 {
@@ -110,7 +110,7 @@ const _FLOW_CLOSE: &[&str] = ${`&[${nl.flowClose.map(J).join(', ')}]`};
                 while bb < n && (b[bb] == 32 || b[bb] == 9) { bb += 1; }
                 if bb >= n { pos = bb; continue; }
                 let bc = b[bb] as u32;
-                if bc == 10 || bc == 13 || bc == 8232 || bc == 8233 {
+                if bc == 10 || bc == 13 {
                     pos = bb + 1; if bc == 13 && pos < n && b[pos] == 10 { pos += 1; } continue;
                 }
             }
@@ -121,7 +121,7 @@ ${commentSkip}            pos = p;
         }
 `,
     ws: `        if c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos += 1; continue; }
-        if c == 10 || c == 13 || c == 8232 || c == 8233 {
+        if c == 10 || c == 13 {
             pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
             if st.flow_depth == 0 { st.line_start = true; } else { st.pending_nl = true; }
             continue;

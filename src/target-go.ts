@@ -96,7 +96,7 @@ function newlinePartsGo(nl: NewlineCfg, pushFn: string): { state: string; bounda
 \t\t\tfor p < n && src[p] == 32 { p++ }
 \t\t\tif p >= n { pos = p; lineStart = false; continue }
 \t\t\tch := int(src[p])
-\t\t\tif ch == 10 || ch == 13 || ch == 8232 || ch == 8233 {
+\t\t\tif ch == 10 || ch == 13 {
 \t\t\t\tpos = p + 1; if ch == 13 && pos < n && src[pos] == 10 { pos++ }; continue
 \t\t\t}
 \t\t\tif ch == 9 {
@@ -104,7 +104,7 @@ function newlinePartsGo(nl: NewlineCfg, pushFn: string): { state: string; bounda
 \t\t\t\tfor b < n && (src[b] == 32 || src[b] == 9) { b++ }
 \t\t\t\tif b >= n { pos = b; continue }
 \t\t\t\tbc := int(src[b])
-\t\t\t\tif bc == 10 || bc == 13 || bc == 8232 || bc == 8233 {
+\t\t\t\tif bc == 10 || bc == 13 {
 \t\t\t\t\tpos = b + 1; if bc == 13 && pos < n && src[pos] == 10 { pos++ }; continue
 \t\t\t\t}
 \t\t\t}
@@ -115,7 +115,7 @@ ${commentSkip}\t\t\tpos = p
 \t\t}
 `,
     ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
-\t\tif c == 10 || c == 13 || c == 8232 || c == 8233 {
+\t\tif c == 10 || c == 13 {
 \t\t\tpos++; if c == 13 && pos < n && src[pos] == 10 { pos++ }
 \t\t\tif flowDepth == 0 { lineStart = true } else { pendingNl = true }
 \t\t\tcontinue

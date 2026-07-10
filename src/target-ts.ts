@@ -96,7 +96,7 @@ function newlineParts(nl: NewlineCfg, pushFn: string): { state: string; boundary
       while (p < n && src.charCodeAt(p) === 32) p++;
       if (p >= n) { pos = p; lineStart = false; continue; }
       const ch = src.charCodeAt(p);
-      if (ch === 10 || ch === 13 || ch === 8232 || ch === 8233) {
+      if (ch === 10 || ch === 13) {   // LF/CR only — the interpreter's newline mode rejects LS/PS (gen-lexer.ts blank-line check)
         pos = p + 1; if (ch === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
         continue;
       }
@@ -105,7 +105,7 @@ function newlineParts(nl: NewlineCfg, pushFn: string): { state: string; boundary
         while (b < n && (src.charCodeAt(b) === 32 || src.charCodeAt(b) === 9)) b++;
         if (b >= n) { pos = b; continue; }
         const bc = src.charCodeAt(b);
-        if (bc === 10 || bc === 13 || bc === 8232 || bc === 8233) {
+        if (bc === 10 || bc === 13) {
           pos = b + 1; if (bc === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
           continue;
         }
@@ -117,7 +117,7 @@ ${commentSkip}      pos = p;
     }
 `,
     ws: `    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
-    if (c === 10 || c === 13 || c === 8232 || c === 8233) {
+    if (c === 10 || c === 13) {   // LF/CR only — LS/PS fall through to the unexpected-character throw, matching the interpreter
       pos++; if (c === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
       if (flowDepth === 0) lineStart = true;
       else pendingNl = true;
