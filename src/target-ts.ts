@@ -471,15 +471,40 @@ export function parse(tokens: Tok[]): Cst | null {
   const root = parse${ir.entry}();
   return root !== null && pos === toks.length ? root : null;
 }
+
+export type Edit = { start: number; end: number; text: string };
+export function createDoc(src: string): { text(): string; root(): Node | null; edit(edits: Edit[]): Node | null } {
+  let text = src;
+  let root: Node | null = parse(tokenize(src));
+  return {
+    text(): string { return text; },
+    root(): Node | null { return root; },
+    edit(edits: Edit[]): Node | null {
+      for (const e of edits) text = text.slice(0, e.start) + e.text + text.slice(e.end);
+      root = parse(tokenize(text));
+      return root;
+    },
+  };
+}
 `;
   },
   emitRunner(): string {
     return `// CLI runner (harness only): stdin → CST JSON. Appended to the parser library by the gate;
 // NOT part of the emitted parser. The import is hoisted, so it may follow the library code.
 import { readFileSync } from 'node:fs';
-const _root = parse(tokenize(readFileSync(0, 'utf8')));
-if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
-process.stdout.write(JSON.stringify(_root));
+const _raw = readFileSync(0, 'utf8');
+if (process.argv.includes('edit-session')) {
+  const { init, batches } = JSON.parse(_raw) as { init: string; batches: [number, number, string][][] };
+  const doc = createDoc(init);
+  for (const batch of batches) doc.edit(batch.map(([start, end, text]) => ({ start, end, text })));
+  const root = doc.root();
+  if (root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
+  process.stdout.write(JSON.stringify(root));
+} else {
+  const _root = parse(tokenize(_raw));
+  if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
+  process.stdout.write(JSON.stringify(_root));
+}
 `;
   },
 };
