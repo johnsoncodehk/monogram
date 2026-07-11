@@ -596,6 +596,17 @@ function classifyToken(token: TokenDecl, opts?: { explicitScope?: boolean }): { 
   return { scope: 'variable.other' };
 }
 
+// The grammar's CALLEE token: one scoped as a function name whose pattern is gated on a
+// following `(` (e.g. env-spec FUNCTION_NAME, `name(?=\s*\()`). Shared by the two derived
+// call-argument regions (the contextualScopes call-args region and the lineComment
+// continuation-bracket call variant), which must agree on what a callee looks like.
+function findCalleeToken(grammar: CstGrammar): TokenDecl | undefined {
+  return grammar.tokens.find((t) => {
+    const sc = t.scope ?? classifyToken(t).scope;
+    return (sc.startsWith('variable.function') || sc.startsWith('entity.name.function')) && tokenPatternSource(t).includes('\\(');
+  });
+}
+
 /**
  * The repository keys of the grammar's COMMENT token entries, in declaration
  * order. A token is a comment iff its emitted scope (the `@scope` override, else
@@ -5081,10 +5092,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         // interior that treats line-start `#` as a comment, eat the `# )` closer, and run
         // away past the comment block. Same interior as the paren construct, begin consumes
         // the callee (scoped like the grammar's callee token). Tried before $self.
-        const calleeForCont = grammar.tokens.find((t) => {
-          const sc = t.scope ?? classifyToken(t).scope;
-          return (sc.startsWith('variable.function') || sc.startsWith('entity.name.function')) && tokenPatternSource(t).includes('\\(');
-        });
+        const calleeForCont = findCalleeToken(grammar);
         const hasParenPair = contBrackets.some(([open]) => open === '(');
         const contCallInclude = (calleeForCont && hasParenPair) ? [{ include: `#${key}-rich-cont-call` }] : [];
         if (contBrackets.length) {
@@ -7584,7 +7592,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     const allRuleLits = new Set<string>();
     for (const r of grammar.rules) for (const lit of collectLiterals(r.body)) allRuleLits.add(lit);
     const ctxPairs = ([['(', ')'], ['[', ']'], ['{', '}']] as [string, string][])
-      .filter(([o, c]) => allRuleLits.has(o) && allRuleLits.has(c) && (o !== '(' || true));
+      .filter(([o, c]) => allRuleLits.has(o) && allRuleLits.has(c));
     const pairKeyOf = (open: string) => `ctx-pair-${[...open].map((ch) => ch.charCodeAt(0).toString(16)).join('')}`;
     const pairIncludes = ctxPairs.filter(([o]) => o !== '(').map(([o]) => ({ include: `#${pairKeyOf(o)}` }));
     for (const [open, close] of ctxPairs) {
@@ -7601,22 +7609,19 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // gated on a following `(` — e.g. env-spec FUNCTION_NAME), else the identifier pattern.
     // The generic ident fallback can resolve to a placeholder token in indentation grammars,
     // so a never-matching callee skips the region entirely rather than emitting a dead rule.
-    const calleeTok = grammar.tokens.find((t) => {
-      const sc = t.scope ?? classifyToken(t).scope;
-      return (sc.startsWith('variable.function') || sc.startsWith('entity.name.function')) && tokenPatternSource(t).includes('\\(');
-    });
+    const calleeTok = findCalleeToken(grammar);
     const calleeScope = calleeTok?.scope ?? 'entity.name.function';
     const calleePattern = calleeTok ? tokenPatternSource(calleeTok) : identPattern;
     if (!calleePattern.includes('(?!)')) {
       repository['ctx-call-args'] = {
-      begin: `(${calleePattern})\\s*(\\()`,
-      beginCaptures: {
-        '1': { name: `${calleeScope}.${langName}` },
-        '2': { name: `${getScope(scopeOverrides, '(') ?? 'punctuation.section.parens.begin'}.${langName}` },
-      },
-      end: '\\)',
-      endCaptures: { '0': { name: `${getScope(scopeOverrides, ')') ?? 'punctuation.section.parens.end'}.${langName}` } },
-      patterns: [...ctxOverrideIncludes, ...pairIncludes, { include: '$self' }],
+        begin: `(${calleePattern})\\s*(\\()`,
+        beginCaptures: {
+          '1': { name: `${calleeScope}.${langName}` },
+          '2': { name: `${getScope(scopeOverrides, '(') ?? 'punctuation.section.parens.begin'}.${langName}` },
+        },
+        end: '\\)',
+        endCaptures: { '0': { name: `${getScope(scopeOverrides, ')') ?? 'punctuation.section.parens.end'}.${langName}` } },
+        patterns: [...ctxOverrideIncludes, ...pairIncludes, { include: '$self' }],
       };
       topPatterns.push({ include: '#ctx-call-args' });
     }
