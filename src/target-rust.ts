@@ -548,14 +548,65 @@ fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
 }
 
 pub struct Edit { pub start: usize, pub end: usize, pub text: String }
-pub struct Doc { text: String }
-impl Doc {
-    pub fn new(text: String) -> Doc { Doc { text } }
-    pub fn text(&self) -> &str { &self.text }
-    pub fn edit(&mut self, edits: &[Edit]) {
-        for e in edits { let s = e.start; let en = e.end; self.text = format!("{}{}{}", &self.text[..s], e.text, &self.text[en..]); }
+#[derive(Clone)]
+struct AlignMeta { kind: &'static str, off: usize, end: usize, nl: bool }
+struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize }
+fn to_meta(toks: &[Tok<'_>]) -> Vec<AlignMeta> {
+    toks.iter().map(|t| AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl }).collect()
+}
+fn compute_align(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> Align {
+    let old_n = old_toks.len();
+    let new_n = new_toks.len();
+    let mut prefix = 0usize;
+    while prefix < old_n && prefix < new_n {
+        let o = &old_toks[prefix];
+        let n = &new_toks[prefix];
+        if o.kind != n.kind || o.off != n.off || o.end != n.end || o.nl != n.nl { break; }
+        if old_text[o.off..o.end] != new_text[n.off..n.end] { break; }
+        prefix += 1;
     }
-    pub fn parse(&self) -> Option<(Parser<'_>, i32)> { parse(tokenize(&self.text)) }
+    let delta = new_text.len() as isize - old_text.len() as isize;
+    let min_n = old_n.min(new_n);
+    let mut suffix = 0usize;
+    while prefix + suffix < min_n {
+        let o = &old_toks[old_n - 1 - suffix];
+        let n = &new_toks[new_n - 1 - suffix];
+        if o.kind != n.kind || o.nl != n.nl { break; }
+        if n.off != (o.off as isize + delta) as usize || n.end != (o.end as isize + delta) as usize { break; }
+        if old_text[o.off..o.end] != new_text[n.off..n.end] { break; }
+        suffix += 1;
+    }
+    Align { old_n, new_n, prefix, suffix }
+}
+fn toks_from_meta<'a>(text: &'a str, meta: &[AlignMeta]) -> Vec<Tok<'a>> {
+    meta.iter().map(|m| Tok { kind: m.kind, text: &text[m.off..m.end], off: m.off, end: m.end, nl: m.nl }).collect()
+}
+pub struct Doc { text: String, toks: Vec<AlignMeta>, align: Option<Align> }
+impl Doc {
+    pub fn new(text: String) -> Doc { Doc { text: text.clone(), toks: to_meta(&lex(&text)), align: None } }
+    pub fn text(&self) -> &str { &self.text }
+    pub fn alignment(&self) -> Option<&Align> { self.align.as_ref() }
+    pub fn edit(&mut self, edits: &[Edit]) {
+        let old_text = self.text.clone();
+        let old_toks = self.toks.clone();
+        for e in edits {
+            let n = self.text.len();
+            let start = e.start.min(n);
+            let end = e.end.max(start).min(n);
+            self.text = format!("{}{}{}", &self.text[..start], e.text, &self.text[end..]);
+        }
+        self.toks = to_meta(&lex(&self.text));
+        self.align = Some(compute_align(&old_text, &old_toks, &self.text, &self.toks));
+    }
+    pub fn parse(&self) -> Option<(Parser<'_>, i32)> {
+        let toks = toks_from_meta(&self.text, &self.toks);
+        let n = toks.len();
+        let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new() };
+        match p.parse_${ir.entry}() {
+            Some(root) if p.pos == n => Some((p, root)),
+            _ => None,
+        }
+    }
 }
 `;
   },
@@ -665,8 +716,13 @@ fn main() {
             let edits: Vec<Edit> = batch.iter().map(|&(s, e, ref t)| Edit { start: s, end: e, text: t.clone() }).collect();
             doc.edit(&edits);
         }
+        if let Some(a) = doc.alignment() {
+            eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix);
+        }
         match doc.parse() {
-            Some((p, root)) => { let mut out = String::new(); write_json(&p, root, &mut out); print!("{}", out); }
+            Some((p, root)) => {
+                let mut out = String::new(); write_json(&p, root, &mut out); print!("{}", out);
+            }
             None => { eprintln!("parse error"); std::process::exit(1); }
         }
         return;

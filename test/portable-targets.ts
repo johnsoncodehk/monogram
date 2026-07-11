@@ -17,9 +17,10 @@
 //
 // Go/Rust toolchains are optional: a missing `go`/`rustc` is logged and skipped (the TS
 // rendering, which needs only node, always runs).
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
+import { createLexer } from '../src/gen-lexer.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import type { CstGrammar } from '../src/types.ts';
 
@@ -270,21 +271,75 @@ function runProc(cmd: string, args: string[], src: string): Outcome {
   try { return { ok: true, cst: canon(JSON.parse(execFileSync(cmd, args, { input: src, stdio: ['pipe', 'pipe', 'pipe'] }).toString())) }; }
   catch { return { ok: false }; }
 }
+type Align = { oldN: number; newN: number; prefix: number; suffix: number };
+type EditOutcome = Outcome & { align?: Align };
+function parseAlignStderr(stderr: string): Align | undefined {
+  for (const line of stderr.split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    try { return JSON.parse(t) as Align; } catch { /* keep scanning */ }
+  }
+  return undefined;
+}
+function runEditSession(cmd: string, args: string[], json: string): EditOutcome {
+  const r = spawnSync(cmd, args, { input: json, encoding: 'utf8' });
+  const align = parseAlignStderr(r.stderr ?? '');
+  if (r.status !== 0) return { ok: false, align };
+  try {
+    return { ok: true, cst: canon(JSON.parse(r.stdout)), align };
+  } catch { return { ok: false, align }; }
+}
+
+type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
+const oracleToks = (g: CstGrammar, src: string): AlignMeta[] => {
+  const { tokenize } = createLexer(g);
+  return tokenize(src).map((t) => ({ kind: t.type, off: t.offset, end: t.offset + t.text.length, nl: t.newlineBefore }));
+};
+const computeAlign = (oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Align => {
+  const oldN = oldToks.length, newN = newToks.length;
+  let prefix = 0;
+  while (prefix < oldN && prefix < newN) {
+    const o = oldToks[prefix], n = newToks[prefix];
+    if (o.kind !== n.kind || o.off !== n.off || o.end !== n.end || o.nl !== n.nl) break;
+    if (oldText.slice(o.off, o.end) !== newText.slice(n.off, n.end)) break;
+    prefix++;
+  }
+  const delta = newText.length - oldText.length;
+  const minN = Math.min(oldN, newN);
+  let suffix = 0;
+  while (prefix + suffix < minN) {
+    const o = oldToks[oldN - 1 - suffix], n = newToks[newN - 1 - suffix];
+    if (o.kind !== n.kind || o.nl !== n.nl || n.off !== o.off + delta || n.end !== o.end + delta) break;
+    if (oldText.slice(o.off, o.end) !== newText.slice(n.off, n.end)) break;
+    suffix++;
+  }
+  return { oldN, newN, prefix, suffix };
+};
+const expectAlign = (g: CstGrammar, init: string, batches: EditBatch[]): Align => {
+  let text = init;
+  for (let i = 0; i < batches.length - 1; i++) for (const [s, e, r] of batches[i]) text = text.slice(0, s) + r + text.slice(e);
+  const oldText = text;
+  const batch = batches[batches.length - 1];
+  for (const [s, e, r] of batch) text = text.slice(0, s) + r + text.slice(e);
+  return computeAlign(oldText, oracleToks(g, oldText), text, oracleToks(g, text));
+};
 
 type EditBatch = [number, number, string][];
-type EditScenario = { init: string; batches: EditBatch[] };
+type EditScenario = { init: string; batches: EditBatch[]; large?: boolean };
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
     { init: '1+2*3', batches: [[[1, 3, '']]] },
     { init: '1+2*3', batches: [[[2, 5, '(7-8)']]] },
     { init: '1+2*3', batches: [[[0, 0, '9-']], [[7, 8, '']]] },
+    { init: '1+2*3+'.repeat(199) + '1+2*3', batches: [[[600, 601, '9']]], large: true },
   ],
   javascript: [
     { init: 'let a = 1;\nf(a);', batches: [[[8, 9, '42']]] },
     { init: 'let a = 1;\nf(a);', batches: [[[11, 16, '']]] },
     { init: 'let a = 1;\nf(a);', batches: [[[4, 5, 'b'], [12, 13, 'b']]] },
     { init: 'let a = 1;\nf(a);', batches: [[[16, 16, '\ng(b);']], [[0, 4, 'var']]] },
+    { init: 'let a = 1;\nf(a);\n'.repeat(80), batches: [[[688, 689, '9']]], large: true },
   ],
 };
 const applyEdits = (init: string, batches: EditBatch[]): string => {
@@ -358,12 +413,10 @@ for (const c of CASES) {
 
     const editScenarios = EDIT_SCENARIOS[c.grammar];
     if (editScenarios) {
-      let editOk = 0;
-      const runEdit = (json: string) => runProc(
-        r.label === 'typescript' ? 'node' : r.label === 'go' ? `${dir}/go/p` : `${dir}/pr`,
-        r.label === 'typescript' ? [`${dir}/p.ts`, 'edit-session'] : ['edit-session'],
-        json,
-      );
+      let editOk = 0, alignOk = 0;
+      const editCmd = r.label === 'typescript' ? 'node' : r.label === 'go' ? `${dir}/go/p` : `${dir}/pr`;
+      const editArgs = r.label === 'typescript' ? [`${dir}/p.ts`, 'edit-session'] : ['edit-session'];
+      const runEdit = (json: string) => runEditSession(editCmd, editArgs, json);
       for (const sc of editScenarios) {
         const final = applyEdits(sc.init, sc.batches);
         const a = runEdit(JSON.stringify({ init: sc.init, batches: sc.batches }));
@@ -373,8 +426,20 @@ for (const c of CASES) {
           failures++;
           console.log(`  ${c.grammar}/${r.label}: edit-session mismatch (final=${JSON.stringify(final)}) A ok=${a.ok} B ok=${b.ok}`);
         }
+        const want = expectAlign(grammar, sc.init, sc.batches);
+        if (a.align && a.align.oldN === want.oldN && a.align.newN === want.newN && a.align.prefix === want.prefix && a.align.suffix === want.suffix) {
+          alignOk++;
+          if (sc.large && want.prefix + want.suffix < want.oldN - 8) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: large-doc align too narrow prefix+suffix=${want.prefix + want.suffix} oldN=${want.oldN}`);
+          }
+        } else {
+          failures++;
+          console.log(`  ${c.grammar}/${r.label}: token-align mismatch want=${JSON.stringify(want)} got=${JSON.stringify(a.align)}`);
+        }
       }
       console.log(`  ${c.grammar}/${r.label}: ${editOk}/${editScenarios.length} edit-sessions ≡ fresh`);
+      console.log(`  ${c.grammar}/${r.label}: ${alignOk}/${editScenarios.length} token-alignments ≡ oracle`);
     }
   }
 }

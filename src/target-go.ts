@@ -552,17 +552,65 @@ func parse(t []Tok) int32 {
 }
 
 type Edit struct { Start, End int; Text string }
-type Doc struct { text string; root int32 }
+type alignMeta struct { Kind string; Off, End int; Nl bool }
+type Align struct {
+\tOldN    int \`json:"oldN"\`
+\tNewN    int \`json:"newN"\`
+\tPrefix  int \`json:"prefix"\`
+\tSuffix  int \`json:"suffix"\`
+}
+func toMeta(toks []Tok) []alignMeta {
+\tm := make([]alignMeta, len(toks))
+\tfor i, t := range toks { m[i] = alignMeta{t.Kind, t.Off, t.End, t.Nl} }
+\treturn m
+}
+func computeAlign(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) Align {
+\toldN, newN := len(oldToks), len(newToks)
+\tprefix := 0
+\tfor prefix < oldN && prefix < newN {
+\t\to, n := oldToks[prefix], newToks[prefix]
+\t\tif o.Kind != n.Kind || o.Off != n.Off || o.End != n.End || o.Nl != n.Nl { break }
+\t\tif oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
+\t\tprefix++
+\t}
+\tdelta := len(newText) - len(oldText)
+\tminN := oldN; if newN < minN { minN = newN }
+\tsuffix := 0
+\tfor prefix+suffix < minN {
+\t\to, n := oldToks[oldN-1-suffix], newToks[newN-1-suffix]
+\t\tif o.Kind != n.Kind || o.Nl != n.Nl || n.Off != o.Off+delta || n.End != o.End+delta { break }
+\t\tif oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
+\t\tsuffix++
+\t}
+\treturn Align{oldN, newN, prefix, suffix}
+}
+type Doc struct { text string; root int32; toks []alignMeta; align *Align }
 func NewDoc(src string) *Doc {
 \td := &Doc{text: src}
+\td.toks = toMeta(tokenize(src))
 \td.root = parse(tokenize(src))
 \treturn d
 }
 func (d *Doc) Text() string { return d.text }
 func (d *Doc) Root() int32 { return d.root }
+func (d *Doc) Align() *Align { return d.align }
+func applyEdit(text string, e Edit) string {
+\tn := len(text)
+\tstart, end := e.Start, e.End
+\tif start < 0 { start = 0 }
+\tif start > n { start = n }
+\tif end < start { end = start }
+\tif end > n { end = n }
+\treturn text[:start] + e.Text + text[end:]
+}
 func (d *Doc) Edit(edits []Edit) int32 {
-\tfor _, e := range edits { d.text = d.text[:e.Start] + e.Text + d.text[e.End:] }
-\td.root = parse(tokenize(d.text))
+\toldText, oldToks := d.text, d.toks
+\tfor _, e := range edits { d.text = applyEdit(d.text, e) }
+\tnewToks := tokenize(d.text)
+\td.toks = toMeta(newToks)
+\ta := computeAlign(oldText, oldToks, d.text, d.toks)
+\td.align = &a
+\td.root = parse(newToks)
 \treturn d.root
 }
 `;
@@ -610,6 +658,7 @@ func main() {
 \t\t\t}
 \t\t\td.Edit(edits)
 \t\t}
+\t\tif a := d.Align(); a != nil { b, _ := json.Marshal(a); os.Stderr.Write(append(b, '\\n')) }
 \t\troot := d.Root()
 \t\tif root < 0 || pos != len(toks) { fmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", pos, len(toks)); os.Exit(1) }
 \t\tvar b strings.Builder
