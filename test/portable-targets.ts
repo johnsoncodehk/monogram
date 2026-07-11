@@ -327,6 +327,7 @@ const expectAlign = (g: CstGrammar, init: string, batches: EditBatch[]): Align =
 type EditBatch = [number, number, string][];
 type EditScenario = { init: string; batches: EditBatch[]; large?: boolean; maxRelexed?: number; fullRelex?: boolean };
 const calcLargeInit = '1+2*3+'.repeat(199) + '1+2*3';
+const envspecLargeInit = 'A=1\n'.repeat(300);
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
@@ -346,7 +347,14 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'let a = 1;\nf(a);\n'.repeat(80), batches: [[[688, 689, '9']]], large: true, fullRelex: true },
   ],
   envspec: [
-    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]], fullRelex: true },
+    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]] },
+    { init: envspecLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 10 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[6, 7, '9']]] },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[4, 4, '(']]] },
+    { init: 'A=1\n# note\nB=2', batches: [[[7, 7, 'x']]] },
+    { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]] },
+    { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]] },
   ],
 };
 const applyEdits = (init: string, batches: EditBatch[]): string => {

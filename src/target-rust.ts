@@ -86,8 +86,11 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, t
   return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
 }
 
-function newlinePartsRs(nl: NewlineCfg): { consts: string; fields: string; init: string; boundary: string; ws: string; hooks: string } {
+function newlinePartsRs(nl: NewlineCfg): { consts: string; fields: string; init: string; boundary: string; ws: string; hooks: string; boundaryFrom: string; wsFrom: string; hooksFrom: string } {
   const commentSkip = nl.comment
+    ? `            if src[p..].starts_with(${J(nl.comment)}) { let mut e = p; while e < n && b[e] != 10 { e += 1; } pos = e; continue; }\n`
+    : '';
+  const commentSkipFrom = nl.comment
     ? `            if src[p..].starts_with(${J(nl.comment)}) { let mut e = p; while e < n && b[e] != 10 { e += 1; } pos = e; continue; }\n`
     : '';
   return {
@@ -120,16 +123,50 @@ ${commentSkip}            pos = p;
             continue;
         }
 `,
+    boundaryFrom: `        if st.flow_depth == 0 && st.line_start {
+            let mut p = pos;
+            while p < n && b[p] == 32 { p += 1; }
+            if p >= n { pos = p; st.line_start = false; continue; }
+            let ch = b[p] as u32;
+            if ch == 10 || ch == 13 {
+                pos = p + 1; if ch == 13 && pos < n && b[pos] == 10 { pos += 1; } continue;
+            }
+            if ch == 9 {
+                let mut bb = p;
+                while bb < n && (b[bb] == 32 || b[bb] == 9) { bb += 1; }
+                if bb >= n { pos = bb; continue; }
+                let bc = b[bb] as u32;
+                if bc == 10 || bc == 13 {
+                    pos = bb + 1; if bc == 13 && pos < n && b[pos] == 10 { pos += 1; } continue;
+                }
+            }
+${commentSkipFrom}            pos = p;
+            if st.emitted_content { st.push_tok(_NLTOK, &src[pos..pos], pos, pos); }
+            st.line_start = false;
+            continue;
+        }
+`,
     ws: `        if c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos += 1; continue; }
         if c == 10 || c == 13 {
             pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
-            if st.flow_depth == 0 { st.line_start = true; } else { st.pending_nl = true; }
+            if st.flow_depth == 0 { st.line_start = true; }
+            continue;
+        }
+`,
+    wsFrom: `        if c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos += 1; continue; }
+        if c == 10 || c == 13 {
+            pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
+            if st.flow_depth == 0 { st.line_start = true; }
             continue;
         }
 `,
     hooks: `        if kind != _NLTOK { self.emitted_content = true; }
         if kind == "" && _in(_FLOW_OPEN, text) { self.flow_depth += 1; }
         else if kind == "" && _in(_FLOW_CLOSE, text) { self.flow_depth = (self.flow_depth - 1).max(0); }
+`,
+    hooksFrom: `        if kind != _NLTOK { emitted_content = true; }
+        if kind == "" && _in(_FLOW_OPEN, text) { flow_depth += 1; }
+        else if kind == "" && _in(_FLOW_CLOSE, text) { flow_depth = (flow_depth - 1).max(0); }
 `,
   };
 }
@@ -140,10 +177,11 @@ function lexer(ir: ParserIR): string {
   const tpl = ir.tpl;
   const nl = ir.newlineCfg;
   const nlRs = nl ? newlinePartsRs(nl) : null;
-  const stateful = !!(rx || tpl || nl);
-  const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
+  const rxOrTpl = !!(rx || tpl);
+  const newlineOnly = !!(nl && !rx && !tpl);
+  const toks = ir.tokens.map((t) => scanTok(t, defs, rxOrTpl, rx?.regexToken, tpl?.token)).join('\n');
   const puncts = ir.puncts.map((p) =>
-    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl }); pending_nl = false;`} pos += ${p.length}; continue; }`).join('\n');
+    `        if src[pos..].starts_with(${J(p)}) { ${rxOrTpl ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl }); pending_nl = false;`} pos += ${p.length}; continue; }`).join('\n');
   const rsArr = (a: string[]) => `&[${a.map(J).join(', ')}]`;
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState.
@@ -189,7 +227,7 @@ ${nlRs.consts}` : '');
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `
         self.bp_text = self.prev_text; self.has_prev2 = self.has_prev; self.prev_kind = kind; self.prev_text = text; self.has_prev = true;` : '';
-  const stateImpl = stateful ? `struct LexState<'a> { ${fields} }
+  const stateImpl = rxOrTpl ? `struct LexState<'a> { ${fields} }
 impl<'a> LexState<'a> {
 ${prevIsValue}    fn emit(&mut self, kind: &'static str, text: &'a str, off: usize, end: usize) {
 ${emitHooks}
@@ -201,8 +239,8 @@ ${emitHooks}
     rx ? 'prev_text: "", prev_kind: "", bp_text: "", has_prev: false, has_prev2: false, paren_head: Vec::new(), last_close: false, last_bang: false' : '',
     tpl ? 'template_stack: Vec::new()' : '',
     nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
-  const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
-  const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
+  const open = rxOrTpl ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
+  const nlVar = rxOrTpl ? 'st.pending_nl' : 'pending_nl';
   const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && src[pos..].starts_with(${J(tpl.interpClose)}) && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length});
@@ -224,7 +262,7 @@ ${emitHooks}
 ${nlWs}${tplDispatch}${toks}
 ${puncts}
         panic!("lex error at {}", pos);`;
-  if (stateful) {
+  if (rxOrTpl) {
     return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
     let b = src.as_bytes();
     let n = b.len();
@@ -233,7 +271,38 @@ ${open}
     while pos < n {
 ${loopBody}
     }
-    ${stateful ? 'st.toks' : 'toks'}
+    st.toks
+}`;
+  }
+  if (newlineOnly) {
+    const rustNlScan = (s: string) => s
+      .replace(/toks\.push\(Tok \{ kind: ([^,]+), text: ([^,]+), off: pos, end: ([^,]+), nl: pending_nl \}\); pending_nl = false; ?/g, 'st.push_tok($1, $2, pos, $3); ')
+      .replace(/pending_nl/g, 'st.pending_nl');
+    const nlLoopBody = `${nlRs!.boundaryFrom}        let c = b[pos] as u32;
+${nlRs!.wsFrom}${rustNlScan(toks)}
+${rustNlScan(puncts)}
+        panic!("lex error at {}", pos);`;
+    return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, line_start: bool, emitted_content: bool, flow_depth: i64 }
+impl<'a, 'b> NlScan<'a, 'b> {
+    fn push_tok(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize) {
+${nlRs!.hooksFrom.replace(/emitted_content/g, 'self.emitted_content').replace(/flow_depth/g, 'self.flow_depth').replace(/pending_nl/g, 'self.pending_nl')}
+        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl }); self.pending_nl = false;
+    }
+}
+fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut line_start: bool, mut emitted_content: bool, mut flow_depth: i64, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, bool, bool, i64) {
+    let b = src.as_bytes();
+    let n = b.len();
+    let base = acc.len();
+    let mut st = NlScan { acc, pending_nl, line_start, emitted_content, flow_depth };
+    while pos < n && (limit == 0 || st.acc.len() - base < limit) {
+${nlLoopBody}
+    }
+    (pos, st.pending_nl, st.line_start, st.emitted_content, st.flow_depth)
+}
+fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+    let mut toks = Vec::new();
+    lex_from(src, 0, false, true, false, 0, &mut toks, 0);
+    toks
 }`;
   }
   return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool) {
@@ -416,8 +485,66 @@ ${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.l
 }
 
 function docEditBlockRust(ir: ParserIR): string {
-  const stateless = !(ir.regexCtx || ir.tpl || ir.newlineCfg);
-  const windowHelpers = stateless ? `
+  const windowLex = !(ir.regexCtx || ir.tpl);
+  const hasNewline = !!ir.newlineCfg;
+  const windowHelpers = windowLex ? (hasNewline ? `
+fn find_tok_at_off_kind(toks: &[AlignMeta], off: usize, kind: &'static str) -> Option<usize> {
+    let mut lo = 0usize;
+    let mut hi = toks.len();
+    let mut hit = None;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if toks[mid].off < off { lo = mid + 1; } else { hi = mid; }
+    }
+    if lo < toks.len() && toks[lo].off == off { hit = Some(lo); }
+    let hit = hit?;
+    let mut start = hit;
+    while start > 0 && toks[start - 1].off == off { start -= 1; }
+    let mut i = start;
+    while i < toks.len() && toks[i].off == off {
+        if toks[i].kind == kind { return Some(i); }
+        i += 1;
+    }
+    None
+}
+fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: usize, end: usize, ins: &str) -> (Vec<AlignMeta>, usize) {
+    let delta = ins.len() as isize - (end - start) as isize;
+    let edit_end = start + ins.len();
+    let mut max_idx = None::<usize>;
+    for (i, t) in old_toks.iter().enumerate() {
+        if t.end < start { max_idx = Some(i); } else { break; }
+    }
+    let rb = max_idx.map(|i| i as isize - 1).unwrap_or(-1);
+    let mut out: Vec<AlignMeta> = if rb >= 0 { old_toks[..=rb as usize].to_vec() } else { Vec::new() };
+    let (mut scan_off, mut pending_nl, mut line_start, mut emitted_content, mut flow_depth) = if rb >= 0 {
+        (old_toks[rb as usize].end, false, false, true, old_toks[rb as usize].fd)
+    } else {
+        (0, false, true, false, 0)
+    };
+    let mut scratch: Vec<Tok<'_>> = Vec::new();
+    let mut relexed = 0usize;
+    while scan_off < new_text.len() {
+        let before = scratch.len();
+        (scan_off, pending_nl, line_start, emitted_content, flow_depth) = lex_from(new_text, scan_off, pending_nl, line_start, emitted_content, flow_depth, &mut scratch, 1);
+        if scratch.len() == before { break; }
+        let t = &scratch[scratch.len() - 1];
+        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: flow_depth });
+        relexed += 1;
+        if t.off >= edit_end {
+            if let Some(o_idx) = find_tok_at_off_kind(old_toks, (t.off as isize - delta) as usize, t.kind) {
+                let o = &old_toks[o_idx];
+                if o.kind == t.kind && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && o.fd == flow_depth && old_text[o.off..o.end] == new_text[t.off..t.end] {
+                    for ot in &old_toks[o_idx + 1..] {
+                        out.push(AlignMeta { kind: ot.kind, off: (ot.off as isize + delta) as usize, end: (ot.end as isize + delta) as usize, nl: ot.nl, fd: ot.fd });
+                    }
+                    return (out, relexed);
+                }
+            }
+        }
+    }
+    (out, relexed)
+}
+` : `
 fn find_tok_at_off(toks: &[AlignMeta], off: usize) -> Option<usize> {
     let mut lo = 0usize;
     let mut hi = toks.len();
@@ -445,14 +572,14 @@ fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, sta
         (scan_off, pending_nl) = lex_from(new_text, scan_off, pending_nl, &mut scratch, 1);
         if scratch.len() == before { break; }
         let t = &scratch[scratch.len() - 1];
-        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl });
+        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0 });
         relexed += 1;
         if t.off >= edit_end {
             if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
                 let o = &old_toks[o_idx];
                 if o.kind == t.kind && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off..t.end] {
                     for ot in &old_toks[o_idx + 1..] {
-                        out.push(AlignMeta { kind: ot.kind, off: (ot.off as isize + delta) as usize, end: (ot.end as isize + delta) as usize, nl: ot.nl });
+                        out.push(AlignMeta { kind: ot.kind, off: (ot.off as isize + delta) as usize, end: (ot.end as isize + delta) as usize, nl: ot.nl, fd: 0 });
                     }
                     return (out, relexed);
                 }
@@ -461,27 +588,8 @@ fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, sta
     }
     (out, relexed)
 }
-fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
-    let fresh = to_meta(&lex(text));
-    if fresh.len() != meta.len() { return false; }
-    for (f, m) in fresh.iter().zip(meta.iter()) {
-        if f.kind != m.kind || f.off != m.off || f.end != m.end || f.nl != m.nl { return false; }
-        if text[f.off..f.end] != text[m.off..m.end] { return false; }
-    }
-    true
-}
-` : `
-fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
-    let fresh = to_meta(&lex(text));
-    if fresh.len() != meta.len() { return false; }
-    for (f, m) in fresh.iter().zip(meta.iter()) {
-        if f.kind != m.kind || f.off != m.off || f.end != m.end || f.nl != m.nl { return false; }
-        if text[f.off..f.end] != text[m.off..m.end] { return false; }
-    }
-    true
-}
-`;
-  const editBody = stateless
+`) : '';
+  const editBody = windowLex
     ? `        let mut cur_text = self.text.clone();
         let mut cur_toks = self.toks.clone();
         for e in edits {
@@ -506,13 +614,51 @@ fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
         }
         self.toks = to_meta(&lex(&self.text));
         relexed = self.toks.len();`;
+  const toMetaFn = hasNewline ? `
+fn scan_meta(src: &str) -> Vec<AlignMeta> {
+    let mut toks: Vec<Tok<'_>> = Vec::new();
+    let mut meta: Vec<AlignMeta> = Vec::new();
+    let (mut pos, mut pending_nl, mut line_start, mut emitted_content, mut flow_depth) = (0usize, false, true, false, 0i64);
+    while pos < src.len() {
+        let before = toks.len();
+        (pos, pending_nl, line_start, emitted_content, flow_depth) = lex_from(src, pos, pending_nl, line_start, emitted_content, flow_depth, &mut toks, 1);
+        if toks.len() == before { break; }
+        let t = &toks[toks.len() - 1];
+        meta.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: flow_depth });
+    }
+    meta
+}
+fn to_meta(_toks: &[Tok<'_>]) -> Vec<AlignMeta> { panic!("use scan_meta for newline") }
+` : `fn to_meta(toks: &[Tok<'_>]) -> Vec<AlignMeta> {
+    toks.iter().map(|t| AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0 }).collect()
+}`;
+  const checkStreamEqFn = hasNewline ? `
+fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
+    let fresh = scan_meta(text);
+    if fresh.len() != meta.len() { return false; }
+    for (f, m) in fresh.iter().zip(meta.iter()) {
+        if f.kind != m.kind || f.off != m.off || f.end != m.end || f.nl != m.nl || f.fd != m.fd { return false; }
+        if text[f.off..f.end] != text[m.off..m.end] { return false; }
+    }
+    true
+}
+` : `
+fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
+    let fresh = to_meta(&lex(text));
+    if fresh.len() != meta.len() { return false; }
+    for (f, m) in fresh.iter().zip(meta.iter()) {
+        if f.kind != m.kind || f.off != m.off || f.end != m.end || f.nl != m.nl { return false; }
+        if text[f.off..f.end] != text[m.off..m.end] { return false; }
+    }
+    true
+}
+`;
+  const initToks = hasNewline ? 'scan_meta(&text)' : 'to_meta(&lex(&text))';
   return `pub struct Edit { pub start: usize, pub end: usize, pub text: String }
 #[derive(Clone)]
-struct AlignMeta { kind: &'static str, off: usize, end: usize, nl: bool }
+struct AlignMeta { kind: &'static str, off: usize, end: usize, nl: bool, fd: i64 }
 struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, stream_eq: bool }
-fn to_meta(toks: &[Tok<'_>]) -> Vec<AlignMeta> {
-    toks.iter().map(|t| AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl }).collect()
-}
+${toMetaFn}
 fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
     let old_n = old_toks.len();
     let new_n = new_toks.len();
@@ -540,9 +686,9 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
 fn toks_from_meta<'a>(text: &'a str, meta: &[AlignMeta]) -> Vec<Tok<'a>> {
     meta.iter().map(|m| Tok { kind: m.kind, text: &text[m.off..m.end], off: m.off, end: m.end, nl: m.nl }).collect()
 }
-${windowHelpers}pub struct Doc { text: String, toks: Vec<AlignMeta>, align: Option<Align> }
+${checkStreamEqFn}${windowHelpers}pub struct Doc { text: String, toks: Vec<AlignMeta>, align: Option<Align> }
 impl Doc {
-    pub fn new(text: String) -> Doc { Doc { text: text.clone(), toks: to_meta(&lex(&text)), align: None } }
+    pub fn new(text: String) -> Doc { Doc { text: text.clone(), toks: ${initToks}, align: None } }
     pub fn text(&self) -> &str { &self.text }
     pub fn alignment(&self) -> Option<&Align> { self.align.as_ref() }
     pub fn edit(&mut self, edits: &[Edit]) {
