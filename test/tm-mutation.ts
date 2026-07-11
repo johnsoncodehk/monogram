@@ -20,7 +20,7 @@
 //      reordered) are EXPECTED to slip past the structural detectors — they are caught,
 //      if at all, only by a differential WITNESS (a paint change on a targeted input).
 //      Survivors here are the detector's MEASURED blind spots, reported not failed: they
-//      are the honest boundary COMPLETENESS.md draws, made empirical.
+//      are the honest boundary docs/COMPLETENESS.md draws, made empirical.
 //
 //  Run:  node test/tm-mutation.ts
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,7 +202,7 @@ async function main(): Promise<void> {
   const failures = [...presenceSurvivors.map(r => `presence SURVIVED: ${r.grammar} — ${r.label}`),
     ...falseAlarms.map(r => `FALSE ALARM on equivalent mutant: ${r.grammar} — ${r.label}`)];
   if (failures.length) { console.log('\n✗ detector defect(s):'); for (const f of failures) console.log(`    - ${f}`); process.exit(1); }
-  console.log(`\n✓ every presence gap killed, no false alarms; correctness/ordering blind spots measured = ${corrOrderSurvivors.length} (the boundary COMPLETENESS.md states).`);
+  console.log(`\n✓ every presence gap killed, no false alarms; correctness/ordering blind spots measured = ${corrOrderSurvivors.length} (the boundary docs/COMPLETENESS.md states).`);
   void createParser; void buildRoleMap; void leafRoles; void generateInputs;
 }
 

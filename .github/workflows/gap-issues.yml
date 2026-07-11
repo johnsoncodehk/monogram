@@ -1,4 +1,4 @@
-# Reconcile GitHub issues from the gap ledger (KNOWN-GAPS.md → issues), idempotently.
+# Reconcile GitHub issues from the gap ledger (docs/KNOWN-GAPS.md → issues), idempotently.
 # Runs when the ledger CHANGES on master (a gap appeared or was fixed) and on manual dispatch.
 # The deterministic ledger is the source of truth; this only PROJECTS it: opens an issue for a new
 # gap, auto-closes the issue when its fingerprint leaves the ledger. See test/gap-issues.ts.
@@ -7,7 +7,7 @@ name: gap-ledger-issues
 on:
   push:
     branches: [master]
-    paths: ['KNOWN-GAPS.md']
+    paths: ['docs/KNOWN-GAPS.md']
   workflow_dispatch: {}
 
 permissions:

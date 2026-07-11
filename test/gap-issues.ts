@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  gap-issues.ts — RECONCILE GitHub issues from the gap ledger (KNOWN-GAPS.md).
+//  gap-issues.ts — RECONCILE GitHub issues from the gap ledger (docs/KNOWN-GAPS.md).
 //
 //  The deterministic ledger (test/gap-ledger.ts) is the SOURCE OF TRUTH — a committed,
 //  fingerprinted list of valid-input flat-highlighter divergences the generative
@@ -14,7 +14,7 @@
 //  Because the fingerprint is content-derived and the ledger is deterministic, this is a
 //  pure function of (ledger, open issues) → it never spams and auto-closes on fix — the
 //  OSS-Fuzz model. The CI workflow (.github/workflows/gap-issues.yml) runs it on a push
-//  that changes KNOWN-GAPS.md (and on manual dispatch).
+//  that changes docs/KNOWN-GAPS.md (and on manual dispatch).
 //
 //  Run:  node test/gap-issues.ts            # reconcile live (needs `gh` auth / GH_TOKEN)
 //        node test/gap-issues.ts --dry-run  # print the plan, touch nothing
@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 const DRY = process.argv.includes('--dry-run');
-const LEDGER = 'KNOWN-GAPS.md';
+const LEDGER = 'docs/KNOWN-GAPS.md';
 const LABEL = 'gap-ledger';
 const marker = (id: string) => `<!-- gap-ledger:${id} -->`;
 const MARKER_RE = /<!-- gap-ledger:([0-9a-f]+) -->/;
@@ -63,7 +63,7 @@ function openIssues(): Map<string, number> {
 function title(g: Gap): string { return `[gap-ledger] ${g.language}: ${g.repro.replace(/\n/g, '\\n').slice(0, 50)}`; }
 function body(g: Gap): string {
   return [
-    'Auto-filed by the **gap ledger** (`test/gap-ledger.ts` → `KNOWN-GAPS.md`). The generative scope≡role',
+    'Auto-filed by the **gap ledger** (`test/gap-ledger.ts` → `docs/KNOWN-GAPS.md`). The generative scope≡role',
     'check found a flat-highlighter divergence from the Monogram parser on **valid input** — the floor-blind',
     'class the corpus-bound scope-gap metric is blind to. **This issue auto-CLOSES when the gap leaves the',
     'ledger** (i.e. when the highlighter is fixed and the next ledger regen drops it).',
@@ -102,6 +102,6 @@ for (const g of toOpen) {
 }
 for (const [id, num] of toClose) {
   console.log(`  - CLOSE #${num}  (gap ${id} no longer in the ledger — resolved)`);
-  if (!DRY) gh(['issue', 'close', String(num), '--comment', `Resolved — gap \`${id}\` is no longer in the ledger (\`KNOWN-GAPS.md\`); the highlighter no longer diverges here. Auto-closed by \`test/gap-issues.ts\`.`]);
+  if (!DRY) gh(['issue', 'close', String(num), '--comment', `Resolved — gap \`${id}\` is no longer in the ledger (\`docs/KNOWN-GAPS.md\`); the highlighter no longer diverges here. Auto-closed by \`test/gap-issues.ts\`.`]);
 }
 if (!toOpen.length && !toClose.length) console.log('  (in sync — nothing to do)');

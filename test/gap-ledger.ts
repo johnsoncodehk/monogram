@@ -23,19 +23,19 @@
 //       it is DROPPED from the gap list (its count is reported, not listed).
 //    4. FINGERPRINT — a stable id = hash(language, normalized repro, role, bucket),
 //       so the same gap keeps the same id across commits.
-//    5. EMIT — a sorted KNOWN-GAPS.md (committed artifact): per gap, the language,
+//    5. EMIT — a sorted docs/KNOWN-GAPS.md (committed artifact): per gap, the language,
 //       escaped minimal repro, role-vs-scope (want vs got), fingerprint, and a
 //       machine-readable JSON block.
 //
 //  DETERMINISM is the whole point (a commit-trackable ledger): two runs produce a
-//  BYTE-IDENTICAL KNOWN-GAPS.md. The generator is a pure function of the grammar
+//  BYTE-IDENTICAL docs/KNOWN-GAPS.md. The generator is a pure function of the grammar
 //  (no seed), ddmin is deterministic, the oracle is deterministic, and the hash is
 //  content-only — so nothing varies run-to-run.
 //
 //  Run (bare node):
 //    node test/gap-ledger.ts            # print the ledger to stdout (don't write)
-//    node test/gap-ledger.ts --write    # (re)write KNOWN-GAPS.md
-//    node test/gap-ledger.ts --check    # fail if KNOWN-GAPS.md is stale (CI guard)
+//    node test/gap-ledger.ts --write    # (re)write docs/KNOWN-GAPS.md
+//    node test/gap-ledger.ts --check    # fail if docs/KNOWN-GAPS.md is stale (CI guard)
 //    node test/gap-ledger.ts yaml       # one language
 // ─────────────────────────────────────────────────────────────────────────────
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -346,7 +346,7 @@ async function main(): Promise<void> {
   for (const r of results) console.error(`    ${r.name}: ${r.kept.length} kept · ${r.droppedOverAccept} dropped (over-accept) · ${r.discovered} distinct divergence(s)`);
   console.error(`  TOTAL: ${allGaps.length} gaps · ${droppedTotal} dropped over-accepts`);
 
-  const OUT = 'KNOWN-GAPS.md';
+  const OUT = 'docs/KNOWN-GAPS.md';
   if (CHECK) {
     const existing = existsSync(OUT) ? readFileSync(OUT, 'utf8') : '';
     if (existing !== md) { console.error(`\n${OUT} is STALE — run \`node test/gap-ledger.ts --write\`.`); process.exit(1); }

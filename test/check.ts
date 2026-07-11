@@ -2,10 +2,10 @@
 //  check.ts — the SINGLE gate runner. Runs every correctness GATE as a subprocess and
 //  prints ONE ✓/✗ summary, exiting non-zero if any fails. `npm run check` answers
 //  "is the repo healthy?" in one command + one output — instead of running a dozen
-//  scripts with a dozen output formats. See TESTING.md for the report taxonomy
+//  scripts with a dozen output formats. See docs/TESTING.md for the report taxonomy
 //  (gate / metric / ledger / bench); this runs the GATE tier (the CI-blocking pass/fail
 //  checks that need no external corpus). Metrics live in the README coverage table
-//  (`npm run coverage:table`), findings in the gap ledger (`KNOWN-GAPS.md`).
+//  (`npm run coverage:table`), findings in the gap ledger (`docs/KNOWN-GAPS.md`).
 //
 //  Assumes the generated grammars are current (`npm run gen`), as CI does before this.
 //  Run:  node test/check.ts            # all gates
