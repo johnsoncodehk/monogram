@@ -208,18 +208,34 @@ ${pushHooks}    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = 
   };
 `
     : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false; };\n';
-  return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
+  const loopBody = `${nlBoundary}    const c = src.charCodeAt(pos);
+    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
+${nlWs}${tplDispatch}${toks}
+${puncts}
+    throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));`;
+  if (stateful) {
+    return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
   let pendingNl = false;
-${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${nlState}${stateful ? emitFn : pushFnDef}  while (pos < n) {
-${nlBoundary}    const c = src.charCodeAt(pos);
-    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
-${nlWs}${tplDispatch}${toks}
-${puncts}
-    throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));
+${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${nlState}${emitFn}  while (pos < n) {
+${loopBody}
   }
+  return toks;
+}`;
+  }
+  return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean } {
+  const n = src.length;
+  const base = toks.length;
+${defs.length ? '  _s = src;\n' : ''}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${loopBody}
+  }
+  return { pos, pendingNl };
+}
+function lex(src: string): Tok[] {
+  const toks: Tok[] = [];
+  lexFrom(src, 0, false, toks);
   return toks;
 }`;
 }
@@ -353,6 +369,137 @@ ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${se
 }`;
 }
 
+function docEditBlock(ir: ParserIR): string {
+  const stateless = !(ir.regexCtx || ir.tpl || ir.newlineCfg);
+  const windowHelpers = stateless ? `
+function findTokAtOff(toks: AlignMeta[], off: number): number {
+  let lo = 0, hi = toks.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (toks[mid].off < off) lo = mid + 1;
+    else if (toks[mid].off > off) hi = mid - 1;
+    else return mid;
+  }
+  return -1;
+}
+function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string, start: number, end: number, ins: string): { toks: AlignMeta[]; relexed: number } {
+  const delta = ins.length - (end - start);
+  const editEnd = start + ins.length;
+  let maxIdx = -1;
+  for (let i = 0; i < oldToks.length; i++) {
+    if (oldToks[i].end < start) maxIdx = i;
+    else break;
+  }
+  const rb = maxIdx >= 0 ? maxIdx - 1 : -1;
+  const out: AlignMeta[] = rb >= 0 ? oldToks.slice(0, rb + 1) : [];
+  let scanOff = rb >= 0 ? oldToks[rb].end : 0;
+  let pendingNl = false;
+  const scratch: Tok[] = [];
+  let relexed = 0;
+  while (scanOff < newText.length) {
+    const before = scratch.length;
+    ({ pos: scanOff, pendingNl } = lexFrom(newText, scanOff, pendingNl, scratch, 1));
+    if (scratch.length === before) break;
+    const t = scratch[scratch.length - 1];
+    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl });
+    relexed++;
+    if (t.off >= editEnd) {
+      const oIdx = findTokAtOff(oldToks, t.off - delta);
+      if (oIdx >= 0) {
+        const o = oldToks[oIdx];
+        if (o.kind === t.kind && o.end === t.end - delta && o.nl === t.nl && oldText.slice(o.off, o.end) === newText.slice(t.off, t.end)) {
+          for (let j = oIdx + 1; j < oldToks.length; j++) {
+            const ot = oldToks[j];
+            out.push({ kind: ot.kind, off: ot.off + delta, end: ot.end + delta, nl: ot.nl });
+          }
+          return { toks: out, relexed };
+        }
+      }
+    }
+  }
+  return { toks: out, relexed };
+}
+` : '';
+  const editBody = stateless
+    ? `      let curText = text;
+      let curToks = oldToks;
+      for (const e of edits) {
+        const stepOldText = curText;
+        const stepOldToks = curToks;
+        const n = curText.length, start = Math.max(0, Math.min(e.start, n)), end = Math.max(start, Math.min(e.end, n));
+        const ins = e.text;
+        curText = curText.slice(0, start) + ins + curText.slice(end);
+        const wr = windowRelexStep(stepOldText, stepOldToks, curText, start, end, ins);
+        curToks = wr.toks;
+        relexed += wr.relexed;
+      }
+      text = curText;
+      prevToks = curToks;`
+    : `      for (const e of edits) {
+        const n = text.length, start = Math.max(0, Math.min(e.start, n)), end = Math.max(start, Math.min(e.end, n));
+        text = text.slice(0, start) + e.text + text.slice(end);
+      }
+      prevToks = toMeta(tokenize(text));
+      relexed = prevToks.length;`;
+  return `export type Edit = { start: number; end: number; text: string };
+type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; streamEq: boolean };
+const toMeta = (toks: Tok[]): AlignMeta[] => toks.map((t) => ({ kind: t.kind, off: t.off, end: t.end, nl: t.nl }));
+function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'streamEq'> {
+  const oldN = oldToks.length, newN = newToks.length;
+  let prefix = 0;
+  while (prefix < oldN && prefix < newN) {
+    const o = oldToks[prefix], n = newToks[prefix];
+    if (o.kind !== n.kind || o.off !== n.off || o.end !== n.end || o.nl !== n.nl) break;
+    if (oldText.slice(o.off, o.end) !== newText.slice(n.off, n.end)) break;
+    prefix++;
+  }
+  const delta = newText.length - oldText.length;
+  const minN = Math.min(oldN, newN);
+  let suffix = 0;
+  while (prefix + suffix < minN) {
+    const o = oldToks[oldN - 1 - suffix], n = newToks[newN - 1 - suffix];
+    if (o.kind !== n.kind || o.nl !== n.nl || n.off !== o.off + delta || n.end !== o.end + delta) break;
+    if (oldText.slice(o.off, o.end) !== newText.slice(n.off, n.end)) break;
+    suffix++;
+  }
+  return { oldN, newN, prefix, suffix };
+}
+function toksFromMeta(text: string, meta: AlignMeta[]): Tok[] {
+  return meta.map((m) => ({ kind: m.kind, text: text.slice(m.off, m.end), off: m.off, end: m.end, nl: m.nl }));
+}
+function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
+  const fresh = toMeta(tokenize(text));
+  if (fresh.length !== meta.length) return false;
+  for (let i = 0; i < fresh.length; i++) {
+    const f = fresh[i], t = meta[i];
+    if (f.kind !== t.kind || f.off !== t.off || f.end !== t.end || f.nl !== t.nl) return false;
+    if (text.slice(f.off, f.end) !== text.slice(t.off, t.end)) return false;
+  }
+  return true;
+}
+${windowHelpers}export function createDoc(src: string): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
+  let text = src;
+  let prevToks = toMeta(tokenize(src));
+  let align: Align | null = null;
+  let root: Node | null = parse(tokenize(src));
+  return {
+    text(): string { return text; },
+    root(): Node | null { return root; },
+    align(): Align | null { return align; },
+    edit(edits: Edit[]): Node | null {
+      const oldText = text, oldToks = prevToks;
+      let relexed = 0;
+${editBody}
+      const streamEq = checkStreamEq(text, prevToks);
+      align = { ...computeAlign(oldText, oldToks, text, prevToks), relexed, streamEq };
+      root = parse(toksFromMeta(text, prevToks));
+      return root;
+    },
+  };
+}`;
+}
+
 export const tsTarget: Target = {
   name: 'typescript',
   ext: 'ts',
@@ -472,53 +619,7 @@ export function parse(tokens: Tok[]): Cst | null {
   return root !== null && pos === toks.length ? root : null;
 }
 
-export type Edit = { start: number; end: number; text: string };
-type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
-type Align = { oldN: number; newN: number; prefix: number; suffix: number };
-const toMeta = (toks: Tok[]): AlignMeta[] => toks.map((t) => ({ kind: t.kind, off: t.off, end: t.end, nl: t.nl }));
-function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Align {
-  const oldN = oldToks.length, newN = newToks.length;
-  let prefix = 0;
-  while (prefix < oldN && prefix < newN) {
-    const o = oldToks[prefix], n = newToks[prefix];
-    if (o.kind !== n.kind || o.off !== n.off || o.end !== n.end || o.nl !== n.nl) break;
-    if (oldText.slice(o.off, o.end) !== newText.slice(n.off, n.end)) break;
-    prefix++;
-  }
-  const delta = newText.length - oldText.length;
-  const minN = Math.min(oldN, newN);
-  let suffix = 0;
-  while (prefix + suffix < minN) {
-    const o = oldToks[oldN - 1 - suffix], n = newToks[newN - 1 - suffix];
-    if (o.kind !== n.kind || o.nl !== n.nl || n.off !== o.off + delta || n.end !== o.end + delta) break;
-    if (oldText.slice(o.off, o.end) !== newText.slice(n.off, n.end)) break;
-    suffix++;
-  }
-  return { oldN, newN, prefix, suffix };
-}
-export function createDoc(src: string): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
-  let text = src;
-  let prevToks = toMeta(tokenize(src));
-  let align: Align | null = null;
-  let root: Node | null = parse(tokenize(src));
-  return {
-    text(): string { return text; },
-    root(): Node | null { return root; },
-    align(): Align | null { return align; },
-    edit(edits: Edit[]): Node | null {
-      const oldText = text, oldToks = prevToks;
-      for (const e of edits) {
-        const n = text.length, start = Math.max(0, Math.min(e.start, n)), end = Math.max(start, Math.min(e.end, n));
-        text = text.slice(0, start) + e.text + text.slice(end);
-      }
-      const newToks = tokenize(text);
-      prevToks = toMeta(newToks);
-      align = computeAlign(oldText, oldToks, text, prevToks);
-      root = parse(newToks);
-      return root;
-    },
-  };
-}
+${docEditBlock(ir)}
 `;
   },
   emitRunner(): string {

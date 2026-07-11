@@ -220,18 +220,35 @@ ${emitHooks}
         if pos + 2 < n && b[pos] == 0xE2 && b[pos + 1] == 0x80 && (b[pos + 2] == 0xA8 || b[pos + 2] == 0xA9) { ${nlVar} = true; pos += 3; continue; }   // LS/PS (UTF-8)
         if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }   // LF/CR
 `;
-  return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+  const loopBody = `${nlBoundary}        let c = b[pos] as u32;
+${nlWs}${tplDispatch}${toks}
+${puncts}
+        panic!("lex error at {}", pos);`;
+  if (stateful) {
+    return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
     let b = src.as_bytes();
     let n = b.len();
 ${open}
     let mut pos = 0usize;
     while pos < n {
-${nlBoundary}        let c = b[pos] as u32;
-${nlWs}${tplDispatch}${toks}
-${puncts}
-        panic!("lex error at {}", pos);
+${loopBody}
     }
     ${stateful ? 'st.toks' : 'toks'}
+}`;
+  }
+  return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool) {
+    let b = src.as_bytes();
+    let n = b.len();
+    let base = acc.len();
+    while pos < n && (limit == 0 || acc.len() - base < limit) {
+${loopBody.replace(/pending_nl/g, 'pending_nl').replace(/toks\.push/g, 'acc.push')}
+    }
+    (pos, pending_nl)
+}
+fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+    let mut toks = Vec::new();
+    lex_from(src, 0, false, &mut toks, 0);
+    toks
 }`;
 }
 
@@ -398,6 +415,157 @@ ${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.l
     }`;
 }
 
+function docEditBlockRust(ir: ParserIR): string {
+  const stateless = !(ir.regexCtx || ir.tpl || ir.newlineCfg);
+  const windowHelpers = stateless ? `
+fn find_tok_at_off(toks: &[AlignMeta], off: usize) -> Option<usize> {
+    let mut lo = 0usize;
+    let mut hi = toks.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if toks[mid].off < off { lo = mid + 1; } else { hi = mid; }
+    }
+    if lo < toks.len() && toks[lo].off == off { Some(lo) } else { None }
+}
+fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: usize, end: usize, ins: &str) -> (Vec<AlignMeta>, usize) {
+    let delta = ins.len() as isize - (end - start) as isize;
+    let edit_end = start + ins.len();
+    let mut max_idx = None::<usize>;
+    for (i, t) in old_toks.iter().enumerate() {
+        if t.end < start { max_idx = Some(i); } else { break; }
+    }
+    let rb = max_idx.map(|i| i as isize - 1).unwrap_or(-1);
+    let mut out: Vec<AlignMeta> = if rb >= 0 { old_toks[..=rb as usize].to_vec() } else { Vec::new() };
+    let mut scan_off = if rb >= 0 { old_toks[rb as usize].end } else { 0 };
+    let mut pending_nl = false;
+    let mut scratch: Vec<Tok<'_>> = Vec::new();
+    let mut relexed = 0usize;
+    while scan_off < new_text.len() {
+        let before = scratch.len();
+        (scan_off, pending_nl) = lex_from(new_text, scan_off, pending_nl, &mut scratch, 1);
+        if scratch.len() == before { break; }
+        let t = &scratch[scratch.len() - 1];
+        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl });
+        relexed += 1;
+        if t.off >= edit_end {
+            if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
+                let o = &old_toks[o_idx];
+                if o.kind == t.kind && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off..t.end] {
+                    for ot in &old_toks[o_idx + 1..] {
+                        out.push(AlignMeta { kind: ot.kind, off: (ot.off as isize + delta) as usize, end: (ot.end as isize + delta) as usize, nl: ot.nl });
+                    }
+                    return (out, relexed);
+                }
+            }
+        }
+    }
+    (out, relexed)
+}
+fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
+    let fresh = to_meta(&lex(text));
+    if fresh.len() != meta.len() { return false; }
+    for (f, m) in fresh.iter().zip(meta.iter()) {
+        if f.kind != m.kind || f.off != m.off || f.end != m.end || f.nl != m.nl { return false; }
+        if text[f.off..f.end] != text[m.off..m.end] { return false; }
+    }
+    true
+}
+` : `
+fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
+    let fresh = to_meta(&lex(text));
+    if fresh.len() != meta.len() { return false; }
+    for (f, m) in fresh.iter().zip(meta.iter()) {
+        if f.kind != m.kind || f.off != m.off || f.end != m.end || f.nl != m.nl { return false; }
+        if text[f.off..f.end] != text[m.off..m.end] { return false; }
+    }
+    true
+}
+`;
+  const editBody = stateless
+    ? `        let mut cur_text = self.text.clone();
+        let mut cur_toks = self.toks.clone();
+        for e in edits {
+            let step_old_text = cur_text.clone();
+            let step_old_toks = cur_toks.clone();
+            let n = cur_text.len();
+            let start = e.start.min(n);
+            let end = e.end.max(start).min(n);
+            let ins = e.text.clone();
+            cur_text = format!("{}{}{}", &cur_text[..start], ins, &cur_text[end..]);
+            let (toks, step_relexed) = window_relex_step(&step_old_text, &step_old_toks, &cur_text, start, end, &ins);
+            cur_toks = toks;
+            relexed += step_relexed;
+        }
+        self.text = cur_text;
+        self.toks = cur_toks;`
+    : `        for e in edits {
+            let n = self.text.len();
+            let start = e.start.min(n);
+            let end = e.end.max(start).min(n);
+            self.text = format!("{}{}{}", &self.text[..start], e.text, &self.text[end..]);
+        }
+        self.toks = to_meta(&lex(&self.text));
+        relexed = self.toks.len();`;
+  return `pub struct Edit { pub start: usize, pub end: usize, pub text: String }
+#[derive(Clone)]
+struct AlignMeta { kind: &'static str, off: usize, end: usize, nl: bool }
+struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, stream_eq: bool }
+fn to_meta(toks: &[Tok<'_>]) -> Vec<AlignMeta> {
+    toks.iter().map(|t| AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl }).collect()
+}
+fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
+    let old_n = old_toks.len();
+    let new_n = new_toks.len();
+    let mut prefix = 0usize;
+    while prefix < old_n && prefix < new_n {
+        let o = &old_toks[prefix];
+        let n = &new_toks[prefix];
+        if o.kind != n.kind || o.off != n.off || o.end != n.end || o.nl != n.nl { break; }
+        if old_text[o.off..o.end] != new_text[n.off..n.end] { break; }
+        prefix += 1;
+    }
+    let delta = new_text.len() as isize - old_text.len() as isize;
+    let min_n = old_n.min(new_n);
+    let mut suffix = 0usize;
+    while prefix + suffix < min_n {
+        let o = &old_toks[old_n - 1 - suffix];
+        let n = &new_toks[new_n - 1 - suffix];
+        if o.kind != n.kind || o.nl != n.nl { break; }
+        if n.off != (o.off as isize + delta) as usize || n.end != (o.end as isize + delta) as usize { break; }
+        if old_text[o.off..o.end] != new_text[n.off..n.end] { break; }
+        suffix += 1;
+    }
+    (old_n, new_n, prefix, suffix)
+}
+fn toks_from_meta<'a>(text: &'a str, meta: &[AlignMeta]) -> Vec<Tok<'a>> {
+    meta.iter().map(|m| Tok { kind: m.kind, text: &text[m.off..m.end], off: m.off, end: m.end, nl: m.nl }).collect()
+}
+${windowHelpers}pub struct Doc { text: String, toks: Vec<AlignMeta>, align: Option<Align> }
+impl Doc {
+    pub fn new(text: String) -> Doc { Doc { text: text.clone(), toks: to_meta(&lex(&text)), align: None } }
+    pub fn text(&self) -> &str { &self.text }
+    pub fn alignment(&self) -> Option<&Align> { self.align.as_ref() }
+    pub fn edit(&mut self, edits: &[Edit]) {
+        let old_text = self.text.clone();
+        let old_toks = self.toks.clone();
+        let mut relexed = 0usize;
+${editBody}
+        let stream_eq = check_stream_eq(&self.text, &self.toks);
+        let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &self.text, &self.toks);
+        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, stream_eq });
+    }
+    pub fn parse(&self) -> Option<(Parser<'_>, i32)> {
+        let toks = toks_from_meta(&self.text, &self.toks);
+        let n = toks.len();
+        let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new() };
+        match p.parse_${ir.entry}() {
+            Some(root) if p.pos == n => Some((p, root)),
+            _ => None,
+        }
+    }
+}`;
+}
+
 export const rustTarget: Target = {
   name: 'rust',
   ext: 'rs',
@@ -547,67 +715,7 @@ fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
     }
 }
 
-pub struct Edit { pub start: usize, pub end: usize, pub text: String }
-#[derive(Clone)]
-struct AlignMeta { kind: &'static str, off: usize, end: usize, nl: bool }
-struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize }
-fn to_meta(toks: &[Tok<'_>]) -> Vec<AlignMeta> {
-    toks.iter().map(|t| AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl }).collect()
-}
-fn compute_align(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> Align {
-    let old_n = old_toks.len();
-    let new_n = new_toks.len();
-    let mut prefix = 0usize;
-    while prefix < old_n && prefix < new_n {
-        let o = &old_toks[prefix];
-        let n = &new_toks[prefix];
-        if o.kind != n.kind || o.off != n.off || o.end != n.end || o.nl != n.nl { break; }
-        if old_text[o.off..o.end] != new_text[n.off..n.end] { break; }
-        prefix += 1;
-    }
-    let delta = new_text.len() as isize - old_text.len() as isize;
-    let min_n = old_n.min(new_n);
-    let mut suffix = 0usize;
-    while prefix + suffix < min_n {
-        let o = &old_toks[old_n - 1 - suffix];
-        let n = &new_toks[new_n - 1 - suffix];
-        if o.kind != n.kind || o.nl != n.nl { break; }
-        if n.off != (o.off as isize + delta) as usize || n.end != (o.end as isize + delta) as usize { break; }
-        if old_text[o.off..o.end] != new_text[n.off..n.end] { break; }
-        suffix += 1;
-    }
-    Align { old_n, new_n, prefix, suffix }
-}
-fn toks_from_meta<'a>(text: &'a str, meta: &[AlignMeta]) -> Vec<Tok<'a>> {
-    meta.iter().map(|m| Tok { kind: m.kind, text: &text[m.off..m.end], off: m.off, end: m.end, nl: m.nl }).collect()
-}
-pub struct Doc { text: String, toks: Vec<AlignMeta>, align: Option<Align> }
-impl Doc {
-    pub fn new(text: String) -> Doc { Doc { text: text.clone(), toks: to_meta(&lex(&text)), align: None } }
-    pub fn text(&self) -> &str { &self.text }
-    pub fn alignment(&self) -> Option<&Align> { self.align.as_ref() }
-    pub fn edit(&mut self, edits: &[Edit]) {
-        let old_text = self.text.clone();
-        let old_toks = self.toks.clone();
-        for e in edits {
-            let n = self.text.len();
-            let start = e.start.min(n);
-            let end = e.end.max(start).min(n);
-            self.text = format!("{}{}{}", &self.text[..start], e.text, &self.text[end..]);
-        }
-        self.toks = to_meta(&lex(&self.text));
-        self.align = Some(compute_align(&old_text, &old_toks, &self.text, &self.toks));
-    }
-    pub fn parse(&self) -> Option<(Parser<'_>, i32)> {
-        let toks = toks_from_meta(&self.text, &self.toks);
-        let n = toks.len();
-        let mut p = Parser { toks, pos: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new() };
-        match p.parse_${ir.entry}() {
-            Some(root) if p.pos == n => Some((p, root)),
-            _ => None,
-        }
-    }
-}
+${docEditBlockRust(ir)}
 `;
   },
   emitRunner(): string {
@@ -717,7 +825,7 @@ fn main() {
             doc.edit(&edits);
         }
         if let Some(a) = doc.alignment() {
-            eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix);
+            eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.stream_eq);
         }
         match doc.parse() {
             Some((p, root)) => {
