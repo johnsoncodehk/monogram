@@ -45,9 +45,9 @@ jobs:
 
       # Every correctness GATE through ONE runner — sanity / agnostic / conformance /
       # highlighter / vue / yaml / the generative scope≡role check / the gap-ledger selftest
-      # + --check (stale KNOWN-GAPS.md fails). One ✓/✗ summary, one exit code. The comparative
+      # + --check (stale docs/KNOWN-GAPS.md fails). One ✓/✗ summary, one exit code. The comparative
       # METRICS (scope-gap / src-coverage) and BENCH tools need the external TS corpus / VS Code
-      # grammars and run in the readme-bench workflow, not here. See TESTING.md for the taxonomy.
+      # grammars and run in the readme-bench workflow, not here. See docs/TESTING.md for the taxonomy.
       - name: Test
         run: npm run check
 
