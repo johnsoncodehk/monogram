@@ -120,6 +120,15 @@ export type TplCfg = {
   interpRule: string;   // the rule that parses each `${…}` hole (the Pratt expression rule)
 };
 
+// Newline-only mode (gen-lexer.ts L236–253, L677–747): engine-emitted NEWLINE tokens at
+// significant line boundaries; flowOpen/flowClose suspend; comment-only lines are skipped.
+export type NewlineCfg = {
+  token: string;
+  flowOpen: string[];
+  flowClose: string[];
+  comment: string | null;
+};
+
 export type ParserIR = {
   grammarName: string;
   entry: string;
@@ -128,6 +137,7 @@ export type ParserIR = {
   rules: RuleIR[];
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
+  newlineCfg: NewlineCfg | null;  // null unless the grammar declares `newline`
 };
 
 // The target-agnostic parse plan for a grammar. Applies the [Await]/[Yield] context fork
@@ -140,11 +150,21 @@ export function portableIR(grammar: CstGrammar): ParserIR {
 
 // ── buildIR: grammar + analysis → the target-agnostic parse plan ──
 
+function isNeverPat(p: TokenPattern): boolean {
+  return typeof p !== 'string' && p.type === 'never';
+}
+
 function buildIR(grammar: CstGrammar): ParserIR {
+  if (grammar.indent) {
+    throw new Error('portable: indent-sensitive grammars are out of scope (use the interpreter path); declare `newline` without `indent` for line-boundary-only mode');
+  }
+
   const a = analyzeGrammar(grammar);
   const tokenNames = a.tokenNames;
 
-  const tokens: LexTok[] = grammar.tokens.map((t) => lexTok(t));
+  // Engine-emitted tokens (`never()` pattern — NEWLINE in newline mode) are excluded from the
+  // char scanner; the target lexer state machine emits them instead.
+  const tokens: LexTok[] = grammar.tokens.filter((t) => !isNeverPat(t.pattern)).map((t) => lexTok(t));
   const lits = new Set<string>();
   for (const r of grammar.rules) for (const l of collectLiterals(r.body)) lits.add(l);
   for (const lv of grammar.precs) for (const o of lv.operators) lits.add(o.value);
@@ -335,7 +355,27 @@ function buildIR(grammar: CstGrammar): ParserIR {
   }
   if (tpl) tpl.interpRule = san(tpl.interpRule);
 
-  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, rules, regexCtx, tpl };
+  let newlineCfg: NewlineCfg | null = null;
+  if (grammar.newline) {
+    const nc = grammar.newline;
+    newlineCfg = {
+      token: nc.token,
+      flowOpen: [...(nc.flowOpen ?? [])],
+      flowClose: [...(nc.flowClose ?? [])],
+      comment: nc.comment ?? null,
+    };
+    // Prefix-ambiguous rd alts (e.g. Ident vs Ident '(' … ')') are ordered longest-first so
+    // first-match backtracking agrees with the interpreter's longest-match rd parse (gen-parser.ts).
+    for (const r of rules) {
+      if (r.kind !== 'rd' || r.alts.length < 2) continue;
+      const order = r.alts.map((_, i) => i).sort((a, b) => r.alts[b].length - r.alts[a].length);
+      if (order.every((v, i) => v === i)) continue;
+      r.alts = order.map((i) => r.alts[i]);
+      r.altFirst = order.map((i) => r.altFirst[i]);
+    }
+  }
+
+  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, rules, regexCtx, tpl, newlineCfg };
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,

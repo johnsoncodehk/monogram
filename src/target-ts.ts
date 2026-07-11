@@ -4,7 +4,7 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, FirstSig } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig } from './emit-portable.ts';
 import { portableIR } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
@@ -49,9 +49,8 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
-  const stateful = rxTok !== undefined || tplTok !== undefined;
   if (tplTok !== undefined && name === tplTok) return '';   // template token is scanned by the state machine
   // `emit(...)` threads the lexer state in stateful mode; a plain push otherwise. A skipped
   // token (comment) still records a newline it spans, so `sameLine` sees it.
@@ -82,12 +81,63 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): st
   return `    if (${gate}true) { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
 }
 
+function newlineParts(nl: NewlineCfg, pushFn: string): { state: string; boundary: string; ws: string; hooks: string } {
+  const commentSkip = nl.comment
+    ? `      if (src.startsWith(${J(nl.comment)}, p)) { let e = p; while (e < n && src.charCodeAt(e) !== 10) e++; pos = e; continue; }\n`
+    : '';
+  return {
+    state: `  let lineStart = true, emittedContent = false, flowDepth = 0;
+  const _flowOpen = new Set([${nl.flowOpen.map(J).join(', ')}]);
+  const _flowClose = new Set([${nl.flowClose.map(J).join(', ')}]);
+  const _nlTok = ${J(nl.token)};
+`,
+    boundary: `    if (flowDepth === 0 && lineStart) {
+      let p = pos;
+      while (p < n && src.charCodeAt(p) === 32) p++;
+      if (p >= n) { pos = p; lineStart = false; continue; }
+      const ch = src.charCodeAt(p);
+      if (ch === 10 || ch === 13) {   // LF/CR only — the interpreter's newline mode rejects LS/PS (gen-lexer.ts blank-line check)
+        pos = p + 1; if (ch === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
+        continue;
+      }
+      if (ch === 9) {
+        let b = p;
+        while (b < n && (src.charCodeAt(b) === 32 || src.charCodeAt(b) === 9)) b++;
+        if (b >= n) { pos = b; continue; }
+        const bc = src.charCodeAt(b);
+        if (bc === 10 || bc === 13) {
+          pos = b + 1; if (bc === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
+          continue;
+        }
+      }
+${commentSkip}      pos = p;
+      if (emittedContent) ${pushFn}(_nlTok, '', pos, pos);
+      lineStart = false;
+      continue;
+    }
+`,
+    ws: `    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
+    if (c === 10 || c === 13) {   // LF/CR only — LS/PS fall through to the unexpected-character throw, matching the interpreter
+      pos++; if (c === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
+      if (flowDepth === 0) lineStart = true;
+      else pendingNl = true;
+      continue;
+    }
+`,
+    hooks: `    if (kind !== _nlTok) emittedContent = true;
+    if (kind === '' && _flowOpen.has(text)) flowDepth++;
+    else if (kind === '' && _flowClose.has(text)) flowDepth = Math.max(0, flowDepth - 1);
+`,
+  };
+}
+
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
-  const stateful = !!(rx || tpl);
-  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken, tpl?.token)).join('\n');
+  const nl = ir.newlineCfg;
+  const stateful = !!(rx || tpl || nl);
+  const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
   const pushFn = stateful ? 'emit' : 'push';
   const puncts = ir.puncts.map((p) =>
     `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}('', ${J(p)}, pos, pos + ${p.length}); pos += ${p.length}; continue; }`).join('\n');
@@ -123,6 +173,7 @@ function lexer(ir: ParserIR): string {
     else if (text === ')') { lastClose = parenHead.pop() ?? false; }
     if (_pav.has(text)) lastBang = prevIsValue();` : '',
     tpl ? `    if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }` : '',
+    nl ? newlineParts(nl, 'emit').hooks : '',
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `\n    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;` : '';
   const emitFn = stateful ? `  function emit(kind: string, text: string, off: number, end: number): void {
@@ -145,17 +196,27 @@ ${emitHooks}
       pos = sp.end; continue;
     }
 ` : '';
+  const nlState = nl ? newlineParts(nl, stateful ? 'emit' : 'push').state : '';
+  const nlBoundary = nl ? newlineParts(nl, stateful ? 'emit' : 'push').boundary : '';
+  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push').ws : `    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
+    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
+`;
+  const pushHooks = nl && !stateful ? newlineParts(nl, 'push').hooks : '';
+  const pushFnDef = stateful ? '' : nl
+    ? `  const push = (kind: string, text: string, off: number, end: number) => {
+${pushHooks}    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;
+  };
+`
+    : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false; };\n';
   return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
   let pendingNl = false;
-${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${stateful ? emitFn : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false; };\n'}  while (pos < n) {
-    const c = src.charCodeAt(pos);
+${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${nlState}${stateful ? emitFn : pushFnDef}  while (pos < n) {
+${nlBoundary}    const c = src.charCodeAt(pos);
     // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
-    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
-    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
-${tplDispatch}${toks}
+${nlWs}${tplDispatch}${toks}
 ${puncts}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));
   }

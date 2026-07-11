@@ -92,6 +92,15 @@ const CASES: Case[] = [
     reject: ['var x = `${ }`;', 'var y = `${a`;', '`${a} ${}`;'],
   },
   {
+    // Newline-only mode (engine-emitted NEWLINE at significant line boundaries; flow suspension).
+    grammar: 'envspec', path: './fixtures/envspec.ts',
+    accept: [
+      'A=1', 'A=1\nB=2', 'A=1\n', 'A=1\n# c\nB=2', 'A=fn(1,\n2)\nB=3',
+      'A=1\n\n\nB=2', '\n\nA=1', 'A=fn(1,\n2)',
+    ],
+    reject: ['A B', 'A=', 'A=1 B=2', 'A=fn(1,'],
+  },
+  {
     // General (non-literal) inline alt: object keys are alt(Ident | Str | Number) — a
     // backtracking alternation of token refs inside a rule sequence.
     grammar: 'altjs', path: './fixtures/altjs.ts',

@@ -11,7 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
 // the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, FirstSig } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig } from './emit-portable.ts';
 import { portableIR } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
@@ -55,9 +55,8 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
-  const stateful = rxTok !== undefined || tplTok !== undefined;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const push = (endE: string) => (t.skip ? `if src[pos..${endE}].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } ` : stateful ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}); ` : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE}, nl: pending_nl }); pending_nl = false; `);
@@ -87,12 +86,62 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): st
   return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
 }
 
+function newlinePartsRs(nl: NewlineCfg): { consts: string; fields: string; init: string; boundary: string; ws: string; hooks: string } {
+  const commentSkip = nl.comment
+    ? `            if src[p..].starts_with(${J(nl.comment)}) { let mut e = p; while e < n && b[e] != 10 { e += 1; } pos = e; continue; }\n`
+    : '';
+  return {
+    consts: `const _NLTOK: &str = ${J(nl.token)};
+const _FLOW_OPEN: &[&str] = ${`&[${nl.flowOpen.map(J).join(', ')}]`};
+const _FLOW_CLOSE: &[&str] = ${`&[${nl.flowClose.map(J).join(', ')}]`};
+`,
+    fields: 'line_start: bool, emitted_content: bool, flow_depth: i64',
+    init: 'line_start: true, emitted_content: false, flow_depth: 0',
+    boundary: `        if st.flow_depth == 0 && st.line_start {
+            let mut p = pos;
+            while p < n && b[p] == 32 { p += 1; }
+            if p >= n { pos = p; st.line_start = false; continue; }
+            let ch = b[p] as u32;
+            if ch == 10 || ch == 13 {
+                pos = p + 1; if ch == 13 && pos < n && b[pos] == 10 { pos += 1; } continue;
+            }
+            if ch == 9 {
+                let mut bb = p;
+                while bb < n && (b[bb] == 32 || b[bb] == 9) { bb += 1; }
+                if bb >= n { pos = bb; continue; }
+                let bc = b[bb] as u32;
+                if bc == 10 || bc == 13 {
+                    pos = bb + 1; if bc == 13 && pos < n && b[pos] == 10 { pos += 1; } continue;
+                }
+            }
+${commentSkip}            pos = p;
+            if st.emitted_content { st.emit(_NLTOK, &src[pos..pos], pos, pos); }
+            st.line_start = false;
+            continue;
+        }
+`,
+    ws: `        if c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos += 1; continue; }
+        if c == 10 || c == 13 {
+            pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
+            if st.flow_depth == 0 { st.line_start = true; } else { st.pending_nl = true; }
+            continue;
+        }
+`,
+    hooks: `        if kind != _NLTOK { self.emitted_content = true; }
+        if kind == "" && _in(_FLOW_OPEN, text) { self.flow_depth += 1; }
+        else if kind == "" && _in(_FLOW_CLOSE, text) { self.flow_depth = (self.flow_depth - 1).max(0); }
+`,
+  };
+}
+
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
-  const stateful = !!(rx || tpl);
-  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken, tpl?.token)).join('\n');
+  const nl = ir.newlineCfg;
+  const nlRs = nl ? newlinePartsRs(nl) : null;
+  const stateful = !!(rx || tpl || nl);
+  const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
   const puncts = ir.puncts.map((p) =>
     `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl }); pending_nl = false;`} pos += ${p.length}; continue; }`).join('\n');
   const rsArr = (a: string[]) => `&[${a.map(J).join(', ')}]`;
@@ -106,7 +155,8 @@ const _MEM: &[&str] = ${rsArr(rx.memberAccess)};
 const _PAV: &[&str] = ${rsArr(rx.postfixAfterValue)};
 const _IDENT: &str = ${J(rx.identToken)};
 fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }
-` : '';
+${nlRs ? nlRs.consts : ''}` : (nlRs ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }
+${nlRs.consts}` : '');
   const tplFn = tpl ? `fn _scan_tpl_span(s: &str, mut p: usize) -> (bool, usize) {
     let n = s.len();
     while p < n {
@@ -120,7 +170,8 @@ fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }
 ` : '';
   const fields = ['toks: Vec<Tok<\'a>>', 'pending_nl: bool',
     rx ? 'prev_text: &\'a str, prev_kind: &\'static str, bp_text: &\'a str, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
-    tpl ? 'template_stack: Vec<i64>' : ''].filter(Boolean).join(', ');
+    tpl ? 'template_stack: Vec<i64>' : '',
+    nlRs ? nlRs.fields : ''].filter(Boolean).join(', ');
   const prevIsValue = rx ? `    fn prev_is_value(&self) -> bool {
         if !self.has_prev { return false; }
         if _in(_PAV, self.prev_text) { return self.last_bang; }
@@ -134,6 +185,7 @@ fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }
         else if text == ")" { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if _in(_PAV, text) { self.last_bang = self.prev_is_value(); }` : '',
     tpl ? `        if !self.template_stack.is_empty() { if text == ${J(tpl.braceOpen)} { *self.template_stack.last_mut().unwrap() += 1; } else if text == ${J(tpl.interpClose)} { *self.template_stack.last_mut().unwrap() -= 1; } }` : '',
+    nlRs ? nlRs.hooks : '',
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `
         self.bp_text = self.prev_text; self.has_prev2 = self.has_prev; self.prev_kind = kind; self.prev_text = text; self.has_prev = true;` : '';
@@ -147,7 +199,8 @@ ${emitHooks}
 ` : '';
   const initFields = ['toks: Vec::new()', 'pending_nl: false',
     rx ? 'prev_text: "", prev_kind: "", bp_text: "", has_prev: false, has_prev2: false, paren_head: Vec::new(), last_close: false, last_bang: false' : '',
-    tpl ? 'template_stack: Vec::new()' : ''].filter(Boolean).join(', ');
+    tpl ? 'template_stack: Vec::new()' : '',
+    nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
   const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && src[pos..].starts_with(${J(tpl.interpClose)}) && *st.template_stack.last().unwrap() == 0 {
@@ -162,17 +215,19 @@ ${emitHooks}
             pos = e; continue;
         }
 ` : '';
+  const nlBoundary = nlRs ? nlRs.boundary : '';
+  const nlWs = nlRs ? nlRs.ws : `        if c == 32 || c == 9 { pos += 1; continue; }
+        if pos + 2 < n && b[pos] == 0xE2 && b[pos + 1] == 0x80 && (b[pos + 2] == 0xA8 || b[pos + 2] == 0xA9) { ${nlVar} = true; pos += 3; continue; }   // LS/PS (UTF-8)
+        if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }   // LF/CR
+`;
   return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
     let b = src.as_bytes();
     let n = b.len();
 ${open}
     let mut pos = 0usize;
     while pos < n {
-        let c = b[pos] as u32;
-        if c == 32 || c == 9 { pos += 1; continue; }
-        if pos + 2 < n && b[pos] == 0xE2 && b[pos + 1] == 0x80 && (b[pos + 2] == 0xA8 || b[pos + 2] == 0xA9) { ${nlVar} = true; pos += 3; continue; }   // LS/PS (UTF-8)
-        if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }   // LF/CR
-${tplDispatch}${toks}
+${nlBoundary}        let c = b[pos] as u32;
+${nlWs}${tplDispatch}${toks}
 ${puncts}
         panic!("lex error at {}", pos);
     }

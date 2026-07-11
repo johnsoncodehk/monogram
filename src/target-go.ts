@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, FirstSig } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig } from './emit-portable.ts';
 import { portableIR } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
@@ -51,9 +51,8 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
-  const stateful = rxTok !== undefined || tplTok !== undefined;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
   const push = (endE: string) => (t.skip ? `if strings.ContainsAny(src[pos:${endE}], "\\n\\r\\u2028\\u2029") { pendingNl = true }; ` : stateful ? `emit(${J(name)}, src[pos:${endE}], pos, ${endE}); ` : `pushTok(${J(name)}, src[pos:${endE}], pos, ${endE}); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
@@ -82,12 +81,59 @@ function scanTok(t: LexTok, defs: string[], rxTok?: string, tplTok?: string): st
   return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(pos); e > pos { ${push('e')}pos = e; continue } }`;
 }
 
+function newlinePartsGo(nl: NewlineCfg, pushFn: string): { state: string; boundary: string; ws: string; hooks: string } {
+  const commentSkip = nl.comment
+    ? `\t\tif strings.HasPrefix(src[p:], ${J(nl.comment)}) { e := p; for e < n && src[e] != 10 { e++ }; pos = e; continue }\n`
+    : '';
+  return {
+    state: `\tlineStart, emittedContent, flowDepth := true, false, 0
+\t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
+\t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
+\tconst _nlTok = ${J(nl.token)}
+`,
+    boundary: `\t\tif flowDepth == 0 && lineStart {
+\t\t\tp := pos
+\t\t\tfor p < n && src[p] == 32 { p++ }
+\t\t\tif p >= n { pos = p; lineStart = false; continue }
+\t\t\tch := int(src[p])
+\t\t\tif ch == 10 || ch == 13 {
+\t\t\t\tpos = p + 1; if ch == 13 && pos < n && src[pos] == 10 { pos++ }; continue
+\t\t\t}
+\t\t\tif ch == 9 {
+\t\t\t\tb := p
+\t\t\t\tfor b < n && (src[b] == 32 || src[b] == 9) { b++ }
+\t\t\t\tif b >= n { pos = b; continue }
+\t\t\t\tbc := int(src[b])
+\t\t\t\tif bc == 10 || bc == 13 {
+\t\t\t\t\tpos = b + 1; if bc == 13 && pos < n && src[pos] == 10 { pos++ }; continue
+\t\t\t\t}
+\t\t\t}
+${commentSkip}\t\t\tpos = p
+\t\t\tif emittedContent { ${pushFn}(_nlTok, "", pos, pos) }
+\t\t\tlineStart = false
+\t\t\tcontinue
+\t\t}
+`,
+    ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
+\t\tif c == 10 || c == 13 {
+\t\t\tpos++; if c == 13 && pos < n && src[pos] == 10 { pos++ }
+\t\t\tif flowDepth == 0 { lineStart = true } else { pendingNl = true }
+\t\t\tcontinue
+\t\t}
+`,
+    hooks: `\t\tif kind != _nlTok { emittedContent = true }
+\t\tif kind == "" && _flowOpen[text] { flowDepth++ } else if kind == "" && _flowClose[text] { if flowDepth > 0 { flowDepth-- } }
+`,
+  };
+}
+
 function lexer(ir: ParserIR): string {
   const defs: string[] = [];
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
-  const stateful = !!(rx || tpl);
-  const toks = ir.tokens.map((t) => scanTok(t, defs, rx?.regexToken, tpl?.token)).join('\n');
+  const nl = ir.newlineCfg;
+  const stateful = !!(rx || tpl || nl);
+  const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
   const pushPunct = stateful ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length})` : (p: string) => `pushTok("", ${J(p)}, pos, pos + ${p.length})`;
   const puncts = ir.puncts.map((p) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`).join('\n');
@@ -132,6 +178,7 @@ function lexer(ir: ParserIR): string {
 \t\t}
 \t\tif _pav[text] { lastBang = prevIsValue() }` : '',
     tpl ? `\t\tif len(templateStack) > 0 { if text == ${J(tpl.braceOpen)} { templateStack[len(templateStack)-1]++ } else if text == ${J(tpl.interpClose)} { templateStack[len(templateStack)-1]-- } }` : '',
+    nl ? newlinePartsGo(nl, 'emit').hooks : '',
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `\n\t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true` : '';
   const emitFn = stateful ? `\temit := func(kind, text string, off, end int) {
@@ -152,19 +199,29 @@ ${emitHooks}
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
-  const pushTokFn = stateful ? '' : `\tpushTok := func(kind, text string, off, end int) { toks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false }\n\t_ = pushTok\n`;
+  const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok').state : '';
+  const nlBoundary = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok').boundary : '';
+  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok').ws : `\t\tif strings.HasPrefix(src[pos:], ${J('\u2028')}) || strings.HasPrefix(src[pos:], ${J('\u2029')}) { pendingNl = true; pos += 3; continue }   // LS/PS (UTF-8)
+\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }   // LF/CR
+\t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
+`;
+  const pushHooks = nl && !stateful ? newlinePartsGo(nl, 'pushTok').hooks : '';
+  const pushTokFn = stateful ? '' : nl
+    ? `\tpushTok := func(kind, text string, off, end int) {
+${pushHooks}\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false
+\t}
+\t_ = pushTok
+`
+    : `\tpushTok := func(kind, text string, off, end int) { toks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false }\n\t_ = pushTok\n`;
   return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
 \ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
 \tpendingNl := false
 \t_ = pendingNl
-${rxState}${tplState}${emitFn}${pushTokFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
-\t\tc := int(src[pos])
-\t\tif strings.HasPrefix(src[pos:], ${J('\u2028')}) || strings.HasPrefix(src[pos:], ${J('\u2029')}) { pendingNl = true; pos += 3; continue }   // LS/PS (UTF-8)
-\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }   // LF/CR
-\t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
-${tplDispatch}${toks}
+${rxState}${tplState}${nlState}${emitFn}${pushTokFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
+${nlBoundary}\t\tc := int(src[pos])
+${nlWs}${tplDispatch}${toks}
 ${puncts}
 \t\tpanic(fmt.Sprintf("lex error at %d", pos))
 \t}
