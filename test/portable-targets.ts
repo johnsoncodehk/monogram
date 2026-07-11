@@ -328,6 +328,7 @@ type EditBatch = [number, number, string][];
 type EditScenario = { init: string; batches: EditBatch[]; large?: boolean; maxRelexed?: number; fullRelex?: boolean };
 const calcLargeInit = '1+2*3+'.repeat(199) + '1+2*3';
 const envspecLargeInit = 'A=1\n'.repeat(300);
+const regexjsLargeInit = 'var r = /abc/g; a / b;\n'.repeat(60);
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
@@ -355,6 +356,14 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]] },
     { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10 },
     { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]] },
+  ],
+  regexjs: [
+    { init: 'var re = /[a-z]+/i; x / y;', batches: [[[11, 12, '0']]] },
+    { init: 'x = a / b / c;', batches: [[[4, 6, '']]] },
+    { init: 'if (x) /y/;', batches: [[[0, 2, 'f']]] },
+    { init: regexjsLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 15 },
+    { init: 'f(x); a / b;', batches: [[[2, 2, '(']]] },
+    { init: 'if (x) /y/;', batches: [[[11, 11, ' /z/;']]] },
   ],
 };
 const applyEdits = (init: string, batches: EditBatch[]): string => {
