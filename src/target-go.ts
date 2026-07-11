@@ -550,6 +550,21 @@ func parse(t []Tok) int32 {
 \tnodes = nodes[:0]; kids = kids[:0]; scratch = scratch[:0]
 \treturn parse${ir.entry}()
 }
+
+type Edit struct { Start, End int; Text string }
+type Doc struct { text string; root int32 }
+func NewDoc(src string) *Doc {
+\td := &Doc{text: src}
+\td.root = parse(tokenize(src))
+\treturn d
+}
+func (d *Doc) Text() string { return d.text }
+func (d *Doc) Root() int32 { return d.root }
+func (d *Doc) Edit(edits []Edit) int32 {
+\tfor _, e := range edits { d.text = d.text[:e.Start] + e.Text + d.text[e.End:] }
+\td.root = parse(tokenize(d.text))
+\treturn d.root
+}
 `;
   },
   emitRunner(): string {
@@ -559,6 +574,7 @@ func parse(t []Tok) int32 {
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -571,7 +587,7 @@ func main() {
 \tdata, _ := io.ReadAll(os.Stdin)
 \tsrc := string(data)
 \t// Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
-\tif len(os.Args) > 1 {
+\tif len(os.Args) > 1 && os.Args[1] != "edit-session" {
 \t\tif iters, err := strconv.Atoi(os.Args[1]); err == nil && iters > 0 {
 \t\t\tfor i := 0; i < 3; i++ { parse(tokenize(src)) }
 \t\t\tt0 := time.Now()
@@ -579,6 +595,27 @@ func main() {
 \t\t\tfmt.Printf("%.4f\\n", float64(time.Since(t0).Nanoseconds())/1e6/float64(iters))
 \t\t\treturn
 \t\t}
+\t}
+\tif len(os.Args) > 1 && os.Args[1] == "edit-session" {
+\t\tvar sess struct {
+\t\t\tInit    string              \`json:"init"\`
+\t\t\tBatches [][][3]interface{}   \`json:"batches"\`
+\t\t}
+\t\tif json.Unmarshal(data, &sess) != nil { os.Exit(1) }
+\t\td := NewDoc(sess.Init)
+\t\tfor _, batch := range sess.Batches {
+\t\t\tedits := make([]Edit, len(batch))
+\t\t\tfor i, t := range batch {
+\t\t\t\tedits[i] = Edit{Start: int(t[0].(float64)), End: int(t[1].(float64)), Text: t[2].(string)}
+\t\t\t}
+\t\t\td.Edit(edits)
+\t\t}
+\t\troot := d.Root()
+\t\tif root < 0 || pos != len(toks) { fmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", pos, len(toks)); os.Exit(1) }
+\t\tvar b strings.Builder
+\t\twriteJSON(root, &b)
+\t\tos.Stdout.WriteString(b.String())
+\t\treturn
 \t}
 \troot := parse(tokenize(src))
 \tif root < 0 || pos != len(toks) {

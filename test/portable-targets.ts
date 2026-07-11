@@ -271,6 +271,28 @@ function runProc(cmd: string, args: string[], src: string): Outcome {
   catch { return { ok: false }; }
 }
 
+type EditBatch = [number, number, string][];
+type EditScenario = { init: string; batches: EditBatch[] };
+const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
+  calc: [
+    { init: '1+2*3', batches: [[[3, 3, '4']]] },
+    { init: '1+2*3', batches: [[[1, 3, '']]] },
+    { init: '1+2*3', batches: [[[2, 5, '(7-8)']]] },
+    { init: '1+2*3', batches: [[[0, 0, '9-']], [[7, 8, '']]] },
+  ],
+  javascript: [
+    { init: 'let a = 1;\nf(a);', batches: [[[8, 9, '42']]] },
+    { init: 'let a = 1;\nf(a);', batches: [[[11, 16, '']]] },
+    { init: 'let a = 1;\nf(a);', batches: [[[4, 5, 'b'], [12, 13, 'b']]] },
+    { init: 'let a = 1;\nf(a);', batches: [[[16, 16, '\ng(b);']], [[0, 4, 'var']]] },
+  ],
+};
+const applyEdits = (init: string, batches: EditBatch[]): string => {
+  let text = init;
+  for (const batch of batches) for (const [start, end, repl] of batch) text = text.slice(0, start) + repl + text.slice(end);
+  return text;
+};
+
 let failures = 0;
 for (const c of CASES) {
   const grammar: CstGrammar = (await import(c.path)).default;
@@ -333,6 +355,27 @@ for (const c of CASES) {
       console.log(`  ${c.grammar}/${r.label}: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
     }
     console.log(`  ${c.grammar}/${r.label}: ${acc}/${c.accept.length} accept ≡ oracle · ${rej}/${c.reject.length} reject ≡ oracle${snap ? ` · ${snap} shape drift` : ''}`);
+
+    const editScenarios = EDIT_SCENARIOS[c.grammar];
+    if (editScenarios) {
+      let editOk = 0;
+      const runEdit = (json: string) => runProc(
+        r.label === 'typescript' ? 'node' : r.label === 'go' ? `${dir}/go/p` : `${dir}/pr`,
+        r.label === 'typescript' ? [`${dir}/p.ts`, 'edit-session'] : ['edit-session'],
+        json,
+      );
+      for (const sc of editScenarios) {
+        const final = applyEdits(sc.init, sc.batches);
+        const a = runEdit(JSON.stringify({ init: sc.init, batches: sc.batches }));
+        const b = r.run(final);
+        if (a.ok === b.ok && (!a.ok || a.cst === b.cst) && a.ok === oracleOut(final).ok) editOk++;
+        else {
+          failures++;
+          console.log(`  ${c.grammar}/${r.label}: edit-session mismatch (final=${JSON.stringify(final)}) A ok=${a.ok} B ok=${b.ok}`);
+        }
+      }
+      console.log(`  ${c.grammar}/${r.label}: ${editOk}/${editScenarios.length} edit-sessions ≡ fresh`);
+    }
   }
 }
 

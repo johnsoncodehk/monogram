@@ -546,6 +546,17 @@ fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
         _ => None,
     }
 }
+
+pub struct Edit { pub start: usize, pub end: usize, pub text: String }
+pub struct Doc { text: String }
+impl Doc {
+    pub fn new(text: String) -> Doc { Doc { text } }
+    pub fn text(&self) -> &str { &self.text }
+    pub fn edit(&mut self, edits: &[Edit]) {
+        for e in edits { let s = e.start; let en = e.end; self.text = format!("{}{}{}", &self.text[..s], e.text, &self.text[en..]); }
+    }
+    pub fn parse(&self) -> Option<(Parser<'_>, i32)> { parse(tokenize(&self.text)) }
+}
 `;
   },
   emitRunner(): string {
@@ -553,12 +564,115 @@ fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
 // CLI runner (harness only): stdin -> CST JSON + a self-bench mode. Appended to the parser
 // library by the gate (same file/crate, so it calls \`parse\`/\`write_json\` directly); NOT part
 // of the parser.
+fn skip_ws(s: &[u8], mut i: usize) -> usize { while i < s.len() && (s[i] as char).is_whitespace() { i += 1; } i }
+fn parse_str(s: &[u8], mut i: usize) -> Option<(String, usize)> {
+    if s.get(i)? != &b'"' { return None; }
+    i += 1;
+    let mut out = String::new();
+    while i < s.len() {
+        match s[i] {
+            b'"' => return Some((out, i + 1)),
+            b'\\\\' => { i += 1; if i >= s.len() { return None; }
+                out.push(match s[i] { b'n' => '\\n', b'r' => '\\r', b't' => '\\t', b'"' => '"', b'\\\\' => '\\\\', b'/' => '/', c => c as char });
+                i += 1; }
+            c => { out.push(c as char); i += 1; }
+        }
+    }
+    None
+}
+fn parse_num(s: &[u8], mut i: usize) -> Option<(usize, usize)> {
+    let start = i;
+    while i < s.len() && s[i].is_ascii_digit() { i += 1; }
+    if i == start { return None; }
+    s[start..i].iter().fold(Some(0usize), |a, &d| a.and_then(|n| n.checked_mul(10).and_then(|m| m.checked_add((d - b'0') as usize))))
+        .map(|n| (n, i))
+}
+fn parse_triple(s: &[u8], mut i: usize) -> Option<((usize, usize, String), usize)> {
+    if s.get(i)? != &b'[' { return None; }
+    i = skip_ws(s, i + 1);
+    let (a, mut i) = parse_num(s, i)?;
+    i = skip_ws(s, i); if s.get(i)? != &b',' { return None; }
+    i = skip_ws(s, i + 1);
+    let (b, mut i) = parse_num(s, i)?;
+    i = skip_ws(s, i); if s.get(i)? != &b',' { return None; }
+    i = skip_ws(s, i + 1);
+    let (t, mut i) = parse_str(s, i)?;
+    i = skip_ws(s, i); if s.get(i)? != &b']' { return None; }
+    Some(((a, b, t), i + 1))
+}
+fn parse_batch(s: &[u8], mut i: usize) -> Option<(Vec<(usize, usize, String)>, usize)> {
+    if s.get(i)? != &b'[' { return None; }
+    i = skip_ws(s, i + 1);
+    let mut batch = Vec::new();
+    if s.get(i)? == &b']' { return Some((batch, i + 1)); }
+    loop {
+        let (t, ni) = parse_triple(s, i)?;
+        batch.push(t);
+        i = skip_ws(s, ni);
+        if s.get(i)? == &b']' { return Some((batch, i + 1)); }
+        if s.get(i)? != &b',' { return None; }
+        i = skip_ws(s, i + 1);
+    }
+}
+fn parse_edit_session(s: &str) -> Option<(String, Vec<Vec<(usize, usize, String)>>)> {
+    let b = s.as_bytes();
+    let mut i = skip_ws(b, 0);
+    if b.get(i)? != &b'{' { return None; }
+    i = skip_ws(b, i + 1);
+    let mut init = None;
+    let mut batches = None;
+    loop {
+        let (key, ni) = parse_str(b, i)?;
+        i = skip_ws(b, ni);
+        if b.get(i)? != &b':' { return None; }
+        i = skip_ws(b, i + 1);
+        if key == "init" {
+            let (v, ni) = parse_str(b, i)?;
+            init = Some(v);
+            i = skip_ws(b, ni);
+        } else if key == "batches" {
+            if b.get(i)? != &b'[' { return None; }
+            i = skip_ws(b, i + 1);
+            let mut bs = Vec::new();
+            if b.get(i)? == &b']' { batches = Some(bs); i += 1; }
+            else {
+                loop {
+                    let (batch, ni) = parse_batch(b, i)?;
+                    bs.push(batch);
+                    i = skip_ws(b, ni);
+                    if b.get(i)? == &b']' { batches = Some(bs); i += 1; break; }
+                    if b.get(i)? != &b',' { return None; }
+                    i = skip_ws(b, i + 1);
+                }
+            }
+        } else { return None; }
+        if b.get(i)? == &b'}' { break; }
+        if b.get(i)? != &b',' { return None; }
+        i = skip_ws(b, i + 1);
+    }
+    Some((init?, batches?))
+}
+
 fn main() {
     use std::io::Read;
     let mut src = String::new();
     std::io::stdin().read_to_string(&mut src).unwrap();
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "edit-session" {
+        let (init, batches) = parse_edit_session(&src).unwrap();
+        let mut doc = Doc::new(init);
+        for batch in &batches {
+            let edits: Vec<Edit> = batch.iter().map(|&(s, e, ref t)| Edit { start: s, end: e, text: t.clone() }).collect();
+            doc.edit(&edits);
+        }
+        match doc.parse() {
+            Some((p, root)) => { let mut out = String::new(); write_json(&p, root, &mut out); print!("{}", out); }
+            None => { eprintln!("parse error"); std::process::exit(1); }
+        }
+        return;
+    }
     // Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
-    if let Some(iters) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) {
+    if let Some(iters) = args.get(1).and_then(|a| a.parse::<u64>().ok()) {
         for _ in 0..3 { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s)) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
         let t = std::time::Instant::now();
         for _ in 0..iters { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s)) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
