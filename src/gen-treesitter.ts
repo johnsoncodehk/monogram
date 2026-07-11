@@ -1313,6 +1313,7 @@ function scopeToCapture(scope: string): string | null {
     ['entity.name.function', '@function'],
     ['entity.name.type', '@type'],
     ['entity.name', '@constructor'],
+    ['entity.other.attribute-name', '@attribute'],
     ['entity.other.document', '@punctuation.delimiter'],  // YAML --- / ... markers
     ['entity.other.property', '@property'],
     ['support.type.primitive', '@type.builtin'],
@@ -1689,6 +1690,29 @@ function buildHighlightsScm(
     }
   }
   out.push('');
+
+  // ── Contextual token scopes (grammar.contextualScopes, highlight-only) ──
+  // Token T carries scope S within rule R (T's immediate enclosing rule) — expressed
+  // exactly as `(rule (token) @capture)` queries. Emitted LAST: highlight resolution is
+  // last-wins (nvim-treesitter / tree-sitter-cli), so these override the token's flat
+  // capture above inside their declared rules only.
+  const ctxQueries: string[] = [];
+  for (const entry of grammar.contextualScopes ?? []) {
+    const cap = scopeToCapture(entry.scope);
+    if (!cap) continue;
+    const tokSnake = ctx.tokenSnake.get(entry.token);
+    if (!tokSnake) continue;
+    for (const ruleName of entry.within) {
+      const ruleSnake = ctx.ruleSnake.get(ruleName);
+      if (!ruleSnake) continue;
+      ctxQueries.push(`(${ruleSnake} (${tokSnake}) ${cap})`);
+    }
+  }
+  if (ctxQueries.length) {
+    out.push(';; Contextual token scopes (grammar.contextualScopes).');
+    for (const q of ctxQueries) out.push(q);
+    out.push('');
+  }
 
   return out.join('\n');
 }

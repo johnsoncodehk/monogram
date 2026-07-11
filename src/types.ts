@@ -23,6 +23,25 @@ export interface TokenDecl {
   scope?: string;         // @scope(...) override
   escapePattern?: TokenPattern; // @escape pattern — escape sequence pattern (highlight only)
   interpolation?: StringInterpolation[]; // highlight-only interpolation regions inside a string token (e.g. `${…}` / `$(…)`)
+  // Highlight-only: this comment-scoped token matches only the INTRODUCER (e.g. a bare `#`)
+  // while the comment runs to end-of-line with content the PARSER still tokenizes (a
+  // structured-comment dialect — env-spec decorator comments). Highlighter generators emit a
+  // to-end-of-line region carrying this token's comment scope so prose dims like any comment;
+  // `richStarters` names tokens that keep FULL token highlighting when one of them (after
+  // optional blanks) opens the comment body (`# @decorator(...)`). The lexer/parser are
+  // unaffected — exactly like `interpolation`, this is generator metadata.
+  // `continuationBrackets`: bracket pairs that, when left OPEN inside a rich comment, continue
+  // the construct across consecutive introducer-prefixed lines (env-spec multi-line decorator
+  // calls/literals — `# @import(` … `#   KEY1,` … `# )`). Each opens a begin/end region that
+  // outlives the line-scoped comment region (a TextMate child region suspends its parent's end),
+  // with the line-start introducer scoped as a continuation marker rather than a new comment.
+  // `markup`: doc-markup patterns highlighted inside PLAIN comment bodies (declared as
+  // token-pattern IR — e.g. `**bold**` / `__italic__` — nothing language-specific here).
+  lineComment?: {
+    richStarters?: string[];
+    continuationBrackets?: [string, string][];
+    markup?: { pattern: TokenPattern; scope: string }[];
+  };
   escapeValidPattern?: TokenPattern; // one well-formed escape; engine-scanned tokens reject non-matching `\`-escapes (skipped in tag position)
   embed?: string;         // @embed(lang) — embedded language scope name
   // ── Lexer hints (keep the engine language-agnostic; all optional) ──
@@ -541,7 +560,13 @@ export interface CstGrammar {
   precs: PrecLevel[];
   ledPrecs?: LedPrec[];
   rules: RuleDecl[];
-  scopeOverrides: Map<string, string[]>;  // literal → scope overrides from `scopes` section (multiple if keyword appears in multiple groups)
+  scopeOverrides: Map<string, string[]>;
+  // Highlight-only CONTEXTUAL token scopes: token T carries scope S when it appears within
+  // rule R (T's immediate enclosing rule). Generators consume this at their own fidelity:
+  // tree-sitter emits exact `(rule (token) @capture)` queries; the TextMate generator applies
+  // the override inside its derived bracket-construct regions (call args, continuation
+  // brackets) — the flat top-level rules keep the token's declared scope.
+  contextualScopes?: { token: string; within: string[]; scope: string }[];  // literal → scope overrides from `scopes` section (multiple if keyword appears in multiple groups)
   name?: string;
   scopeName?: string;  // declared TextMate scope name (e.g. source.ts); its suffix drives every scope's language tag
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue); absent for token-stream languages

@@ -19,6 +19,16 @@ interface TokenOptions {
   // Highlight-only interpolation regions for ordinary string tokens (e.g. env-spec `${…}` / `$(…)`).
   // The parser/lexer stay token-based; generators re-express these as nested regions.
   interpolation?: StringInterpolation | StringInterpolation[];
+  // Highlight-only: this comment token matches only the INTRODUCER (a bare `#`) while the
+  // comment runs to end-of-line with parser-tokenized content (a structured-comment dialect).
+  // Generators emit a to-EOL region in the token's comment scope so prose dims; `richStarters`
+  // lists tokens that keep full token highlighting when one opens the comment body
+  // (e.g. env-spec `# @decorator(...)`). See TokenDecl.lineComment.
+  lineComment?: {
+    richStarters?: TokenRef[];
+    continuationBrackets?: [string, string][];
+    markup?: { pattern: TokenPattern; scope: string }[];
+  };
   // A regex matching exactly one well-formed escape sequence. Engine-scanned tokens
   // (templates) validate each `\`-escape against it and reject any that don't match —
   // unlike `escape` (highlight-only), this drives tokenization. Skipped in tag
@@ -507,6 +517,9 @@ interface GrammarConfig {
   ledPrec?: LedPrec[];
   rules: Record<string, RuleRef>;
   scopes?: Record<string, string[]>;
+  // Highlight-only contextual token scopes: token T carries scope S within rule R (T's
+  // immediate enclosing rule) — see CstGrammar.contextualScopes for generator fidelity.
+  contextualScopes?: { token: TokenRef; within: RuleRef | RuleRef[]; scope: string }[];
   entry: RuleRef;
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML)
@@ -547,6 +560,18 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
         ? (Array.isArray(tok.opts.interpolation) ? tok.opts.interpolation : [tok.opts.interpolation]).map((i) => ({ ...i }))
         : undefined,
       escapeValidPattern: tok.opts.escapeValid,
+      // richStarters are TokenRefs; resolve to declared names (unknown refs are a config error)
+      lineComment: tok.opts.lineComment
+        ? {
+          richStarters: (tok.opts.lineComment.richStarters ?? []).map((ref) => {
+            const refName = names.get(ref);
+            if (!refName) throw new Error(`lineComment.richStarters on token '${name}' references an undeclared token`);
+            return refName;
+          }),
+          continuationBrackets: tok.opts.lineComment.continuationBrackets?.map((pair) => [...pair] as [string, string]),
+          markup: tok.opts.lineComment.markup?.map((m) => ({ ...m })),
+        }
+        : undefined,
       embed: tok.opts.embed,
       identifier: tok.opts.identifier,
       identifierPrefix: tok.opts.identifierPrefix,
@@ -591,5 +616,16 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     }
   }
 
-  return { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
+  const contextualScopes = (config.contextualScopes ?? []).map((entry) => {
+    const tokenName = names.get(entry.token);
+    if (!tokenName) throw new Error('contextualScopes entry references an undeclared token');
+    const withinRefs = Array.isArray(entry.within) ? entry.within : [entry.within];
+    const within = withinRefs.map((ref) => {
+      const ruleName = names.get(ref);
+      if (!ruleName) throw new Error(`contextualScopes entry for token '${tokenName}' references an undeclared rule`);
+      return ruleName;
+    });
+    return { token: tokenName, within, scope: entry.scope };
+  });
+  return { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
 }

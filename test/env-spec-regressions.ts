@@ -6,8 +6,9 @@
 //
 // Run with: node test/env-spec-regressions.ts
 import { createParser } from '../src/gen-parser.ts';
-import { defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy } from '../src/api.ts';
+import { alt, defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy, notPrecededBy } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTreeSitter } from '../src/gen-treesitter.ts';
 
 let ok = 0;
 let fail = 0;
@@ -81,6 +82,194 @@ const check = (label: string, cond: boolean) => {
     threw = true;
   }
   check('parser: multiline inline quoted value is accepted without blockScalar', !threw);
+}
+
+
+// ---------------------------------------------------------------------------
+// Regressions 3–6: structured-comment highlighting — BEHAVIORAL SPEC.
+//
+// These are written against the *rendered output* (vscode-textmate tokenization
+// of a real document), not the generated grammar's internal shape, so they pin
+// the desired outcome independently of how the generators achieve it.
+//
+// The dialect under test is an env-spec-style DSL: comments carry a decorator
+// DSL, so the PARSER must tokenize comment bodies — but a comment is still a
+// comment to a THEME. The contract, line by line:
+//
+//   KEY=fn(retry=3, plain)         KEY = env key; retry = option key (attribute,
+//                                  contextualScopes); plain = positional value
+//   # a note with **bold** mark    prose dims as comment; **bold** = markup
+//   # @dec(opt=1)                  decorator comments keep rich token scopes
+//   # @import(                     an OPEN bracket continues the construct
+//   #   first,                     across `#`-prefixed lines: content keeps its
+//   #   pick=[                     token scopes; the line-start `#` is a
+//   #     ITEM, # aside            continuation marker; `# aside` dims to EOL
+//   #   ],
+//   # )
+//   # after                        construct closed → plain dim comment again
+//
+// And all of it is HIGHLIGHT-ONLY: the parser must produce a byte-identical
+// CST whether or not the highlight metadata is declared.
+// ---------------------------------------------------------------------------
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import vsctm from 'vscode-textmate';
+import onigLib from 'vscode-oniguruma';
+
+const { INITIAL, Registry, parseRawGrammar } = vsctm;
+const { loadWASM, OnigScanner, OnigString } = onigLib;
+const require = createRequire(import.meta.url);
+const wasmBin = readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
+await loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + wasmBin.byteLength));
+
+function makeDialect(withHighlightMetadata: boolean) {
+  const hspace = oneOf(' ', '\t');
+  const alnum = oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'));
+  const WS = token(plus(hspace), { skip: true, scope: 'meta.whitespace' });
+  const DEC_NAME = token(seq('@', plus(alnum)), { scope: 'variable.annotation' });
+  const HASH = token(seq(notPrecededBy(noneOf(' ', '\t', '\n', '\r')), '#'), {
+    scope: 'comment.line',
+    ...(withHighlightMetadata ? {
+      lineComment: {
+        richStarters: [DEC_NAME],
+        continuationBrackets: [['(', ')'], ['[', ']']] as [string, string][],
+        markup: [{ pattern: seq('**', star(noneOf('*', '\n')), '**'), scope: 'markup.bold' }],
+      },
+    } : {}),
+  });
+  const KEY = token(seq(plus(alnum), followedBy('=')), { scope: 'entity.name.tag' });
+  const FN_NAME = token(seq(plus(alnum), followedBy(seq(star(hspace), '('))), { scope: 'variable.function' });
+  const TEXT = token(plus(noneOf(' ', '\t', '\n', '#', '=', '@', '(', ')', '[', ']', ',', '*')), { scope: 'string.unquoted' });
+  const ArgKV = rule(() => [[KEY, '=', TEXT]]);
+  const Arg = rule(() => [ArgKV, TEXT]);
+  const Args = rule(() => [['(', many(alt(Arg, ',', HASH)), ')']]);
+  const Call = rule(() => [[FN_NAME, Args]]);
+  const Part = rule(() => [DEC_NAME, Call, ArgKV, TEXT, KEY, '=', ',', '(', ')', '[', ']', '**']);
+  const Comment = rule(() => [[HASH, many(Part)]]);
+  const Item = rule(() => [[KEY, '=', alt(Call, TEXT), opt(Comment)]]);
+  const Line = rule(() => [Item, Comment]);
+  const File = rule(() => [[many(Line)]]);
+  return defineGrammar({
+    name: 'env-spec-dialect',
+    tokens: { WS, HASH, DEC_NAME, KEY, FN_NAME, TEXT },
+    rules: { ArgKV, Arg, Args, Call, Part, Comment, Item, Line, File },
+    ...(withHighlightMetadata ? {
+      contextualScopes: [{ token: KEY, within: [ArgKV], scope: 'entity.other.attribute-name' }],
+    } : {}),
+    entry: File,
+  });
+}
+
+const DOC = [
+  'KEY=fn(retry=3, plain)',
+  '# a note with **bold** mark',
+  '# @dec(opt=1)',
+  '# @import(',
+  '#   first,',
+  '#   pick=[',
+  '#     ITEM, # aside',
+  '#   ],',
+  '# )',
+  '# after',
+  '# @dec2=someFn(',
+  '#   argone,',
+  '#   keytwo=v,',
+  '# )',
+  'NEXT=ok',
+];
+
+async function tokenizeDoc(grammarDef: ReturnType<typeof makeDialect>) {
+  const tm = generateTmLanguage(grammarDef);
+  const registry = new Registry({
+    onigLib: Promise.resolve({
+      createOnigScanner: (p: string[]) => new OnigScanner(p),
+      createOnigString: (str: string) => new OnigString(str),
+    }),
+    loadGrammar: async (scopeName: string) => scopeName === 'source.env-spec-dialect'
+      ? parseRawGrammar(JSON.stringify(tm), 'g.json') : null,
+  });
+  const grammar = (await registry.loadGrammar('source.env-spec-dialect'))!;
+  let stack = INITIAL;
+  return DOC.map((line) => {
+    const r = grammar.tokenizeLine(line, stack);
+    stack = r.ruleStack;
+    return r.tokens.map((t) => ({ text: line.slice(t.startIndex, t.endIndex), scopes: t.scopes }));
+  });
+}
+
+type Span = { text: string; scopes: string[] };
+// the scopes painted on `text` in DOC line `lineNo` (1-based); nth occurrence via `skip`
+function paint(lines: Span[][], lineNo: number, text: string, skip = 0): string[] {
+  let seen = 0;
+  for (const span of lines[lineNo - 1]) {
+    if (span.text.includes(text) || (text.length > span.text.length && span.text.trim() !== '' && text.includes(span.text.trim()) && span.text.trim().length > 2)) {
+      if (seen === skip) return span.scopes;
+      seen += 1;
+    }
+  }
+  return [];
+}
+const has = (scopes: string[], frag: string) => scopes.some((sc) => sc.includes(frag));
+
+{
+  const lines = await tokenizeDoc(makeDialect(true));
+
+  // ── Regression 3: contextual scopes — the SAME token, three different paints ──
+  check('spec: a top-level env key keeps its declared scope', has(paint(lines, 1, 'KEY'), 'entity.name.tag'));
+  check('spec: an option key inside call args paints as an attribute name', has(paint(lines, 1, 'retry'), 'entity.other.attribute-name'));
+  check('spec: a positional arg value is NOT an attribute name', !has(paint(lines, 1, 'plain'), 'attribute-name') && has(paint(lines, 1, 'plain'), 'string.unquoted'));
+  check('spec: the callee keeps its function scope', has(paint(lines, 1, 'fn'), 'function'));
+
+  // ── Regression 4: plain comments dim; markup highlights ──
+  check('spec: plain comment prose paints as comment, not as a value string', has(paint(lines, 2, 'a note with'), 'comment.line') && !has(paint(lines, 2, 'a note with'), 'string.unquoted'));
+  check('spec: the comment introducer is comment punctuation', has(paint(lines, 2, '#'), 'punctuation.definition.comment'));
+  check('spec: declared markup highlights inside plain comments', has(paint(lines, 2, '**bold**'), 'markup.bold'));
+
+  // ── Regression 5: decorator comments stay rich ──
+  check('spec: a decorator in a rich comment keeps its annotation scope', has(paint(lines, 3, '@dec'), 'variable.annotation'));
+  check('spec: an option key inside a decorator call paints as an attribute name', has(paint(lines, 3, 'opt'), 'entity.other.attribute-name'));
+
+  // ── Regression 6: multi-line constructs — an open bracket continues the construct ──
+  check('spec: construct content on a continuation line keeps its token scope (not dimmed)', has(paint(lines, 5, 'first'), 'string.unquoted'));
+  check('spec: the line-start `#` inside a construct is a continuation marker (comment punctuation)', has(paint(lines, 5, '#'), 'punctuation.definition.comment'));
+  check('spec: a nested option key on a continuation line paints as an attribute name', has(paint(lines, 6, 'pick'), 'entity.other.attribute-name'));
+  check('spec: a nested array element keeps its token scope', has(paint(lines, 7, 'ITEM'), 'string.unquoted'));
+  check('spec: an embedded `# aside` after content dims to end-of-line', has(paint(lines, 7, 'aside'), 'comment.line') && !has(paint(lines, 7, 'aside'), 'string.unquoted'));
+  check('spec: after the construct closes, a plain comment dims again', has(paint(lines, 10, 'after'), 'comment.line') && !has(paint(lines, 10, 'after'), 'string.unquoted'));
+
+  // ── Regression 7: a CALL opening a construct must not leak past its closer ──
+  // `# @dec2=someFn(` … `# )` — the call-args region must be continuation-aware; a
+  // naive callee-anchored region would treat `# )` as an embedded comment, never see
+  // the closer, and swallow the FOLLOWING config item into the comment.
+  check('spec: a call construct keeps continuation content rich', has(paint(lines, 12, 'argone'), 'string.unquoted'));
+  check('spec: a nested option key in a call construct paints as an attribute name', has(paint(lines, 13, 'keytwo'), 'entity.other.attribute-name'));
+  check('spec: the call construct ends at its `# )` closer', has(paint(lines, 15, 'NEXT'), 'entity.name.tag') && !has(paint(lines, 15, 'NEXT'), 'comment'));
+  check('spec: the config item after the construct is not comment-scoped at all', !has(paint(lines, 15, 'ok'), 'comment'));
+}
+
+// ── Highlight metadata is HIGHLIGHT-ONLY: identical CSTs with and without it ──
+{
+  const withMeta = createParser(makeDialect(true));
+  const withoutMeta = createParser(makeDialect(false));
+  const text = DOC.join('\n');
+  const a = JSON.stringify(withMeta.parse(text));
+  const b = JSON.stringify(withoutMeta.parse(text));
+  check('spec: the parser CST is byte-identical with and without highlight metadata', a === b);
+}
+
+// ── Without the metadata, generation is unchanged (the features are opt-in) ──
+{
+  const plainGrammar = makeDialect(false);
+  const tm = generateTmLanguage(plainGrammar);
+  check('spec: without lineComment metadata the comment token stays a flat match', typeof tm.repository.hash?.match === 'string' && tm.repository.hash?.begin === undefined);
+  check('spec: without contextualScopes no construct regions are derived', !Object.keys(tm.repository).some((k) => k.startsWith('ctx-')));
+}
+
+// ── tree-sitter: the same contextualScopes declaration becomes exact queries ──
+{
+  const ts = generateTreeSitter(makeDialect(true), 'env-spec-dialect');
+  check('spec: tree-sitter emits an exact rule-scoped capture for the contextual scope', ts.highlightsScm.includes('(arg_kv (key) @attribute)'));
+  check('spec: contextual captures come last (highlight resolution is last-wins)', ts.highlightsScm.lastIndexOf('(arg_kv (key) @attribute)') > ts.highlightsScm.lastIndexOf('] @'));
 }
 
 console.log(
