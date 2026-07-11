@@ -271,7 +271,7 @@ function runProc(cmd: string, args: string[], src: string): Outcome {
   try { return { ok: true, cst: canon(JSON.parse(execFileSync(cmd, args, { input: src, stdio: ['pipe', 'pipe', 'pipe'] }).toString())) }; }
   catch { return { ok: false }; }
 }
-type Align = { oldN: number; newN: number; prefix: number; suffix: number };
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; streamEq?: boolean };
 type EditOutcome = Outcome & { align?: Align };
 function parseAlignStderr(stderr: string): Align | undefined {
   for (const line of stderr.split('\n')) {
@@ -325,21 +325,28 @@ const expectAlign = (g: CstGrammar, init: string, batches: EditBatch[]): Align =
 };
 
 type EditBatch = [number, number, string][];
-type EditScenario = { init: string; batches: EditBatch[]; large?: boolean };
+type EditScenario = { init: string; batches: EditBatch[]; large?: boolean; maxRelexed?: number; fullRelex?: boolean };
+const calcLargeInit = '1+2*3+'.repeat(199) + '1+2*3';
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
     { init: '1+2*3', batches: [[[1, 3, '']]] },
     { init: '1+2*3', batches: [[[2, 5, '(7-8)']]] },
     { init: '1+2*3', batches: [[[0, 0, '9-']], [[7, 8, '']]] },
-    { init: '1+2*3+'.repeat(199) + '1+2*3', batches: [[[600, 601, '9']]], large: true },
+    { init: calcLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 8 },
+    { init: '1 2;', batches: [[[1, 2, '']]] },
+    { init: calcLargeInit, batches: [[[calcLargeInit.length, calcLargeInit.length, '+4']]], maxRelexed: 5 },
+    { init: calcLargeInit, batches: [[[0, 1, '9']]], maxRelexed: 8 },
   ],
   javascript: [
-    { init: 'let a = 1;\nf(a);', batches: [[[8, 9, '42']]] },
-    { init: 'let a = 1;\nf(a);', batches: [[[11, 16, '']]] },
-    { init: 'let a = 1;\nf(a);', batches: [[[4, 5, 'b'], [12, 13, 'b']]] },
-    { init: 'let a = 1;\nf(a);', batches: [[[16, 16, '\ng(b);']], [[0, 4, 'var']]] },
-    { init: 'let a = 1;\nf(a);\n'.repeat(80), batches: [[[688, 689, '9']]], large: true },
+    { init: 'let a = 1;\nf(a);', batches: [[[8, 9, '42']]], fullRelex: true },
+    { init: 'let a = 1;\nf(a);', batches: [[[11, 16, '']]], fullRelex: true },
+    { init: 'let a = 1;\nf(a);', batches: [[[4, 5, 'b'], [12, 13, 'b']]], fullRelex: true },
+    { init: 'let a = 1;\nf(a);', batches: [[[16, 16, '\ng(b);']], [[0, 4, 'var']]], fullRelex: true },
+    { init: 'let a = 1;\nf(a);\n'.repeat(80), batches: [[[688, 689, '9']]], large: true, fullRelex: true },
+  ],
+  envspec: [
+    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]], fullRelex: true },
   ],
 };
 const applyEdits = (init: string, batches: EditBatch[]): string => {
@@ -432,6 +439,18 @@ for (const c of CASES) {
           if (sc.large && want.prefix + want.suffix < want.oldN - 8) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: large-doc align too narrow prefix+suffix=${want.prefix + want.suffix} oldN=${want.oldN}`);
+          }
+          if (a.align.streamEq !== true) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: streamEq want=true got=${JSON.stringify(a.align.streamEq)}`);
+          }
+          if (sc.maxRelexed !== undefined && (a.align.relexed === undefined || a.align.relexed > sc.maxRelexed)) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: relexed want<=${sc.maxRelexed} got=${JSON.stringify(a.align.relexed)}`);
+          }
+          if (sc.fullRelex && a.align.relexed !== want.newN) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: fullRelex want relexed=${want.newN} got=${JSON.stringify(a.align.relexed)}`);
           }
         } else {
           failures++;

@@ -213,19 +213,38 @@ ${pushHooks}\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl}); pendi
 \t_ = pushTok
 `
     : `\tpushTok := func(kind, text string, off, end int) { toks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false }\n\t_ = pushTok\n`;
-  return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
+  const pushTokAccFn = `\tpushTok := func(kind, text string, off, end int) { *acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false }
+\t_ = pushTok
+`;
+  const loopBody = `${nlBoundary}\t\tc := int(src[pos])
+${nlWs}${tplDispatch}${toks}
+${puncts}
+\t\tpanic(fmt.Sprintf("lex error at %d", pos))`;
+  if (stateful) {
+    return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
 \ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
 \tpendingNl := false
 \t_ = pendingNl
 ${rxState}${tplState}${nlState}${emitFn}${pushTokFn}${defs.length ? '\t_s = src\n' : ''}\tfor pos < n {
-${nlBoundary}\t\tc := int(src[pos])
-${nlWs}${tplDispatch}${toks}
-${puncts}
-\t\tpanic(fmt.Sprintf("lex error at %d", pos))
+${loopBody}
 \t}
 \treturn toks
+}`;
+  }
+  return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
+\tn := len(src)
+${pushTokAccFn}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
+\tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
+${loopBody}
+\t}
+\treturn pos, pendingNl
+}
+func lex(src string) []Tok {
+\tvar out []Tok
+\tlexFrom(src, 0, false, &out, 0)
+\treturn out
 }`;
 }
 
@@ -370,6 +389,159 @@ ${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes);
 \t}()
 \t_capped = false
 \treturn _r
+}`;
+}
+
+function docEditBlockGo(ir: ParserIR): string {
+  const stateless = !(ir.regexCtx || ir.tpl || ir.newlineCfg);
+  const windowHelpers = stateless ? `
+func findTokAtOff(toks []alignMeta, off int) int {
+\tlo, hi := 0, len(toks)-1
+\tfor lo <= hi {
+\t\tmid := (lo + hi) >> 1
+\t\tif toks[mid].Off < off { lo = mid + 1 } else if toks[mid].Off > off { hi = mid - 1 } else { return mid }
+\t}
+\treturn -1
+}
+func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
+\tdelta := len(ins) - (end - start)
+\teditEnd := start + len(ins)
+\tmaxIdx := -1
+\tfor i := 0; i < len(oldToks); i++ {
+\t\tif oldToks[i].End < start { maxIdx = i } else { break }
+\t}
+\trb := -1
+\tif maxIdx >= 0 { rb = maxIdx - 1 }
+\tvar out []alignMeta
+\tif rb >= 0 { out = append(out, oldToks[:rb+1]...) }
+\tscanOff := 0
+\tif rb >= 0 { scanOff = oldToks[rb].End }
+\tpendingNl := false
+\tvar scratch []Tok
+\trelexed := 0
+\tfor scanOff < len(newText) {
+\t\tbefore := len(scratch)
+\t\tscanOff, pendingNl = lexFrom(newText, scanOff, pendingNl, &scratch, 1)
+\t\tif len(scratch) == before { break }
+\t\tt := scratch[len(scratch)-1]
+\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl})
+\t\trelexed++
+\t\tif t.Off >= editEnd {
+\t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
+\t\t\tif oIdx >= 0 {
+\t\t\t\to := oldToks[oIdx]
+\t\t\t\tif o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+\t\t\t\t\tfor j := oIdx + 1; j < len(oldToks); j++ {
+\t\t\t\t\t\tot := oldToks[j]
+\t\t\t\t\t\tout = append(out, alignMeta{ot.Kind, ot.Off + delta, ot.End + delta, ot.Nl})
+\t\t\t\t\t}
+\t\t\t\t\treturn out, relexed
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+\treturn out, relexed
+}
+` : '';
+  const editBody = stateless
+    ? `\tcurText := d.text
+\tcurToks := d.toks
+\tfor _, e := range edits {
+\t\tstepOldText, stepOldToks := curText, curToks
+\t\tn := len(curText)
+\t\tstart, end := e.Start, e.End
+\t\tif start < 0 { start = 0 }
+\t\tif start > n { start = n }
+\t\tif end < start { end = start }
+\t\tif end > n { end = n }
+\t\tins := e.Text
+\t\tcurText = curText[:start] + ins + curText[end:]
+\t\tvar stepRelexed int
+\t\tcurToks, stepRelexed = windowRelexStep(stepOldText, stepOldToks, curText, start, end, ins)
+\t\trelexed += stepRelexed
+\t}
+\td.text = curText
+\td.toks = curToks`
+    : `\tfor _, e := range edits { d.text = applyEdit(d.text, e) }
+\tnewToks := tokenize(d.text)
+\td.toks = toMeta(newToks)
+\trelexed = len(d.toks)`;
+  return `type Edit struct { Start, End int; Text string }
+type alignMeta struct { Kind string; Off, End int; Nl bool }
+type Align struct {
+\tOldN     int  \`json:"oldN"\`
+\tNewN     int  \`json:"newN"\`
+\tPrefix   int  \`json:"prefix"\`
+\tSuffix   int  \`json:"suffix"\`
+\tRelexed  int  \`json:"relexed"\`
+\tStreamEq bool \`json:"streamEq"\`
+}
+func toMeta(toks []Tok) []alignMeta {
+\tm := make([]alignMeta, len(toks))
+\tfor i, t := range toks { m[i] = alignMeta{t.Kind, t.Off, t.End, t.Nl} }
+\treturn m
+}
+func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
+\toldN, newN = len(oldToks), len(newToks)
+\tfor prefix < oldN && prefix < newN {
+\t\to, n := oldToks[prefix], newToks[prefix]
+\t\tif o.Kind != n.Kind || o.Off != n.Off || o.End != n.End || o.Nl != n.Nl { break }
+\t\tif oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
+\t\tprefix++
+\t}
+\tdelta := len(newText) - len(oldText)
+\tminN := oldN; if newN < minN { minN = newN }
+\tfor prefix+suffix < minN {
+\t\to, n := oldToks[oldN-1-suffix], newToks[newN-1-suffix]
+\t\tif o.Kind != n.Kind || o.Nl != n.Nl || n.Off != o.Off+delta || n.End != o.End+delta { break }
+\t\tif oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
+\t\tsuffix++
+\t}
+\treturn
+}
+func toksFromMeta(text string, meta []alignMeta) []Tok {
+\tt := make([]Tok, len(meta))
+\tfor i, m := range meta { t[i] = Tok{m.Kind, text[m.Off:m.End], m.Off, m.End, m.Nl} }
+\treturn t
+}
+func checkStreamEq(text string, meta []alignMeta) bool {
+\tfresh := toMeta(tokenize(text))
+\tif len(fresh) != len(meta) { return false }
+\tfor i := range fresh {
+\t\tf, m := fresh[i], meta[i]
+\t\tif f.Kind != m.Kind || f.Off != m.Off || f.End != m.End || f.Nl != m.Nl { return false }
+\t\tif text[f.Off:f.End] != text[m.Off:m.End] { return false }
+\t}
+\treturn true
+}
+${windowHelpers}type Doc struct { text string; root int32; toks []alignMeta; align *Align }
+func NewDoc(src string) *Doc {
+\td := &Doc{text: src}
+\td.toks = toMeta(tokenize(src))
+\td.root = parse(tokenize(src))
+\treturn d
+}
+func (d *Doc) Text() string { return d.text }
+func (d *Doc) Root() int32 { return d.root }
+func (d *Doc) Align() *Align { return d.align }
+func applyEdit(text string, e Edit) string {
+\tn := len(text)
+\tstart, end := e.Start, e.End
+\tif start < 0 { start = 0 }
+\tif start > n { start = n }
+\tif end < start { end = start }
+\tif end > n { end = n }
+\treturn text[:start] + e.Text + text[end:]
+}
+func (d *Doc) Edit(edits []Edit) int32 {
+\toldText, oldToks := d.text, d.toks
+\trelexed := 0
+${editBody}
+\tstreamEq := checkStreamEq(d.text, d.toks)
+\toldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
+\td.align = &Align{oldN, newN, prefix, suffix, relexed, streamEq}
+\td.root = parse(toksFromMeta(d.text, d.toks))
+\treturn d.root
 }`;
 }
 
@@ -551,68 +723,7 @@ func parse(t []Tok) int32 {
 \treturn parse${ir.entry}()
 }
 
-type Edit struct { Start, End int; Text string }
-type alignMeta struct { Kind string; Off, End int; Nl bool }
-type Align struct {
-\tOldN    int \`json:"oldN"\`
-\tNewN    int \`json:"newN"\`
-\tPrefix  int \`json:"prefix"\`
-\tSuffix  int \`json:"suffix"\`
-}
-func toMeta(toks []Tok) []alignMeta {
-\tm := make([]alignMeta, len(toks))
-\tfor i, t := range toks { m[i] = alignMeta{t.Kind, t.Off, t.End, t.Nl} }
-\treturn m
-}
-func computeAlign(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) Align {
-\toldN, newN := len(oldToks), len(newToks)
-\tprefix := 0
-\tfor prefix < oldN && prefix < newN {
-\t\to, n := oldToks[prefix], newToks[prefix]
-\t\tif o.Kind != n.Kind || o.Off != n.Off || o.End != n.End || o.Nl != n.Nl { break }
-\t\tif oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
-\t\tprefix++
-\t}
-\tdelta := len(newText) - len(oldText)
-\tminN := oldN; if newN < minN { minN = newN }
-\tsuffix := 0
-\tfor prefix+suffix < minN {
-\t\to, n := oldToks[oldN-1-suffix], newToks[newN-1-suffix]
-\t\tif o.Kind != n.Kind || o.Nl != n.Nl || n.Off != o.Off+delta || n.End != o.End+delta { break }
-\t\tif oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
-\t\tsuffix++
-\t}
-\treturn Align{oldN, newN, prefix, suffix}
-}
-type Doc struct { text string; root int32; toks []alignMeta; align *Align }
-func NewDoc(src string) *Doc {
-\td := &Doc{text: src}
-\td.toks = toMeta(tokenize(src))
-\td.root = parse(tokenize(src))
-\treturn d
-}
-func (d *Doc) Text() string { return d.text }
-func (d *Doc) Root() int32 { return d.root }
-func (d *Doc) Align() *Align { return d.align }
-func applyEdit(text string, e Edit) string {
-\tn := len(text)
-\tstart, end := e.Start, e.End
-\tif start < 0 { start = 0 }
-\tif start > n { start = n }
-\tif end < start { end = start }
-\tif end > n { end = n }
-\treturn text[:start] + e.Text + text[end:]
-}
-func (d *Doc) Edit(edits []Edit) int32 {
-\toldText, oldToks := d.text, d.toks
-\tfor _, e := range edits { d.text = applyEdit(d.text, e) }
-\tnewToks := tokenize(d.text)
-\td.toks = toMeta(newToks)
-\ta := computeAlign(oldText, oldToks, d.text, d.toks)
-\td.align = &a
-\td.root = parse(newToks)
-\treturn d.root
-}
+${docEditBlockGo(ir)}
 `;
   },
   emitRunner(): string {
