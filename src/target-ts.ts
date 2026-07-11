@@ -473,15 +473,48 @@ export function parse(tokens: Tok[]): Cst | null {
 }
 
 export type Edit = { start: number; end: number; text: string };
-export function createDoc(src: string): { text(): string; root(): Node | null; edit(edits: Edit[]): Node | null } {
+type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
+type Align = { oldN: number; newN: number; prefix: number; suffix: number };
+const toMeta = (toks: Tok[]): AlignMeta[] => toks.map((t) => ({ kind: t.kind, off: t.off, end: t.end, nl: t.nl }));
+function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Align {
+  const oldN = oldToks.length, newN = newToks.length;
+  let prefix = 0;
+  while (prefix < oldN && prefix < newN) {
+    const o = oldToks[prefix], n = newToks[prefix];
+    if (o.kind !== n.kind || o.off !== n.off || o.end !== n.end || o.nl !== n.nl) break;
+    if (oldText.slice(o.off, o.end) !== newText.slice(n.off, n.end)) break;
+    prefix++;
+  }
+  const delta = newText.length - oldText.length;
+  const minN = Math.min(oldN, newN);
+  let suffix = 0;
+  while (prefix + suffix < minN) {
+    const o = oldToks[oldN - 1 - suffix], n = newToks[newN - 1 - suffix];
+    if (o.kind !== n.kind || o.nl !== n.nl || n.off !== o.off + delta || n.end !== o.end + delta) break;
+    if (oldText.slice(o.off, o.end) !== newText.slice(n.off, n.end)) break;
+    suffix++;
+  }
+  return { oldN, newN, prefix, suffix };
+}
+export function createDoc(src: string): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
   let text = src;
+  let prevToks = toMeta(tokenize(src));
+  let align: Align | null = null;
   let root: Node | null = parse(tokenize(src));
   return {
     text(): string { return text; },
     root(): Node | null { return root; },
+    align(): Align | null { return align; },
     edit(edits: Edit[]): Node | null {
-      for (const e of edits) text = text.slice(0, e.start) + e.text + text.slice(e.end);
-      root = parse(tokenize(text));
+      const oldText = text, oldToks = prevToks;
+      for (const e of edits) {
+        const n = text.length, start = Math.max(0, Math.min(e.start, n)), end = Math.max(start, Math.min(e.end, n));
+        text = text.slice(0, start) + e.text + text.slice(end);
+      }
+      const newToks = tokenize(text);
+      prevToks = toMeta(newToks);
+      align = computeAlign(oldText, oldToks, text, prevToks);
+      root = parse(newToks);
       return root;
     },
   };
@@ -497,6 +530,8 @@ if (process.argv.includes('edit-session')) {
   const { init, batches } = JSON.parse(_raw) as { init: string; batches: [number, number, string][][] };
   const doc = createDoc(init);
   for (const batch of batches) doc.edit(batch.map(([start, end, text]) => ({ start, end, text })));
+  const a = doc.align();
+  if (a) process.stderr.write(JSON.stringify(a) + '\\n');
   const root = doc.root();
   if (root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
   process.stdout.write(JSON.stringify(root));
