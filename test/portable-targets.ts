@@ -358,6 +358,17 @@ const calcLongBatches: EditBatch[] = Array.from({ length: 24 }, (_, i) => {
   return [[at, at + 1, String((i * 7 + 3) % 10)]] as EditBatch;
 });
 const envspecLargeInit = 'A=1\n'.repeat(300);
+const envReuseInit = Array.from({ length: 40 }, (_, i) => `K${i}=${i}`).join('\n');
+const envReuseMid = envReuseInit.indexOf('K20=') + 'K20='.length;
+const envReuseFirstEq = envReuseInit.indexOf('=') + 1;
+const envReuseLastEq = envReuseInit.lastIndexOf('=') + 1;
+const envFlowInit = 'A=1\nB=fn(a,\nb)\nC=3';
+const envFlowEdit = envFlowInit.indexOf('fn(a') + 'fn('.length; // 'a' inside hanging flow stmt
+const envMultiBatches: EditBatch[] = [
+  [[envReuseMid, envReuseMid + 1, '9']],
+  [[envReuseInit.indexOf('K5=') + 'K5='.length, envReuseInit.indexOf('K5=') + 'K5='.length + 1, '7']],
+  [[envReuseLastEq, envReuseLastEq + 1, '8']],
+];
 const regexjsLargeInit = 'var r = /abc/g; a / b;\n'.repeat(60);
 const jsLookaheadInit = 'let x = (a)\nfoo;\nbar;';
 const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peeked-into second stmt
@@ -408,14 +419,24 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: '`a`; z; `b${x}c`;', batches: [[[5, 6, 'w']]] },
   ],
   envspec: [
-    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]], reused: 0 },
-    { init: envspecLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 10, reused: 0 },
+    // Existing scenes — reused pinned from S8 measurement (was 0 under shape-A-only).
+    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]], minReused: 1 },
+    { init: envspecLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 10, minReused: 200 },
+    // Comma→digit rejects the doc → full-parse fallback, reused:0.
     { init: 'A=fn(1,\n2)\nB=3', batches: [[[6, 7, '9']]], reused: 0 },
     { init: 'A=fn(1,\n2)\nB=3', batches: [[[4, 4, '(']]], reused: 0 },
-    { init: 'A=1\n# note\nB=2', batches: [[[7, 7, 'x']]], reused: 0 },
-    { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]], reused: 0 },
-    { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10, reused: 0 },
-    { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]], reused: 0 },
+    { init: 'A=1\n# note\nB=2', batches: [[[7, 7, 'x']]], minReused: 1 },
+    { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]], minReused: 1 },
+    { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10, minReused: 200 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]], minReused: 1 },
+    // S8 segment-reuse scenes
+    { init: envReuseInit, batches: [[[envReuseMid, envReuseMid + 1, '9']]], minReused: 30 },
+    { init: envReuseInit, batches: [[[envReuseFirstEq, envReuseFirstEq + 1, '9']]], minReused: 1 },
+    { init: envReuseInit, batches: [[[envReuseLastEq, envReuseLastEq + 1, '9']]], minReused: 1 },
+    { init: 'A=1\n\n\n\nB=2', batches: [[[4, 5, '']]], minReused: 1 }, // blank-line fold
+    { init: 'A=1\n\nB=2', batches: [[[4, 4, '\n']]], minReused: 1 }, // blank-line expand
+    { init: envFlowInit, batches: [[[envFlowEdit, envFlowEdit + 1, 'x']]], minReused: 2 }, // mid flow stmt; sides reused
+    { init: envReuseInit, batches: envMultiBatches, longSession: true, minReused: 1 },
   ],
   regexjs: [
     { init: 'var re = /[a-z]+/i; x / y;', batches: [[[11, 12, '0']]] },
