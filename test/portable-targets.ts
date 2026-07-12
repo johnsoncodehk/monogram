@@ -271,6 +271,11 @@ function runProc(cmd: string, args: string[], src: string): Outcome {
   try { return { ok: true, cst: canon(JSON.parse(execFileSync(cmd, args, { input: src, stdio: ['pipe', 'pipe', 'pipe'] }).toString())) }; }
   catch { return { ok: false }; }
 }
+function runTokSpans(cmd: string, args: string[], src: string): string | null {
+  const r = spawnSync(cmd, args, { input: src, encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  return r.stdout;
+}
 type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; streamEq?: boolean };
 type EditOutcome = Outcome & { align?: Align };
 function parseAlignStderr(stderr: string): Align | undefined {
@@ -412,6 +417,117 @@ for (const c of CASES) {
     writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
     execFileSync('rustc', ['-O', '-A', 'warnings', rfile, '-o', `${dir}/pr`], { stdio: 'pipe' });
     runners.push({ label: 'rust', run: (src) => runProc(`${dir}/pr`, [], src) });
+  }
+
+  // tok-spans: top-level kids record parse-consumption [tokStart, tokEnd); cross-target
+  // identity + contiguous partition of the consumed token stream. Empty accept inputs are
+  // still run (identity), but contiguous checks skip when there are no kids.
+  // envspec: Newline tokens are zero-width in the byte sense but still occupy a token index;
+  // if contiguous ever fails here, partition by grammar with evidence rather than relaxing.
+  {
+    const spanRunners: Array<{ label: string; cmd: string; args: string[] }> = [
+      { label: 'typescript', cmd: 'node', args: [tsFile, 'tok-spans'] },
+    ];
+    if (HAS_GO && !c.tsOnly) spanRunners.push({ label: 'go', cmd: `${dir}/go/p`, args: ['tok-spans'] });
+    if (HAS_RUST && !c.tsOnly) spanRunners.push({ label: 'rust', cmd: `${dir}/pr`, args: ['tok-spans'] });
+
+    const parseSpans = (out: string) => {
+      const lines = out.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd().split('\n').filter(Boolean);
+      const totalLine = lines[lines.length - 1]!;
+      const kids = lines.slice(0, -1).map((line) => {
+        const [name, a, b] = line.split('\t');
+        return { name: name!, tokStart: Number(a), tokEnd: Number(b) };
+      });
+      const [, , tot] = totalLine.split('\t');
+      return { kids, total: Number(tot) };
+    };
+    const assertPartition = (src: string, out: string, label: string) => {
+      const { kids, total } = parseSpans(out);
+      if (kids.length === 0) {
+        if (total !== 0) {
+          failures++;
+          console.log(`  ${c.grammar}/${label}: tok-spans empty kids but total=${total} on ${JSON.stringify(src)}`);
+        }
+        return;
+      }
+      if (kids[0]!.tokStart !== 0) {
+        failures++;
+        console.log(`  ${c.grammar}/${label}: tok-spans first tokStart want=0 got=${kids[0]!.tokStart} on ${JSON.stringify(src)}`);
+      }
+      if (kids[kids.length - 1]!.tokEnd !== total) {
+        failures++;
+        console.log(`  ${c.grammar}/${label}: tok-spans last tokEnd want=${total} got=${kids[kids.length - 1]!.tokEnd} on ${JSON.stringify(src)}`);
+      }
+      for (let i = 0; i < kids.length; i++) {
+        const k = kids[i]!;
+        if (k.tokStart > k.tokEnd) {
+          failures++;
+          console.log(`  ${c.grammar}/${label}: tok-spans inverted span ${k.name} [${k.tokStart},${k.tokEnd}) on ${JSON.stringify(src)}`);
+        }
+        if (i > 0 && kids[i - 1]!.tokEnd !== k.tokStart) {
+          failures++;
+          console.log(`  ${c.grammar}/${label}: tok-spans gap/overlap at kid ${i}: prevEnd=${kids[i - 1]!.tokEnd} start=${k.tokStart} on ${JSON.stringify(src)}`);
+          console.log(`      spans:\n${out}`);
+        }
+      }
+    };
+
+    const cases = c.accept.slice(0, 2);
+    for (const src of cases) {
+      const outs: Array<{ label: string; out: string | null }> = spanRunners.map((r) => ({
+        label: r.label,
+        out: runTokSpans(r.cmd, r.args, src),
+      }));
+      const ref = outs[0]!;
+      if (ref.out === null) {
+        failures++;
+        console.log(`  ${c.grammar}/${ref.label}: tok-spans reject/fail on accept case ${JSON.stringify(src)}`);
+        continue;
+      }
+      for (const o of outs.slice(1)) {
+        if (o.out === null) {
+          failures++;
+          console.log(`  ${c.grammar}/${o.label}: tok-spans reject/fail on accept case ${JSON.stringify(src)}`);
+          continue;
+        }
+        if (o.out !== ref.out) {
+          failures++;
+          console.log(`  ${c.grammar}: tok-spans cross-target mismatch ${ref.label}≢${o.label} on ${JSON.stringify(src)}`);
+          console.log(`      ${ref.label}: ${JSON.stringify(ref.out)}`);
+          console.log(`      ${o.label}: ${JSON.stringify(o.out)}`);
+        }
+      }
+      for (const o of outs) {
+        if (o.out !== null) assertPartition(src, o.out, o.label);
+      }
+    }
+
+    if (c.grammar === 'calc') {
+      const src = 'let a=1;\n2+3;\nlet b=a;';
+      const out = runTokSpans(spanRunners[0]!.cmd, spanRunners[0]!.args, src);
+      if (out === null) {
+        failures++;
+        console.log(`  calc: tok-spans reject on trailing-punct probe`);
+      } else {
+        for (const r of spanRunners.slice(1)) {
+          const o = runTokSpans(r.cmd, r.args, src);
+          if (o !== out) {
+            failures++;
+            console.log(`  calc: tok-spans cross-target mismatch on trailing-punct probe (${r.label})`);
+          }
+        }
+        const { kids } = parseSpans(out);
+        const first = kids[0];
+        if (!first || first.tokEnd !== 5) {
+          failures++;
+          console.log(`  calc: first Stmt tokEnd want=5 got=${first?.tokEnd} (name=${first?.name}) on trailing-punct probe`);
+          console.log(`      spans:\n${out}`);
+        } else {
+          console.log(`  calc: tok-spans trailing-punct Stmt tokEnd=5 ✓`);
+        }
+      }
+    }
+    console.log(`  ${c.grammar}: tok-spans checked on ${cases.length} accept case(s)${c.grammar === 'calc' ? ' + trailing-punct probe' : ''}`);
   }
 
   for (const r of runners) {

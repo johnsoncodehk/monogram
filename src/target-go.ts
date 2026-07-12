@@ -408,7 +408,7 @@ function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
 
 function rdRule(r: RdRule): string {
   if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save)) } }`;
+    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save), save) } }`;
     return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \tt := peek(); if t == nil { return -1 }
@@ -418,7 +418,7 @@ ${r.alts.map(arm).join(' ')}
 }`;
   }
   const alt = (steps: Step[]) =>
-    `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save)) }
+    `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save), save) }
 \tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
   return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
@@ -433,7 +433,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\tnode := matchTemplate()
 \t\tif node < 0 { return -1 }
 \t\tsb := len(scratch); scratch = append(scratch, node)
-\t\treturn finish(${J(r.cstName)}, sb, nodes[node].Offset)
+\t\treturn finish(${J(r.cstName)}, sb, nodes[node].Offset, nodes[node].TokStart)
 \t}\n`
     : '';
   const bin = r.binary.map((b) => `${J(b.op)}: {${b.lbp}, ${b.rbp}}`).join(', ');
@@ -441,24 +441,24 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const atoms = r.nudToks.map((k) => `${J(k)}: true`).join(', ');
   const bracketNud = (b: Bracket) => `\tif t.Text == ${J(b.first)} {
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
-\t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off) }
+\t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off, save) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
   const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.Nl && ' : ''}${nll ? `!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left)) && ` : ''}!_suppressCur[${J(b.first)}] && t.Text == ${J(b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
-\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue }
+\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue }
 \t\t\tpos = ledSave; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break
 \t\t}`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
 \t\tif !tailClosed && t.Kind == "$templateHead" {
 \t\t\tnode := matchTemplate()
-\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue }
+\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue }
 \t\t}` : '';
     return `\t\tif !tailClosed && t.Kind == ${J(tok)} {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf(t.Kind, t.Off, t.End)); pos++
-\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue
+\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue
 \t\t}${tplPart}`;
   };
   const post = r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ');
@@ -486,7 +486,7 @@ ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[
 ${r.postfixToks.map(postfixArm).join('\n')}
 \t\tif post, ok := ${r.name}POST[t.Text]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End)); pos++; tailClosed = true
-\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue
+\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue
 \t\t}
 \t\tinfo, ok := ${r.name}BIN[t.Text]
 \t\tif !ok || info.lbp <= minBp { break }
@@ -496,7 +496,7 @@ ${r.postfixToks.map(postfixArm).join('\n')}
 \t\trhs := ${r.name}bp(info.rbp)
 \t\tif rhs < 0 { pos = ledSave; scratch = scratch[:sb]; break }
 \t\tscratch = append(scratch, rhs)
-\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset)
+\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart)
 \t}
 \treturn left
 }
@@ -504,11 +504,11 @@ func ${r.name}nud(minBp int) int32 {
 \t_capped = false
 \tt := peek()
 \tif t == nil { return -1 }
-${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { _capped = true; return finish(${J(r.cstName)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { _capped = true; return finish(${J(r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \t_r := func() int32 {   // non-capped: a sub-parse may leave _capped set; force it false after
 ${tplNud}\tif ${r.name}ATOM[t.Kind] {
-\t\tsb := len(scratch); scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
-\t\treturn finish(${J(r.cstName)}, sb, t.Off)
+\t\tsb := len(scratch); ts := pos; scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
+\t\treturn finish(${J(r.cstName)}, sb, t.Off, ts)
 \t}
 ${r.nudBrackets.map(bracketNud).join('\n')}
 \tif pbp, ok := ${r.name}PRE[t.Text]; ok {
@@ -517,9 +517,9 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
 \t\toperand := ${r.name}bp(pbp)
 \t\tif operand < 0 { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
 \t\tscratch = append(scratch, operand)
-\t\treturn finish(${J(r.cstName)}, sb, t.Off)
+\t\treturn finish(${J(r.cstName)}, sb, t.Off, save)
 \t}
-${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return finish(${J(r.cstName)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return finish(${J(r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \treturn -1
 \t}()
 \t_capped = false
@@ -1104,7 +1104,7 @@ func Tokenize(src string) []Tok { return lex(src) }
 \t\tif next.Kind == "$templateTail" { scratch = append(scratch, mkLeaf("$templateTail", next.Off, next.End)); pos++; break }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1
 \t}
-\treturn finish("$template", sb, t.Off)
+\treturn finish("$template", sb, t.Off, save)
 }
 ` : '';
     return `// GENERATED by emit-portable.ts (goTarget) — parser LIBRARY for grammar "${ir.grammarName}".
@@ -1127,7 +1127,7 @@ type Tok struct {
 type Node struct {
 \tRule, TokenType string
 \tIsLeaf          bool
-\tKidStart, KidCount, Offset, End int
+\tKidStart, KidCount, Offset, End, TokStart, TokEnd int
 }
 type bp struct{ lbp, rbp int }
 
@@ -1149,18 +1149,19 @@ func peek() *Tok {
 }
 func offAt(i int) int { if i < len(toks) { return toks[i].Off }; return 0 }
 func mkLeaf(ttype string, off, end int) int32 {
-\tnodes = append(nodes, Node{TokenType: ttype, IsLeaf: true, Offset: off, End: end})
+\tnodes = append(nodes, Node{TokenType: ttype, IsLeaf: true, Offset: off, End: end, TokStart: pos, TokEnd: pos + 1})
 \treturn int32(len(nodes) - 1)
 }
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
-func finish(rule string, sb, fallbackOff int) int32 {
+// tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
+func finish(rule string, sb, fallbackOff, tokStart int) int32 {
 \tnn := len(scratch)
 \tkidStart := len(kids)
 \toff, end := fallbackOff, fallbackOff
 \tif nn > sb { off = nodes[scratch[sb]].Offset; end = nodes[scratch[nn-1]].End }
 \tkids = append(kids, scratch[sb:nn]...)
 \tscratch = scratch[:sb]
-\tnodes = append(nodes, Node{Rule: rule, KidStart: kidStart, KidCount: nn - sb, Offset: off, End: end})
+\tnodes = append(nodes, Node{Rule: rule, KidStart: kidStart, KidCount: nn - sb, Offset: off, End: end, TokStart: tokStart, TokEnd: pos})
 \treturn int32(len(nodes) - 1)
 }
 func matchLit(value, ttype string) bool {
@@ -1285,6 +1286,22 @@ func main() {
 \t\tvar b strings.Builder
 \t\twriteJSON(root, &b)
 \t\tos.Stdout.WriteString(b.String())
+\t\treturn
+\t}
+\tif len(os.Args) > 1 && os.Args[1] == "tok-spans" {
+\t\troot := parse(tokenize(src))
+\t\tif root < 0 || pos != len(toks) {
+\t\t\tfmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", pos, len(toks))
+\t\t\tos.Exit(1)
+\t\t}
+\t\tnd := &nodes[root]
+\t\tfor i := 0; i < nd.KidCount; i++ {
+\t\t\tk := &nodes[kids[nd.KidStart+i]]
+\t\t\tname := k.Rule
+\t\t\tif k.IsLeaf { name = k.TokenType }
+\t\t\tfmt.Printf("%s\\t%d\\t%d\\n", name, k.TokStart, k.TokEnd)
+\t\t}
+\t\tfmt.Printf("total\\t0\\t%d\\n", pos)
 \t\treturn
 \t}
 \troot := parse(tokenize(src))

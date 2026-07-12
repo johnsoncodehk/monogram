@@ -398,14 +398,14 @@ ${r.alts.map(alt).join('\n')}
 
 function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
-    ? `  if (t.kind === '$templateHead') { const node = matchTemplate(); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end }; }\n`
+    ? `  if (t.kind === '$templateHead') { const node = matchTemplate(); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end, tokStart: node.tokStart, tokEnd: node.tokEnd }; }\n`
     : '';
   const BIN = `{ ${r.binary.map((b) => `${J(b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${J(p.op)}: ${p.rbp}`).join(', ')} }`;
   const atom = `new Set([${r.nudToks.map(J).join(', ')}])`;
   const bracketNud = (b: Bracket) => `    if (t.text === ${J(b.first)}) {
       const save = pos; const kids: Cst[] = [];
-      if (${b.steps.map(stepCond).join(' && ')}) return node(${J(r.cstName)}, kids, t.off);
+      if (${b.steps.map(stepCond).join(' && ')}) return branch(${J(r.cstName)}, kids, save);
       pos = save;   // fall through to the next NUD alternative (e.g. another '${b.first}'-led form)
     }`;
   // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
@@ -418,8 +418,8 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   // A postfix token (e.g. a tagged template) binds like a mixfix led: `left X` → node(left, X). Also an access tail.
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-    if (!tailClosed && t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end }; continue; } }` : '';
-    return `    if (!tailClosed && t.kind === ${J(tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end }; continue; }${tplPart}`;
+    if (!tailClosed && t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end, tokStart: left.tokStart, tokEnd: pos }; continue; } }` : '';
+    return `    if (!tailClosed && t.kind === ${J(tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end, tokStart: left.tokStart, tokEnd: pos }; continue; }${tplPart}`;
   };
   const POST = `{ ${r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ')} }`;
   return `const ${r.name}_BIN: Record<string, { lbp: number; rbp: number }> = ${BIN};
@@ -443,15 +443,15 @@ function ${r.name}_bp(minBp: number): Node | null {
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
     const post = ${r.name}_POST[t.text];
-    if (!tailClosed && post !== undefined && post > minBp) { pos++; const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; continue; }
+    if (!tailClosed && post !== undefined && post > minBp) { const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end, tokStart: left.tokStart, tokEnd: pos }; tailClosed = true; continue; }
     const info = ${r.name}_BIN[t.text];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
+    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 };
     pos++;
-    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
     const rhs = ${r.name}_bp(info.rbp);
     if (rhs === null) { pos = ledSave; break; }
-    left = { rule: ${J(r.cstName)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end };
+    left = { rule: ${J(r.cstName)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end, tokStart: left.tokStart, tokEnd: pos };
   }
   return left;
 }
@@ -463,15 +463,16 @@ ${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const ki
   // Below is non-capped: a sub-parse may leave _capped set (e.g. grouping a capped arrow),
   // so force it false after — only the capped arms above produce a capped node.
   const _r = ((): Node | null => {
-${tplNud}  if (${r.name}_ATOM.has(t.kind)) { pos++; return { rule: ${J(r.cstName)}, children: [{ tokenType: t.kind, offset: t.off, end: t.end }], offset: t.off, end: t.end }; }
+${tplNud}  if (${r.name}_ATOM.has(t.kind)) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; return { rule: ${J(r.cstName)}, children: [leaf], offset: t.off, end: t.end, tokStart: leaf.tokStart, tokEnd: pos }; }
 ${r.nudBrackets.map(bracketNud).join('\n')}
   const pbp = ${r.name}_PRE[t.text];
   if (pbp !== undefined) {
-    const save = pos; pos++;
-    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
+    const save = pos;
+    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 };
+    pos++;
     const operand = ${r.name}_bp(pbp);
     if (operand === null) { pos = save; return null; }
-    return { rule: ${J(r.cstName)}, children: [opLeaf, operand], offset: t.off, end: operand.end };
+    return { rule: ${J(r.cstName)}, children: [opLeaf, operand], offset: t.off, end: operand.end, tokStart: save, tokEnd: pos };
   }
 ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${seq.length ? seq.map(stepCond).join(' && ') : 'true'}) return branch(${J(r.cstName)}, kids, save); pos = save; }`).join('\n')}
   return null;
@@ -960,27 +961,27 @@ export function tokenize(src: string): Tok[] { return lex(src); }
   const t = peek();
   if (t === null || t.kind !== '$templateHead') return null;
   const children: Cst[] = [];
-  const save = pos; pos++;
-  children.push({ tokenType: '$templateHead', offset: t.off, end: t.end });
+  const save = pos;
+  children.push({ tokenType: '$templateHead', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++;
   for (;;) {
     const expr = parse${ir.tpl.interpRule}();
     if (expr === null) { pos = save; return null; }
     children.push(expr);
     const next = peek();
     if (next === null) { pos = save; return null; }
-    if (next.kind === '$templateMiddle') { pos++; children.push({ tokenType: '$templateMiddle', offset: next.off, end: next.end }); continue; }
-    if (next.kind === '$templateTail') { pos++; children.push({ tokenType: '$templateTail', offset: next.off, end: next.end }); break; }
+    if (next.kind === '$templateMiddle') { children.push({ tokenType: '$templateMiddle', offset: next.off, end: next.end, tokStart: pos, tokEnd: pos + 1 }); pos++; continue; }
+    if (next.kind === '$templateTail') { children.push({ tokenType: '$templateTail', offset: next.off, end: next.end, tokStart: pos, tokEnd: pos + 1 }); pos++; break; }
     pos = save; return null;
   }
-  return { rule: '$template', children, offset: children[0].offset, end: children[children.length - 1].end };
+  return { rule: '$template', children, offset: children[0].offset, end: children[children.length - 1].end, tokStart: save, tokEnd: pos };
 }
 ` : '';
     return `// GENERATED by emit-portable.ts (tsTarget) — parser LIBRARY for grammar "${ir.grammarName}" (exports \`parse\`).
 // The CLI runner (stdin → CST JSON) is a SEPARATE piece — tsTarget.emitRunner(), appended by the harness.
 
 type Tok = { kind: string; text: string; off: number; end: number; nl: boolean };
-type Leaf = { tokenType: string; offset: number; end: number };
-type Node = { rule: string; children: Cst[]; offset: number; end: number };
+type Leaf = { tokenType: string; offset: number; end: number; tokStart: number; tokEnd: number };
+type Node = { rule: string; children: Cst[]; offset: number; end: number; tokStart: number; tokEnd: number };
 type Cst = Node | Leaf;
 
 ${lexerSrc ?? ''}
@@ -1000,20 +1001,22 @@ function headLeafText(node: Cst): string {
 function branch(rule: string, kids: Cst[], save: number): Node {
   const offset = kids.length > 0 ? kids[0].offset : (save < toks.length ? toks[save].off : 0);
   const end = kids.length > 0 ? kids[kids.length - 1].end : offset;
-  return { rule, children: kids, offset, end };
+  return { rule, children: kids, offset, end, tokStart: save, tokEnd: pos };
 }
 function node(rule: string, kids: Cst[], fallbackOff: number = 0): Node {
-  return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff };
+  // Pratt LED path: tokStart is the leftmost operand's start (not the led trigger pos).
+  const tokStart = kids.length ? kids[0].tokStart : pos;
+  return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff, tokStart, tokEnd: pos };
 }
 function matchLit(value: string, ttype: string, kids: Cst[]): boolean {
   const t = peek();
   if (t === null || t.text !== value) return false;
-  if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end }); pos++; return true;
+  if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++; return true;
 }
 function matchTok(name: string, kids: Cst[]): boolean {
   const t = peek();
   if (t === null || t.kind !== name) return false;
-  kids.push({ tokenType: name, offset: t.off, end: t.end }); pos++; return true;
+  kids.push({ tokenType: name, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++; return true;
 }
 function callRule(fn: () => Node | null, kids: Cst[]): boolean {
   const n = fn();
@@ -1064,6 +1067,7 @@ ${docEditBlock(ir)}
 import { readFileSync } from 'node:fs';
 const _raw = readFileSync(0, 'utf8');
 const _editFast = process.argv.includes('edit-session-fast');
+const _cstJSON = (n: Cst) => JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' ? undefined : v));
 if (_editFast || process.argv.includes('edit-session')) {
   const { init, batches } = JSON.parse(_raw) as { init: string; batches: [number, number, string][][] };
   const doc = createDoc(init, { validate: !_editFast });
@@ -1072,11 +1076,20 @@ if (_editFast || process.argv.includes('edit-session')) {
   if (a) process.stderr.write(JSON.stringify(a) + '\\n');
   const root = doc.root();
   if (root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
-  process.stdout.write(JSON.stringify(root));
+  process.stdout.write(_cstJSON(root));
+} else if (process.argv.includes('tok-spans')) {
+  const _root = parse(tokenize(_raw));
+  if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
+  const kids = 'children' in _root ? _root.children : [];
+  for (const k of kids) {
+    const name = 'rule' in k ? k.rule : k.tokenType;
+    process.stdout.write(name + '\\t' + k.tokStart + '\\t' + k.tokEnd + '\\n');
+  }
+  process.stdout.write('total\\t0\\t' + pos + '\\n');
 } else {
   const _root = parse(tokenize(_raw));
   if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
-  process.stdout.write(JSON.stringify(_root));
+  process.stdout.write(_cstJSON(_root));
 }
 `;
   },

@@ -482,7 +482,7 @@ function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
 
 function rdRule(r: RdRule): string {
   if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save))); } }`;
+    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } }`;
     return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
         let t = match self.peek() { Some(t) => t, None => return None };
@@ -492,7 +492,7 @@ ${r.alts.map(arm).join('\n')}
     }`;
   }
   const alt = (steps: Step[]) =>
-    `        if ${steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save))); }
+    `        if ${steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); }
         self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);`;
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
@@ -506,7 +506,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
     ? `        if t.kind == "$templateHead" {
             let n = match self.match_template() { Some(n) => n, None => return None };
             let sb = self.scratch.len(); self.scratch.push(n);
-            return Some(self.finish(${J(r.cstName)}, sb, self.nodes[n as usize].offset));
+            return Some(self.finish(${J(r.cstName)}, sb, self.nodes[n as usize].offset, self.nodes[n as usize].tok_start));
         }\n`
     : '';
   const binArms = r.binary.map((b) => `${J(b.op)} => Some((${b.lbp}, ${b.rbp}))`).join(', ');
@@ -514,19 +514,19 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const atomArm = r.nudToks.map(J).join(' | ');
   const bracketNud = (b: Bracket) => `        if t.text == ${J(b.first)} {
             let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
-            if ${b.steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, t.off)); }
+            if ${b.steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);
         }`;
   const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], left) && ` : ''}!self.suppress_cur.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
                 let led_save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
                 self.scratch.push(left);
-                if ${b.steps.map(stepCond).join(' && ')} { left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); continue; }
+                if ${b.steps.map(stepCond).join(' && ')} { left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; }
                 self.pos = led_save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break;
             }`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); continue; } }` : '';
-    return `            if !tail_closed && t.kind == ${J(tok)} { self.pos += 1; let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kind, t.off, t.end); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); continue; }${tplPart}`;
+            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; } }` : '';
+    return `            if !tail_closed && t.kind == ${J(tok)} { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kind, t.off, t.end); self.pos += 1; left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; }${tplPart}`;
   };
   const postArms = r.postfix.map((p) => `${J(p.op)} => Some(${p.lbp})`).join(', ');
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
@@ -548,22 +548,22 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             let t = match self.peek() { Some(t) => t, None => break };
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
-            if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { self.pos += 1; let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset); tail_closed = true; continue; } }
+            if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end); self.pos += 1; left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); tail_closed = true; continue; } }
             let (lbp, rbp) = match Parser::${r.name}_bin(t.text) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
             let led_save = self.pos;
-            self.pos += 1;
             let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end);
+            self.pos += 1;
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.pos = led_save; break; } };
             self.scratch.push(rhs);
-            left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset);
+            left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start);
         }
         Some(left)
     }
     fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<i32> {
         self.capped = false;
         let t = self.peek()?;
-${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { self.capped = true; return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save))); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
+${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { self.capped = true; return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
         // non-capped: a sub-parse may leave capped set (grouping a capped arrow); force it false after
         let r = self.${r.name}_nud_rest(t);
         self.capped = false;
@@ -571,19 +571,18 @@ ${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; 
     }
     fn ${r.name}_nud_rest(&mut self, t: Tok<'a>) -> Option<i32> {
 ${tplNud}        if Parser::${r.name}_atom(t.kind) {
-            let sb = self.scratch.len(); self.push_leaf(t.kind, t.off, t.end); self.pos += 1;
-            return Some(self.finish(${J(r.cstName)}, sb, t.off));
+            let sb = self.scratch.len(); let ts = self.pos; self.push_leaf(t.kind, t.off, t.end); self.pos += 1;
+            return Some(self.finish(${J(r.cstName)}, sb, t.off, ts));
         }
 ${r.nudBrackets.map(bracketNud).join('\n')}
         if let Some(pbp) = Parser::${r.name}_pre(t.text) {
-            let save = self.pos; self.pos += 1;
-            let sb = self.scratch.len(); self.push_leaf("$operator", t.off, t.end);
+            let save = self.pos; let sb = self.scratch.len(); self.push_leaf("$operator", t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
-                Some(operand) => { return Some(self.finish(${J(r.cstName)}, sb, t.off)); }
+                Some(_operand) => { return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
                 None => { self.pos = save; self.scratch.truncate(sb); return None; }
             }
         }
-${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save))); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
+${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
         None
     }`;
 }
@@ -1167,7 +1166,7 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None;
         }
         let o = self.nodes[self.scratch[sb] as usize].offset;
-        Some(self.finish("$template", sb, o))
+        Some(self.finish("$template", sb, o, save))
     }
 ` : '';
     return `// GENERATED by emit-portable.ts (rustTarget) — parser for grammar "${ir.grammarName}".
@@ -1183,7 +1182,7 @@ struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: 
 // kid_count). No per-node heap allocation — the arena grows by Vec push, and backtracking
 // truncates the three vecs (nodes/kids/scratch) to saved lengths. Nodes hold only &'static str
 // labels + usize spans: no per-node String.
-struct Node { rule: &'static str, token_type: &'static str, is_leaf: bool, kid_start: u32, kid_count: u32, offset: usize, end: usize }
+struct Node { rule: &'static str, token_type: &'static str, is_leaf: bool, kid_start: u32, kid_count: u32, offset: usize, end: usize, tok_start: usize, tok_end: usize }
 
 ${lexerSrc ?? ''}
 
@@ -1192,7 +1191,7 @@ impl<'a> Parser<'a> {
     fn peek(&self) -> Option<Tok<'a>> { if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None } }
     fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off } else { 0 } }
     fn mk_leaf(&mut self, ttype: &'static str, off: usize, end: usize) -> i32 {
-        self.nodes.push(Node { rule: "", token_type: ttype, is_leaf: true, kid_start: 0, kid_count: 0, offset: off, end });
+        self.nodes.push(Node { rule: "", token_type: ttype, is_leaf: true, kid_start: 0, kid_count: 0, offset: off, end, tok_start: self.pos, tok_end: self.pos + 1 });
         (self.nodes.len() - 1) as i32
     }
     // mk_leaf + scratch.push combined: the obvious self.scratch.push(self.mk_leaf(...)) is a
@@ -1206,14 +1205,14 @@ impl<'a> Parser<'a> {
     // $template* parts are kept.
     fn push_leaf(&mut self, ttype: &'static str, off: usize, end: usize) { if ttype != "$punct" { let id = self.mk_leaf(ttype, off, end); self.scratch.push(id); } }
     // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
-    fn finish(&mut self, rule: &'static str, sb: usize, fallback_off: usize) -> i32 {
+    fn finish(&mut self, rule: &'static str, sb: usize, fallback_off: usize, tok_start: usize) -> i32 {
         let nn = self.scratch.len();
         let kid_start = self.kids.len();
         let off = if nn > sb { self.nodes[self.scratch[sb] as usize].offset } else { fallback_off };
         let end = if nn > sb { self.nodes[self.scratch[nn - 1] as usize].end } else { fallback_off };
         self.kids.extend(self.scratch[sb..nn].iter().copied());
         self.scratch.truncate(sb);
-        self.nodes.push(Node { rule, token_type: "", is_leaf: false, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset: off, end });
+        self.nodes.push(Node { rule, token_type: "", is_leaf: false, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset: off, end, tok_start, tok_end: self.pos });
         (self.nodes.len() - 1) as i32
     }
     fn head_leaf_text(&self, node: i32) -> &'a str {
@@ -1411,6 +1410,21 @@ fn main() {
         let t = std::time::Instant::now();
         for _ in 0..iters { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(tokenize(s)) { std::hint::black_box((&p.nodes[r as usize], p.pos)); } }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
+        return;
+    }
+    if args.get(1).map(|a| a.as_str()) == Some("tok-spans") {
+        match parse(tokenize(&src)) {
+            Some((p, root)) => {
+                let nd = &p.nodes[root as usize];
+                for i in 0..nd.kid_count {
+                    let k = &p.nodes[p.kids[nd.kid_start as usize + i as usize] as usize];
+                    let name = if k.is_leaf { k.token_type } else { k.rule };
+                    println!("{}\t{}\t{}", name, k.tok_start, k.tok_end);
+                }
+                println!("total\t0\t{}", p.pos);
+            }
+            None => { eprintln!("parse error"); std::process::exit(1); }
+        }
         return;
     }
     match parse(tokenize(&src)) {
