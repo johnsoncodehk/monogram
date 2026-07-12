@@ -1075,7 +1075,7 @@ fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
   return `pub struct Edit { pub start: usize, pub end: usize, pub text: String }
 #[derive(Clone)]
 struct AlignMeta { kind: &'static str, off: usize, end: usize, nl: bool, fd: i64, pd: i64, lc: bool, lb: bool, hd: bool, td: i64 }
-struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, stream_eq: bool }
+struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, stream_eq: Option<bool> }
 ${toMetaFn}
 fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
     let old_n = old_toks.len();
@@ -1104,9 +1104,10 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
 fn toks_from_meta<'a>(text: &'a str, meta: &[AlignMeta]) -> Vec<Tok<'a>> {
     meta.iter().map(|m| Tok { kind: m.kind, text: &text[m.off..m.end], off: m.off, end: m.end, nl: m.nl }).collect()
 }
-${checkStreamEqFn}${windowHelpers}pub struct Doc { text: String, toks: Vec<AlignMeta>, align: Option<Align> }
+${checkStreamEqFn}${windowHelpers}pub struct Doc { text: String, toks: Vec<AlignMeta>, align: Option<Align>, validate: bool }
 impl Doc {
-    pub fn new(text: String) -> Doc { Doc { text: text.clone(), toks: ${initToks}, align: None } }
+    pub fn new(text: String) -> Doc { Doc { text: text.clone(), toks: ${initToks}, align: None, validate: false } }
+    pub fn set_validate(&mut self, v: bool) { self.validate = v; }
     pub fn text(&self) -> &str { &self.text }
     pub fn alignment(&self) -> Option<&Align> { self.align.as_ref() }
     pub fn edit(&mut self, edits: &[Edit]) {
@@ -1114,8 +1115,8 @@ impl Doc {
         let old_toks = self.toks.clone();
         let mut relexed = 0usize;
 ${editBody}
-        let stream_eq = check_stream_eq(&self.text, &self.toks);
         let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &self.text, &self.toks);
+        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, stream_eq });
     }
     pub fn parse(&self) -> Option<(Parser<'_>, i32)> {
@@ -1382,15 +1383,19 @@ fn main() {
     let mut src = String::new();
     std::io::stdin().read_to_string(&mut src).unwrap();
     let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 && args[1] == "edit-session" {
+    if args.len() > 1 && (args[1] == "edit-session" || args[1] == "edit-session-fast") {
         let (init, batches) = parse_edit_session(&src).unwrap();
         let mut doc = Doc::new(init);
+        if args[1] == "edit-session" { doc.set_validate(true); }
         for batch in &batches {
             let edits: Vec<Edit> = batch.iter().map(|&(s, e, ref t)| Edit { start: s, end: e, text: t.clone() }).collect();
             doc.edit(&edits);
         }
         if let Some(a) = doc.alignment() {
-            eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.stream_eq);
+            match a.stream_eq {
+                Some(eq) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, eq),
+                None => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed),
+            }
         }
         match doc.parse() {
             Some((p, root)) => {

@@ -888,7 +888,7 @@ function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
   const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(tokenize(src))';
   return `export type Edit = { start: number; end: number; text: string };
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean; fd: number; pd: number; lc: boolean; lb: boolean; hd: boolean; td: number };
-type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; streamEq: boolean };
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; streamEq?: boolean };
 ${toMetaFn}
 function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'streamEq'> {
   const oldN = oldToks.length, newN = newToks.length;
@@ -913,7 +913,8 @@ function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, ne
 function toksFromMeta(text: string, meta: AlignMeta[]): Tok[] {
   return meta.map((m) => ({ kind: m.kind, text: text.slice(m.off, m.end), off: m.off, end: m.end, nl: m.nl }));
 }
-${checkStreamEqFn}${windowHelpers}export function createDoc(src: string): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
+${checkStreamEqFn}${windowHelpers}export function createDoc(src: string, opts?: { validate?: boolean }): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
+  const validate = opts?.validate === true;
   let text = src;
   let prevToks = ${initToks};
   let align: Align | null = null;
@@ -926,8 +927,8 @@ ${checkStreamEqFn}${windowHelpers}export function createDoc(src: string): { text
       const oldText = text, oldToks = prevToks;
       let relexed = 0;
 ${editBody}
-      const streamEq = checkStreamEq(text, prevToks);
-      align = { ...computeAlign(oldText, oldToks, text, prevToks), relexed, streamEq };
+      const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
+      align = validate ? { ...core, streamEq: checkStreamEq(text, prevToks) } : core;
       root = parse(toksFromMeta(text, prevToks));
       return root;
     },
@@ -1062,9 +1063,10 @@ ${docEditBlock(ir)}
 // NOT part of the emitted parser. The import is hoisted, so it may follow the library code.
 import { readFileSync } from 'node:fs';
 const _raw = readFileSync(0, 'utf8');
-if (process.argv.includes('edit-session')) {
+const _editFast = process.argv.includes('edit-session-fast');
+if (_editFast || process.argv.includes('edit-session')) {
   const { init, batches } = JSON.parse(_raw) as { init: string; batches: [number, number, string][][] };
-  const doc = createDoc(init);
+  const doc = createDoc(init, { validate: !_editFast });
   for (const batch of batches) doc.edit(batch.map(([start, end, text]) => ({ start, end, text })));
   const a = doc.align();
   if (a) process.stderr.write(JSON.stringify(a) + '\\n');
