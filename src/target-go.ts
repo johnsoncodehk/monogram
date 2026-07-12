@@ -985,12 +985,12 @@ func checkStreamEq(text string, meta []alignMeta) bool {
   return `type Edit struct { Start, End int; Text string }
 type alignMeta struct { Kind string; Off, End int; Nl bool; Fd, Pd int; Lc, Lb, Hd bool; Td int }
 type Align struct {
-\tOldN     int  \`json:"oldN"\`
-\tNewN     int  \`json:"newN"\`
-\tPrefix   int  \`json:"prefix"\`
-\tSuffix   int  \`json:"suffix"\`
-\tRelexed  int  \`json:"relexed"\`
-\tStreamEq bool \`json:"streamEq"\`
+\tOldN     int   \`json:"oldN"\`
+\tNewN     int   \`json:"newN"\`
+\tPrefix   int   \`json:"prefix"\`
+\tSuffix   int   \`json:"suffix"\`
+\tRelexed  int   \`json:"relexed"\`
+\tStreamEq *bool \`json:"streamEq,omitempty"\`
 }
 ${toMetaFn}
 func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
@@ -1016,13 +1016,14 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 \tfor i, m := range meta { t[i] = Tok{m.Kind, text[m.Off:m.End], m.Off, m.End, m.Nl} }
 \treturn t
 }
-${checkStreamEqFn}${windowHelpers}type Doc struct { text string; root int32; toks []alignMeta; align *Align }
+${checkStreamEqFn}${windowHelpers}type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool }
 func NewDoc(src string) *Doc {
 \td := &Doc{text: src}
 \td.toks = ${initToks}
 \td.root = parse(tokenize(src))
 \treturn d
 }
+func (d *Doc) SetValidate(v bool) { d.validate = v }
 func (d *Doc) Text() string { return d.text }
 func (d *Doc) Root() int32 { return d.root }
 func (d *Doc) Align() *Align { return d.align }
@@ -1039,9 +1040,13 @@ func (d *Doc) Edit(edits []Edit) int32 {
 \toldText, oldToks := d.text, d.toks
 \trelexed := 0
 ${editBody}
-\tstreamEq := checkStreamEq(d.text, d.toks)
 \toldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
-\td.align = &Align{oldN, newN, prefix, suffix, relexed, streamEq}
+\ta := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed}
+\tif d.validate {
+\t\tv := checkStreamEq(d.text, d.toks)
+\t\ta.StreamEq = &v
+\t}
+\td.align = a
 \td.root = parse(toksFromMeta(d.text, d.toks))
 \treturn d.root
 }`;
@@ -1247,8 +1252,10 @@ import (
 func main() {
 \tdata, _ := io.ReadAll(os.Stdin)
 \tsrc := string(data)
+\teditFast := len(os.Args) > 1 && os.Args[1] == "edit-session-fast"
+\teditSess := editFast || (len(os.Args) > 1 && os.Args[1] == "edit-session")
 \t// Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
-\tif len(os.Args) > 1 && os.Args[1] != "edit-session" {
+\tif len(os.Args) > 1 && !editSess {
 \t\tif iters, err := strconv.Atoi(os.Args[1]); err == nil && iters > 0 {
 \t\t\tfor i := 0; i < 3; i++ { parse(tokenize(src)) }
 \t\t\tt0 := time.Now()
@@ -1257,13 +1264,14 @@ func main() {
 \t\t\treturn
 \t\t}
 \t}
-\tif len(os.Args) > 1 && os.Args[1] == "edit-session" {
+\tif editSess {
 \t\tvar sess struct {
 \t\t\tInit    string              \`json:"init"\`
 \t\t\tBatches [][][3]interface{}   \`json:"batches"\`
 \t\t}
 \t\tif json.Unmarshal(data, &sess) != nil { os.Exit(1) }
 \t\td := NewDoc(sess.Init)
+\t\tif !editFast { d.SetValidate(true) }
 \t\tfor _, batch := range sess.Batches {
 \t\t\tedits := make([]Edit, len(batch))
 \t\t\tfor i, t := range batch {

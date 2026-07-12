@@ -446,13 +446,16 @@ for (const c of CASES) {
 
     const editScenarios = EDIT_SCENARIOS[c.grammar];
     if (editScenarios) {
-      let editOk = 0, alignOk = 0;
+      let editOk = 0, alignOk = 0, fastOk = 0;
       const editCmd = r.label === 'typescript' ? 'node' : r.label === 'go' ? `${dir}/go/p` : `${dir}/pr`;
       const editArgs = r.label === 'typescript' ? [`${dir}/p.ts`, 'edit-session'] : ['edit-session'];
+      const fastArgs = r.label === 'typescript' ? [`${dir}/p.ts`, 'edit-session-fast'] : ['edit-session-fast'];
       const runEdit = (json: string) => runEditSession(editCmd, editArgs, json);
+      const runFast = (json: string) => runEditSession(editCmd, fastArgs, json);
       for (const sc of editScenarios) {
         const final = applyEdits(sc.init, sc.batches);
-        const a = runEdit(JSON.stringify({ init: sc.init, batches: sc.batches }));
+        const payload = JSON.stringify({ init: sc.init, batches: sc.batches });
+        const a = runEdit(payload);
         const b = r.run(final);
         if (a.ok === b.ok && (!a.ok || a.cst === b.cst) && a.ok === oracleOut(final).ok) editOk++;
         else {
@@ -482,9 +485,22 @@ for (const c of CASES) {
           failures++;
           console.log(`  ${c.grammar}/${r.label}: token-align mismatch want=${JSON.stringify(want)} got=${JSON.stringify(a.align)}`);
         }
+        const f = runFast(payload);
+        const fiveEq = !!(a.align && f.align
+          && a.align.oldN === f.align.oldN && a.align.newN === f.align.newN
+          && a.align.prefix === f.align.prefix && a.align.suffix === f.align.suffix
+          && a.align.relexed === f.align.relexed);
+        const noStreamEq = f.align !== undefined && !('streamEq' in f.align);
+        const outEq = a.ok === f.ok && (!a.ok || a.cst === f.cst);
+        if (fiveEq && noStreamEq && outEq) fastOk++;
+        else {
+          failures++;
+          console.log(`  ${c.grammar}/${r.label}: fast≢validated fiveEq=${fiveEq} noStreamEq=${noStreamEq} outEq=${outEq} validated=${JSON.stringify(a.align)} fast=${JSON.stringify(f.align)}`);
+        }
       }
       console.log(`  ${c.grammar}/${r.label}: ${editOk}/${editScenarios.length} edit-sessions ≡ fresh`);
       console.log(`  ${c.grammar}/${r.label}: ${alignOk}/${editScenarios.length} token-alignments ≡ oracle`);
+      console.log(`  ${c.grammar}/${r.label}: ${fastOk}/${editScenarios.length} fast ≡ validated`);
     }
   }
 }
