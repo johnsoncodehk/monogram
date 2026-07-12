@@ -4,8 +4,8 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig } from './emit-portable.ts';
-import { portableIR } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 
@@ -81,6 +81,43 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, t
   return `    if (${gate}true) { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
 }
 
+function buildLexCandidates(
+  ir: ParserIR, defs: string[], stateful: boolean, rxTok: string | undefined, tplTok: string | undefined,
+  punctLine: (p: string) => string,
+): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
+  const codes: string[] = [];
+  const firsts: (LexFirstBytes | null)[] = [];
+  for (const t of ir.tokens) {
+    const code = scanTok(t, defs, stateful, rxTok, tplTok);
+    if (!code) continue;
+    codes.push(code);
+    firsts.push(lexTokFirstBytes(t));
+  }
+  for (const p of ir.puncts) {
+    codes.push(punctLine(p));
+    firsts.push(punctFirstBytes(p));
+  }
+  return { codes, firsts };
+}
+
+/** Shared first-byte dispatch for all lexFrom variants in this target. */
+function renderLexByteDispatchTS(codes: string[], firsts: (LexFirstBytes | null)[], indent: string): string {
+  const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
+  const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
+  let switchArms = '';
+  for (const arm of arms) {
+    switchArms += arm.bytes.map((b) => `${indent}    case ${b}:`).join('\n') + '\n';
+    switchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
+    switchArms += `${indent}      break;\n`;
+  }
+  return `${indent}if (c >= 128) {
+${fallback}
+${indent}} else {
+${indent}  switch (c) {
+${switchArms}${indent}  }
+${indent}}`;
+}
+
 function newlineParts(nl: NewlineCfg, pushFn: string): { state: string; stateFrom: string; boundary: string; ws: string; hooks: string } {
   const commentSkip = nl.comment
     ? `      if (src.startsWith(${J(nl.comment)}, p)) { let e = p; while (e < n && src.charCodeAt(e) !== 10) e++; pos = e; continue; }\n`
@@ -145,10 +182,11 @@ function lexer(ir: ParserIR): string {
   const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
-  const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
   const pushFn = stateful ? 'emit' : 'push';
-  const puncts = ir.puncts.map((p) =>
-    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}('', ${J(p)}, pos, pos + ${p.length}); pos += ${p.length}; continue; }`).join('\n');
+  const punctLine = (p: string) =>
+    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}('', ${J(p)}, pos, pos + ${p.length}); pos += ${p.length}; continue; }`;
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, rx?.regexToken, tpl?.token, punctLine);
+  const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ');
   const set = (a: string[]) => `new Set([${a.map(J).join(', ')}])`;
   // Per-feature pieces of the shared `emit`, so a grammar can have regex, templates, or both.
   const rxState = rx ? `  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
@@ -262,8 +300,7 @@ ${pushHooks}    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = 
     : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false; };\n';
   const loopBody = `${nlBoundary}    const c = src.charCodeAt(pos);
     // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
-${nlWs}${tplDispatch}${toks}
-${puncts}
+${nlWs}${tplDispatch}${cascade}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));`;
   if (rxOnly) {
     return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {

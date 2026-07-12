@@ -521,3 +521,165 @@ function buildPratt(
     : [];
   return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, postfixToks, postfix };
 }
+
+// ── Lexer first-byte dispatch (IR analysis; targets render buckets) ──
+
+export type LexFirstBytes = { bytes: number[]; nonAscii: boolean };
+
+/** Conservative FIRST-byte analysis for a punct literal. */
+export function punctFirstBytes(value: string): LexFirstBytes | null {
+  if (value.length === 0) return null;
+  const c = value.charCodeAt(0);
+  if (c >= 128) return { bytes: [], nonAscii: true };
+  return { bytes: [c], nonAscii: false };
+}
+
+function expandRangeToAscii(lo: number, hi: number, out: Set<number>): boolean {
+  let nonAscii = false;
+  if (lo >= 128 || hi >= 128) nonAscii = true;
+  for (let c = Math.max(0, lo); c <= Math.min(127, hi); c++) out.add(c);
+  return nonAscii;
+}
+
+function rangesToFirstBytes(ranges: CharRange[]): LexFirstBytes {
+  const bytes = new Set<number>();
+  let nonAscii = false;
+  for (const [lo, hi] of ranges) nonAscii = expandRangeToAscii(lo, hi, bytes) || nonAscii;
+  return { bytes: [...bytes].sort((a, b) => a - b), nonAscii };
+}
+
+function patternNullable(p: TokenPattern): boolean {
+  if (typeof p === 'string') return false;
+  switch (p.type) {
+    case 'repeat': return p.min === 0;
+    case 'lookahead': case 'lookbehind': case 'anchor': case 'never': return true;
+    default: return false;
+  }
+}
+
+function patternFirst(p: TokenPattern): LexFirstBytes | null {
+  if (typeof p === 'string') {
+    const c = p.charCodeAt(0);
+    if (c >= 128) return { bytes: [], nonAscii: true };
+    return { bytes: [c], nonAscii: false };
+  }
+  switch (p.type) {
+    case 'seq': {
+      const bytes = new Set<number>();
+      let nonAscii = false;
+      for (const item of p.items) {
+        const fb = patternFirst(item);
+        if (fb === null) return null;
+        fb.bytes.forEach((b) => bytes.add(b));
+        nonAscii = nonAscii || fb.nonAscii;
+        if (!patternNullable(item)) break;
+      }
+      return { bytes: [...bytes].sort((a, b) => a - b), nonAscii };
+    }
+    case 'alt': {
+      const bytes = new Set<number>();
+      let nonAscii = false;
+      for (const item of p.items) {
+        const fb = patternFirst(item);
+        if (fb === null) return null;
+        fb.bytes.forEach((b) => bytes.add(b));
+        nonAscii = nonAscii || fb.nonAscii;
+      }
+      return { bytes: [...bytes].sort((a, b) => a - b), nonAscii };
+    }
+    case 'charClass': {
+      if (p.negate) {
+        const bytes = new Set<number>();
+        for (let c = 0; c <= 127; c++) bytes.add(c);
+        return { bytes: [...bytes], nonAscii: true };
+      }
+      const bytes = new Set<number>();
+      let nonAscii = false;
+      for (const item of p.items) {
+        if (item.type === 'char') {
+          const c = item.value.charCodeAt(0);
+          if (c <= 127) bytes.add(c); else nonAscii = true;
+        } else {
+          nonAscii = expandRangeToAscii(item.from.charCodeAt(0), item.to.charCodeAt(0), bytes) || nonAscii;
+        }
+      }
+      return { bytes: [...bytes].sort((a, b) => a - b), nonAscii };
+    }
+    case 'repeat': return patternFirst(p.body);
+    case 'anyChar': return null;
+    case 'lookahead': case 'lookbehind': case 'anchor': case 'never':
+      return { bytes: [], nonAscii: false };
+    default: return null;
+  }
+}
+
+/** Which ASCII bytes (0..127) may start this token matcher; nonAscii ⇒ also in fallback. null ⇒ all bytes + nonAscii. */
+export function lexTokFirstBytes(t: LexTok): LexFirstBytes | null {
+  switch (t.kind) {
+    case 'run': return rangesToFirstBytes(t.first);
+    case 'string': return punctFirstBytes(t.delim);
+    case 'line': return punctFirstBytes(t.prefix);
+    case 'block': return punctFirstBytes(t.open);
+    case 'pattern': return patternFirst(t.pattern);
+  }
+}
+
+export type LexDispatchMeta = {
+  key: string;
+  shape: LexTok['kind'] | 'punct';
+  firstBytes: LexFirstBytes | null;
+};
+
+export type LexDispatchArm = { bytes: number[]; indices: number[] };
+
+/** Build per-byte buckets (0..127) over a fixed global candidate sequence; fallback = full sequence. */
+export function buildLexDispatchPlan(firsts: (LexFirstBytes | null)[]): { arms: LexDispatchArm[]; fallbackIndices: number[] } {
+  const n = firsts.length;
+  const fallbackIndices = [...Array(n).keys()];
+  const asciiBuckets: number[][] = Array.from({ length: 128 }, () => []);
+  for (let i = 0; i < n; i++) {
+    const fb = firsts[i];
+    if (fb === null) {
+      for (let b = 0; b < 128; b++) asciiBuckets[b].push(i);
+    } else {
+      for (const b of fb.bytes) if (b >= 0 && b < 128) asciiBuckets[b].push(i);
+    }
+  }
+  const keyToBytes = new Map<string, number[]>();
+  const keyToIndices = new Map<string, number[]>();
+  for (let b = 0; b < 128; b++) {
+    const indices = asciiBuckets[b];
+    if (!indices.length) continue;
+    const key = indices.join(',');
+    if (!keyToIndices.has(key)) { keyToIndices.set(key, indices); keyToBytes.set(key, []); }
+    keyToBytes.get(key)!.push(b);
+  }
+  const arms: LexDispatchArm[] = [...keyToIndices.entries()].map(([key, indices]) => ({
+    bytes: keyToBytes.get(key)!.sort((a, b) => a - b),
+    indices,
+  }));
+  arms.sort((a, b) => a.bytes[0] - b.bytes[0]);
+  return { arms, fallbackIndices };
+}
+
+/** Interval notation for report tables, e.g. "a-z, A-Z, 48". */
+export function formatFirstBytes(fb: LexFirstBytes | null): string {
+  if (fb === null) return 'null (all ASCII + nonAscii)';
+  if (!fb.bytes.length && fb.nonAscii) return '(empty ASCII) nonAscii';
+  const parts: string[] = [];
+  const sorted = [...fb.bytes].sort((a, b) => a - b);
+  for (let i = 0; i < sorted.length; i++) {
+    const lo = sorted[i];
+    let hi = lo;
+    while (i + 1 < sorted.length && sorted[i + 1] === hi + 1) { hi = sorted[++i]; }
+    if (lo === hi) {
+      parts.push(lo >= 32 && lo <= 126 ? `'${String.fromCharCode(lo)}'(${lo})` : String(lo));
+    } else {
+      const ls = lo >= 32 && lo <= 126 ? `'${String.fromCharCode(lo)}'` : String(lo);
+      const hs = hi >= 32 && hi <= 126 ? `'${String.fromCharCode(hi)}'` : String(hi);
+      parts.push(`${ls}..${hs}`);
+    }
+  }
+  if (fb.nonAscii) parts.push('nonAscii');
+  return parts.join(', ');
+}

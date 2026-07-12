@@ -11,8 +11,8 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
 // the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig } from './emit-portable.ts';
-import { portableIR } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -84,6 +84,67 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, t
         }`;
   const m = compilePat(t.pattern, defs);
   return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
+}
+
+function rustByteLit(b: number): string {
+  if ((b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57)) return `b'${String.fromCharCode(b)}'`;
+  if ([33, 35, 36, 37, 38, 42, 43, 44, 45, 46, 47, 58, 59, 61, 63, 64, 94, 95].includes(b)) return `b'${String.fromCharCode(b)}'`;
+  return String(b);
+}
+
+function rustMatchLabels(bytes: number[]): string {
+  const sorted = [...bytes].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const lo = sorted[i];
+    let hi = lo;
+    while (i + 1 < sorted.length && sorted[i + 1] === hi + 1) hi = sorted[++i];
+    if (lo === hi) {
+      parts.push(rustByteLit(lo));
+    } else {
+      const ls = rustByteLit(lo), hs = rustByteLit(hi);
+      parts.push(ls.startsWith('b') && hs.startsWith('b') ? `${ls}..=${hs}` : `${lo}..=${hi}`);
+    }
+  }
+  return parts.join(' | ');
+}
+
+function buildLexCandidates(
+  ir: ParserIR, defs: string[], stateful: boolean, rxTok: string | undefined, tplTok: string | undefined,
+  punctLine: (p: string) => string,
+): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
+  const codes: string[] = [];
+  const firsts: (LexFirstBytes | null)[] = [];
+  for (const t of ir.tokens) {
+    const code = scanTok(t, defs, stateful, rxTok, tplTok);
+    if (!code) continue;
+    codes.push(code);
+    firsts.push(lexTokFirstBytes(t));
+  }
+  for (const p of ir.puncts) {
+    codes.push(punctLine(p));
+    firsts.push(punctFirstBytes(p));
+  }
+  return { codes, firsts };
+}
+
+/** Shared first-byte dispatch for all lexFrom variants in this target. */
+function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string): string {
+  const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
+  const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
+  let matchArms = '';
+  for (const arm of arms) {
+    matchArms += `${indent}        ${rustMatchLabels(arm.bytes)} => {\n`;
+    matchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
+    matchArms += `${indent}        }\n`;
+  }
+  return `${indent}        if c >= 128 {
+${fallback}
+${indent}        } else {
+${indent}        match b[pos] {
+${matchArms}${indent}        _ => {}
+${indent}        }
+${indent}        }`;
 }
 
 function newlinePartsRs(nl: NewlineCfg): { consts: string; fields: string; init: string; boundary: string; ws: string; hooks: string; boundaryFrom: string; wsFrom: string; hooksFrom: string } {
@@ -183,9 +244,10 @@ function lexer(ir: ParserIR): string {
   const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
-  const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
-  const puncts = ir.puncts.map((p) =>
-    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl }); pending_nl = false;`} pos += ${p.length}; continue; }`).join('\n');
+  const punctLine = (p: string) =>
+    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl }); pending_nl = false;`} pos += ${p.length}; continue; }`;
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, rx?.regexToken, tpl?.token, punctLine);
+  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ');
   const rsArr = (a: string[]) => `&[${a.map(J).join(', ')}]`;
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState.
@@ -308,13 +370,11 @@ impl<'a, 'b> RxTplScan<'a, 'b> {
         if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }   // LF/CR
 `;
   const loopBody = `${nlBoundary}        let c = b[pos] as u32;
-${nlWs}${tplDispatch}${toks}
-${puncts}
+${nlWs}${tplDispatch}${cascade}
         panic!("lex error at {}", pos);`;
   if (rxOnly) {
     const rxLoopBody = `${nlBoundary}        let c = b[pos] as u32;
-${nlWs}${toks}
-${puncts}
+${nlWs}${cascade}
         panic!("lex error at {}", pos);`;
     return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_text: &'a str, mut prev_kind: &'static str, mut bp_text: &'a str, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, &'a str, &'static str, &'a str, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
@@ -383,8 +443,7 @@ ${loopBody}
       .replace(/toks\.push\(Tok \{ kind: ([^,]+), text: ([^,]+), off: pos, end: ([^,]+), nl: pending_nl \}\); pending_nl = false; ?/g, 'st.push_tok($1, $2, pos, $3); ')
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlLoopBody = `${nlRs!.boundaryFrom}        let c = b[pos] as u32;
-${nlRs!.wsFrom}${rustNlScan(toks)}
-${rustNlScan(puncts)}
+${nlRs!.wsFrom}${rustNlScan(cascade)}
         panic!("lex error at {}", pos);`;
     return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, line_start: bool, emitted_content: bool, flow_depth: i64 }
 impl<'a, 'b> NlScan<'a, 'b> {

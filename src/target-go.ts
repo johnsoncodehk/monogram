@@ -9,8 +9,8 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig } from './emit-portable.ts';
-import { portableIR } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -81,6 +81,42 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, t
   return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(pos); e > pos { ${push('e')}pos = e; continue } }`;
 }
 
+function buildLexCandidates(
+  ir: ParserIR, defs: string[], stateful: boolean, rxTok: string | undefined, tplTok: string | undefined,
+  punctLine: (p: string) => string,
+): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
+  const codes: string[] = [];
+  const firsts: (LexFirstBytes | null)[] = [];
+  for (const t of ir.tokens) {
+    const code = scanTok(t, defs, stateful, rxTok, tplTok);
+    if (!code) continue;
+    codes.push(code);
+    firsts.push(lexTokFirstBytes(t));
+  }
+  for (const p of ir.puncts) {
+    codes.push(punctLine(p));
+    firsts.push(punctFirstBytes(p));
+  }
+  return { codes, firsts };
+}
+
+/** Shared first-byte dispatch for all lexFrom variants in this target. */
+function renderLexByteDispatchGo(codes: string[], firsts: (LexFirstBytes | null)[], indent: string): string {
+  const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
+  const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
+  let switchArms = '';
+  for (const arm of arms) {
+    switchArms += `${indent}\tcase ${arm.bytes.join(', ')}:\n`;
+    switchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
+  }
+  return `${indent}if c >= 128 {
+${fallback}
+${indent}} else {
+${indent}\tswitch c {
+${switchArms}${indent}\t}
+${indent}}`;
+}
+
 function newlinePartsGo(nl: NewlineCfg, pushFn: string): { state: string; stateFrom: string; boundary: string; ws: string; hooks: string } {
   const commentSkip = nl.comment
     ? `\t\tif strings.HasPrefix(src[p:], ${J(nl.comment)}) { e := p; for e < n && src[e] != 10 { e++ }; pos = e; continue }\n`
@@ -142,10 +178,11 @@ function lexer(ir: ParserIR): string {
   const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
-  const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
   const pushPunct = stateful ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length})` : (p: string) => `pushTok("", ${J(p)}, pos, pos + ${p.length})`;
-  const puncts = ir.puncts.map((p) =>
-    `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`).join('\n');
+  const punctLine = (p: string) =>
+    `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`;
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, rx?.regexToken, tpl?.token, punctLine);
+  const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t');
   const goMap = (a: string[]) => `map[string]bool{${a.map((x) => `${J(x)}: true`).join(', ')}}`;
   const rxState = rx ? `\tprevText, prevKind, bpText := "", "", ""
 \thasPrev, hasPrev2 := false, false
@@ -292,8 +329,7 @@ ${pushHooks}\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendi
 \t_ = pushTok
 `;
   const loopBody = `${nlBoundary}\t\tc := int(src[pos])
-${nlWs}${tplDispatch}${toks}
-${puncts}
+${nlWs}${tplDispatch}${cascade}
 \t\tpanic(fmt.Sprintf("lex error at %d", pos))`;
   if (rxOnly) {
     return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevText, prevKind, bpText string, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, string, string, string, bool, bool, []bool, bool, bool) {
