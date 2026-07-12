@@ -406,9 +406,29 @@ function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
   return `t := peek(); if t == nil { return false }; ${arms}; return false`;
 }
 
+function topReusePlan(ir: ParserIR): { topOneBody: string } | null {
+  const entry = ir.rules.find((r) => r.name === ir.entry);
+  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
+  const alt = entry.alts[0];
+  if (alt.length !== 1 || alt[0].t !== 'star') return null;
+  const step = alt[0].step;
+  if (step.t === 'rule') return { topOneBody: `\treturn parse${step.name}()` };
+  if (step.t === 'alt') {
+    for (const br of step.branches) {
+      if (br.length !== 1 || br[0].t !== 'rule') return null;
+    }
+    const tries = step.branches.map((br) => {
+      const name = (br[0] as { t: 'rule'; name: string }).name;
+      return `\t{ sp := pos; n := parse${name}(); if n >= 0 { return n }; pos = sp }`;
+    }).join('\n');
+    return { topOneBody: `${tries}\n\treturn -1` };
+  }
+  return null;
+}
+
 function rdRule(r: RdRule): string {
   if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save)) } }`;
+    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save), save) } }`;
     return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \tt := peek(); if t == nil { return -1 }
@@ -418,12 +438,33 @@ ${r.alts.map(arm).join(' ')}
 }`;
   }
   const alt = (steps: Step[]) =>
-    `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save)) }
+    `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save), save) }
 \tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
   return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 ${r.alts.map(alt).join('\n')}
 \treturn -1
+}`;
+}
+
+/** Entry rule that records per-top-kid lookahead ext via parseTopOne. */
+function rdEntryWithReuse(r: RdRule, plan: { topOneBody: string }): string {
+  return `func parseTopOne() int32 {
+${plan.topOneBody}
+}
+func parse${r.name}() int32 {
+\tsave := pos; sb := len(scratch)
+\tfor {
+\t\tsp := pos
+\t\tmaxLook = 0
+\t\tn := parseTopOne()
+\t\tif n < 0 { pos = sp; break }
+\t\text := nodes[n].TokEnd
+\t\tif maxLook > ext { ext = maxLook }
+\t\tnodes[n].Ext = ext
+\t\tscratch = append(scratch, n)
+\t}
+\treturn finish(${J(r.cstName)}, sb, offAt(save), save)
 }`;
 }
 
@@ -433,7 +474,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\tnode := matchTemplate()
 \t\tif node < 0 { return -1 }
 \t\tsb := len(scratch); scratch = append(scratch, node)
-\t\treturn finish(${J(r.cstName)}, sb, nodes[node].Offset)
+\t\treturn finish(${J(r.cstName)}, sb, nodes[node].Offset, nodes[node].TokStart)
 \t}\n`
     : '';
   const bin = r.binary.map((b) => `${J(b.op)}: {${b.lbp}, ${b.rbp}}`).join(', ');
@@ -441,24 +482,24 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
   const atoms = r.nudToks.map((k) => `${J(k)}: true`).join(', ');
   const bracketNud = (b: Bracket) => `\tif t.Text == ${J(b.first)} {
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
-\t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off) }
+\t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off, save) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
   const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.Nl && ' : ''}${nll ? `!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left)) && ` : ''}!_suppressCur[${J(b.first)}] && t.Text == ${J(b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
-\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue }
+\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue }
 \t\t\tpos = ledSave; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break
 \t\t}`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
 \t\tif !tailClosed && t.Kind == "$templateHead" {
 \t\t\tnode := matchTemplate()
-\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue }
+\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue }
 \t\t}` : '';
     return `\t\tif !tailClosed && t.Kind == ${J(tok)} {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf(t.Kind, t.Off, t.End)); pos++
-\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue
+\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue
 \t\t}${tplPart}`;
   };
   const post = r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ');
@@ -486,7 +527,7 @@ ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[
 ${r.postfixToks.map(postfixArm).join('\n')}
 \t\tif post, ok := ${r.name}POST[t.Text]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End)); pos++; tailClosed = true
-\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset); continue
+\t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue
 \t\t}
 \t\tinfo, ok := ${r.name}BIN[t.Text]
 \t\tif !ok || info.lbp <= minBp { break }
@@ -496,7 +537,7 @@ ${r.postfixToks.map(postfixArm).join('\n')}
 \t\trhs := ${r.name}bp(info.rbp)
 \t\tif rhs < 0 { pos = ledSave; scratch = scratch[:sb]; break }
 \t\tscratch = append(scratch, rhs)
-\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset)
+\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart)
 \t}
 \treturn left
 }
@@ -504,11 +545,11 @@ func ${r.name}nud(minBp int) int32 {
 \t_capped = false
 \tt := peek()
 \tif t == nil { return -1 }
-${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { _capped = true; return finish(${J(r.cstName)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { _capped = true; return finish(${J(r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \t_r := func() int32 {   // non-capped: a sub-parse may leave _capped set; force it false after
 ${tplNud}\tif ${r.name}ATOM[t.Kind] {
-\t\tsb := len(scratch); scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
-\t\treturn finish(${J(r.cstName)}, sb, t.Off)
+\t\tsb := len(scratch); ts := pos; scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
+\t\treturn finish(${J(r.cstName)}, sb, t.Off, ts)
 \t}
 ${r.nudBrackets.map(bracketNud).join('\n')}
 \tif pbp, ok := ${r.name}PRE[t.Text]; ok {
@@ -517,9 +558,9 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
 \t\toperand := ${r.name}bp(pbp)
 \t\tif operand < 0 { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
 \t\tscratch = append(scratch, operand)
-\t\treturn finish(${J(r.cstName)}, sb, t.Off)
+\t\treturn finish(${J(r.cstName)}, sb, t.Off, save)
 \t}
-${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return finish(${J(r.cstName)}, sb, offAt(save)) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return finish(${J(r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \treturn -1
 \t}()
 \t_capped = false
@@ -533,6 +574,7 @@ function docEditBlockGo(ir: ParserIR): string {
   const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
   const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
   const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
+  const topReuse = topReusePlan(ir);
   const zeroMeta = ', 0, 0, false, false, false, 0'; // Fd,Pd,Lc,Lb,Hd,Td after Kind,Off,End,Nl
   const adoptSuffix = `\t\t\t\tfor j := oIdx + 1; j < len(oldToks); j++ {
 \t\t\t\t\tot := oldToks[j]
@@ -982,73 +1024,238 @@ func checkStreamEq(text string, meta []alignMeta) bool {
 }
 `;
   const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(tokenize(src))';
+  const reuseFns = topReuse ? `
+func countLive(id int32) int {
+	n := 1
+	nd := &nodes[id]
+	if !nd.IsLeaf {
+		for i := 0; i < nd.KidCount; i++ { n += countLive(kids[nd.KidStart+i]) }
+	}
+	return n
+}
+func shouldReclaim(root int32) bool {
+	if root < 0 || arenaBaseline == 0 { return false }
+	live := countLive(root)
+	lim := arenaBaseline
+	if live > lim { lim = live }
+	return len(nodes) > arenaCompactK*lim
+}
+func shiftSubtree(id int32, byteDelta, tokDelta int) {
+	nd := &nodes[id]
+	nd.Offset += byteDelta
+	nd.End += byteDelta
+	nd.TokStart += tokDelta
+	nd.TokEnd += tokDelta
+	nd.Ext += tokDelta
+	if !nd.IsLeaf {
+		for i := 0; i < nd.KidCount; i++ { shiftSubtree(kids[nd.KidStart+i], byteDelta, tokDelta) }
+	}
+}
+func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int) (int32, int) {
+	if oldRoot < 0 { return -1, 0 }
+	old := nodes[oldRoot]
+	if old.IsLeaf { return -1, 0 }
+	oldKids := make([]int32, old.KidCount)
+	for i := 0; i < old.KidCount; i++ { oldKids[i] = kids[old.KidStart+i] }
+	prefixLen := 0
+	for prefixLen < len(oldKids) {
+		ext := nodes[oldKids[prefixLen]].Ext
+		if ext <= prefix { prefixLen++ } else { break }
+	}
+	suffixStart := len(oldKids)
+	for i := len(oldKids) - 1; i >= prefixLen; i-- {
+		if nodes[oldKids[i]].TokStart >= oldN-suffix { suffixStart = i } else { break }
+	}
+	prefixKids := oldKids[:prefixLen]
+	suffixCand := oldKids[suffixStart:]
+	tokDelta := newN - oldN
+	_src = newText
+	toks = toksFromMeta(newText, newMeta)
+	if prefixLen > 0 { pos = nodes[prefixKids[prefixLen-1]].TokEnd } else { pos = 0 }
+	scratch = scratch[:0]
+	mid := make([]int32, 0)
+	suffixBound := newN - suffix
+	maxCand := -1
+	for _, id := range suffixCand {
+		c := nodes[id].TokStart + tokDelta
+		if c > maxCand { maxCand = c }
+	}
+	finishHit := func(adoptFrom int) (int32, int) {
+		adopted := suffixCand[adoptFrom:]
+		for _, s := range adopted { shiftSubtree(s, byteDelta, tokDelta) }
+		children := make([]int32, 0, len(prefixKids)+len(mid)+len(adopted))
+		children = append(children, prefixKids...)
+		children = append(children, mid...)
+		children = append(children, adopted...)
+		off, end, tokStart, tokEnd := 0, 0, 0, 0
+		if len(children) > 0 {
+			off = nodes[children[0]].Offset
+			end = nodes[children[len(children)-1]].End
+			tokStart = nodes[children[0]].TokStart
+			tokEnd = nodes[children[len(children)-1]].TokEnd
+		}
+		kidStart := len(kids)
+		kids = append(kids, children...)
+		nodes = append(nodes, Node{Rule: old.Rule, KidStart: kidStart, KidCount: len(children), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd})
+		pos = newN
+		return int32(len(nodes) - 1), len(prefixKids) + len(adopted)
+	}
+	tryHit := func() (int32, int, bool) {
+		if pos < suffixBound { return -1, 0, false }
+		if len(suffixCand) == 0 {
+			if pos == newN { r, n := finishHit(0); return r, n, true }
+			return -1, 0, false
+		}
+		for i, id := range suffixCand {
+			if nodes[id].TokStart+tokDelta == pos { r, n := finishHit(i); return r, n, true }
+		}
+		return -1, 0, false
+	}
+	if r, n, ok := tryHit(); ok { return r, n }
+	if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
+	for {
+		if pos >= len(toks) {
+			if len(suffixCand) == 0 && pos == newN { return finishHit(0) }
+			if r, n, ok := tryHit(); ok { return r, n }
+			return -1, 0
+		}
+		maxLook = 0
+		sp := pos
+		n := parseTopOne()
+		if n < 0 { pos = sp; return -1, 0 }
+		ext := nodes[n].TokEnd
+		if maxLook > ext { ext = maxLook }
+		nodes[n].Ext = ext
+		mid = append(mid, n)
+		if r, rn, ok := tryHit(); ok { return r, rn }
+		if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
+	}
+}
+` : '';
+  const editParse = topReuse
+    ? `\tbyteDelta := len(d.text) - len(oldText)
+\treused := 0
+\tforceFresh := d.root < 0 || shouldReclaim(d.root)
+\tif !forceFresh {
+\t\tif got, n := tryReuseTop(d.root, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix); got >= 0 {
+\t\t\td.root = got
+\t\t\treused = n
+\t\t} else {
+\t\t\td.root = parse(toksFromMeta(d.text, d.toks))
+\t\t\treused = 0
+\t\t}
+\t} else {
+\t\td.root = parse(toksFromMeta(d.text, d.toks))
+\t\treused = 0
+\t}`
+    : `\treused := 0
+\td.root = parse(toksFromMeta(d.text, d.toks))`;
+  const treeEqFn = `
+func checkTreeEq(text string, root int32) bool {
+	// Match TS/Rust: incomplete parse (root>=0 but pos!=len) is not a tree.
+	rootOk := root >= 0 && pos == len(toks)
+	var s1 string
+	if rootOk {
+		var b strings.Builder
+		writeJSON(root, &b)
+		s1 = b.String()
+	}
+	saveNodes := append([]Node(nil), nodes...)
+	saveKids := append([]int32(nil), kids...)
+	saveScratch := append([]int32(nil), scratch...)
+	saveBaseline := arenaBaseline
+	saveToks := append([]Tok(nil), toks...)
+	savePos, saveSrc, saveML := pos, _src, maxLook
+	saveCap, saveSN, saveSC := _capped, _suppressNext, _suppressCur
+	nodes, kids, scratch = nil, nil, nil
+	_capped, _suppressNext, _suppressCur = false, nil, nil
+	fresh := parse(tokenize(text))
+	freshOk := fresh >= 0 && pos == len(toks)
+	ok := false
+	if !rootOk || !freshOk {
+		ok = rootOk == freshOk
+	} else {
+		var b2 strings.Builder
+		writeJSON(fresh, &b2)
+		ok = s1 == b2.String()
+	}
+	nodes, kids, scratch = saveNodes, saveKids, saveScratch
+	arenaBaseline, toks, pos, _src, maxLook = saveBaseline, saveToks, savePos, saveSrc, saveML
+	_capped, _suppressNext, _suppressCur = saveCap, saveSN, saveSC
+	return ok
+}
+`;
   return `type Edit struct { Start, End int; Text string }
 type alignMeta struct { Kind string; Off, End int; Nl bool; Fd, Pd int; Lc, Lb, Hd bool; Td int }
 type Align struct {
-\tOldN     int   \`json:"oldN"\`
-\tNewN     int   \`json:"newN"\`
-\tPrefix   int   \`json:"prefix"\`
-\tSuffix   int   \`json:"suffix"\`
-\tRelexed  int   \`json:"relexed"\`
-\tStreamEq *bool \`json:"streamEq,omitempty"\`
+	OldN     int   \`json:"oldN"\`
+	NewN     int   \`json:"newN"\`
+	Prefix   int   \`json:"prefix"\`
+	Suffix   int   \`json:"suffix"\`
+	Relexed  int   \`json:"relexed"\`
+	Reused   int   \`json:"reused"\`
+	StreamEq *bool \`json:"streamEq,omitempty"\`
+	TreeEq   *bool \`json:"treeEq,omitempty"\`
 }
 ${toMetaFn}
 func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
-\toldN, newN = len(oldToks), len(newToks)
-\tfor prefix < oldN && prefix < newN {
-\t\to, n := oldToks[prefix], newToks[prefix]
-\t\tif o.Kind != n.Kind || o.Off != n.Off || o.End != n.End || o.Nl != n.Nl { break }
-\t\tif oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
-\t\tprefix++
-\t}
-\tdelta := len(newText) - len(oldText)
-\tminN := oldN; if newN < minN { minN = newN }
-\tfor prefix+suffix < minN {
-\t\to, n := oldToks[oldN-1-suffix], newToks[newN-1-suffix]
-\t\tif o.Kind != n.Kind || o.Nl != n.Nl || n.Off != o.Off+delta || n.End != o.End+delta { break }
-\t\tif oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
-\t\tsuffix++
-\t}
-\treturn
+	oldN, newN = len(oldToks), len(newToks)
+	for prefix < oldN && prefix < newN {
+		o, n := oldToks[prefix], newToks[prefix]
+		if o.Kind != n.Kind || o.Off != n.Off || o.End != n.End || o.Nl != n.Nl { break }
+		if oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
+		prefix++
+	}
+	delta := len(newText) - len(oldText)
+	minN := oldN; if newN < minN { minN = newN }
+	for prefix+suffix < minN {
+		o, n := oldToks[oldN-1-suffix], newToks[newN-1-suffix]
+		if o.Kind != n.Kind || o.Nl != n.Nl || n.Off != o.Off+delta || n.End != o.End+delta { break }
+		if oldText[o.Off:o.End] != newText[n.Off:n.End] { break }
+		suffix++
+	}
+	return
 }
 func toksFromMeta(text string, meta []alignMeta) []Tok {
-\tt := make([]Tok, len(meta))
-\tfor i, m := range meta { t[i] = Tok{m.Kind, text[m.Off:m.End], m.Off, m.End, m.Nl} }
-\treturn t
+	t := make([]Tok, len(meta))
+	for i, m := range meta { t[i] = Tok{m.Kind, text[m.Off:m.End], m.Off, m.End, m.Nl} }
+	return t
 }
-${checkStreamEqFn}${windowHelpers}type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool }
+${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool }
 func NewDoc(src string) *Doc {
-\td := &Doc{text: src}
-\td.toks = ${initToks}
-\td.root = parse(tokenize(src))
-\treturn d
+	d := &Doc{text: src}
+	d.toks = ${initToks}
+	d.root = parse(tokenize(src))
+	return d
 }
 func (d *Doc) SetValidate(v bool) { d.validate = v }
 func (d *Doc) Text() string { return d.text }
 func (d *Doc) Root() int32 { return d.root }
 func (d *Doc) Align() *Align { return d.align }
 func applyEdit(text string, e Edit) string {
-\tn := len(text)
-\tstart, end := e.Start, e.End
-\tif start < 0 { start = 0 }
-\tif start > n { start = n }
-\tif end < start { end = start }
-\tif end > n { end = n }
-\treturn text[:start] + e.Text + text[end:]
+	n := len(text)
+	start, end := e.Start, e.End
+	if start < 0 { start = 0 }
+	if start > n { start = n }
+	if end < start { end = start }
+	if end > n { end = n }
+	return text[:start] + e.Text + text[end:]
 }
 func (d *Doc) Edit(edits []Edit) int32 {
-\toldText, oldToks := d.text, d.toks
-\trelexed := 0
+	oldText, oldToks := d.text, d.toks
+	relexed := 0
 ${editBody}
-\toldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
-\ta := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed}
-\tif d.validate {
-\t\tv := checkStreamEq(d.text, d.toks)
-\t\ta.StreamEq = &v
-\t}
-\td.align = a
-\td.root = parse(toksFromMeta(d.text, d.toks))
-\treturn d.root
+	oldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
+${editParse}
+	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused}
+	if d.validate {
+		v := checkStreamEq(d.text, d.toks)
+		a.StreamEq = &v
+		t := checkTreeEq(d.text, d.root)
+		a.TreeEq = &t
+	}
+	d.align = a
+	return d.root
 }`;
 }
 
@@ -1088,7 +1295,12 @@ func Tokenize(src string) []Tok { return lex(src) }
   },
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
     const ir = portableIR(grammar);
-    const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
+    const reuse = topReusePlan(ir);
+    const ruleFns = ir.rules.map((r) => {
+      if (r.kind === 'pratt') return prattRule(r, ir.tpl);
+      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse);
+      return rdRule(r);
+    }).join('\n\n');
     const matchTemplate = ir.tpl ? `func matchTemplate() int32 {
 \tt := peek()
 \tif t == nil || t.Kind != "$templateHead" { return -1 }
@@ -1104,7 +1316,7 @@ func Tokenize(src string) []Tok { return lex(src) }
 \t\tif next.Kind == "$templateTail" { scratch = append(scratch, mkLeaf("$templateTail", next.Off, next.End)); pos++; break }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1
 \t}
-\treturn finish("$template", sb, t.Off)
+\treturn finish("$template", sb, t.Off, save)
 }
 ` : '';
     return `// GENERATED by emit-portable.ts (goTarget) — parser LIBRARY for grammar "${ir.grammarName}".
@@ -1124,15 +1336,17 @@ type Tok struct {
 \tNl         bool
 }
 // Arena node: an int32 index into nodes; children are a flat range in kids.
+// Ext is lookahead watermark for top-level reuse (not emitted in JSON).
 type Node struct {
 \tRule, TokenType string
 \tIsLeaf          bool
-\tKidStart, KidCount, Offset, End int
+\tKidStart, KidCount, Offset, End, TokStart, TokEnd, Ext int
 }
 type bp struct{ lbp, rbp int }
 
 var toks []Tok
 var pos int
+var maxLook int
 var _capped bool
 var _src string
 var _suppressNext map[string]bool
@@ -1140,27 +1354,31 @@ var _suppressCur map[string]bool
 var nodes []Node
 var kids []int32
 var scratch []int32
+var arenaBaseline int
+const arenaCompactK = 4
 
 ${lexerSrc ?? ''}
 
 func peek() *Tok {
+\tif pos+1 > maxLook { maxLook = pos + 1 }
 \tif pos < len(toks) { return &toks[pos] }
 \treturn nil
 }
 func offAt(i int) int { if i < len(toks) { return toks[i].Off }; return 0 }
 func mkLeaf(ttype string, off, end int) int32 {
-\tnodes = append(nodes, Node{TokenType: ttype, IsLeaf: true, Offset: off, End: end})
+\tnodes = append(nodes, Node{TokenType: ttype, IsLeaf: true, Offset: off, End: end, TokStart: pos, TokEnd: pos + 1})
 \treturn int32(len(nodes) - 1)
 }
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
-func finish(rule string, sb, fallbackOff int) int32 {
+// tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
+func finish(rule string, sb, fallbackOff, tokStart int) int32 {
 \tnn := len(scratch)
 \tkidStart := len(kids)
 \toff, end := fallbackOff, fallbackOff
 \tif nn > sb { off = nodes[scratch[sb]].Offset; end = nodes[scratch[nn-1]].End }
 \tkids = append(kids, scratch[sb:nn]...)
 \tscratch = scratch[:sb]
-\tnodes = append(nodes, Node{Rule: rule, KidStart: kidStart, KidCount: nn - sb, Offset: off, End: end})
+\tnodes = append(nodes, Node{Rule: rule, KidStart: kidStart, KidCount: nn - sb, Offset: off, End: end, TokStart: tokStart, TokEnd: pos})
 \treturn int32(len(nodes) - 1)
 }
 func matchLit(value, ttype string) bool {
@@ -1226,8 +1444,15 @@ func tokenize(src string) []Tok {
 func parse(t []Tok) int32 {
 \ttoks = t
 \tpos = 0
+\tmaxLook = 0
 \tnodes = nodes[:0]; kids = kids[:0]; scratch = scratch[:0]
-\treturn parse${ir.entry}()
+\troot := parse${ir.entry}()
+\tarenaBaseline = len(nodes)
+\t// Full-consumption guard (mirrors the TS wrapper): a partial parse is a reject, not a
+\t// tree. Without this, Doc keeps a partial root after a rejecting edit and the next
+\t// edit's reuse path resurrects it as if it were a valid old tree.
+\tif root >= 0 && pos != len(toks) { return -1 }
+\treturn root
 }
 
 ${docEditBlockGo(ir)}
@@ -1285,6 +1510,22 @@ func main() {
 \t\tvar b strings.Builder
 \t\twriteJSON(root, &b)
 \t\tos.Stdout.WriteString(b.String())
+\t\treturn
+\t}
+\tif len(os.Args) > 1 && os.Args[1] == "tok-spans" {
+\t\troot := parse(tokenize(src))
+\t\tif root < 0 || pos != len(toks) {
+\t\t\tfmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", pos, len(toks))
+\t\t\tos.Exit(1)
+\t\t}
+\t\tnd := &nodes[root]
+\t\tfor i := 0; i < nd.KidCount; i++ {
+\t\t\tk := &nodes[kids[nd.KidStart+i]]
+\t\t\tname := k.Rule
+\t\t\tif k.IsLeaf { name = k.TokenType }
+\t\t\tfmt.Printf("%s\\t%d\\t%d\\n", name, k.TokStart, k.TokEnd)
+\t\t}
+\t\tfmt.Printf("total\\t0\\t%d\\n", pos)
 \t\treturn
 \t}
 \troot := parse(tokenize(src))

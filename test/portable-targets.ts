@@ -271,7 +271,12 @@ function runProc(cmd: string, args: string[], src: string): Outcome {
   try { return { ok: true, cst: canon(JSON.parse(execFileSync(cmd, args, { input: src, stdio: ['pipe', 'pipe', 'pipe'] }).toString())) }; }
   catch { return { ok: false }; }
 }
-type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; streamEq?: boolean };
+function runTokSpans(cmd: string, args: string[], src: string): string | null {
+  const r = spawnSync(cmd, args, { input: src, encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  return r.stdout;
+}
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; reused?: number; streamEq?: boolean; treeEq?: boolean };
 type EditOutcome = Outcome & { align?: Align };
 function parseAlignStderr(stderr: string): Align | undefined {
   for (const line of stderr.split('\n')) {
@@ -325,10 +330,37 @@ const expectAlign = (g: CstGrammar, init: string, batches: EditBatch[]): Align =
 };
 
 type EditBatch = [number, number, string][];
-type EditScenario = { init: string; batches: EditBatch[]; large?: boolean; maxRelexed?: number; fullRelex?: boolean };
+type EditScenario = {
+  init: string;
+  batches: EditBatch[];
+  large?: boolean;
+  maxRelexed?: number;
+  fullRelex?: boolean;
+  /** Minimum reused top-level kids (tree reuse) — all targets. */
+  minReused?: number;
+  /** Exact reused count — all targets. */
+  reused?: number;
+  /** Reused must be strictly less than this (lookahead / ext gate) — all targets. */
+  maxReused?: number;
+  /** Long arena session: assert treeEq after every cumulative batch prefix. */
+  longSession?: boolean;
+};
 const calcLargeInit = '1+2*3+'.repeat(199) + '1+2*3';
+const calcReuseInit = Array.from({ length: 40 }, (_, i) => `let x${i}=${i};`).join('\n');
+const calcReuseMid = calcReuseInit.indexOf('let x20=') + 'let x20='.length;
+const calcReuseFirstEq = calcReuseInit.indexOf('=') + 1;
+const calcReuseLastEq = calcReuseInit.lastIndexOf('=') + 1;
+const calcReuseSemi = calcReuseInit.indexOf(';');
+const calcLongInit = Array.from({ length: 80 }, (_, i) => `let y${i}=${i};`).join('\n');
+const calcLongBatches: EditBatch[] = Array.from({ length: 24 }, (_, i) => {
+  const needle = `let y${i}=`;
+  const at = calcLongInit.indexOf(needle) + needle.length;
+  return [[at, at + 1, String((i * 7 + 3) % 10)]] as EditBatch;
+});
 const envspecLargeInit = 'A=1\n'.repeat(300);
 const regexjsLargeInit = 'var r = /abc/g; a / b;\n'.repeat(60);
+const jsLookaheadInit = 'let x = (a)\nfoo;\nbar;';
+const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peeked-into second stmt
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
@@ -339,6 +371,23 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: '1 2;', batches: [[[1, 2, '']]] },
     { init: calcLargeInit, batches: [[[calcLargeInit.length, calcLargeInit.length, '+4']]], maxRelexed: 5 },
     { init: calcLargeInit, batches: [[[0, 1, '9']]], maxRelexed: 8 },
+    // S7b tree-reuse scenarios
+    { init: calcReuseInit, batches: [[[calcReuseMid, calcReuseMid + 1, '9']]], minReused: 30 },
+    { init: calcReuseInit, batches: [[[calcReuseFirstEq, calcReuseFirstEq + 1, '9']]], minReused: 1 },
+    { init: calcReuseInit, batches: [[[calcReuseLastEq, calcReuseLastEq + 1, '9']]], minReused: 1 },
+    { init: calcReuseInit, batches: [[[calcReuseSemi - 1, calcReuseSemi + 1, '9;']]], minReused: 1 },
+    { init: calcReuseInit, batches: [[[calcReuseMid, calcReuseMid + 1, '9']], [[calcReuseMid, calcReuseMid + 1, '8']]], minReused: 30 },
+    // Boundary-hit must be exact (===): merging b;c via `;`→`+` lands on `d`; a `>=` mutant would adopt too early.
+    { init: 'a;\nb;\nc;\nd;', batches: [[[4, 5, '+']]] },
+    // Mid overshoot past suffix candidates → tryReuseTop fails, full-parse fallback (reused:0) still ≡ fresh.
+    { init: 'a;\nb;\nc;\nd;', batches: [[[7, 8, '+']]], reused: 0 },
+    // S7c long arena session: ≥20 continuous edits; each cumulative prefix treeEq + final ≡ fresh.
+    { init: calcLongInit, batches: calcLongBatches, longSession: true, minReused: 1 },
+    // Reject-then-edit: batch 1 breaks the doc; batch 2 must not resurrect a partial old
+    // tree via reuse (a Go parse wrapper without the full-consumption guard did exactly that).
+    { init: 'let a = 1;\nlet b = 2;\nlet c = 3;', batches: [[[19, 20, '']], [[29, 30, '4']]], reused: 0 },
+    // Reject-then-repair: same setup, batch 2 restores validity; must parse fresh (reused:0) ≡ fresh.
+    { init: 'let a = 1;\nlet b = 2;\nlet c = 3;', batches: [[[19, 20, '']], [[19, 19, '2']]], reused: 0 },
   ],
   javascript: [
     { init: 'let a = 1;\nf(a);', batches: [[[8, 9, '42']]] },
@@ -347,6 +396,8 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'let a = 1;\nf(a);', batches: [[[16, 16, '\ng(b);']], [[0, 4, 'var']]] },
     { init: 'let a = 1;\nf(a);\n'.repeat(80), batches: [[[688, 689, '9']]], large: true, maxRelexed: 15 },
     { init: 'var q = `x${a/b}y`;', batches: [[[12, 13, 'c']]] },
+    // predecessor peeked into second stmt (ext > tokEnd); editing that region must not keep stmt0
+    { init: jsLookaheadInit, batches: [[[jsLookaheadEdit, jsLookaheadEdit + 1, '+']]], maxReused: 1 },
   ],
   templatejs: [
     { init: '`a${x}b`;', batches: [[[4, 5, 'y']]] },
@@ -357,14 +408,14 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: '`a`; z; `b${x}c`;', batches: [[[5, 6, 'w']]] },
   ],
   envspec: [
-    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]] },
-    { init: envspecLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 10 },
-    { init: 'A=fn(1,\n2)\nB=3', batches: [[[6, 7, '9']]] },
-    { init: 'A=fn(1,\n2)\nB=3', batches: [[[4, 4, '(']]] },
-    { init: 'A=1\n# note\nB=2', batches: [[[7, 7, 'x']]] },
-    { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]] },
-    { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10 },
-    { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]] },
+    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]], reused: 0 },
+    { init: envspecLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 10, reused: 0 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[6, 7, '9']]], reused: 0 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[4, 4, '(']]], reused: 0 },
+    { init: 'A=1\n# note\nB=2', batches: [[[7, 7, 'x']]], reused: 0 },
+    { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]], reused: 0 },
+    { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10, reused: 0 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]], reused: 0 },
   ],
   regexjs: [
     { init: 'var re = /[a-z]+/i; x / y;', batches: [[[11, 12, '0']]] },
@@ -412,6 +463,117 @@ for (const c of CASES) {
     writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
     execFileSync('rustc', ['-O', '-A', 'warnings', rfile, '-o', `${dir}/pr`], { stdio: 'pipe' });
     runners.push({ label: 'rust', run: (src) => runProc(`${dir}/pr`, [], src) });
+  }
+
+  // tok-spans: top-level kids record parse-consumption [tokStart, tokEnd); cross-target
+  // identity + contiguous partition of the consumed token stream. Empty accept inputs are
+  // still run (identity), but contiguous checks skip when there are no kids.
+  // envspec: Newline tokens are zero-width in the byte sense but still occupy a token index;
+  // if contiguous ever fails here, partition by grammar with evidence rather than relaxing.
+  {
+    const spanRunners: Array<{ label: string; cmd: string; args: string[] }> = [
+      { label: 'typescript', cmd: 'node', args: [tsFile, 'tok-spans'] },
+    ];
+    if (HAS_GO && !c.tsOnly) spanRunners.push({ label: 'go', cmd: `${dir}/go/p`, args: ['tok-spans'] });
+    if (HAS_RUST && !c.tsOnly) spanRunners.push({ label: 'rust', cmd: `${dir}/pr`, args: ['tok-spans'] });
+
+    const parseSpans = (out: string) => {
+      const lines = out.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd().split('\n').filter(Boolean);
+      const totalLine = lines[lines.length - 1]!;
+      const kids = lines.slice(0, -1).map((line) => {
+        const [name, a, b] = line.split('\t');
+        return { name: name!, tokStart: Number(a), tokEnd: Number(b) };
+      });
+      const [, , tot] = totalLine.split('\t');
+      return { kids, total: Number(tot) };
+    };
+    const assertPartition = (src: string, out: string, label: string) => {
+      const { kids, total } = parseSpans(out);
+      if (kids.length === 0) {
+        if (total !== 0) {
+          failures++;
+          console.log(`  ${c.grammar}/${label}: tok-spans empty kids but total=${total} on ${JSON.stringify(src)}`);
+        }
+        return;
+      }
+      if (kids[0]!.tokStart !== 0) {
+        failures++;
+        console.log(`  ${c.grammar}/${label}: tok-spans first tokStart want=0 got=${kids[0]!.tokStart} on ${JSON.stringify(src)}`);
+      }
+      if (kids[kids.length - 1]!.tokEnd !== total) {
+        failures++;
+        console.log(`  ${c.grammar}/${label}: tok-spans last tokEnd want=${total} got=${kids[kids.length - 1]!.tokEnd} on ${JSON.stringify(src)}`);
+      }
+      for (let i = 0; i < kids.length; i++) {
+        const k = kids[i]!;
+        if (k.tokStart > k.tokEnd) {
+          failures++;
+          console.log(`  ${c.grammar}/${label}: tok-spans inverted span ${k.name} [${k.tokStart},${k.tokEnd}) on ${JSON.stringify(src)}`);
+        }
+        if (i > 0 && kids[i - 1]!.tokEnd !== k.tokStart) {
+          failures++;
+          console.log(`  ${c.grammar}/${label}: tok-spans gap/overlap at kid ${i}: prevEnd=${kids[i - 1]!.tokEnd} start=${k.tokStart} on ${JSON.stringify(src)}`);
+          console.log(`      spans:\n${out}`);
+        }
+      }
+    };
+
+    const cases = c.accept.slice(0, 2);
+    for (const src of cases) {
+      const outs: Array<{ label: string; out: string | null }> = spanRunners.map((r) => ({
+        label: r.label,
+        out: runTokSpans(r.cmd, r.args, src),
+      }));
+      const ref = outs[0]!;
+      if (ref.out === null) {
+        failures++;
+        console.log(`  ${c.grammar}/${ref.label}: tok-spans reject/fail on accept case ${JSON.stringify(src)}`);
+        continue;
+      }
+      for (const o of outs.slice(1)) {
+        if (o.out === null) {
+          failures++;
+          console.log(`  ${c.grammar}/${o.label}: tok-spans reject/fail on accept case ${JSON.stringify(src)}`);
+          continue;
+        }
+        if (o.out !== ref.out) {
+          failures++;
+          console.log(`  ${c.grammar}: tok-spans cross-target mismatch ${ref.label}≢${o.label} on ${JSON.stringify(src)}`);
+          console.log(`      ${ref.label}: ${JSON.stringify(ref.out)}`);
+          console.log(`      ${o.label}: ${JSON.stringify(o.out)}`);
+        }
+      }
+      for (const o of outs) {
+        if (o.out !== null) assertPartition(src, o.out, o.label);
+      }
+    }
+
+    if (c.grammar === 'calc') {
+      const src = 'let a=1;\n2+3;\nlet b=a;';
+      const out = runTokSpans(spanRunners[0]!.cmd, spanRunners[0]!.args, src);
+      if (out === null) {
+        failures++;
+        console.log(`  calc: tok-spans reject on trailing-punct probe`);
+      } else {
+        for (const r of spanRunners.slice(1)) {
+          const o = runTokSpans(r.cmd, r.args, src);
+          if (o !== out) {
+            failures++;
+            console.log(`  calc: tok-spans cross-target mismatch on trailing-punct probe (${r.label})`);
+          }
+        }
+        const { kids } = parseSpans(out);
+        const first = kids[0];
+        if (!first || first.tokEnd !== 5) {
+          failures++;
+          console.log(`  calc: first Stmt tokEnd want=5 got=${first?.tokEnd} (name=${first?.name}) on trailing-punct probe`);
+          console.log(`      spans:\n${out}`);
+        } else {
+          console.log(`  calc: tok-spans trailing-punct Stmt tokEnd=5 ✓`);
+        }
+      }
+    }
+    console.log(`  ${c.grammar}: tok-spans checked on ${cases.length} accept case(s)${c.grammar === 'calc' ? ' + trailing-punct probe' : ''}`);
   }
 
   for (const r of runners) {
@@ -473,6 +635,36 @@ for (const c of CASES) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: streamEq want=true got=${JSON.stringify(a.align.streamEq)}`);
           }
+          if (a.align.treeEq !== true) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: treeEq want=true got=${JSON.stringify(a.align.treeEq)}`);
+          }
+          if (a.align.reused === undefined) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: reused field missing got=${JSON.stringify(a.align)}`);
+          }
+          if (sc.reused !== undefined && a.align.reused !== sc.reused) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: reused want=${sc.reused} got=${JSON.stringify(a.align.reused)}`);
+          }
+          if (sc.minReused !== undefined && (a.align.reused === undefined || a.align.reused < sc.minReused)) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: reused want>=${sc.minReused} got=${JSON.stringify(a.align.reused)}`);
+          }
+          if (sc.maxReused !== undefined && (a.align.reused === undefined || a.align.reused > sc.maxReused)) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: reused want<=${sc.maxReused} got=${JSON.stringify(a.align.reused)}`);
+          }
+          if (sc.longSession) {
+            for (let bi = 1; bi < sc.batches.length; bi++) {
+              const prefixPayload = JSON.stringify({ init: sc.init, batches: sc.batches.slice(0, bi) });
+              const p = runEdit(prefixPayload);
+              if (p.align?.treeEq !== true) {
+                failures++;
+                console.log(`  ${c.grammar}/${r.label}: longSession batch ${bi} treeEq want=true got=${JSON.stringify(p.align?.treeEq)}`);
+              }
+            }
+          }
           if (sc.maxRelexed !== undefined && (a.align.relexed === undefined || a.align.relexed > sc.maxRelexed)) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: relexed want<=${sc.maxRelexed} got=${JSON.stringify(a.align.relexed)}`);
@@ -486,16 +678,16 @@ for (const c of CASES) {
           console.log(`  ${c.grammar}/${r.label}: token-align mismatch want=${JSON.stringify(want)} got=${JSON.stringify(a.align)}`);
         }
         const f = runFast(payload);
-        const fiveEq = !!(a.align && f.align
+        const sixEq = !!(a.align && f.align
           && a.align.oldN === f.align.oldN && a.align.newN === f.align.newN
           && a.align.prefix === f.align.prefix && a.align.suffix === f.align.suffix
-          && a.align.relexed === f.align.relexed);
-        const noStreamEq = f.align !== undefined && !('streamEq' in f.align);
+          && a.align.relexed === f.align.relexed && a.align.reused === f.align.reused);
+        const noValidateKeys = f.align !== undefined && !('streamEq' in f.align) && !('treeEq' in f.align);
         const outEq = a.ok === f.ok && (!a.ok || a.cst === f.cst);
-        if (fiveEq && noStreamEq && outEq) fastOk++;
+        if (sixEq && noValidateKeys && outEq) fastOk++;
         else {
           failures++;
-          console.log(`  ${c.grammar}/${r.label}: fast≢validated fiveEq=${fiveEq} noStreamEq=${noStreamEq} outEq=${outEq} validated=${JSON.stringify(a.align)} fast=${JSON.stringify(f.align)}`);
+          console.log(`  ${c.grammar}/${r.label}: fast≢validated sixEq=${sixEq} noValidateKeys=${noValidateKeys} outEq=${outEq} validated=${JSON.stringify(a.align)} fast=${JSON.stringify(f.align)}`);
         }
       }
       console.log(`  ${c.grammar}/${r.label}: ${editOk}/${editScenarios.length} edit-sessions ≡ fresh`);
