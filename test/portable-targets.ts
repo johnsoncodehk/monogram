@@ -336,12 +336,14 @@ type EditScenario = {
   large?: boolean;
   maxRelexed?: number;
   fullRelex?: boolean;
-  /** TS-only: minimum reused top-level kids (tree reuse). */
+  /** Minimum reused top-level kids (tree reuse) — all targets. */
   minReused?: number;
-  /** TS-only: exact reused count. */
+  /** Exact reused count — all targets. */
   reused?: number;
-  /** TS-only: reused must be strictly less than this (lookahead / ext gate). */
+  /** Reused must be strictly less than this (lookahead / ext gate) — all targets. */
   maxReused?: number;
+  /** Long arena session: assert treeEq after every cumulative batch prefix. */
+  longSession?: boolean;
 };
 const calcLargeInit = '1+2*3+'.repeat(199) + '1+2*3';
 const calcReuseInit = Array.from({ length: 40 }, (_, i) => `let x${i}=${i};`).join('\n');
@@ -349,6 +351,12 @@ const calcReuseMid = calcReuseInit.indexOf('let x20=') + 'let x20='.length;
 const calcReuseFirstEq = calcReuseInit.indexOf('=') + 1;
 const calcReuseLastEq = calcReuseInit.lastIndexOf('=') + 1;
 const calcReuseSemi = calcReuseInit.indexOf(';');
+const calcLongInit = Array.from({ length: 80 }, (_, i) => `let y${i}=${i};`).join('\n');
+const calcLongBatches: EditBatch[] = Array.from({ length: 24 }, (_, i) => {
+  const needle = `let y${i}=`;
+  const at = calcLongInit.indexOf(needle) + needle.length;
+  return [[at, at + 1, String((i * 7 + 3) % 10)]] as EditBatch;
+});
 const envspecLargeInit = 'A=1\n'.repeat(300);
 const regexjsLargeInit = 'var r = /abc/g; a / b;\n'.repeat(60);
 const jsLookaheadInit = 'let x = (a)\nfoo;\nbar;';
@@ -373,6 +381,13 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'a;\nb;\nc;\nd;', batches: [[[4, 5, '+']]] },
     // Mid overshoot past suffix candidates → tryReuseTop fails, full-parse fallback (reused:0) still ≡ fresh.
     { init: 'a;\nb;\nc;\nd;', batches: [[[7, 8, '+']]], reused: 0 },
+    // S7c long arena session: ≥20 continuous edits; each cumulative prefix treeEq + final ≡ fresh.
+    { init: calcLongInit, batches: calcLongBatches, longSession: true, minReused: 1 },
+    // Reject-then-edit: batch 1 breaks the doc; batch 2 must not resurrect a partial old
+    // tree via reuse (a Go parse wrapper without the full-consumption guard did exactly that).
+    { init: 'let a = 1;\nlet b = 2;\nlet c = 3;', batches: [[[19, 20, '']], [[29, 30, '4']]], reused: 0 },
+    // Reject-then-repair: same setup, batch 2 restores validity; must parse fresh (reused:0) ≡ fresh.
+    { init: 'let a = 1;\nlet b = 2;\nlet c = 3;', batches: [[[19, 20, '']], [[19, 19, '2']]], reused: 0 },
   ],
   javascript: [
     { init: 'let a = 1;\nf(a);', batches: [[[8, 9, '42']]] },
@@ -620,7 +635,7 @@ for (const c of CASES) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: streamEq want=true got=${JSON.stringify(a.align.streamEq)}`);
           }
-          if (r.label === 'typescript' && a.align.treeEq !== true) {
+          if (a.align.treeEq !== true) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: treeEq want=true got=${JSON.stringify(a.align.treeEq)}`);
           }
@@ -632,13 +647,23 @@ for (const c of CASES) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: reused want=${sc.reused} got=${JSON.stringify(a.align.reused)}`);
           }
-          if (r.label === 'typescript' && sc.minReused !== undefined && (a.align.reused === undefined || a.align.reused < sc.minReused)) {
+          if (sc.minReused !== undefined && (a.align.reused === undefined || a.align.reused < sc.minReused)) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: reused want>=${sc.minReused} got=${JSON.stringify(a.align.reused)}`);
           }
-          if (r.label === 'typescript' && sc.maxReused !== undefined && (a.align.reused === undefined || a.align.reused > sc.maxReused)) {
+          if (sc.maxReused !== undefined && (a.align.reused === undefined || a.align.reused > sc.maxReused)) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: reused want<=${sc.maxReused} got=${JSON.stringify(a.align.reused)}`);
+          }
+          if (sc.longSession) {
+            for (let bi = 1; bi < sc.batches.length; bi++) {
+              const prefixPayload = JSON.stringify({ init: sc.init, batches: sc.batches.slice(0, bi) });
+              const p = runEdit(prefixPayload);
+              if (p.align?.treeEq !== true) {
+                failures++;
+                console.log(`  ${c.grammar}/${r.label}: longSession batch ${bi} treeEq want=true got=${JSON.stringify(p.align?.treeEq)}`);
+              }
+            }
           }
           if (sc.maxRelexed !== undefined && (a.align.relexed === undefined || a.align.relexed > sc.maxRelexed)) {
             failures++;
