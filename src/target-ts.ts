@@ -140,7 +140,9 @@ function lexer(ir: ParserIR): string {
   const tpl = ir.tpl;
   const nl = ir.newlineCfg;
   const rxOnly = !!(rx && !tpl && !nl);
-  const rxOrTpl = !!(rx || tpl) && !rxOnly;
+  const tplOnly = !!(tpl && !rx && !nl);
+  const rxTpl = !!(rx && tpl && !nl);
+  const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
   const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
@@ -197,10 +199,35 @@ ${emitHooks}
     const isParenHead = prevText === ')' && lastClose;
     return !isExprKw && !isParenHead && (_divK.has(prevKind) || _divT.has(prevText));
   }
-  function emit(kind: string, text: string, off: number, end: number): void {
+` : '';
+  const tplStateFrom = tpl ? `  function scanTplSpan(p: number): { interp: boolean; end: number } {
+    while (p < n) {
+      if (src.startsWith(${J(tpl.interpOpen)}, p)) return { interp: true, end: p + ${tpl.interpOpen.length} };
+      if (src.charCodeAt(p) === 92) { p += 2; continue; }
+      if (src.startsWith(${J(tpl.open)}, p)) return { interp: false, end: p + ${tpl.open.length} };
+      p++;
+    }
+    return { interp: false, end: p };
+  }
+` : '';
+  const emitRxOnly = rx ? `  function emit(kind: string, text: string, off: number, end: number): void {
     if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
     else if (text === ')') { lastClose = parenHead.pop() ?? false; }
     if (_pav.has(text)) lastBang = prevIsValue();
+    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;
+    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;
+  }
+` : '';
+  const emitTplOnly = tpl ? `  function emit(kind: string, text: string, off: number, end: number): void {
+    if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }
+    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;
+  }
+` : '';
+  const emitRxTpl = (rx && tpl) ? `  function emit(kind: string, text: string, off: number, end: number): void {
+    if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
+    else if (text === ')') { lastClose = parenHead.pop() ?? false; }
+    if (_pav.has(text)) lastBang = prevIsValue();
+    if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }
     toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;
     bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;
   }
@@ -242,7 +269,7 @@ ${puncts}
     return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
   const n = src.length;
   const base = toks.length;
-${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${emitRxOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
   return { pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang };
@@ -250,6 +277,36 @@ ${loopBody}
 function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   lexFrom(src, 0, false, '', '', false, '', false, [], false, false, toks);
+  return toks;
+}`;
+  }
+  if (tplOnly) {
+    return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
+  const n = src.length;
+  const base = toks.length;
+${defs.length ? '  _s = src;\n' : ''}${tplStateFrom}${emitTplOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${loopBody}
+  }
+  return { pos, pendingNl, templateStack };
+}
+function lex(src: string): Tok[] {
+  const toks: Tok[] = [];
+  lexFrom(src, 0, false, [], toks);
+  return toks;
+}`;
+  }
+  if (rxTpl) {
+    return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
+  const n = src.length;
+  const base = toks.length;
+${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${tplStateFrom}${emitRxTpl}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${loopBody}
+  }
+  return { pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack };
+}
+function lex(src: string): Tok[] {
+  const toks: Tok[] = [];
+  lexFrom(src, 0, false, '', '', false, '', false, [], false, false, [], toks);
   return toks;
 }`;
   }
@@ -425,10 +482,56 @@ ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${se
 }
 
 function docEditBlock(ir: ParserIR): string {
-  const windowLex = !ir.tpl && (!ir.regexCtx || !ir.newlineCfg);
+  const windowLex = (!ir.regexCtx && !ir.tpl) || !ir.newlineCfg;
   const hasNewline = !!(ir.newlineCfg && !ir.regexCtx && !ir.tpl);
   const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
-  const zeroMeta = ', fd: 0, pd: 0, lc: false, lb: false, hd: false';
+  const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
+  const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
+  const zeroMeta = ', fd: 0, pd: 0, lc: false, lb: false, hd: false, td: 0';
+  const adoptSuffix = `for (let j = oIdx + 1; j < oldToks.length; j++) {
+            const ot = oldToks[j];
+            out.push({ kind: ot.kind, off: ot.off + delta, end: ot.end + delta, nl: ot.nl, fd: ot.fd, pd: ot.pd, lc: ot.lc, lb: ot.lb, hd: ot.hd, td: ot.td });
+          }`;
+  const findTokAtOff = `
+function findTokAtOff(toks: AlignMeta[], off: number): number {
+  let lo = 0, hi = toks.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (toks[mid].off < off) lo = mid + 1;
+    else if (toks[mid].off > off) hi = mid - 1;
+    else return mid;
+  }
+  return -1;
+}`;
+  const reconstructParens = `
+function reconstructParens(toks: AlignMeta[], text: string, b: number): boolean[] {
+  let need = b >= 0 ? toks[b].pd : 0;
+  const out: boolean[] = [];
+  for (let i = b; i >= 0 && need > 0; i--) {
+    const t = toks[i];
+    if (text.slice(t.off, t.end) === '(' && t.pd === need) { out[need - 1] = t.hd; need--; }
+  }
+  return out;
+}
+function parenStacksEq(a: boolean[], b: boolean[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}`;
+  const tplAnchor = `  let maxIdx = -1;
+  for (let i = 0; i < oldToks.length; i++) {
+    if (oldToks[i].end < start) maxIdx = i;
+    else break;
+  }
+  const rb0 = maxIdx >= 0 ? maxIdx - 1 : -1;
+  let rb = -1;
+  if (rb0 >= 0) {
+    for (let i = rb0; i < oldToks.length; i++) {
+      if (oldToks[i].end > start) break;
+      if (oldToks[i].td === 0) { rb = i; break; }
+    }
+  }
+  const out: AlignMeta[] = rb >= 0 ? oldToks.slice(0, rb + 1) : [];`;
   const windowHelpers = windowLex ? (hasNewline ? `
 function findTokAtOffKind(toks: AlignMeta[], off: number, kind: string): number {
   let lo = 0, hi = toks.length - 1, hit = -1;
@@ -469,17 +572,14 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
     ({ pos: scanOff, pendingNl, lineStart, emittedContent, flowDepth } = lexFrom(newText, scanOff, pendingNl, lineStart, emittedContent, flowDepth, scratch, 1));
     if (scratch.length === before) break;
     const t = scratch[scratch.length - 1];
-    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: flowDepth, pd: 0, lc: false, lb: false, hd: false });
+    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: flowDepth, pd: 0, lc: false, lb: false, hd: false, td: 0 });
     relexed++;
     if (t.off >= editEnd) {
       const oIdx = findTokAtOffKind(oldToks, t.off - delta, t.kind);
       if (oIdx >= 0) {
         const o = oldToks[oIdx];
         if (o.kind === t.kind && o.end === t.end - delta && o.nl === t.nl && o.fd === flowDepth && oldText.slice(o.off, o.end) === newText.slice(t.off, t.end)) {
-          for (let j = oIdx + 1; j < oldToks.length; j++) {
-            const ot = oldToks[j];
-            out.push({ kind: ot.kind, off: ot.off + delta, end: ot.end + delta, nl: ot.nl, fd: ot.fd, pd: ot.pd, lc: ot.lc, lb: ot.lb, hd: ot.hd });
-          }
+          ${adoptSuffix}
           return { toks: out, relexed };
         }
       }
@@ -487,31 +587,7 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
   }
   return { toks: out, relexed };
 }
-` : rxOnly ? `
-function findTokAtOff(toks: AlignMeta[], off: number): number {
-  let lo = 0, hi = toks.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (toks[mid].off < off) lo = mid + 1;
-    else if (toks[mid].off > off) hi = mid - 1;
-    else return mid;
-  }
-  return -1;
-}
-function reconstructParens(toks: AlignMeta[], text: string, b: number): boolean[] {
-  let need = b >= 0 ? toks[b].pd : 0;
-  const out: boolean[] = [];
-  for (let i = b; i >= 0 && need > 0; i--) {
-    const t = toks[i];
-    if (text.slice(t.off, t.end) === '(' && t.pd === need) { out[need - 1] = t.hd; need--; }
-  }
-  return out;
-}
-function parenStacksEq(a: boolean[], b: boolean[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
+` : rxOnly ? `${findTokAtOff}${reconstructParens}
 function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string, start: number, end: number, ins: string): { toks: AlignMeta[]; relexed: number } {
   const delta = ins.length - (end - start);
   const editEnd = start + ins.length;
@@ -543,7 +619,7 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
     if (scratch.length === before) break;
     const t = scratch[scratch.length - 1];
     const txt = newText.slice(t.off, t.end);
-    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false });
+    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false, td: 0 });
     relexed++;
     if (t.off >= editEnd) {
       const oIdx = findTokAtOff(oldToks, t.off - delta);
@@ -554,10 +630,7 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
         const bpOk = newPrevText === oldPrevText;
         const oldStack = reconstructParens(oldToks, oldText, oIdx);
         if (o.pd === parenHead.length && parenStacksEq(oldStack, parenHead) && o.lc === lastClose && o.lb === lastBang && bpOk && o.kind === t.kind && o.end === t.end - delta && o.nl === t.nl && oldText.slice(o.off, o.end) === newText.slice(t.off, t.end)) {
-          for (let j = oIdx + 1; j < oldToks.length; j++) {
-            const ot = oldToks[j];
-            out.push({ kind: ot.kind, off: ot.off + delta, end: ot.end + delta, nl: ot.nl, fd: ot.fd, pd: ot.pd, lc: ot.lc, lb: ot.lb, hd: ot.hd });
-          }
+          ${adoptSuffix}
           return { toks: out, relexed };
         }
       }
@@ -565,17 +638,83 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
   }
   return { toks: out, relexed };
 }
-` : `
-function findTokAtOff(toks: AlignMeta[], off: number): number {
-  let lo = 0, hi = toks.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (toks[mid].off < off) lo = mid + 1;
-    else if (toks[mid].off > off) hi = mid - 1;
-    else return mid;
+` : rxTpl ? `${findTokAtOff}${reconstructParens}
+function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string, start: number, end: number, ins: string): { toks: AlignMeta[]; relexed: number } {
+  const delta = ins.length - (end - start);
+  const editEnd = start + ins.length;
+${tplAnchor}
+  let scanOff: number, pendingNl: boolean;
+  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  let parenHead: boolean[] = [], lastClose = false, lastBang = false;
+  let templateStack: number[] = [];
+  if (rb >= 0) {
+    const anchor = oldToks[rb];
+    scanOff = anchor.end; pendingNl = false;
+    prevText = oldText.slice(anchor.off, anchor.end); prevKind = anchor.kind; hasPrev = true;
+    if (rb >= 1) { bpText = oldText.slice(oldToks[rb - 1].off, oldToks[rb - 1].end); hasPrev2 = true; }
+    lastClose = anchor.lc; lastBang = anchor.lb;
+    parenHead = reconstructParens(oldToks, oldText, rb);
+  } else {
+    scanOff = 0; pendingNl = false;
   }
-  return -1;
+  const scratch: Tok[] = [];
+  let relexed = 0;
+  while (scanOff < newText.length) {
+    const before = scratch.length;
+    ({ pos: scanOff, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack } = lexFrom(newText, scanOff, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack, scratch, 1));
+    if (scratch.length === before) break;
+    const t = scratch[scratch.length - 1];
+    const txt = newText.slice(t.off, t.end);
+    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false, td: templateStack.length });
+    relexed++;
+    if (t.off >= editEnd) {
+      const oIdx = findTokAtOff(oldToks, t.off - delta);
+      if (oIdx >= 0) {
+        const o = oldToks[oIdx];
+        const newPrevText = out.length > 1 ? newText.slice(out[out.length - 2].off, out[out.length - 2].end) : '';
+        const oldPrevText = oIdx >= 1 ? oldText.slice(oldToks[oIdx - 1].off, oldToks[oIdx - 1].end) : '';
+        const bpOk = newPrevText === oldPrevText;
+        const oldStack = reconstructParens(oldToks, oldText, oIdx);
+        if (o.td === 0 && templateStack.length === 0 && o.pd === parenHead.length && parenStacksEq(oldStack, parenHead) && o.lc === lastClose && o.lb === lastBang && bpOk && o.kind === t.kind && o.end === t.end - delta && o.nl === t.nl && oldText.slice(o.off, o.end) === newText.slice(t.off, t.end)) {
+          ${adoptSuffix}
+          return { toks: out, relexed };
+        }
+      }
+    }
+  }
+  return { toks: out, relexed };
 }
+` : tplOnly ? `${findTokAtOff}
+function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string, start: number, end: number, ins: string): { toks: AlignMeta[]; relexed: number } {
+  const delta = ins.length - (end - start);
+  const editEnd = start + ins.length;
+${tplAnchor}
+  let scanOff = rb >= 0 ? oldToks[rb].end : 0;
+  let pendingNl = false;
+  let templateStack: number[] = [];
+  const scratch: Tok[] = [];
+  let relexed = 0;
+  while (scanOff < newText.length) {
+    const before = scratch.length;
+    ({ pos: scanOff, pendingNl, templateStack } = lexFrom(newText, scanOff, pendingNl, templateStack, scratch, 1));
+    if (scratch.length === before) break;
+    const t = scratch[scratch.length - 1];
+    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: templateStack.length });
+    relexed++;
+    if (t.off >= editEnd) {
+      const oIdx = findTokAtOff(oldToks, t.off - delta);
+      if (oIdx >= 0) {
+        const o = oldToks[oIdx];
+        if (o.td === 0 && templateStack.length === 0 && o.kind === t.kind && o.end === t.end - delta && o.nl === t.nl && oldText.slice(o.off, o.end) === newText.slice(t.off, t.end)) {
+          ${adoptSuffix}
+          return { toks: out, relexed };
+        }
+      }
+    }
+  }
+  return { toks: out, relexed };
+}
+` : `${findTokAtOff}
 function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string, start: number, end: number, ins: string): { toks: AlignMeta[]; relexed: number } {
   const delta = ins.length - (end - start);
   const editEnd = start + ins.length;
@@ -602,10 +741,7 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
       if (oIdx >= 0) {
         const o = oldToks[oIdx];
         if (o.kind === t.kind && o.end === t.end - delta && o.nl === t.nl && oldText.slice(o.off, o.end) === newText.slice(t.off, t.end)) {
-          for (let j = oIdx + 1; j < oldToks.length; j++) {
-            const ot = oldToks[j];
-            out.push({ kind: ot.kind, off: ot.off + delta, end: ot.end + delta, nl: ot.nl, fd: ot.fd, pd: ot.pd, lc: ot.lc, lb: ot.lb, hd: ot.hd });
-          }
+          ${adoptSuffix}
           return { toks: out, relexed };
         }
       }
@@ -645,7 +781,7 @@ function scanMeta(src: string): AlignMeta[] {
     ({ pos, pendingNl, lineStart, emittedContent, flowDepth } = lexFrom(src, pos, pendingNl, lineStart, emittedContent, flowDepth, toks, 1));
     if (toks.length === before) break;
     const t = toks[toks.length - 1];
-    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: flowDepth, pd: 0, lc: false, lb: false, hd: false });
+    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: flowDepth, pd: 0, lc: false, lb: false, hd: false, td: 0 });
   }
   return meta;
 }
@@ -663,11 +799,46 @@ function scanMeta(src: string): AlignMeta[] {
     if (toks.length === before) break;
     const t = toks[toks.length - 1];
     const txt = src.slice(t.off, t.end);
-    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false });
+    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false, td: 0 });
   }
   return meta;
 }
 const toMeta = (_toks: Tok[]): AlignMeta[] => { throw new Error('use scanMeta for regex'); };
+` : rxTpl ? `
+function scanMeta(src: string): AlignMeta[] {
+  const toks: Tok[] = [];
+  const meta: AlignMeta[] = [];
+  let pos = 0, pendingNl = false;
+  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  let parenHead: boolean[] = [], lastClose = false, lastBang = false;
+  let templateStack: number[] = [];
+  while (pos < src.length) {
+    const before = toks.length;
+    ({ pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack } = lexFrom(src, pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack, toks, 1));
+    if (toks.length === before) break;
+    const t = toks[toks.length - 1];
+    const txt = src.slice(t.off, t.end);
+    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false, td: templateStack.length });
+  }
+  return meta;
+}
+const toMeta = (_toks: Tok[]): AlignMeta[] => { throw new Error('use scanMeta for rx+tpl'); };
+` : tplOnly ? `
+function scanMeta(src: string): AlignMeta[] {
+  const toks: Tok[] = [];
+  const meta: AlignMeta[] = [];
+  let pos = 0, pendingNl = false;
+  let templateStack: number[] = [];
+  while (pos < src.length) {
+    const before = toks.length;
+    ({ pos, pendingNl, templateStack } = lexFrom(src, pos, pendingNl, templateStack, toks, 1));
+    if (toks.length === before) break;
+    const t = toks[toks.length - 1];
+    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: templateStack.length });
+  }
+  return meta;
+}
+const toMeta = (_toks: Tok[]): AlignMeta[] => { throw new Error('use scanMeta for tpl'); };
 ` : `const toMeta = (toks: Tok[]): AlignMeta[] => toks.map((t) => ({ kind: t.kind, off: t.off, end: t.end, nl: t.nl${zeroMeta} }));`;
   const checkStreamEqFn = hasNewline ? `
 function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
@@ -691,6 +862,17 @@ function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
   }
   return true;
 }
+` : (rxTpl || tplOnly) ? `
+function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
+  const fresh = scanMeta(text);
+  if (fresh.length !== meta.length) return false;
+  for (let i = 0; i < fresh.length; i++) {
+    const f = fresh[i], t = meta[i];
+    if (f.kind !== t.kind || f.off !== t.off || f.end !== t.end || f.nl !== t.nl || f.td !== t.td${rxTpl ? ' || f.pd !== t.pd || f.lc !== t.lc || f.lb !== t.lb || f.hd !== t.hd' : ''}) return false;
+    if (text.slice(f.off, f.end) !== text.slice(t.off, t.end)) return false;
+  }
+  return true;
+}
 ` : `
 function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
   const fresh = toMeta(tokenize(text));
@@ -703,9 +885,9 @@ function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
   return true;
 }
 `;
-  const initToks = (hasNewline || rxOnly) ? 'scanMeta(src)' : 'toMeta(tokenize(src))';
+  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(tokenize(src))';
   return `export type Edit = { start: number; end: number; text: string };
-type AlignMeta = { kind: string; off: number; end: number; nl: boolean; fd: number; pd: number; lc: boolean; lb: boolean; hd: boolean };
+type AlignMeta = { kind: string; off: number; end: number; nl: boolean; fd: number; pd: number; lc: boolean; lb: boolean; hd: boolean; td: number };
 type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; streamEq: boolean };
 ${toMetaFn}
 function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'streamEq'> {

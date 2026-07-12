@@ -137,7 +137,9 @@ function lexer(ir: ParserIR): string {
   const tpl = ir.tpl;
   const nl = ir.newlineCfg;
   const rxOnly = !!(rx && !tpl && !nl);
-  const rxOrTpl = !!(rx || tpl) && !rxOnly;
+  const tplOnly = !!(tpl && !rx && !nl);
+  const rxTpl = !!(rx && tpl && !nl);
+  const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
   const toks = ir.tokens.map((t) => scanTok(t, defs, stateful, rx?.regexToken, tpl?.token)).join('\n');
@@ -208,7 +210,19 @@ ${emitHooks}
 \t\tisParenHead := prevText == ")" && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKind] || _divT[prevText])
 \t}
-\temit := func(kind, text string, off, end int) {
+` : '';
+  const tplStateFrom = tpl ? `\tscanTplSpan := func(p int) (bool, int) {
+\t\tfor p < n {
+\t\t\tif strings.HasPrefix(src[p:], ${J(tpl.interpOpen)}) { return true, p + ${tpl.interpOpen.length} }
+\t\t\tif src[p] == 92 { p += 2; continue }
+\t\t\tif strings.HasPrefix(src[p:], ${J(tpl.open)}) { return false, p + ${tpl.open.length} }
+\t\t\tp++
+\t\t}
+\t\treturn false, p
+\t}
+\t_ = scanTplSpan
+` : '';
+  const emitRxOnly = rx ? `\temit := func(kind, text string, off, end int) {
 \t\tif text == "(" {
 \t\t\tisMember := hasPrev2 && _mem[bpText]
 \t\t\tparenHead = append(parenHead, !isMember && prevKind == IDENT && _phK[prevText])
@@ -216,6 +230,26 @@ ${emitHooks}
 \t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
 \t\tif _pav[text] { lastBang = prevIsValue() }
+\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false
+\t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true
+\t}
+\t_ = emit
+` : '';
+  const emitTplOnly = tpl ? `\temit := func(kind, text string, off, end int) {
+\t\tif len(templateStack) > 0 { if text == ${J(tpl.braceOpen)} { templateStack[len(templateStack)-1]++ } else if text == ${J(tpl.interpClose)} { templateStack[len(templateStack)-1]-- } }
+\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false
+\t}
+\t_ = emit
+` : '';
+  const emitRxTpl = (rx && tpl) ? `\temit := func(kind, text string, off, end int) {
+\t\tif text == "(" {
+\t\t\tisMember := hasPrev2 && _mem[bpText]
+\t\t\tparenHead = append(parenHead, !isMember && prevKind == IDENT && _phK[prevText])
+\t\t} else if text == ")" {
+\t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
+\t\t}
+\t\tif _pav[text] { lastBang = prevIsValue() }
+\t\tif len(templateStack) > 0 { if text == ${J(tpl.braceOpen)} { templateStack[len(templateStack)-1]++ } else if text == ${J(tpl.interpClose)} { templateStack[len(templateStack)-1]-- } }
 \t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false
 \t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true
 \t}
@@ -264,7 +298,7 @@ ${puncts}
   if (rxOnly) {
     return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevText, prevKind, bpText string, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, string, string, string, bool, bool, []bool, bool, bool) {
 \tn := len(src)
-${rxStateFrom}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
+${rxStateFrom}${emitRxOnly}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
@@ -273,6 +307,36 @@ ${loopBody}
 func lex(src string) []Tok {
 \tvar out []Tok
 \tlexFrom(src, 0, false, "", "", "", false, false, nil, false, false, &out, 0)
+\treturn out
+}`;
+  }
+  if (tplOnly) {
+    return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
+\tn := len(src)
+${tplStateFrom}${emitTplOnly}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
+\tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
+${loopBody}
+\t}
+\treturn pos, pendingNl, templateStack
+}
+func lex(src string) []Tok {
+\tvar out []Tok
+\tlexFrom(src, 0, false, nil, &out, 0)
+\treturn out
+}`;
+  }
+  if (rxTpl) {
+    return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevText, prevKind, bpText string, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, string, string, string, bool, bool, []bool, bool, bool, []int) {
+\tn := len(src)
+${rxStateFrom}${tplStateFrom}${emitRxTpl}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
+\tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
+${loopBody}
+\t}
+\treturn pos, pendingNl, prevText, prevKind, bpText, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack
+}
+func lex(src string) []Tok {
+\tvar out []Tok
+\tlexFrom(src, 0, false, "", "", "", false, false, nil, false, false, nil, &out, 0)
 \treturn out
 }`;
   }
@@ -464,10 +528,59 @@ ${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes);
 }
 
 function docEditBlockGo(ir: ParserIR): string {
-  const windowLex = !ir.tpl && (!ir.regexCtx || !ir.newlineCfg);
+  const windowLex = (!ir.regexCtx && !ir.tpl) || !ir.newlineCfg;
   const hasNewline = !!(ir.newlineCfg && !ir.regexCtx && !ir.tpl);
   const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
-  const zeroMeta = ', Pd: 0, Lc: false, Lb: false, Hd: false';
+  const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
+  const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
+  const zeroMeta = ', 0, 0, false, false, false, 0'; // Fd,Pd,Lc,Lb,Hd,Td after Kind,Off,End,Nl
+  const adoptSuffix = `\t\t\t\tfor j := oIdx + 1; j < len(oldToks); j++ {
+\t\t\t\t\tot := oldToks[j]
+\t\t\t\t\tout = append(out, alignMeta{ot.Kind, ot.Off + delta, ot.End + delta, ot.Nl, ot.Fd, ot.Pd, ot.Lc, ot.Lb, ot.Hd, ot.Td})
+\t\t\t\t}`;
+  const findTokAtOff = `
+func findTokAtOff(toks []alignMeta, off int) int {
+\tlo, hi := 0, len(toks)-1
+\tfor lo <= hi {
+\t\tmid := (lo + hi) >> 1
+\t\tif toks[mid].Off < off { lo = mid + 1 } else if toks[mid].Off > off { hi = mid - 1 } else { return mid }
+\t}
+\treturn -1
+}`;
+  const reconstructParens = `
+func reconstructParens(toks []alignMeta, text string, b int) []bool {
+\tneed := 0
+\tif b >= 0 { need = toks[b].Pd }
+\tout := make([]bool, 0, need)
+\tfor i := b; i >= 0 && need > 0; i-- {
+\t\tt := toks[i]
+\t\tif text[t.Off:t.End] == "(" && t.Pd == need {
+\t\t\tout = append([]bool{t.Hd}, out...)
+\t\t\tneed--
+\t\t}
+\t}
+\treturn out
+}
+func parenStacksEq(a, b []bool) bool {
+\tif len(a) != len(b) { return false }
+\tfor i := range a { if a[i] != b[i] { return false } }
+\treturn true
+}`;
+  const tplAnchor = `\tmaxIdx := -1
+\tfor i := 0; i < len(oldToks); i++ {
+\t\tif oldToks[i].End < start { maxIdx = i } else { break }
+\t}
+\trb0 := -1
+\tif maxIdx >= 0 { rb0 = maxIdx - 1 }
+\trb := -1
+\tif rb0 >= 0 {
+\t\tfor i := rb0; i < len(oldToks); i++ {
+\t\t\tif oldToks[i].End > start { break }
+\t\t\tif oldToks[i].Td == 0 { rb = i; break }
+\t\t}
+\t}
+\tvar out []alignMeta
+\tif rb >= 0 { out = append(out, oldToks[:rb+1]...) }`;
   const windowHelpers = windowLex ? (hasNewline ? `
 func findTokAtOffKind(toks []alignMeta, off int, kind string) int {
 \tlo, hi := 0, len(toks)-1
@@ -510,17 +623,14 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t\tscanOff, pendingNl, lineStart, emittedContent, flowDepth = lexFrom(newText, scanOff, pendingNl, lineStart, emittedContent, flowDepth, &scratch, 1)
 \t\tif len(scratch) == before { break }
 \t\tt := scratch[len(scratch)-1]
-\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, flowDepth, 0, false, false, false})
+\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, flowDepth, 0, false, false, false, 0})
 \t\trelexed++
 \t\tif t.Off >= editEnd {
 \t\t\toIdx := findTokAtOffKind(oldToks, t.Off-delta, t.Kind)
 \t\t\tif oIdx >= 0 {
 \t\t\t\to := oldToks[oIdx]
 \t\t\t\tif o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && o.Fd == flowDepth && oldText[o.Off:o.End] == newText[t.Off:t.End] {
-\t\t\t\t\tfor j := oIdx + 1; j < len(oldToks); j++ {
-\t\t\t\t\t\tot := oldToks[j]
-\t\t\t\t\t\tout = append(out, alignMeta{ot.Kind, ot.Off + delta, ot.End + delta, ot.Nl, ot.Fd, ot.Pd, ot.Lc, ot.Lb, ot.Hd})
-\t\t\t\t\t}
+${adoptSuffix}
 \t\t\t\t\treturn out, relexed
 \t\t\t\t}
 \t\t\t}
@@ -528,33 +638,7 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t}
 \treturn out, relexed
 }
-` : rxOnly ? `
-func findTokAtOff(toks []alignMeta, off int) int {
-\tlo, hi := 0, len(toks)-1
-\tfor lo <= hi {
-\t\tmid := (lo + hi) >> 1
-\t\tif toks[mid].Off < off { lo = mid + 1 } else if toks[mid].Off > off { hi = mid - 1 } else { return mid }
-\t}
-\treturn -1
-}
-func reconstructParens(toks []alignMeta, text string, b int) []bool {
-\tneed := 0
-\tif b >= 0 { need = toks[b].Pd }
-\tout := make([]bool, 0, need)
-\tfor i := b; i >= 0 && need > 0; i-- {
-\t\tt := toks[i]
-\t\tif text[t.Off:t.End] == "(" && t.Pd == need {
-\t\t\tout = append([]bool{t.Hd}, out...)
-\t\t\tneed--
-\t\t}
-\t}
-\treturn out
-}
-func parenStacksEq(a, b []bool) bool {
-\tif len(a) != len(b) { return false }
-\tfor i := range a { if a[i] != b[i] { return false } }
-\treturn true
-}
+` : rxOnly ? `${findTokAtOff}${reconstructParens}
 func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
 \tdelta := len(ins) - (end - start)
 \teditEnd := start + len(ins)
@@ -596,23 +680,19 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t\ttxt := newText[t.Off:t.End]
 \t\thd := false
 \t\tif txt == "(" && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd})
+\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd, 0})
 \t\trelexed++
 \t\tif t.Off >= editEnd {
 \t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
 \t\t\tif oIdx >= 0 {
 \t\t\t\to := oldToks[oIdx]
 \t\t\t\tnewPrevText := ""
-\t\t\t\tif len(out) > 1 { p := out[len(out)-2]; newPrevText = newText[p.Off:p.End] }
+\t\t\t\tif len(out) > 1 { newPrevText = newText[out[len(out)-2].Off:out[len(out)-2].End] }
 \t\t\t\toldPrevText := ""
-\t\t\t\tif oIdx >= 1 { p := oldToks[oIdx-1]; oldPrevText = oldText[p.Off:p.End] }
-\t\t\t\tbpOk := newPrevText == oldPrevText
+\t\t\t\tif oIdx >= 1 { oldPrevText = oldText[oldToks[oIdx-1].Off:oldToks[oIdx-1].End] }
 \t\t\t\toldStack := reconstructParens(oldToks, oldText, oIdx)
-\t\t\t\tif o.Pd == len(parenHead) && parenStacksEq(oldStack, parenHead) && o.Lc == lastClose && o.Lb == lastBang && bpOk && o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
-\t\t\t\t\tfor j := oIdx + 1; j < len(oldToks); j++ {
-\t\t\t\t\t\tot := oldToks[j]
-\t\t\t\t\t\tout = append(out, alignMeta{ot.Kind, ot.Off + delta, ot.End + delta, ot.Nl, ot.Fd, ot.Pd, ot.Lc, ot.Lb, ot.Hd})
-\t\t\t\t\t}
+\t\t\t\tif o.Pd == len(parenHead) && parenStacksEq(oldStack, parenHead) && o.Lc == lastClose && o.Lb == lastBang && newPrevText == oldPrevText && o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+${adoptSuffix}
 \t\t\t\t\treturn out, relexed
 \t\t\t\t}
 \t\t\t}
@@ -620,15 +700,94 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t}
 \treturn out, relexed
 }
-` : `
-func findTokAtOff(toks []alignMeta, off int) int {
-\tlo, hi := 0, len(toks)-1
-\tfor lo <= hi {
-\t\tmid := (lo + hi) >> 1
-\t\tif toks[mid].Off < off { lo = mid + 1 } else if toks[mid].Off > off { hi = mid - 1 } else { return mid }
+` : rxTpl ? `${findTokAtOff}${reconstructParens}
+func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
+\tdelta := len(ins) - (end - start)
+\teditEnd := start + len(ins)
+${tplAnchor}
+\tvar scanOff int
+\tpendingNl := false
+\tprevText, prevKind, bpText := "", "", ""
+\thasPrev, hasPrev2 := false, false
+\tvar parenHead []bool
+\tlastClose, lastBang := false, false
+\tvar templateStack []int
+\tif rb >= 0 {
+\t\tanchor := oldToks[rb]
+\t\tscanOff = anchor.End
+\t\tprevText = oldText[anchor.Off:anchor.End]
+\t\tprevKind = anchor.Kind
+\t\thasPrev = true
+\t\tif rb >= 1 {
+\t\t\tbpText = oldText[oldToks[rb-1].Off:oldToks[rb-1].End]
+\t\t\thasPrev2 = true
+\t\t}
+\t\tlastClose = anchor.Lc
+\t\tlastBang = anchor.Lb
+\t\tparenHead = reconstructParens(oldToks, oldText, rb)
 \t}
-\treturn -1
+\tvar scratch []Tok
+\trelexed := 0
+\tfor scanOff < len(newText) {
+\t\tbefore := len(scratch)
+\t\tscanOff, pendingNl, prevText, prevKind, bpText, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack = lexFrom(newText, scanOff, pendingNl, prevText, prevKind, bpText, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack, &scratch, 1)
+\t\tif len(scratch) == before { break }
+\t\tt := scratch[len(scratch)-1]
+\t\ttxt := newText[t.Off:t.End]
+\t\thd := false
+\t\tif txt == "(" && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
+\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd, len(templateStack)})
+\t\trelexed++
+\t\tif t.Off >= editEnd {
+\t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
+\t\t\tif oIdx >= 0 {
+\t\t\t\to := oldToks[oIdx]
+\t\t\t\tnewPrevText := ""
+\t\t\t\tif len(out) > 1 { newPrevText = newText[out[len(out)-2].Off:out[len(out)-2].End] }
+\t\t\t\toldPrevText := ""
+\t\t\t\tif oIdx >= 1 { oldPrevText = oldText[oldToks[oIdx-1].Off:oldToks[oIdx-1].End] }
+\t\t\t\toldStack := reconstructParens(oldToks, oldText, oIdx)
+\t\t\t\tif o.Td == 0 && len(templateStack) == 0 && o.Pd == len(parenHead) && parenStacksEq(oldStack, parenHead) && o.Lc == lastClose && o.Lb == lastBang && newPrevText == oldPrevText && o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+${adoptSuffix}
+\t\t\t\t\treturn out, relexed
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+\treturn out, relexed
 }
+` : tplOnly ? `${findTokAtOff}
+func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
+\tdelta := len(ins) - (end - start)
+\teditEnd := start + len(ins)
+${tplAnchor}
+\tscanOff := 0
+\tif rb >= 0 { scanOff = oldToks[rb].End }
+\tpendingNl := false
+\tvar templateStack []int
+\tvar scratch []Tok
+\trelexed := 0
+\tfor scanOff < len(newText) {
+\t\tbefore := len(scratch)
+\t\tscanOff, pendingNl, templateStack = lexFrom(newText, scanOff, pendingNl, templateStack, &scratch, 1)
+\t\tif len(scratch) == before { break }
+\t\tt := scratch[len(scratch)-1]
+\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, 0, false, false, false, len(templateStack)})
+\t\trelexed++
+\t\tif t.Off >= editEnd {
+\t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
+\t\t\tif oIdx >= 0 {
+\t\t\t\to := oldToks[oIdx]
+\t\t\t\tif o.Td == 0 && len(templateStack) == 0 && o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+${adoptSuffix}
+\t\t\t\t\treturn out, relexed
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+\treturn out, relexed
+}
+` : `${findTokAtOff}
 func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
 \tdelta := len(ins) - (end - start)
 \teditEnd := start + len(ins)
@@ -650,17 +809,14 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t\tscanOff, pendingNl = lexFrom(newText, scanOff, pendingNl, &scratch, 1)
 \t\tif len(scratch) == before { break }
 \t\tt := scratch[len(scratch)-1]
-\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, 0, false, false, false})
+\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl${zeroMeta}})
 \t\trelexed++
 \t\tif t.Off >= editEnd {
 \t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
 \t\t\tif oIdx >= 0 {
 \t\t\t\to := oldToks[oIdx]
 \t\t\t\tif o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
-\t\t\t\t\tfor j := oIdx + 1; j < len(oldToks); j++ {
-\t\t\t\t\t\tot := oldToks[j]
-\t\t\t\t\t\tout = append(out, alignMeta{ot.Kind, ot.Off + delta, ot.End + delta, ot.Nl, ot.Fd, ot.Pd, ot.Lc, ot.Lb, ot.Hd})
-\t\t\t\t\t}
+${adoptSuffix}
 \t\t\t\t\treturn out, relexed
 \t\t\t\t}
 \t\t\t}
@@ -696,22 +852,25 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 func scanMeta(src string) []alignMeta {
 \tvar toks []Tok
 \tvar meta []alignMeta
-\tpos, pendingNl, lineStart, emittedContent, flowDepth := 0, false, true, false, 0
+\tpos := 0
+\tpendingNl, lineStart, emittedContent := false, true, false
+\tflowDepth := 0
 \tfor pos < len(src) {
 \t\tbefore := len(toks)
 \t\tpos, pendingNl, lineStart, emittedContent, flowDepth = lexFrom(src, pos, pendingNl, lineStart, emittedContent, flowDepth, &toks, 1)
 \t\tif len(toks) == before { break }
 \t\tt := toks[len(toks)-1]
-\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, flowDepth, 0, false, false, false})
+\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, flowDepth, 0, false, false, false, 0})
 \t}
 \treturn meta
 }
-func toMeta(toks []Tok) []alignMeta { panic("use scanMeta for newline") }
+func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for newline") }
 ` : rxOnly ? `
 func scanMeta(src string) []alignMeta {
 \tvar toks []Tok
 \tvar meta []alignMeta
-\tpos, pendingNl := 0, false
+\tpos := 0
+\tpendingNl := false
 \tprevText, prevKind, bpText := "", "", ""
 \thasPrev, hasPrev2 := false, false
 \tvar parenHead []bool
@@ -724,24 +883,67 @@ func scanMeta(src string) []alignMeta {
 \t\ttxt := src[t.Off:t.End]
 \t\thd := false
 \t\tif txt == "(" && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd})
+\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd, 0})
 \t}
 \treturn meta
 }
-func toMeta(toks []Tok) []alignMeta { panic("use scanMeta for regex") }
-` : `func toMeta(toks []Tok) []alignMeta {
-\tm := make([]alignMeta, len(toks))
-\tfor i, t := range toks { m[i] = alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, 0, false, false, false} }
-\treturn m
+func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for regex") }
+` : rxTpl ? `
+func scanMeta(src string) []alignMeta {
+\tvar toks []Tok
+\tvar meta []alignMeta
+\tpos := 0
+\tpendingNl := false
+\tprevText, prevKind, bpText := "", "", ""
+\thasPrev, hasPrev2 := false, false
+\tvar parenHead []bool
+\tlastClose, lastBang := false, false
+\tvar templateStack []int
+\tfor pos < len(src) {
+\t\tbefore := len(toks)
+\t\tpos, pendingNl, prevText, prevKind, bpText, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack = lexFrom(src, pos, pendingNl, prevText, prevKind, bpText, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack, &toks, 1)
+\t\tif len(toks) == before { break }
+\t\tt := toks[len(toks)-1]
+\t\ttxt := src[t.Off:t.End]
+\t\thd := false
+\t\tif txt == "(" && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
+\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd, len(templateStack)})
+\t}
+\treturn meta
+}
+func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for rx+tpl") }
+` : tplOnly ? `
+func scanMeta(src string) []alignMeta {
+\tvar toks []Tok
+\tvar meta []alignMeta
+\tpos := 0
+\tpendingNl := false
+\tvar templateStack []int
+\tfor pos < len(src) {
+\t\tbefore := len(toks)
+\t\tpos, pendingNl, templateStack = lexFrom(src, pos, pendingNl, templateStack, &toks, 1)
+\t\tif len(toks) == before { break }
+\t\tt := toks[len(toks)-1]
+\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, 0, false, false, false, len(templateStack)})
+\t}
+\treturn meta
+}
+func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for tpl") }
+` : `
+func toMeta(toks []Tok) []alignMeta {
+\tout := make([]alignMeta, len(toks))
+\tfor i, t := range toks { out[i] = alignMeta{t.Kind, t.Off, t.End, t.Nl${zeroMeta}} }
+\treturn out
 }`;
+  const rxTdCheck = rxTpl ? ' || f.Pd != t.Pd || f.Lc != t.Lc || f.Lb != t.Lb || f.Hd != t.Hd' : '';
   const checkStreamEqFn = hasNewline ? `
 func checkStreamEq(text string, meta []alignMeta) bool {
 \tfresh := scanMeta(text)
 \tif len(fresh) != len(meta) { return false }
 \tfor i := range fresh {
-\t\tf, m := fresh[i], meta[i]
-\t\tif f.Kind != m.Kind || f.Off != m.Off || f.End != m.End || f.Nl != m.Nl || f.Fd != m.Fd { return false }
-\t\tif text[f.Off:f.End] != text[m.Off:m.End] { return false }
+\t\tf, t := fresh[i], meta[i]
+\t\tif f.Kind != t.Kind || f.Off != t.Off || f.End != t.End || f.Nl != t.Nl || f.Fd != t.Fd { return false }
+\t\tif text[f.Off:f.End] != text[t.Off:t.End] { return false }
 \t}
 \treturn true
 }
@@ -750,9 +952,20 @@ func checkStreamEq(text string, meta []alignMeta) bool {
 \tfresh := scanMeta(text)
 \tif len(fresh) != len(meta) { return false }
 \tfor i := range fresh {
-\t\tf, m := fresh[i], meta[i]
-\t\tif f.Kind != m.Kind || f.Off != m.Off || f.End != m.End || f.Nl != m.Nl || f.Pd != m.Pd || f.Lc != m.Lc || f.Lb != m.Lb || f.Hd != m.Hd { return false }
-\t\tif text[f.Off:f.End] != text[m.Off:m.End] { return false }
+\t\tf, t := fresh[i], meta[i]
+\t\tif f.Kind != t.Kind || f.Off != t.Off || f.End != t.End || f.Nl != t.Nl || f.Pd != t.Pd || f.Lc != t.Lc || f.Lb != t.Lb || f.Hd != t.Hd { return false }
+\t\tif text[f.Off:f.End] != text[t.Off:t.End] { return false }
+\t}
+\treturn true
+}
+` : (rxTpl || tplOnly) ? `
+func checkStreamEq(text string, meta []alignMeta) bool {
+\tfresh := scanMeta(text)
+\tif len(fresh) != len(meta) { return false }
+\tfor i := range fresh {
+\t\tf, t := fresh[i], meta[i]
+\t\tif f.Kind != t.Kind || f.Off != t.Off || f.End != t.End || f.Nl != t.Nl || f.Td != t.Td${rxTdCheck} { return false }
+\t\tif text[f.Off:f.End] != text[t.Off:t.End] { return false }
 \t}
 \treturn true
 }
@@ -761,16 +974,16 @@ func checkStreamEq(text string, meta []alignMeta) bool {
 \tfresh := toMeta(tokenize(text))
 \tif len(fresh) != len(meta) { return false }
 \tfor i := range fresh {
-\t\tf, m := fresh[i], meta[i]
-\t\tif f.Kind != m.Kind || f.Off != m.Off || f.End != m.End || f.Nl != m.Nl { return false }
-\t\tif text[f.Off:f.End] != text[m.Off:m.End] { return false }
+\t\tf, t := fresh[i], meta[i]
+\t\tif f.Kind != t.Kind || f.Off != t.Off || f.End != t.End || f.Nl != t.Nl { return false }
+\t\tif text[f.Off:f.End] != text[t.Off:t.End] { return false }
 \t}
 \treturn true
 }
 `;
-  const initToks = (hasNewline || rxOnly) ? 'scanMeta(src)' : 'toMeta(tokenize(src))';
+  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(tokenize(src))';
   return `type Edit struct { Start, End int; Text string }
-type alignMeta struct { Kind string; Off, End int; Nl bool; Fd, Pd int; Lc, Lb, Hd bool }
+type alignMeta struct { Kind string; Off, End int; Nl bool; Fd, Pd int; Lc, Lb, Hd bool; Td int }
 type Align struct {
 \tOldN     int  \`json:"oldN"\`
 \tNewN     int  \`json:"newN"\`
