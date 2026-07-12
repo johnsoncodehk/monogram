@@ -276,7 +276,7 @@ function runTokSpans(cmd: string, args: string[], src: string): string | null {
   if (r.status !== 0) return null;
   return r.stdout;
 }
-type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; streamEq?: boolean };
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; reused?: number; streamEq?: boolean; treeEq?: boolean };
 type EditOutcome = Outcome & { align?: Align };
 function parseAlignStderr(stderr: string): Align | undefined {
   for (const line of stderr.split('\n')) {
@@ -330,10 +330,29 @@ const expectAlign = (g: CstGrammar, init: string, batches: EditBatch[]): Align =
 };
 
 type EditBatch = [number, number, string][];
-type EditScenario = { init: string; batches: EditBatch[]; large?: boolean; maxRelexed?: number; fullRelex?: boolean };
+type EditScenario = {
+  init: string;
+  batches: EditBatch[];
+  large?: boolean;
+  maxRelexed?: number;
+  fullRelex?: boolean;
+  /** TS-only: minimum reused top-level kids (tree reuse). */
+  minReused?: number;
+  /** TS-only: exact reused count. */
+  reused?: number;
+  /** TS-only: reused must be strictly less than this (lookahead / ext gate). */
+  maxReused?: number;
+};
 const calcLargeInit = '1+2*3+'.repeat(199) + '1+2*3';
+const calcReuseInit = Array.from({ length: 40 }, (_, i) => `let x${i}=${i};`).join('\n');
+const calcReuseMid = calcReuseInit.indexOf('let x20=') + 'let x20='.length;
+const calcReuseFirstEq = calcReuseInit.indexOf('=') + 1;
+const calcReuseLastEq = calcReuseInit.lastIndexOf('=') + 1;
+const calcReuseSemi = calcReuseInit.indexOf(';');
 const envspecLargeInit = 'A=1\n'.repeat(300);
 const regexjsLargeInit = 'var r = /abc/g; a / b;\n'.repeat(60);
+const jsLookaheadInit = 'let x = (a)\nfoo;\nbar;';
+const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peeked-into second stmt
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
   calc: [
     { init: '1+2*3', batches: [[[3, 3, '4']]] },
@@ -344,6 +363,16 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: '1 2;', batches: [[[1, 2, '']]] },
     { init: calcLargeInit, batches: [[[calcLargeInit.length, calcLargeInit.length, '+4']]], maxRelexed: 5 },
     { init: calcLargeInit, batches: [[[0, 1, '9']]], maxRelexed: 8 },
+    // S7b tree-reuse scenarios
+    { init: calcReuseInit, batches: [[[calcReuseMid, calcReuseMid + 1, '9']]], minReused: 30 },
+    { init: calcReuseInit, batches: [[[calcReuseFirstEq, calcReuseFirstEq + 1, '9']]], minReused: 1 },
+    { init: calcReuseInit, batches: [[[calcReuseLastEq, calcReuseLastEq + 1, '9']]], minReused: 1 },
+    { init: calcReuseInit, batches: [[[calcReuseSemi - 1, calcReuseSemi + 1, '9;']]], minReused: 1 },
+    { init: calcReuseInit, batches: [[[calcReuseMid, calcReuseMid + 1, '9']], [[calcReuseMid, calcReuseMid + 1, '8']]], minReused: 30 },
+    // Boundary-hit must be exact (===): merging b;c via `;`→`+` lands on `d`; a `>=` mutant would adopt too early.
+    { init: 'a;\nb;\nc;\nd;', batches: [[[4, 5, '+']]] },
+    // Mid overshoot past suffix candidates → tryReuseTop fails, full-parse fallback (reused:0) still ≡ fresh.
+    { init: 'a;\nb;\nc;\nd;', batches: [[[7, 8, '+']]], reused: 0 },
   ],
   javascript: [
     { init: 'let a = 1;\nf(a);', batches: [[[8, 9, '42']]] },
@@ -352,6 +381,8 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'let a = 1;\nf(a);', batches: [[[16, 16, '\ng(b);']], [[0, 4, 'var']]] },
     { init: 'let a = 1;\nf(a);\n'.repeat(80), batches: [[[688, 689, '9']]], large: true, maxRelexed: 15 },
     { init: 'var q = `x${a/b}y`;', batches: [[[12, 13, 'c']]] },
+    // predecessor peeked into second stmt (ext > tokEnd); editing that region must not keep stmt0
+    { init: jsLookaheadInit, batches: [[[jsLookaheadEdit, jsLookaheadEdit + 1, '+']]], maxReused: 1 },
   ],
   templatejs: [
     { init: '`a${x}b`;', batches: [[[4, 5, 'y']]] },
@@ -362,14 +393,14 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: '`a`; z; `b${x}c`;', batches: [[[5, 6, 'w']]] },
   ],
   envspec: [
-    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]] },
-    { init: envspecLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 10 },
-    { init: 'A=fn(1,\n2)\nB=3', batches: [[[6, 7, '9']]] },
-    { init: 'A=fn(1,\n2)\nB=3', batches: [[[4, 4, '(']]] },
-    { init: 'A=1\n# note\nB=2', batches: [[[7, 7, 'x']]] },
-    { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]] },
-    { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10 },
-    { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]] },
+    { init: 'A=1\nB=2', batches: [[[2, 2, '3']]], reused: 0 },
+    { init: envspecLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 10, reused: 0 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[6, 7, '9']]], reused: 0 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[4, 4, '(']]], reused: 0 },
+    { init: 'A=1\n# note\nB=2', batches: [[[7, 7, 'x']]], reused: 0 },
+    { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]], reused: 0 },
+    { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10, reused: 0 },
+    { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]], reused: 0 },
   ],
   regexjs: [
     { init: 'var re = /[a-z]+/i; x / y;', batches: [[[11, 12, '0']]] },
@@ -589,6 +620,26 @@ for (const c of CASES) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: streamEq want=true got=${JSON.stringify(a.align.streamEq)}`);
           }
+          if (r.label === 'typescript' && a.align.treeEq !== true) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: treeEq want=true got=${JSON.stringify(a.align.treeEq)}`);
+          }
+          if (a.align.reused === undefined) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: reused field missing got=${JSON.stringify(a.align)}`);
+          }
+          if (sc.reused !== undefined && a.align.reused !== sc.reused) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: reused want=${sc.reused} got=${JSON.stringify(a.align.reused)}`);
+          }
+          if (r.label === 'typescript' && sc.minReused !== undefined && (a.align.reused === undefined || a.align.reused < sc.minReused)) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: reused want>=${sc.minReused} got=${JSON.stringify(a.align.reused)}`);
+          }
+          if (r.label === 'typescript' && sc.maxReused !== undefined && (a.align.reused === undefined || a.align.reused > sc.maxReused)) {
+            failures++;
+            console.log(`  ${c.grammar}/${r.label}: reused want<=${sc.maxReused} got=${JSON.stringify(a.align.reused)}`);
+          }
           if (sc.maxRelexed !== undefined && (a.align.relexed === undefined || a.align.relexed > sc.maxRelexed)) {
             failures++;
             console.log(`  ${c.grammar}/${r.label}: relexed want<=${sc.maxRelexed} got=${JSON.stringify(a.align.relexed)}`);
@@ -602,16 +653,16 @@ for (const c of CASES) {
           console.log(`  ${c.grammar}/${r.label}: token-align mismatch want=${JSON.stringify(want)} got=${JSON.stringify(a.align)}`);
         }
         const f = runFast(payload);
-        const fiveEq = !!(a.align && f.align
+        const sixEq = !!(a.align && f.align
           && a.align.oldN === f.align.oldN && a.align.newN === f.align.newN
           && a.align.prefix === f.align.prefix && a.align.suffix === f.align.suffix
-          && a.align.relexed === f.align.relexed);
-        const noStreamEq = f.align !== undefined && !('streamEq' in f.align);
+          && a.align.relexed === f.align.relexed && a.align.reused === f.align.reused);
+        const noValidateKeys = f.align !== undefined && !('streamEq' in f.align) && !('treeEq' in f.align);
         const outEq = a.ok === f.ok && (!a.ok || a.cst === f.cst);
-        if (fiveEq && noStreamEq && outEq) fastOk++;
+        if (sixEq && noValidateKeys && outEq) fastOk++;
         else {
           failures++;
-          console.log(`  ${c.grammar}/${r.label}: fast≢validated fiveEq=${fiveEq} noStreamEq=${noStreamEq} outEq=${outEq} validated=${JSON.stringify(a.align)} fast=${JSON.stringify(f.align)}`);
+          console.log(`  ${c.grammar}/${r.label}: fast≢validated sixEq=${sixEq} noValidateKeys=${noValidateKeys} outEq=${outEq} validated=${JSON.stringify(a.align)} fast=${JSON.stringify(f.align)}`);
         }
       }
       console.log(`  ${c.grammar}/${r.label}: ${editOk}/${editScenarios.length} edit-sessions ≡ fresh`);

@@ -1074,7 +1074,7 @@ fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
   return `pub struct Edit { pub start: usize, pub end: usize, pub text: String }
 #[derive(Clone)]
 struct AlignMeta { kind: &'static str, off: usize, end: usize, nl: bool, fd: i64, pd: i64, lc: bool, lb: bool, hd: bool, td: i64 }
-struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, stream_eq: Option<bool> }
+struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, stream_eq: Option<bool> }
 ${toMetaFn}
 fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
     let old_n = old_toks.len();
@@ -1116,7 +1116,7 @@ impl Doc {
 ${editBody}
         let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &self.text, &self.toks);
         let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
-        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, stream_eq });
+        self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, reused: 0, stream_eq });
     }
     pub fn parse(&self) -> Option<(Parser<'_>, i32)> {
         let toks = toks_from_meta(&self.text, &self.toks);
@@ -1392,8 +1392,8 @@ fn main() {
         }
         if let Some(a) = doc.alignment() {
             match a.stream_eq {
-                Some(eq) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, eq),
-                None => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed),
+                Some(eq) => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{},\\"streamEq\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused, eq),
+                None => eprintln!("{{\\"oldN\\":{},\\"newN\\":{},\\"prefix\\":{},\\"suffix\\":{},\\"relexed\\":{},\\"reused\\":{}}}", a.old_n, a.new_n, a.prefix, a.suffix, a.relexed, a.reused),
             }
         }
         match doc.parse() {

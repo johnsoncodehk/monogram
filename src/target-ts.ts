@@ -376,6 +376,28 @@ function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
   return `const t = peek(); if (t === null) return false; ${arms} return false;`;
 }
 
+/** Entry shape eligible for top-level subtree reuse: single alt whose sole step is
+ *  `star(rule)` or `star(alt(rule, rule, …))` (calc / javascript). */
+function topReusePlan(ir: ParserIR): { topOneBody: string } | null {
+  const entry = ir.rules.find((r) => r.name === ir.entry);
+  if (!entry || entry.kind !== 'rd' || entry.alts.length !== 1) return null;
+  const alt = entry.alts[0];
+  if (alt.length !== 1 || alt[0].t !== 'star') return null;
+  const step = alt[0].step;
+  if (step.t === 'rule') return { topOneBody: `  return parse${step.name}();` };
+  if (step.t === 'alt') {
+    for (const br of step.branches) {
+      if (br.length !== 1 || br[0].t !== 'rule') return null;
+    }
+    const tries = step.branches.map((br) => {
+      const name = (br[0] as { t: 'rule'; name: string }).name;
+      return `  { const sp = pos; const n = parse${name}(); if (n !== null) return n; pos = sp; }`;
+    }).join('\n');
+    return { topOneBody: `${tries}\n  return null;` };
+  }
+  return null;
+}
+
 function rdRule(r: RdRule): string {
   if (r.predictive) {
   const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't')}) { const kids: Cst[] = []; if (${steps.map(stepCond).join(' && ')}) return branch(${J(r.cstName)}, kids, save); }`;
@@ -393,6 +415,26 @@ ${r.alts.map(arm).join(' ')}
   const save = pos;
 ${r.alts.map(alt).join('\n')}
   return null;
+}`;
+}
+
+/** Entry rule that records per-top-kid lookahead ext via parseTopOne. */
+function rdEntryWithReuse(r: RdRule, plan: { topOneBody: string }): string {
+  return `function parseTopOne(): Node | null {
+${plan.topOneBody}
+}
+function parse${r.name}(): Node | null {
+  const save = pos;
+  const kids: Cst[] = [];
+  for (;;) {
+    const sp = pos;
+    maxLook = 0;
+    const n = parseTopOne();
+    if (n === null) { pos = sp; break; }
+    n.ext = Math.max(n.tokEnd, maxLook);
+    kids.push(n);
+  }
+  return branch(${J(r.cstName)}, kids, save);
 }`;
 }
 
@@ -488,6 +530,7 @@ function docEditBlock(ir: ParserIR): string {
   const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
   const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
   const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
+  const topReuse = topReusePlan(ir);
   const zeroMeta = ', fd: 0, pd: 0, lc: false, lb: false, hd: false, td: 0';
   const adoptSuffix = `for (let j = oIdx + 1; j < oldToks.length; j++) {
             const ot = oldToks[j];
@@ -887,11 +930,121 @@ function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
 }
 `;
   const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(tokenize(src))';
+  const reuseFns = topReuse ? `
+function cstJSON(n: Cst): string {
+  return JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' || k === 'ext' ? undefined : v));
+}
+function checkTreeEq(text: string, root: Node | null): boolean {
+  const fresh = parse(tokenize(text));
+  if (root === null || fresh === null) return root === fresh;
+  return cstJSON(root) === cstJSON(fresh as Cst);
+}
+function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number): void {
+  n.offset += byteDelta;
+  n.end += byteDelta;
+  n.tokStart += tokDelta;
+  n.tokEnd += tokDelta;
+  if ('ext' in n && typeof (n as Node).ext === 'number') (n as Node).ext! += tokDelta;
+  if ('children' in n) for (const c of n.children) shiftSubtree(c, byteDelta, tokDelta);
+}
+function tryReuseTop(oldRoot: Node, newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: Node; reused: number } | null {
+  const oldKids = oldRoot.children as Node[];
+  let prefixLen = 0;
+  while (prefixLen < oldKids.length) {
+    const k = oldKids[prefixLen]!;
+    const ext = k.ext ?? k.tokEnd;
+    if (ext <= prefix) prefixLen++;
+    else break;
+  }
+  let suffixStart = oldKids.length;
+  for (let i = oldKids.length - 1; i >= prefixLen; i--) {
+    if (oldKids[i]!.tokStart >= oldN - suffix) suffixStart = i;
+    else break;
+  }
+  const prefixKids = oldKids.slice(0, prefixLen);
+  const suffixCand = oldKids.slice(suffixStart);
+  const tokDelta = newN - oldN;
+  _src = newText;
+  toks = toksFromMeta(newText, newMeta);
+  pos = prefixLen > 0 ? prefixKids[prefixLen - 1]!.tokEnd : 0;
+  const mid: Node[] = [];
+  const suffixBound = newN - suffix;
+  const maxCand = suffixCand.length > 0 ? Math.max(...suffixCand.map((k) => k.tokStart + tokDelta)) : -1;
+  const finish = (adoptFrom: number): { root: Node; reused: number } => {
+    const adopted = suffixCand.slice(adoptFrom);
+    for (const s of adopted) shiftSubtree(s, byteDelta, tokDelta);
+    const children: Cst[] = [...prefixKids, ...mid, ...adopted];
+    const offset = children.length > 0 ? children[0]!.offset : 0;
+    const end = children.length > 0 ? children[children.length - 1]!.end : offset;
+    const tokStart = children.length > 0 ? (children[0] as Node).tokStart : 0;
+    const tokEnd = children.length > 0 ? (children[children.length - 1] as Node).tokEnd : 0;
+    return { root: { rule: oldRoot.rule, children, offset, end, tokStart, tokEnd }, reused: prefixKids.length + adopted.length };
+  };
+  const tryHit = (): { root: Node; reused: number } | null => {
+    if (pos < suffixBound) return null;
+    if (suffixCand.length === 0) {
+      if (pos === newN) return finish(0);
+      return null;
+    }
+    const hit = suffixCand.findIndex((k) => k.tokStart + tokDelta === pos);
+    if (hit >= 0) return finish(hit);
+    return null;
+  };
+  {
+    const early = tryHit();
+    if (early) return early;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+  }
+  for (;;) {
+    if (pos >= toks.length) {
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      return tryHit() ?? null;
+    }
+    maxLook = 0;
+    const sp = pos;
+    const n = parseTopOne();
+    if (n === null) { pos = sp; return null; }
+    n.ext = Math.max(n.tokEnd, maxLook);
+    mid.push(n);
+    const hit = tryHit();
+    if (hit) return hit;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+  }
+}
+` : `
+function cstJSON(n: Cst): string {
+  return JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' || k === 'ext' ? undefined : v));
+}
+function checkTreeEq(text: string, root: Node | null): boolean {
+  const fresh = parse(tokenize(text));
+  if (root === null || fresh === null) return root === fresh;
+  return cstJSON(root) === cstJSON(fresh as Cst);
+}
+`;
+  const editParse = topReuse
+    ? `      const byteDelta = text.length - oldText.length;
+      let reused = 0;
+      let next: Node | null = null;
+      if (root !== null) {
+        const got = tryReuseTop(root, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
+        if (got) { next = got.root; reused = got.reused; }
+      }
+      if (next === null) { _src = text; next = parse(toksFromMeta(text, prevToks)) as Node | null; reused = 0; }
+      root = next;
+      align = validate
+        ? { ...core, reused, streamEq: checkStreamEq(text, prevToks), treeEq: checkTreeEq(text, root) }
+        : { ...core, reused };`
+    : `      const reused = 0;
+      _src = text;
+      root = parse(toksFromMeta(text, prevToks)) as Node | null;
+      align = validate
+        ? { ...core, reused, streamEq: checkStreamEq(text, prevToks), treeEq: checkTreeEq(text, root) }
+        : { ...core, reused };`;
   return `export type Edit = { start: number; end: number; text: string };
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean; fd: number; pd: number; lc: boolean; lb: boolean; hd: boolean; td: number };
-type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; streamEq?: boolean };
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; streamEq?: boolean; treeEq?: boolean };
 ${toMetaFn}
-function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'streamEq'> {
+function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'streamEq' | 'treeEq'> {
   const oldN = oldToks.length, newN = newToks.length;
   let prefix = 0;
   while (prefix < oldN && prefix < newN) {
@@ -914,12 +1067,12 @@ function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, ne
 function toksFromMeta(text: string, meta: AlignMeta[]): Tok[] {
   return meta.map((m) => ({ kind: m.kind, text: text.slice(m.off, m.end), off: m.off, end: m.end, nl: m.nl }));
 }
-${checkStreamEqFn}${windowHelpers}export function createDoc(src: string, opts?: { validate?: boolean }): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
+${checkStreamEqFn}${windowHelpers}${reuseFns}export function createDoc(src: string, opts?: { validate?: boolean }): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
   const validate = opts?.validate === true;
   let text = src;
   let prevToks = ${initToks};
   let align: Align | null = null;
-  let root: Node | null = parse(tokenize(src));
+  let root: Node | null = parse(tokenize(src)) as Node | null;
   return {
     text(): string { return text; },
     root(): Node | null { return root; },
@@ -929,8 +1082,7 @@ ${checkStreamEqFn}${windowHelpers}export function createDoc(src: string, opts?: 
       let relexed = 0;
 ${editBody}
       const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
-      align = validate ? { ...core, streamEq: checkStreamEq(text, prevToks) } : core;
-      root = parse(toksFromMeta(text, prevToks));
+${editParse}
       return root;
     },
   };
@@ -956,7 +1108,12 @@ export function tokenize(src: string): Tok[] { return lex(src); }
   },
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
     const ir = portableIR(grammar);
-    const ruleFns = ir.rules.map((r) => (r.kind === 'pratt' ? prattRule(r, ir.tpl) : rdRule(r))).join('\n\n');
+    const reuse = topReusePlan(ir);
+    const ruleFns = ir.rules.map((r) => {
+      if (r.kind === 'pratt') return prattRule(r, ir.tpl);
+      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse);
+      return rdRule(r);
+    }).join('\n\n');
     const matchTemplate = ir.tpl ? `function matchTemplate(): Cst | null {
   const t = peek();
   if (t === null || t.kind !== '$templateHead') return null;
@@ -981,18 +1138,19 @@ export function tokenize(src: string): Tok[] { return lex(src); }
 
 type Tok = { kind: string; text: string; off: number; end: number; nl: boolean };
 type Leaf = { tokenType: string; offset: number; end: number; tokStart: number; tokEnd: number };
-type Node = { rule: string; children: Cst[]; offset: number; end: number; tokStart: number; tokEnd: number };
+type Node = { rule: string; children: Cst[]; offset: number; end: number; tokStart: number; tokEnd: number; ext?: number };
 type Cst = Node | Leaf;
 
 ${lexerSrc ?? ''}
 
 let toks: Tok[] = [];
 let pos = 0;
+let maxLook = 0;
 let _capped = false;
 let _suppressNext: Set<string> | null = null;
 let _suppressCur: Set<string> | null = null;
 let _src = '';
-function peek(): Tok | null { return pos < toks.length ? toks[pos] : null; }
+function peek(): Tok | null { maxLook = Math.max(maxLook, pos + 1); return pos < toks.length ? toks[pos] : null; }
 function headLeafText(node: Cst): string {
   let n: Cst = node;
   while ('children' in n && n.children.length > 0) n = n.children[0];
@@ -1054,6 +1212,7 @@ export function tokenize(src: string): Tok[] { _src = src; return lex(src); }
 export function parse(tokens: Tok[]): Cst | null {
   toks = tokens;
   pos = 0;
+  maxLook = 0;
   const root = parse${ir.entry}();
   return root !== null && pos === toks.length ? root : null;
 }
@@ -1067,7 +1226,7 @@ ${docEditBlock(ir)}
 import { readFileSync } from 'node:fs';
 const _raw = readFileSync(0, 'utf8');
 const _editFast = process.argv.includes('edit-session-fast');
-const _cstJSON = (n: Cst) => JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' ? undefined : v));
+const _cstJSON = (n: Cst) => JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' || k === 'ext' ? undefined : v));
 if (_editFast || process.argv.includes('edit-session')) {
   const { init, batches } = JSON.parse(_raw) as { init: string; batches: [number, number, string][][] };
   const doc = createDoc(init, { validate: !_editFast });

@@ -990,6 +990,7 @@ type Align struct {
 \tPrefix   int   \`json:"prefix"\`
 \tSuffix   int   \`json:"suffix"\`
 \tRelexed  int   \`json:"relexed"\`
+\tReused   int   \`json:"reused"\`
 \tStreamEq *bool \`json:"streamEq,omitempty"\`
 }
 ${toMetaFn}
@@ -1041,7 +1042,7 @@ func (d *Doc) Edit(edits []Edit) int32 {
 \trelexed := 0
 ${editBody}
 \toldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
-\ta := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed}
+\ta := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: 0}
 \tif d.validate {
 \t\tv := checkStreamEq(d.text, d.toks)
 \t\ta.StreamEq = &v
