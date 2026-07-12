@@ -131,6 +131,10 @@ if (existsSync(OFFICIAL)) {
   console.log(`\nBoundary vs official (both embedding Monogram's JS), <script> only, ${cases.length} cases:`);
   console.log(`  ${agree}/${total} chars delegated to source.js identically (${(100 * agree / total).toFixed(1)}%)`);
   if (diffs.length) { console.log('  where they differ:'); for (const d of diffs) console.log(d); }
+  // Ratchet: the known divergences are the 5 chars where the official grammar starts
+  // source.js immediately after `<script ...>` while Monogram starts at the first token.
+  // Regressions below this floor are real boundary bugs.
+  check(`official-boundary ratchet (${agree}/${total} ≥ 216/221)`, agree >= 216 && total === 221);
 } else {
   console.log(`\n⊘ official HTML grammar not found — skipping the boundary comparison.`);
 }

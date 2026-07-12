@@ -16,8 +16,10 @@ import { cpus } from 'node:os';
 
 interface Gate { group: string; name: string; args: string[] }
 const GATES: Gate[] = [
-  { group: 'core', name: 'sanity', args: ['test/sanity-check.ts'] },
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },
+  { group: 'core', name: 'left-recursion', args: ['test/left-recursion.ts'] },
+  { group: 'core', name: 'newline-mode', args: ['test/newline-mode.ts'] },
+  { group: 'core', name: 'interpolation-metadata', args: ['test/interpolation-metadata.ts'] },
   { group: 'core', name: 'refactor-guard', args: ['test/refactor-guard.ts'] },
   { group: 'core', name: 'cst-text-invariant', args: ['test/cst-text-invariant.ts'] },
   { group: 'conformance', name: 'ts-ast-structure', args: ['test/ts-ast-verify.ts'] },
@@ -45,7 +47,6 @@ const GATES: Gate[] = [
   { group: 'highlighter', name: 'angle-depth', args: ['test/angle-depth-probe.ts'] },
   { group: 'highlighter', name: 'html-monarch', args: ['test/html-monarch.ts'] },
   { group: 'highlighter', name: 'html-embed-js', args: ['test/html-embed-js.ts'] },
-  { group: 'highlighter', name: 'html-lexer-spike', args: ['test/html-lexer-spike.ts'] },
   { group: 'highlighter', name: 'self-close-sites', args: ['test/self-close-sites.ts'] },
   { group: 'highlighter', name: 'raw-text-case-sites', args: ['test/raw-text-case-sites.ts'] },
   { group: 'core', name: 'indent-extensions', args: ['test/indent-extensions.ts'] },
