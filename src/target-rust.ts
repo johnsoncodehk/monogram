@@ -61,8 +61,11 @@ function renderIdTablesRust(ids: LexIdPlan): string {
     const arms = ents.map((e) => `${J(e.text)} => ${e.id}`).join(', ');
     return `        ${len} => match text { ${arms}, _ => 0 },`;
   }).join('\n');
-  return `const _KIDS: &[&str] = &[${kidsLit}];
+  return `const KIND_STR: &[&str] = &[${kidsLit}];
 const _LIDS: &[&str] = &[${lidsLit}];
+#[inline(always)] fn tok_kind(t: &Tok) -> &'static str { KIND_STR[t.kid as usize] }
+#[inline(always)] fn tok_text<'a>(src: &'a str, t: &Tok) -> &'a str { &src[t.off as usize..t.end as usize] }
+#[inline(always)] fn mk_tok(off: usize, end: usize, nl: bool, kid: u16, lid: u16) -> Tok { Tok { off: off as u32, end: end as u32, kid, lid, nl } }
 fn kid_of(kind: &str) -> u16 { match kind { ${kidArms}, _ => 0 } }
 fn lid_of(text: &str) -> u16 {
     match text.len() {
@@ -118,8 +121,8 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
   const push = (endE: string) => (t.skip
     ? `if src[pos..${endE}].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
     : stateful
-      ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}, ${kid}, lid_of(&src[pos..${endE}])); `
-      : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE}, nl: pending_nl, kid: ${kid}, lid: lid_of(&src[pos..${endE}]) }); pending_nl = false; `);
+      ? `st.emit(pos, ${endE}, ${kid}, lid_of(&src[pos..${endE}])); `
+      : `toks.push(mk_tok(pos, ${endE}, pending_nl, ${kid}, lid_of(&src[pos..${endE}]))); pending_nl = false; `);
   const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
   if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
@@ -238,6 +241,7 @@ function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; field
     : '';
   return {
     consts: `const _NLTOK: &str = ${J(nl.token)};
+const _KID_NLTOK: u16 = ${kidOf(ids, nl.token)};
 const _FLOW_OPEN: &[&str] = ${`&[${nl.flowOpen.map(J).join(', ')}]`};
 const _FLOW_CLOSE: &[&str] = ${`&[${nl.flowClose.map(J).join(', ')}]`};
 `,
@@ -261,7 +265,7 @@ const _FLOW_CLOSE: &[&str] = ${`&[${nl.flowClose.map(J).join(', ')}]`};
                 }
             }
 ${commentSkip}            pos = p;
-            if st.emitted_content { st.emit(_NLTOK, &src[pos..pos], pos, pos, ${kidOf(ids, nl.token)}, 0); }
+            if st.emitted_content { st.emit(pos, pos, ${kidOf(ids, nl.token)}, 0); }
             st.line_start = false;
             continue;
         }
@@ -284,7 +288,7 @@ ${commentSkip}            pos = p;
                 }
             }
 ${commentSkipFrom}            pos = p;
-            if st.emitted_content { st.push_tok(_NLTOK, &src[pos..pos], pos, pos, ${kidOf(ids, nl.token)}, 0); }
+            if st.emitted_content { st.push_tok(pos, pos, ${kidOf(ids, nl.token)}, 0); }
             st.line_start = false;
             continue;
         }
@@ -303,13 +307,13 @@ ${commentSkipFrom}            pos = p;
             continue;
         }
 `,
-    hooks: `        if kind != _NLTOK { self.emitted_content = true; }
-        if kind == "" && _in(_FLOW_OPEN, text) { self.flow_depth += 1; }
-        else if kind == "" && _in(_FLOW_CLOSE, text) { self.flow_depth = (self.flow_depth - 1).max(0); }
+    hooks: `        if kid != _KID_NLTOK { self.emitted_content = true; }
+        if kid == 0 && _in(_FLOW_OPEN, _LIDS[lid as usize]) { self.flow_depth += 1; }
+        else if kid == 0 && _in(_FLOW_CLOSE, _LIDS[lid as usize]) { self.flow_depth = (self.flow_depth - 1).max(0); }
 `,
-    hooksFrom: `        if kind != _NLTOK { emitted_content = true; }
-        if kind == "" && _in(_FLOW_OPEN, text) { flow_depth += 1; }
-        else if kind == "" && _in(_FLOW_CLOSE, text) { flow_depth = (flow_depth - 1).max(0); }
+    hooksFrom: `        if kid != _KID_NLTOK { emitted_content = true; }
+        if kid == 0 && _in(_FLOW_OPEN, _LIDS[lid as usize]) { flow_depth += 1; }
+        else if kid == 0 && _in(_FLOW_CLOSE, _LIDS[lid as usize]) { flow_depth = (flow_depth - 1).max(0); }
 `,
   };
 }
@@ -342,7 +346,7 @@ function lexer(ir: ParserIR): string {
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
   const punctLine = (p: string) =>
-    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length}, 0, ${lidOf(ids, p)});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl, kid: 0, lid: ${lidOf(ids, p)} }); pending_nl = false;`} pos += ${p.length}; continue; }`;
+    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit(pos, pos + ${p.length}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${p.length}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${p.length}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
   const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ');
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
@@ -374,7 +378,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     (false, p)
 }
 ` : '';
-  const fields = ['toks: Vec<Tok<\'a>>', 'pending_nl: bool',
+  const fields = ['toks: Vec<Tok>', 'pending_nl: bool',
     rx ? 'prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool' : '',
     tpl ? 'template_stack: Vec<i64>' : '',
     nlRs ? nlRs.fields : ''].filter(Boolean).join(', ');
@@ -399,16 +403,16 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `
         self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;` : '';
-  const stateImpl = stateful ? `struct LexState<'a> { ${fields} }
-impl<'a> LexState<'a> {
-${prevIsValue}${inlAlways}    fn emit(&mut self, kind: &'static str, text: &'a str, off: usize, end: usize, kid: u16, lid: u16) {
+  const stateImpl = stateful ? `struct LexState { ${fields} }
+impl LexState {
+${prevIsValue}${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${emitHooks}
-        self.toks.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;${emitTail}
+        self.toks.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;${emitTail}
     }
 }
 ` : '';
-  const rxScanImpl = rxOnly ? `struct RxScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
-impl<'a, 'b> RxScan<'a, 'b> {
+  const rxScanImpl = rxOnly ? `struct RxScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool }
+impl<'a> RxScan<'a> {
 ${inlAlways}    fn prev_is_value(&self) -> bool {
         if !self.has_prev { return false; }
         if ${rsFlag('_PAV', 'self.prev_lid')} { return self.last_bang; }
@@ -416,25 +420,25 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
         let is_paren_head = self.prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'self.prev_kid')} || ${rsFlag('_DIVT', 'self.prev_lid')})
     }
-${inlAlways}    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize, kid: u16, lid: u16) {
+${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         if lid == _LID_LPAREN { let is_member = self.has_prev2 && ${rsFlag('_MEM', 'self.bp_lid')}; self.paren_head.push(!is_member && self.prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'self.prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
-        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;
+        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
         self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;
     }
 }
 ` : '';
-  const tplScanImpl = tplOnly ? `struct TplScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, template_stack: Vec<i64> }
-impl<'a, 'b> TplScan<'a, 'b> {
-${inlAlways}    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize, kid: u16, lid: u16) {
+  const tplScanImpl = tplOnly ? `struct TplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, template_stack: Vec<i64> }
+impl<'a> TplScan<'a> {
+${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }
-        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;
+        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
     }
 }
 ` : '';
-  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
-impl<'a, 'b> RxTplScan<'a, 'b> {
+  const rxTplScanImpl = rxTpl ? `struct RxTplScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64> }
+impl<'a> RxTplScan<'a> {
 ${inlAlways}    fn prev_is_value(&self) -> bool {
         if !self.has_prev { return false; }
         if ${rsFlag('_PAV', 'self.prev_lid')} { return self.last_bang; }
@@ -442,12 +446,12 @@ ${inlAlways}    fn prev_is_value(&self) -> bool {
         let is_paren_head = self.prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'self.prev_kid')} || ${rsFlag('_DIVT', 'self.prev_lid')})
     }
-${inlAlways}    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize, kid: u16, lid: u16) {
+${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         if lid == _LID_LPAREN { let is_member = self.has_prev2 && ${rsFlag('_MEM', 'self.bp_lid')}; self.paren_head.push(!is_member && self.prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'self.prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${pavHot} { self.last_bang = self.prev_is_value(); }
         if !self.template_stack.is_empty() { if lid == _LID_BRACE_OPEN { *self.template_stack.last_mut().unwrap() += 1; } else if lid == _LID_INTERP_CLOSE { *self.template_stack.last_mut().unwrap() -= 1; } }
-        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;
+        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
         self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;
     }
 }
@@ -461,12 +465,12 @@ ${inlAlways}    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize
   const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && src[pos..].starts_with(${J(tpl.interpClose)}) && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length});
-            if interp { st.emit("$templateMiddle", &src[pos..e], pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit("$templateTail", &src[pos..e], pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
         if src[pos..].starts_with(${J(tpl.open)}) {
             let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length});
-            if interp { st.emit("$templateHead", &src[pos..e], pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(${J(tpl.token)}, &src[pos..e], pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
 ` : '';
@@ -482,7 +486,7 @@ ${nlWs}${tplDispatch}${cascade}
     const rxLoopBody = `${nlBoundary}        let c = b[pos] as u32;
 ${nlWs}${cascade}
         panic!("lex error at {}", pos);`;
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -492,14 +496,14 @@ ${rxLoopBody}
     }
     (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, &mut toks, 0);
     toks
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${tplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${tplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -509,14 +513,14 @@ ${loopBody}
     }
     (pos, st.pending_nl, st.template_stack)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, Vec::new(), &mut toks, 0);
     toks
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxTplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxTplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -526,14 +530,14 @@ ${loopBody}
     }
     (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, Vec::new(), &mut toks, 0);
     toks
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let b = src.as_bytes();
     let n = b.len();
 ${open}
@@ -546,19 +550,19 @@ ${loopBody}
   }
   if (newlineOnly) {
     const rustNlScan = (s: string) => s
-      .replace(/toks\.push\(Tok \{ kind: ([^,]+), text: ([^,]+), off: pos, end: ([^,]+), nl: pending_nl, kid: ([^,]+), lid: ([^}]+) \}\); pending_nl = false; ?/g, 'st.push_tok($1, $2, pos, $3, $4, $5); ')
+      .replace(/toks\.push\(mk_tok\(pos, ([^,]+), pending_nl, ([^,]+), (.+)\)\); ?/g, 'st.push_tok(pos, $1, $2, $3); ')
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlLoopBody = `${nlRs!.boundaryFrom}        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
         panic!("lex error at {}", pos);`;
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, line_start: bool, emitted_content: bool, flow_depth: i64 }
-impl<'a, 'b> NlScan<'a, 'b> {
-    fn push_tok(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize, kid: u16, lid: u16) {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, line_start: bool, emitted_content: bool, flow_depth: i64 }
+impl<'a> NlScan<'a> {
+    fn push_tok(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${nlRs!.hooksFrom.replace(/emitted_content/g, 'self.emitted_content').replace(/flow_depth/g, 'self.flow_depth').replace(/pending_nl/g, 'self.pending_nl')}
-        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;
+        self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
     }
 }
-fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut line_start: bool, mut emitted_content: bool, mut flow_depth: i64, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, bool, bool, i64) {
+fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut line_start: bool, mut emitted_content: bool, mut flow_depth: i64, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, bool, bool, i64) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -568,13 +572,13 @@ ${nlLoopBody}
     }
     (pos, st.pending_nl, st.line_start, st.emitted_content, st.flow_depth)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, true, false, 0, &mut toks, 0);
     toks
 }`;
   }
-  return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool) {
+  return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -583,7 +587,7 @@ ${loopBody.replace(/pending_nl/g, 'pending_nl').replace(/toks\.push/g, 'acc.push
     }
     (pos, pending_nl)
 }
-fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let mut toks = Vec::new();
     lex_from(src, 0, false, &mut toks, 0);
     toks
@@ -809,7 +813,7 @@ ${needPeek ? '        let _ft = self.peek();\n' : ''}${r.alts.map(alt).join('\n'
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
-    ? `        if t.kind == "$templateHead" {
+    ? `        if t.kid == ${kidOf(ids, "$templateHead")} {
             let n = match self.match_template() { Some(n) => n, None => return None };
             let sb = self.scratch.len(); self.scratch.push(n);
             return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[n as usize].offset as usize, self.nodes[n as usize].tok_start as usize));
@@ -820,7 +824,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const atomArm = r.nudToks.map((k) => `${kidOf(ids, k)}`).join(' | ');
   const bracketNudBody = (b: Bracket) => `{
             let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
-            if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off, save)); }
+            if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off as usize, save)); }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);
         }`;
   const bracketNudMatch = (() => {
@@ -866,7 +870,7 @@ ${groups.map((g) => {
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
     const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
     const tplPart = hasTpl ? `
-            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; } }` : '';
+            if !tail_closed && t.kid == ${kidOf(ids, "$templateHead")} { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; } }` : '';
     return `            match t.kid {
 ${groups.map((g) => `                ${g.key} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kid as u8, self.pos as u32); self.pos += 1; left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; } }`).join('\n')}
                 _ => {}
@@ -913,16 +917,16 @@ ${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; 
         self.capped = false;
         r
     }
-    fn ${r.name}_nud_rest(&mut self, t: Tok<'a>) -> Option<i32> {
+    fn ${r.name}_nud_rest(&mut self, t: Tok) -> Option<i32> {
 ${tplNud}        if Parser::${r.name}_atom(t.kid) {
             let sb = self.scratch.len(); let ts = self.pos; self.push_leaf(t.kid as u8, self.pos as u32); self.pos += 1;
-            return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off, ts));
+            return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off as usize, ts));
         }
 ${bracketNudMatch}
         if let Some(pbp) = Parser::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32); self.pos += 1;
             match self.${r.name}_bp(pbp) {
-                Some(operand) => { self.scratch.push(operand); return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off, save)); }
+                Some(operand) => { self.scratch.push(operand); return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off as usize, save)); }
                 None => { self.pos = save; self.scratch.truncate(sb); return None; }
             }
         }
@@ -1019,19 +1023,19 @@ fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, sta
     } else {
         (0, false, true, false, 0)
     };
-    let mut scratch: Vec<Tok<'_>> = Vec::new();
+    let mut scratch: Vec<Tok> = Vec::new();
     let mut relexed = 0usize;
     while scan_off < new_text.len() {
         let before = scratch.len();
         (scan_off, pending_nl, line_start, emitted_content, flow_depth) = lex_from(new_text, scan_off, pending_nl, line_start, emitted_content, flow_depth, &mut scratch, 1);
         if scratch.len() == before { break; }
         let t = &scratch[scratch.len() - 1];
-        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: flow_depth, pd: 0, lc: false, lb: false, hd: false, td: 0 });
+        out.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: flow_depth, pd: 0, lc: false, lb: false, hd: false, td: 0 });
         relexed += 1;
-        if t.off >= edit_end {
-            if let Some(o_idx) = find_tok_at_off_kind(old_toks, (t.off as isize - delta) as usize, t.kind) {
+        if (t.off as usize) >= edit_end {
+            if let Some(o_idx) = find_tok_at_off_kind(old_toks, (t.off as isize - delta) as usize, tok_kind(t)) {
                 let o = &old_toks[o_idx];
-                if o.kind == t.kind && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && o.fd == flow_depth && old_text[o.off..o.end] == new_text[t.off..t.end] {
+                if o.kind == tok_kind(t) && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && o.fd == flow_depth && old_text[o.off..o.end] == new_text[t.off as usize..t.end as usize] {
                     for ot in &old_toks[o_idx + 1..] {
                         out.push(AlignMeta { kind: ot.kind, off: (ot.off as isize + delta) as usize, end: (ot.end as isize + delta) as usize, nl: ot.nl, fd: ot.fd, pd: ot.pd, lc: ot.lc, lb: ot.lb, hd: ot.hd, td: ot.td });
                     }
@@ -1105,7 +1109,7 @@ fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, sta
     } else {
         scan_off = 0;
     }
-    let mut scratch: Vec<Tok<'_>> = Vec::new();
+    let mut scratch: Vec<Tok> = Vec::new();
     let mut relexed = 0usize;
     while scan_off < new_text.len() {
         let before = scratch.len();
@@ -1113,16 +1117,16 @@ fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, sta
         if scratch.len() == before { break; }
         let t = &scratch[scratch.len() - 1];
         let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
-        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: paren_head.len() as i64, lc: last_close, lb: last_bang, hd, td: 0 });
+        out.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: 0, pd: paren_head.len() as i64, lc: last_close, lb: last_bang, hd, td: 0 });
         relexed += 1;
-        if t.off >= edit_end {
+        if (t.off as usize) >= edit_end {
             if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
                 let o = &old_toks[o_idx];
                 let new_prev_text = if out.len() > 1 { let p = &out[out.len() - 2]; &new_text[p.off..p.end] } else { "" };
                 let old_prev_text = if o_idx >= 1 { let p = &old_toks[o_idx - 1]; &old_text[p.off..p.end] } else { "" };
                 let bp_ok = new_prev_text == old_prev_text;
                 let old_stack = reconstruct_parens(old_toks, old_text, o_idx as isize);
-                if o.pd == paren_head.len() as i64 && paren_stacks_eq(&old_stack, &paren_head) && o.lc == last_close && o.lb == last_bang && bp_ok && o.kind == t.kind && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off..t.end] {
+                if o.pd == paren_head.len() as i64 && paren_stacks_eq(&old_stack, &paren_head) && o.lc == last_close && o.lb == last_bang && bp_ok && o.kind == tok_kind(t) && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off as usize..t.end as usize] {
                     for ot in &old_toks[o_idx + 1..] {
                         out.push(AlignMeta { kind: ot.kind, off: (ot.off as isize + delta) as usize, end: (ot.end as isize + delta) as usize, nl: ot.nl, fd: ot.fd, pd: ot.pd, lc: ot.lc, lb: ot.lb, hd: ot.hd, td: ot.td });
                     }
@@ -1166,7 +1170,7 @@ ${tplAnchor}
     } else {
         scan_off = 0;
     }
-    let mut scratch: Vec<Tok<'_>> = Vec::new();
+    let mut scratch: Vec<Tok> = Vec::new();
     let mut relexed = 0usize;
     while scan_off < new_text.len() {
         let before = scratch.len();
@@ -1175,15 +1179,15 @@ ${tplAnchor}
         if scratch.len() == before { break; }
         let t = &scratch[scratch.len() - 1];
         let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
-        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: paren_head.len() as i64, lc: last_close, lb: last_bang, hd, td: template_stack.len() as i64 });
+        out.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: 0, pd: paren_head.len() as i64, lc: last_close, lb: last_bang, hd, td: template_stack.len() as i64 });
         relexed += 1;
-        if t.off >= edit_end {
+        if (t.off as usize) >= edit_end {
             if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
                 let o = &old_toks[o_idx];
                 let new_prev = if out.len() > 1 { &new_text[out[out.len()-2].off..out[out.len()-2].end] } else { "" };
                 let old_prev = if o_idx >= 1 { &old_text[old_toks[o_idx-1].off..old_toks[o_idx-1].end] } else { "" };
                 let old_stack = reconstruct_parens(old_toks, old_text, o_idx as isize);
-                if o.td == 0 && template_stack.is_empty() && o.pd == paren_head.len() as i64 && paren_stacks_eq(&old_stack, &paren_head) && o.lc == last_close && o.lb == last_bang && new_prev == old_prev && o.kind == t.kind && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off..t.end] {
+                if o.td == 0 && template_stack.is_empty() && o.pd == paren_head.len() as i64 && paren_stacks_eq(&old_stack, &paren_head) && o.lc == last_close && o.lb == last_bang && new_prev == old_prev && o.kind == tok_kind(t) && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off as usize..t.end as usize] {
 ${adoptSuffix}
                     return (out, relexed);
                 }
@@ -1200,7 +1204,7 @@ ${tplAnchor}
     let mut scan_off = if rb >= 0 { old_toks[rb as usize].end } else { 0 };
     let mut pending_nl = false;
     let mut template_stack: Vec<i64> = Vec::new();
-    let mut scratch: Vec<Tok<'_>> = Vec::new();
+    let mut scratch: Vec<Tok> = Vec::new();
     let mut relexed = 0usize;
     while scan_off < new_text.len() {
         let before = scratch.len();
@@ -1208,12 +1212,12 @@ ${tplAnchor}
         scan_off = r.0; pending_nl = r.1; template_stack = r.2;
         if scratch.len() == before { break; }
         let t = &scratch[scratch.len() - 1];
-        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: template_stack.len() as i64 });
+        out.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: template_stack.len() as i64 });
         relexed += 1;
-        if t.off >= edit_end {
+        if (t.off as usize) >= edit_end {
             if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
                 let o = &old_toks[o_idx];
-                if o.td == 0 && template_stack.is_empty() && o.kind == t.kind && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off..t.end] {
+                if o.td == 0 && template_stack.is_empty() && o.kind == tok_kind(t) && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off as usize..t.end as usize] {
 ${adoptSuffix}
                     return (out, relexed);
                 }
@@ -1243,19 +1247,19 @@ fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, sta
     let mut out: Vec<AlignMeta> = if rb >= 0 { old_toks[..=rb as usize].to_vec() } else { Vec::new() };
     let mut scan_off = if rb >= 0 { old_toks[rb as usize].end } else { 0 };
     let mut pending_nl = false;
-    let mut scratch: Vec<Tok<'_>> = Vec::new();
+    let mut scratch: Vec<Tok> = Vec::new();
     let mut relexed = 0usize;
     while scan_off < new_text.len() {
         let before = scratch.len();
         (scan_off, pending_nl) = lex_from(new_text, scan_off, pending_nl, &mut scratch, 1);
         if scratch.len() == before { break; }
         let t = &scratch[scratch.len() - 1];
-        out.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: 0 });
+        out.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: 0 });
         relexed += 1;
-        if t.off >= edit_end {
+        if (t.off as usize) >= edit_end {
             if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
                 let o = &old_toks[o_idx];
-                if o.kind == t.kind && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off..t.end] {
+                if o.kind == tok_kind(t) && o.end == (t.end as isize - delta) as usize && o.nl == t.nl && old_text[o.off..o.end] == new_text[t.off as usize..t.end as usize] {
                     for ot in &old_toks[o_idx + 1..] {
                         out.push(AlignMeta { kind: ot.kind, off: (ot.off as isize + delta) as usize, end: (ot.end as isize + delta) as usize, nl: ot.nl, fd: ot.fd, pd: ot.pd, lc: ot.lc, lb: ot.lb, hd: ot.hd, td: ot.td });
                     }
@@ -1294,7 +1298,7 @@ fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, sta
         relexed = self.toks.len();`;
   const toMetaFn = hasNewline ? `
 fn scan_meta(src: &str) -> Vec<AlignMeta> {
-    let mut toks: Vec<Tok<'_>> = Vec::new();
+    let mut toks: Vec<Tok> = Vec::new();
     let mut meta: Vec<AlignMeta> = Vec::new();
     let (mut pos, mut pending_nl, mut line_start, mut emitted_content, mut flow_depth) = (0usize, false, true, false, 0i64);
     while pos < src.len() {
@@ -1302,14 +1306,14 @@ fn scan_meta(src: &str) -> Vec<AlignMeta> {
         (pos, pending_nl, line_start, emitted_content, flow_depth) = lex_from(src, pos, pending_nl, line_start, emitted_content, flow_depth, &mut toks, 1);
         if toks.len() == before { break; }
         let t = &toks[toks.len() - 1];
-        meta.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: flow_depth, pd: 0, lc: false, lb: false, hd: false, td: 0 });
+        meta.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: flow_depth, pd: 0, lc: false, lb: false, hd: false, td: 0 });
     }
     meta
 }
-fn to_meta(_toks: &[Tok<'_>]) -> Vec<AlignMeta> { panic!("use scan_meta for newline") }
+fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for newline") }
 ` : rxOnly ? `
 fn scan_meta(src: &str) -> Vec<AlignMeta> {
-    let mut toks: Vec<Tok<'_>> = Vec::new();
+    let mut toks: Vec<Tok> = Vec::new();
     let mut meta: Vec<AlignMeta> = Vec::new();
     let (mut pos, mut pending_nl) = (0usize, false);
     let (mut prev_lid, mut prev_kid, mut bp_lid) = (0u16, 0u16, 0u16);
@@ -1322,11 +1326,11 @@ fn scan_meta(src: &str) -> Vec<AlignMeta> {
         if toks.len() == before { break; }
         let t = &toks[toks.len() - 1];
         let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
-        meta.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: paren_head.len() as i64, lc: last_close, lb: last_bang, hd, td: 0 });
+        meta.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: 0, pd: paren_head.len() as i64, lc: last_close, lb: last_bang, hd, td: 0 });
     }
     meta
 }
-fn to_meta(_toks: &[Tok<'_>]) -> Vec<AlignMeta> { panic!("use scan_meta for regex") }
+fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for regex") }
 ` : rxTpl ? `
 fn scan_meta(src: &str) -> Vec<AlignMeta> {
     let mut toks: Vec<Tok> = Vec::new();
@@ -1349,11 +1353,11 @@ fn scan_meta(src: &str) -> Vec<AlignMeta> {
         if toks.len() == before { break; }
         let t = &toks[toks.len() - 1];
         let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
-        meta.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: paren_head.len() as i64, lc: last_close, lb: last_bang, hd, td: template_stack.len() as i64 });
+        meta.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: 0, pd: paren_head.len() as i64, lc: last_close, lb: last_bang, hd, td: template_stack.len() as i64 });
     }
     meta
 }
-fn to_meta(_toks: &[Tok<'_>]) -> Vec<AlignMeta> { panic!("use scan_meta for rx+tpl") }
+fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for rx+tpl") }
 ` : tplOnly ? `
 fn scan_meta(src: &str) -> Vec<AlignMeta> {
     let mut toks: Vec<Tok> = Vec::new();
@@ -1367,13 +1371,13 @@ fn scan_meta(src: &str) -> Vec<AlignMeta> {
         pos = r.0; pending_nl = r.1; template_stack = r.2;
         if toks.len() == before { break; }
         let t = &toks[toks.len() - 1];
-        meta.push(AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: template_stack.len() as i64 });
+        meta.push(AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: template_stack.len() as i64 });
     }
     meta
 }
-fn to_meta(_toks: &[Tok<'_>]) -> Vec<AlignMeta> { panic!("use scan_meta for tpl") }
-` : `fn to_meta(toks: &[Tok<'_>]) -> Vec<AlignMeta> {
-    toks.iter().map(|t| AlignMeta { kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: 0 }).collect()
+fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for tpl") }
+` : `fn to_meta(toks: &[Tok]) -> Vec<AlignMeta> {
+    toks.iter().map(|t| AlignMeta { kind: tok_kind(t), off: t.off as usize, end: t.end as usize, nl: t.nl, fd: 0, pd: 0, lc: false, lb: false, hd: false, td: 0 }).collect()
 }`;
   const checkStreamEqFn = hasNewline ? `
 fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
@@ -1682,7 +1686,7 @@ fn shift_subtree(nodes: &mut [Node], kids: &mut [i32], id: i32, byte_delta: isiz
 ` : '';
   const reuseFns = reuseFnsA || reuseFnsB;
   const treeEqFn = `
-fn cmp_kid(nodes_a: &[Node], kids_a: &[i32], toks_a: &[Tok<'_>], kid_a: i32, nodes_b: &[Node], kids_b: &[i32], toks_b: &[Tok<'_>], kid_b: i32) -> bool {
+fn cmp_kid(nodes_a: &[Node], kids_a: &[i32], toks_a: &[Tok], kid_a: i32, nodes_b: &[Node], kids_b: &[i32], toks_b: &[Tok], kid_b: i32) -> bool {
     if (kid_a < 0) != (kid_b < 0) { return false; }
     if kid_a < 0 {
         let (ti_a, tt_a) = decode_leaf(kid_a);
@@ -1883,8 +1887,8 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
     }
     (old_n, new_n, prefix, suffix)
 }
-fn toks_from_meta<'a>(text: &'a str, meta: &[AlignMeta]) -> Vec<Tok<'a>> {
-    meta.iter().map(|m| { let tx = &text[m.off..m.end]; Tok { kind: m.kind, text: tx, off: m.off, end: m.end, nl: m.nl, kid: kid_of(m.kind), lid: lid_of(tx) } }).collect()
+fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
+    meta.iter().map(|m| { let tx = &text[m.off..m.end]; mk_tok(m.off, m.end, m.nl, kid_of(m.kind), lid_of(tx)) }).collect()
 }
 ${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}pub struct Doc {
     text: String,
@@ -1966,11 +1970,17 @@ export const rustTarget: Target = {
 // tokenize(src) -> Vec<Tok>. The same lexer is embedded in emitParser's output, so the tokens
 // are identical. Compile as a library (rustc --crate-type lib) or include via \`mod\`.
 #![allow(dead_code)]
-struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool, kid: u16, lid: u16 }
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Tok { off: u32, end: u32, kid: u16, lid: u16, nl: bool }
+const _: () = assert!(std::mem::size_of::<Tok>() == 16);
 
 ${lexer(portableIR(grammar))}
 
-pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
+pub struct RichTok<'a> { pub kind: &'static str, pub text: &'a str, pub off: usize, pub end: usize, pub nl: bool, pub kid: u16, pub lid: u16 }
+pub fn tokenize<'a>(src: &'a str) -> Vec<RichTok<'a>> {
+    lex(src).into_iter().map(|t| RichTok { kind: tok_kind(&t), text: tok_text(src, &t), off: t.off as usize, end: t.end as usize, nl: t.nl, kid: t.kid, lid: t.lid }).collect()
+}
 `;
   },
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
@@ -1984,8 +1994,8 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
       ? `\n#[derive(Clone, Copy)]\nstruct Seg { kid_start: usize, kid_count: usize, tok_start: usize, tok_end: usize, ext: usize }\n`
       : '';
     const parserFields = shapeB
-      ? 'struct Parser<\'a> { toks: Vec<Tok<\'a>>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<u16>, suppress_cur: Vec<u16>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32>, segs: Vec<Seg> }'
-      : 'struct Parser<\'a> { toks: Vec<Tok<\'a>>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<u16>, suppress_cur: Vec<u16>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32> }';
+      ? 'struct Parser<\'a> { toks: Vec<Tok>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<u16>, suppress_cur: Vec<u16>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32>, segs: Vec<Seg> }'
+      : 'struct Parser<\'a> { toks: Vec<Tok>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<u16>, suppress_cur: Vec<u16>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32> }';
     const ruleFns = ir.rules.map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
@@ -1994,15 +2004,15 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
     const arenaIdTables = renderArenaIdTablesRust(ar);
     const matchTemplate = ir.tpl ? `    fn match_template(&mut self) -> Option<i32> {
         let t = self.peek()?;
-        if t.kind != "$templateHead" { return None; }
+        if t.kid != ${kidOf(ids, "$templateHead")} { return None; }
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
         self.push_leaf(${ttIdOf(ar, '$templateHead')}, self.pos as u32); self.pos += 1;
         loop {
             let expr = match self.parse_${ir.tpl.interpRule}() { Some(e) => e, None => { self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None; } };
             self.scratch.push(expr);
             let next = match self.peek() { Some(x) => x, None => { self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None; } };
-            if next.kind == "$templateMiddle" { self.push_leaf(${ttIdOf(ar, '$templateMiddle')}, self.pos as u32); self.pos += 1; continue; }
-            if next.kind == "$templateTail" { self.push_leaf(${ttIdOf(ar, '$templateTail')}, self.pos as u32); self.pos += 1; break; }
+            if next.kid == ${kidOf(ids, "$templateMiddle")} { self.push_leaf(${ttIdOf(ar, '$templateMiddle')}, self.pos as u32); self.pos += 1; continue; }
+            if next.kid == ${kidOf(ids, "$templateTail")} { self.push_leaf(${ttIdOf(ar, '$templateTail')}, self.pos as u32); self.pos += 1; break; }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None;
         }
         let (o, _) = self.kid_off_end(self.scratch[sb]);
@@ -2013,10 +2023,11 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
 #![allow(non_snake_case)]
 use std::io::Read;
 
-// Zero-alloc tokens: kind is a known grammar name (&'static str), text is a slice of the
-// source. Tok is Copy, so peek() copies pointers — no per-peek heap work.
+// Slim hot-path token (16B): kind/text reconstructed via KIND_STR / src[off..end].
+#[repr(C)]
 #[derive(Clone, Copy)]
-struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool, kid: u16, lid: u16 }
+struct Tok { off: u32, end: u32, kid: u16, lid: u16, nl: bool }
+const _: () = assert!(std::mem::size_of::<Tok>() == 16);
 
 // Arena node: a flat record in \`nodes\`; children are a contiguous range in \`kids\`.
 // Rule nodes only — leaf kids are negative i32 encodings in \`kids\` / \`scratch\`.
@@ -2046,11 +2057,11 @@ fn decode_leaf(v: i32) -> (u32, u8) {
 
 ${parserFields}
 impl<'a> Parser<'a> {
-    fn peek(&mut self) -> Option<Tok<'a>> {
+    fn peek(&mut self) -> Option<Tok> {
         if self.pos + 1 > self.max_look { self.max_look = self.pos + 1; }
         if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None }
     }
-    fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off } else { 0 } }
+    fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off as usize } else { 0 } }
     fn kid_off_end(&self, kid: i32) -> (u32, u32) {
         if kid < 0 {
             let (ti, _) = decode_leaf(kid);
@@ -2098,7 +2109,7 @@ impl<'a> Parser<'a> {
             if k < 0 {
                 let (ti, _) = decode_leaf(k);
                 let t = &self.toks[ti as usize];
-                return &self.src[t.off..t.end];
+                return &self.src[t.off as usize..t.end as usize];
             }
             id = k;
         }
@@ -2137,7 +2148,7 @@ impl<'a> Parser<'a> {
 ${matchTemplate}${ruleFns}
 }
 
-fn write_json_kid(nodes: &[Node], kids: &[i32], toks: &[Tok<'_>], kid: i32, out: &mut String) {
+fn write_json_kid(nodes: &[Node], kids: &[i32], toks: &[Tok], kid: i32, out: &mut String) {
     if kid < 0 {
         let (ti, tt) = decode_leaf(kid);
         let t = &toks[ti as usize];
@@ -2146,7 +2157,7 @@ fn write_json_kid(nodes: &[Node], kids: &[i32], toks: &[Tok<'_>], kid: i32, out:
     }
     write_json_arena(nodes, kids, toks, kid, out);
 }
-fn write_json_arena(nodes: &[Node], kids: &[i32], toks: &[Tok<'_>], id: i32, out: &mut String) {
+fn write_json_arena(nodes: &[Node], kids: &[i32], toks: &[Tok], id: i32, out: &mut String) {
     let nd = &nodes[id as usize];
     out.push_str(&format!("{{\\"rule\\":\\"{}\\",\\"children\\":[", RULE_NAMES[nd.rule_id as usize]));
     for i in 0..nd.kid_count {
@@ -2163,7 +2174,7 @@ fn write_json(p: &Parser<'_>, id: i32, out: &mut String) {
 // carries the source slice (head-leaf lookups need it — Rust keeps no globals). Pass it to
 // parse(). The arena (nodes/kids) lives in the returned Parser so the caller can serialize
 // (write_json) or inspect it. Just the CST? parse(tokenize(src)).
-struct Tokens<'a> { src: &'a str, toks: Vec<Tok<'a>> }
+struct Tokens<'a> { src: &'a str, toks: Vec<Tok> }
 fn tokenize<'a>(src: &'a str) -> Tokens<'a> { Tokens { src, toks: lex(src) } }
 fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
     let n = tokens.toks.len();

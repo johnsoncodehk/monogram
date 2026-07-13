@@ -44,17 +44,20 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 function renderIdTablesGo(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
-  return `var _kids = []string{${kidsLit}}
+  return `var KIND_STR = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
 var _kidMap = map[string]uint16{}
 var _lidMap = map[string]uint16{}
 
 func init() {
-\tfor i, k := range _kids { _kidMap[k] = uint16(i) }
+\tfor i, k := range KIND_STR { _kidMap[k] = uint16(i) }
 \tfor i, t := range _lids { _lidMap[t] = uint16(i) }
 }
 func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
 func lidOf(text string) uint16 { if v, ok := _lidMap[text]; ok { return v }; return 0 }
+func tokKind(t *Tok) string { return KIND_STR[t.Kid] }
+func tokText(src string, t *Tok) string { return src[t.Off:t.End] }
+func mkTok(off, end int, nl bool, kid, lid uint16) Tok { return Tok{Off: uint32(off), End: uint32(end), Kid: kid, Lid: lid, Nl: nl} }
 `;
 }
 
@@ -100,7 +103,7 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
   const kid = kidOf(ids, name);
   const push = (endE: string) => (t.skip
     ? `if strings.ContainsAny(src[pos:${endE}], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
-    : `{ _tx := src[pos:${endE}]; ${stateful ? 'emit' : 'pushTok'}(${J(name)}, _tx, pos, ${endE}, ${kid}, lidOf(_tx)) }; `);
+    : `${stateful ? 'emit' : 'pushTok'}(pos, ${endE}, ${kid}, lidOf(src[pos:${endE}])); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   if (t.kind === 'run') return `\t\tif ${gate}${rangeCond('c', t.first)} {
 \t\t\te := pos + 1
@@ -189,15 +192,14 @@ function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state
   const commentSkip = nl.comment
     ? `\t\tif strings.HasPrefix(src[p:], ${J(nl.comment)}) { e := p; for e < n && src[e] != 10 { e++ }; pos = e; continue }\n`
     : '';
+  const kidNl = kidOf(ids, nl.token);
   return {
     state: `\tlineStart, emittedContent, flowDepth := true, false, 0
 \t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
 \t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
-\tconst _nlTok = ${J(nl.token)}
 `,
     stateFrom: `\t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
 \t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
-\tconst _nlTok = ${J(nl.token)}
 `,
     boundary: `\t\tif flowDepth == 0 && lineStart {
 \t\t\tp := pos
@@ -217,7 +219,7 @@ function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state
 \t\t\t\t}
 \t\t\t}
 ${commentSkip}\t\t\tpos = p
-\t\t\tif emittedContent { ${pushFn}(_nlTok, "", pos, pos, ${kidOf(ids, nl.token)}, 0) }
+\t\t\tif emittedContent { ${pushFn}(pos, pos, ${kidNl}, 0) }
 \t\t\tlineStart = false
 \t\t\tcontinue
 \t\t}
@@ -229,8 +231,8 @@ ${commentSkip}\t\t\tpos = p
 \t\t\tcontinue
 \t\t}
 `,
-    hooks: `\t\tif kind != _nlTok { emittedContent = true }
-\t\tif kind == "" && _flowOpen[text] { flowDepth++ } else if kind == "" && _flowClose[text] { if flowDepth > 0 { flowDepth-- } }
+    hooks: `\t\tif kid != ${kidNl} { emittedContent = true }
+\t\tif kid == 0 && _flowOpen[_lids[lid]] { flowDepth++ } else if kid == 0 && _flowClose[_lids[lid]] { if flowDepth > 0 { flowDepth-- } }
 `,
   };
 }
@@ -248,8 +250,8 @@ function lexer(ir: ParserIR): string {
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushPunct = stateful
-    ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`
-    : (p: string) => `pushTok("", ${J(p)}, pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`;
+    ? (p: string) => `emit(pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`
+    : (p: string) => `pushTok(pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`;
   const punctLine = (p: string) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
@@ -306,9 +308,9 @@ const LID_INTERP_CLOSE uint16 = ${lidOf(ids, tpl.interpClose)}
     nl ? newlinePartsGo(nl, 'emit', ids).hooks : '',
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `\n\t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true` : '';
-  const emitFn = stateful ? `\temit := func(kind, text string, off, end int, kid, lid uint16) {
+  const emitFn = stateful ? `\temit := func(off, end int, kid, lid uint16) {
 ${emitHooks}
-\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false${emitTail}
+\t\ttoks = append(toks, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false${emitTail}
 \t}
 \t_ = emit
 ` : '';
@@ -331,7 +333,7 @@ ${emitHooks}
 \t}
 \t_ = scanTplSpan
 ` : '';
-  const emitRxOnly = rx ? `\temit := func(kind, text string, off, end int, kid, lid uint16) {
+  const emitRxOnly = rx ? `\temit := func(off, end int, kid, lid uint16) {
 \t\tif lid == LID_LPAREN {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
 \t\t\tparenHead = append(parenHead, !isMember && prevKid == KID_IDENT && _phK[prevLid])
@@ -339,18 +341,18 @@ ${emitHooks}
 \t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
 \t\tif _pav[lid] { lastBang = prevIsValue() }
-\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
+\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
 \t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true
 \t}
 \t_ = emit
 ` : '';
-  const emitTplOnly = tpl ? `\temit := func(kind, text string, off, end int, kid, lid uint16) {
+  const emitTplOnly = tpl ? `\temit := func(off, end int, kid, lid uint16) {
 \t\tif len(templateStack) > 0 { if lid == LID_BRACE_OPEN { templateStack[len(templateStack)-1]++ } else if lid == LID_INTERP_CLOSE { templateStack[len(templateStack)-1]-- } }
-\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
+\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
 \t}
 \t_ = emit
 ` : '';
-  const emitRxTpl = (rx && tpl) ? `\temit := func(kind, text string, off, end int, kid, lid uint16) {
+  const emitRxTpl = (rx && tpl) ? `\temit := func(off, end int, kid, lid uint16) {
 \t\tif lid == LID_LPAREN {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
 \t\t\tparenHead = append(parenHead, !isMember && prevKid == KID_IDENT && _phK[prevLid])
@@ -359,7 +361,7 @@ ${emitHooks}
 \t\t}
 \t\tif _pav[lid] { lastBang = prevIsValue() }
 \t\tif len(templateStack) > 0 { if lid == LID_BRACE_OPEN { templateStack[len(templateStack)-1]++ } else if lid == LID_INTERP_CLOSE { templateStack[len(templateStack)-1]-- } }
-\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
+\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
 \t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true
 \t}
 \t_ = emit
@@ -367,12 +369,12 @@ ${emitHooks}
   const tplDispatch = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
 \t\t\ttemplateStack = templateStack[:len(templateStack)-1]
 \t\t\tinterp, e := scanTplSpan(pos + ${tpl.interpClose.length})
-\t\t\tif interp { _tx := src[pos:e]; emit("$templateMiddle", _tx, pos, e, ${kidOf(ids, '$templateMiddle')}, lidOf(_tx)); templateStack = append(templateStack, 0) } else { _tx := src[pos:e]; emit("$templateTail", _tx, pos, e, ${kidOf(ids, '$templateTail')}, lidOf(_tx)) }
+\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, lidOf(src[pos:e])) }
 \t\t\tpos = e; continue
 \t\t}
 \t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
 \t\t\tinterp, e := scanTplSpan(pos + ${tpl.open.length})
-\t\t\tif interp { _tx := src[pos:e]; emit("$templateHead", _tx, pos, e, ${kidOf(ids, '$templateHead')}, lidOf(_tx)); templateStack = append(templateStack, 0) } else { _tx := src[pos:e]; emit(${J(tpl.token)}, _tx, pos, e, ${kidOf(ids, tpl.token)}, lidOf(_tx)) }
+\t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateHead')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, tpl.token)}, lidOf(src[pos:e])) }
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
@@ -385,19 +387,19 @@ ${emitHooks}
 `;
   const pushHooks = nl && !stateful ? newlinePartsGo(nl, 'pushTok', ids).hooks : '';
   const pushTokFn = stateful ? '' : nl
-    ? `\tpushTok := func(kind, text string, off, end int, kid, lid uint16) {
-${pushHooks}\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
+    ? `\tpushTok := func(off, end int, kid, lid uint16) {
+${pushHooks}\t\ttoks = append(toks, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
 \t}
 \t_ = pushTok
 `
-    : `\tpushTok := func(kind, text string, off, end int, kid, lid uint16) { toks = append(toks, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false }\n\t_ = pushTok\n`;
+    : `\tpushTok := func(off, end int, kid, lid uint16) { toks = append(toks, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false }\n\t_ = pushTok\n`;
   const pushTokAccFn = nl && !stateful
-    ? `\tpushTok := func(kind, text string, off, end int, kid, lid uint16) {
-${pushHooks}\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
+    ? `\tpushTok := func(off, end int, kid, lid uint16) {
+${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
 \t}
 \t_ = pushTok
 `
-    : `\tpushTok := func(kind, text string, off, end int, kid, lid uint16) { *acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false }
+    : `\tpushTok := func(off, end int, kid, lid uint16) { *acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false }
 \t_ = pushTok
 `;
   const loopBody = `${nlBoundary}\t\tc := int(src[pos])
@@ -692,7 +694,7 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
-    ? `\tif t.Kind == "$templateHead" {
+    ? `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tnode := matchTemplate()
 \t\tif node < 0 { return -1 }
 \t\tsb := len(scratch); scratch = append(scratch, node)
@@ -704,7 +706,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const atoms = r.nudToks.map((k) => `${kidOf(ids, k)}: true`).join(', ');
   const bracketNudBody = (b: Bracket) => `{
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
-\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return finish(${ruleIdOf(ar, r.cstName)}, sb, t.Off, save) }
+\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return finish(${ruleIdOf(ar, r.cstName)}, sb, int(t.Off), save) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
   const bracketNudSwitch = (() => {
@@ -747,7 +749,7 @@ ${groups.map((g) => {
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
     const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
     const tplPart = hasTpl ? `
-\t\tif !tailClosed && t.Kind == "$templateHead" {
+\t\tif !tailClosed && t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\t\tnode := matchTemplate()
 \t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue LedLoop }
 \t\t}` : '';
@@ -806,7 +808,7 @@ ${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scrat
 \t_r := func() int32 {   // non-capped: a sub-parse may leave _capped set; force it false after
 ${tplNud}\tif ${r.name}ATOM[t.Kid] {
 \t\tsb := len(scratch); ts := pos; pushLeaf(uint8(t.Kid), uint32(pos)); pos++
-\t\treturn finish(${ruleIdOf(ar, r.cstName)}, sb, t.Off, ts)
+\t\treturn finish(${ruleIdOf(ar, r.cstName)}, sb, int(t.Off), ts)
 \t}
 ${bracketNudSwitch}
 \tif pbp, ok := ${r.name}PRE[t.Lid]; ok {
@@ -815,7 +817,7 @@ ${bracketNudSwitch}
 \t\toperand := ${r.name}bp(pbp)
 \t\tif operand < 0 { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
 \t\tscratch = append(scratch, operand)
-\t\treturn finish(${ruleIdOf(ar, r.cstName)}, sb, t.Off, save)
+\t\treturn finish(${ruleIdOf(ar, r.cstName)}, sb, int(t.Off), save)
 \t}
 ${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return finish(${ruleIdOf(ar, r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \treturn -1
@@ -925,13 +927,13 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t\tscanOff, pendingNl, lineStart, emittedContent, flowDepth = lexFrom(newText, scanOff, pendingNl, lineStart, emittedContent, flowDepth, &scratch, 1)
 \t\tif len(scratch) == before { break }
 \t\tt := scratch[len(scratch)-1]
-\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, flowDepth, 0, false, false, false, 0})
+\t\tout = append(out, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl, flowDepth, 0, false, false, false, 0})
 \t\trelexed++
-\t\tif t.Off >= editEnd {
-\t\t\toIdx := findTokAtOffKind(oldToks, t.Off-delta, t.Kind)
+\t\tif int(t.Off) >= editEnd {
+\t\t\toIdx := findTokAtOffKind(oldToks, int(t.Off)-delta, tokKind(&t))
 \t\t\tif oIdx >= 0 {
 \t\t\t\to := oldToks[oIdx]
-\t\t\t\tif o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && o.Fd == flowDepth && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+\t\t\t\tif o.Kind == tokKind(&t) && o.End == int(t.End)-delta && o.Nl == t.Nl && o.Fd == flowDepth && oldText[o.Off:o.End] == newText[t.Off:t.End] {
 ${adoptSuffix}
 \t\t\t\t\treturn out, relexed
 \t\t\t\t}
@@ -981,10 +983,10 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t\tt := scratch[len(scratch)-1]
 \t\thd := false
 \t\tif t.Lid == LID_LPAREN && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd, 0})
+\t\tout = append(out, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl, 0, len(parenHead), lastClose, lastBang, hd, 0})
 \t\trelexed++
-\t\tif t.Off >= editEnd {
-\t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
+\t\tif int(t.Off) >= editEnd {
+\t\t\toIdx := findTokAtOff(oldToks, int(t.Off)-delta)
 \t\t\tif oIdx >= 0 {
 \t\t\t\to := oldToks[oIdx]
 \t\t\t\tnewPrevText := ""
@@ -992,7 +994,7 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t\t\t\toldPrevText := ""
 \t\t\t\tif oIdx >= 1 { oldPrevText = oldText[oldToks[oIdx-1].Off:oldToks[oIdx-1].End] }
 \t\t\t\toldStack := reconstructParens(oldToks, oldText, oIdx)
-\t\t\t\tif o.Pd == len(parenHead) && parenStacksEq(oldStack, parenHead) && o.Lc == lastClose && o.Lb == lastBang && newPrevText == oldPrevText && o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+\t\t\t\tif o.Pd == len(parenHead) && parenStacksEq(oldStack, parenHead) && o.Lc == lastClose && o.Lb == lastBang && newPrevText == oldPrevText && o.Kind == tokKind(&t) && o.End == int(t.End)-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
 ${adoptSuffix}
 \t\t\t\t\treturn out, relexed
 \t\t\t\t}
@@ -1036,10 +1038,10 @@ ${tplAnchor}
 \t\tt := scratch[len(scratch)-1]
 \t\thd := false
 \t\tif t.Lid == LID_LPAREN && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd, len(templateStack)})
+\t\tout = append(out, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl, 0, len(parenHead), lastClose, lastBang, hd, len(templateStack)})
 \t\trelexed++
-\t\tif t.Off >= editEnd {
-\t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
+\t\tif int(t.Off) >= editEnd {
+\t\t\toIdx := findTokAtOff(oldToks, int(t.Off)-delta)
 \t\t\tif oIdx >= 0 {
 \t\t\t\to := oldToks[oIdx]
 \t\t\t\tnewPrevText := ""
@@ -1047,7 +1049,7 @@ ${tplAnchor}
 \t\t\t\toldPrevText := ""
 \t\t\t\tif oIdx >= 1 { oldPrevText = oldText[oldToks[oIdx-1].Off:oldToks[oIdx-1].End] }
 \t\t\t\toldStack := reconstructParens(oldToks, oldText, oIdx)
-\t\t\t\tif o.Td == 0 && len(templateStack) == 0 && o.Pd == len(parenHead) && parenStacksEq(oldStack, parenHead) && o.Lc == lastClose && o.Lb == lastBang && newPrevText == oldPrevText && o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+\t\t\t\tif o.Td == 0 && len(templateStack) == 0 && o.Pd == len(parenHead) && parenStacksEq(oldStack, parenHead) && o.Lc == lastClose && o.Lb == lastBang && newPrevText == oldPrevText && o.Kind == tokKind(&t) && o.End == int(t.End)-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
 ${adoptSuffix}
 \t\t\t\t\treturn out, relexed
 \t\t\t\t}
@@ -1072,13 +1074,13 @@ ${tplAnchor}
 \t\tscanOff, pendingNl, templateStack = lexFrom(newText, scanOff, pendingNl, templateStack, &scratch, 1)
 \t\tif len(scratch) == before { break }
 \t\tt := scratch[len(scratch)-1]
-\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, 0, false, false, false, len(templateStack)})
+\t\tout = append(out, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl, 0, 0, false, false, false, len(templateStack)})
 \t\trelexed++
-\t\tif t.Off >= editEnd {
-\t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
+\t\tif int(t.Off) >= editEnd {
+\t\t\toIdx := findTokAtOff(oldToks, int(t.Off)-delta)
 \t\t\tif oIdx >= 0 {
 \t\t\t\to := oldToks[oIdx]
-\t\t\t\tif o.Td == 0 && len(templateStack) == 0 && o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+\t\t\t\tif o.Td == 0 && len(templateStack) == 0 && o.Kind == tokKind(&t) && o.End == int(t.End)-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
 ${adoptSuffix}
 \t\t\t\t\treturn out, relexed
 \t\t\t\t}
@@ -1109,13 +1111,13 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t\tscanOff, pendingNl = lexFrom(newText, scanOff, pendingNl, &scratch, 1)
 \t\tif len(scratch) == before { break }
 \t\tt := scratch[len(scratch)-1]
-\t\tout = append(out, alignMeta{t.Kind, t.Off, t.End, t.Nl${zeroMeta}})
+\t\tout = append(out, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl${zeroMeta}})
 \t\trelexed++
-\t\tif t.Off >= editEnd {
-\t\t\toIdx := findTokAtOff(oldToks, t.Off-delta)
+\t\tif int(t.Off) >= editEnd {
+\t\t\toIdx := findTokAtOff(oldToks, int(t.Off)-delta)
 \t\t\tif oIdx >= 0 {
 \t\t\t\to := oldToks[oIdx]
-\t\t\t\tif o.Kind == t.Kind && o.End == t.End-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
+\t\t\t\tif o.Kind == tokKind(&t) && o.End == int(t.End)-delta && o.Nl == t.Nl && oldText[o.Off:o.End] == newText[t.Off:t.End] {
 ${adoptSuffix}
 \t\t\t\t\treturn out, relexed
 \t\t\t\t}
@@ -1160,7 +1162,7 @@ func scanMeta(src string) []alignMeta {
 \t\tpos, pendingNl, lineStart, emittedContent, flowDepth = lexFrom(src, pos, pendingNl, lineStart, emittedContent, flowDepth, &toks, 1)
 \t\tif len(toks) == before { break }
 \t\tt := toks[len(toks)-1]
-\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, flowDepth, 0, false, false, false, 0})
+\t\tmeta = append(meta, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl, flowDepth, 0, false, false, false, 0})
 \t}
 \treturn meta
 }
@@ -1182,7 +1184,7 @@ func scanMeta(src string) []alignMeta {
 \t\tt := toks[len(toks)-1]
 \t\thd := false
 \t\tif t.Lid == LID_LPAREN && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd, 0})
+\t\tmeta = append(meta, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl, 0, len(parenHead), lastClose, lastBang, hd, 0})
 \t}
 \treturn meta
 }
@@ -1205,7 +1207,7 @@ func scanMeta(src string) []alignMeta {
 \t\tt := toks[len(toks)-1]
 \t\thd := false
 \t\tif t.Lid == LID_LPAREN && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, len(parenHead), lastClose, lastBang, hd, len(templateStack)})
+\t\tmeta = append(meta, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl, 0, len(parenHead), lastClose, lastBang, hd, len(templateStack)})
 \t}
 \treturn meta
 }
@@ -1222,7 +1224,7 @@ func scanMeta(src string) []alignMeta {
 \t\tpos, pendingNl, templateStack = lexFrom(src, pos, pendingNl, templateStack, &toks, 1)
 \t\tif len(toks) == before { break }
 \t\tt := toks[len(toks)-1]
-\t\tmeta = append(meta, alignMeta{t.Kind, t.Off, t.End, t.Nl, 0, 0, false, false, false, len(templateStack)})
+\t\tmeta = append(meta, alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl, 0, 0, false, false, false, len(templateStack)})
 \t}
 \treturn meta
 }
@@ -1230,7 +1232,7 @@ func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for tpl") }
 ` : `
 func toMeta(toks []Tok) []alignMeta {
 \tout := make([]alignMeta, len(toks))
-\tfor i, t := range toks { out[i] = alignMeta{t.Kind, t.Off, t.End, t.Nl${zeroMeta}} }
+\tfor i, t := range toks { out[i] = alignMeta{tokKind(&t), int(t.Off), int(t.End), t.Nl${zeroMeta}} }
 \treturn out
 }`;
   const rxTdCheck = rxTpl ? ' || f.Pd != t.Pd || f.Lc != t.Lc || f.Lb != t.Lb || f.Hd != t.Hd' : '';
@@ -1321,7 +1323,7 @@ func spanOffEnd(v int32) (int, int) {
 	if v < 0 {
 		ti, _ := decodeLeaf(v)
 		t := toks[ti]
-		return t.Off, t.End
+		return int(t.Off), int(t.End)
 	}
 	nd := &nodes[v]
 	return int(nd.Offset), int(nd.End)
@@ -1693,7 +1695,7 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	t := make([]Tok, len(meta))
 	for i, m := range meta {
 		tx := text[m.Off:m.End]
-		t[i] = Tok{m.Kind, tx, m.Off, m.End, m.Nl, kidOf(m.Kind), lidOf(tx)}
+		t[i] = mkTok(m.Off, m.End, m.Nl, kidOf(m.Kind), lidOf(tx))
 	}
 	return t
 }
@@ -1743,7 +1745,7 @@ export const goTarget: Target = {
   },
   emitLexer(grammar: CstGrammar): string {
     return `// GENERATED by emit-portable.ts (goTarget) — standalone TOKENIZER for grammar "${grammar.name ?? ''}".
-// A library package: Tokenize(src) []Tok. The same lexer is embedded in emitParser's output
+// A library package: Tokenize(src) []RichTok. The same lexer is embedded in emitParser's output
 // (there as package main), so the tokens are identical.
 package lexer
 
@@ -1756,7 +1758,15 @@ import (
 // imports so a grammar whose lexer happens to skip one still compiles.
 var _, _ = fmt.Sprintf, strings.HasPrefix
 
+// Slim hot-path token (kind/text via KIND_STR / src[Off:End]).
 type Tok struct {
+\tOff, End uint32
+\tKid, Lid uint16
+\tNl       bool
+}
+
+// Public materialized token (API shape).
+type RichTok struct {
 \tKind, Text string
 \tOff, End   int
 \tNl         bool
@@ -1767,7 +1777,15 @@ var toks []Tok   // the lexer reseeds this (toks[:0]) per call
 
 ${lexer(portableIR(grammar))}
 
-func Tokenize(src string) []Tok { return lex(src) }
+func Tokenize(src string) []RichTok {
+\tslim := lex(src)
+\tout := make([]RichTok, len(slim))
+\tfor i := range slim {
+\t\tt := &slim[i]
+\t\tout[i] = RichTok{Kind: tokKind(t), Text: tokText(src, t), Off: int(t.Off), End: int(t.End), Nl: t.Nl, Kid: t.Kid, Lid: t.Lid}
+\t}
+\treturn out
+}
 `;
   },
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
@@ -1782,7 +1800,7 @@ func Tokenize(src string) []Tok { return lex(src) }
     }).join('\n\n');
     const matchTemplate = ir.tpl ? `func matchTemplate() int32 {
 \tt := peek()
-\tif t == nil || t.Kind != "$templateHead" { return -1 }
+\tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return -1 }
 \tsb := len(scratch); nb := len(nodes); kb := len(kids); save := pos
 \tpushLeaf(${ttIdOf(ar, '$templateHead')}, uint32(pos)); pos++
 \tfor {
@@ -1791,11 +1809,11 @@ func Tokenize(src string) []Tok { return lex(src) }
 \t\tscratch = append(scratch, expr)
 \t\tnext := peek()
 \t\tif next == nil { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
-\t\tif next.Kind == "$templateMiddle" { pushLeaf(${ttIdOf(ar, '$templateMiddle')}, uint32(pos)); pos++; continue }
-\t\tif next.Kind == "$templateTail" { pushLeaf(${ttIdOf(ar, '$templateTail')}, uint32(pos)); pos++; break }
+\t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { pushLeaf(${ttIdOf(ar, '$templateMiddle')}, uint32(pos)); pos++; continue }
+\t\tif next.Kid == ${kidOf(ids, '$templateTail')} { pushLeaf(${ttIdOf(ar, '$templateTail')}, uint32(pos)); pos++; break }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1
 \t}
-\treturn finish(${ruleIdOf(ar, '$template')}, sb, t.Off, save)
+\treturn finish(${ruleIdOf(ar, '$template')}, sb, int(t.Off), save)
 }
 ` : '';
     return `// GENERATED by emit-portable.ts (goTarget) — parser LIBRARY for grammar "${ir.grammarName}".
@@ -1809,11 +1827,11 @@ import (
 \t"strings"
 )
 
+// Slim hot-path token (kind/text via KIND_STR / src[Off:End]).
 type Tok struct {
-\tKind, Text string
-\tOff, End   int
-\tNl         bool
-\tKid, Lid   uint16
+\tOff, End uint32
+\tKid, Lid uint16
+\tNl       bool
 }
 // Arena node: an int32 index into nodes; children are a flat range in kids (node indices or encoded leaf refs).
 // Ext is lookahead watermark for top-level reuse (not emitted in JSON).
@@ -1859,7 +1877,7 @@ func peek() *Tok {
 \tif pos < len(toks) { return &toks[pos] }
 \treturn nil
 }
-func offAt(i int) int { if i < len(toks) { return toks[i].Off }; return 0 }
+func offAt(i int) int { if i < len(toks) { return int(toks[i].Off) }; return 0 }
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
 // tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
 func finish(ruleId uint16, sb, fallbackOff, tokStart int) int32 {
