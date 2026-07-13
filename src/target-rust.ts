@@ -11,7 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
 // the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan, ArenaIdPlan } from './emit-portable.ts';
+import { FIRST_GUARD_K, type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
@@ -39,6 +39,9 @@ function emitAsciiBoolTableRs(name: string, rs: CharRange[]): string {
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.lid == ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kid == ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
+/** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
+const isGuardable = (f: FirstSig): f is NonNullable<FirstSig> =>
+  f !== null && f.lits.length + f.toks.length > 0 && f.lits.length + f.toks.length <= FIRST_GUARD_K;
 
 /** Emit kid/lid lookup tables into generated lexer source (length-bucketed lid_of match). */
 function renderIdTablesRust(ids: LexIdPlan): string {
@@ -575,7 +578,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'opt': return `self.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
     case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
     case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
-    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids, ar)} })(self)`;
+    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
     case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps, ids, ar)} })(self)`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
@@ -584,8 +587,18 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 }
 // A backtracking inline alternation rendered as an immediately-applied closure over p,
 // so it composes identically whether it sits at top level or already inside a closure.
-function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return `${branches.map((br) => `{ let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); }`).join(' ')} false`;
+// Non-null FirstSig branches get a FIRST pre-filter (skip without save/restore) when |sig|≤K.
+function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
+  const fs = firsts ?? [];
+  const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null));
+  const peekInit = needPeek ? `let _ft = p.peek(); ` : '';
+  const tries = branches.map((br, i) => {
+    const body = `{ let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); }`;
+    const f = fs[i] ?? null;
+    if (!isGuardable(f)) return body;
+    return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
+  }).join(' ');
+  return `${peekInit}${tries} false`;
 }
 // Zero-width negative lookahead: try the steps, restore, succeed iff they did NOT all match.
 function notBody(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan): string {
@@ -602,7 +615,7 @@ function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
     case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
     case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
-    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(p)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids, ar)} })(p)`;
+    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(p)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(p)`;
     case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps, ids, ar)} })(p)`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
@@ -750,12 +763,22 @@ ${r.alts.map(arm).join('\n')}
         None
     }`;
   }
-  const alt = (steps: Step[]) =>
-    `        if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save)); }
-        self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);`;
+  const alt = (steps: Step[], i: number) => {
+    const cond = steps.map((x) => stepCond(x, ids, ar)).join(' && ');
+    const restore = `self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);`;
+    if (!isGuardable(r.altFirst[i])) {
+      return `        if ${cond} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save)); }
+        ${restore}`;
+    }
+    return `        if let Some(t) = _ft { if ${firstCond(r.altFirst[i], 't', ids)} {
+            if ${cond} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save)); }
+            ${restore}
+        } }`;
+  };
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i]));
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
-${r.alts.map(alt).join('\n')}
+${needPeek ? '        let _ft = self.peek();\n' : ''}${r.alts.map(alt).join('\n')}
         None
     }`;
 }

@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan, ArenaIdPlan } from './emit-portable.ts';
+import { FIRST_GUARD_K, type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
@@ -36,6 +36,9 @@ function emitAsciiBoolTableGo(name: string, rs: CharRange[]): string {
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.Lid == ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.Kid == ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
+/** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
+const isGuardable = (f: FirstSig): f is NonNullable<FirstSig> =>
+  f !== null && f.lits.length + f.toks.length > 0 && f.lits.length + f.toks.length <= FIRST_GUARD_K;
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesGo(ids: LexIdPlan): string {
@@ -498,7 +501,19 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'opt': return `opt(func() bool { return ${s.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} })`;
     case 'sep': return `sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${lidOf(ids, s.delim)})`;
     case 'altlit': return `altLit([]struct{ Lid uint16; TtId uint8 }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)}}`).join(', ')}})`;
-    case 'alt': return s.predictive ? `func() bool { ${predAltBody(s.branches, ids, s.firsts, ar)} }()` : `func() bool { ${s.branches.map((br) => `{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('; ')}; return false }()`;
+    case 'alt': {
+      if (s.predictive) return `func() bool { ${predAltBody(s.branches, ids, s.firsts, ar)} }()`;
+      const firsts = s.firsts ?? [];
+      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null));
+      const peekInit = needPeek ? `_ft := peek(); ` : '';
+      const tries = s.branches.map((br, i) => {
+        const body = `{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`;
+        const f = firsts[i] ?? null;
+        if (!isGuardable(f)) return body;
+        return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
+      }).join('; ');
+      return `func() bool { ${peekInit}${tries}; return false }()`;
+    }
     case 'not': return `func() bool { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); m := ${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return !m }()`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := peek(); return t != nil && !t.Nl }()`;
@@ -565,12 +580,22 @@ ${r.alts.map(arm).join(' ')}
 \treturn -1
 }`;
   }
-  const alt = (steps: Step[]) =>
-    `\tif ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return finish(${ruleIdOf(ar, r.cstName)}, sb, offAt(save), save) }
-\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
+  const alt = (steps: Step[], i: number) => {
+    const cond = steps.map((x) => stepCond(x, ids, ar)).join(' && ');
+    const restore = `pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
+    if (!isGuardable(r.altFirst[i])) {
+      return `\tif ${cond} { return finish(${ruleIdOf(ar, r.cstName)}, sb, offAt(save), save) }
+\t${restore}`;
+    }
+    return `\tif _ft != nil && ${firstCond(r.altFirst[i], '_ft', ids)} {
+\t\tif ${cond} { return finish(${ruleIdOf(ar, r.cstName)}, sb, offAt(save), save) }
+\t\t${restore}
+\t}`;
+  };
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i]));
   return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
-${r.alts.map(alt).join('\n')}
+${needPeek ? '\t_ft := peek()\n' : ''}${r.alts.map(alt).join('\n')}
 \treturn -1
 }`;
 }

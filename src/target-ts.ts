@@ -4,7 +4,7 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan } from './emit-portable.ts';
+import { FIRST_GUARD_K, type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf, rangesHaveNonAscii } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
@@ -32,6 +32,9 @@ function emitAsciiBoolTableTS(name: string, rs: CharRange[]): string {
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.lid === ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kid === ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
+/** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
+const isGuardable = (f: FirstSig): f is NonNullable<FirstSig> =>
+  f !== null && f.lits.length + f.toks.length > 0 && f.lits.length + f.toks.length <= FIRST_GUARD_K;
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesTS(ids: LexIdPlan): string {
@@ -454,7 +457,19 @@ function stepCond(s: Step, ids: LexIdPlan): string {
   case 'opt': return `opt(() => ${s.steps.map((x) => stepCond(x, ids)).join(' && ')}, kids)`;
   case 'sep': return `sepBy(() => ${stepCond(s.elem, ids)}, ${lidOf(ids, s.delim)}, kids)`;
     case 'altlit': return `altLit([${s.opts.map((o) => `[${lidOf(ids, o.value)}, ${J(o.ttype)}]`).join(', ')}], kids)`;
-    case 'alt': return s.predictive ? `(() => { ${predAltBody(s.branches, ids, s.firsts)} })()` : `(() => { ${s.branches.map((br) => `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`).join(' ')} return false; })()`;
+    case 'alt': {
+      if (s.predictive) return `(() => { ${predAltBody(s.branches, ids, s.firsts)} })()`;
+      const firsts = s.firsts ?? [];
+      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null));
+      const peekInit = needPeek ? `const _ft = peek(); ` : '';
+      const tries = s.branches.map((br, i) => {
+        const body = `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`;
+        const f = firsts[i] ?? null;
+        if (!isGuardable(f)) return body;
+        return `if (_ft !== null && ${firstCond(f, '_ft', ids)}) ${body}`;
+      }).join(' ');
+      return `(() => { ${peekInit}${tries} return false; })()`;
+    }
     case 'not': return `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
@@ -524,11 +539,15 @@ ${r.alts.map(arm).join(' ')}
   return null;
 }`;
   }
-  const alt = (steps: Step[]) =>
-    `  { const kids: Cst[] = []; if (${steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save); pos = save; }`;
+  const alt = (steps: Step[], i: number) => {
+    const body = `{ const kids: Cst[] = []; if (${steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save); pos = save; }`;
+    if (!isGuardable(r.altFirst[i])) return `  ${body}`;
+    return `  if (_ft !== null && ${firstCond(r.altFirst[i], '_ft', ids)}) ${body}`;
+  };
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i]));
   return `function parse${r.name}(): Node | null {
   const save = pos;
-${r.alts.map(alt).join('\n')}
+${needPeek ? '  const _ft = peek();\n' : ''}${r.alts.map(alt).join('\n')}
   return null;
 }`;
 }

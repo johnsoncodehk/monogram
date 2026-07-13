@@ -58,6 +58,9 @@ export type Lit = { value: string; ttype: '$keyword' | '$punct' };
 // backtracking for it. Computed conservatively in buildIR; targets only render a predictive
 // dispatch when every branch in an alt-list is non-null AND the signatures are pairwise disjoint.
 export type FirstSig = { lits: string[]; toks: string[] } | null;
+// Cap on FIRST-set size for partial pre-filter guards on non-predictive rd/inline alts.
+// Larger sets skip the guard (|| chains can exceed a failed attempt). Tunable; see P4b.
+export const FIRST_GUARD_K = 4;
 export type Step =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
   | { t: 'tok'; name: string }                                  // match a token kind
