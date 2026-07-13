@@ -621,6 +621,93 @@ export function kidOf(plan: LexIdPlan, kind: string): number {
   return i >= 0 ? i : 0;
 }
 
+// ── Arena id tables (rule_id / tt_id for slim Node + inlined leaves) ──
+//
+// Arena stores only rule nodes; leaf kids are negative i32 encodings that pack
+// (tok_idx, tt_id). TT_NAMES is indexed by tt_id; RULE_NAMES by rule_id.
+// TT_NAMES starts with LexIdPlan.kids so token-kind leaves can use Tok.kid as tt_id.
+
+export type ArenaIdPlan = {
+  ttNames: string[];   // TT_NAMES — leaf tokenType strings
+  ruleNames: string[]; // RULE_NAMES — CST rule labels
+};
+
+/** Sentinel tt_id for $punct (trivia — never stored as a leaf). Not an index into ttNames. */
+export const TT_SKIP_PUNCT = 255;
+
+/** Collect every ttype text that push_leaf / match_lit|match_tok may emit (excluding $punct). */
+function collectStepTtypes(steps: Step[], out: Set<string>): void {
+  for (const s of steps) {
+    switch (s.t) {
+      case 'lit': if (s.ttype !== '$punct') out.add(s.ttype); break;
+      case 'tok': out.add(s.name); break;
+      case 'altlit': for (const o of s.opts) if (o.ttype !== '$punct') out.add(o.ttype); break;
+      case 'sep': collectStepTtypes([s.elem], out); break;
+      case 'suppress': collectStepTtypes(s.steps, out); break;
+      case 'star': collectStepTtypes([s.step], out); break;
+      case 'opt': case 'not': case 'seq': collectStepTtypes(s.steps, out); break;
+      case 'alt': for (const b of s.branches) collectStepTtypes(b, out); break;
+      default: break;
+    }
+  }
+}
+
+/**
+ * Build TT_NAMES + RULE_NAMES for arena slim encoding.
+ * TT_NAMES = kids 全体 ∪ {$keyword,$operator,$templateHead,$templateMiddle,$templateTail}
+ *            ∪ other push_leaf ttypes collected from the IR (exhaustive).
+ * RULE_NAMES = every rule cstName ∪ {$template} when templates are enabled.
+ */
+export function buildArenaIdPlan(ir: ParserIR, lexIds: LexIdPlan): ArenaIdPlan {
+  const ttNames = [...lexIds.kids];
+  const seenTt = new Set<string>(ttNames);
+  const addTt = (s: string) => { if (!seenTt.has(s)) { seenTt.add(s); ttNames.push(s); } };
+  for (const s of ['$keyword', '$operator', '$templateHead', '$templateMiddle', '$templateTail']) addTt(s);
+
+  const fromSteps = new Set<string>();
+  for (const r of ir.rules) {
+    if (r.kind === 'rd') {
+      for (const alt of r.alts) collectStepTtypes(alt, fromSteps);
+    } else {
+      for (const t of r.nudToks) fromSteps.add(t);
+      for (const b of r.nudBrackets) collectStepTtypes(b.steps, fromSteps);
+      for (const seq of r.nudSeqs) collectStepTtypes(seq, fromSteps);
+      for (const c of r.nudCapped) collectStepTtypes(c.steps, fromSteps);
+      for (const b of r.leds) collectStepTtypes(b.steps, fromSteps);
+      for (const t of r.postfixToks) fromSteps.add(t);
+    }
+  }
+  if (ir.newlineCfg) fromSteps.add(ir.newlineCfg.token);
+  for (const s of fromSteps) addTt(s);
+
+  if (ttNames.length > 64) {
+    throw new Error(`TT_NAMES length ${ttNames.length} exceeds tt_id limit 63`);
+  }
+
+  const ruleNames: string[] = [];
+  const seenR = new Set<string>();
+  const addR = (s: string) => { if (!seenR.has(s)) { seenR.add(s); ruleNames.push(s); } };
+  for (const r of ir.rules) addR(r.cstName);
+  if (ir.tpl) addR('$template');
+
+  return { ttNames, ruleNames };
+}
+
+/** Resolve tt_id for a leaf tokenType; throws if missing (codegen bug). $punct → TT_SKIP_PUNCT. */
+export function ttIdOf(plan: ArenaIdPlan, ttype: string): number {
+  if (ttype === '$punct') return TT_SKIP_PUNCT;
+  const i = plan.ttNames.indexOf(ttype);
+  if (i < 0) throw new Error(`ttIdOf: unknown ttype ${JSON.stringify(ttype)}`);
+  return i;
+}
+
+/** Resolve rule_id for a CST rule label; throws if missing. */
+export function ruleIdOf(plan: ArenaIdPlan, rule: string): number {
+  const i = plan.ruleNames.indexOf(rule);
+  if (i < 0) throw new Error(`ruleIdOf: unknown rule ${JSON.stringify(rule)}`);
+  return i;
+}
+
 // ── Lexer first-byte dispatch (IR analysis; targets render buckets) ──
 
 export type LexFirstBytes = { bytes: number[]; nonAscii: boolean };

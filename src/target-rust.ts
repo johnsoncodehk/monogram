@@ -11,8 +11,8 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
 // the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan, ArenaIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -53,6 +53,13 @@ ${lenArms || '        // no non-empty lids'}
         _ => 0,
     }
 }
+`;
+}
+
+/** Emit TT_NAMES / RULE_NAMES from ArenaIdPlan (slim arena leaf + rule ids). */
+function renderArenaIdTablesRust(ar: ArenaIdPlan): string {
+  return `const TT_NAMES: &[&str] = &[${ar.ttNames.map(J).join(', ')}];
+const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 `;
 }
 
@@ -522,48 +529,48 @@ fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
 }
 
 // Top-level step: uses `self`; children accumulate on `self.scratch`.
-function stepCond(s: Step, ids: LexIdPlan): string {
+function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return `self.match_lit(${lidOf(ids, s.value)}, ${J(s.ttype)})`;
-    case 'tok': return `self.match_tok(${kidOf(ids, s.name)}, ${J(s.name)})`;
+    case 'lit': return `self.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'tok': return `self.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
     case 'rule': return `self.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
-    case 'star': return `self.star(|p| ${stepCondP(s.step, ids)})`;
-    case 'opt': return `self.opt(|p| ${s.steps.map((x) => stepCondP(x, ids)).join(' && ')})`;
-    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids)}, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${J(o.ttype)})`).join(', ')}])`;
-    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, s.firsts)} })(self)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids)} })(self)`;
-    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps, ids)} })(self)`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'})`;
+    case 'star': return `self.star(|p| ${stepCondP(s.step, ids, ar)})`;
+    case 'opt': return `self.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
+    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
+    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids, ar)} })(self)`;
+    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps, ids, ar)} })(self)`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
-    case 'suppress': return `{ self.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}); self.suppress_next = Vec::new(); _r }`;
+    case 'suppress': return `{ self.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); self.suppress_next = Vec::new(); _r }`;
   }
 }
 // A backtracking inline alternation rendered as an immediately-applied closure over p,
 // so it composes identically whether it sits at top level or already inside a closure.
-function altBody(branches: Step[][], ids: LexIdPlan): string {
-  return `${branches.map((br) => `{ let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); if ${br.length ? br.map((x) => stepCondP(x, ids)).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); }`).join(' ')} false`;
+function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return `${branches.map((br) => `{ let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); }`).join(' ')} false`;
 }
 // Zero-width negative lookahead: try the steps, restore, succeed iff they did NOT all match.
-function notBody(steps: Step[], ids: LexIdPlan): string {
-  return `let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); let m = ${steps.length ? steps.map((x) => stepCondP(x, ids)).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); !m`;
+function notBody(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return `let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); let m = ${steps.length ? steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); !m`;
 }
 // Inside a closure: uses `p`.
-function stepCondP(s: Step, ids: LexIdPlan): string {
+function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return `p.match_lit(${lidOf(ids, s.value)}, ${J(s.ttype)})`;
-    case 'tok': return `p.match_tok(${kidOf(ids, s.name)}, ${J(s.name)})`;
+    case 'lit': return `p.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'tok': return `p.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
     case 'rule': return `p.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
-    case 'star': return `p.star(|p| ${stepCondP(s.step, ids)})`;
-    case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids)).join(' && ')})`;
-    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids)}, ${lidOf(ids, s.delim)})`;
-    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${J(o.ttype)})`).join(', ')}])`;
-    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, s.firsts)} })(p)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids)} })(p)`;
-    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps, ids)} })(p)`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids)).join(' && ') : 'true'})`;
+    case 'star': return `p.star(|p| ${stepCondP(s.step, ids, ar)})`;
+    case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ')})`;
+    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
+    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(p)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids, ar)} })(p)`;
+    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps, ids, ar)} })(p)`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
-    case 'suppress': return `{ p.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids)).join(' && ') : 'true'}); p.suppress_next = Vec::new(); _r }`;
+    case 'suppress': return `{ p.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}); p.suppress_next = Vec::new(); _r }`;
   }
 }
 
@@ -571,8 +578,8 @@ function stepCondP(s: Step, ids: LexIdPlan): string {
 // branch — no save/restore per branch, no cross-branch backtracking. If the selected branch's
 // body fails, the alt fails (the enclosing rule restores pos to its own save). Parity holds
 // because disjoint EXACT FIRSTs mean no other branch could match the first token.
-function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[]): string {
-  const arms = branches.map((br, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCondP(x, ids)).join(' && ') : 'true'} { return true; } }`).join('\n');
+function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
+  const arms = branches.map((br, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } }`).join('\n');
   return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
 }
 
@@ -620,7 +627,7 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 }
 
 /** Entry rule that records per-top-kid lookahead ext via parse_top_one (shape A). */
-function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, _ids: LexIdPlan): string {
+function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
   return `    fn parse_top_one(&mut self) -> Option<i32> {
 ${plan.topOneBody}
     }
@@ -633,17 +640,17 @@ ${plan.topOneBody}
                 None => { self.pos = sp; break; }
                 Some(n) => {
                     let mut ext = self.nodes[n as usize].tok_end;
-                    if self.max_look > ext { ext = self.max_look; }
+                    if (self.max_look as u32) > ext { ext = self.max_look as u32; }
                     self.nodes[n as usize].ext = ext;
                     self.scratch.push(n);
                 }
             }
         }
-        Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save))
+        Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save))
     }`;
 }
 
-function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string {
+function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const headFn = plan.hasHead && plan.headRule
     ? `    fn parse_head_seg(&mut self, sb: usize) -> Option<Seg> {
         self.max_look = 0;
@@ -652,8 +659,9 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string 
         if self.scratch.len() == before { return None; }
         let n = self.scratch[before];
         let mut ext = self.nodes[n as usize].tok_end;
-        if self.max_look > ext { ext = self.max_look; }
-        Some(Seg { kid_start: before - sb, kid_count: 1, tok_start: self.nodes[n as usize].tok_start, tok_end: self.nodes[n as usize].tok_end, ext })
+        if (self.max_look as u32) > ext { ext = self.max_look as u32; }
+        let (tok_start, tok_end) = self.kid_tok_range(n);
+        Some(Seg { kid_start: before - sb, kid_count: 1, tok_start: tok_start as usize, tok_end: tok_end as usize, ext: ext as usize })
     }
 `
     : '';
@@ -664,18 +672,18 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string 
   return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<Seg> {
         let sp = self.pos; let before = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
         self.max_look = 0;
-        if !self.match_tok(${kidOf(ids, plan.loopTok)}, ${J(plan.loopTok)}) {
+        if !self.match_tok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
             self.pos = sp; self.scratch.truncate(before); self.nodes.truncate(nb); self.kids.truncate(kb);
             return None;
         }
         self.opt(|p| p.call_rule(Parser::parse_${plan.loopRule}));
         let leaf = self.scratch[before];
-        let mut tok_end = self.nodes[leaf as usize].tok_end;
+        let (tok_start, mut tok_end) = self.kid_tok_range(leaf);
         let count = self.scratch.len() - before;
-        if count > 1 { tok_end = self.nodes[self.scratch[before + 1] as usize].tok_end; }
+        if count > 1 { tok_end = self.kid_tok_range(self.scratch[before + 1]).1; }
         let mut ext = tok_end;
-        if self.max_look > ext { ext = self.max_look; }
-        Some(Seg { kid_start: before - sb, kid_count: count, tok_start: self.nodes[leaf as usize].tok_start, tok_end, ext })
+        if (self.max_look as u32) > ext { ext = self.max_look as u32; }
+        Some(Seg { kid_start: before - sb, kid_count: count, tok_start: tok_start as usize, tok_end: tok_end as usize, ext: ext as usize })
     }
     fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len();
@@ -687,17 +695,17 @@ ${headBlock}        loop {
             }
         }
         self.segs = local;
-        Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save))
+        Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save))
     }`;
 }
 
-function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
-  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ids) : rdEntryWithReuseB(r, plan, ids);
+function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ar) : rdEntryWithReuseB(r, plan, ids, ar);
 }
 
-function rdRule(r: RdRule, ids: LexIdPlan): string {
+function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids)).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } }`;
+    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save)); } }`;
     return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
         let t = match self.peek() { Some(t) => t, None => return None };
@@ -707,7 +715,7 @@ ${r.alts.map(arm).join('\n')}
     }`;
   }
   const alt = (steps: Step[]) =>
-    `        if ${steps.map((x) => stepCond(x, ids)).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); }
+    `        if ${steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save)); }
         self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);`;
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
@@ -716,12 +724,12 @@ ${r.alts.map(alt).join('\n')}
     }`;
 }
 
-function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
+function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
     ? `        if t.kind == "$templateHead" {
             let n = match self.match_template() { Some(n) => n, None => return None };
             let sb = self.scratch.len(); self.scratch.push(n);
-            return Some(self.finish(${J(r.cstName)}, sb, self.nodes[n as usize].offset, self.nodes[n as usize].tok_start));
+            return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[n as usize].offset as usize, self.nodes[n as usize].tok_start as usize));
         }\n`
     : '';
   const binArms = r.binary.map((b) => `${lidOf(ids, b.op)} => Some((${b.lbp}, ${b.rbp}))`).join(', ');
@@ -729,19 +737,19 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const atomArm = r.nudToks.map((k) => `${kidOf(ids, k)}`).join(' | ');
   const bracketNud = (b: Bracket) => `        if t.lid == ${lidOf(ids, b.first)} {
             let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
-            if ${b.steps.map((x) => stepCond(x, ids)).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
+            if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off, save)); }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);
         }`;
   const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], left) && ` : ''}!self.suppress_cur.iter().any(|c| *c == ${lidOf(ids, b.first)}) && t.lid == ${lidOf(ids, b.first)} {
                 let led_save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
                 self.scratch.push(left);
-                if ${b.steps.map((x) => stepCond(x, ids)).join(' && ')} { left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; }
+                if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; }
                 self.pos = led_save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break;
             }`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
-            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; } }` : '';
-    return `            if !tail_closed && t.kid == ${kidOf(ids, tok)} { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kind, t.off, t.end); self.pos += 1; left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; }${tplPart}`;
+            if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; } }` : '';
+    return `            if !tail_closed && t.kid == ${kidOf(ids, tok)} { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kid as u8, self.pos as u32); self.pos += 1; left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; }${tplPart}`;
   };
   const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some(${p.lbp})`).join(', ');
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
@@ -763,22 +771,22 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
             let t = match self.peek() { Some(t) => t, None => break };
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
-            if let Some(plbp) = Parser::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end); self.pos += 1; left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); tail_closed = true; continue; } }
+            if let Some(plbp) = Parser::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32); self.pos += 1; left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); tail_closed = true; continue; } }
             let (lbp, rbp) = match Parser::${r.name}_bin(t.lid) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
             let led_save = self.pos;
-            let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end);
+            let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32);
             self.pos += 1;
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.pos = led_save; break; } };
             self.scratch.push(rhs);
-            left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start);
+            left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize);
         }
         Some(left)
     }
     fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<i32> {
         self.capped = false;
         let t = self.peek()?;
-${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${c.steps.length ? c.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'} { self.capped = true; return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
+${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${c.steps.length ? c.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { self.capped = true; return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
         // non-capped: a sub-parse may leave capped set (grouping a capped arrow); force it false after
         let r = self.${r.name}_nud_rest(t);
         self.capped = false;
@@ -786,18 +794,18 @@ ${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; 
     }
     fn ${r.name}_nud_rest(&mut self, t: Tok<'a>) -> Option<i32> {
 ${tplNud}        if Parser::${r.name}_atom(t.kid) {
-            let sb = self.scratch.len(); let ts = self.pos; self.push_leaf(t.kind, t.off, t.end); self.pos += 1;
-            return Some(self.finish(${J(r.cstName)}, sb, t.off, ts));
+            let sb = self.scratch.len(); let ts = self.pos; self.push_leaf(t.kid as u8, self.pos as u32); self.pos += 1;
+            return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off, ts));
         }
 ${r.nudBrackets.map(bracketNud).join('\n')}
         if let Some(pbp) = Parser::${r.name}_pre(t.lid) {
-            let save = self.pos; let sb = self.scratch.len(); self.push_leaf("$operator", t.off, t.end); self.pos += 1;
+            let save = self.pos; let sb = self.scratch.len(); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32); self.pos += 1;
             match self.${r.name}_bp(pbp) {
-                Some(operand) => { self.scratch.push(operand); return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
+                Some(operand) => { self.scratch.push(operand); return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off, save)); }
                 None => { self.pos = save; self.scratch.truncate(sb); return None; }
             }
         }
-${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${seq.length ? seq.map((x) => stepCond(x, ids)).join(' && ') : 'true'} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
+${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${seq.length ? seq.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
         None
     }`;
 }
@@ -1296,10 +1304,9 @@ fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
 fn count_live(nodes: &[Node], kids: &[i32], id: i32) -> usize {
     let mut n = 1usize;
     let nd = &nodes[id as usize];
-    if !nd.is_leaf {
-        for i in 0..nd.kid_count {
-            n += count_live(nodes, kids, kids[nd.kid_start as usize + i as usize]);
-        }
+    for i in 0..nd.kid_count {
+        let cid = kids[nd.kid_start as usize + i as usize];
+        if cid >= 0 { n += count_live(nodes, kids, cid); }
     }
     n
 }
@@ -1309,65 +1316,71 @@ fn should_reclaim(nodes: &[Node], kids: &[i32], root: i32, baseline: usize) -> b
     let lim = baseline.max(live);
     nodes.len() > ARENA_COMPACT_K * lim
 }
-fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, tok_delta: isize) {
+fn shift_subtree(nodes: &mut [Node], kids: &mut [i32], id: i32, byte_delta: isize, tok_delta: isize) {
+    assert!(id >= 0);
     {
         let nd = &mut nodes[id as usize];
-        nd.offset = (nd.offset as isize + byte_delta) as usize;
-        nd.end = (nd.end as isize + byte_delta) as usize;
-        nd.tok_start = (nd.tok_start as isize + tok_delta) as usize;
-        nd.tok_end = (nd.tok_end as isize + tok_delta) as usize;
-        nd.ext = (nd.ext as isize + tok_delta) as usize;
+        nd.offset = (nd.offset as isize + byte_delta) as u32;
+        nd.end = (nd.end as isize + byte_delta) as u32;
+        nd.tok_start = (nd.tok_start as isize + tok_delta) as u32;
+        nd.tok_end = (nd.tok_end as isize + tok_delta) as u32;
+        nd.ext = (nd.ext as isize + tok_delta) as u32;
     }
-    let (ks, kc) = {
-        let nd = &nodes[id as usize];
-        if nd.is_leaf { (0u32, 0u32) } else { (nd.kid_start, nd.kid_count) }
-    };
+    let (ks, kc) = { let nd = &nodes[id as usize]; (nd.kid_start, nd.kid_count) };
     for i in 0..kc {
-        let cid = kids[ks as usize + i as usize];
-        shift_subtree(nodes, kids, cid, byte_delta, tok_delta);
+        let slot = ks as usize + i as usize;
+        let cid = kids[slot];
+        if cid < 0 {
+            let (ti, tt) = decode_leaf(cid);
+            let nti = (ti as isize + tok_delta) as u32;
+            kids[slot] = encode_leaf(nti, tt);
+        } else {
+            shift_subtree(nodes, kids, cid, byte_delta, tok_delta);
+        }
     }
 }
 ` : '';
   const reuseFnsA = shapeA ? `${reuseShared}impl<'a> Parser<'a> {
-    fn finish_reuse(&mut self, rule: &'static str, prefix_kids: &[i32], mid: &[i32], suffix_cand: &[i32], adopt_from: usize, byte_delta: isize, tok_delta: isize, new_n: usize) -> (i32, usize) {
+    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[i32], mid: &[i32], suffix_cand: &[i32], adopt_from: usize, byte_delta: isize, tok_delta: isize, new_n: usize) -> (i32, usize) {
         let adopted = &suffix_cand[adopt_from..];
-        for &s in adopted { shift_subtree(&mut self.nodes, &self.kids, s, byte_delta, tok_delta); }
+        for &s in adopted { shift_subtree(&mut self.nodes, &mut self.kids, s, byte_delta, tok_delta); }
         let mut children: Vec<i32> = Vec::with_capacity(prefix_kids.len() + mid.len() + adopted.len());
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid);
         children.extend_from_slice(adopted);
         let (off, end, tok_start, tok_end) = if children.is_empty() {
-            (0usize, 0usize, 0usize, 0usize)
+            (0u32, 0u32, 0u32, 0u32)
         } else {
-            let a = &self.nodes[children[0] as usize];
-            let b = &self.nodes[*children.last().unwrap() as usize];
-            (a.offset, b.end, a.tok_start, b.tok_end)
+            let (o0, _) = self.kid_off_end(children[0]);
+            let (_, e1) = self.kid_off_end(*children.last().unwrap());
+            let (ts, _) = self.kid_tok_range(children[0]);
+            let (_, te) = self.kid_tok_range(*children.last().unwrap());
+            (o0, e1, ts, te)
         };
         let kid_start = self.kids.len();
         self.kids.extend_from_slice(&children);
-        self.nodes.push(Node { rule, token_type: "", is_leaf: false, kid_start: kid_start as u32, kid_count: children.len() as u32, offset: off, end, tok_start, tok_end, ext: 0 });
+        self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: children.len() as u32, offset: off, end, tok_start, tok_end, ext: 0 });
         self.pos = new_n;
         ((self.nodes.len() - 1) as i32, prefix_kids.len() + adopted.len())
     }
     fn try_reuse_top(&mut self, old_root: i32, byte_delta: isize, old_n: usize, new_n: usize, prefix: usize, suffix: usize) -> Option<(i32, usize)> {
         if old_root < 0 { return None; }
         let old = self.nodes[old_root as usize];
-        if old.is_leaf { return None; }
         let old_kids: Vec<i32> = (0..old.kid_count).map(|i| self.kids[old.kid_start as usize + i as usize]).collect();
         let mut prefix_len = 0usize;
         while prefix_len < old_kids.len() {
-            if self.nodes[old_kids[prefix_len] as usize].ext <= prefix { prefix_len += 1; } else { break; }
+            if self.nodes[old_kids[prefix_len] as usize].ext <= prefix as u32 { prefix_len += 1; } else { break; }
         }
         let mut suffix_start = old_kids.len();
         let mut i = old_kids.len();
         while i > prefix_len {
             i -= 1;
-            if self.nodes[old_kids[i] as usize].tok_start >= old_n - suffix { suffix_start = i; } else { break; }
+            if self.nodes[old_kids[i] as usize].tok_start as usize >= old_n - suffix { suffix_start = i; } else { break; }
         }
         let prefix_kids = old_kids[..prefix_len].to_vec();
         let suffix_cand = old_kids[suffix_start..].to_vec();
         let tok_delta = new_n as isize - old_n as isize;
-        self.pos = if prefix_len > 0 { self.nodes[prefix_kids[prefix_len - 1] as usize].tok_end } else { 0 };
+        self.pos = if prefix_len > 0 { self.nodes[prefix_kids[prefix_len - 1] as usize].tok_end as usize } else { 0 };
         self.scratch.clear();
         let mut mid: Vec<i32> = Vec::new();
         let suffix_bound = new_n - suffix;
@@ -1376,16 +1389,16 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
             let c = self.nodes[id as usize].tok_start as isize + tok_delta;
             if c > max_cand { max_cand = c; }
         }
-        let rule = old.rule;
+        let rule_id = old.rule_id;
         let try_hit = |p: &mut Parser<'a>, mid: &[i32]| -> Option<(i32, usize)> {
             if p.pos < suffix_bound { return None; }
             if suffix_cand.is_empty() {
-                if p.pos == new_n { return Some(p.finish_reuse(rule, &prefix_kids, mid, &suffix_cand, 0, byte_delta, tok_delta, new_n)); }
+                if p.pos == new_n { return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, 0, byte_delta, tok_delta, new_n)); }
                 return None;
             }
             for (hi, &id) in suffix_cand.iter().enumerate() {
                 if p.nodes[id as usize].tok_start as isize + tok_delta == p.pos as isize {
-                    return Some(p.finish_reuse(rule, &prefix_kids, mid, &suffix_cand, hi, byte_delta, tok_delta, new_n));
+                    return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, hi, byte_delta, tok_delta, new_n));
                 }
             }
             None
@@ -1395,7 +1408,7 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
         loop {
             if self.pos >= self.toks.len() {
                 if suffix_cand.is_empty() && self.pos == new_n {
-                    return Some(self.finish_reuse(rule, &prefix_kids, &mid, &suffix_cand, 0, byte_delta, tok_delta, new_n));
+                    return Some(self.finish_reuse(rule_id, &prefix_kids, &mid, &suffix_cand, 0, byte_delta, tok_delta, new_n));
                 }
                 return try_hit(self, &mid);
             }
@@ -1403,7 +1416,7 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
             let sp = self.pos;
             let n = match self.parse_top_one() { Some(n) => n, None => { self.pos = sp; return None; } };
             let mut ext = self.nodes[n as usize].tok_end;
-            if self.max_look > ext { ext = self.max_look; }
+            if (self.max_look as u32) > ext { ext = self.max_look as u32; }
             self.nodes[n as usize].ext = ext;
             mid.push(n);
             if let Some(hit) = try_hit(self, &mid) { return Some(hit); }
@@ -1413,14 +1426,20 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
 }
 ` : '';
   const reuseFnsB = shapeB ? `${reuseShared}impl<'a> Parser<'a> {
-    fn finish_reuse_seg(&mut self, rule: &'static str, prefix_segs: &[Seg], prefix_kids: &[i32], mid_segs: &[Seg], mid_kids: &[i32], suffix_cand: &[Seg], old_kid_start: u32, adopt_from: usize, byte_delta: isize, tok_delta: isize, new_n: usize) -> (i32, usize) {
+    fn finish_reuse_seg(&mut self, rule_id: u16, prefix_segs: &[Seg], prefix_kids: &[i32], mid_segs: &[Seg], mid_kids: &[i32], suffix_cand: &[Seg], old_kid_start: u32, adopt_from: usize, byte_delta: isize, tok_delta: isize, new_n: usize) -> (i32, usize) {
         let adopted_segs = &suffix_cand[adopt_from..];
         let mut adopted_kids: Vec<i32> = Vec::new();
         for s in adopted_segs {
             for i in 0..s.kid_count {
                 let id = self.kids[old_kid_start as usize + s.kid_start + i];
-                shift_subtree(&mut self.nodes, &self.kids, id, byte_delta, tok_delta);
-                adopted_kids.push(id);
+                if id < 0 {
+                    let (ti, tt) = decode_leaf(id);
+                    let nti = (ti as isize + tok_delta) as u32;
+                    adopted_kids.push(encode_leaf(nti, tt));
+                } else {
+                    shift_subtree(&mut self.nodes, &mut self.kids, id, byte_delta, tok_delta);
+                    adopted_kids.push(id);
+                }
             }
         }
         let mut children: Vec<i32> = Vec::with_capacity(prefix_kids.len() + mid_kids.len() + adopted_kids.len());
@@ -1442,15 +1461,17 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
             k_off += s.kid_count;
         }
         let (off, end, tok_start, tok_end) = if children.is_empty() {
-            (0usize, 0usize, 0usize, 0usize)
+            (0u32, 0u32, 0u32, 0u32)
         } else {
-            let a = &self.nodes[children[0] as usize];
-            let b = &self.nodes[*children.last().unwrap() as usize];
-            (a.offset, b.end, a.tok_start, b.tok_end)
+            let (o0, _) = self.kid_off_end(children[0]);
+            let (_, e1) = self.kid_off_end(*children.last().unwrap());
+            let (ts, _) = self.kid_tok_range(children[0]);
+            let (_, te) = self.kid_tok_range(*children.last().unwrap());
+            (o0, e1, ts, te)
         };
         let kid_start = self.kids.len();
         self.kids.extend_from_slice(&children);
-        self.nodes.push(Node { rule, token_type: "", is_leaf: false, kid_start: kid_start as u32, kid_count: children.len() as u32, offset: off, end, tok_start, tok_end, ext: 0 });
+        self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: children.len() as u32, offset: off, end, tok_start, tok_end, ext: 0 });
         self.segs = new_segs;
         self.pos = new_n;
         ((self.nodes.len() - 1) as i32, prefix_segs.len() + adopted_segs.len())
@@ -1458,7 +1479,6 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
     fn try_reuse_seg(&mut self, old_root: i32, old_segs: &[Seg], byte_delta: isize, old_n: usize, new_n: usize, prefix: usize, suffix: usize) -> Option<(i32, usize)> {
         if old_root < 0 || old_segs.is_empty() { return None; }
         let old = self.nodes[old_root as usize];
-        if old.is_leaf { return None; }
         let mut prefix_len = 0usize;
         while prefix_len < old_segs.len() {
             if old_segs[prefix_len].ext <= prefix { prefix_len += 1; } else { break; }
@@ -1488,17 +1508,17 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
             let c = s.tok_start as isize + tok_delta;
             if c > max_cand { max_cand = c; }
         }
-        let rule = old.rule;
+        let rule_id = old.rule_id;
         let old_kid_start = old.kid_start;
         let try_hit = |p: &mut Parser<'a>, mid_kids: &[i32], mid_segs: &[Seg]| -> Option<(i32, usize)> {
             if p.pos < suffix_bound { return None; }
             if suffix_cand.is_empty() {
-                if p.pos == new_n { return Some(p.finish_reuse_seg(rule, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n)); }
+                if p.pos == new_n { return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n)); }
                 return None;
             }
             for (hi, s) in suffix_cand.iter().enumerate() {
                 if s.tok_start as isize + tok_delta == p.pos as isize {
-                    return Some(p.finish_reuse_seg(rule, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, old_kid_start, hi, byte_delta, tok_delta, new_n));
+                    return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, old_kid_start, hi, byte_delta, tok_delta, new_n));
                 }
             }
             None
@@ -1519,7 +1539,7 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
         ` : ''}loop {
             if self.pos >= self.toks.len() {
                 if suffix_cand.is_empty() && self.pos == new_n {
-                    return Some(self.finish_reuse_seg(rule, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n));
+                    return Some(self.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n));
                 }
                 return try_hit(self, &mid_kids, &mid_segs);
             }
@@ -1528,7 +1548,7 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
                 Some(s) => s,
                 None => {
                     if suffix_cand.is_empty() && self.pos == new_n {
-                        return Some(self.finish_reuse_seg(rule, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n));
+                        return Some(self.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n));
                     }
                     return try_hit(self, &mid_kids, &mid_segs);
                 }
@@ -1545,17 +1565,40 @@ fn shift_subtree(nodes: &mut [Node], kids: &[i32], id: i32, byte_delta: isize, t
 ` : '';
   const reuseFns = reuseFnsA || reuseFnsB;
   const treeEqFn = `
+fn cmp_kid(nodes_a: &[Node], kids_a: &[i32], toks_a: &[Tok<'_>], kid_a: i32, nodes_b: &[Node], kids_b: &[i32], toks_b: &[Tok<'_>], kid_b: i32) -> bool {
+    if (kid_a < 0) != (kid_b < 0) { return false; }
+    if kid_a < 0 {
+        let (ti_a, tt_a) = decode_leaf(kid_a);
+        let (ti_b, tt_b) = decode_leaf(kid_b);
+        if tt_a != tt_b { return false; }
+        let ta = &toks_a[ti_a as usize];
+        let tb = &toks_b[ti_b as usize];
+        ta.off == tb.off && ta.end == tb.end
+    } else {
+        let na = &nodes_a[kid_a as usize];
+        let nb = &nodes_b[kid_b as usize];
+        if na.rule_id != nb.rule_id || na.kid_count != nb.kid_count || na.offset != nb.offset || na.end != nb.end { return false; }
+        for i in 0..na.kid_count {
+            let ca = kids_a[na.kid_start as usize + i as usize];
+            let cb = kids_b[nb.kid_start as usize + i as usize];
+            if !cmp_kid(nodes_a, kids_a, toks_a, ca, nodes_b, kids_b, toks_b, cb) { return false; }
+        }
+        true
+    }
+}
 fn check_tree_eq(text: &str, nodes: &[Node], kids: &[i32], root: Option<i32>) -> bool {
     let root_ok = root.is_some();
+    let toks_a = tokenize(text).toks;
     let s1 = if let Some(r) = root {
         let mut b = String::new();
-        write_json_arena(nodes, kids, r, &mut b);
+        write_json_arena(nodes, kids, &toks_a, r, &mut b);
         b
     } else { String::new() };
     let fresh = parse(tokenize(text));
     match (root_ok, fresh) {
         (false, None) => true,
         (true, Some((p, fr))) => {
+            if !cmp_kid(nodes, kids, &toks_a, root.unwrap(), &p.nodes, &p.kids, &p.toks, fr) { return false; }
             let mut b2 = String::new();
             write_json(&p, fr, &mut b2);
             s1 == b2
@@ -1768,8 +1811,9 @@ impl Doc {
     pub fn cst_json(&self) -> Option<String> {
         let root = self.root?;
         if self.last_pos != self.toks.len() { return None; }
+        let toks = toks_from_meta(&self.text, &self.toks);
         let mut out = String::new();
-        write_json_arena(&self.nodes, &self.kids, root, &mut out);
+        write_json_arena(&self.nodes, &self.kids, &toks, root, &mut out);
         Some(out)
     }
     pub fn edit(&mut self, edits: &[Edit]) {
@@ -1815,6 +1859,7 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
     const ir = portableIR(grammar);
     const ids = buildLexIdPlan(ir);
+    const ar = buildArenaIdPlan(ir, ids);
     const reuse = topReusePlan(ir);
     const shapeB = reuse?.kind === 'B';
     const segsInit = shapeB ? ', segs: Vec::new()' : '';
@@ -1825,25 +1870,26 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
       ? 'struct Parser<\'a> { toks: Vec<Tok<\'a>>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<u16>, suppress_cur: Vec<u16>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32>, segs: Vec<Seg> }'
       : 'struct Parser<\'a> { toks: Vec<Tok<\'a>>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<u16>, suppress_cur: Vec<u16>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32> }';
     const ruleFns = ir.rules.map((r) => {
-      if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids);
-      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids);
-      return rdRule(r, ids);
+      if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
+      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
+      return rdRule(r, ids, ar);
     }).join('\n\n');
+    const arenaIdTables = renderArenaIdTablesRust(ar);
     const matchTemplate = ir.tpl ? `    fn match_template(&mut self) -> Option<i32> {
         let t = self.peek()?;
         if t.kind != "$templateHead" { return None; }
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
-        self.push_leaf("$templateHead", t.off, t.end); self.pos += 1;
+        self.push_leaf(${ttIdOf(ar, '$templateHead')}, self.pos as u32); self.pos += 1;
         loop {
             let expr = match self.parse_${ir.tpl.interpRule}() { Some(e) => e, None => { self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None; } };
             self.scratch.push(expr);
             let next = match self.peek() { Some(x) => x, None => { self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None; } };
-            if next.kind == "$templateMiddle" { self.push_leaf("$templateMiddle", next.off, next.end); self.pos += 1; continue; }
-            if next.kind == "$templateTail" { self.push_leaf("$templateTail", next.off, next.end); self.pos += 1; break; }
+            if next.kind == "$templateMiddle" { self.push_leaf(${ttIdOf(ar, '$templateMiddle')}, self.pos as u32); self.pos += 1; continue; }
+            if next.kind == "$templateTail" { self.push_leaf(${ttIdOf(ar, '$templateTail')}, self.pos as u32); self.pos += 1; break; }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); return None;
         }
-        let o = self.nodes[self.scratch[sb] as usize].offset;
-        Some(self.finish("$template", sb, o, save))
+        let (o, _) = self.kid_off_end(self.scratch[sb]);
+        Some(self.finish(${ruleIdOf(ar, '$template')}, sb, o as usize, save))
     }
 ` : '';
     return `// GENERATED by emit-portable.ts (rustTarget) — parser for grammar "${ir.grammarName}".
@@ -1855,17 +1901,31 @@ use std::io::Read;
 #[derive(Clone, Copy)]
 struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool, kid: u16, lid: u16 }
 
-// Arena node: a flat record in \`nodes\`; children are a contiguous range in \`kids\` (kid_start,
-// kid_count). No per-node heap allocation — the arena grows by Vec push, and backtracking
-// truncates the three vecs (nodes/kids/scratch) to saved lengths. Nodes hold only &'static str
-// labels + usize spans: no per-node String. \`ext\` is lookahead watermark for top-level reuse
-// (not emitted in JSON). Copy so try_reuse_top can snapshot a node row by value.
+// Arena node: a flat record in \`nodes\`; children are a contiguous range in \`kids\`.
+// Rule nodes only — leaf kids are negative i32 encodings in \`kids\` / \`scratch\`.
+#[repr(C)]
 #[derive(Clone, Copy)]
-struct Node { rule: &'static str, token_type: &'static str, is_leaf: bool, kid_start: u32, kid_count: u32, offset: usize, end: usize, tok_start: usize, tok_end: usize, ext: usize }
+struct Node { rule_id: u16, kid_start: u32, kid_count: u32, offset: u32, end: u32, tok_start: u32, tok_end: u32, ext: u32 }
+const _: () = assert!(std::mem::size_of::<Node>() == 32);
 ${segStruct}
 ${lexerSrc ?? ''}
 
+${arenaIdTables}
 const ARENA_COMPACT_K: usize = 4;
+
+#[inline]
+fn encode_leaf(tok_idx: u32, tt_id: u8) -> i32 {
+    debug_assert!(tok_idx < (1u32 << 25));
+    debug_assert!((tt_id as u32) < 64);
+    let packed = tok_idx | ((tt_id as u32) << 25);
+    !(packed as i32)
+}
+#[inline]
+fn decode_leaf(v: i32) -> (u32, u8) {
+    debug_assert!(v < 0);
+    let packed = (!v) as u32;
+    (packed & ((1u32 << 25) - 1), (packed >> 25) as u8)
+}
 
 ${parserFields}
 impl<'a> Parser<'a> {
@@ -1874,42 +1934,64 @@ impl<'a> Parser<'a> {
         if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None }
     }
     fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off } else { 0 } }
-    fn mk_leaf(&mut self, ttype: &'static str, off: usize, end: usize) -> i32 {
-        self.nodes.push(Node { rule: "", token_type: ttype, is_leaf: true, kid_start: 0, kid_count: 0, offset: off, end, tok_start: self.pos, tok_end: self.pos + 1, ext: 0 });
-        (self.nodes.len() - 1) as i32
+    fn kid_off_end(&self, kid: i32) -> (u32, u32) {
+        if kid < 0 {
+            let (ti, _) = decode_leaf(kid);
+            let t = &self.toks[ti as usize];
+            (t.off as u32, t.end as u32)
+        } else {
+            let nd = &self.nodes[kid as usize];
+            (nd.offset, nd.end)
+        }
     }
-    // mk_leaf + scratch.push combined: the obvious self.scratch.push(self.mk_leaf(...)) is a
-    // double mutable borrow of self, so this splits the two statements. CST compression (Phase 5):
-    // punctuation ($punct) leaves are TRIVIA — they carry no semantic content the rule node
-    // doesn't already capture — so they are NOT recorded. This cuts arena node count substantially
-    // with no loss of parse decisions or recoverable spans (a rule node's offset/end still come
-    // from its first/last KEPT child). $operator leaves are KEPT: the Pratt notLeftLeaf guard
-    // (void/typeof/delete .x blocking) reads the head leaf of a prefix-op node, which is its
-    // $operator leaf. Token-kind leaves (identifiers, literals, numbers), $keyword, and
-    // $template* parts are kept.
-    fn push_leaf(&mut self, ttype: &'static str, off: usize, end: usize) { if ttype != "$punct" { let id = self.mk_leaf(ttype, off, end); self.scratch.push(id); } }
-    // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
-    fn finish(&mut self, rule: &'static str, sb: usize, fallback_off: usize, tok_start: usize) -> i32 {
+    fn kid_tok_range(&self, kid: i32) -> (u32, u32) {
+        if kid < 0 {
+            let (ti, _) = decode_leaf(kid);
+            (ti, ti + 1)
+        } else {
+            let nd = &self.nodes[kid as usize];
+            (nd.tok_start, nd.tok_end)
+        }
+    }
+    fn push_leaf(&mut self, tt_id: u8, tok_idx: u32) {
+        if tt_id == ${TT_SKIP_PUNCT} { return; }
+        self.scratch.push(encode_leaf(tok_idx, tt_id));
+    }
+    fn finish(&mut self, rule_id: u16, sb: usize, fallback_off: usize, tok_start: usize) -> i32 {
         let nn = self.scratch.len();
         let kid_start = self.kids.len();
-        let off = if nn > sb { self.nodes[self.scratch[sb] as usize].offset } else { fallback_off };
-        let end = if nn > sb { self.nodes[self.scratch[nn - 1] as usize].end } else { fallback_off };
+        let (offset, end) = if nn > sb {
+            let (o0, _) = self.kid_off_end(self.scratch[sb]);
+            let (_, e1) = self.kid_off_end(self.scratch[nn - 1]);
+            (o0, e1)
+        } else {
+            (fallback_off as u32, fallback_off as u32)
+        };
         self.kids.extend(self.scratch[sb..nn].iter().copied());
         self.scratch.truncate(sb);
-        self.nodes.push(Node { rule, token_type: "", is_leaf: false, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset: off, end, tok_start, tok_end: self.pos, ext: 0 });
+        self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset, end, tok_start: tok_start as u32, tok_end: self.pos as u32, ext: 0 });
         (self.nodes.len() - 1) as i32
     }
     fn head_leaf_text(&self, node: i32) -> &'a str {
-        let mut id = node as usize;
-        while !self.nodes[id].is_leaf && self.nodes[id].kid_count > 0 { id = self.kids[self.nodes[id].kid_start as usize] as usize; }
-        &self.src[self.nodes[id].offset..self.nodes[id].end]
+        let mut id = node;
+        loop {
+            let nd = &self.nodes[id as usize];
+            if nd.kid_count == 0 { return ""; }
+            let k = self.kids[nd.kid_start as usize];
+            if k < 0 {
+                let (ti, _) = decode_leaf(k);
+                let t = &self.toks[ti as usize];
+                return &self.src[t.off..t.end];
+            }
+            id = k;
+        }
     }
     fn nll_blocked(&self, words: &[&str], node: i32) -> bool { let h = self.head_leaf_text(node); words.iter().any(|w| *w == h) }
-    fn match_lit(&mut self, lid: u16, ttype: &'static str) -> bool {
-        match self.peek() { Some(t) if t.lid == lid => { self.push_leaf(ttype, t.off, t.end); self.pos += 1; true } _ => false }
+    fn match_lit(&mut self, lid: u16, tt_id: u8) -> bool {
+        match self.peek() { Some(_t) if _t.lid == lid => { self.push_leaf(tt_id, self.pos as u32); self.pos += 1; true } _ => false }
     }
-    fn match_tok(&mut self, kid: u16, name: &'static str) -> bool {
-        match self.peek() { Some(t) if t.kid == kid => { self.push_leaf(name, t.off, t.end); self.pos += 1; true } _ => false }
+    fn match_tok(&mut self, kid: u16, tt_id: u8) -> bool {
+        match self.peek() { Some(_t) if _t.kid == kid => { self.push_leaf(tt_id, self.pos as u32); self.pos += 1; true } _ => false }
     }
     fn call_rule(&mut self, f: fn(&mut Parser<'a>) -> Option<i32>) -> bool {
         match f(self) { Some(id) => { self.scratch.push(id); true } None => false }
@@ -1922,34 +2004,42 @@ impl<'a> Parser<'a> {
         let sp = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if !body(self) { self.pos = sp; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); } true
     }
     fn sep_by(&mut self, elem: fn(&mut Parser<'a>) -> bool, delim: u16) -> bool {
-        if !elem(self) { return true; }   // the whole separated list is optional — zero elements is valid
+        if !elem(self) { return true; }
         loop {
             let sp = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
-            if !self.match_lit(delim, "$punct") { self.pos = sp; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break; }
-            if !elem(self) { break; }   // a trailing delimiter is allowed — keep the pushed delim and stop
+            if !self.match_lit(delim, ${TT_SKIP_PUNCT}) { self.pos = sp; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break; }
+            if !elem(self) { break; }
         }
         true
     }
-    fn alt_lit(&mut self, opts: &[(u16, &'static str)]) -> bool {
-        for (lid, tt) in opts { if self.match_lit(*lid, tt) { return true; } }
+    fn alt_lit(&mut self, opts: &[(u16, u8)]) -> bool {
+        for (lid, tt) in opts { if self.match_lit(*lid, *tt) { return true; } }
         false
     }
 
 ${matchTemplate}${ruleFns}
 }
 
-fn write_json_arena(nodes: &[Node], kids: &[i32], id: i32, out: &mut String) {
-    let nd = &nodes[id as usize];
-    if nd.is_leaf {
-        out.push_str(&format!("{{\\"tokenType\\":\\"{}\\",\\"offset\\":{},\\"end\\":{}}}", nd.token_type, nd.offset, nd.end));
+fn write_json_kid(nodes: &[Node], kids: &[i32], toks: &[Tok<'_>], kid: i32, out: &mut String) {
+    if kid < 0 {
+        let (ti, tt) = decode_leaf(kid);
+        let t = &toks[ti as usize];
+        out.push_str(&format!("{{\\"tokenType\\":\\"{}\\",\\"offset\\":{},\\"end\\":{}}}", TT_NAMES[tt as usize], t.off, t.end));
         return;
     }
-    out.push_str(&format!("{{\\"rule\\":\\"{}\\",\\"children\\":[", nd.rule));
-    for i in 0..nd.kid_count { if i > 0 { out.push(','); } write_json_arena(nodes, kids, kids[nd.kid_start as usize + i as usize], out); }
+    write_json_arena(nodes, kids, toks, kid, out);
+}
+fn write_json_arena(nodes: &[Node], kids: &[i32], toks: &[Tok<'_>], id: i32, out: &mut String) {
+    let nd = &nodes[id as usize];
+    out.push_str(&format!("{{\\"rule\\":\\"{}\\",\\"children\\":[", RULE_NAMES[nd.rule_id as usize]));
+    for i in 0..nd.kid_count {
+        if i > 0 { out.push(','); }
+        write_json_kid(nodes, kids, toks, kids[nd.kid_start as usize + i as usize], out);
+    }
     out.push_str(&format!("],\\"offset\\":{},\\"end\\":{}}}", nd.offset, nd.end));
 }
-fn write_json(p: &Parser, id: i32, out: &mut String) {
-    write_json_arena(&p.nodes, &p.kids, id, out);
+fn write_json(p: &Parser<'_>, id: i32, out: &mut String) {
+    write_json_arena(&p.nodes, &p.kids, &p.toks, id, out);
 }
 
 // Library entry, two composable phases. tokenize() lexes ONCE and returns a Tokens struct that
@@ -2104,9 +2194,14 @@ fn main() {
             Some((p, root)) => {
                 let nd = &p.nodes[root as usize];
                 for i in 0..nd.kid_count {
-                    let k = &p.nodes[p.kids[nd.kid_start as usize + i as usize] as usize];
-                    let name = if k.is_leaf { k.token_type } else { k.rule };
-                    println!("{}\t{}\t{}", name, k.tok_start, k.tok_end);
+                    let kv = p.kids[nd.kid_start as usize + i as usize];
+                    if kv < 0 {
+                        let (ti, tt) = decode_leaf(kv);
+                        println!("{}\t{}\t{}", TT_NAMES[tt as usize], ti, ti + 1);
+                    } else {
+                        let k = &p.nodes[kv as usize];
+                        println!("{}\t{}\t{}", RULE_NAMES[k.rule_id as usize], k.tok_start, k.tok_end);
+                    }
                 }
                 println!("total\t0\t{}", p.pos);
             }
