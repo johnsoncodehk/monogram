@@ -59,8 +59,46 @@ export type Lit = { value: string; ttype: '$keyword' | '$punct' };
 // dispatch when every branch in an alt-list is non-null AND the signatures are pairwise disjoint.
 export type FirstSig = { lits: string[]; toks: string[] } | null;
 // Cap on FIRST-set size for partial pre-filter guards on non-predictive rd/inline alts.
-// Larger sets skip the guard (|| chains can exceed a failed attempt). Tunable; see P4b.
+// Larger sets skip the guard (|| chains can exceed a failed attempt). Tunable; see P4b/P5c.
 export const FIRST_GUARD_K = 4;
+/** toks-only sigs may use a larger K (kid compares cheaper than long lid || chains). 0 = off. */
+export const FIRST_GUARD_K_TOK = 0;
+/** When a non-predictive rule has ≥ this many alts, allow FIRST_GUARD_K_BIG. 0 = off. */
+export const FIRST_GUARD_BIG_NALTS = 10;
+export const FIRST_GUARD_K_BIG = 8;
+
+/** Whether a FirstSig is small enough to pre-filter before a backtracking attempt. */
+export function isFirstGuardable(f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> {
+  if (f === null) return false;
+  const n = f.lits.length + f.toks.length;
+  if (n === 0) return false;
+  if (n <= FIRST_GUARD_K) return true;
+  if (FIRST_GUARD_K_TOK > 0 && f.lits.length === 0 && f.toks.length <= FIRST_GUARD_K_TOK) return true;
+  if (
+    FIRST_GUARD_BIG_NALTS > 0 &&
+    nAlts != null &&
+    nAlts >= FIRST_GUARD_BIG_NALTS &&
+    n <= FIRST_GUARD_K_BIG
+  ) return true;
+  return false;
+}
+
+/** Group items by key, preserving first-seen key order and within-group original order. */
+export type Grouped<T> = { key: string | number; members: Array<{ item: T; index: number }> };
+export function groupByPreserveOrder<T>(
+  items: readonly T[],
+  keyOf: (item: T, index: number) => string | number,
+): Grouped<T>[] {
+  const map = new Map<string | number, Array<{ item: T; index: number }>>();
+  const order: Array<string | number> = [];
+  for (let i = 0; i < items.length; i++) {
+    const key = keyOf(items[i]!, i);
+    let arr = map.get(key);
+    if (!arr) { arr = []; map.set(key, arr); order.push(key); }
+    arr.push({ item: items[i]!, index: i });
+  }
+  return order.map((key) => ({ key, members: map.get(key)! }));
+}
 export type Step =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct' }   // match a literal by text
   | { t: 'tok'; name: string }                                  // match a token kind

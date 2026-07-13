@@ -11,8 +11,8 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
 // the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
-import { FIRST_GUARD_K, type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -40,8 +40,8 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.lid == ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kid == ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
-const isGuardable = (f: FirstSig): f is NonNullable<FirstSig> =>
-  f !== null && f.lits.length + f.toks.length > 0 && f.lits.length + f.toks.length <= FIRST_GUARD_K;
+const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
+  isFirstGuardable(f, nAlts);
 
 /** Emit kid/lid lookup tables into generated lexer source (length-bucketed lid_of match). */
 function renderIdTablesRust(ids: LexIdPlan): string {
@@ -590,12 +590,13 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 // Non-null FirstSig branches get a FIRST pre-filter (skip without save/restore) when |sig|≤K.
 function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
   const fs = firsts ?? [];
-  const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null));
+  const nAlts = branches.length;
+  const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
   const peekInit = needPeek ? `let _ft = p.peek(); ` : '';
   const tries = branches.map((br, i) => {
     const body = `{ let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); }`;
     const f = fs[i] ?? null;
-    if (!isGuardable(f)) return body;
+    if (!isGuardable(f, nAlts)) return body;
     return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
   }).join(' ');
   return `${peekInit}${tries} false`;
@@ -766,7 +767,7 @@ ${r.alts.map(arm).join('\n')}
   const alt = (steps: Step[], i: number) => {
     const cond = steps.map((x) => stepCond(x, ids, ar)).join(' && ');
     const restore = `self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);`;
-    if (!isGuardable(r.altFirst[i])) {
+    if (!isGuardable(r.altFirst[i], r.alts.length)) {
       return `        if ${cond} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.off_at(save), save)); }
         ${restore}`;
     }
@@ -775,7 +776,7 @@ ${r.alts.map(arm).join('\n')}
             ${restore}
         } }`;
   };
-  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i]));
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
 ${needPeek ? '        let _ft = self.peek();\n' : ''}${r.alts.map(alt).join('\n')}
@@ -794,22 +795,60 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const binArms = r.binary.map((b) => `${lidOf(ids, b.op)} => Some((${b.lbp}, ${b.rbp}))`).join(', ');
   const preArms = r.prefix.map((p) => `${lidOf(ids, p.op)} => Some(${p.rbp})`).join(', ');
   const atomArm = r.nudToks.map((k) => `${kidOf(ids, k)}`).join(' | ');
-  const bracketNud = (b: Bracket) => `        if t.lid == ${lidOf(ids, b.first)} {
+  const bracketNudBody = (b: Bracket) => `{
             let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
             if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off, save)); }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);
         }`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], left) && ` : ''}!self.suppress_cur.iter().any(|c| *c == ${lidOf(ids, b.first)}) && t.lid == ${lidOf(ids, b.first)} {
+  const bracketNudMatch = (() => {
+    if (r.nudBrackets.length === 0) return '';
+    const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
+    return `        match t.lid {
+${groups.map((g) => `            ${g.key} => {
+${g.members.map(({ item: b }) => `                ${bracketNudBody(b)}`).join('\n')}
+            }`).join('\n')}
+            _ => {}
+        }`;
+  })();
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+    const parts: string[] = [];
+    if (accessTail) parts.push('!tail_closed');
+    if (lbp !== null) parts.push(`${lbp} > min_bp`);
+    if (sameLine) parts.push('!t.nl');
+    if (nll) parts.push(`!self.nll_blocked(&[${nll.map(J).join(', ')}], left)`);
+    parts.push(`!self.suppress_cur.iter().any(|c| *c == ${lid})`);
+    return parts.join(' && ');
+  };
+  const ledBody = (b: Bracket) => `{
                 let led_save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
                 self.scratch.push(left);
                 if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; }
                 self.pos = led_save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break;
             }`;
-  const postfixArm = (tok: string) => {
-    const tplPart = tpl && tok === tpl.token ? `
+  const ledMatch = (() => {
+    if (r.leds.length === 0) return '';
+    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
+    return `            match t.lid {
+${groups.map((g) => {
+  const lid = g.key as number;
+  const arms = g.members.map(({ item: b, index: i }) =>
+    `                if ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b)}`);
+  return `                ${lid} => {\n${arms.join('\n')}\n                }`;
+}).join('\n')}
+                _ => {}
+            }`;
+  })();
+  const postfixTokMatch = (() => {
+    if (r.postfixToks.length === 0) return '';
+    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
+    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
+    const tplPart = hasTpl ? `
             if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; } }` : '';
-    return `            if !tail_closed && t.kid == ${kidOf(ids, tok)} { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kid as u8, self.pos as u32); self.pos += 1; left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; }${tplPart}`;
-  };
+    return `            match t.kid {
+${groups.map((g) => `                ${g.key} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kid as u8, self.pos as u32); self.pos += 1; left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); continue; } }`).join('\n')}
+                _ => {}
+            }${tplPart}`;
+  })();
   const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some(${p.lbp})`).join(', ');
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let prev = std::mem::take(&mut self.suppress_cur);
@@ -828,8 +867,8 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
         let mut tail_closed = false;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
-${r.postfixToks.map(postfixArm).join('\n')}
+${ledMatch}
+${postfixTokMatch}
             if let Some(plbp) = Parser::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32); self.pos += 1; left = self.finish(${ruleIdOf(ar, r.cstName)}, sb, self.nodes[left as usize].offset as usize, self.nodes[left as usize].tok_start as usize); tail_closed = true; continue; } }
             let (lbp, rbp) = match Parser::${r.name}_bin(t.lid) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
@@ -856,7 +895,7 @@ ${tplNud}        if Parser::${r.name}_atom(t.kid) {
             let sb = self.scratch.len(); let ts = self.pos; self.push_leaf(t.kid as u8, self.pos as u32); self.pos += 1;
             return Some(self.finish(${ruleIdOf(ar, r.cstName)}, sb, t.off, ts));
         }
-${r.nudBrackets.map(bracketNud).join('\n')}
+${bracketNudMatch}
         if let Some(pbp) = Parser::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32); self.pos += 1;
             match self.${r.name}_bp(pbp) {

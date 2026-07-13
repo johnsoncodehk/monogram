@@ -4,8 +4,8 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { FIRST_GUARD_K, type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf, rangesHaveNonAscii } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 
@@ -33,8 +33,8 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.lid === ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kid === ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
-const isGuardable = (f: FirstSig): f is NonNullable<FirstSig> =>
-  f !== null && f.lits.length + f.toks.length > 0 && f.lits.length + f.toks.length <= FIRST_GUARD_K;
+const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
+  isFirstGuardable(f, nAlts);
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesTS(ids: LexIdPlan): string {
@@ -460,12 +460,13 @@ function stepCond(s: Step, ids: LexIdPlan): string {
     case 'alt': {
       if (s.predictive) return `(() => { ${predAltBody(s.branches, ids, s.firsts)} })()`;
       const firsts = s.firsts ?? [];
-      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null));
+      const nAlts = s.branches.length;
+      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
       const peekInit = needPeek ? `const _ft = peek(); ` : '';
       const tries = s.branches.map((br, i) => {
         const body = `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`;
         const f = firsts[i] ?? null;
-        if (!isGuardable(f)) return body;
+        if (!isGuardable(f, nAlts)) return body;
         return `if (_ft !== null && ${firstCond(f, '_ft', ids)}) ${body}`;
       }).join(' ');
       return `(() => { ${peekInit}${tries} return false; })()`;
@@ -541,10 +542,10 @@ ${r.alts.map(arm).join(' ')}
   }
   const alt = (steps: Step[], i: number) => {
     const body = `{ const kids: Cst[] = []; if (${steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save); pos = save; }`;
-    if (!isGuardable(r.altFirst[i])) return `  ${body}`;
+    if (!isGuardable(r.altFirst[i], r.alts.length)) return `  ${body}`;
     return `  if (_ft !== null && ${firstCond(r.altFirst[i], '_ft', ids)}) ${body}`;
   };
-  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i]));
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
   return `function parse${r.name}(): Node | null {
   const save = pos;
 ${needPeek ? '  const _ft = peek();\n' : ''}${r.alts.map(alt).join('\n')}
@@ -631,24 +632,58 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const BIN = `{ ${r.binary.map((b) => `${lidOf(ids, b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ')} }`;
   const atom = `new Set([${r.nudToks.map((k) => kidOf(ids, k)).join(', ')}])`;
-  const bracketNud = (b: Bracket) => `    if (t.lid === ${lidOf(ids, b.first)}) {
+  const bracketNudBody = (b: Bracket) => `{
       const save = pos; const kids: Cst[] = [];
       if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save);
       pos = save;   // fall through to the next NUD alternative (e.g. another '${b.first}'-led form)
     }`;
-  // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
-  // a precedence-gated led (ternary/in/instanceof) binds only when its lbp > minBp.
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!${J(nll)}.includes(headLeafText(left)) && ` : ''}(_suppressCur === null || !_suppressCur.has(${lidOf(ids, b.first)})) && t.lid === ${lidOf(ids, b.first)}) {
-      const ledSave = pos; const kids: Cst[] = [left];
-      if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue; }
-      pos = ledSave; break;
-    }`;
-  // A postfix token (e.g. a tagged template) binds like a mixfix led: `left X` → node(left, X). Also an access tail.
-  const postfixArm = (tok: string) => {
-    const tplPart = tpl && tok === tpl.token ? `
-    if (!tailClosed && t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end, tokStart: left.tokStart, tokEnd: pos }; continue; } }` : '';
-    return `    if (!tailClosed && t.kid === ${kidOf(ids, tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end, tokStart: left.tokStart, tokEnd: pos }; continue; }${tplPart}`;
+  const bracketNudSwitch = (() => {
+    if (r.nudBrackets.length === 0) return '';
+    const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
+    return `  switch (t.lid) {
+${groups.map((g) => `    case ${g.key}:
+${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
+      break;`).join('\n')}
+  }`;
+  })();
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+    const parts: string[] = [];
+    if (accessTail) parts.push('!tailClosed');
+    if (lbp !== null) parts.push(`${lbp} > minBp`);
+    if (sameLine) parts.push('!t.nl');
+    if (nll) parts.push(`!${J(nll)}.includes(headLeafText(left))`);
+    parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
+    return parts.join(' && ');
   };
+  const ledBody = (b: Bracket) => `{
+      const ledSave = pos; const kids: Cst[] = [left];
+      if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue ledLoop; }
+      pos = ledSave; break ledLoop;
+    }`;
+  const ledSwitch = (() => {
+    if (r.leds.length === 0) return '';
+    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
+    return `    switch (t.lid) {
+${groups.map((g) => {
+  const lid = g.key as number;
+  const arms = g.members.map(({ item: b, index: i }) =>
+    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b)}`);
+  return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
+}).join('\n')}
+    }`;
+  })();
+  const postfixTokSwitch = (() => {
+    if (r.postfixToks.length === 0) return '';
+    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
+    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
+    const tplPart = hasTpl ? `
+    if (!tailClosed && t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end, tokStart: left.tokStart, tokEnd: pos }; continue ledLoop; } }` : '';
+    return `    switch (t.kid) {
+${groups.map((g) => `      case ${g.key}:
+        if (!tailClosed) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end, tokStart: left.tokStart, tokEnd: pos }; continue ledLoop; }
+        break;`).join('\n')}
+    }${tplPart}`;
+  })();
   const POST = `{ ${r.postfix.map((p) => `${lidOf(ids, p.op)}: ${p.lbp}`).join(', ')} }`;
   return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number }> = ${BIN};
 const ${r.name}_PRE: Record<number, number> = ${PRE};
@@ -665,11 +700,11 @@ function ${r.name}_bp(minBp: number): Node | null {
   if (left === null) return null;
   if (_capped) return left;   // an assignment-level arrow admits no led
   let tailClosed = false;
-  for (;;) {
+  ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'ledLoop: ' : ''}for (;;) {
     const t = peek();
     if (t === null) break;
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
-${r.postfixToks.map(postfixArm).join('\n')}
+${ledSwitch}
+${postfixTokSwitch}
     const post = ${r.name}_POST[t.lid];
     if (!tailClosed && post !== undefined && post > minBp) { const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end, tokStart: left.tokStart, tokEnd: pos }; tailClosed = true; continue; }
     const info = ${r.name}_BIN[t.lid];
@@ -692,7 +727,7 @@ ${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const ki
   // so force it false after — only the capped arms above produce a capped node.
   const _r = ((): Node | null => {
 ${tplNud}  if (${r.name}_ATOM.has(t.kid)) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; return { rule: ${J(r.cstName)}, children: [leaf], offset: t.off, end: t.end, tokStart: leaf.tokStart, tokEnd: pos }; }
-${r.nudBrackets.map(bracketNud).join('\n')}
+${bracketNudSwitch}
   const pbp = ${r.name}_PRE[t.lid];
   if (pbp !== undefined) {
     const save = pos;

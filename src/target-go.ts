@@ -9,8 +9,8 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { FIRST_GUARD_K, type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -37,8 +37,8 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.Lid == ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.Kid == ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
-const isGuardable = (f: FirstSig): f is NonNullable<FirstSig> =>
-  f !== null && f.lits.length + f.toks.length > 0 && f.lits.length + f.toks.length <= FIRST_GUARD_K;
+const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
+  isFirstGuardable(f, nAlts);
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesGo(ids: LexIdPlan): string {
@@ -504,12 +504,13 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': {
       if (s.predictive) return `func() bool { ${predAltBody(s.branches, ids, s.firsts, ar)} }()`;
       const firsts = s.firsts ?? [];
-      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null));
+      const nAlts = s.branches.length;
+      const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
       const peekInit = needPeek ? `_ft := peek(); ` : '';
       const tries = s.branches.map((br, i) => {
         const body = `{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`;
         const f = firsts[i] ?? null;
-        if (!isGuardable(f)) return body;
+        if (!isGuardable(f, nAlts)) return body;
         return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
       }).join('; ');
       return `func() bool { ${peekInit}${tries}; return false }()`;
@@ -583,7 +584,7 @@ ${r.alts.map(arm).join(' ')}
   const alt = (steps: Step[], i: number) => {
     const cond = steps.map((x) => stepCond(x, ids, ar)).join(' && ');
     const restore = `pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
-    if (!isGuardable(r.altFirst[i])) {
+    if (!isGuardable(r.altFirst[i], r.alts.length)) {
       return `\tif ${cond} { return finish(${ruleIdOf(ar, r.cstName)}, sb, offAt(save), save) }
 \t${restore}`;
     }
@@ -592,7 +593,7 @@ ${r.alts.map(arm).join(' ')}
 \t\t${restore}
 \t}`;
   };
-  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i]));
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
   return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 ${needPeek ? '\t_ft := peek()\n' : ''}${r.alts.map(alt).join('\n')}
@@ -700,28 +701,63 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const bin = r.binary.map((b) => `${lidOf(ids, b.op)}: {${b.lbp}, ${b.rbp}}`).join(', ');
   const pre = r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ');
   const atoms = r.nudToks.map((k) => `${kidOf(ids, k)}: true`).join(', ');
-  const bracketNud = (b: Bracket) => `\tif t.Lid == ${lidOf(ids, b.first)} {
+  const bracketNudBody = (b: Bracket) => `{
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return finish(${ruleIdOf(ar, r.cstName)}, sb, t.Off, save) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.Nl && ' : ''}${nll ? `!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left)) && ` : ''}!_suppressCur[${lidOf(ids, b.first)}] && t.Lid == ${lidOf(ids, b.first)} {
+  const bracketNudSwitch = (() => {
+    if (r.nudBrackets.length === 0) return '';
+    const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
+    return `\tswitch t.Lid {
+${groups.map((g) => `\tcase ${g.key}:
+${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join('\n')}
+\t}`;
+  })();
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+    const parts: string[] = [];
+    if (accessTail) parts.push('!tailClosed');
+    if (lbp !== null) parts.push(`${lbp} > minBp`);
+    if (sameLine) parts.push('!t.Nl');
+    if (nll) parts.push(`!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left))`);
+    parts.push(`!_suppressCur[${lid}]`);
+    return parts.join(' && ');
+  };
+  const ledBody = (b: Bracket) => `{
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
-\t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue }
-\t\t\tpos = ledSave; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break
+\t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue LedLoop }
+\t\t\tpos = ledSave; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break LedLoop
 \t\t}`;
-  const postfixArm = (tok: string) => {
-    const tplPart = tpl && tok === tpl.token ? `
+  const ledSwitch = (() => {
+    if (r.leds.length === 0) return '';
+    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
+    return `\t\tswitch t.Lid {
+${groups.map((g) => {
+  const lid = g.key as number;
+  const arms = g.members.map(({ item: b, index: i }) =>
+    `\t\t\tif ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b)}`);
+  return `\t\tcase ${lid}:\n${arms.join('\n')}`;
+}).join('\n')}
+\t\t}`;
+  })();
+  const postfixTokSwitch = (() => {
+    if (r.postfixToks.length === 0) return '';
+    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
+    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
+    const tplPart = hasTpl ? `
 \t\tif !tailClosed && t.Kind == "$templateHead" {
 \t\t\tnode := matchTemplate()
-\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue }
+\t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue LedLoop }
 \t\t}` : '';
-    return `\t\tif !tailClosed && t.Kid == ${kidOf(ids, tok)} {
-\t\t\tsb := len(scratch); scratch = append(scratch, left); pushLeaf(uint8(t.Kid), uint32(pos)); pos++
-\t\t\tleft = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue
+    return `\t\tswitch t.Kid {
+${groups.map((g) => `\t\tcase ${g.key}:
+\t\t\tif !tailClosed {
+\t\t\t\tsb := len(scratch); scratch = append(scratch, left); pushLeaf(uint8(t.Kid), uint32(pos)); pos++
+\t\t\t\tleft = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue LedLoop
+\t\t\t}`).join('\n')}
 \t\t}${tplPart}`;
-  };
+  })();
   const post = r.postfix.map((p) => `${lidOf(ids, p.op)}: ${p.lbp}`).join(', ');
   return `var ${r.name}BIN = map[uint16]bp{${bin}}
 var ${r.name}PRE = map[uint16]int{${pre}}
@@ -740,11 +776,11 @@ func ${r.name}bp(minBp int) int32 {
 \tif left < 0 { return -1 }
 \tif _capped { return left }
 \ttailClosed := false
-\tfor {
+${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := peek()
 \t\tif t == nil { break }
-${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
-${r.postfixToks.map(postfixArm).join('\n')}
+${ledSwitch}
+${postfixTokSwitch}
 \t\tif post, ok := ${r.name}POST[t.Lid]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(scratch); scratch = append(scratch, left); pushLeaf(${ttIdOf(ar, '$operator')}, uint32(pos)); pos++; tailClosed = true
 \t\t\tleft = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue
@@ -771,7 +807,7 @@ ${tplNud}\tif ${r.name}ATOM[t.Kid] {
 \t\tsb := len(scratch); ts := pos; pushLeaf(uint8(t.Kid), uint32(pos)); pos++
 \t\treturn finish(${ruleIdOf(ar, r.cstName)}, sb, t.Off, ts)
 \t}
-${r.nudBrackets.map(bracketNud).join('\n')}
+${bracketNudSwitch}
 \tif pbp, ok := ${r.name}PRE[t.Lid]; ok {
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\tpushLeaf(${ttIdOf(ar, '$operator')}, uint32(pos)); pos++
