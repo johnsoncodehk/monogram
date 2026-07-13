@@ -35,6 +35,14 @@ import {
 export type CharRange = [number, number];   // inclusive char-code range
 export type LexTok =
   | { kind: 'run'; name: string; first: CharRange[]; cont: CharRange[]; skip: boolean }   // ident/number char run
+  // Char-run with bail stops (e.g. Ident with `\u…` escapes): ASCII tight loop when safe,
+  // else fall back to the general pattern matcher from the token start. `bail` governs where
+  // the cont run may STOP; `headBail` are ENTRY chars claimed by a complex head alternative
+  // (e.g. an escape-led first char) that must route straight to the general matcher.
+  | { kind: 'runBail'; name: string; first: CharRange[]; cont: CharRange[];
+      bail: number[]; bailNonAscii: boolean;
+      headBail: number[]; headBailNonAscii: boolean;
+      pattern: TokenPattern; skip: boolean }
   | { kind: 'string'; name: string; delim: string; skip: boolean }                        // delim..delim, `\` escapes next
   | { kind: 'line'; name: string; prefix: string; skip: boolean }                         // prefix..end-of-line
   | { kind: 'block'; name: string; open: string; close: string; skip: boolean }           // open..close
@@ -388,8 +396,20 @@ function lexTok(t: TokenDecl): LexTok {
   const bd = tokenPatternBlockDelimiters(t);
   if (bd) return { kind: 'block', name: t.name, open: bd[0], close: bd[1], skip };
   const loop = tokenPatternCharLoop(t);
-  if (loop && loop.bail.length === 0 && !loop.bailNonAscii) {
+  // Plain `run` only when NOTHING needs the general matcher: no cont-stop bails AND no
+  // complex head alternative (`run` has no fallback path — a headBail entry char would
+  // otherwise be unlexable in the portable targets, diverging from the interpreter).
+  if (loop && loop.bail.length === 0 && !loop.bailNonAscii && loop.headBail.length === 0 && !loop.headBailNonAscii) {
     return { kind: 'run', name: t.name, first: codesToRanges(loop.first), cont: codesToRanges(loop.cont), skip };
+  }
+  if (loop) {
+    return {
+      kind: 'runBail', name: t.name,
+      first: codesToRanges(loop.first), cont: codesToRanges(loop.cont),
+      bail: loop.bail, bailNonAscii: loop.bailNonAscii,
+      headBail: loop.headBail, headBailNonAscii: loop.headBailNonAscii,
+      pattern: t.pattern, skip,
+    };
   }
   const line = lineCommentShape(t.pattern);   // PRECISE: prefix-literal then star(non-newline)
   if (line) return { kind: 'line', name: t.name, prefix: line, skip };
@@ -803,11 +823,28 @@ function patternFirst(p: TokenPattern): LexFirstBytes | null {
 export function lexTokFirstBytes(t: LexTok): LexFirstBytes | null {
   switch (t.kind) {
     case 'run': return rangesToFirstBytes(t.first);
+    case 'runBail': {
+      // first ASCII ∪ bail ASCII ∪ headBail ASCII — so both a `\`-led Ident (cont-escape
+      // opener) and a complex-head-only entry char reach this token's dispatch arm.
+      const fb = rangesToFirstBytes(t.first);
+      const bytes = new Set(fb.bytes);
+      let nonAscii = fb.nonAscii || t.bailNonAscii || t.headBailNonAscii;
+      for (const b of [...t.bail, ...t.headBail]) {
+        if (b < 128) bytes.add(b);
+        else nonAscii = true;
+      }
+      return { bytes: [...bytes].sort((a, b) => a - b), nonAscii };
+    }
     case 'string': return punctFirstBytes(t.delim);
     case 'line': return punctFirstBytes(t.prefix);
     case 'block': return punctFirstBytes(t.open);
     case 'pattern': return patternFirst(t.pattern);
   }
+}
+
+/** True if any range endpoint is ≥128 (non-ASCII). Used by targets to refuse byte-tight cont loops. */
+export function rangesHaveNonAscii(rs: CharRange[]): boolean {
+  return rs.some(([, hi]) => hi >= 128);
 }
 
 export type LexDispatchMeta = {

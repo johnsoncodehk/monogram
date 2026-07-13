@@ -10,13 +10,27 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan, ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
+
+function bailCondGo(v: string, bail: number[], bailNonAscii: boolean): string {
+  const parts = bail.map((c) => `${v} == ${c}`);
+  if (bailNonAscii) parts.push(`${v} >= 128`);
+  return parts.length ? parts.join(' || ') : 'false';
+}
+
+function emitAsciiBoolTableGo(name: string, rs: CharRange[]): string {
+  const idxs: number[] = [];
+  for (const [lo, hi] of rs) {
+    for (let c = Math.max(0, lo); c <= Math.min(127, hi); c++) idxs.push(c);
+  }
+  return `var ${name} = [256]bool{${idxs.map((i) => `${i}: true`).join(', ')}}`;
+}
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
@@ -90,6 +104,28 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
 \t\t\tfor e < n { cc := int(src[e]); if !${rangeCond('cc', t.cont)} { break }; e++ }
 \t\t\t${push('e')}pos = e; continue
 \t\t}`;
+  if (t.kind === 'runBail') {
+    if (rangesHaveNonAscii(t.cont)) {
+      const m = compilePat(t.pattern, defs);
+      return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(pos); e > pos { ${push('e')}pos = e; continue } }`;
+    }
+    const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_');
+    const fTab = `_rbF_${tag}`, cTab = `_rbC_${tag}`;
+    defs.push(emitAsciiBoolTableGo(fTab, t.first));
+    defs.push(emitAsciiBoolTableGo(cTab, t.cont));
+    const m = compilePat(t.pattern, defs);
+    const bailAt = (v: string) => bailCondGo(v, t.bail, t.bailNonAscii);
+    // Entry fallback covers cont-bail chars AND complex-head entry chars (headBail).
+    const entryBail = bailCondGo('c', [...new Set([...t.bail, ...t.headBail])].sort((a, b) => a - b), t.bailNonAscii || t.headBailNonAscii);
+    return `\t\tif ${gate}${fTab}[c] {
+\t\t\te := pos + 1
+\t\t\tfor e < n && ${cTab}[src[e]] { e++ }
+\t\t\tif e >= n || !(${bailAt('int(src[e])')}) { ${push('e')}pos = e; continue }
+\t\t\tif e2 := ${m}(pos); e2 > pos { ${push('e2')}pos = e2; continue }
+\t\t} else if ${entryBail} {
+\t\t\tif e := ${m}(pos); e > pos { ${push('e')}pos = e; continue }
+\t\t}`;
+  }
   if (t.kind === 'string') return `\t\tif ${gate}c == ${t.delim.charCodeAt(0)} {
 \t\t\te := pos + 1
 \t\t\tfor e < n { ch := int(src[e]); if ch == 92 { e += 2; continue }; if ch == ${t.delim.charCodeAt(0)} { e++; break }; e++ }

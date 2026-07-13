@@ -199,6 +199,11 @@ export type TokenPatternLoop = {
   cont: number[];       // ASCII codes the loop consumes
   bail: number[];       // ASCII stop codes that require the full regex (a complex alternative may continue)
   bailNonAscii: boolean; // a complex alternative may continue on a non-ASCII char
+  // Head-entry bail: first chars claimed by a COMPLEX head alternative (excluded from `first`).
+  // A dispatcher with no per-char regex fallback must route these to the full matcher at token
+  // START — they are distinct from `bail`, which only governs where the cont run may STOP.
+  headBail: number[];
+  headBailNonAscii: boolean;
 };
 
 export function tokenPatternCharLoop(token: Pick<TokenDecl, 'pattern'>): TokenPatternLoop | null {
@@ -222,15 +227,20 @@ export function tokenPatternCharLoop(token: Pick<TokenDecl, 'pattern'>): TokenPa
     if (fs.nonAscii) bailNonAscii = true;
   }
   const headComplexFirst = new Set<number>();
+  let headBailNonAscii = false;
   for (const item of headSplit.complex) {
     if (patternCanMatchEmpty(item)) return null;
     const fs = firstCharSetFromPattern(item);
     if (!fs) return null;
     for (const c of fs.ascii) headComplexFirst.add(c);
+    if (fs.nonAscii) headBailNonAscii = true;
   }
   const first = headSplit.plain.filter(c => !headComplexFirst.has(c));
   if (first.length === 0) return null;
-  return { first, cont: contSplit.plain, bail: [...bail].sort((a, b) => a - b), bailNonAscii };
+  return {
+    first, cont: contSplit.plain, bail: [...bail].sort((a, b) => a - b), bailNonAscii,
+    headBail: [...headComplexFirst].sort((a, b) => a - b), headBailNonAscii,
+  };
 }
 
 // Split an alternation (or single node) into plain ASCII charClass codes vs complex alternatives.

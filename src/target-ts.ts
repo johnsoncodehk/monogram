@@ -5,13 +5,28 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf, rangesHaveNonAscii } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} === ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
+
+/** Bail predicate: byte in bail set, or (bailNonAscii && ≥128). */
+function bailCondTS(v: string, bail: number[], bailNonAscii: boolean): string {
+  const parts = bail.map((c) => `${v} === ${c}`);
+  if (bailNonAscii) parts.push(`${v} >= 128`);
+  return parts.length ? parts.join(' || ') : 'false';
+}
+
+/** 256-entry Uint8Array FIRST/CONT table from ASCII-only ranges (codes >127 omitted). */
+function emitAsciiBoolTableTS(name: string, rs: CharRange[]): string {
+  const ranges = rs
+    .filter(([lo]) => lo <= 127)
+    .map(([lo, hi]) => `[${Math.max(0, lo)},${Math.min(127, hi)}]`);
+  return `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${ranges.join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`;
+}
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
@@ -75,6 +90,30 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
       while (e < n) { const cc = src.charCodeAt(e); if (!${rangeCond('cc', t.cont)}) break; e++; }
       ${push('e')}pos = e; continue;
     }`;
+  if (t.kind === 'runBail') {
+    // Cont with non-ASCII: refuse tight loop (byte-index unsafe for multi-unit chars in other
+    // targets; keep three-target isomorphism — fall back to pattern cascade).
+    if (rangesHaveNonAscii(t.cont)) {
+      const m = compilePat(t.pattern, defs);
+      return `    if (${gate}true) { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
+    }
+    const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_');
+    const fTab = `_rbF_${tag}`, cTab = `_rbC_${tag}`;
+    defs.push(emitAsciiBoolTableTS(fTab, t.first));
+    defs.push(emitAsciiBoolTableTS(cTab, t.cont));
+    const m = compilePat(t.pattern, defs);
+    const bailAt = (v: string) => bailCondTS(v, t.bail, t.bailNonAscii);
+    // Entry fallback covers cont-bail chars AND complex-head entry chars (headBail).
+    const entryBail = bailCondTS('c', [...new Set([...t.bail, ...t.headBail])].sort((a, b) => a - b), t.bailNonAscii || t.headBailNonAscii);
+    return `    if (${gate}${fTab}[c]) {
+      let e = pos + 1;
+      while (e < n && ${cTab}[src.charCodeAt(e)]) e++;
+      if (e >= n || !(${bailAt('src.charCodeAt(e)')})) { ${push('e')}pos = e; continue; }
+      { const e2 = ${m}(pos); if (e2 > pos) { ${push('e2')}pos = e2; continue; } }
+    } else if (${entryBail}) {
+      const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; }
+    }`;
+  }
   if (t.kind === 'string') return `    if (${gate}c === ${t.delim.charCodeAt(0)}) {
       let e = pos + 1;
       while (e < n) { const ch = src.charCodeAt(e); if (ch === 92) { e += 2; continue; } if (ch === ${t.delim.charCodeAt(0)}) { e++; break; } e++; }

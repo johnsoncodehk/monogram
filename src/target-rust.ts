@@ -12,13 +12,27 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
 // the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
 import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan, ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `(${lo}..=${hi}).contains(&${v})`)).join(' || ') + ')';
+
+function bailCondRs(v: string, bail: number[], bailNonAscii: boolean): string {
+  const parts = bail.map((c) => `${v} == ${c}`);
+  if (bailNonAscii) parts.push(`${v} >= 128`);
+  return parts.length ? parts.join(' || ') : 'false';
+}
+
+function emitAsciiBoolTableRs(name: string, rs: CharRange[]): string {
+  const a = Array<boolean>(256).fill(false);
+  for (const [lo, hi] of rs) {
+    for (let c = Math.max(0, lo); c <= Math.min(127, hi); c++) a[c] = true;
+  }
+  return `const ${name}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
+}
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 // null FirstSig → 'false' (never matched here; predictive alts have all-non-null FIRSTs).
@@ -109,6 +123,28 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
             while e < n { let cc = b[e] as u32; if !${rangeCond('cc', t.cont)} { break } e += 1; }
             ${push('e')}pos = e; continue;
         }`;
+  if (t.kind === 'runBail') {
+    if (rangesHaveNonAscii(t.cont)) {
+      const m = compilePat(t.pattern, defs);
+      return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
+    }
+    const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_').toUpperCase();
+    const fTab = `_RB_F_${tag}`, cTab = `_RB_C_${tag}`;
+    defs.push(emitAsciiBoolTableRs(fTab, t.first));
+    defs.push(emitAsciiBoolTableRs(cTab, t.cont));
+    const m = compilePat(t.pattern, defs);
+    const bailAt = (v: string) => bailCondRs(v, t.bail, t.bailNonAscii);
+    // Entry fallback covers cont-bail chars AND complex-head entry chars (headBail).
+    const entryBail = bailCondRs('c', [...new Set([...t.bail, ...t.headBail])].sort((a, b) => a - b), t.bailNonAscii || t.headBailNonAscii);
+    return `        if ${gate}${fTab}[c as usize] {
+            let mut e = pos + 1;
+            while e < n && ${cTab}[b[e] as usize] { e += 1; }
+            if e >= n || !(${bailAt('b[e] as u32')}) { ${push('e')}pos = e; continue; }
+            { let e2 = ${m}(src, pos as i64); if e2 > pos as i64 { let e2 = e2 as usize; ${push('e2')}pos = e2; continue; } }
+        } else if ${entryBail} {
+            let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; }
+        }`;
+  }
   if (t.kind === 'string') return `        if ${gate}c == ${t.delim.charCodeAt(0)} {
             let mut e = pos + 1;
             while e < n { let ch = b[e] as u32; if ch == 92 { e += 2; continue } if ch == ${t.delim.charCodeAt(0)} { e += 1; break } e += 1; }
