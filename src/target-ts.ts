@@ -4,8 +4,8 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 
@@ -14,9 +14,20 @@ const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} === ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
-const firstCond = (f: FirstSig, t: string) => f
-  ? `(${f.lits.map((l) => `${t}.text === ${J(l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kind === ${J(k)}`).join(' || ') || 'false'})`
+const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
+  ? `(${f.lits.map((l) => `${t}.lid === ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kid === ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
+
+/** Emit kid/lid lookup tables into generated lexer source. */
+function renderIdTablesTS(ids: LexIdPlan): string {
+  return `const _KIDS: string[] = ${J(ids.kids)};
+const _LIDS: string[] = ${J(ids.lids)};
+const _KID_MAP = new Map<string, number>(_KIDS.map((k, i) => [k, i]));
+const _LID_MAP = new Map<string, number>(_LIDS.map((t, i) => [t, i]));
+function kid_of(kind: string): number { return _KID_MAP.get(kind) ?? 0; }
+function lid_of(text: string): number { return _LID_MAP.get(text) ?? 0; }
+`;
+}
 
 import type { TokenPattern } from './types.ts';
 
@@ -49,12 +60,15 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
   if (tplTok !== undefined && name === tplTok) return '';   // template token is scanned by the state machine
   // `emit(...)` threads the lexer state in stateful mode; a plain push otherwise. A skipped
   // token (comment) still records a newline it spans, so `sameLine` sees it.
-  const push = (endExpr: string) => (t.skip ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, ${endExpr}))) pendingNl = true; ` : `${stateful ? 'emit' : 'push'}(${J(name)}, src.slice(pos, ${endExpr}), pos, ${endExpr}); `);
+  const kid = kidOf(ids, name);
+  const push = (endExpr: string) => (t.skip
+    ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, ${endExpr}))) pendingNl = true; `
+    : `{ const _tx = src.slice(pos, ${endExpr}); ${stateful ? 'emit' : 'push'}(${J(name)}, _tx, pos, ${endExpr}, ${kid}, lid_of(_tx)); } `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   if (t.kind === 'run') return `    if (${gate}${rangeCond('c', t.first)}) {
       let e = pos + 1;
@@ -82,13 +96,13 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, t
 }
 
 function buildLexCandidates(
-  ir: ParserIR, defs: string[], stateful: boolean, rxTok: string | undefined, tplTok: string | undefined,
+  ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, rxTok, tplTok);
+    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok);
     if (!code) continue;
     codes.push(code);
     firsts.push(lexTokFirstBytes(t));
@@ -118,7 +132,7 @@ ${switchArms}${indent}  }
 ${indent}}`;
 }
 
-function newlineParts(nl: NewlineCfg, pushFn: string): { state: string; stateFrom: string; boundary: string; ws: string; hooks: string } {
+function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; boundary: string; ws: string; hooks: string } {
   const commentSkip = nl.comment
     ? `      if (src.startsWith(${J(nl.comment)}, p)) { let e = p; while (e < n && src.charCodeAt(e) !== 10) e++; pos = e; continue; }\n`
     : '';
@@ -152,7 +166,7 @@ function newlineParts(nl: NewlineCfg, pushFn: string): { state: string; stateFro
         }
       }
 ${commentSkip}      pos = p;
-      if (emittedContent) ${pushFn}(_nlTok, '', pos, pos);
+      if (emittedContent) ${pushFn}(_nlTok, '', pos, pos, ${kidOf(ids, nl.token)}, 0);
       lineStart = false;
       continue;
     }
@@ -172,6 +186,7 @@ ${commentSkip}      pos = p;
 }
 
 function lexer(ir: ParserIR): string {
+  const ids = buildLexIdPlan(ir);
   const defs: string[] = [];
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
@@ -184,8 +199,8 @@ function lexer(ir: ParserIR): string {
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushFn = stateful ? 'emit' : 'push';
   const punctLine = (p: string) =>
-    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}('', ${J(p)}, pos, pos + ${p.length}); pos += ${p.length}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, rx?.regexToken, tpl?.token, punctLine);
+    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}('', ${J(p)}, pos, pos + ${p.length}, 0, ${lidOf(ids, p)}); pos += ${p.length}; continue; }`;
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
   const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ');
   const set = (a: string[]) => `new Set([${a.map(J).join(', ')}])`;
   // Per-feature pieces of the shared `emit`, so a grammar can have regex, templates, or both.
@@ -219,12 +234,12 @@ function lexer(ir: ParserIR): string {
     else if (text === ')') { lastClose = parenHead.pop() ?? false; }
     if (_pav.has(text)) lastBang = prevIsValue();` : '',
     tpl ? `    if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }` : '',
-    nl ? newlineParts(nl, 'emit').hooks : '',
+    nl ? newlineParts(nl, 'emit', ids).hooks : '',
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `\n    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;` : '';
-  const emitFn = stateful ? `  function emit(kind: string, text: string, off: number, end: number): void {
+  const emitFn = stateful ? `  function emit(kind: string, text: string, off: number, end: number, kid: number, lid: number): void {
 ${emitHooks}
-    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;${emitTail}
+    toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;${emitTail}
   }
 ` : '';
   const rxStateFrom = rx ? `  const _divT = ${set(rx.divisionTexts)}, _divK = ${set(rx.divisionTypes)}, _rxT = ${set(rx.regexTexts)};
@@ -248,25 +263,25 @@ ${emitHooks}
     return { interp: false, end: p };
   }
 ` : '';
-  const emitRxOnly = rx ? `  function emit(kind: string, text: string, off: number, end: number): void {
+  const emitRxOnly = rx ? `  function emit(kind: string, text: string, off: number, end: number, kid: number, lid: number): void {
     if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
     else if (text === ')') { lastClose = parenHead.pop() ?? false; }
     if (_pav.has(text)) lastBang = prevIsValue();
-    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;
+    toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;
     bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;
   }
 ` : '';
-  const emitTplOnly = tpl ? `  function emit(kind: string, text: string, off: number, end: number): void {
+  const emitTplOnly = tpl ? `  function emit(kind: string, text: string, off: number, end: number, kid: number, lid: number): void {
     if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }
-    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;
+    toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;
   }
 ` : '';
-  const emitRxTpl = (rx && tpl) ? `  function emit(kind: string, text: string, off: number, end: number): void {
+  const emitRxTpl = (rx && tpl) ? `  function emit(kind: string, text: string, off: number, end: number, kid: number, lid: number): void {
     if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
     else if (text === ')') { lastClose = parenHead.pop() ?? false; }
     if (_pav.has(text)) lastBang = prevIsValue();
     if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }
-    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;
+    toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;
     bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;
   }
 ` : '';
@@ -274,36 +289,36 @@ ${emitHooks}
   const tplDispatch = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
       templateStack.pop();
       const sp = scanTplSpan(pos + ${tpl.interpClose.length});
-      if (sp.interp) { emit('$templateMiddle', src.slice(pos, sp.end), pos, sp.end); templateStack.push(0); }
-      else emit('$templateTail', src.slice(pos, sp.end), pos, sp.end);
+      if (sp.interp) { const _tx = src.slice(pos, sp.end); emit('$templateMiddle', _tx, pos, sp.end, ${kidOf(ids, '$templateMiddle')}, lid_of(_tx)); templateStack.push(0); }
+      else { const _tx = src.slice(pos, sp.end); emit('$templateTail', _tx, pos, sp.end, ${kidOf(ids, '$templateTail')}, lid_of(_tx)); }
       pos = sp.end; continue;
     }
     if (src.startsWith(${J(tpl.open)}, pos)) {
       const sp = scanTplSpan(pos + ${tpl.open.length});
-      if (sp.interp) { emit('$templateHead', src.slice(pos, sp.end), pos, sp.end); templateStack.push(0); }
-      else emit(${J(tpl.token)}, src.slice(pos, sp.end), pos, sp.end);
+      if (sp.interp) { const _tx = src.slice(pos, sp.end); emit('$templateHead', _tx, pos, sp.end, ${kidOf(ids, '$templateHead')}, lid_of(_tx)); templateStack.push(0); }
+      else { const _tx = src.slice(pos, sp.end); emit(${J(tpl.token)}, _tx, pos, sp.end, ${kidOf(ids, tpl.token)}, lid_of(_tx)); }
       pos = sp.end; continue;
     }
 ` : '';
-  const nlState = nl ? newlineParts(nl, stateful ? 'emit' : 'push').state : '';
-  const nlStateFrom = nl ? newlineParts(nl, 'push').stateFrom : '';
-  const nlBoundary = nl ? newlineParts(nl, stateful ? 'emit' : 'push').boundary : '';
-  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push').ws : `    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
+  const nlState = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).state : '';
+  const nlStateFrom = nl ? newlineParts(nl, 'push', ids).stateFrom : '';
+  const nlBoundary = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).boundary : '';
+  const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).ws : `    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
     if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
 `;
-  const pushHooks = nl && !stateful ? newlineParts(nl, 'push').hooks : '';
+  const pushHooks = nl && !stateful ? newlineParts(nl, 'push', ids).hooks : '';
   const pushFnDef = stateful ? '' : nl
-    ? `  const push = (kind: string, text: string, off: number, end: number) => {
-${pushHooks}    toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false;
+    ? `  const push = (kind: string, text: string, off: number, end: number, kid: number, lid: number) => {
+${pushHooks}    toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;
   };
 `
-    : '  const push = (kind: string, text: string, off: number, end: number) => { toks.push({ kind, text, off, end, nl: pendingNl }); pendingNl = false; };\n';
+    : '  const push = (kind: string, text: string, off: number, end: number, kid: number, lid: number) => { toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false; };\n';
   const loopBody = `${nlBoundary}    const c = src.charCodeAt(pos);
     // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));`;
   if (rxOnly) {
-    return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
+    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${emitRxOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -318,7 +333,7 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (tplOnly) {
-    return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
+    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${tplStateFrom}${emitTplOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -333,7 +348,7 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (rxTpl) {
-    return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
+    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${tplStateFrom}${emitRxTpl}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -348,7 +363,7 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (rxOrTpl) {
-    return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
+    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
@@ -360,7 +375,7 @@ ${loopBody}
 }`;
   }
   if (newlineOnly) {
-    return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, lineStart: boolean, emittedContent: boolean, flowDepth: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; lineStart: boolean; emittedContent: boolean; flowDepth: number } {
+    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, lineStart: boolean, emittedContent: boolean, flowDepth: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; lineStart: boolean; emittedContent: boolean; flowDepth: number } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${nlStateFrom}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -374,7 +389,7 @@ function lex(src: string): Tok[] {
   return toks;
 }`;
   }
-  return `${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean } {
+  return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -390,26 +405,26 @@ function lex(src: string): Tok[] {
 }
 
 // A Step as a boolean expression (appends to the in-scope `kids`).
-function stepCond(s: Step): string {
+function stepCond(s: Step, ids: LexIdPlan): string {
   switch (s.t) {
-    case 'lit': return `matchLit(${J(s.value)}, ${J(s.ttype)}, kids)`;
-    case 'tok': return `matchTok(${J(s.name)}, kids)`;
+    case 'lit': return `matchLit(${lidOf(ids, s.value)}, ${J(s.ttype)}, kids)`;
+    case 'tok': return `matchTok(${kidOf(ids, s.name)}, ${J(s.name)}, kids)`;
     case 'rule': return `callRule(parse${s.name}, kids)`;
     case 'ruleBp': return `callRule(() => ${s.name}_bp(${s.bp}), kids)`;
-  case 'star': return `star(() => ${stepCond(s.step)}, kids)`;
-  case 'opt': return `opt(() => ${s.steps.map(stepCond).join(' && ')}, kids)`;
-  case 'sep': return `sepBy(() => ${stepCond(s.elem)}, ${J(s.delim)}, kids)`;
-    case 'altlit': return `altLit([${s.opts.map((o) => `[${J(o.value)}, ${J(o.ttype)}]`).join(', ')}], kids)`;
-    case 'alt': return s.predictive ? `(() => { ${predAltBody(s.branches, s.firsts)} })()` : `(() => { ${s.branches.map((br) => `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map(stepCond).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`).join(' ')} return false; })()`;
-    case 'not': return `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
+  case 'star': return `star(() => ${stepCond(s.step, ids)}, kids)`;
+  case 'opt': return `opt(() => ${s.steps.map((x) => stepCond(x, ids)).join(' && ')}, kids)`;
+  case 'sep': return `sepBy(() => ${stepCond(s.elem, ids)}, ${lidOf(ids, s.delim)}, kids)`;
+    case 'altlit': return `altLit([${s.opts.map((o) => `[${lidOf(ids, o.value)}, ${J(o.ttype)}]`).join(', ')}], kids)`;
+    case 'alt': return s.predictive ? `(() => { ${predAltBody(s.branches, ids, s.firsts)} })()` : `(() => { ${s.branches.map((br) => `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`).join(' ')} return false; })()`;
+    case 'not': return `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
-    case 'suppress': return `(() => { _suppressNext = new Set([${s.connectors.map(J).join(', ')}]); const _r = (${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}); _suppressNext = null; return _r; })()`;
+    case 'suppress': return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}); _suppressNext = null; return _r; })()`;
   }
 }
 
-function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
-  const arms = branches.map((br, i) => `if (${firstCond(firsts![i], 't')}) { if (${br.length ? br.map(stepCond).join(' && ') : 'true'}) return true; }`).join(' else ');
+function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[]): string {
+  const arms = branches.map((br, i) => `if (${firstCond(firsts![i], 't', ids)}) { if (${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return true; }`).join(' else ');
   return `const t = peek(); if (t === null) return false; ${arms} return false;`;
 }
 
@@ -459,9 +474,9 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
   return null;
 }
 
-function rdRule(r: RdRule): string {
+function rdRule(r: RdRule, ids: LexIdPlan): string {
   if (r.predictive) {
-  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't')}) { const kids: Cst[] = []; if (${steps.map(stepCond).join(' && ')}) return branch(${J(r.cstName)}, kids, save); }`;
+  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { const kids: Cst[] = []; if (${steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save); }`;
   return `function parse${r.name}(): Node | null {
   const save = pos;
   const t = peek(); if (t === null) return null;
@@ -471,7 +486,7 @@ ${r.alts.map(arm).join(' ')}
 }`;
   }
   const alt = (steps: Step[]) =>
-    `  { const kids: Cst[] = []; if (${steps.map(stepCond).join(' && ')}) return branch(${J(r.cstName)}, kids, save); pos = save; }`;
+    `  { const kids: Cst[] = []; if (${steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save); pos = save; }`;
   return `function parse${r.name}(): Node | null {
   const save = pos;
 ${r.alts.map(alt).join('\n')}
@@ -480,7 +495,7 @@ ${r.alts.map(alt).join('\n')}
 }
 
 /** Entry rule that records per-top-kid lookahead ext via parseTopOne (shape A). */
-function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA): string {
+function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, _ids: LexIdPlan): string {
   return `function parseTopOne(): Node | null {
 ${plan.topOneBody}
 }
@@ -500,7 +515,7 @@ function parse${r.name}(): Node | null {
 }
 
 /** Entry rule that builds a segment table for newline-interleaved kids (shape B). */
-function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB): string {
+function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string {
   const headBlock = plan.hasHead && plan.headRule
     ? `  {
     const h = parseHeadSeg(kids);
@@ -526,7 +541,7 @@ ${headFn}function parseLoopSeg(kids: Cst[]): Seg | null {
   const sp = pos;
   const kidStart = kids.length;
   maxLook = 0;
-  if (!matchTok(${J(plan.loopTok)}, kids)) { pos = sp; kids.length = kidStart; return null; }
+  if (!matchTok(${kidOf(ids, plan.loopTok)}, ${J(plan.loopTok)}, kids)) { pos = sp; kids.length = kidStart; return null; }
   opt(() => callRule(parse${plan.loopRule}, kids), kids);
   const leaf = kids[kidStart]!;
   const hasStmt = kids.length > kidStart + 1;
@@ -547,39 +562,39 @@ ${headBlock}  for (;;) {
 }`;
 }
 
-function rdEntryWithReuse(r: RdRule, plan: ReusePlan): string {
-  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan) : rdEntryWithReuseB(r, plan);
+function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
+  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ids) : rdEntryWithReuseB(r, plan, ids);
 }
 
-function prattRule(r: PrattRule, tpl: TplCfg | null): string {
+function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
     ? `  if (t.kind === '$templateHead') { const node = matchTemplate(); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end, tokStart: node.tokStart, tokEnd: node.tokEnd }; }\n`
     : '';
-  const BIN = `{ ${r.binary.map((b) => `${J(b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
-  const PRE = `{ ${r.prefix.map((p) => `${J(p.op)}: ${p.rbp}`).join(', ')} }`;
-  const atom = `new Set([${r.nudToks.map(J).join(', ')}])`;
-  const bracketNud = (b: Bracket) => `    if (t.text === ${J(b.first)}) {
+  const BIN = `{ ${r.binary.map((b) => `${lidOf(ids, b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
+  const PRE = `{ ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ')} }`;
+  const atom = `new Set([${r.nudToks.map((k) => kidOf(ids, k)).join(', ')}])`;
+  const bracketNud = (b: Bracket) => `    if (t.lid === ${lidOf(ids, b.first)}) {
       const save = pos; const kids: Cst[] = [];
-      if (${b.steps.map(stepCond).join(' && ')}) return branch(${J(r.cstName)}, kids, save);
+      if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) return branch(${J(r.cstName)}, kids, save);
       pos = save;   // fall through to the next NUD alternative (e.g. another '${b.first}'-led form)
     }`;
   // Access-tail leds (member/call/index) are disabled once a postfix has closed the operand;
   // a precedence-gated led (ternary/in/instanceof) binds only when its lbp > minBp.
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!${J(nll)}.includes(headLeafText(left)) && ` : ''}(_suppressCur === null || !_suppressCur.has(${J(b.first)})) && t.text === ${J(b.first)}) {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `    if (${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!${J(nll)}.includes(headLeafText(left)) && ` : ''}(_suppressCur === null || !_suppressCur.has(${lidOf(ids, b.first)})) && t.lid === ${lidOf(ids, b.first)}) {
       const ledSave = pos; const kids: Cst[] = [left];
-      if (${b.steps.map(stepCond).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue; }
+      if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue; }
       pos = ledSave; break;
     }`;
   // A postfix token (e.g. a tagged template) binds like a mixfix led: `left X` → node(left, X). Also an access tail.
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
     if (!tailClosed && t.kind === '$templateHead') { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end, tokStart: left.tokStart, tokEnd: pos }; continue; } }` : '';
-    return `    if (!tailClosed && t.kind === ${J(tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end, tokStart: left.tokStart, tokEnd: pos }; continue; }${tplPart}`;
+    return `    if (!tailClosed && t.kid === ${kidOf(ids, tok)}) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end, tokStart: left.tokStart, tokEnd: pos }; continue; }${tplPart}`;
   };
-  const POST = `{ ${r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ')} }`;
-  return `const ${r.name}_BIN: Record<string, { lbp: number; rbp: number }> = ${BIN};
-const ${r.name}_PRE: Record<string, number> = ${PRE};
-const ${r.name}_POST: Record<string, number> = ${POST};
+  const POST = `{ ${r.postfix.map((p) => `${lidOf(ids, p.op)}: ${p.lbp}`).join(', ')} }`;
+  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number }> = ${BIN};
+const ${r.name}_PRE: Record<number, number> = ${PRE};
+const ${r.name}_POST: Record<number, number> = ${POST};
 const ${r.name}_ATOM = ${atom};
 function parse${r.name}(): Node | null {
   const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = null;
@@ -597,9 +612,9 @@ function ${r.name}_bp(minBp: number): Node | null {
     if (t === null) break;
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
-    const post = ${r.name}_POST[t.text];
+    const post = ${r.name}_POST[t.lid];
     if (!tailClosed && post !== undefined && post > minBp) { const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end, tokStart: left.tokStart, tokEnd: pos }; tailClosed = true; continue; }
-    const info = ${r.name}_BIN[t.text];
+    const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
     const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 };
@@ -614,13 +629,13 @@ function ${r.name}_nud(minBp: number): Node | null {
   _capped = false;
   const t = peek();
   if (t === null) return null;
-${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: Cst[] = []; if (${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'}) { _capped = true; return branch(${J(r.cstName)}, kids, save); } pos = save; }`).join('\n')}
+${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: Cst[] = []; if (${c.steps.length ? c.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) { _capped = true; return branch(${J(r.cstName)}, kids, save); } pos = save; }`).join('\n')}
   // Below is non-capped: a sub-parse may leave _capped set (e.g. grouping a capped arrow),
   // so force it false after — only the capped arms above produce a capped node.
   const _r = ((): Node | null => {
-${tplNud}  if (${r.name}_ATOM.has(t.kind)) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; return { rule: ${J(r.cstName)}, children: [leaf], offset: t.off, end: t.end, tokStart: leaf.tokStart, tokEnd: pos }; }
+${tplNud}  if (${r.name}_ATOM.has(t.kid)) { const leaf: Leaf = { tokenType: t.kind, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; return { rule: ${J(r.cstName)}, children: [leaf], offset: t.off, end: t.end, tokStart: leaf.tokStart, tokEnd: pos }; }
 ${r.nudBrackets.map(bracketNud).join('\n')}
-  const pbp = ${r.name}_PRE[t.text];
+  const pbp = ${r.name}_PRE[t.lid];
   if (pbp !== undefined) {
     const save = pos;
     const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 };
@@ -629,7 +644,7 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
     if (operand === null) { pos = save; return null; }
     return { rule: ${J(r.cstName)}, children: [opLeaf, operand], offset: t.off, end: operand.end, tokStart: save, tokEnd: pos };
   }
-${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${seq.length ? seq.map(stepCond).join(' && ') : 'true'}) return branch(${J(r.cstName)}, kids, save); pos = save; }`).join('\n')}
+${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${seq.length ? seq.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return branch(${J(r.cstName)}, kids, save); pos = save; }`).join('\n')}
   return null;
   })();
   _capped = false;
@@ -1307,7 +1322,10 @@ function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, ne
   return { oldN, newN, prefix, suffix };
 }
 function toksFromMeta(text: string, meta: AlignMeta[]): Tok[] {
-  return meta.map((m) => ({ kind: m.kind, text: text.slice(m.off, m.end), off: m.off, end: m.end, nl: m.nl }));
+  return meta.map((m) => {
+    const tx = text.slice(m.off, m.end);
+    return { kind: m.kind, text: tx, off: m.off, end: m.end, nl: m.nl, kid: kid_of(m.kind), lid: lid_of(tx) };
+  });
 }
 ${checkStreamEqFn}${windowHelpers}${reuseFns}export function createDoc(src: string, opts?: { validate?: boolean }): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
   const validate = opts?.validate === true;
@@ -1341,7 +1359,7 @@ export const tsTarget: Target = {
     return `// GENERATED by emit-portable.ts (tsTarget) — standalone TOKENIZER for grammar "${grammar.name ?? ''}".
 // import { tokenize } from './this-file'; tokenize(src) → Tok[]. The same lexer is embedded in
 // emitParser's output, so the parser's tokens are identical.
-type Tok = { kind: string; text: string; off: number; end: number; nl: boolean };
+type Tok = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
 
 ${lexer(portableIR(grammar))}
 
@@ -1350,11 +1368,12 @@ export function tokenize(src: string): Tok[] { return lex(src); }
   },
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
     const ir = portableIR(grammar);
+    const ids = buildLexIdPlan(ir);
     const reuse = topReusePlan(ir);
     const ruleFns = ir.rules.map((r) => {
-      if (r.kind === 'pratt') return prattRule(r, ir.tpl);
-      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse);
-      return rdRule(r);
+      if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids);
+      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids);
+      return rdRule(r, ids);
     }).join('\n\n');
     const matchTemplate = ir.tpl ? `function matchTemplate(): Cst | null {
   const t = peek();
@@ -1378,7 +1397,7 @@ export function tokenize(src: string): Tok[] { return lex(src); }
     return `// GENERATED by emit-portable.ts (tsTarget) — parser LIBRARY for grammar "${ir.grammarName}" (exports \`parse\`).
 // The CLI runner (stdin → CST JSON) is a SEPARATE piece — tsTarget.emitRunner(), appended by the harness.
 
-type Tok = { kind: string; text: string; off: number; end: number; nl: boolean };
+type Tok = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
 type Leaf = { tokenType: string; offset: number; end: number; tokStart: number; tokEnd: number };
 type Node = { rule: string; children: Cst[]; offset: number; end: number; tokStart: number; tokEnd: number; ext?: number };
 type Cst = Node | Leaf;
@@ -1389,8 +1408,8 @@ let toks: Tok[] = [];
 let pos = 0;
 let maxLook = 0;
 let _capped = false;
-let _suppressNext: Set<string> | null = null;
-let _suppressCur: Set<string> | null = null;
+let _suppressNext: Set<number> | null = null;
+let _suppressCur: Set<number> | null = null;
 let _src = '';
 function peek(): Tok | null { maxLook = Math.max(maxLook, pos + 1); return pos < toks.length ? toks[pos] : null; }
 function headLeafText(node: Cst): string {
@@ -1408,14 +1427,14 @@ function node(rule: string, kids: Cst[], fallbackOff: number = 0): Node {
   const tokStart = kids.length ? kids[0].tokStart : pos;
   return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff, tokStart, tokEnd: pos };
 }
-function matchLit(value: string, ttype: string, kids: Cst[]): boolean {
+function matchLit(lid: number, ttype: string, kids: Cst[]): boolean {
   const t = peek();
-  if (t === null || t.text !== value) return false;
+  if (t === null || t.lid !== lid) return false;
   if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++; return true;
 }
-function matchTok(name: string, kids: Cst[]): boolean {
+function matchTok(kid: number, name: string, kids: Cst[]): boolean {
   const t = peek();
-  if (t === null || t.kind !== name) return false;
+  if (t === null || t.kid !== kid) return false;
   kids.push({ tokenType: name, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++; return true;
 }
 function callRule(fn: () => Node | null, kids: Cst[]): boolean {
@@ -1430,17 +1449,17 @@ function star(once: () => boolean, kids: Cst[]): boolean {
 function opt(body: () => boolean, kids: Cst[]): boolean {
   const sp = pos; const before = kids.length; if (!body()) { pos = sp; kids.length = before; } return true;
 }
-function sepBy(elem: () => boolean, delim: string, kids: Cst[]): boolean {
+function sepBy(elem: () => boolean, delimLid: number, kids: Cst[]): boolean {
   if (!elem()) return true;   // the whole separated list is optional — zero elements is valid
   for (;;) {
     const sp = pos; const before = kids.length;
-    if (!matchLit(delim, '$punct', kids)) { pos = sp; kids.length = before; break; }
+    if (!matchLit(delimLid, '$punct', kids)) { pos = sp; kids.length = before; break; }
     if (!elem()) break;   // a trailing delimiter is allowed — keep the pushed delim and stop
   }
   return true;
 }
-function altLit(opts: [string, string][], kids: Cst[]): boolean {
-  for (const [v, tt] of opts) if (matchLit(v, tt, kids)) return true;
+function altLit(opts: [number, string][], kids: Cst[]): boolean {
+  for (const [lid, tt] of opts) if (matchLit(lid, tt, kids)) return true;
   return false;
 }
 

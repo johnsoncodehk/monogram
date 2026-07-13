@@ -9,8 +9,8 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -19,9 +19,27 @@ const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
-const firstCond = (f: FirstSig, t: string) => f
-  ? `(${f.lits.map((l) => `${t}.Text == ${J(l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.Kind == ${J(k)}`).join(' || ') || 'false'})`
+const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
+  ? `(${f.lits.map((l) => `${t}.Lid == ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.Kid == ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
+
+/** Emit kid/lid lookup tables into generated lexer source. */
+function renderIdTablesGo(ids: LexIdPlan): string {
+  const kidsLit = ids.kids.map(J).join(', ');
+  const lidsLit = ids.lids.map(J).join(', ');
+  return `var _kids = []string{${kidsLit}}
+var _lids = []string{${lidsLit}}
+var _kidMap = map[string]uint16{}
+var _lidMap = map[string]uint16{}
+
+func init() {
+\tfor i, k := range _kids { _kidMap[k] = uint16(i) }
+\tfor i, t := range _lids { _lidMap[t] = uint16(i) }
+}
+func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
+func lidOf(text string) uint16 { if v, ok := _lidMap[text]; ok { return v }; return 0 }
+`;
+}
 
 // Compile a token-pattern AST to backtracking-free package-level matcher funcs
 // `_mN(p int) int` (new position, or -1) over the module-level source `_s`.
@@ -51,10 +69,13 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
-  const push = (endE: string) => (t.skip ? `if strings.ContainsAny(src[pos:${endE}], "\\n\\r\\u2028\\u2029") { pendingNl = true }; ` : stateful ? `emit(${J(name)}, src[pos:${endE}], pos, ${endE}); ` : `pushTok(${J(name)}, src[pos:${endE}], pos, ${endE}); `);
+  const kid = kidOf(ids, name);
+  const push = (endE: string) => (t.skip
+    ? `if strings.ContainsAny(src[pos:${endE}], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
+    : `{ _tx := src[pos:${endE}]; ${stateful ? 'emit' : 'pushTok'}(${J(name)}, _tx, pos, ${endE}, ${kid}, lidOf(_tx)) }; `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   if (t.kind === 'run') return `\t\tif ${gate}${rangeCond('c', t.first)} {
 \t\t\te := pos + 1
@@ -82,13 +103,13 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, t
 }
 
 function buildLexCandidates(
-  ir: ParserIR, defs: string[], stateful: boolean, rxTok: string | undefined, tplTok: string | undefined,
+  ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, rxTok, tplTok);
+    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok);
     if (!code) continue;
     codes.push(code);
     firsts.push(lexTokFirstBytes(t));
@@ -117,7 +138,7 @@ ${switchArms}${indent}\t}
 ${indent}}`;
 }
 
-function newlinePartsGo(nl: NewlineCfg, pushFn: string): { state: string; stateFrom: string; boundary: string; ws: string; hooks: string } {
+function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; boundary: string; ws: string; hooks: string } {
   const commentSkip = nl.comment
     ? `\t\tif strings.HasPrefix(src[p:], ${J(nl.comment)}) { e := p; for e < n && src[e] != 10 { e++ }; pos = e; continue }\n`
     : '';
@@ -149,7 +170,7 @@ function newlinePartsGo(nl: NewlineCfg, pushFn: string): { state: string; stateF
 \t\t\t\t}
 \t\t\t}
 ${commentSkip}\t\t\tpos = p
-\t\t\tif emittedContent { ${pushFn}(_nlTok, "", pos, pos) }
+\t\t\tif emittedContent { ${pushFn}(_nlTok, "", pos, pos, ${kidOf(ids, nl.token)}, 0) }
 \t\t\tlineStart = false
 \t\t\tcontinue
 \t\t}
@@ -168,6 +189,7 @@ ${commentSkip}\t\t\tpos = p
 }
 
 function lexer(ir: ParserIR): string {
+  const ids = buildLexIdPlan(ir);
   const defs: string[] = [];
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
@@ -178,10 +200,12 @@ function lexer(ir: ParserIR): string {
   const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
-  const pushPunct = stateful ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length})` : (p: string) => `pushTok("", ${J(p)}, pos, pos + ${p.length})`;
+  const pushPunct = stateful
+    ? (p: string) => `emit("", ${J(p)}, pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`
+    : (p: string) => `pushTok("", ${J(p)}, pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`;
   const punctLine = (p: string) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, rx?.regexToken, tpl?.token, punctLine);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
   const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t');
   const goMap = (a: string[]) => `map[string]bool{${a.map((x) => `${J(x)}: true`).join(', ')}}`;
   const rxState = rx ? `\tprevText, prevKind, bpText := "", "", ""
@@ -224,12 +248,12 @@ function lexer(ir: ParserIR): string {
 \t\t}
 \t\tif _pav[text] { lastBang = prevIsValue() }` : '',
     tpl ? `\t\tif len(templateStack) > 0 { if text == ${J(tpl.braceOpen)} { templateStack[len(templateStack)-1]++ } else if text == ${J(tpl.interpClose)} { templateStack[len(templateStack)-1]-- } }` : '',
-    nl ? newlinePartsGo(nl, 'emit').hooks : '',
+    nl ? newlinePartsGo(nl, 'emit', ids).hooks : '',
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `\n\t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true` : '';
-  const emitFn = stateful ? `\temit := func(kind, text string, off, end int) {
+  const emitFn = stateful ? `\temit := func(kind, text string, off, end int, kid, lid uint16) {
 ${emitHooks}
-\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false${emitTail}
+\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false${emitTail}
 \t}
 \t_ = emit
 ` : '';
@@ -259,7 +283,7 @@ ${emitHooks}
 \t}
 \t_ = scanTplSpan
 ` : '';
-  const emitRxOnly = rx ? `\temit := func(kind, text string, off, end int) {
+  const emitRxOnly = rx ? `\temit := func(kind, text string, off, end int, kid, lid uint16) {
 \t\tif text == "(" {
 \t\t\tisMember := hasPrev2 && _mem[bpText]
 \t\t\tparenHead = append(parenHead, !isMember && prevKind == IDENT && _phK[prevText])
@@ -267,18 +291,18 @@ ${emitHooks}
 \t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
 \t\tif _pav[text] { lastBang = prevIsValue() }
-\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false
+\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
 \t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true
 \t}
 \t_ = emit
 ` : '';
-  const emitTplOnly = tpl ? `\temit := func(kind, text string, off, end int) {
+  const emitTplOnly = tpl ? `\temit := func(kind, text string, off, end int, kid, lid uint16) {
 \t\tif len(templateStack) > 0 { if text == ${J(tpl.braceOpen)} { templateStack[len(templateStack)-1]++ } else if text == ${J(tpl.interpClose)} { templateStack[len(templateStack)-1]-- } }
-\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false
+\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
 \t}
 \t_ = emit
 ` : '';
-  const emitRxTpl = (rx && tpl) ? `\temit := func(kind, text string, off, end int) {
+  const emitRxTpl = (rx && tpl) ? `\temit := func(kind, text string, off, end int, kid, lid uint16) {
 \t\tif text == "(" {
 \t\t\tisMember := hasPrev2 && _mem[bpText]
 \t\t\tparenHead = append(parenHead, !isMember && prevKind == IDENT && _phK[prevText])
@@ -287,7 +311,7 @@ ${emitHooks}
 \t\t}
 \t\tif _pav[text] { lastBang = prevIsValue() }
 \t\tif len(templateStack) > 0 { if text == ${J(tpl.braceOpen)} { templateStack[len(templateStack)-1]++ } else if text == ${J(tpl.interpClose)} { templateStack[len(templateStack)-1]-- } }
-\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false
+\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
 \t\tbpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true
 \t}
 \t_ = emit
@@ -295,44 +319,45 @@ ${emitHooks}
   const tplDispatch = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
 \t\t\ttemplateStack = templateStack[:len(templateStack)-1]
 \t\t\tinterp, e := scanTplSpan(pos + ${tpl.interpClose.length})
-\t\t\tif interp { emit("$templateMiddle", src[pos:e], pos, e); templateStack = append(templateStack, 0) } else { emit("$templateTail", src[pos:e], pos, e) }
+\t\t\tif interp { _tx := src[pos:e]; emit("$templateMiddle", _tx, pos, e, ${kidOf(ids, '$templateMiddle')}, lidOf(_tx)); templateStack = append(templateStack, 0) } else { _tx := src[pos:e]; emit("$templateTail", _tx, pos, e, ${kidOf(ids, '$templateTail')}, lidOf(_tx)) }
 \t\t\tpos = e; continue
 \t\t}
 \t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
 \t\t\tinterp, e := scanTplSpan(pos + ${tpl.open.length})
-\t\t\tif interp { emit("$templateHead", src[pos:e], pos, e); templateStack = append(templateStack, 0) } else { emit(${J(tpl.token)}, src[pos:e], pos, e) }
+\t\t\tif interp { _tx := src[pos:e]; emit("$templateHead", _tx, pos, e, ${kidOf(ids, '$templateHead')}, lidOf(_tx)); templateStack = append(templateStack, 0) } else { _tx := src[pos:e]; emit(${J(tpl.token)}, _tx, pos, e, ${kidOf(ids, tpl.token)}, lidOf(_tx)) }
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
-  const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok').state : '';
-  const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok').stateFrom : '';
-  const nlBoundary = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok').boundary : '';
-  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok').ws : `\t\tif strings.HasPrefix(src[pos:], ${J('\u2028')}) || strings.HasPrefix(src[pos:], ${J('\u2029')}) { pendingNl = true; pos += 3; continue }   // LS/PS (UTF-8)
+  const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).state : '';
+  const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok', ids).stateFrom : '';
+  const nlBoundary = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).boundary : '';
+  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif strings.HasPrefix(src[pos:], ${J('\u2028')}) || strings.HasPrefix(src[pos:], ${J('\u2029')}) { pendingNl = true; pos += 3; continue }   // LS/PS (UTF-8)
 \t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }   // LF/CR
 \t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
 `;
-  const pushHooks = nl && !stateful ? newlinePartsGo(nl, 'pushTok').hooks : '';
+  const pushHooks = nl && !stateful ? newlinePartsGo(nl, 'pushTok', ids).hooks : '';
   const pushTokFn = stateful ? '' : nl
-    ? `\tpushTok := func(kind, text string, off, end int) {
-${pushHooks}\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false
+    ? `\tpushTok := func(kind, text string, off, end int, kid, lid uint16) {
+${pushHooks}\t\ttoks = append(toks, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
 \t}
 \t_ = pushTok
 `
-    : `\tpushTok := func(kind, text string, off, end int) { toks = append(toks, Tok{kind, text, off, end, pendingNl}); pendingNl = false }\n\t_ = pushTok\n`;
+    : `\tpushTok := func(kind, text string, off, end int, kid, lid uint16) { toks = append(toks, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false }\n\t_ = pushTok\n`;
   const pushTokAccFn = nl && !stateful
-    ? `\tpushTok := func(kind, text string, off, end int) {
-${pushHooks}\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false
+    ? `\tpushTok := func(kind, text string, off, end int, kid, lid uint16) {
+${pushHooks}\t\t*acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false
 \t}
 \t_ = pushTok
 `
-    : `\tpushTok := func(kind, text string, off, end int) { *acc = append(*acc, Tok{kind, text, off, end, pendingNl}); pendingNl = false }
+    : `\tpushTok := func(kind, text string, off, end int, kid, lid uint16) { *acc = append(*acc, Tok{kind, text, off, end, pendingNl, kid, lid}); pendingNl = false }
 \t_ = pushTok
 `;
   const loopBody = `${nlBoundary}\t\tc := int(src[pos])
 ${nlWs}${tplDispatch}${cascade}
 \t\tpanic(fmt.Sprintf("lex error at %d", pos))`;
+  const idTables = renderIdTablesGo(ids);
   if (rxOnly) {
-    return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevText, prevKind, bpText string, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, string, string, string, bool, bool, []bool, bool, bool) {
+    return `${idTables}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevText, prevKind, bpText string, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, string, string, string, bool, bool, []bool, bool, bool) {
 \tn := len(src)
 ${rxStateFrom}${emitRxOnly}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -347,7 +372,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (tplOnly) {
-    return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
+    return `${idTables}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
 \tn := len(src)
 ${tplStateFrom}${emitTplOnly}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -362,7 +387,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (rxTpl) {
-    return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevText, prevKind, bpText string, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, string, string, string, bool, bool, []bool, bool, bool, []int) {
+    return `${idTables}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevText, prevKind, bpText string, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, string, string, string, bool, bool, []bool, bool, bool, []int) {
 \tn := len(src)
 ${rxStateFrom}${tplStateFrom}${emitRxTpl}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -377,7 +402,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (rxOrTpl) {
-    return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
+    return `${idTables}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
 \ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
@@ -390,7 +415,7 @@ ${loopBody}
 }`;
   }
   if (newlineOnly) {
-    return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, lineStart bool, emittedContent bool, flowDepth int, acc *[]Tok, limit int) (int, bool, bool, bool, int) {
+    return `${idTables}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, lineStart bool, emittedContent bool, flowDepth int, acc *[]Tok, limit int) (int, bool, bool, bool, int) {
 \tn := len(src)
 ${nlStateFrom}${pushTokAccFn}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -404,7 +429,7 @@ func lex(src string) []Tok {
 \treturn out
 }`;
   }
-  return `${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
+  return `${idTables}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
 \tn := len(src)
 ${pushTokAccFn}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -419,26 +444,26 @@ func lex(src string) []Tok {
 }`;
 }
 
-function stepCond(s: Step): string {
+function stepCond(s: Step, ids: LexIdPlan): string {
   switch (s.t) {
-    case 'lit': return `matchLit(${J(s.value)}, ${J(s.ttype)})`;
-    case 'tok': return `matchTok(${J(s.name)})`;
+    case 'lit': return `matchLit(${lidOf(ids, s.value)}, ${J(s.ttype)})`;
+    case 'tok': return `matchTok(${kidOf(ids, s.name)}, ${J(s.name)})`;
     case 'rule': return `callRule(parse${s.name})`;
     case 'ruleBp': return `callRule(func() int32 { return ${s.name}bp(${s.bp}) })`;
-    case 'star': return `star(func() bool { return ${stepCond(s.step)} })`;
-    case 'opt': return `opt(func() bool { return ${s.steps.map(stepCond).join(' && ')} })`;
-    case 'sep': return `sepBy(func() bool { return ${stepCond(s.elem)} }, ${J(s.delim)})`;
-    case 'altlit': return `altLit([][2]string{${s.opts.map((o) => `{${J(o.value)}, ${J(o.ttype)}}`).join(', ')}})`;
-    case 'alt': return s.predictive ? `func() bool { ${predAltBody(s.branches, s.firsts)} }()` : `func() bool { ${s.branches.map((br) => `{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${br.length ? br.map(stepCond).join(' && ') : 'true'} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('; ')}; return false }()`;
-    case 'not': return `func() bool { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); m := ${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return !m }()`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
+    case 'star': return `star(func() bool { return ${stepCond(s.step, ids)} })`;
+    case 'opt': return `opt(func() bool { return ${s.steps.map((x) => stepCond(x, ids)).join(' && ')} })`;
+    case 'sep': return `sepBy(func() bool { return ${stepCond(s.elem, ids)} }, ${lidOf(ids, s.delim)})`;
+    case 'altlit': return `altLit([]struct{ Lid uint16; Ttype string }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${J(o.ttype)}}`).join(', ')}})`;
+    case 'alt': return s.predictive ? `func() bool { ${predAltBody(s.branches, ids, s.firsts)} }()` : `func() bool { ${s.branches.map((br) => `{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('; ')}; return false }()`;
+    case 'not': return `func() bool { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); m := ${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return !m }()`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := peek(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { _suppressNext = map[string]bool{${s.connectors.map((c) => `${J(c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}); _suppressNext = nil; return _r }()`;
+    case 'suppress': return `func() bool { _suppressNext = map[uint16]bool{${s.connectors.map((c) => `${lidOf(ids, c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}); _suppressNext = nil; return _r }()`;
   }
 }
 
-function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
-  const arms = branches.map((br, i) => `if ${firstCond(firsts![i], 't')} { if ${br.length ? br.map(stepCond).join(' && ') : 'true'} { return true } }`).join(' else ');
+function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[]): string {
+  const arms = branches.map((br, i) => `if ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'} { return true } }`).join(' else ');
   return `t := peek(); if t == nil { return false }; ${arms}; return false`;
 }
 
@@ -485,9 +510,9 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
   return null;
 }
 
-function rdRule(r: RdRule): string {
+function rdRule(r: RdRule, ids: LexIdPlan): string {
   if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save), save) } }`;
+    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids)).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save), save) } }`;
     return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \tt := peek(); if t == nil { return -1 }
@@ -497,7 +522,7 @@ ${r.alts.map(arm).join(' ')}
 }`;
   }
   const alt = (steps: Step[]) =>
-    `\tif ${steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save), save) }
+    `\tif ${steps.map((x) => stepCond(x, ids)).join(' && ')} { return finish(${J(r.cstName)}, sb, offAt(save), save) }
 \tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]`;
   return `func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
@@ -507,7 +532,7 @@ ${r.alts.map(alt).join('\n')}
 }
 
 /** Entry rule that records per-top-kid lookahead ext via parseTopOne (shape A). */
-function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA): string {
+function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, _ids: LexIdPlan): string {
   return `func parseTopOne() int32 {
 ${plan.topOneBody}
 }
@@ -527,7 +552,7 @@ func parse${r.name}() int32 {
 }`;
 }
 
-function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB): string {
+function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string {
   const headFn = plan.hasHead && plan.headRule
     ? `func parseHeadSeg(sb int) (Seg, bool) {
 \tmaxLook = 0
@@ -550,7 +575,7 @@ var segs []Seg
 ${headFn}func parseLoopSeg(sb int) (Seg, bool) {
 \tsp := pos; before := len(scratch); nb := len(nodes); kb := len(kids)
 \tmaxLook = 0
-\tif !matchTok(${J(plan.loopTok)}) {
+\tif !matchTok(${kidOf(ids, plan.loopTok)}, ${J(plan.loopTok)}) {
 \t\tpos = sp; scratch = scratch[:before]; nodes = nodes[:nb]; kids = kids[:kb]
 \t\treturn Seg{}, false
 \t}
@@ -574,11 +599,11 @@ ${headBlock}\tfor {
 }`;
 }
 
-function rdEntryWithReuse(r: RdRule, plan: ReusePlan): string {
-  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan) : rdEntryWithReuseB(r, plan);
+function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
+  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ids) : rdEntryWithReuseB(r, plan, ids);
 }
 
-function prattRule(r: PrattRule, tpl: TplCfg | null): string {
+function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
     ? `\tif t.Kind == "$templateHead" {
 \t\tnode := matchTemplate()
@@ -587,18 +612,18 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\treturn finish(${J(r.cstName)}, sb, nodes[node].Offset, nodes[node].TokStart)
 \t}\n`
     : '';
-  const bin = r.binary.map((b) => `${J(b.op)}: {${b.lbp}, ${b.rbp}}`).join(', ');
-  const pre = r.prefix.map((p) => `${J(p.op)}: ${p.rbp}`).join(', ');
-  const atoms = r.nudToks.map((k) => `${J(k)}: true`).join(', ');
-  const bracketNud = (b: Bracket) => `\tif t.Text == ${J(b.first)} {
+  const bin = r.binary.map((b) => `${lidOf(ids, b.op)}: {${b.lbp}, ${b.rbp}}`).join(', ');
+  const pre = r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ');
+  const atoms = r.nudToks.map((k) => `${kidOf(ids, k)}: true`).join(', ');
+  const bracketNud = (b: Bracket) => `\tif t.Lid == ${lidOf(ids, b.first)} {
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
-\t\tif ${b.steps.map(stepCond).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off, save) }
+\t\tif ${b.steps.map((x) => stepCond(x, ids)).join(' && ')} { return finish(${J(r.cstName)}, sb, t.Off, save) }
 \t\tpos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]
 \t}`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.Nl && ' : ''}${nll ? `!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left)) && ` : ''}!_suppressCur[${J(b.first)}] && t.Text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `\t\tif ${accessTail ? '!tailClosed && ' : ''}${lbp !== null ? `${lbp} > minBp && ` : ''}${sameLine ? '!t.Nl && ' : ''}${nll ? `!_inW([]string{${nll.map(J).join(', ')}}, headLeafText(left)) && ` : ''}!_suppressCur[${lidOf(ids, b.first)}] && t.Lid == ${lidOf(ids, b.first)} {
 \t\t\tledSave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\t\tscratch = append(scratch, left)
-\t\t\tif ${b.steps.map(stepCond).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue }
+\t\t\tif ${b.steps.map((x) => stepCond(x, ids)).join(' && ')} { left = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue }
 \t\t\tpos = ledSave; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break
 \t\t}`;
   const postfixArm = (tok: string) => {
@@ -607,16 +632,16 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
 \t\t\tnode := matchTemplate()
 \t\t\tif node >= 0 { sb := len(scratch); scratch = append(scratch, left, node); left = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue }
 \t\t}` : '';
-    return `\t\tif !tailClosed && t.Kind == ${J(tok)} {
+    return `\t\tif !tailClosed && t.Kid == ${kidOf(ids, tok)} {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf(t.Kind, t.Off, t.End)); pos++
 \t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue
 \t\t}${tplPart}`;
   };
-  const post = r.postfix.map((p) => `${J(p.op)}: ${p.lbp}`).join(', ');
-  return `var ${r.name}BIN = map[string]bp{${bin}}
-var ${r.name}PRE = map[string]int{${pre}}
-var ${r.name}POST = map[string]int{${post}}
-var ${r.name}ATOM = map[string]bool{${atoms}}
+  const post = r.postfix.map((p) => `${lidOf(ids, p.op)}: ${p.lbp}`).join(', ');
+  return `var ${r.name}BIN = map[uint16]bp{${bin}}
+var ${r.name}PRE = map[uint16]int{${pre}}
+var ${r.name}POST = map[uint16]int{${post}}
+var ${r.name}ATOM = map[uint16]bool{${atoms}}
 func parse${r.name}() int32 {
 \tprev := _suppressCur
 \t_suppressCur = _suppressNext
@@ -635,11 +660,11 @@ func ${r.name}bp(minBp int) int32 {
 \t\tif t == nil { break }
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
-\t\tif post, ok := ${r.name}POST[t.Text]; ok && !tailClosed && post > minBp {
+\t\tif post, ok := ${r.name}POST[t.Lid]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(scratch); scratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End)); pos++; tailClosed = true
 \t\t\tleft = finish(${J(r.cstName)}, sb, nodes[left].Offset, nodes[left].TokStart); continue
 \t\t}
-\t\tinfo, ok := ${r.name}BIN[t.Text]
+\t\tinfo, ok := ${r.name}BIN[t.Lid]
 \t\tif !ok || info.lbp <= minBp { break }
 \t\tledSave := pos; sb := len(scratch)
 \t\tscratch = append(scratch, left, mkLeaf("$operator", t.Off, t.End))
@@ -655,14 +680,14 @@ func ${r.name}nud(minBp int) int32 {
 \t_capped = false
 \tt := peek()
 \tif t == nil { return -1 }
-${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { _capped = true; return finish(${J(r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'} { _capped = true; return finish(${J(r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \t_r := func() int32 {   // non-capped: a sub-parse may leave _capped set; force it false after
-${tplNud}\tif ${r.name}ATOM[t.Kind] {
+${tplNud}\tif ${r.name}ATOM[t.Kid] {
 \t\tsb := len(scratch); ts := pos; scratch = append(scratch, mkLeaf(t.Kind, t.Off, t.End)); pos++
 \t\treturn finish(${J(r.cstName)}, sb, t.Off, ts)
 \t}
 ${r.nudBrackets.map(bracketNud).join('\n')}
-\tif pbp, ok := ${r.name}PRE[t.Text]; ok {
+\tif pbp, ok := ${r.name}PRE[t.Lid]; ok {
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\tscratch = append(scratch, mkLeaf("$operator", t.Off, t.End)); pos++
 \t\toperand := ${r.name}bp(pbp)
@@ -670,7 +695,7 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
 \t\tscratch = append(scratch, operand)
 \t\treturn finish(${J(r.cstName)}, sb, t.Off, save)
 \t}
-${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return finish(${J(r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
+${r.nudSeqs.map((seq) => `\t{ save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${seq.length ? seq.map((x) => stepCond(x, ids)).join(' && ') : 'true'} { return finish(${J(r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \treturn -1
 \t}()
 \t_capped = false
@@ -1500,7 +1525,10 @@ func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newTo
 }
 func toksFromMeta(text string, meta []alignMeta) []Tok {
 	t := make([]Tok, len(meta))
-	for i, m := range meta { t[i] = Tok{m.Kind, text[m.Off:m.End], m.Off, m.End, m.Nl} }
+	for i, m := range meta {
+		tx := text[m.Off:m.End]
+		t[i] = Tok{m.Kind, tx, m.Off, m.End, m.Nl, kidOf(m.Kind), lidOf(tx)}
+	}
 	return t
 }
 ${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool }
@@ -1566,6 +1594,7 @@ type Tok struct {
 \tKind, Text string
 \tOff, End   int
 \tNl         bool
+\tKid, Lid   uint16
 }
 
 var toks []Tok   // the lexer reseeds this (toks[:0]) per call
@@ -1577,11 +1606,12 @@ func Tokenize(src string) []Tok { return lex(src) }
   },
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
     const ir = portableIR(grammar);
+    const ids = buildLexIdPlan(ir);
     const reuse = topReusePlan(ir);
     const ruleFns = ir.rules.map((r) => {
-      if (r.kind === 'pratt') return prattRule(r, ir.tpl);
-      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse);
-      return rdRule(r);
+      if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids);
+      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids);
+      return rdRule(r, ids);
     }).join('\n\n');
     const matchTemplate = ir.tpl ? `func matchTemplate() int32 {
 \tt := peek()
@@ -1616,6 +1646,7 @@ type Tok struct {
 \tKind, Text string
 \tOff, End   int
 \tNl         bool
+\tKid, Lid   uint16
 }
 // Arena node: an int32 index into nodes; children are a flat range in kids.
 // Ext is lookahead watermark for top-level reuse (not emitted in JSON).
@@ -1631,8 +1662,8 @@ var pos int
 var maxLook int
 var _capped bool
 var _src string
-var _suppressNext map[string]bool
-var _suppressCur map[string]bool
+var _suppressNext map[uint16]bool
+var _suppressCur map[uint16]bool
 var nodes []Node
 var kids []int32
 var scratch []int32
@@ -1663,14 +1694,14 @@ func finish(rule string, sb, fallbackOff, tokStart int) int32 {
 \tnodes = append(nodes, Node{Rule: rule, KidStart: kidStart, KidCount: nn - sb, Offset: off, End: end, TokStart: tokStart, TokEnd: pos})
 \treturn int32(len(nodes) - 1)
 }
-func matchLit(value, ttype string) bool {
+func matchLit(lid uint16, ttype string) bool {
 \tif pos+1 > maxLook { maxLook = pos + 1 } // probe counts as lookahead (mirrors TS/Rust peek())
-\tif pos < len(toks) && toks[pos].Text == value { if ttype != "$punct" { scratch = append(scratch, mkLeaf(ttype, toks[pos].Off, toks[pos].End)) }; pos++; return true }
+\tif pos < len(toks) && toks[pos].Lid == lid { if ttype != "$punct" { scratch = append(scratch, mkLeaf(ttype, toks[pos].Off, toks[pos].End)) }; pos++; return true }
 \treturn false
 }
-func matchTok(name string) bool {
+func matchTok(kid uint16, name string) bool {
 \tif pos+1 > maxLook { maxLook = pos + 1 }
-\tif pos < len(toks) && toks[pos].Kind == name { scratch = append(scratch, mkLeaf(name, toks[pos].Off, toks[pos].End)); pos++; return true }
+\tif pos < len(toks) && toks[pos].Kid == kid { scratch = append(scratch, mkLeaf(name, toks[pos].Off, toks[pos].End)); pos++; return true }
 \treturn false
 }
 func callRule(fn func() int32) bool {
@@ -1685,17 +1716,17 @@ func star(once func() bool) bool {
 func opt(body func() bool) bool {
 \tsp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if !body() { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }; return true
 }
-func sepBy(elem func() bool, delim string) bool {
+func sepBy(elem func() bool, delimLid uint16) bool {
 \tif !elem() { return true }   // the whole separated list is optional — zero elements is valid
 \tfor {
 \t\tsp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
-\t\tif !matchLit(delim, "$punct") { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break }
+\t\tif !matchLit(delimLid, "$punct") { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break }
 \t\tif !elem() { break }   // a trailing delimiter is allowed — keep the pushed delim and stop
 \t}
 \treturn true
 }
-func altLit(opts [][2]string) bool {
-\tfor _, o := range opts { if matchLit(o[0], o[1]) { return true } }
+func altLit(opts []struct{ Lid uint16; Ttype string }) bool {
+\tfor _, o := range opts { if matchLit(o.Lid, o.Ttype) { return true } }
 \treturn false
 }
 

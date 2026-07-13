@@ -522,6 +522,105 @@ function buildPratt(
   return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, postfixToks, postfix };
 }
 
+// ── Lex integer ids (kid = kind index, lid = text/literal index) ──
+//
+// Parser matching hot paths compare u16/uint16/number instead of strings. kid indexes
+// `kids` (token kind names); lid indexes `lids` (literal texts). lid is a pure function of
+// text and is independent of kind — matching the existing `match_lit` (text-only) contract.
+
+export type LexIdPlan = {
+  kids: string[];   // kids[0]='' reserved for punct (kind=""); then tokens in decl order + engine-emitted (NEWLINE, $template*)
+  lids: string[];   // lids[0]='' = "not any literal"; then puncts (longest-first), then remaining texts lexicographically
+};
+
+/** Collect every literal text that appears in the Step IR (match_lit / altlit / sep / suppress / FIRST / Pratt). */
+function collectStepLitTexts(steps: Step[], out: Set<string>): void {
+  for (const s of steps) {
+    switch (s.t) {
+      case 'lit': out.add(s.value); break;
+      case 'altlit': for (const o of s.opts) out.add(o.value); break;
+      case 'sep': out.add(s.delim); collectStepLitTexts([s.elem], out); break;
+      case 'suppress': for (const c of s.connectors) out.add(c); collectStepLitTexts(s.steps, out); break;
+      case 'star': collectStepLitTexts([s.step], out); break;
+      case 'opt': case 'not': case 'seq': collectStepLitTexts(s.steps, out); break;
+      case 'alt': for (const b of s.branches) collectStepLitTexts(b, out); break;
+      default: break;
+    }
+  }
+}
+
+/**
+ * Build stable kid/lid tables for a ParserIR. Semantics:
+ * - kid(kind) = kids.indexOf(kind); punct kind "" → 0.
+ * - lid(text) = lids.indexOf(text), or 0 if absent. Independent of kind.
+ */
+export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
+  // kids: '' + lexer token names (declaration order) + engine-emitted kinds not already present
+  const kids: string[] = [''];
+  const seenKid = new Set<string>(['']);
+  const addKid = (k: string) => { if (!seenKid.has(k)) { seenKid.add(k); kids.push(k); } };
+  for (const t of ir.tokens) addKid(t.name);
+  if (ir.newlineCfg) addKid(ir.newlineCfg.token);
+  if (ir.tpl) {
+    addKid('$templateHead');
+    addKid('$templateMiddle');
+    addKid('$templateTail');
+  }
+
+  // lids universe: puncts + keyword/other lit texts from IR + regexCtx text sets + tpl delimiters
+  const litTexts = new Set<string>();
+  for (const p of ir.puncts) litTexts.add(p);
+  for (const r of ir.rules) {
+    if (r.kind === 'rd') {
+      for (const alt of r.alts) collectStepLitTexts(alt, litTexts);
+    } else {
+      for (const b of r.nudBrackets) { litTexts.add(b.first); collectStepLitTexts(b.steps, litTexts); }
+      for (const seq of r.nudSeqs) collectStepLitTexts(seq, litTexts);
+      for (const c of r.nudCapped) collectStepLitTexts(c.steps, litTexts);
+      for (const p of r.prefix) litTexts.add(p.op);
+      for (const b of r.binary) litTexts.add(b.op);
+      for (const b of r.leds) { litTexts.add(b.first); collectStepLitTexts(b.steps, litTexts); }
+      for (const p of r.postfix) litTexts.add(p.op);
+      for (const nll of r.ledNotLeftLeaf) if (nll) for (const x of nll) litTexts.add(x);
+    }
+  }
+  if (ir.regexCtx) {
+    for (const x of ir.regexCtx.divisionTexts) litTexts.add(x);
+    for (const x of ir.regexCtx.regexTexts) litTexts.add(x);
+    for (const x of ir.regexCtx.parenHeadKw) litTexts.add(x);
+    for (const x of ir.regexCtx.memberAccess) litTexts.add(x);
+    for (const x of ir.regexCtx.postfixAfterValue) litTexts.add(x);
+  }
+  if (ir.tpl) {
+    litTexts.add(ir.tpl.open);
+    litTexts.add(ir.tpl.interpOpen);
+    litTexts.add(ir.tpl.interpClose);
+    litTexts.add(ir.tpl.braceOpen);
+  }
+  if (ir.newlineCfg) {
+    for (const x of ir.newlineCfg.flowOpen) litTexts.add(x);
+    for (const x of ir.newlineCfg.flowClose) litTexts.add(x);
+  }
+
+  // Stable order: puncts longest-first (ir.puncts), then remaining texts lexicographically
+  const punctSet = new Set(ir.puncts);
+  const rest = [...litTexts].filter((t) => !punctSet.has(t)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const lids: string[] = ['', ...ir.puncts, ...rest];
+  return { kids, lids };
+}
+
+/** Resolve lid for a known text; 0 if not in the plan (matches runtime lid_of). */
+export function lidOf(plan: LexIdPlan, text: string): number {
+  const i = plan.lids.indexOf(text);
+  return i >= 0 ? i : 0;
+}
+
+/** Resolve kid for a known kind; 0 if not in the plan. */
+export function kidOf(plan: LexIdPlan, kind: string): number {
+  const i = plan.kids.indexOf(kind);
+  return i >= 0 ? i : 0;
+}
+
 // ── Lexer first-byte dispatch (IR analysis; targets render buckets) ──
 
 export type LexFirstBytes = { bytes: number[]; nonAscii: boolean };

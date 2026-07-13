@@ -11,8 +11,8 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
 // the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
-import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes } from './emit-portable.ts';
+import type { ParserIR, RdRule, PrattRule, Step, Bracket, CharRange, LexTok, TplCfg, NewlineCfg, FirstSig, LexFirstBytes, LexIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -22,9 +22,40 @@ const rangeCond = (v: string, rs: CharRange[]) =>
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 // null FirstSig → 'false' (never matched here; predictive alts have all-non-null FIRSTs).
-const firstCond = (f: FirstSig, t: string) => f
-  ? `(${f.lits.map((l) => `${t}.text == ${J(l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kind == ${J(k)}`).join(' || ') || 'false'})`
+const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
+  ? `(${f.lits.map((l) => `${t}.lid == ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kid == ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
+
+/** Emit kid/lid lookup tables into generated lexer source (length-bucketed lid_of match). */
+function renderIdTablesRust(ids: LexIdPlan): string {
+  const kidsLit = ids.kids.map(J).join(', ');
+  const lidsLit = ids.lids.map(J).join(', ');
+  const kidArms = ids.kids.map((k, i) => `${J(k)} => ${i}`).join(', ');
+  // Group lids[1..] by UTF-8 byte length for a two-level match (len → text). Rust `str::len` is bytes.
+  const byLen = new Map<number, { text: string; id: number }[]>();
+  for (let i = 1; i < ids.lids.length; i++) {
+    const text = ids.lids[i];
+    const blen = Buffer.byteLength(text);
+    const arr = byLen.get(blen) ?? [];
+    arr.push({ text, id: i });
+    byLen.set(blen, arr);
+  }
+  const lenArms = [...byLen.entries()].sort((a, b) => a[0] - b[0]).map(([len, ents]) => {
+    const arms = ents.map((e) => `${J(e.text)} => ${e.id}`).join(', ');
+    return `        ${len} => match text { ${arms}, _ => 0 },`;
+  }).join('\n');
+  return `const _KIDS: &[&str] = &[${kidsLit}];
+const _LIDS: &[&str] = &[${lidsLit}];
+fn kid_of(kind: &str) -> u16 { match kind { ${kidArms}, _ => 0 } }
+fn lid_of(text: &str) -> u16 {
+    match text.len() {
+${lenArms || '        // no non-empty lids'}
+        _ => 0,
+    }
+}
+`;
+}
+
 
 // Compile a token-pattern AST to backtracking-free matcher fns `_mN(s, p) -> i64`
 // (new position, or -1). Named functions (Rust closures can't recurse); the source is
@@ -55,11 +86,16 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], stateful: boolean, rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok?: string, tplTok?: string): string {
   const name = (t as { name: string }).name;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
-  const push = (endE: string) => (t.skip ? `if src[pos..${endE}].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } ` : stateful ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}); ` : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE}, nl: pending_nl }); pending_nl = false; `);
+  const kid = kidOf(ids, name);
+  const push = (endE: string) => (t.skip
+    ? `if src[pos..${endE}].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
+    : stateful
+      ? `st.emit(${J(name)}, &src[pos..${endE}], pos, ${endE}, ${kid}, lid_of(&src[pos..${endE}])); `
+      : `toks.push(Tok { kind: ${J(name)}, text: &src[pos..${endE}], off: pos, end: ${endE}, nl: pending_nl, kid: ${kid}, lid: lid_of(&src[pos..${endE}]) }); pending_nl = false; `);
   const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
   if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
@@ -110,13 +146,13 @@ function rustMatchLabels(bytes: number[]): string {
 }
 
 function buildLexCandidates(
-  ir: ParserIR, defs: string[], stateful: boolean, rxTok: string | undefined, tplTok: string | undefined,
+  ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, rxTok, tplTok);
+    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok);
     if (!code) continue;
     codes.push(code);
     firsts.push(lexTokFirstBytes(t));
@@ -147,7 +183,7 @@ ${indent}        }
 ${indent}        }`;
 }
 
-function newlinePartsRs(nl: NewlineCfg): { consts: string; fields: string; init: string; boundary: string; ws: string; hooks: string; boundaryFrom: string; wsFrom: string; hooksFrom: string } {
+function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; fields: string; init: string; boundary: string; ws: string; hooks: string; boundaryFrom: string; wsFrom: string; hooksFrom: string } {
   const commentSkip = nl.comment
     ? `            if src[p..].starts_with(${J(nl.comment)}) { let mut e = p; while e < n && b[e] != 10 { e += 1; } pos = e; continue; }\n`
     : '';
@@ -179,7 +215,7 @@ const _FLOW_CLOSE: &[&str] = ${`&[${nl.flowClose.map(J).join(', ')}]`};
                 }
             }
 ${commentSkip}            pos = p;
-            if st.emitted_content { st.emit(_NLTOK, &src[pos..pos], pos, pos); }
+            if st.emitted_content { st.emit(_NLTOK, &src[pos..pos], pos, pos, ${kidOf(ids, nl.token)}, 0); }
             st.line_start = false;
             continue;
         }
@@ -202,7 +238,7 @@ ${commentSkip}            pos = p;
                 }
             }
 ${commentSkipFrom}            pos = p;
-            if st.emitted_content { st.push_tok(_NLTOK, &src[pos..pos], pos, pos); }
+            if st.emitted_content { st.push_tok(_NLTOK, &src[pos..pos], pos, pos, ${kidOf(ids, nl.token)}, 0); }
             st.line_start = false;
             continue;
         }
@@ -233,11 +269,12 @@ ${commentSkipFrom}            pos = p;
 }
 
 function lexer(ir: ParserIR): string {
+  const ids = buildLexIdPlan(ir);
   const defs: string[] = [];
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
   const nl = ir.newlineCfg;
-  const nlRs = nl ? newlinePartsRs(nl) : null;
+  const nlRs = nl ? newlinePartsRs(nl, ids) : null;
   const rxOnly = !!(rx && !tpl && !nl);
   const tplOnly = !!(tpl && !rx && !nl);
   const rxTpl = !!(rx && tpl && !nl);
@@ -245,8 +282,8 @@ function lexer(ir: ParserIR): string {
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
   const punctLine = (p: string) =>
-    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl }); pending_nl = false;`} pos += ${p.length}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, rx?.regexToken, tpl?.token, punctLine);
+    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit("", &src[pos..pos + ${p.length}], pos, pos + ${p.length}, 0, ${lidOf(ids, p)});` : `toks.push(Tok { kind: "", text: &src[pos..pos + ${p.length}], off: pos, end: pos + ${p.length}, nl: pending_nl, kid: 0, lid: ${lidOf(ids, p)} }); pending_nl = false;`} pos += ${p.length}; continue; }`;
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
   const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ');
   const rsArr = (a: string[]) => `&[${a.map(J).join(', ')}]`;
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
@@ -295,9 +332,9 @@ ${nlRs.consts}` : '');
         self.bp_text = self.prev_text; self.has_prev2 = self.has_prev; self.prev_kind = kind; self.prev_text = text; self.has_prev = true;` : '';
   const stateImpl = stateful ? `struct LexState<'a> { ${fields} }
 impl<'a> LexState<'a> {
-${prevIsValue}    fn emit(&mut self, kind: &'static str, text: &'a str, off: usize, end: usize) {
+${prevIsValue}    fn emit(&mut self, kind: &'static str, text: &'a str, off: usize, end: usize, kid: u16, lid: u16) {
 ${emitHooks}
-        self.toks.push(Tok { kind, text, off, end, nl: self.pending_nl }); self.pending_nl = false;${emitTail}
+        self.toks.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;${emitTail}
     }
 }
 ` : '';
@@ -310,20 +347,20 @@ impl<'a, 'b> RxScan<'a, 'b> {
         let is_paren_head = self.prev_text == ")" && self.last_close;
         !is_expr_kw && !is_paren_head && (_in(_DIVK, self.prev_kind) || _in(_DIVT, self.prev_text))
     }
-    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize) {
+    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize, kid: u16, lid: u16) {
         if text == "(" { let is_member = self.has_prev2 && _in(_MEM, self.bp_text); self.paren_head.push(!is_member && self.prev_kind == _IDENT && _in(_PHK, self.prev_text)); }
         else if text == ")" { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if _in(_PAV, text) { self.last_bang = self.prev_is_value(); }
-        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl }); self.pending_nl = false;
+        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;
         self.bp_text = self.prev_text; self.has_prev2 = self.has_prev; self.prev_kind = kind; self.prev_text = text; self.has_prev = true;
     }
 }
 ` : '';
   const tplScanImpl = tplOnly ? `struct TplScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, template_stack: Vec<i64> }
 impl<'a, 'b> TplScan<'a, 'b> {
-    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize) {
+    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize, kid: u16, lid: u16) {
         if !self.template_stack.is_empty() { if text == ${J(tpl.braceOpen)} { *self.template_stack.last_mut().unwrap() += 1; } else if text == ${J(tpl.interpClose)} { *self.template_stack.last_mut().unwrap() -= 1; } }
-        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl }); self.pending_nl = false;
+        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;
     }
 }
 ` : '';
@@ -336,12 +373,12 @@ impl<'a, 'b> RxTplScan<'a, 'b> {
         let is_paren_head = self.prev_text == ")" && self.last_close;
         !is_expr_kw && !is_paren_head && (_in(_DIVK, self.prev_kind) || _in(_DIVT, self.prev_text))
     }
-    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize) {
+    fn emit(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize, kid: u16, lid: u16) {
         if text == "(" { let is_member = self.has_prev2 && _in(_MEM, self.bp_text); self.paren_head.push(!is_member && self.prev_kind == _IDENT && _in(_PHK, self.prev_text)); }
         else if text == ")" { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if _in(_PAV, text) { self.last_bang = self.prev_is_value(); }
         if !self.template_stack.is_empty() { if text == ${J(tpl.braceOpen)} { *self.template_stack.last_mut().unwrap() += 1; } else if text == ${J(tpl.interpClose)} { *self.template_stack.last_mut().unwrap() -= 1; } }
-        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl }); self.pending_nl = false;
+        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;
         self.bp_text = self.prev_text; self.has_prev2 = self.has_prev; self.prev_kind = kind; self.prev_text = text; self.has_prev = true;
     }
 }
@@ -355,12 +392,12 @@ impl<'a, 'b> RxTplScan<'a, 'b> {
   const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && src[pos..].starts_with(${J(tpl.interpClose)}) && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
             let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length});
-            if interp { st.emit("$templateMiddle", &src[pos..e], pos, e); st.template_stack.push(0); } else { st.emit("$templateTail", &src[pos..e], pos, e); }
+            if interp { st.emit("$templateMiddle", &src[pos..e], pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit("$templateTail", &src[pos..e], pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
         if src[pos..].starts_with(${J(tpl.open)}) {
             let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length});
-            if interp { st.emit("$templateHead", &src[pos..e], pos, e); st.template_stack.push(0); } else { st.emit(${J(tpl.token)}, &src[pos..e], pos, e); }
+            if interp { st.emit("$templateHead", &src[pos..e], pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(${J(tpl.token)}, &src[pos..e], pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
 ` : '';
@@ -376,7 +413,7 @@ ${nlWs}${tplDispatch}${cascade}
     const rxLoopBody = `${nlBoundary}        let c = b[pos] as u32;
 ${nlWs}${cascade}
         panic!("lex error at {}", pos);`;
-    return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_text: &'a str, mut prev_kind: &'static str, mut bp_text: &'a str, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, &'a str, &'static str, &'a str, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_text: &'a str, mut prev_kind: &'static str, mut bp_text: &'a str, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, &'a str, &'static str, &'a str, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -393,7 +430,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
 }`;
   }
   if (tplOnly) {
-    return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${tplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${tplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -410,7 +447,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
 }`;
   }
   if (rxTpl) {
-    return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxTplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_text: &'a str, mut prev_kind: &'static str, mut bp_text: &'a str, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, &'a str, &'static str, &'a str, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxTplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_text: &'a str, mut prev_kind: &'static str, mut bp_text: &'a str, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, &'a str, &'static str, &'a str, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -427,7 +464,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
 }`;
   }
   if (rxOrTpl) {
-    return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
     let b = src.as_bytes();
     let n = b.len();
 ${open}
@@ -440,16 +477,16 @@ ${loopBody}
   }
   if (newlineOnly) {
     const rustNlScan = (s: string) => s
-      .replace(/toks\.push\(Tok \{ kind: ([^,]+), text: ([^,]+), off: pos, end: ([^,]+), nl: pending_nl \}\); pending_nl = false; ?/g, 'st.push_tok($1, $2, pos, $3); ')
+      .replace(/toks\.push\(Tok \{ kind: ([^,]+), text: ([^,]+), off: pos, end: ([^,]+), nl: pending_nl, kid: ([^,]+), lid: ([^}]+) \}\); pending_nl = false; ?/g, 'st.push_tok($1, $2, pos, $3, $4, $5); ')
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlLoopBody = `${nlRs!.boundaryFrom}        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
         panic!("lex error at {}", pos);`;
-    return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, line_start: bool, emitted_content: bool, flow_depth: i64 }
+    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a, 'b> { acc: &'a mut Vec<Tok<'b>>, pending_nl: bool, line_start: bool, emitted_content: bool, flow_depth: i64 }
 impl<'a, 'b> NlScan<'a, 'b> {
-    fn push_tok(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize) {
+    fn push_tok(&mut self, kind: &'static str, text: &'b str, off: usize, end: usize, kid: u16, lid: u16) {
 ${nlRs!.hooksFrom.replace(/emitted_content/g, 'self.emitted_content').replace(/flow_depth/g, 'self.flow_depth').replace(/pending_nl/g, 'self.pending_nl')}
-        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl }); self.pending_nl = false;
+        self.acc.push(Tok { kind, text, off, end, nl: self.pending_nl, kid, lid }); self.pending_nl = false;
     }
 }
 fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut line_start: bool, mut emitted_content: bool, mut flow_depth: i64, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool, bool, bool, i64) {
@@ -468,7 +505,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
     toks
 }`;
   }
-  return `${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool) {
+  return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok<'a>>, limit: usize) -> (usize, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -485,48 +522,48 @@ fn lex<'a>(src: &'a str) -> Vec<Tok<'a>> {
 }
 
 // Top-level step: uses `self`; children accumulate on `self.scratch`.
-function stepCond(s: Step): string {
+function stepCond(s: Step, ids: LexIdPlan): string {
   switch (s.t) {
-    case 'lit': return `self.match_lit(${J(s.value)}, ${J(s.ttype)})`;
-    case 'tok': return `self.match_tok(${J(s.name)})`;
+    case 'lit': return `self.match_lit(${lidOf(ids, s.value)}, ${J(s.ttype)})`;
+    case 'tok': return `self.match_tok(${kidOf(ids, s.name)}, ${J(s.name)})`;
     case 'rule': return `self.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
-    case 'star': return `self.star(|p| ${stepCondP(s.step)})`;
-    case 'opt': return `self.opt(|p| ${s.steps.map(stepCondP).join(' && ')})`;
-    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem)}, ${J(s.delim)})`;
-    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}])`;
-    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, s.firsts)} })(self)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches)} })(self)`;
-    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps)} })(self)`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'})`;
+    case 'star': return `self.star(|p| ${stepCondP(s.step, ids)})`;
+    case 'opt': return `self.opt(|p| ${s.steps.map((x) => stepCondP(x, ids)).join(' && ')})`;
+    case 'sep': return `self.sep_by(|p| ${stepCondP(s.elem, ids)}, ${lidOf(ids, s.delim)})`;
+    case 'altlit': return `self.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${J(o.ttype)})`).join(', ')}])`;
+    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, s.firsts)} })(self)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids)} })(self)`;
+    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps, ids)} })(self)`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
-    case 'suppress': return `{ self.suppress_next = vec![${s.connectors.map(J).join(', ')}]; let _r = (${s.steps.length ? s.steps.map(stepCond).join(' && ') : 'true'}); self.suppress_next = Vec::new(); _r }`;
+    case 'suppress': return `{ self.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}); self.suppress_next = Vec::new(); _r }`;
   }
 }
 // A backtracking inline alternation rendered as an immediately-applied closure over p,
 // so it composes identically whether it sits at top level or already inside a closure.
-function altBody(branches: Step[][]): string {
-  return `${branches.map((br) => `{ let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); if ${br.length ? br.map(stepCondP).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); }`).join(' ')} false`;
+function altBody(branches: Step[][], ids: LexIdPlan): string {
+  return `${branches.map((br) => `{ let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); if ${br.length ? br.map((x) => stepCondP(x, ids)).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); }`).join(' ')} false`;
 }
 // Zero-width negative lookahead: try the steps, restore, succeed iff they did NOT all match.
-function notBody(steps: Step[]): string {
-  return `let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); let m = ${steps.length ? steps.map(stepCondP).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); !m`;
+function notBody(steps: Step[], ids: LexIdPlan): string {
+  return `let sp = p.pos; let sb = p.scratch.len(); let nb = p.nodes.len(); let kb = p.kids.len(); let m = ${steps.length ? steps.map((x) => stepCondP(x, ids)).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.nodes.truncate(nb); p.kids.truncate(kb); !m`;
 }
 // Inside a closure: uses `p`.
-function stepCondP(s: Step): string {
+function stepCondP(s: Step, ids: LexIdPlan): string {
   switch (s.t) {
-    case 'lit': return `p.match_lit(${J(s.value)}, ${J(s.ttype)})`;
-    case 'tok': return `p.match_tok(${J(s.name)})`;
+    case 'lit': return `p.match_lit(${lidOf(ids, s.value)}, ${J(s.ttype)})`;
+    case 'tok': return `p.match_tok(${kidOf(ids, s.name)}, ${J(s.name)})`;
     case 'rule': return `p.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
-    case 'star': return `p.star(|p| ${stepCondP(s.step)})`;
-    case 'opt': return `p.opt(|p| ${s.steps.map(stepCondP).join(' && ')})`;
-    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem)}, ${J(s.delim)})`;
-    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${J(o.value)}, ${J(o.ttype)})`).join(', ')}])`;
-    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, s.firsts)} })(p)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches)} })(p)`;
-    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps)} })(p)`;
-    case 'seq': return `(${s.steps.length ? s.steps.map(stepCondP).join(' && ') : 'true'})`;
+    case 'star': return `p.star(|p| ${stepCondP(s.step, ids)})`;
+    case 'opt': return `p.opt(|p| ${s.steps.map((x) => stepCondP(x, ids)).join(' && ')})`;
+    case 'sep': return `p.sep_by(|p| ${stepCondP(s.elem, ids)}, ${lidOf(ids, s.delim)})`;
+    case 'altlit': return `p.alt_lit(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${J(o.ttype)})`).join(', ')}])`;
+    case 'alt': return s.predictive ? `(|p: &mut Parser<'a>| -> bool { ${predAltBody(s.branches, ids, s.firsts)} })(p)` : `(|p: &mut Parser<'a>| -> bool { ${altBody(s.branches, ids)} })(p)`;
+    case 'not': return `(|p: &mut Parser<'a>| -> bool { ${notBody(s.steps, ids)} })(p)`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
-    case 'suppress': return `{ p.suppress_next = vec![${s.connectors.map(J).join(', ')}]; let _r = (${s.steps.length ? s.steps.map(stepCondP).join(' && ') : 'true'}); p.suppress_next = Vec::new(); _r }`;
+    case 'suppress': return `{ p.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids)).join(' && ') : 'true'}); p.suppress_next = Vec::new(); _r }`;
   }
 }
 
@@ -534,8 +571,8 @@ function stepCondP(s: Step): string {
 // branch — no save/restore per branch, no cross-branch backtracking. If the selected branch's
 // body fails, the alt fails (the enclosing rule restores pos to its own save). Parity holds
 // because disjoint EXACT FIRSTs mean no other branch could match the first token.
-function predAltBody(branches: Step[][], firsts?: FirstSig[]): string {
-  const arms = branches.map((br, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't')} { if ${br.length ? br.map(stepCondP).join(' && ') : 'true'} { return true; } }`).join('\n');
+function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[]): string {
+  const arms = branches.map((br, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCondP(x, ids)).join(' && ') : 'true'} { return true; } }`).join('\n');
   return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
 }
 
@@ -583,7 +620,7 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 }
 
 /** Entry rule that records per-top-kid lookahead ext via parse_top_one (shape A). */
-function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA): string {
+function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, _ids: LexIdPlan): string {
   return `    fn parse_top_one(&mut self) -> Option<i32> {
 ${plan.topOneBody}
     }
@@ -606,7 +643,7 @@ ${plan.topOneBody}
     }`;
 }
 
-function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB): string {
+function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string {
   const headFn = plan.hasHead && plan.headRule
     ? `    fn parse_head_seg(&mut self, sb: usize) -> Option<Seg> {
         self.max_look = 0;
@@ -627,7 +664,7 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB): string {
   return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<Seg> {
         let sp = self.pos; let before = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
         self.max_look = 0;
-        if !self.match_tok(${J(plan.loopTok)}) {
+        if !self.match_tok(${kidOf(ids, plan.loopTok)}, ${J(plan.loopTok)}) {
             self.pos = sp; self.scratch.truncate(before); self.nodes.truncate(nb); self.kids.truncate(kb);
             return None;
         }
@@ -654,13 +691,13 @@ ${headBlock}        loop {
     }`;
 }
 
-function rdEntryWithReuse(r: RdRule, plan: ReusePlan): string {
-  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan) : rdEntryWithReuseB(r, plan);
+function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
+  return plan.kind === 'A' ? rdEntryWithReuseA(r, plan, ids) : rdEntryWithReuseB(r, plan, ids);
 }
 
-function rdRule(r: RdRule): string {
+function rdRule(r: RdRule, ids: LexIdPlan): string {
   if (r.predictive) {
-    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't')} { if ${steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } }`;
+    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCond(x, ids)).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } }`;
     return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
         let t = match self.peek() { Some(t) => t, None => return None };
@@ -670,7 +707,7 @@ ${r.alts.map(arm).join('\n')}
     }`;
   }
   const alt = (steps: Step[]) =>
-    `        if ${steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); }
+    `        if ${steps.map((x) => stepCond(x, ids)).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); }
         self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);`;
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
@@ -679,7 +716,7 @@ ${r.alts.map(alt).join('\n')}
     }`;
 }
 
-function prattRule(r: PrattRule, tpl: TplCfg | null): string {
+function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
     ? `        if t.kind == "$templateHead" {
             let n = match self.match_template() { Some(n) => n, None => return None };
@@ -687,26 +724,26 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             return Some(self.finish(${J(r.cstName)}, sb, self.nodes[n as usize].offset, self.nodes[n as usize].tok_start));
         }\n`
     : '';
-  const binArms = r.binary.map((b) => `${J(b.op)} => Some((${b.lbp}, ${b.rbp}))`).join(', ');
-  const preArms = r.prefix.map((p) => `${J(p.op)} => Some(${p.rbp})`).join(', ');
-  const atomArm = r.nudToks.map(J).join(' | ');
-  const bracketNud = (b: Bracket) => `        if t.text == ${J(b.first)} {
+  const binArms = r.binary.map((b) => `${lidOf(ids, b.op)} => Some((${b.lbp}, ${b.rbp}))`).join(', ');
+  const preArms = r.prefix.map((p) => `${lidOf(ids, p.op)} => Some(${p.rbp})`).join(', ');
+  const atomArm = r.nudToks.map((k) => `${kidOf(ids, k)}`).join(' | ');
+  const bracketNud = (b: Bracket) => `        if t.lid == ${lidOf(ids, b.first)} {
             let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
-            if ${b.steps.map(stepCond).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
+            if ${b.steps.map((x) => stepCond(x, ids)).join(' && ')} { return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
             self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb);
         }`;
-  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], left) && ` : ''}!self.suppress_cur.iter().any(|c| *c == ${J(b.first)}) && t.text == ${J(b.first)} {
+  const ledArm = (b: Bracket, accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null) => `            if ${accessTail ? '!tail_closed && ' : ''}${lbp !== null ? `${lbp} > min_bp && ` : ''}${sameLine ? '!t.nl && ' : ''}${nll ? `!self.nll_blocked(&[${nll.map(J).join(', ')}], left) && ` : ''}!self.suppress_cur.iter().any(|c| *c == ${lidOf(ids, b.first)}) && t.lid == ${lidOf(ids, b.first)} {
                 let led_save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
                 self.scratch.push(left);
-                if ${b.steps.map(stepCond).join(' && ')} { left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; }
+                if ${b.steps.map((x) => stepCond(x, ids)).join(' && ')} { left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; }
                 self.pos = led_save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); break;
             }`;
   const postfixArm = (tok: string) => {
     const tplPart = tpl && tok === tpl.token ? `
             if !tail_closed && t.kind == "$templateHead" { if let Some(n) = self.match_template() { let sb = self.scratch.len(); self.scratch.push(left); self.scratch.push(n); left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; } }` : '';
-    return `            if !tail_closed && t.kind == ${J(tok)} { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kind, t.off, t.end); self.pos += 1; left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; }${tplPart}`;
+    return `            if !tail_closed && t.kid == ${kidOf(ids, tok)} { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf(t.kind, t.off, t.end); self.pos += 1; left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); continue; }${tplPart}`;
   };
-  const postArms = r.postfix.map((p) => `${J(p.op)} => Some(${p.lbp})`).join(', ');
+  const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some(${p.lbp})`).join(', ');
   return `    fn parse_${r.name}(&mut self) -> Option<i32> {
         let prev = std::mem::take(&mut self.suppress_cur);
         self.suppress_cur = std::mem::take(&mut self.suppress_next);
@@ -714,10 +751,10 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
         self.suppress_cur = prev;
         r
     }
-    fn ${r.name}_bin(op: &str) -> Option<(i64, i64)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
-    fn ${r.name}_pre(op: &str) -> Option<i64> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
-    fn ${r.name}_post(op: &str) -> Option<i64> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
-    fn ${r.name}_atom(kind: &str) -> bool { matches!(kind, ${atomArm || '""'}) }
+    fn ${r.name}_bin(op: u16) -> Option<(i64, i64)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_pre(op: u16) -> Option<i64> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_post(op: u16) -> Option<i64> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_atom(kid: u16) -> bool { matches!(kid, ${atomArm || '0'}) }
     fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<i32> {
         let mut left = self.${r.name}_nud(min_bp)?;
         if self.capped { return Some(left); }
@@ -726,8 +763,8 @@ function prattRule(r: PrattRule, tpl: TplCfg | null): string {
             let t = match self.peek() { Some(t) => t, None => break };
 ${r.leds.map((b, i) => ledArm(b, r.ledAccessTail[i], r.ledLbp[i], r.ledSameLine[i], r.ledNotLeftLeaf[i])).join('\n')}
 ${r.postfixToks.map(postfixArm).join('\n')}
-            if let Some(plbp) = Parser::${r.name}_post(t.text) { if !tail_closed && plbp > min_bp { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end); self.pos += 1; left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); tail_closed = true; continue; } }
-            let (lbp, rbp) = match Parser::${r.name}_bin(t.text) { Some(x) => x, None => break };
+            if let Some(plbp) = Parser::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp { let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end); self.pos += 1; left = self.finish(${J(r.cstName)}, sb, self.nodes[left as usize].offset, self.nodes[left as usize].tok_start); tail_closed = true; continue; } }
+            let (lbp, rbp) = match Parser::${r.name}_bin(t.lid) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
             let led_save = self.pos;
             let sb = self.scratch.len(); self.scratch.push(left); self.push_leaf("$operator", t.off, t.end);
@@ -741,26 +778,26 @@ ${r.postfixToks.map(postfixArm).join('\n')}
     fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<i32> {
         self.capped = false;
         let t = self.peek()?;
-${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${c.steps.length ? c.steps.map(stepCond).join(' && ') : 'true'} { self.capped = true; return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
+${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${c.steps.length ? c.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'} { self.capped = true; return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
         // non-capped: a sub-parse may leave capped set (grouping a capped arrow); force it false after
         let r = self.${r.name}_nud_rest(t);
         self.capped = false;
         r
     }
     fn ${r.name}_nud_rest(&mut self, t: Tok<'a>) -> Option<i32> {
-${tplNud}        if Parser::${r.name}_atom(t.kind) {
+${tplNud}        if Parser::${r.name}_atom(t.kid) {
             let sb = self.scratch.len(); let ts = self.pos; self.push_leaf(t.kind, t.off, t.end); self.pos += 1;
             return Some(self.finish(${J(r.cstName)}, sb, t.off, ts));
         }
 ${r.nudBrackets.map(bracketNud).join('\n')}
-        if let Some(pbp) = Parser::${r.name}_pre(t.text) {
+        if let Some(pbp) = Parser::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); self.push_leaf("$operator", t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(operand) => { self.scratch.push(operand); return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
                 None => { self.pos = save; self.scratch.truncate(sb); return None; }
             }
         }
-${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${seq.length ? seq.map(stepCond).join(' && ') : 'true'} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
+${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if ${seq.length ? seq.map((x) => stepCond(x, ids)).join(' && ') : 'true'} { return Some(self.finish(${J(r.cstName)}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); }`).join('\n')}
         None
     }`;
 }
@@ -1687,7 +1724,7 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
     (old_n, new_n, prefix, suffix)
 }
 fn toks_from_meta<'a>(text: &'a str, meta: &[AlignMeta]) -> Vec<Tok<'a>> {
-    meta.iter().map(|m| Tok { kind: m.kind, text: &text[m.off..m.end], off: m.off, end: m.end, nl: m.nl }).collect()
+    meta.iter().map(|m| { let tx = &text[m.off..m.end]; Tok { kind: m.kind, text: tx, off: m.off, end: m.end, nl: m.nl, kid: kid_of(m.kind), lid: lid_of(tx) } }).collect()
 }
 ${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}pub struct Doc {
     text: String,
@@ -1768,7 +1805,7 @@ export const rustTarget: Target = {
 // tokenize(src) -> Vec<Tok>. The same lexer is embedded in emitParser's output, so the tokens
 // are identical. Compile as a library (rustc --crate-type lib) or include via \`mod\`.
 #![allow(dead_code)]
-struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool }
+struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool, kid: u16, lid: u16 }
 
 ${lexer(portableIR(grammar))}
 
@@ -1777,6 +1814,7 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
   },
   emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
     const ir = portableIR(grammar);
+    const ids = buildLexIdPlan(ir);
     const reuse = topReusePlan(ir);
     const shapeB = reuse?.kind === 'B';
     const segsInit = shapeB ? ', segs: Vec::new()' : '';
@@ -1784,12 +1822,12 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Tok<'a>> { lex(src) }
       ? `\n#[derive(Clone, Copy)]\nstruct Seg { kid_start: usize, kid_count: usize, tok_start: usize, tok_end: usize, ext: usize }\n`
       : '';
     const parserFields = shapeB
-      ? 'struct Parser<\'a> { toks: Vec<Tok<\'a>>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<&\'static str>, suppress_cur: Vec<&\'static str>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32>, segs: Vec<Seg> }'
-      : 'struct Parser<\'a> { toks: Vec<Tok<\'a>>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<&\'static str>, suppress_cur: Vec<&\'static str>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32> }';
+      ? 'struct Parser<\'a> { toks: Vec<Tok<\'a>>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<u16>, suppress_cur: Vec<u16>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32>, segs: Vec<Seg> }'
+      : 'struct Parser<\'a> { toks: Vec<Tok<\'a>>, pos: usize, max_look: usize, capped: bool, suppress_next: Vec<u16>, suppress_cur: Vec<u16>, src: &\'a str, nodes: Vec<Node>, kids: Vec<i32>, scratch: Vec<i32> }';
     const ruleFns = ir.rules.map((r) => {
-      if (r.kind === 'pratt') return prattRule(r, ir.tpl);
-      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse);
-      return rdRule(r);
+      if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids);
+      if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids);
+      return rdRule(r, ids);
     }).join('\n\n');
     const matchTemplate = ir.tpl ? `    fn match_template(&mut self) -> Option<i32> {
         let t = self.peek()?;
@@ -1815,7 +1853,7 @@ use std::io::Read;
 // Zero-alloc tokens: kind is a known grammar name (&'static str), text is a slice of the
 // source. Tok is Copy, so peek() copies pointers — no per-peek heap work.
 #[derive(Clone, Copy)]
-struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool }
+struct Tok<'a> { kind: &'static str, text: &'a str, off: usize, end: usize, nl: bool, kid: u16, lid: u16 }
 
 // Arena node: a flat record in \`nodes\`; children are a contiguous range in \`kids\` (kid_start,
 // kid_count). No per-node heap allocation — the arena grows by Vec push, and backtracking
@@ -1867,11 +1905,11 @@ impl<'a> Parser<'a> {
         &self.src[self.nodes[id].offset..self.nodes[id].end]
     }
     fn nll_blocked(&self, words: &[&str], node: i32) -> bool { let h = self.head_leaf_text(node); words.iter().any(|w| *w == h) }
-    fn match_lit(&mut self, value: &str, ttype: &'static str) -> bool {
-        match self.peek() { Some(t) if t.text == value => { self.push_leaf(ttype, t.off, t.end); self.pos += 1; true } _ => false }
+    fn match_lit(&mut self, lid: u16, ttype: &'static str) -> bool {
+        match self.peek() { Some(t) if t.lid == lid => { self.push_leaf(ttype, t.off, t.end); self.pos += 1; true } _ => false }
     }
-    fn match_tok(&mut self, name: &'static str) -> bool {
-        match self.peek() { Some(t) if t.kind == name => { self.push_leaf(name, t.off, t.end); self.pos += 1; true } _ => false }
+    fn match_tok(&mut self, kid: u16, name: &'static str) -> bool {
+        match self.peek() { Some(t) if t.kid == kid => { self.push_leaf(name, t.off, t.end); self.pos += 1; true } _ => false }
     }
     fn call_rule(&mut self, f: fn(&mut Parser<'a>) -> Option<i32>) -> bool {
         match f(self) { Some(id) => { self.scratch.push(id); true } None => false }
@@ -1883,7 +1921,7 @@ impl<'a> Parser<'a> {
     fn opt(&mut self, body: fn(&mut Parser<'a>) -> bool) -> bool {
         let sp = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len(); if !body(self) { self.pos = sp; self.scratch.truncate(sb); self.nodes.truncate(nb); self.kids.truncate(kb); } true
     }
-    fn sep_by(&mut self, elem: fn(&mut Parser<'a>) -> bool, delim: &str) -> bool {
+    fn sep_by(&mut self, elem: fn(&mut Parser<'a>) -> bool, delim: u16) -> bool {
         if !elem(self) { return true; }   // the whole separated list is optional — zero elements is valid
         loop {
             let sp = self.pos; let sb = self.scratch.len(); let nb = self.nodes.len(); let kb = self.kids.len();
@@ -1892,8 +1930,8 @@ impl<'a> Parser<'a> {
         }
         true
     }
-    fn alt_lit(&mut self, opts: &[(&str, &'static str)]) -> bool {
-        for (v, tt) in opts { if self.match_lit(v, tt) { return true; } }
+    fn alt_lit(&mut self, opts: &[(u16, &'static str)]) -> bool {
+        for (lid, tt) in opts { if self.match_lit(*lid, tt) { return true; } }
         false
     }
 
