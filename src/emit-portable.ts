@@ -682,6 +682,32 @@ export function kidOf(plan: LexIdPlan, kind: string): number {
   return i >= 0 ? i : 0;
 }
 
+/**
+ * Bool table indexed by lid for O(1) set membership in emitted lexers.
+ * Slot 0 stays false: lids[0]='' means "not any literal" (Ident/Number text → lid 0).
+ */
+export function lidFlagTable(plan: LexIdPlan, texts: readonly string[]): boolean[] {
+  const t = Array.from({ length: plan.lids.length }, () => false);
+  for (const x of texts) {
+    const i = plan.lids.indexOf(x);
+    if (i > 0) t[i] = true;
+  }
+  return t;
+}
+
+/**
+ * Bool table indexed by kid for O(1) kind-set membership.
+ * Only sets slots for kinds actually present in the plan (missing → skip, never alias to 0).
+ */
+export function kidFlagTable(plan: LexIdPlan, kinds: readonly string[]): boolean[] {
+  const t = Array.from({ length: plan.kids.length }, () => false);
+  for (const x of kinds) {
+    const i = plan.kids.indexOf(x);
+    if (i >= 0) t[i] = true;
+  }
+  return t;
+}
+
 // ── Arena id tables (rule_id / tt_id for slim Node + inlined leaves) ──
 //
 // Arena stores only rule nodes; leaf kids are negative i32 encodings that pack

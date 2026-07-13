@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 
@@ -227,6 +227,11 @@ ${commentSkip}      pos = p;
   };
 }
 
+/** Emit a dense 0/1 number[] bit table (indexed by lid or kid). */
+function tsFlagTable(name: string, flags: boolean[]): string {
+  return `const ${name}: number[] = [${flags.map((b) => (b ? 1 : 0)).join(', ')}];`;
+}
+
 function lexer(ir: ParserIR): string {
   const ids = buildLexIdPlan(ir);
   const defs: string[] = [];
@@ -244,20 +249,30 @@ function lexer(ir: ParserIR): string {
     `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}('', ${J(p)}, pos, pos + ${p.length}, 0, ${lidOf(ids, p)}); pos += ${p.length}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
   const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ');
-  const set = (a: string[]) => `new Set([${a.map(J).join(', ')}])`;
+  const rxBitTables = rx ? `${tsFlagTable('_divT', lidFlagTable(ids, rx.divisionTexts))}
+${tsFlagTable('_divK', kidFlagTable(ids, rx.divisionTypes))}
+${tsFlagTable('_rxT', lidFlagTable(ids, rx.regexTexts))}
+${tsFlagTable('_phK', lidFlagTable(ids, rx.parenHeadKw))}
+${tsFlagTable('_mem', lidFlagTable(ids, rx.memberAccess))}
+${tsFlagTable('_pav', lidFlagTable(ids, rx.postfixAfterValue))}
+const KID_IDENT = ${kidOf(ids, rx.identToken)};
+const LID_LPAREN = ${lidOf(ids, '(')};
+const LID_RPAREN = ${lidOf(ids, ')')};
+` : '';
+  const tplLidConsts = tpl ? `const LID_BRACE_OPEN = ${lidOf(ids, tpl.braceOpen)};
+const LID_INTERP_CLOSE = ${lidOf(ids, tpl.interpClose)};
+` : '';
+  const rxModuleConsts = `${rxBitTables}${tplLidConsts}`;
   // Per-feature pieces of the shared `emit`, so a grammar can have regex, templates, or both.
-  const rxState = rx ? `  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  const rxState = rx ? `  let prevLid = 0, prevKid = 0, bpLid = 0, hasPrev = false, hasPrev2 = false;
   const parenHead: boolean[] = [];
   let lastClose = false, lastBang = false;
-  const _divT = ${set(rx.divisionTexts)}, _divK = ${set(rx.divisionTypes)}, _rxT = ${set(rx.regexTexts)};
-  const _phK = ${set(rx.parenHeadKw)}, _mem = ${set(rx.memberAccess)}, _pav = ${set(rx.postfixAfterValue)};
-  const IDENT = ${J(rx.identToken)};
   function prevIsValue(): boolean {
     if (!hasPrev) return false;
-    if (_pav.has(prevText)) return lastBang;
-    const isExprKw = prevKind === IDENT && _rxT.has(prevText);
-    const isParenHead = prevText === ')' && lastClose;
-    return !isExprKw && !isParenHead && (_divK.has(prevKind) || _divT.has(prevText));
+    if (_pav[prevLid]) return lastBang;
+    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid];
+    const isParenHead = prevLid === LID_RPAREN && lastClose;
+    return !isExprKw && !isParenHead && (!!_divK[prevKid] || !!_divT[prevLid]);
   }
 ` : '';
   const tplState = tpl ? `  const templateStack: number[] = [];
@@ -272,27 +287,24 @@ function lexer(ir: ParserIR): string {
   }
 ` : '';
   const emitHooks = [
-    rx ? `    if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
-    else if (text === ')') { lastClose = parenHead.pop() ?? false; }
-    if (_pav.has(text)) lastBang = prevIsValue();` : '',
-    tpl ? `    if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }` : '',
+    rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
+    else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false; }
+    if (_pav[lid]) lastBang = prevIsValue();` : '',
+    tpl ? `    if (templateStack.length > 0) { if (lid === LID_BRACE_OPEN) templateStack[templateStack.length - 1]++; else if (lid === LID_INTERP_CLOSE) templateStack[templateStack.length - 1]--; }` : '',
     nl ? newlineParts(nl, 'emit', ids).hooks : '',
   ].filter(Boolean).join('\n');
-  const emitTail = rx ? `\n    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;` : '';
+  const emitTail = rx ? `\n    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;` : '';
   const emitFn = stateful ? `  function emit(kind: string, text: string, off: number, end: number, kid: number, lid: number): void {
 ${emitHooks}
     toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;${emitTail}
   }
 ` : '';
-  const rxStateFrom = rx ? `  const _divT = ${set(rx.divisionTexts)}, _divK = ${set(rx.divisionTypes)}, _rxT = ${set(rx.regexTexts)};
-  const _phK = ${set(rx.parenHeadKw)}, _mem = ${set(rx.memberAccess)}, _pav = ${set(rx.postfixAfterValue)};
-  const IDENT = ${J(rx.identToken)};
-  function prevIsValue(): boolean {
+  const rxStateFrom = rx ? `  function prevIsValue(): boolean {
     if (!hasPrev) return false;
-    if (_pav.has(prevText)) return lastBang;
-    const isExprKw = prevKind === IDENT && _rxT.has(prevText);
-    const isParenHead = prevText === ')' && lastClose;
-    return !isExprKw && !isParenHead && (_divK.has(prevKind) || _divT.has(prevText));
+    if (_pav[prevLid]) return lastBang;
+    const isExprKw = prevKid === KID_IDENT && !!_rxT[prevLid];
+    const isParenHead = prevLid === LID_RPAREN && lastClose;
+    return !isExprKw && !isParenHead && (!!_divK[prevKid] || !!_divT[prevLid]);
   }
 ` : '';
   const tplStateFrom = tpl ? `  function scanTplSpan(p: number): { interp: boolean; end: number } {
@@ -306,25 +318,25 @@ ${emitHooks}
   }
 ` : '';
   const emitRxOnly = rx ? `  function emit(kind: string, text: string, off: number, end: number, kid: number, lid: number): void {
-    if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
-    else if (text === ')') { lastClose = parenHead.pop() ?? false; }
-    if (_pav.has(text)) lastBang = prevIsValue();
+    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
+    else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false; }
+    if (_pav[lid]) lastBang = prevIsValue();
     toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;
-    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;
+    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;
   }
 ` : '';
   const emitTplOnly = tpl ? `  function emit(kind: string, text: string, off: number, end: number, kid: number, lid: number): void {
-    if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }
+    if (templateStack.length > 0) { if (lid === LID_BRACE_OPEN) templateStack[templateStack.length - 1]++; else if (lid === LID_INTERP_CLOSE) templateStack[templateStack.length - 1]--; }
     toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;
   }
 ` : '';
   const emitRxTpl = (rx && tpl) ? `  function emit(kind: string, text: string, off: number, end: number, kid: number, lid: number): void {
-    if (text === '(') { const isMember = hasPrev2 && _mem.has(bpText); parenHead.push(!isMember && prevKind === IDENT && _phK.has(prevText)); }
-    else if (text === ')') { lastClose = parenHead.pop() ?? false; }
-    if (_pav.has(text)) lastBang = prevIsValue();
-    if (templateStack.length > 0) { if (text === ${J(tpl.braceOpen)}) templateStack[templateStack.length - 1]++; else if (text === ${J(tpl.interpClose)}) templateStack[templateStack.length - 1]--; }
+    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
+    else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false; }
+    if (_pav[lid]) lastBang = prevIsValue();
+    if (templateStack.length > 0) { if (lid === LID_BRACE_OPEN) templateStack[templateStack.length - 1]++; else if (lid === LID_INTERP_CLOSE) templateStack[templateStack.length - 1]--; }
     toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pendingNl = false;
-    bpText = prevText; hasPrev2 = hasPrev; prevKind = kind; prevText = text; hasPrev = true;
+    bpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true;
   }
 ` : '';
   // Template dispatch runs at the top of the loop, before token/punct scanning.
@@ -360,22 +372,22 @@ ${pushHooks}    toks.push({ kind, text, off, end, nl: pendingNl, kid, lid }); pe
 ${nlWs}${tplDispatch}${cascade}
     throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));`;
   if (rxOnly) {
-    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
+    return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, hasPrev: boolean, bpLid: number, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${emitRxOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
-  return { pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang };
+  return { pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang };
 }
 function lex(src: string): Tok[] {
   const toks: Tok[] = [];
-  lexFrom(src, 0, false, '', '', false, '', false, [], false, false, toks);
+  lexFrom(src, 0, false, 0, 0, false, 0, false, [], false, false, toks);
   return toks;
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
+    return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${tplStateFrom}${emitTplOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -390,22 +402,22 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevText: string, prevKind: string, hasPrev: boolean, bpText: string, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevText: string; prevKind: string; hasPrev: boolean; bpText: string; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
+    return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, hasPrev: boolean, bpLid: number, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${tplStateFrom}${emitRxTpl}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
-  return { pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack };
+  return { pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, templateStack };
 }
 function lex(src: string): Tok[] {
   const toks: Tok[] = [];
-  lexFrom(src, 0, false, '', '', false, '', false, [], false, false, [], toks);
+  lexFrom(src, 0, false, 0, 0, false, 0, false, [], false, false, [], toks);
   return toks;
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
+    return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
@@ -867,13 +879,13 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
   const rb = maxIdx >= 0 ? maxIdx - 1 : -1;
   const out: AlignMeta[] = rb >= 0 ? oldToks.slice(0, rb + 1) : [];
   let scanOff: number, pendingNl: boolean;
-  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  let prevLid = 0, prevKid = 0, bpLid = 0, hasPrev = false, hasPrev2 = false;
   let parenHead: boolean[] = [], lastClose = false, lastBang = false;
   if (rb >= 0) {
     const anchor = oldToks[rb];
     scanOff = anchor.end; pendingNl = false;
-    prevText = oldText.slice(anchor.off, anchor.end); prevKind = anchor.kind; hasPrev = true;
-    if (rb >= 1) { bpText = oldText.slice(oldToks[rb - 1].off, oldToks[rb - 1].end); hasPrev2 = true; }
+    prevLid = lid_of(oldText.slice(anchor.off, anchor.end)); prevKid = kid_of(anchor.kind); hasPrev = true;
+    if (rb >= 1) { bpLid = lid_of(oldText.slice(oldToks[rb - 1].off, oldToks[rb - 1].end)); hasPrev2 = true; }
     lastClose = anchor.lc; lastBang = anchor.lb;
     parenHead = reconstructParens(oldToks, oldText, rb);
   } else {
@@ -883,11 +895,10 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
   let relexed = 0;
   while (scanOff < newText.length) {
     const before = scratch.length;
-    ({ pos: scanOff, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang } = lexFrom(newText, scanOff, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, scratch, 1));
+    ({ pos: scanOff, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang } = lexFrom(newText, scanOff, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, scratch, 1));
     if (scratch.length === before) break;
     const t = scratch[scratch.length - 1];
-    const txt = newText.slice(t.off, t.end);
-    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false, td: 0 });
+    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: t.lid === LID_LPAREN ? parenHead[parenHead.length - 1]! : false, td: 0 });
     relexed++;
     if (t.off >= editEnd) {
       const oIdx = findTokAtOff(oldToks, t.off - delta);
@@ -912,14 +923,14 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
   const editEnd = start + ins.length;
 ${tplAnchor}
   let scanOff: number, pendingNl: boolean;
-  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  let prevLid = 0, prevKid = 0, bpLid = 0, hasPrev = false, hasPrev2 = false;
   let parenHead: boolean[] = [], lastClose = false, lastBang = false;
   let templateStack: number[] = [];
   if (rb >= 0) {
     const anchor = oldToks[rb];
     scanOff = anchor.end; pendingNl = false;
-    prevText = oldText.slice(anchor.off, anchor.end); prevKind = anchor.kind; hasPrev = true;
-    if (rb >= 1) { bpText = oldText.slice(oldToks[rb - 1].off, oldToks[rb - 1].end); hasPrev2 = true; }
+    prevLid = lid_of(oldText.slice(anchor.off, anchor.end)); prevKid = kid_of(anchor.kind); hasPrev = true;
+    if (rb >= 1) { bpLid = lid_of(oldText.slice(oldToks[rb - 1].off, oldToks[rb - 1].end)); hasPrev2 = true; }
     lastClose = anchor.lc; lastBang = anchor.lb;
     parenHead = reconstructParens(oldToks, oldText, rb);
   } else {
@@ -929,11 +940,10 @@ ${tplAnchor}
   let relexed = 0;
   while (scanOff < newText.length) {
     const before = scratch.length;
-    ({ pos: scanOff, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack } = lexFrom(newText, scanOff, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack, scratch, 1));
+    ({ pos: scanOff, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, templateStack } = lexFrom(newText, scanOff, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, templateStack, scratch, 1));
     if (scratch.length === before) break;
     const t = scratch[scratch.length - 1];
-    const txt = newText.slice(t.off, t.end);
-    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false, td: templateStack.length });
+    out.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: t.lid === LID_LPAREN ? parenHead[parenHead.length - 1]! : false, td: templateStack.length });
     relexed++;
     if (t.off >= editEnd) {
       const oIdx = findTokAtOff(oldToks, t.off - delta);
@@ -1059,15 +1069,14 @@ function scanMeta(src: string): AlignMeta[] {
   const toks: Tok[] = [];
   const meta: AlignMeta[] = [];
   let pos = 0, pendingNl = false;
-  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  let prevLid = 0, prevKid = 0, bpLid = 0, hasPrev = false, hasPrev2 = false;
   let parenHead: boolean[] = [], lastClose = false, lastBang = false;
   while (pos < src.length) {
     const before = toks.length;
-    ({ pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang } = lexFrom(src, pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, toks, 1));
+    ({ pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang } = lexFrom(src, pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, toks, 1));
     if (toks.length === before) break;
     const t = toks[toks.length - 1];
-    const txt = src.slice(t.off, t.end);
-    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false, td: 0 });
+    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: t.lid === LID_LPAREN ? parenHead[parenHead.length - 1]! : false, td: 0 });
   }
   return meta;
 }
@@ -1077,16 +1086,15 @@ function scanMeta(src: string): AlignMeta[] {
   const toks: Tok[] = [];
   const meta: AlignMeta[] = [];
   let pos = 0, pendingNl = false;
-  let prevText = '', prevKind = '', bpText = '', hasPrev = false, hasPrev2 = false;
+  let prevLid = 0, prevKid = 0, bpLid = 0, hasPrev = false, hasPrev2 = false;
   let parenHead: boolean[] = [], lastClose = false, lastBang = false;
   let templateStack: number[] = [];
   while (pos < src.length) {
     const before = toks.length;
-    ({ pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack } = lexFrom(src, pos, pendingNl, prevText, prevKind, hasPrev, bpText, hasPrev2, parenHead, lastClose, lastBang, templateStack, toks, 1));
+    ({ pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, templateStack } = lexFrom(src, pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, templateStack, toks, 1));
     if (toks.length === before) break;
     const t = toks[toks.length - 1];
-    const txt = src.slice(t.off, t.end);
-    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: txt === '(' ? parenHead[parenHead.length - 1]! : false, td: templateStack.length });
+    meta.push({ kind: t.kind, off: t.off, end: t.end, nl: t.nl, fd: 0, pd: parenHead.length, lc: lastClose, lb: lastBang, hd: t.lid === LID_LPAREN ? parenHead[parenHead.length - 1]! : false, td: templateStack.length });
   }
   return meta;
 }
