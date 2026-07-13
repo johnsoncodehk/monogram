@@ -603,11 +603,12 @@ for (const c of CASES) {
       const want = oracleOut(src), got = r.run(src);
       if (want.ok && got.ok) {
         acc++;
-        // Shape snapshot on a few tiny inputs: the rule-node skeleton (rule labels tree,
+        // Shape snapshot on every accepted input: the rule-node skeleton (rule labels tree,
         // trivia/punct leaves stripped) must match the oracle's. Robust to leaf-level CST
         // compression (Phase 5) but catches semantic restructure (a node becoming a different
-        // rule / merging / disappearing).
-        if (src && c.accept.indexOf(src) < 2 && canon(skeleton(want.cst)) !== canon(skeleton(got.cst))) {
+        // rule / merging / disappearing) — e.g. the rust prefix arm once dropped its operand
+        // subtree, visible only on inputs beyond the first two.
+        if (src && canon(skeleton(want.cst)) !== canon(skeleton(got.cst))) {
           snap++;
           failures++;
           console.log(`  ${c.grammar}/${r.label}: SHAPE drift on ${JSON.stringify(src)}`);

@@ -756,7 +756,7 @@ ${r.nudBrackets.map(bracketNud).join('\n')}
         if let Some(pbp) = Parser::${r.name}_pre(t.text) {
             let save = self.pos; let sb = self.scratch.len(); self.push_leaf("$operator", t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
-                Some(_operand) => { return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
+                Some(operand) => { self.scratch.push(operand); return Some(self.finish(${J(r.cstName)}, sb, t.off, save)); }
                 None => { self.pos = save; self.scratch.truncate(sb); return None; }
             }
         }
