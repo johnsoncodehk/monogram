@@ -475,39 +475,49 @@ function lex(src: string): Tok[] {
 }
 
 // A Step as a boolean expression (appends to the in-scope `kids`).
-function stepCond(s: Step, ids: LexIdPlan): string {
+// When `w` is true, emit the builder-mode helpers (`matchLitW` …) that also maintain
+// a parallel `spans` array — span bookkeeping never reads consumer handles.
+function stepCond(s: Step, ids: LexIdPlan, w = false): string {
+  const S = w ? 'W' : '';
+  const ks = w ? 'kids, spans' : 'kids';
+  const sc = (x: Step) => stepCond(x, ids, w);
   switch (s.t) {
-    case 'lit': return `matchLit(${lidOf(ids, s.value)}, ${J(s.ttype)}, kids)`;
-    case 'tok': return `matchTok(${kidOf(ids, s.name)}, ${J(s.name)}, kids)`;
-    case 'rule': return `callRule(parse${s.name}, kids)`;
-    case 'ruleBp': return `callRule(() => ${s.name}_bp(${s.bp}), kids)`;
-  case 'star': return `star(() => ${stepCond(s.step, ids)}, kids)`;
-  case 'opt': return `opt(() => ${s.steps.map((x) => stepCond(x, ids)).join(' && ')}, kids)`;
-  case 'sep': return `sepBy(() => ${stepCond(s.elem, ids)}, ${lidOf(ids, s.delim)}, kids)`;
-    case 'altlit': return `altLit([${s.opts.map((o) => `[${lidOf(ids, o.value)}, ${J(o.ttype)}]`).join(', ')}], kids)`;
+    case 'lit': return `matchLit${S}(${lidOf(ids, s.value)}, ${J(s.ttype)}, ${ks})`;
+    case 'tok': return `matchTok${S}(${kidOf(ids, s.name)}, ${J(s.name)}, ${ks})`;
+    case 'rule': return `callRule${S}(parse${s.name}${S}, ${ks})`;
+    case 'ruleBp': return `callRule${S}(() => ${s.name}_bp${S}(${s.bp}), ${ks})`;
+  case 'star': return `star${S}(() => ${sc(s.step)}, ${ks})`;
+  case 'opt': return `opt${S}(() => ${s.steps.map(sc).join(' && ')}, ${ks})`;
+  case 'sep': return `sepBy${S}(() => ${sc(s.elem)}, ${lidOf(ids, s.delim)}, ${ks})`;
+    case 'altlit': return `altLit${S}([${s.opts.map((o) => `[${lidOf(ids, o.value)}, ${J(o.ttype)}]`).join(', ')}], ${ks})`;
     case 'alt': {
-      if (s.predictive) return `(() => { ${predAltBody(s.branches, ids, s.firsts)} })()`;
+      if (s.predictive) return `(() => { ${predAltBody(s.branches, ids, s.firsts, w)} })()`;
       const firsts = s.firsts ?? [];
       const nAlts = s.branches.length;
       const needPeek = s.branches.some((_, i) => isGuardable(firsts[i] ?? null, nAlts));
       const peekInit = needPeek ? `const _ft = peek(); ` : '';
       const tries = s.branches.map((br, i) => {
-        const body = `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`;
+        const body = w
+          ? `{ const sp = pos; const bk = kids.length; const bs = spans.length; if (${br.length ? br.map(sc).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; spans.length = bs; }`
+          : `{ const sp = pos; const bk = kids.length; if (${br.length ? br.map(sc).join(' && ') : 'true'}) return true; pos = sp; kids.length = bk; }`;
         const f = firsts[i] ?? null;
         if (!isGuardable(f, nAlts)) return body;
         return `if (_ft !== null && ${firstCond(f, '_ft', ids)}) ${body}`;
       }).join(' ');
       return `(() => { ${peekInit}${tries} return false; })()`;
     }
-    case 'not': return `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
-    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'})`;
+    case 'not': return w
+      ? `(() => { const sp = pos; const bk = kids.length; const bs = spans.length; const m = ${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}; pos = sp; kids.length = bk; spans.length = bs; return !m; })()`
+      : `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
+    case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
-    case 'suppress': return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}); _suppressNext = null; return _r; })()`;
+    case 'suppress': return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = null; return _r; })()`;
   }
 }
 
-function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[]): string {
-  const arms = branches.map((br, i) => `if (${firstCond(firsts![i], 't', ids)}) { if (${br.length ? br.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return true; }`).join(' else ');
+function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[], w = false): string {
+  const sc = (x: Step) => stepCond(x, ids, w);
+  const arms = branches.map((br, i) => `if (${firstCond(firsts![i], 't', ids)}) { if (${br.length ? br.map(sc).join(' && ') : 'true'}) return true; }`).join(' else ');
   return `const t = peek(); if (t === null) return false; ${arms} return false;`;
 }
 
@@ -578,6 +588,106 @@ ${r.alts.map(arm).join(' ')}
   const save = pos;
 ${needPeek ? '  const _ft = peek();\n' : ''}${r.alts.map(alt).join('\n')}
   return null;
+}`;
+}
+
+/** Builder-mode RD rule — same control flow as rdRule, returns Frame (span+handles). */
+function rdRuleW(r: RdRule, ids: LexIdPlan): string {
+  if (r.predictive) {
+  const arm = (steps: Step[], i: number) => `  ${i === 0 ? 'if' : 'else if'} (${firstCond(r.altFirst[i], 't', ids)}) { const kids: any[] = []; const spans: BWSpan[] = []; if (${steps.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${J(r.cstName)}, kids, spans, save); }`;
+  return `function parse${r.name}W(): Frame | null {
+  const save = pos;
+  const t = peek(); if (t === null) return null;
+${r.alts.map(arm).join(' ')}
+  pos = save;
+  return null;
+}`;
+  }
+  const alt = (steps: Step[], i: number) => {
+    const body = `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${steps.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${J(r.cstName)}, kids, spans, save); pos = save; }`;
+    if (!isGuardable(r.altFirst[i], r.alts.length)) return `  ${body}`;
+    return `  if (_ft !== null && ${firstCond(r.altFirst[i], '_ft', ids)}) ${body}`;
+  };
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
+  return `function parse${r.name}W(): Frame | null {
+  const save = pos;
+${needPeek ? '  const _ft = peek();\n' : ''}${r.alts.map(alt).join('\n')}
+  return null;
+}`;
+}
+
+function topOneBodyW(plan: ReusePlanA): string {
+  return plan.topOneBody.replace(/parse([A-Za-z0-9_]+)\(\)/g, 'parse$1W()');
+}
+
+function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
+  if (plan.kind === 'A') {
+    return `function parseTopOneW(): Frame | null {
+${topOneBodyW(plan)}
+}
+function parse${r.name}W(): Frame | null {
+  const save = pos;
+  const kids: any[] = [];
+  const spans: BWSpan[] = [];
+  for (;;) {
+    const sp = pos;
+    maxLook = 0;
+    const n = parseTopOneW();
+    if (n === null) { pos = sp; break; }
+    // Only annotate CST handles (have tokEnd). Opaque consumer handles must not be mutated.
+    if (n.hs.length === 1 && n.hs[0] !== null && typeof n.hs[0] === 'object' && 'tokEnd' in (n.hs[0] as object)) {
+      (n.hs[0] as { ext?: number }).ext = Math.max(n.tokEnd, maxLook);
+    }
+    absorbFrame(kids, spans, n);
+  }
+  return branchW(${J(r.cstName)}, kids, spans, save);
+}`;
+  }
+  const headBlock = plan.hasHead && plan.headRule
+    ? `  {
+    const h = parseHeadSegW(kids, spans);
+    if (h) segs.push(h);
+  }
+`
+    : '';
+  const headFn = plan.hasHead && plan.headRule
+    ? `function parseHeadSegW(kids: any[], spans: BWSpan[]): Seg | null {
+  maxLook = 0;
+  const kidStart = kids.length;
+  const before = kids.length;
+  const spanBefore = spans.length;
+  optW(() => callRuleW(parse${plan.headRule}W, kids, spans), kids, spans);
+  if (kids.length === before) return null;
+  const tokStart = spans[spanBefore]!.tokStart;
+  const tokEnd = spans[spans.length - 1]!.tokEnd;
+  return { kidStart, kidCount: 1, tokStart, tokEnd, ext: Math.max(tokEnd, maxLook) };
+}
+`
+    : '';
+  return `${headFn}function parseLoopSegW(kids: any[], spans: BWSpan[]): Seg | null {
+  const sp = pos;
+  const kidStart = kids.length;
+  const spanStart = spans.length;
+  maxLook = 0;
+  if (!matchTokW(${kidOf(ids, plan.loopTok)}, ${J(plan.loopTok)}, kids, spans)) { pos = sp; kids.length = kidStart; spans.length = spanStart; return null; }
+  optW(() => callRuleW(parse${plan.loopRule}W, kids, spans), kids, spans);
+  const leafSp = spans[spanStart]!;
+  const hasStmt = spans.length > spanStart + 1;
+  const tokEnd = hasStmt ? spans[spanStart + 1]!.tokEnd : leafSp.tokEnd;
+  return { kidStart, kidCount: kids.length - kidStart, tokStart: leafSp.tokStart, tokEnd, ext: Math.max(tokEnd, maxLook) };
+}
+function parse${r.name}W(): Frame | null {
+  const save = pos;
+  const kids: any[] = [];
+  const spans: BWSpan[] = [];
+  const segs: Seg[] = [];
+${headBlock}  for (;;) {
+    const seg = parseLoopSegW(kids, spans);
+    if (seg === null) break;
+    segs.push(seg);
+  }
+  _segs = segs;
+  return branchW(${J(r.cstName)}, kids, spans, save);
 }`;
 }
 
@@ -771,6 +881,286 @@ ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${se
   _capped = false;
   return _r;
 }`;
+}
+
+/** Builder-mode Pratt — reuses ${name}_BIN/_PRE/_POST/_ATOM tables from the CST emit. */
+function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
+  const cn = J(r.cstName);
+  const tplNud = tpl && r.nudToks.includes(tpl.token)
+    ? `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(); return node === null ? null : wrapUnaryW(${cn}, node); }\n`
+    : '';
+  const bracketNudBody = (b: Bracket) => `{
+      const save = pos; const kids: any[] = []; const spans: BWSpan[] = [];
+      if (${b.steps.map((x) => stepCond(x, ids, true)).join(' && ')}) return branchW(${cn}, kids, spans, save);
+      pos = save;   // fall through to the next NUD alternative (e.g. another '${b.first}'-led form)
+    }`;
+  const bracketNudSwitch = (() => {
+    if (r.nudBrackets.length === 0) return '';
+    const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
+    return `  switch (t.lid) {
+${groups.map((g) => `    case ${g.key}:
+${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
+      break;`).join('\n')}
+  }`;
+  })();
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+    const parts: string[] = [];
+    if (accessTail) parts.push('!tailClosed');
+    if (lbp !== null) parts.push(`${lbp} > minBp`);
+    if (sameLine) parts.push('!t.nl');
+    if (nll) parts.push(`!${J(nll)}.includes(headLeafTextW(left))`);
+    parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
+    return parts.join(' && ');
+  };
+  const ledBody = (b: Bracket) => `{
+      const ledSave = pos; const kids: any[] = []; const spans: BWSpan[] = [];
+      absorbFrame(kids, spans, left);
+      if (${b.steps.map((x) => stepCond(x, ids, true)).join(' && ')}) { left = nodeW(${cn}, kids, spans); continue ledLoop; }
+      pos = ledSave; break ledLoop;
+    }`;
+  const ledSwitch = (() => {
+    if (r.leds.length === 0) return '';
+    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
+    return `    switch (t.lid) {
+${groups.map((g) => {
+  const lid = g.key as number;
+  const arms = g.members.map(({ item: b, index: i }) =>
+    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b)}`);
+  return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
+}).join('\n')}
+    }`;
+  })();
+  const postfixTokSwitch = (() => {
+    if (r.postfixToks.length === 0) return '';
+    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
+    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
+    const tplPart = hasTpl ? `
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(); if (node !== null) { left = joinFramesW(${cn}, left, node); continue ledLoop; } }` : '';
+    return `    switch (t.kid) {
+${groups.map((g) => `      case ${g.key}:
+        if (!tailClosed) { const lf = leafFrameW(tok_kind(t), t); pos++; left = joinFramesW(${cn}, left, lf); continue ledLoop; }
+        break;`).join('\n')}
+    }${tplPart}`;
+  })();
+  return `function parse${r.name}W(): Frame | null {
+  const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = null;
+  const r = ${r.name}_bpW(0);
+  _suppressCur = prev;
+  return r;
+}
+function ${r.name}_bpW(minBp: number): Frame | null {
+  let left = ${r.name}_nudW(minBp);
+  if (left === null) return null;
+  if (_capped) return left;   // an assignment-level arrow admits no led
+  let tailClosed = false;
+  ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'ledLoop: ' : ''}for (;;) {
+    const t = peek();
+    if (t === null) break;
+${ledSwitch}
+${postfixTokSwitch}
+    const post = ${r.name}_POST[t.lid];
+    if (!tailClosed && post !== undefined && post > minBp) { const lf = leafFrameW('$operator', t); pos++; left = joinFramesW(${cn}, left, lf); tailClosed = true; continue; }
+    const info = ${r.name}_BIN[t.lid];
+    if (info === undefined || info.lbp <= minBp) break;
+    const ledSave = pos;
+    const lf = leafFrameW('$operator', t);
+    pos++;
+    const rhs = ${r.name}_bpW(info.rbp);
+    if (rhs === null) { pos = ledSave; break; }
+    left = joinFramesW(${cn}, left, lf, rhs);
+  }
+  return left;
+}
+function ${r.name}_nudW(minBp: number): Frame | null {
+  _capped = false;
+  const t = peek();
+  if (t === null) return null;
+${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: any[] = []; const spans: BWSpan[] = []; if (${c.steps.length ? c.steps.map((x) => stepCond(x, ids, true)).join(' && ') : 'true'}) { _capped = true; return branchW(${cn}, kids, spans, save); } pos = save; }`).join('\n')}
+  // Below is non-capped: a sub-parse may leave _capped set (e.g. grouping a capped arrow),
+  // so force it false after — only the capped arms above produce a capped node.
+  const _r = ((): Frame | null => {
+${tplNud}  if (${r.name}_ATOM.has(t.kid)) { const lf = leafFrameW(tok_kind(t), t); pos++; return wrapUnaryW(${cn}, lf); }
+${bracketNudSwitch}
+  const pbp = ${r.name}_PRE[t.lid];
+  if (pbp !== undefined) {
+    const save = pos;
+    const lf = leafFrameW('$operator', t);
+    pos++;
+    const operand = ${r.name}_bpW(pbp);
+    if (operand === null) { pos = save; return null; }
+    return joinFramesW(${cn}, lf, operand);
+  }
+${r.nudSeqs.map((seq) => `  { const save = pos; const kids: any[] = []; const spans: BWSpan[] = []; if (${seq.length ? seq.map((x) => stepCond(x, ids, true)).join(' && ') : 'true'}) return branchW(${cn}, kids, spans, save); pos = save; }`).join('\n')}
+  return null;
+  })();
+  _capped = false;
+  return _r;
+}`;
+}
+
+/** Additive parseWith / Builder / cstBuilder — appended after the unchanged CST library. */
+function emitBuilderAddon(ir: ParserIR, ids: LexIdPlan): string {
+  const reuse = topReusePlan(ir);
+  const ruleFnsW = ir.rules.map((r) => {
+    if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids);
+    if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids);
+    return rdRuleW(r, ids);
+  }).join('\n\n');
+  const matchTemplateW = ir.tpl ? `function matchTemplateW(): Frame | null {
+  const t = peek();
+  if (t === null || t.kid !== ${kidOf(ids, '$templateHead')}) return null;
+  const kids: any[] = []; const spans: BWSpan[] = [];
+  const save = pos;
+  {
+    const lf = leafFrameW('$templateHead', t); pos++;
+    absorbFrame(kids, spans, lf);
+  }
+  for (;;) {
+    const expr = parse${ir.tpl.interpRule}W();
+    if (expr === null) { pos = save; return null; }
+    absorbFrame(kids, spans, expr);
+    const next = peek();
+    if (next === null) { pos = save; return null; }
+    if (next.kid === ${kidOf(ids, '$templateMiddle')}) { const lf = leafFrameW('$templateMiddle', next); pos++; absorbFrame(kids, spans, lf); continue; }
+    if (next.kid === ${kidOf(ids, '$templateTail')}) { const lf = leafFrameW('$templateTail', next); pos++; absorbFrame(kids, spans, lf); break; }
+    pos = save; return null;
+  }
+  return finishNodeW('$template', kids, spans, save);
+}
+` : '';
+  return `// ─── Builder API (additive; CST parse() above is unchanged) ─────────────────
+// Builder must be pure / bottom-up. Backtracking simply abandons Frame values —
+// there is no rollback callback; discarded handles become garbage.
+export type Builder<H> = {
+  leaf(tokenType: string, kid: number, lid: number, off: number, end: number): H | null;
+  node(rule: string, children: H[], off: number, end: number): H | H[] | null;
+};
+type BWSpan = { off: number; end: number; tokStart: number; tokEnd: number; headOff: number; headEnd: number };
+type Frame = { hs: any[]; off: number; end: number; tokStart: number; tokEnd: number; headOff: number; headEnd: number };
+let _builder: Builder<any> = null!;
+let _bSave = 0;
+function packNodeW(r: any, off: number, end: number, tokStart: number, tokEnd: number, headOff: number, headEnd: number): Frame {
+  if (r === null) return { hs: [], off, end, tokStart, tokEnd, headOff, headEnd };
+  if (Array.isArray(r)) return { hs: r, off, end, tokStart, tokEnd, headOff, headEnd };
+  return { hs: [r], off, end, tokStart, tokEnd, headOff, headEnd };
+}
+function absorbFrame(kids: any[], spans: BWSpan[], f: Frame): void {
+  for (let i = 0; i < f.hs.length; i++) kids.push(f.hs[i]);
+  // Span is recorded whenever the child Frame covers a region. Empty hs (node-null drop)
+  // still contributes span so parent off/end cover the production; leaf-null never creates a Frame.
+  spans.push({ off: f.off, end: f.end, tokStart: f.tokStart, tokEnd: f.tokEnd, headOff: f.headOff, headEnd: f.headEnd });
+}
+function leafFrameW(ttype: string, t: Tok): Frame {
+  const h = _builder.leaf(ttype, t.kid, t.lid, t.off, t.end);
+  return { hs: h === null ? [] : [h], off: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1, headOff: t.off, headEnd: t.end };
+}
+function finishNodeW(rule: string, kids: any[], spans: BWSpan[], save: number): Frame {
+  const off = spans.length > 0 ? spans[0]!.off : (save < toks.length ? toks[save]!.off : 0);
+  const end = spans.length > 0 ? spans[spans.length - 1]!.end : off;
+  const tokStart = save;
+  const tokEnd = pos;
+  const headOff = spans.length > 0 ? spans[0]!.headOff : off;
+  const headEnd = spans.length > 0 ? spans[0]!.headEnd : end;
+  _bSave = tokStart;
+  return packNodeW(_builder.node(rule, kids, off, end), off, end, tokStart, tokEnd, headOff, headEnd);
+}
+function branchW(rule: string, kids: any[], spans: BWSpan[], save: number): Frame {
+  return finishNodeW(rule, kids, spans, save);
+}
+function nodeW(rule: string, kids: any[], spans: BWSpan[], fallbackOff: number = 0): Frame {
+  const off = spans.length ? spans[0]!.off : fallbackOff;
+  const end = spans.length ? spans[spans.length - 1]!.end : fallbackOff;
+  const tokStart = spans.length ? spans[0]!.tokStart : pos;
+  const tokEnd = pos;
+  const headOff = spans.length ? spans[0]!.headOff : off;
+  const headEnd = spans.length ? spans[0]!.headEnd : end;
+  _bSave = tokStart;
+  return packNodeW(_builder.node(rule, kids, off, end), off, end, tokStart, tokEnd, headOff, headEnd);
+}
+function joinFramesW(rule: string, ...frames: Frame[]): Frame {
+  const kids: any[] = []; const spans: BWSpan[] = [];
+  for (const f of frames) absorbFrame(kids, spans, f);
+  return nodeW(rule, kids, spans);
+}
+function wrapUnaryW(rule: string, child: Frame): Frame {
+  return joinFramesW(rule, child);
+}
+function headLeafTextW(f: Frame): string { return _src.slice(f.headOff, f.headEnd); }
+function matchLitW(lid: number, ttype: string, kids: any[], spans: BWSpan[]): boolean {
+  const t = peek();
+  if (t === null || t.lid !== lid) return false;
+  const f = leafFrameW(ttype, t); pos++;
+  // Mirror CST matchLit: $punct is never a child. Other leaf-null drops also skip the span slot
+  // so parent off/end track surviving children (matches CST omitting $punct).
+  if (f.hs.length > 0) absorbFrame(kids, spans, f);
+  else if (ttype !== '$punct') { /* intentional drop — no span */ }
+  return true;
+}
+function matchTokW(kid: number, name: string, kids: any[], spans: BWSpan[]): boolean {
+  const t = peek();
+  if (t === null || t.kid !== kid) return false;
+  const f = leafFrameW(name, t); pos++;
+  if (f.hs.length > 0) absorbFrame(kids, spans, f);
+  return true;
+}
+function callRuleW(fn: () => Frame | null, kids: any[], spans: BWSpan[]): boolean {
+  const n = fn();
+  if (n === null) return false;
+  absorbFrame(kids, spans, n); return true;
+}
+function starW(once: () => boolean, kids: any[], spans: BWSpan[]): boolean {
+  for (;;) { const sp = pos; const before = kids.length; const bs = spans.length; if (!once()) { pos = sp; kids.length = before; spans.length = bs; break; } }
+  return true;
+}
+function optW(body: () => boolean, kids: any[], spans: BWSpan[]): boolean {
+  const sp = pos; const before = kids.length; const bs = spans.length; if (!body()) { pos = sp; kids.length = before; spans.length = bs; } return true;
+}
+function sepByW(elem: () => boolean, delimLid: number, kids: any[], spans: BWSpan[]): boolean {
+  if (!elem()) return true;
+  for (;;) {
+    const sp = pos; const before = kids.length; const bs = spans.length;
+    if (!matchLitW(delimLid, '$punct', kids, spans)) { pos = sp; kids.length = before; spans.length = bs; break; }
+    if (!elem()) break;
+  }
+  return true;
+}
+function altLitW(opts: [number, string][], kids: any[], spans: BWSpan[]): boolean {
+  for (const [lid, tt] of opts) if (matchLitW(lid, tt, kids, spans)) return true;
+  return false;
+}
+${matchTemplateW}${ruleFnsW}
+
+/** Default CST builder — same object shape as parse(). Uses ambient pos/_bSave for tok spans. */
+export const cstBuilder: Builder<Cst> = {
+  leaf(tokenType, _kid, _lid, off, end) {
+    if (tokenType === '$punct') return null;
+    return { tokenType, offset: off, end, tokStart: pos, tokEnd: pos + 1 };
+  },
+  node(rule, children, off, end) {
+    // _bSave is set by branchW/nodeW immediately before this callback.
+    return { rule, children, offset: off, end, tokStart: _bSave, tokEnd: pos };
+  },
+};
+
+/**
+ * parseWith: second instantiation of the same grammar logic driven by \`builder\`.
+ * Handles are opaque — the parser never reads offset/end/tok* from H.
+ * Builder must be pure; backtracking discards Frames without notifying the builder.
+ */
+export function parseWith<H>(src: string, builder: Builder<H>): H | null {
+  _src = src;
+  toks = lex(src);
+  pos = 0;
+  maxLook = 0;
+  _builder = builder;
+  const root = parse${ir.entry}W();
+  if (root === null || pos !== toks.length) return null;
+  if (root.hs.length === 0) return null;
+  if (root.hs.length === 1) return root.hs[0] as H;
+  // Root spliced into multiple handles — not representable as single H; reject.
+  return null;
+}
+`;
 }
 
 function docEditBlock(ir: ParserIR): string {
@@ -1603,6 +1993,7 @@ export function parse(tokens: Tok[]): Cst | null {
 }
 
 ${docEditBlock(ir)}
+${emitBuilderAddon(ir, ids)}
 `;
   },
   emitRunner(): string {
