@@ -629,42 +629,47 @@ function parse${r.name}W(): Frame | null {
   const save = pos;
   const kids: any[] = [];
   const spans: BWSpan[] = [];
+  // Engine-side EntryMeta (R2): never mutate consumer handles.
+  const localE: EntryMeta[] = [];
   for (;;) {
     const sp = pos;
     maxLook = 0;
     const n = parseTopOneW();
     if (n === null) { pos = sp; break; }
-    // Only annotate CST handles (have tokEnd). Opaque consumer handles must not be mutated.
-    if (n.hs.length === 1 && n.hs[0] !== null && typeof n.hs[0] === 'object' && 'tokEnd' in (n.hs[0] as object)) {
-      (n.hs[0] as { ext?: number }).ext = Math.max(n.tokEnd, maxLook);
-    }
+    const ext = Math.max(n.tokEnd, maxLook);
+    localE.push({ tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.off, end: n.end, kidStart: spans.length, kidCount: 1 });
     absorbFrame(kids, spans, n);
   }
+  _entries = localE;
   return branchW(${J(r.cstName)}, kids, spans, save);
 }`;
   }
   const headBlock = plan.hasHead && plan.headRule
     ? `  {
-    const h = parseHeadSegW(kids, spans);
-    if (h) segs.push(h);
+    const pair = parseHeadSegW(kids, spans);
+    if (pair) { segs.push(pair.seg); localE.push(pair.meta); }
   }
 `
     : '';
   const headFn = plan.hasHead && plan.headRule
-    ? `function parseHeadSegW(kids: any[], spans: BWSpan[]): Seg | null {
+    ? `function parseHeadSegW(kids: any[], spans: BWSpan[]): { seg: Seg; meta: EntryMeta } | null {
   maxLook = 0;
   const kidStart = kids.length;
   const before = kids.length;
   const spanBefore = spans.length;
   optW(() => callRuleW(parse${plan.headRule}W, kids, spans), kids, spans);
   if (kids.length === before) return null;
-  const tokStart = spans[spanBefore]!.tokStart;
-  const tokEnd = spans[spans.length - 1]!.tokEnd;
-  return { kidStart, kidCount: 1, tokStart, tokEnd, ext: Math.max(tokEnd, maxLook) };
+  const sp0 = spans[spanBefore]!;
+  const sp1 = spans[spans.length - 1]!;
+  const tokStart = sp0.tokStart;
+  const tokEnd = sp1.tokEnd;
+  const ext = Math.max(tokEnd, maxLook);
+  const meta: EntryMeta = { tokStart, tokEnd, ext, off: sp0.off, end: sp1.end, kidStart, kidCount: 1 };
+  return { seg: { kidStart, kidCount: 1, tokStart, tokEnd, ext }, meta };
 }
 `
     : '';
-  return `${headFn}function parseLoopSegW(kids: any[], spans: BWSpan[]): Seg | null {
+  return `${headFn}function parseLoopSegW(kids: any[], spans: BWSpan[]): { seg: Seg; meta: EntryMeta } | null {
   const sp = pos;
   const kidStart = kids.length;
   const spanStart = spans.length;
@@ -674,39 +679,52 @@ function parse${r.name}W(): Frame | null {
   const leafSp = spans[spanStart]!;
   const hasStmt = spans.length > spanStart + 1;
   const tokEnd = hasStmt ? spans[spanStart + 1]!.tokEnd : leafSp.tokEnd;
-  return { kidStart, kidCount: kids.length - kidStart, tokStart: leafSp.tokStart, tokEnd, ext: Math.max(tokEnd, maxLook) };
+  const end = hasStmt ? spans[spanStart + 1]!.end : leafSp.end;
+  const ext = Math.max(tokEnd, maxLook);
+  const kidCount = kids.length - kidStart;
+  const meta: EntryMeta = { tokStart: leafSp.tokStart, tokEnd, ext, off: leafSp.off, end, kidStart, kidCount };
+  return { seg: { kidStart, kidCount, tokStart: leafSp.tokStart, tokEnd, ext }, meta };
 }
 function parse${r.name}W(): Frame | null {
   const save = pos;
   const kids: any[] = [];
   const spans: BWSpan[] = [];
   const segs: Seg[] = [];
+  const localE: EntryMeta[] = [];
 ${headBlock}  for (;;) {
-    const seg = parseLoopSegW(kids, spans);
-    if (seg === null) break;
-    segs.push(seg);
+    const pair = parseLoopSegW(kids, spans);
+    if (pair === null) break;
+    segs.push(pair.seg);
+    localE.push(pair.meta);
   }
   _segs = segs;
+  _entries = localE;
   return branchW(${J(r.cstName)}, kids, spans, save);
 }`;
 }
 
-/** Entry rule that records per-top-kid lookahead ext via parseTopOne (shape A). */
+/** Entry rule that records per-top-kid EntryMeta (+ Node.ext oracle) via parseTopOne (shape A). */
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, _ids: LexIdPlan): string {
-  return `function parseTopOne(): Node | null {
+  return `type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidStart: number; kidCount: number };
+let _entries: EntryMeta[] = [];
+function parseTopOne(): Node | null {
 ${plan.topOneBody}
 }
 function parse${r.name}(): Node | null {
   const save = pos;
   const kids: Cst[] = [];
+  const localE: EntryMeta[] = [];
   for (;;) {
     const sp = pos;
     maxLook = 0;
     const n = parseTopOne();
     if (n === null) { pos = sp; break; }
-    n.ext = Math.max(n.tokEnd, maxLook);
+    const ext = Math.max(n.tokEnd, maxLook);
+    n.ext = ext; // CST oracle for validate assert; reuse decisions read _entries
+    localE.push({ tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.offset, end: n.end, kidStart: kids.length, kidCount: 1 });
     kids.push(n);
   }
+  _entries = localE;
   return branch(${J(r.cstName)}, kids, save);
 }`;
 }
@@ -715,26 +733,30 @@ function parse${r.name}(): Node | null {
 function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string {
   const headBlock = plan.hasHead && plan.headRule
     ? `  {
-    const h = parseHeadSeg(kids);
-    if (h) segs.push(h);
+    const pair = parseHeadSeg(kids);
+    if (pair) { segs.push(pair.seg); localE.push(pair.meta); }
   }
 `
     : '';
   const headFn = plan.hasHead && plan.headRule
-    ? `function parseHeadSeg(kids: Cst[]): Seg | null {
+    ? `function parseHeadSeg(kids: Cst[]): { seg: Seg; meta: EntryMeta } | null {
   maxLook = 0;
   const kidStart = kids.length;
   const before = kids.length;
   opt(() => callRule(parse${plan.headRule}, kids), kids);
   if (kids.length === before) return null;
   const n = kids[before] as Node;
-  return { kidStart, kidCount: 1, tokStart: n.tokStart, tokEnd: n.tokEnd, ext: Math.max(n.tokEnd, maxLook) };
+  const ext = Math.max(n.tokEnd, maxLook);
+  const meta: EntryMeta = { tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.offset, end: n.end, kidStart, kidCount: 1 };
+  return { seg: { kidStart, kidCount: 1, tokStart: n.tokStart, tokEnd: n.tokEnd, ext }, meta };
 }
 `
     : '';
   return `type Seg = { kidStart: number; kidCount: number; tokStart: number; tokEnd: number; ext: number };
+type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidStart: number; kidCount: number };
 let _segs: Seg[] = [];
-${headFn}function parseLoopSeg(kids: Cst[]): Seg | null {
+let _entries: EntryMeta[] = [];
+${headFn}function parseLoopSeg(kids: Cst[]): { seg: Seg; meta: EntryMeta } | null {
   const sp = pos;
   const kidStart = kids.length;
   maxLook = 0;
@@ -743,18 +765,25 @@ ${headFn}function parseLoopSeg(kids: Cst[]): Seg | null {
   const leaf = kids[kidStart]!;
   const hasStmt = kids.length > kidStart + 1;
   const tokEnd = hasStmt ? kids[kidStart + 1]!.tokEnd : leaf.tokEnd;
-  return { kidStart, kidCount: kids.length - kidStart, tokStart: leaf.tokStart, tokEnd, ext: Math.max(tokEnd, maxLook) };
+  const end = hasStmt ? kids[kidStart + 1]!.end : leaf.end;
+  const ext = Math.max(tokEnd, maxLook);
+  const kidCount = kids.length - kidStart;
+  const meta: EntryMeta = { tokStart: leaf.tokStart, tokEnd, ext, off: leaf.offset, end, kidStart, kidCount };
+  return { seg: { kidStart, kidCount, tokStart: leaf.tokStart, tokEnd, ext }, meta };
 }
 function parse${r.name}(): Node | null {
   const save = pos;
   const kids: Cst[] = [];
   const segs: Seg[] = [];
+  const localE: EntryMeta[] = [];
 ${headBlock}  for (;;) {
-    const seg = parseLoopSeg(kids);
-    if (seg === null) break;
-    segs.push(seg);
+    const pair = parseLoopSeg(kids);
+    if (pair === null) break;
+    segs.push(pair.seg);
+    localE.push(pair.meta);
   }
   _segs = segs;
+  _entries = localE;
   return branch(${J(r.cstName)}, kids, save);
 }`;
 }
@@ -1585,46 +1614,79 @@ function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number): void {
   if ('ext' in n && typeof (n as Node).ext === 'number') (n as Node).ext! += tokDelta;
   if ('children' in n) for (const c of n.children) shiftSubtree(c, byteDelta, tokDelta);
 }
-${shapeA ? `function tryReuseTop(oldRoot: Node, newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: Node; reused: number } | null {
+function shiftEntryMeta(m: EntryMeta, byteDelta: number, tokDelta: number): void {
+  m.tokStart += tokDelta;
+  m.tokEnd += tokDelta;
+  m.ext += tokDelta;
+  m.off += byteDelta;
+  m.end += byteDelta;
+}
+${shapeA ? `function assertEntriesVsNodes(entries: EntryMeta[], oldRoot: Node): void {
+  const oldKids = oldRoot.children as Node[];
+  if (entries.length !== oldKids.length) throw new Error('entry count vs root kids: ' + entries.length + ' vs ' + oldKids.length);
+  for (let i = 0; i < entries.length; i++) {
+    const nd = oldKids[i]!;
+    const e = entries[i]!;
+    const ndExt = nd.ext ?? nd.tokEnd;
+    if (e.tokStart !== nd.tokStart) throw new Error('tok_start entry ' + i);
+    if (e.tokEnd !== nd.tokEnd) throw new Error('tok_end entry ' + i);
+    if (e.ext !== ndExt) throw new Error('ext entry ' + i);
+    if (e.off !== nd.offset) throw new Error('off entry ' + i);
+    if (e.end !== nd.end) throw new Error('end entry ' + i);
+  }
+}
+function tryReuseTop(oldRoot: Node, oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number, validate: boolean): { root: Node; entries: EntryMeta[]; reused: number } | null {
+  if (validate) assertEntriesVsNodes(oldEntries, oldRoot);
   const oldKids = oldRoot.children as Node[];
   let prefixLen = 0;
-  while (prefixLen < oldKids.length) {
-    const k = oldKids[prefixLen]!;
-    const ext = k.ext ?? k.tokEnd;
-    if (ext <= prefix) prefixLen++;
+  while (prefixLen < oldEntries.length) {
+    if (oldEntries[prefixLen]!.ext <= prefix) prefixLen++;
     else break;
   }
-  let suffixStart = oldKids.length;
-  for (let i = oldKids.length - 1; i >= prefixLen; i--) {
-    if (oldKids[i]!.tokStart >= oldN - suffix) suffixStart = i;
+  let suffixStart = oldEntries.length;
+  for (let i = oldEntries.length - 1; i >= prefixLen; i--) {
+    if (oldEntries[i]!.tokStart >= oldN - suffix) suffixStart = i;
     else break;
   }
   const prefixKids = oldKids.slice(0, prefixLen);
   const suffixCand = oldKids.slice(suffixStart);
+  const prefixMeta = oldEntries.slice(0, prefixLen);
+  const suffixMeta = oldEntries.slice(suffixStart);
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
-  pos = prefixLen > 0 ? prefixKids[prefixLen - 1]!.tokEnd : 0;
+  pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   const mid: Node[] = [];
+  const midMeta: EntryMeta[] = [];
   const suffixBound = newN - suffix;
-  const maxCand = suffixCand.length > 0 ? Math.max(...suffixCand.map((k) => k.tokStart + tokDelta)) : -1;
-  const finish = (adoptFrom: number): { root: Node; reused: number } => {
+  const maxCand = suffixMeta.length > 0 ? Math.max(...suffixMeta.map((m) => m.tokStart + tokDelta)) : -1;
+  const finish = (adoptFrom: number): { root: Node; entries: EntryMeta[]; reused: number } => {
     const adopted = suffixCand.slice(adoptFrom);
     for (const s of adopted) shiftSubtree(s, byteDelta, tokDelta);
     const children: Cst[] = [...prefixKids, ...mid, ...adopted];
-    const offset = children.length > 0 ? children[0]!.offset : 0;
-    const end = children.length > 0 ? children[children.length - 1]!.end : offset;
-    const tokStart = children.length > 0 ? (children[0] as Node).tokStart : 0;
-    const tokEnd = children.length > 0 ? (children[children.length - 1] as Node).tokEnd : 0;
-    return { root: { rule: oldRoot.rule, children, offset, end, tokStart, tokEnd }, reused: prefixKids.length + adopted.length };
+    const adoptedMeta = suffixMeta.slice(adoptFrom);
+    const newEntries: EntryMeta[] = new Array(prefixMeta.length + midMeta.length + adoptedMeta.length);
+    let ei = 0;
+    for (let i = 0; i < prefixMeta.length; i++) newEntries[ei++] = prefixMeta[i]!;
+    for (let i = 0; i < midMeta.length; i++) newEntries[ei++] = midMeta[i]!;
+    for (let i = 0; i < adoptedMeta.length; i++) {
+      const m = adoptedMeta[i]!;
+      shiftEntryMeta(m, byteDelta, tokDelta);
+      newEntries[ei++] = m;
+    }
+    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
+    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
+    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
+    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    return { root: { rule: oldRoot.rule, children, offset, end, tokStart, tokEnd }, entries: newEntries, reused: prefixKids.length + adopted.length };
   };
-  const tryHit = (): { root: Node; reused: number } | null => {
+  const tryHit = (): { root: Node; entries: EntryMeta[]; reused: number } | null => {
     if (pos < suffixBound) return null;
     if (suffixCand.length === 0) {
       if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixCand.findIndex((k) => k.tokStart + tokDelta === pos);
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
     if (hit >= 0) return finish(hit);
     return null;
   };
@@ -1642,26 +1704,49 @@ ${shapeA ? `function tryReuseTop(oldRoot: Node, newText: string, newMeta: AlignM
     const sp = pos;
     const n = parseTopOne();
     if (n === null) { pos = sp; return null; }
-    n.ext = Math.max(n.tokEnd, maxLook);
+    const ext = Math.max(n.tokEnd, maxLook);
+    n.ext = ext;
+    midMeta.push({ tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.offset, end: n.end, kidStart: 0, kidCount: 1 });
     mid.push(n);
     const hit = tryHit();
     if (hit) return hit;
     if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
 }
-` : ''}${shapeB ? `function tryReuseSeg(oldRoot: Node, oldSegs: Seg[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: Node; segs: Seg[]; reused: number } | null {
+` : ''}${shapeB ? `function assertEntriesVsSegs(entries: EntryMeta[], oldSegs: Seg[], oldRoot: Node): void {
+  if (entries.length !== oldSegs.length) throw new Error('entry count vs segs: ' + entries.length + ' vs ' + oldSegs.length);
+  const oldKids = oldRoot.children;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i]!;
+    const s = oldSegs[i]!;
+    if (e.tokStart !== s.tokStart) throw new Error('tok_start entry ' + i);
+    if (e.tokEnd !== s.tokEnd) throw new Error('tok_end entry ' + i);
+    if (e.ext !== s.ext) throw new Error('ext entry ' + i);
+    if (e.kidStart !== s.kidStart) throw new Error('kid_start entry ' + i);
+    if (e.kidCount !== s.kidCount) throw new Error('kid_count entry ' + i);
+    const first = oldKids[s.kidStart]!;
+    const last = oldKids[s.kidStart + s.kidCount - 1]!;
+    if ('rule' in first && e.off !== first.offset) throw new Error('off entry ' + i);
+    if ('rule' in last && e.end !== last.end) throw new Error('end entry ' + i);
+  }
+}
+function tryReuseSeg(oldRoot: Node, oldSegs: Seg[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number, validate: boolean): { root: Node; segs: Seg[]; entries: EntryMeta[]; reused: number } | null {
+  if (oldSegs.length === 0) return null;
+  if (validate) assertEntriesVsSegs(oldEntries, oldSegs, oldRoot);
   let prefixLen = 0;
-  while (prefixLen < oldSegs.length) {
-    if (oldSegs[prefixLen]!.ext <= prefix) prefixLen++;
+  while (prefixLen < oldEntries.length) {
+    if (oldEntries[prefixLen]!.ext <= prefix) prefixLen++;
     else break;
   }
-  let suffixStart = oldSegs.length;
-  for (let i = oldSegs.length - 1; i >= prefixLen; i--) {
-    if (oldSegs[i]!.tokStart >= oldN - suffix) suffixStart = i;
+  let suffixStart = oldEntries.length;
+  for (let i = oldEntries.length - 1; i >= prefixLen; i--) {
+    if (oldEntries[i]!.tokStart >= oldN - suffix) suffixStart = i;
     else break;
   }
   const prefixSegs = oldSegs.slice(0, prefixLen);
   const suffixCand = oldSegs.slice(suffixStart);
+  const prefixMeta = oldEntries.slice(0, prefixLen);
+  const suffixMeta = oldEntries.slice(suffixStart);
   const oldKids = oldRoot.children;
   const prefixKids: Cst[] = [];
   for (const s of prefixSegs) {
@@ -1670,12 +1755,13 @@ ${shapeA ? `function tryReuseTop(oldRoot: Node, newText: string, newMeta: AlignM
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
-  pos = prefixLen > 0 ? prefixSegs[prefixLen - 1]!.tokEnd : 0;
+  pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   const midKids: Cst[] = [];
   const midSegs: Seg[] = [];
+  const midMeta: EntryMeta[] = [];
   const suffixBound = newN - suffix;
-  const maxCand = suffixCand.length > 0 ? Math.max(...suffixCand.map((s) => s.tokStart + tokDelta)) : -1;
-  const finish = (adoptFrom: number): { root: Node; segs: Seg[]; reused: number } => {
+  const maxCand = suffixMeta.length > 0 ? Math.max(...suffixMeta.map((m) => m.tokStart + tokDelta)) : -1;
+  const finish = (adoptFrom: number): { root: Node; segs: Seg[]; entries: EntryMeta[]; reused: number } => {
     const adoptedSegs = suffixCand.slice(adoptFrom);
     const adoptedKids: Cst[] = [];
     for (const s of adoptedSegs) {
@@ -1687,32 +1773,47 @@ ${shapeA ? `function tryReuseTop(oldRoot: Node, newText: string, newMeta: AlignM
     }
     const children: Cst[] = [...prefixKids, ...midKids, ...adoptedKids];
     const newSegs: Seg[] = [];
+    const newEntries: EntryMeta[] = [];
     let kOff = 0;
-    for (const s of prefixSegs) {
+    for (let i = 0; i < prefixSegs.length; i++) {
+      const s = prefixSegs[i]!;
+      const m = prefixMeta[i]!;
+      m.kidStart = kOff;
       newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
+      newEntries.push(m);
       kOff += s.kidCount;
     }
-    for (const s of midSegs) {
+    for (let i = 0; i < midSegs.length; i++) {
+      const s = midSegs[i]!;
+      const m = midMeta[i]!;
+      m.kidStart = kOff;
       newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
+      newEntries.push(m);
       kOff += s.kidCount;
     }
-    for (const s of adoptedSegs) {
+    const adoptedMeta = suffixMeta.slice(adoptFrom);
+    for (let i = 0; i < adoptedSegs.length; i++) {
+      const s = adoptedSegs[i]!;
+      const em = adoptedMeta[i]!;
+      shiftEntryMeta(em, byteDelta, tokDelta);
+      em.kidStart = kOff;
       newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart + tokDelta, tokEnd: s.tokEnd + tokDelta, ext: s.ext + tokDelta });
+      newEntries.push(em);
       kOff += s.kidCount;
     }
-    const offset = children.length > 0 ? children[0]!.offset : 0;
-    const end = children.length > 0 ? children[children.length - 1]!.end : offset;
-    const tokStart = children.length > 0 ? children[0]!.tokStart : 0;
-    const tokEnd = children.length > 0 ? children[children.length - 1]!.tokEnd : 0;
-    return { root: { rule: oldRoot.rule, children, offset, end, tokStart, tokEnd }, segs: newSegs, reused: prefixSegs.length + adoptedSegs.length };
+    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
+    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
+    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
+    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    return { root: { rule: oldRoot.rule, children, offset, end, tokStart, tokEnd }, segs: newSegs, entries: newEntries, reused: prefixSegs.length + adoptedSegs.length };
   };
-  const tryHit = (): { root: Node; segs: Seg[]; reused: number } | null => {
+  const tryHit = (): { root: Node; segs: Seg[]; entries: EntryMeta[]; reused: number } | null => {
     if (pos < suffixBound) return null;
     if (suffixCand.length === 0) {
       if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixCand.findIndex((s) => s.tokStart + tokDelta === pos);
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
     if (hit >= 0) return finish(hit);
     return null;
   };
@@ -1722,9 +1823,10 @@ ${shapeA ? `function tryReuseTop(oldRoot: Node, newText: string, newMeta: AlignM
     if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
   ${hasHeadB ? `if (prefixLen === 0) {
-    const h = parseHeadSeg(midKids);
-    if (h) {
-      midSegs.push({ kidStart: 0, kidCount: h.kidCount, tokStart: h.tokStart, tokEnd: h.tokEnd, ext: h.ext });
+    const pair = parseHeadSeg(midKids);
+    if (pair) {
+      midSegs.push({ kidStart: 0, kidCount: pair.seg.kidCount, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
+      midMeta.push({ ...pair.meta, kidStart: 0 });
       const hit = tryHit();
       if (hit) return hit;
       if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
@@ -1736,12 +1838,13 @@ ${shapeA ? `function tryReuseTop(oldRoot: Node, newText: string, newMeta: AlignM
       return tryHit() ?? null;
     }
     const before = midKids.length;
-    const seg = parseLoopSeg(midKids);
-    if (seg === null) {
+    const pair = parseLoopSeg(midKids);
+    if (pair === null) {
       if (suffixCand.length === 0 && pos === newN) return finish(0);
       return tryHit() ?? null;
     }
-    midSegs.push({ kidStart: before, kidCount: midKids.length - before, tokStart: seg.tokStart, tokEnd: seg.tokEnd, ext: seg.ext });
+    midSegs.push({ kidStart: before, kidCount: midKids.length - before, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
+    midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
     const hit = tryHit();
     if (hit) return hit;
     if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
@@ -1762,10 +1865,10 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       let reused = 0;
       let next: Node | null = null;
       if (root !== null) {
-        const got = tryReuseTop(root, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
-        if (got) { next = got.root; reused = got.reused; }
+        const got = tryReuseTop(root, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix, validate);
+        if (got) { next = got.root; entries = got.entries; reused = got.reused; }
       }
-      if (next === null) { _src = text; next = parse(toksFromMeta(text, prevToks)) as Node | null; reused = 0; }
+      if (next === null) { _src = text; next = parse(toksFromMeta(text, prevToks)) as Node | null; entries = next !== null ? _entries.slice() : []; reused = 0; }
       root = next;
       align = validate
         ? { ...core, reused, streamEq: checkStreamEq(text, prevToks), treeEq: checkTreeEq(text, root) }
@@ -1776,13 +1879,14 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       let next: Node | null = null;
       let nextSegs: Seg[] | null = null;
       if (root !== null && segs.length > 0) {
-        const got = tryReuseSeg(root, segs, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
-        if (got) { next = got.root; nextSegs = got.segs; reused = got.reused; }
+        const got = tryReuseSeg(root, segs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix, validate);
+        if (got) { next = got.root; nextSegs = got.segs; entries = got.entries; reused = got.reused; }
       }
       if (next === null) {
         _src = text;
         next = parse(toksFromMeta(text, prevToks)) as Node | null;
         nextSegs = next !== null ? _segs.slice() : [];
+        entries = next !== null ? _entries.slice() : [];
         reused = 0;
       }
       root = next;
@@ -1800,9 +1904,17 @@ function checkTreeEq(text: string, root: Node | null): boolean {
     ? `
   let segs: Seg[] = [];`
     : '';
+  const docEntriesInit = topReuse
+    ? `
+  let entries: EntryMeta[] = [];`
+    : '';
   const docParseInit = shapeB
     ? `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;
-  segs = root !== null ? _segs.slice() : [];`
+  segs = root !== null ? _segs.slice() : [];
+  entries = root !== null ? _entries.slice() : [];`
+    : shapeA
+    ? `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;
+  entries = root !== null ? _entries.slice() : [];`
     : `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;`;
   return `export type Edit = { start: number; end: number; text: string };
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean; fd: number; pd: number; lc: boolean; lb: boolean; hd: boolean; td: number };
@@ -1838,7 +1950,7 @@ ${checkStreamEqFn}${windowHelpers}${reuseFns}export function createDoc(src: stri
   const validate = opts?.validate === true;
   let text = src;
   let prevToks = ${initToks};
-  let align: Align | null = null;${docSegInit}
+  let align: Align | null = null;${docSegInit}${docEntriesInit}
 ${docParseInit}
   return {
     text(): string { return text; },

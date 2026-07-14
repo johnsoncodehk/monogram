@@ -169,10 +169,17 @@ async function loadMod(grammar: CstGrammar, name: string): Promise<Mod> {
   return await import(out + '?t=' + Date.now()) as Mod;
 }
 
+/** Strip engine-side lookahead watermark. After D3, parse() may still stamp Node.ext as an
+ *  oracle for Doc.validate asserts, but parseWith must not mutate consumer handles — so
+ *  cstBuilder ≡ parse compares structure without `ext`. */
+function cstCanon(v: unknown): string {
+  return JSON.stringify(v, (k, x) => (k === 'ext' ? undefined : x));
+}
+
 function parseJson(mod: Mod, src: string): string {
   try {
     const toks = mod.tokenize(src).map((t) => ({ off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
-    return JSON.stringify(mod.parse(toks));
+    return cstCanon(mod.parse(toks));
   } catch {
     return '__THROW__';
   }
@@ -180,7 +187,7 @@ function parseJson(mod: Mod, src: string): string {
 
 function withJson(mod: Mod, src: string): string {
   try {
-    return JSON.stringify(mod.parseWith(src, mod.cstBuilder));
+    return cstCanon(mod.parseWith(src, mod.cstBuilder));
   } catch {
     return '__THROW__';
   }
