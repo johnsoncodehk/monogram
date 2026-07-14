@@ -618,13 +618,18 @@ ${needPeek ? '\t_ft := peek()\n' : ''}${r.alts.map(alt).join('\n')}
 }`;
 }
 
-/** Entry rule that records per-top-kid lookahead ext via parseTopOne (shape A). */
+/** Entry rule that records per-top-kid EntryMeta (+ Node.ext oracle) via parseTopOne (shape A). */
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
-  return `func parseTopOne() int32 {
+  return `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
+var entries []EntryMeta
+func parseTopOne() int32 {
 ${plan.topOneBody}
 }
 func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch)
+\tcapHint := (len(toks) - pos) / 2
+\tif capHint < 8 { capHint = 8 }
+\tlocalE := make([]EntryMeta, 0, capHint)
 \tfor {
 \t\tsp := pos
 \t\tmaxLook = 0
@@ -632,50 +637,60 @@ func parse${r.name}() int32 {
 \t\tif n < 0 { pos = sp; break }
 \t\text := nodes[n].TokEnd
 \t\tif uint32(maxLook) > ext { ext = uint32(maxLook) }
-\t\tnodes[n].Ext = ext
+\t\tnodes[n].Ext = ext // CST oracle for validate assert; reuse decisions read entries
+\t\tlocalE = append(localE, EntryMeta{int(nodes[n].TokStart), int(nodes[n].TokEnd), int(ext), int(nodes[n].Offset), int(nodes[n].End), len(scratch) - sb, 1})
 \t\tscratch = append(scratch, n)
 \t}
+\tentries = localE
 \treturn finish(${ruleIdOf(ar, r.cstName)}, sb, offAt(save), save)
 }`;
 }
 
 function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const headFn = plan.hasHead && plan.headRule
-    ? `func parseHeadSeg(sb int) (Seg, bool) {
+    ? `func parseHeadSeg(sb int) (Seg, EntryMeta, bool) {
 \tmaxLook = 0
 \tbefore := len(scratch)
 \topt(func() bool { return callRule(parse${plan.headRule}) })
-\tif len(scratch) == before { return Seg{}, false }
+\tif len(scratch) == before { return Seg{}, EntryMeta{}, false }
 \tn := scratch[before]
 \text := nodes[n].TokEnd
 \tif uint32(maxLook) > ext { ext = uint32(maxLook) }
-\treturn Seg{KidStart: before - sb, KidCount: 1, TokStart: int(nodes[n].TokStart), TokEnd: int(nodes[n].TokEnd), Ext: int(ext)}, true
+\tmeta := EntryMeta{int(nodes[n].TokStart), int(nodes[n].TokEnd), int(ext), int(nodes[n].Offset), int(nodes[n].End), before - sb, 1}
+\treturn Seg{KidStart: before - sb, KidCount: 1, TokStart: int(nodes[n].TokStart), TokEnd: int(nodes[n].TokEnd), Ext: int(ext)}, meta, true
 }
 `
     : '';
   const headBlock = plan.hasHead && plan.headRule
-    ? `\tif h, ok := parseHeadSeg(sb); ok { local = append(local, h) }
+    ? `\tif h, m, ok := parseHeadSeg(sb); ok { local = append(local, h); localE = append(localE, m) }
 `
     : '';
   return `type Seg struct { KidStart, KidCount, TokStart, TokEnd, Ext int }
+type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
 var segs []Seg
-${headFn}func parseLoopSeg(sb int) (Seg, bool) {
+var entries []EntryMeta
+${headFn}func parseLoopSeg(sb int) (Seg, EntryMeta, bool) {
 \tsp := pos; before := len(scratch); nb := len(nodes); kb := len(kids)
 \tmaxLook = 0
 \tif !matchTok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
 \t\tpos = sp; scratch = scratch[:before]; nodes = nodes[:nb]; kids = kids[:kb]
-\t\treturn Seg{}, false
+\t\treturn Seg{}, EntryMeta{}, false
 \t}
 \topt(func() bool { return callRule(parse${plan.loopRule}) })
 \tleaf := scratch[before]
 \tvar tokStart, tokEnd uint32
+\tvar off, end uint32
 \tif leaf < 0 {
 \t\tti, _ := decodeLeaf(leaf)
 \t\ttokStart = ti
 \t\ttokEnd = ti + 1
+\t\toff = toks[ti].Off
+\t\tend = toks[ti].End
 \t} else {
 \t\ttokStart = nodes[leaf].TokStart
 \t\ttokEnd = nodes[leaf].TokEnd
+\t\toff = nodes[leaf].Offset
+\t\tend = nodes[leaf].End
 \t}
 \tcount := len(scratch) - before
 \tif count > 1 {
@@ -683,21 +698,28 @@ ${headFn}func parseLoopSeg(sb int) (Seg, bool) {
 \t\tif second < 0 {
 \t\t\tti, _ := decodeLeaf(second)
 \t\t\ttokEnd = ti + 1
+\t\t\tend = toks[ti].End
 \t\t} else {
 \t\t\ttokEnd = nodes[second].TokEnd
+\t\t\tend = nodes[second].End
 \t\t}
 \t}
 \text := tokEnd
 \tif uint32(maxLook) > ext { ext = uint32(maxLook) }
-\treturn Seg{KidStart: before - sb, KidCount: count, TokStart: int(tokStart), TokEnd: int(tokEnd), Ext: int(ext)}, true
+\tmeta := EntryMeta{int(tokStart), int(tokEnd), int(ext), int(off), int(end), before - sb, count}
+\treturn Seg{KidStart: before - sb, KidCount: count, TokStart: int(tokStart), TokEnd: int(tokEnd), Ext: int(ext)}, meta, true
 }
 func parse${r.name}() int32 {
 \tsave := pos; sb := len(scratch)
-\tlocal := make([]Seg, 0)
+\tcapHint := (len(toks) - pos) / 2
+\tif capHint < 8 { capHint = 8 }
+\tlocal := make([]Seg, 0, capHint)
+\tlocalE := make([]EntryMeta, 0, capHint)
 ${headBlock}\tfor {
-\t\tif seg, ok := parseLoopSeg(sb); ok { local = append(local, seg) } else { break }
+\t\tif seg, m, ok := parseLoopSeg(sb); ok { local = append(local, seg); localE = append(localE, m) } else { break }
 \t}
 \tsegs = local
+\tentries = localE
 \treturn finish(${ruleIdOf(ar, r.cstName)}, sb, offAt(save), save)
 }`;
 }
@@ -1333,57 +1355,56 @@ func shiftSubtree(id int32, byteDelta, tokDelta int) {
 		}
 	}
 }
-func spanOffEnd(v int32) (int, int) {
-	if v < 0 {
-		ti, _ := decodeLeaf(v)
-		t := toks[ti]
-		return int(t.Off), int(t.End)
-	}
-	nd := &nodes[v]
-	return int(nd.Offset), int(nd.End)
+func shiftEntryMeta(m *EntryMeta, byteDelta, tokDelta int) {
+	m.TokStart += tokDelta
+	m.TokEnd += tokDelta
+	m.Ext += tokDelta
+	m.Off += byteDelta
+	m.End += byteDelta
 }
-func spanTokEnd(v int32) int {
-	if v < 0 {
-		ti, _ := decodeLeaf(v)
-		return int(ti) + 1
+${shapeA ? `func assertEntriesVsNodes(oldEntries []EntryMeta, oldRoot int32) {
+	old := nodes[oldRoot]
+	if len(oldEntries) != int(old.KidCount) {
+		panic("entry count vs root kids: " + fmt.Sprintf("%d", len(oldEntries)) + " vs " + fmt.Sprintf("%d", int(old.KidCount)))
 	}
-	return int(nodes[v].TokEnd)
-}
-func prefixKidsTokEnd(kids []int32) int {
-	if len(kids) == 0 { return 0 }
-	last := kids[len(kids)-1]
-	if last < 0 {
-		ti, _ := decodeLeaf(last)
-		return int(ti) + 1
+	for i, e := range oldEntries {
+		nd := nodes[kids[old.KidStart+uint32(i)]]
+		if e.TokStart != int(nd.TokStart) { panic("tok_start entry " + fmt.Sprintf("%d", i)) }
+		if e.TokEnd != int(nd.TokEnd) { panic("tok_end entry " + fmt.Sprintf("%d", i)) }
+		if e.Ext != int(nd.Ext) { panic("ext entry " + fmt.Sprintf("%d", i)) }
+		if e.Off != int(nd.Offset) { panic("off entry " + fmt.Sprintf("%d", i)) }
+		if e.End != int(nd.End) { panic("end entry " + fmt.Sprintf("%d", i)) }
 	}
-	return int(nodes[last].TokEnd)
 }
-${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int) (int32, int) {
+func tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int, validate bool) (int32, int) {
 	if oldRoot < 0 { return -1, 0 }
+	if validate { assertEntriesVsNodes(oldEntries, oldRoot) }
 	old := nodes[oldRoot]
 	oldKids := make([]int32, old.KidCount)
 	for i := uint32(0); i < old.KidCount; i++ { oldKids[i] = kids[old.KidStart+i] }
 	prefixLen := 0
-	for prefixLen < len(oldKids) {
-		ext := nodes[oldKids[prefixLen]].Ext
-		if ext <= uint32(prefix) { prefixLen++ } else { break }
+	for prefixLen < len(oldEntries) {
+		if oldEntries[prefixLen].Ext <= prefix { prefixLen++ } else { break }
 	}
-	suffixStart := len(oldKids)
-	for i := len(oldKids) - 1; i >= prefixLen; i-- {
-		if nodes[oldKids[i]].TokStart >= uint32(oldN-suffix) { suffixStart = i } else { break }
+	suffixStart := len(oldEntries)
+	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
+		if oldEntries[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
 	}
 	prefixKids := oldKids[:prefixLen]
 	suffixCand := oldKids[suffixStart:]
+	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
+	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	tokDelta := newN - oldN
 	_src = newText
 	toks = toksFromMeta(newText, newMeta)
-	if prefixLen > 0 { pos = prefixKidsTokEnd(prefixKids) } else { pos = 0 }
+	if prefixLen > 0 { pos = prefixMeta[prefixLen-1].TokEnd } else { pos = 0 }
 	scratch = scratch[:0]
 	mid := make([]int32, 0)
+	midMeta := make([]EntryMeta, 0)
 	suffixBound := newN - suffix
 	maxCand := -1
-	for _, id := range suffixCand {
-		c := int(nodes[id].TokStart) + tokDelta
+	for _, m := range suffixMeta {
+		c := m.TokStart + tokDelta
 		if c > maxCand { maxCand = c }
 	}
 	finishHit := func(adoptFrom int) (int32, int) {
@@ -1393,21 +1414,25 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 		children = append(children, prefixKids...)
 		children = append(children, mid...)
 		children = append(children, adopted...)
+		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
+		newEntries := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(adoptedMeta))
+		newEntries = append(newEntries, prefixMeta...)
+		newEntries = append(newEntries, midMeta...)
+		for i := range adoptedMeta {
+			shiftEntryMeta(&adoptedMeta[i], byteDelta, tokDelta)
+			newEntries = append(newEntries, adoptedMeta[i])
+		}
 		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(children) > 0 {
-			off, _ = spanOffEnd(children[0])
-			_, end = spanOffEnd(children[len(children)-1])
-			if children[0] < 0 {
-				ti, _ := decodeLeaf(children[0])
-				tokStart = int(ti)
-			} else {
-				tokStart = int(nodes[children[0]].TokStart)
-			}
-			tokEnd = spanTokEnd(children[len(children)-1])
+		if len(newEntries) > 0 {
+			off = newEntries[0].Off
+			end = newEntries[len(newEntries)-1].End
+			tokStart = newEntries[0].TokStart
+			tokEnd = newEntries[len(newEntries)-1].TokEnd
 		}
 		kidStart := len(kids)
 		kids = append(kids, children...)
 		nodes = append(nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
+		entries = newEntries
 		pos = newN
 		return int32(len(nodes) - 1), len(prefixKids) + len(adopted)
 	}
@@ -1417,8 +1442,8 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 			if pos == newN { r, n := finishHit(0); return r, n, true }
 			return -1, 0, false
 		}
-		for i, id := range suffixCand {
-			if int(nodes[id].TokStart)+tokDelta == pos { r, n := finishHit(i); return r, n, true }
+		for i, m := range suffixMeta {
+			if m.TokStart+tokDelta == pos { r, n := finishHit(i); return r, n, true }
 		}
 		return -1, 0, false
 	}
@@ -1437,24 +1462,50 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 		ext := nodes[n].TokEnd
 		if uint32(maxLook) > ext { ext = uint32(maxLook) }
 		nodes[n].Ext = ext
+		midMeta = append(midMeta, EntryMeta{int(nodes[n].TokStart), int(nodes[n].TokEnd), int(ext), int(nodes[n].Offset), int(nodes[n].End), 0, 1})
 		mid = append(mid, n)
 		if r, rn, ok := tryHit(); ok { return r, rn }
 		if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
 	}
 }
-` : ''}${shapeB ? `func tryReuseSeg(oldRoot int32, oldSegs []Seg, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int) (int32, int) {
+` : ''}${shapeB ? `func assertEntriesVsSegs(oldEntries []EntryMeta, oldSegs []Seg, oldRoot int32) {
+	if len(oldEntries) != len(oldSegs) {
+		panic("entry count vs segs: " + fmt.Sprintf("%d", len(oldEntries)) + " vs " + fmt.Sprintf("%d", len(oldSegs)))
+	}
+	old := nodes[oldRoot]
+	for i, e := range oldEntries {
+		s := oldSegs[i]
+		if e.TokStart != s.TokStart { panic("tok_start entry " + fmt.Sprintf("%d", i)) }
+		if e.TokEnd != s.TokEnd { panic("tok_end entry " + fmt.Sprintf("%d", i)) }
+		if e.Ext != s.Ext { panic("ext entry " + fmt.Sprintf("%d", i)) }
+		if e.KidStart != s.KidStart { panic("kid_start entry " + fmt.Sprintf("%d", i)) }
+		if e.KidCount != s.KidCount { panic("kid_count entry " + fmt.Sprintf("%d", i)) }
+		first := kids[old.KidStart+uint32(s.KidStart)]
+		last := kids[old.KidStart+uint32(s.KidStart+s.KidCount-1)]
+		if first >= 0 {
+			if e.Off != int(nodes[first].Offset) { panic("off entry " + fmt.Sprintf("%d", i)) }
+		}
+		if last >= 0 {
+			if e.End != int(nodes[last].End) { panic("end entry " + fmt.Sprintf("%d", i)) }
+		}
+	}
+}
+func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int, validate bool) (int32, int) {
 	if oldRoot < 0 || len(oldSegs) == 0 { return -1, 0 }
+	if validate { assertEntriesVsSegs(oldEntries, oldSegs, oldRoot) }
 	old := nodes[oldRoot]
 	prefixLen := 0
-	for prefixLen < len(oldSegs) {
-		if oldSegs[prefixLen].Ext <= prefix { prefixLen++ } else { break }
+	for prefixLen < len(oldEntries) {
+		if oldEntries[prefixLen].Ext <= prefix { prefixLen++ } else { break }
 	}
-	suffixStart := len(oldSegs)
-	for i := len(oldSegs) - 1; i >= prefixLen; i-- {
-		if oldSegs[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
+	suffixStart := len(oldEntries)
+	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
+		if oldEntries[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
 	}
 	prefixSegs := oldSegs[:prefixLen]
 	suffixCand := oldSegs[suffixStart:]
+	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
+	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	prefixKids := make([]int32, 0)
 	for _, s := range prefixSegs {
 		for i := 0; i < s.KidCount; i++ { prefixKids = append(prefixKids, kids[old.KidStart+uint32(s.KidStart+i)]) }
@@ -1462,14 +1513,15 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 	tokDelta := newN - oldN
 	_src = newText
 	toks = toksFromMeta(newText, newMeta)
-	if prefixLen > 0 { pos = prefixSegs[prefixLen-1].TokEnd } else { pos = 0 }
+	if prefixLen > 0 { pos = prefixMeta[prefixLen-1].TokEnd } else { pos = 0 }
 	scratch = scratch[:0]
 	midKids := make([]int32, 0)
 	midSegs := make([]Seg, 0)
+	midMeta := make([]EntryMeta, 0)
 	suffixBound := newN - suffix
 	maxCand := -1
-	for _, s := range suffixCand {
-		c := s.TokStart + tokDelta
+	for _, m := range suffixMeta {
+		c := m.TokStart + tokDelta
 		if c > maxCand { maxCand = c }
 	}
 	finishHit := func(adoptFrom int) (int32, int) {
@@ -1492,35 +1544,43 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 		children = append(children, midKids...)
 		children = append(children, adoptedKids...)
 		newSegs := make([]Seg, 0, len(prefixSegs)+len(midSegs)+len(adoptedSegs))
+		newEntries := make([]EntryMeta, 0, len(prefixMeta)+len(midMeta)+len(suffixMeta)-adoptFrom)
 		kOff := 0
-		for _, s := range prefixSegs {
+		for i, s := range prefixSegs {
+			em := prefixMeta[i]
+			em.KidStart = kOff
 			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
+			newEntries = append(newEntries, em)
 			kOff += s.KidCount
 		}
-		for _, s := range midSegs {
+		for i, s := range midSegs {
+			em := midMeta[i]
+			em.KidStart = kOff
 			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart, s.TokEnd, s.Ext})
+			newEntries = append(newEntries, em)
 			kOff += s.KidCount
 		}
-		for _, s := range adoptedSegs {
+		adoptedMeta := append([]EntryMeta(nil), suffixMeta[adoptFrom:]...)
+		for i, s := range adoptedSegs {
+			em := adoptedMeta[i]
+			shiftEntryMeta(&em, byteDelta, tokDelta)
+			em.KidStart = kOff
 			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext + tokDelta})
+			newEntries = append(newEntries, em)
 			kOff += s.KidCount
 		}
 		off, end, tokStart, tokEnd := 0, 0, 0, 0
-		if len(children) > 0 {
-			off, _ = spanOffEnd(children[0])
-			_, end = spanOffEnd(children[len(children)-1])
-			if children[0] < 0 {
-				ti, _ := decodeLeaf(children[0])
-				tokStart = int(ti)
-			} else {
-				tokStart = int(nodes[children[0]].TokStart)
-			}
-			tokEnd = spanTokEnd(children[len(children)-1])
+		if len(newEntries) > 0 {
+			off = newEntries[0].Off
+			end = newEntries[len(newEntries)-1].End
+			tokStart = newEntries[0].TokStart
+			tokEnd = newEntries[len(newEntries)-1].TokEnd
 		}
 		kidStart := len(kids)
 		kids = append(kids, children...)
 		nodes = append(nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
 		segs = newSegs
+		entries = newEntries
 		pos = newN
 		return int32(len(nodes) - 1), len(prefixSegs) + len(adoptedSegs)
 	}
@@ -1530,8 +1590,8 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 			if pos == newN { r, n := finishHit(0); return r, n, true }
 			return -1, 0, false
 		}
-		for i, s := range suffixCand {
-			if s.TokStart+tokDelta == pos { r, n := finishHit(i); return r, n, true }
+		for i, m := range suffixMeta {
+			if m.TokStart+tokDelta == pos { r, n := finishHit(i); return r, n, true }
 		}
 		return -1, 0, false
 	}
@@ -1539,11 +1599,13 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 	if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
 	${hasHeadB ? `if prefixLen == 0 {
 		sb := len(scratch)
-		if h, ok := parseHeadSeg(sb); ok {
+		if h, m, ok := parseHeadSeg(sb); ok {
 			h.KidStart = 0
+			m.KidStart = 0
 			midKids = append(midKids, scratch[sb:]...)
 			scratch = scratch[:sb]
 			midSegs = append(midSegs, h)
+			midMeta = append(midMeta, m)
 			if r, rn, ok := tryHit(); ok { return r, rn }
 			if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
 		}
@@ -1555,7 +1617,7 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 			return -1, 0
 		}
 		sb := len(scratch)
-		seg, ok := parseLoopSeg(sb)
+		seg, m, ok := parseLoopSeg(sb)
 		if !ok {
 			if len(suffixCand) == 0 && pos == newN { return finishHit(0) }
 			if r, n, hit := tryHit(); hit { return r, n }
@@ -1564,7 +1626,9 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 		count := len(scratch) - sb
 		midKids = append(midKids, scratch[sb:]...)
 		scratch = scratch[:sb]
+		m.KidStart = 0
 		midSegs = append(midSegs, Seg{0, count, seg.TokStart, seg.TokEnd, seg.Ext})
+		midMeta = append(midMeta, m)
 		if r, rn, hit := tryHit(); hit { return r, rn }
 		if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
 	}
@@ -1575,15 +1639,19 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 \treused := 0
 \tforceFresh := d.root < 0 || shouldReclaim(d.root)
 \tif !forceFresh {
-\t\tif got, n := tryReuseTop(d.root, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix); got >= 0 {
+\t\toldEntries := append([]EntryMeta(nil), d.entries...)
+\t\tif got, n := tryReuseTop(d.root, oldEntries, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix, d.validate); got >= 0 {
 \t\t\td.root = got
+\t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = n
 \t\t} else {
 \t\t\td.root = parse(toksFromMeta(d.text, d.toks))
+\t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = 0
 \t\t}
 \t} else {
 \t\td.root = parse(toksFromMeta(d.text, d.toks))
+\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\treused = 0
 \t}`
     : shapeB
@@ -1592,15 +1660,19 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 \tforceFresh := d.root < 0 || shouldReclaim(d.root)
 \tif !forceFresh {
 \t\toldSegs := append([]Seg(nil), segs...)
-\t\tif got, n := tryReuseSeg(d.root, oldSegs, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix); got >= 0 {
+\t\toldEntries := append([]EntryMeta(nil), d.entries...)
+\t\tif got, n := tryReuseSeg(d.root, oldSegs, oldEntries, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix, d.validate); got >= 0 {
 \t\t\td.root = got
+\t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = n
 \t\t} else {
 \t\t\td.root = parse(toksFromMeta(d.text, d.toks))
+\t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = 0
 \t\t}
 \t} else {
 \t\td.root = parse(toksFromMeta(d.text, d.toks))
+\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\treused = 0
 \t}`
     : `\treused := 0
@@ -1618,11 +1690,12 @@ func checkTreeEq(text string, root int32) bool {
 	saveKids := append([]int32(nil), kids...)
 	saveScratch := append([]int32(nil), scratch...)
 	saveSegs := append([]Seg(nil), segs...)
+	saveEntries := append([]EntryMeta(nil), entries...)
 	saveBaseline := arenaBaseline
 	saveToks := append([]Tok(nil), toks...)
 	savePos, saveSrc, saveML := pos, _src, maxLook
 	saveCap, saveSN, saveSC := _capped, _suppressNext, _suppressCur
-	nodes, kids, scratch, segs = nil, nil, nil, nil
+	nodes, kids, scratch, segs, entries = nil, nil, nil, nil, nil
 	_capped, _suppressNext, _suppressCur = false, nil, nil
 	fresh := parse(tokenize(text))
 	freshOk := fresh >= 0 && pos == len(toks)
@@ -1634,7 +1707,7 @@ func checkTreeEq(text string, root int32) bool {
 		writeJSON(fresh, &b2)
 		ok = s1 == b2.String()
 	}
-	nodes, kids, scratch, segs = saveNodes, saveKids, saveScratch, saveSegs
+	nodes, kids, scratch, segs, entries = saveNodes, saveKids, saveScratch, saveSegs, saveEntries
 	arenaBaseline, toks, pos, _src, maxLook = saveBaseline, saveToks, savePos, saveSrc, saveML
 	_capped, _suppressNext, _suppressCur = saveCap, saveSN, saveSC
 	return ok
@@ -1652,12 +1725,14 @@ func checkTreeEq(text string, root int32) bool {
 	saveNodes := append([]Node(nil), nodes...)
 	saveKids := append([]int32(nil), kids...)
 	saveScratch := append([]int32(nil), scratch...)
-	saveBaseline := arenaBaseline
+${shapeA ? `\tsaveEntries := append([]EntryMeta(nil), entries...)
+` : ''}\tsaveBaseline := arenaBaseline
 	saveToks := append([]Tok(nil), toks...)
 	savePos, saveSrc, saveML := pos, _src, maxLook
 	saveCap, saveSN, saveSC := _capped, _suppressNext, _suppressCur
 	nodes, kids, scratch = nil, nil, nil
-	_capped, _suppressNext, _suppressCur = false, nil, nil
+${shapeA ? `\tentries = nil
+` : ''}\t_capped, _suppressNext, _suppressCur = false, nil, nil
 	fresh := parse(tokenize(text))
 	freshOk := fresh >= 0 && pos == len(toks)
 	ok := false
@@ -1669,7 +1744,8 @@ func checkTreeEq(text string, root int32) bool {
 		ok = s1 == b2.String()
 	}
 	nodes, kids, scratch = saveNodes, saveKids, saveScratch
-	arenaBaseline, toks, pos, _src, maxLook = saveBaseline, saveToks, savePos, saveSrc, saveML
+${shapeA ? `\tentries = saveEntries
+` : ''}\tarenaBaseline, toks, pos, _src, maxLook = saveBaseline, saveToks, savePos, saveSrc, saveML
 	_capped, _suppressNext, _suppressCur = saveCap, saveSN, saveSC
 	return ok
 }
@@ -1713,12 +1789,12 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	}
 	return t
 }
-${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool }
+${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool${topReuse ? '; entries []EntryMeta' : ''} }
 func NewDoc(src string) *Doc {
 	d := &Doc{text: src}
 	d.toks = ${initToks}
 	d.root = parse(tokenize(src))
-	return d
+${topReuse ? '\td.entries = append([]EntryMeta(nil), entries...)\n' : ''}\treturn d
 }
 func (d *Doc) SetValidate(v bool) { d.validate = v }
 func (d *Doc) Text() string { return d.text }
@@ -1853,18 +1929,32 @@ function topOneBodyW(plan: ReusePlanA): string {
 
 function rdEntryWithReuseAW(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan, recv: string): string {
   const rid = ruleIdOf(ar, r.cstName);
+  // Engine-side EntryMeta (R2): never mutate consumer handles; span from spanned + SpanOf.
   return `func (p *${recv}) parseTopOneW() (spanned, bool) {
 ${topOneBodyW(plan)}
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
+\tcapHint := (len(p.toks) - p.pos) / 2
+\tif capHint < 8 { capHint = 8 }
+\tlocalE := make([]EntryMeta, 0, capHint)
 \tfor {
 \t\tsp := p.pos
 \t\tp.maxLook = 0
 \t\tfr, ok := p.parseTopOneW()
 \t\tif !ok { p.pos = sp; break }
-\t\tif fr.present { p.scratch = append(p.scratch, fr.h) }
+\t\ttokEnd := p.pos
+\t\text := tokEnd
+\t\tif p.maxLook > ext { ext = p.maxLook }
+\t\tend := int(fr.off)
+\t\tif fr.present {
+\t\t\t_, e1 := p.b.SpanOf(fr.h, p.toks)
+\t\t\tend = int(e1)
+\t\t\tlocalE = append(localE, EntryMeta{int(fr.tokStart), tokEnd, ext, int(fr.off), end, len(p.scratch) - sb, 1})
+\t\t\tp.scratch = append(p.scratch, fr.h)
+\t\t}
 \t}
+\tp.entries = localE
 \treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
 }`;
 }
@@ -1872,33 +1962,59 @@ func (p *${recv}) parse${r.name}W() (spanned, bool) {
 function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   const rid = ruleIdOf(ar, r.cstName);
   const headFn = plan.hasHead && plan.headRule
-    ? `func (p *${recv}) parseHeadSegW() bool {
+    ? `func (p *${recv}) parseHeadSegW(sb int) (EntryMeta, bool) {
 \tp.maxLook = 0
 \tbefore := len(p.scratch)
+\ttokStart := p.pos
 \tp.optW(func() bool { return p.callRuleW((*${recv}).parse${plan.headRule}W) })
-\treturn len(p.scratch) > before
+\tif len(p.scratch) == before { return EntryMeta{}, false }
+\th := p.scratch[before]
+\to0, e1 := p.b.SpanOf(h, p.toks)
+\ttokEnd := p.pos
+\text := tokEnd
+\tif p.maxLook > ext { ext = p.maxLook }
+\treturn EntryMeta{tokStart, tokEnd, ext, int(o0), int(e1), before - sb, 1}, true
 }
 `
     : '';
   const headBlock = plan.hasHead && plan.headRule
-    ? `\t_ = p.parseHeadSegW()
+    ? `\tif m, ok := p.parseHeadSegW(sb); ok { localE = append(localE, m) }
 `
     : '';
-  return `${headFn}func (p *${recv}) parseLoopSegW() bool {
+  return `${headFn}func (p *${recv}) parseLoopSegW(sb int) (EntryMeta, bool) {
 \tsp := p.pos; before := len(p.scratch); ${arenaCkpt(recv)}
 \tp.maxLook = 0
 \tif !p.matchTokW(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
 \t\tp.pos = sp; p.scratch = p.scratch[:before]; ${arenaRestore(recv)}
-\t\treturn false
+\t\treturn EntryMeta{}, false
 \t}
 \tp.optW(func() bool { return p.callRuleW((*${recv}).parse${plan.loopRule}W) })
-\treturn true
+\tcount := len(p.scratch) - before
+\tif count == 0 { return EntryMeta{}, false }
+\tleaf := p.scratch[before]
+\to0, e1 := p.b.SpanOf(leaf, p.toks)
+\tend := e1
+\tif count > 1 {
+\t\t_, e2 := p.b.SpanOf(p.scratch[before+1], p.toks)
+\t\tend = e2
+\t}
+\ttokStart := sp
+\ttokEnd := p.pos
+\text := tokEnd
+\tif p.maxLook > ext { ext = p.maxLook }
+\treturn EntryMeta{tokStart, tokEnd, ext, int(o0), int(end), before - sb, count}, true
 }
 func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch)
+\tcapHint := (len(p.toks) - p.pos) / 2
+\tif capHint < 8 { capHint = 8 }
+\tlocalE := make([]EntryMeta, 0, capHint)
 ${headBlock}\tfor {
-\t\tif !p.parseLoopSegW() { break }
+\t\tm, ok := p.parseLoopSegW(sb)
+\t\tif !ok { break }
+\t\tlocalE = append(localE, m)
 \t}
+\tp.entries = localE
 \treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
 }`;
 }
@@ -2043,6 +2159,7 @@ ${r.nudSeqs.map((seq) => `\t{ save := p.pos; sb := len(p.scratch); ${arenaCkpt(r
 
 function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const reuse = topReusePlan(ir);
+  const entriesField = reuse ? '\n\tentries []EntryMeta' : '';
   const ruleFnsW = ir.rules.map((r) => {
     if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids, ar, recv);
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids, ar, recv);
@@ -2139,7 +2256,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tsuppressNext, suppressCur map[uint16]bool
 \tsrc string
 \tb Builder
-\tscratch []int32`;
+\tscratch []int32${entriesField}`;
   return `type ${recv} struct {
 ${structFields}
 }
