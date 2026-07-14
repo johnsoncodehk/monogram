@@ -163,7 +163,8 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
         }`;
   if (t.kind === 'block') return `        if ${gate}src[pos..].starts_with(${J(t.open)}) {
             let mut e = pos + ${t.open.length};
-            while e < n && !src[e..].starts_with(${J(t.close)}) { e += 1; }
+            // Byte-step + &str slice panics mid multi-byte char; match close on bytes.
+            while e < n && !b[e..].starts_with(${J(t.close)}.as_bytes()) { e += 1; }
             if e < n { e += ${t.close.length}; }
             ${push('e')}pos = e; continue;
         }`;
@@ -368,11 +369,14 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
   const rxConsts = `${rxBitTables}${tplLidConsts}${needIn ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }\n` : ''}${nlRs ? nlRs.consts : ''}`;
   const pavHot = rx ? rsLidAny(ids, rx.postfixAfterValue, 'lid') : 'false';
   const tplFn = tpl ? `fn _scan_tpl_span(s: &str, mut p: usize) -> (bool, usize) {
-    let n = s.len();
+    let b = s.as_bytes();
+    let n = b.len();
+    // Scan on bytes: p may land mid multi-byte UTF-8 after escape (+2) or byte-step;
+    // &str[p..] would panic on char-boundary. ASCII delimiters match equivalently.
     while p < n {
-        if s[p..].starts_with(${J(tpl.interpOpen)}) { return (true, p + ${tpl.interpOpen.length}); }
-        if s.as_bytes()[p] == 92 { p += 2; continue; }
-        if s[p..].starts_with(${J(tpl.open)}) { return (false, p + ${tpl.open.length}); }
+        if b[p..].starts_with(${J(tpl.interpOpen)}.as_bytes()) { return (true, p + ${tpl.interpOpen.length}); }
+        if b[p] == 92 { p += 2; continue; }
+        if b[p..].starts_with(${J(tpl.open)}.as_bytes()) { return (false, p + ${tpl.open.length}); }
         p += 1;
     }
     (false, p)
@@ -2204,7 +2208,15 @@ fn parse_str(s: &[u8], mut i: usize) -> Option<(String, usize)> {
             b'\\\\' => { i += 1; if i >= s.len() { return None; }
                 out.push(match s[i] { b'n' => '\\n', b'r' => '\\r', b't' => '\\t', b'"' => '"', b'\\\\' => '\\\\', b'/' => '/', c => c as char });
                 i += 1; }
-            c => { out.push(c as char); i += 1; }
+            // Decode UTF-8 properly: byte-as-char Latin-1 corrupted multi-byte (e.g. é → Ã©)
+            // and made edit offsets disagree with go/ts JSON parsers.
+            c if c < 0x80 => { out.push(c as char); i += 1; }
+            _ => {
+                let w = match s[i] { 0xC0..=0xDF => 2, 0xE0..=0xEF => 3, 0xF0..=0xF7 => 4, _ => return None };
+                if i + w > s.len() { return None; }
+                let ch = std::str::from_utf8(&s[i..i + w]).ok()?.chars().next()?;
+                out.push(ch); i += w;
+            }
         }
     }
     None
