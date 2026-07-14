@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -44,17 +44,31 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 function renderIdTablesGo(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
+  const pf = buildLidPrefilter(ids);
+  const bitsLit = [...pf.firstByLenBits].join(', ');
   return `var KIND_STR = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
 var _kidMap = map[string]uint16{}
 var _lidMap = map[string]uint16{}
+const _lidMaxLen = ${pf.maxByteLen}
+var _lidFirstBits = [...]byte{${bitsLit}}
 
 func init() {
 \tfor i, k := range KIND_STR { _kidMap[k] = uint16(i) }
 \tfor i, t := range _lids { _lidMap[t] = uint16(i) }
 }
 func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
-func lidOf(text string) uint16 { if v, ok := _lidMap[text]; ok { return v }; return 0 }
+func lidOf(text string) uint16 {
+\tn := len(text)
+\tif n == 0 || n > _lidMaxLen { return 0 }
+\tb0 := text[0]
+\t// Ident/@-keyword shape: O(1) length×first-byte miss ⇒ lid 0. Punct first bytes skip the probe.
+\tif (b0 >= 'A' && b0 <= 'Z') || (b0 >= 'a' && b0 <= 'z') || b0 == '_' || b0 == '$' || b0 == '@' {
+\t\tif _lidFirstBits[n*32+(int(b0)>>3)]&(1<<(b0&7)) == 0 { return 0 }
+\t}
+\tif v, ok := _lidMap[text]; ok { return v }
+\treturn 0
+}
 func tokKind(t *Tok) string { return KIND_STR[t.Kid] }
 func tokText(src string, t *Tok) string { return src[t.Off:t.End] }
 func mkTok(off, end int, nl bool, kid, lid uint16) Tok { return Tok{Off: uint32(off), End: uint32(end), Kid: kid, Lid: lid, Nl: nl} }

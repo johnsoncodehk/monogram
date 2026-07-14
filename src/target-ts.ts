@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 
@@ -38,12 +38,25 @@ const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesTS(ids: LexIdPlan): string {
+  const pf = buildLidPrefilter(ids);
+  const bitsLit = [...pf.firstByLenBits].join(', ');
   return `const KIND_STR: string[] = ${J(ids.kids)};
 const _LIDS: string[] = ${J(ids.lids)};
 const _KID_MAP = new Map<string, number>(KIND_STR.map((k, i) => [k, i]));
 const _LID_MAP = new Map<string, number>(_LIDS.map((t, i) => [t, i]));
+const _LID_MAX_LEN = ${pf.maxByteLen};
+const _LID_FIRST_BITS = new Uint8Array([${bitsLit}]);
 function kid_of(kind: string): number { return _KID_MAP.get(kind) ?? 0; }
-function lid_of(text: string): number { return _LID_MAP.get(text) ?? 0; }
+function lid_of(text: string): number {
+  const n = text.length;
+  if (n === 0 || n > _LID_MAX_LEN) return 0;
+  const b0 = text.charCodeAt(0);
+  // Ident/@-keyword shape: O(1) length×first-byte miss ⇒ lid 0. Punct first bytes skip the probe.
+  if ((b0 >= 65 && b0 <= 90) || (b0 >= 97 && b0 <= 122) || b0 === 95 || b0 === 36 || b0 === 64) {
+    if ((_LID_FIRST_BITS[n * 32 + (b0 >> 3)]! & (1 << (b0 & 7))) === 0) return 0;
+  }
+  return _LID_MAP.get(text) ?? 0;
+}
 function tok_kind(t: Tok): string { return KIND_STR[t.kid]!; }
 function tok_text(src: string, t: Tok): string { return src.slice(t.off, t.end); }
 function mk_tok(off: number, end: number, nl: boolean, kid: number, lid: number): Tok { return { off, end, nl, kid, lid }; }

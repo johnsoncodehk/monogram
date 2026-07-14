@@ -12,7 +12,8 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers (the kids vec is now on
 // the Parser as `scratch`, so the second param the old owned-tree version threaded is gone).
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { isKeywordLiteral } from './grammar-utils.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 
@@ -48,28 +49,59 @@ function renderIdTablesRust(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
   const kidArms = ids.kids.map((k, i) => `${J(k)} => ${i}`).join(', ');
-  // Group lids[1..] by UTF-8 byte length for a two-level match (len → text). Rust `str::len` is bytes.
-  const byLen = new Map<number, { text: string; id: number }[]>();
+  // Group lids[1..] by UTF-8 byte length; split keyword-shaped vs punct for separate match tables.
+  const byLenKw = new Map<number, { text: string; id: number }[]>();
+  const byLenPu = new Map<number, { text: string; id: number }[]>();
   for (let i = 1; i < ids.lids.length; i++) {
-    const text = ids.lids[i];
+    const text = ids.lids[i]!;
     const blen = Buffer.byteLength(text);
-    const arr = byLen.get(blen) ?? [];
-    arr.push({ text, id: i });
-    byLen.set(blen, arr);
+    const ent = { text, id: i };
+    const map = isKeywordLiteral(text) ? byLenKw : byLenPu;
+    const arr = map.get(blen) ?? [];
+    arr.push(ent);
+    map.set(blen, arr);
   }
-  const lenArms = [...byLen.entries()].sort((a, b) => a[0] - b[0]).map(([len, ents]) => {
-    const arms = ents.map((e) => `${J(e.text)} => ${e.id}`).join(', ');
-    return `        ${len} => match text { ${arms}, _ => 0 },`;
-  }).join('\n');
+  const lenArmsOf = (byLen: Map<number, { text: string; id: number }[]>) =>
+    [...byLen.entries()].sort((a, b) => a[0] - b[0]).map(([len, ents]) => {
+      const arms = ents.map((e) => `${J(e.text)} => ${e.id}`).join(', ');
+      return `        ${len} => match text { ${arms}, _ => 0 },`;
+    }).join('\n');
+  const kwArms = lenArmsOf(byLenKw);
+  const puArms = lenArmsOf(byLenPu);
+  const pf = buildLidPrefilter(ids);
+  const bitsLit = [...pf.firstByLenBits].join(', ');
   return `const KIND_STR: &[&str] = &[${kidsLit}];
 const _LIDS: &[&str] = &[${lidsLit}];
+const _LID_MAX_LEN: usize = ${pf.maxByteLen};
+const _LID_FIRST_BITS: &[u8] = &[${bitsLit}];
 #[inline(always)] fn tok_kind(t: &Tok) -> &'static str { KIND_STR[t.kid as usize] }
 #[inline(always)] fn tok_text<'a>(src: &'a str, t: &Tok) -> &'a str { &src[t.off as usize..t.end as usize] }
 #[inline(always)] fn mk_tok(off: usize, end: usize, nl: bool, kid: u16, lid: u16) -> Tok { Tok { off: off as u32, end: end as u32, kid, lid, nl } }
 fn kid_of(kind: &str) -> u16 { match kind { ${kidArms}, _ => 0 } }
+/// Ident/@-keyword: O(1) length×first-byte prefilter, then keyword-only match (no punct arms).
+#[inline(always)]
 fn lid_of(text: &str) -> u16 {
-    match text.len() {
-${lenArms || '        // no non-empty lids'}
+    let n = text.len();
+    if n == 0 || n > _LID_MAX_LEN { return 0; }
+    let b0 = text.as_bytes()[0];
+    if matches!(b0, b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'$' | b'@') {
+        let b0u = b0 as usize;
+        if (_LID_FIRST_BITS[n * 32 + (b0u >> 3)] & (1u8 << (b0u & 7))) == 0 { return 0; }
+        return lid_of_kw(text, n);
+    }
+    lid_of_punct(text, n)
+}
+#[inline(never)]
+fn lid_of_kw(text: &str, n: usize) -> u16 {
+    match n {
+${kwArms || '        // no keyword lids'}
+        _ => 0,
+    }
+}
+#[inline(never)]
+fn lid_of_punct(text: &str, n: usize) -> u16 {
+    match n {
+${puArms || '        // no punct lids'}
         _ => 0,
     }
 }

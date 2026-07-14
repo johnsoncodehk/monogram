@@ -676,6 +676,60 @@ export function lidOf(plan: LexIdPlan, text: string): number {
   return i >= 0 ? i : 0;
 }
 
+/**
+ * O(1) early-exit prefilter for runtime `lid_of` on Ident-shaped texts.
+ *
+ * - `maxByteLen` spans ALL literals (so oversize still ⇒ lid 0, puncts included).
+ * - `firstByLenBits` is filled only from `isKeywordLiteral` texts (Ident / `@kw` shapes).
+ * Runtime applies the bit probe only when the first byte is Ident-start or `@`; punct first
+ * bytes skip the probe and go straight to the slow path — no tax on the punct hot path.
+ * Conservatively correct: every keyword-shaped literal hits; non-keywords may fall through.
+ *
+ * Layout: `(maxByteLen + 1)` rows × 32 bytes (256 bits).
+ */
+export type LidPrefilterPlan = {
+  maxByteLen: number;
+  /** Flat bit table, length `(maxByteLen + 1) * 32` — keyword-shaped (len × first) only. */
+  firstByLenBits: Uint8Array;
+};
+
+/** True if first byte is Ident-start (`A-Za-z_$`) or `@` (decorator-keyword shape). */
+export function lidPrefilterAppliesToFirst(b0: number): boolean {
+  return (b0 >= 65 && b0 <= 90) || (b0 >= 97 && b0 <= 122) || b0 === 95 || b0 === 36 || b0 === 64;
+}
+
+/** Build length×first-byte prefilter: maxLen from all lids; bits from keyword-shaped lids only. */
+export function buildLidPrefilter(plan: LexIdPlan): LidPrefilterPlan {
+  let maxByteLen = 0;
+  const kw: { len: number; first: number }[] = [];
+  for (let i = 1; i < plan.lids.length; i++) {
+    const text = plan.lids[i]!;
+    const buf = Buffer.from(text, 'utf8');
+    if (buf.length === 0) continue;
+    maxByteLen = Math.max(maxByteLen, buf.length);
+    if (isKeywordLiteral(text)) kw.push({ len: buf.length, first: buf[0]! });
+  }
+  const firstByLenBits = new Uint8Array((maxByteLen + 1) * 32);
+  for (const { len, first } of kw) {
+    firstByLenBits[len * 32 + (first >> 3)] |= 1 << (first & 7);
+  }
+  return { maxByteLen, firstByLenBits };
+}
+
+/**
+ * Probe the prefilter (mirrors emitted runtime).
+ * Non-Ident-shaped texts are never rejected here (punct path).
+ * True ⇒ may be a literal (must consult slow path); false ⇒ definite lid 0 for Ident-shaped.
+ */
+export function lidPrefilterMayHit(pf: LidPrefilterPlan, text: string): boolean {
+  const buf = Buffer.from(text, 'utf8');
+  const n = buf.length;
+  if (n === 0 || n > pf.maxByteLen) return false;
+  const b0 = buf[0]!;
+  if (!lidPrefilterAppliesToFirst(b0)) return true; // punct-shaped — defer to slow path
+  return (pf.firstByLenBits[n * 32 + (b0 >> 3)]! & (1 << (b0 & 7))) !== 0;
+}
+
 /** Resolve kid for a known kind; 0 if not in the plan. */
 export function kidOf(plan: LexIdPlan, kind: string): number {
   const i = plan.kids.indexOf(kind);
