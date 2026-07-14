@@ -134,9 +134,9 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
     }`;
   }
   if (t.kind === 'string') return `    if (${gate}c === ${t.delim.charCodeAt(0)}) {
-      let e = pos + 1;
-      while (e < n) { const ch = src.charCodeAt(e); if (ch === 92) { e += 2; continue; } if (ch === ${t.delim.charCodeAt(0)}) { e++; break; } e++; }
-      ${push('e')}pos = e; continue;
+      let e = pos + 1, closed = false;
+      while (e < n) { const ch = src.charCodeAt(e); if (ch === 92) { e += 2; continue; } if (ch === ${t.delim.charCodeAt(0)}) { e++; closed = true; break; } e++; }
+      if (closed) { ${push('e')}pos = e; continue; }
     }`;
   if (t.kind === 'line') return `    if (${gate}src.startsWith(${J(t.prefix)}, pos)) {
       let e = pos + ${t.prefix.length};
@@ -146,8 +146,7 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
   if (t.kind === 'block') return `    if (${gate}src.startsWith(${J(t.open)}, pos)) {
       let e = pos + ${t.open.length};
       while (e < n && !src.startsWith(${J(t.close)}, e)) e++;
-      if (e < n) e += ${t.close.length};
-      ${push('e')}pos = e; continue;
+      if (e < n) { e += ${t.close.length}; ${push('e')}pos = e; continue; }
     }`;
   const m = compilePat(t.pattern, defs);
   return `    if (${gate}true) { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
@@ -299,7 +298,7 @@ const LID_INTERP_CLOSE = ${lidOf(ids, tpl.interpClose)};
       if (src.startsWith(${J(tpl.open)}, p)) return { interp: false, end: p + ${tpl.open.length} };
       p++;
     }
-    return { interp: false, end: p };
+    throw new Error('Unterminated template literal at offset ' + p);
   }
 ` : '';
   const emitHooks = [
@@ -330,7 +329,7 @@ ${emitHooks}
       if (src.startsWith(${J(tpl.open)}, p)) return { interp: false, end: p + ${tpl.open.length} };
       p++;
     }
-    return { interp: false, end: p };
+    throw new Error('Unterminated template literal at offset ' + p);
   }
 ` : '';
   const emitRxOnly = rx ? `  function emit(off: number, end: number, kid: number, lid: number): void {
@@ -386,7 +385,7 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
   const loopBody = `${nlBoundary}    const c = src.charCodeAt(pos);
     // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
-    throw new Error('lex error at ' + pos + ': ' + JSON.stringify(src[pos]));`;
+    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
   if (rxOnly) {
     return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, hasPrev: boolean, bpLid: number, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
   const n = src.length;
@@ -1036,6 +1035,7 @@ ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: any[] = []; const sp
 type DocEditParts = {
   editBody: string;
   initToks: string;
+  freshMeta: string;
   shapeA: boolean;
   shapeB: boolean;
   hasHeadB: boolean;
@@ -1469,6 +1469,7 @@ function createDocWithBuilder<H>(src: string, opts: { validate?: boolean; builde
     edit(edits: Edit[]): H | null {
       const oldText = text, oldToks = prevToks;
       let relexed = 0;
+      try {
 ${doc.editBody}
       const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
       const byteDelta = text.length - oldText.length;
@@ -1484,7 +1485,8 @@ ${doc.editBody}
         if (got) { next = got.root; segs = got.segs; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
       }` : ''}
       if (next === null) {
-        const got = parseWithMeta(text, prevToks, builder);
+        let got = parseWithMeta(text, prevToks, builder);
+        if (got.root === null) { prevToks = ${doc.freshMeta}; got = parseWithMeta(text, prevToks, builder); }
         next = got.root;${doc.topReuse ? `
         entries = got.entries;
         entryHs = got.entryHs as H[];` : ''}${shapeB ? `
@@ -1493,11 +1495,35 @@ ${doc.editBody}
       }
       root = next;
       if (validate) {
-        const streamEq = checkStreamEq(text, prevToks);
+        let streamEq = false;
+        try { streamEq = checkStreamEq(text, prevToks); } catch { streamEq = false; }
         // Non-cstBuilder: treeEq reports null (rust SUPPORTS_TREE_EQ=false). D3 asserts stay on CST Doc path.
         align = { ...core, reused, streamEq, treeEq: null };
       } else {
         align = { ...core, reused };
+      }
+      } catch {
+        text = oldText;
+        for (const e of edits) {
+          const n = text.length, start = Math.max(0, Math.min(e.start, n)), end = Math.max(start, Math.min(e.end, n));
+          text = text.slice(0, start) + e.text + text.slice(end);
+        }
+        try {
+          prevToks = ${doc.freshMeta};
+          const got = parseWithMeta(text, prevToks, builder);
+          root = got.root;${doc.topReuse ? `
+          entries = got.entries;
+          entryHs = got.entryHs as H[];` : ''}${shapeB ? `
+          segs = got.segs;` : ''}
+          align = { oldN: oldToks.length, newN: prevToks.length, prefix: 0, suffix: 0, relexed: prevToks.length, reused: 0 };
+        } catch {
+          prevToks = [];
+          root = null;${doc.topReuse ? `
+          entries = [];
+          entryHs = [];` : ''}${shapeB ? `
+          segs = [];` : ''}
+          align = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0 };
+        }
       }
       return root;
     },
@@ -1924,14 +1950,18 @@ function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
 }
 `;
   const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(lex(src))';
+  // True fresh re-lex when window relex left a stale stream (unterminated → closed restore).
+  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(text)' : 'toMeta(lex(text))';
   const reuseFns = topReuse ? `
 function cstJSON(n: Cst): string {
   return JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' || k === 'ext' ? undefined : v));
 }
 function checkTreeEq(text: string, root: Node | null): boolean {
-  const fresh = (_src = text, parse(lex(text)));
-  if (root === null || fresh === null) return root === fresh;
-  return cstJSON(root) === cstJSON(fresh as Cst);
+  try {
+    const fresh = (_src = text, parse(lex(text)));
+    if (root === null || fresh === null) return root === fresh;
+    return cstJSON(root) === cstJSON(fresh as Cst);
+  } catch { return root === null; }
 }
 function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number): void {
   n.offset += byteDelta;
@@ -2182,9 +2212,11 @@ function cstJSON(n: Cst): string {
   return JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' || k === 'ext' ? undefined : v));
 }
 function checkTreeEq(text: string, root: Node | null): boolean {
-  const fresh = (_src = text, parse(lex(text)));
-  if (root === null || fresh === null) return root === fresh;
-  return cstJSON(root) === cstJSON(fresh as Cst);
+  try {
+    const fresh = (_src = text, parse(lex(text)));
+    if (root === null || fresh === null) return root === fresh;
+    return cstJSON(root) === cstJSON(fresh as Cst);
+  } catch { return root === null; }
 }
 `;
   const editParse = shapeA
@@ -2195,11 +2227,17 @@ function checkTreeEq(text: string, root: Node | null): boolean {
         const got = tryReuseTop(root, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix, validate);
         if (got) { next = got.root; entries = got.entries; reused = got.reused; }
       }
-      if (next === null) { _src = text; next = parse(toksFromMeta(text, prevToks)) as Node | null; entries = next !== null ? _entries.slice() : []; reused = 0; }
+      if (next === null) {
+        _src = text;
+        next = parse(toksFromMeta(text, prevToks)) as Node | null;
+        if (next === null) { prevToks = ${freshMeta}; next = parse(toksFromMeta(text, prevToks)) as Node | null; }
+        entries = next !== null ? _entries.slice() : [];
+        reused = 0;
+      }
       root = next;
-      align = validate
-        ? { ...core, reused, streamEq: checkStreamEq(text, prevToks), treeEq: checkTreeEq(text, root) }
-        : { ...core, reused };`
+      let streamEq = false, treeEq = false;
+      if (validate) { try { streamEq = checkStreamEq(text, prevToks); treeEq = checkTreeEq(text, root); } catch { streamEq = false; treeEq = root === null; } }
+      align = validate ? { ...core, reused, streamEq, treeEq } : { ...core, reused };`
     : shapeB
     ? `      const byteDelta = text.length - oldText.length;
       let reused = 0;
@@ -2212,21 +2250,23 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       if (next === null) {
         _src = text;
         next = parse(toksFromMeta(text, prevToks)) as Node | null;
-        nextSegs = next !== null ? _segs.slice() : [];
+        if (next === null) { prevToks = ${freshMeta}; next = parse(toksFromMeta(text, prevToks)) as Node | null; nextSegs = next !== null ? _segs.slice() : []; }
+        else { nextSegs = _segs.slice(); }
         entries = next !== null ? _entries.slice() : [];
         reused = 0;
       }
       root = next;
       segs = nextSegs ?? [];
-      align = validate
-        ? { ...core, reused, streamEq: checkStreamEq(text, prevToks), treeEq: checkTreeEq(text, root) }
-        : { ...core, reused };`
+      let streamEq = false, treeEq = false;
+      if (validate) { try { streamEq = checkStreamEq(text, prevToks); treeEq = checkTreeEq(text, root); } catch { streamEq = false; treeEq = root === null; } }
+      align = validate ? { ...core, reused, streamEq, treeEq } : { ...core, reused };`
     : `      const reused = 0;
       _src = text;
       root = parse(toksFromMeta(text, prevToks)) as Node | null;
-      align = validate
-        ? { ...core, reused, streamEq: checkStreamEq(text, prevToks), treeEq: checkTreeEq(text, root) }
-        : { ...core, reused };`;
+      if (root === null) { prevToks = ${freshMeta}; root = parse(toksFromMeta(text, prevToks)) as Node | null; }
+      let streamEq = false, treeEq = false;
+      if (validate) { try { streamEq = checkStreamEq(text, prevToks); treeEq = checkTreeEq(text, root); } catch { streamEq = false; treeEq = root === null; } }
+      align = validate ? { ...core, reused, streamEq, treeEq } : { ...core, reused };`;
   const docSegInit = shapeB
     ? `
   let segs: Seg[] = [];`
@@ -2287,9 +2327,31 @@ ${docParseInit}
     edit(edits: Edit[]): Node | null {
       const oldText = text, oldToks = prevToks;
       let relexed = 0;
+      try {
 ${editBody}
       const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
 ${editParse}
+      } catch {
+        text = oldText;
+        for (const e of edits) {
+          const n = text.length, start = Math.max(0, Math.min(e.start, n)), end = Math.max(start, Math.min(e.end, n));
+          text = text.slice(0, start) + e.text + text.slice(end);
+        }
+        try {
+          prevToks = ${freshMeta};
+          _src = text;
+          root = parse(toksFromMeta(text, prevToks)) as Node | null;${shapeA || shapeB ? `
+          entries = root !== null ? _entries.slice() : [];` : ''}${shapeB ? `
+          segs = root !== null ? _segs.slice() : [];` : ''}
+          align = { oldN: oldToks.length, newN: prevToks.length, prefix: 0, suffix: 0, relexed: prevToks.length, reused: 0 };
+        } catch {
+          prevToks = [];
+          root = null;${shapeA || shapeB ? `
+          entries = [];` : ''}${shapeB ? `
+          segs = [];` : ''}
+          align = { oldN: oldToks.length, newN: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0 };
+        }
+      }
       return root;
     },
   };
@@ -2299,6 +2361,7 @@ ${editParse}
     parts: {
       editBody,
       initToks,
+      freshMeta,
       shapeA: !!shapeA,
       shapeB: !!shapeB,
       hasHeadB,

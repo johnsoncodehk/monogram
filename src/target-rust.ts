@@ -185,8 +185,9 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
   }
   if (t.kind === 'string') return `        if ${gate}c == ${t.delim.charCodeAt(0)} {
             let mut e = pos + 1;
-            while e < n { let ch = b[e] as u32; if ch == 92 { e += 2; continue } if ch == ${t.delim.charCodeAt(0)} { e += 1; break } e += 1; }
-            ${push('e')}pos = e; continue;
+            let mut closed = false;
+            while e < n { let ch = b[e] as u32; if ch == 92 { e += 2; continue } if ch == ${t.delim.charCodeAt(0)} { e += 1; closed = true; break } e += 1; }
+            if closed { ${push('e')}pos = e; continue; }
         }`;
   if (t.kind === 'line') return `        if ${gate}src[pos..].starts_with(${J(t.prefix)}) {
             let mut e = pos + ${t.prefix.length};
@@ -197,8 +198,7 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
             let mut e = pos + ${t.open.length};
             // Byte-step + &str slice panics mid multi-byte char; match close on bytes.
             while e < n && !b[e..].starts_with(${J(t.close)}.as_bytes()) { e += 1; }
-            if e < n { e += ${t.close.length}; }
-            ${push('e')}pos = e; continue;
+            if e < n { e += ${t.close.length}; ${push('e')}pos = e; continue; }
         }`;
   const m = compilePat(t.pattern, defs);
   return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
@@ -411,7 +411,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
         if b[p..].starts_with(${J(tpl.open)}.as_bytes()) { return (false, p + ${tpl.open.length}); }
         p += 1;
     }
-    (false, p)
+    panic!("Unterminated template literal at offset {}", p);
 }
 ` : '';
   const fields = ['toks: Vec<Tok>', 'pending_nl: bool',
@@ -517,11 +517,11 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 `;
   const loopBody = `${nlBoundary}        let c = b[pos] as u32;
 ${nlWs}${tplDispatch}${cascade}
-        panic!("lex error at {}", pos);`;
+        panic!("Unexpected character at offset {}: '{}'", pos, b[pos] as char);`;
   if (rxOnly) {
     const rxLoopBody = `${nlBoundary}        let c = b[pos] as u32;
 ${nlWs}${cascade}
-        panic!("lex error at {}", pos);`;
+        panic!("Unexpected character at offset {}: '{}'", pos, b[pos] as char);`;
     return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
@@ -590,7 +590,7 @@ ${loopBody}
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlLoopBody = `${nlRs!.boundaryFrom}        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
-        panic!("lex error at {}", pos);`;
+        panic!("Unexpected character at offset {}: '{}'", pos, b[pos] as char);`;
     return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, line_start: bool, emitted_content: bool, flow_depth: i64 }
 impl<'a> NlScan<'a> {
     fn push_tok(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
@@ -1479,6 +1479,26 @@ fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
 }
 `;
   const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scan_meta(&text)' : 'to_meta(&lex(&text))';
+  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scan_meta(&self.text)' : 'to_meta(&lex(&self.text))';
+  const freshRetryRs = `        if self.root.is_none() {
+            self.toks = ${freshMeta};
+            let text = self.text.clone();
+            let meta = self.toks.clone();
+            let ntoks = toks_from_meta(&text, &meta);
+            let nlen = ntoks.len();
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+            match p.parse_${ir.entry}() {
+                Some(fr) if p.pos == nlen && fr.present => {
+                    self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                    self.b = p.b; self.scratch = p.scratch;${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
+                }
+                _ => {
+                    self.root = None; self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                    self.b = p.b; self.scratch = p.scratch;${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
+                }
+            }
+        }
+`;
   const reuseShared = topReuse ? `
 fn count_live(nodes: &[Node], kids: &[i32], id: i32) -> usize {
     let mut n = 1usize;
@@ -1904,7 +1924,7 @@ fn check_tree_eq_arena(text: &str, nodes: &[Node], kids: &[i32], root: Option<i3
             }
             reused = 0;
         }
-        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
@@ -1961,7 +1981,7 @@ fn check_tree_eq_arena(text: &str, nodes: &[Node], kids: &[i32], root: Option<i3
             }
             reused = 0;
         }
-        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
@@ -1990,7 +2010,7 @@ fn check_tree_eq_arena(text: &str, nodes: &[Node], kids: &[i32], root: Option<i3
             }
         }
         let reused = 0usize;
-        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
+${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&self.text, &self.toks)) } else { None };
         let tree_eq = if self.validate && B::SUPPORTS_TREE_EQ {
             Some(self.b.check_tree_eq(&self.text, self.root))
         } else { None };
@@ -2082,10 +2102,57 @@ impl<B: Builder + Default> Doc<B> {
     pub fn edit(&mut self, edits: &[Edit]) {
         let old_text = self.text.clone();
         let old_toks = self.toks.clone();
-        let mut relexed = 0usize;
-${editBody}
-        let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &self.text, &self.toks);
-${editParse}
+        let edits_owned: Vec<Edit> = edits.iter().map(|e| Edit { start: e.start, end: e.end, text: e.text.clone() }).collect();
+        let self_ptr = self as *mut Self;
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let d = unsafe { &mut *self_ptr };
+            let mut relexed = 0usize;
+            {
+                // Re-bind names expected by editBody / editParse templates.
+                let edits = &edits_owned[..];
+                let _ = edits;
+${editBody.replace(/self\./g, 'd.').replace(/old_text/g, 'old_text')}
+                let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &d.text, &d.toks);
+${editParse.replace(/self\./g, 'd.')}
+            }
+            let _ = relexed;
+        }));
+        if ok.is_err() {
+            self.text = old_text;
+            for e in &edits_owned {
+                let n = self.text.len();
+                let start = e.start.min(n);
+                let end = e.end.max(start).min(n);
+                self.text = format!("{}{}{}", &self.text[..start], e.text, &self.text[end..]);
+            }
+            let toks = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ${freshMeta.replace(/self\.text/g, 'self.text')}));
+            match toks {
+                Ok(t) => {
+                    self.toks = t;
+                    let text = self.text.clone();
+                    let meta = self.toks.clone();
+                    let ntoks = toks_from_meta(&text, &meta);
+                    let nlen = ntoks.len();
+                    let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+                    match p.parse_${ir.entry}() {
+                        Some(fr) if p.pos == nlen && fr.present => {
+                            self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                            self.b = p.b; self.scratch = p.scratch;${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
+                        }
+                        _ => {
+                            self.root = None; self.baseline = p.b.arena_len(); self.last_pos = p.pos;
+                            self.b = p.b; self.scratch = p.scratch;${topReuse ? (shapeB ? ' self.entries = p.entries; self.segs = p.segs;' : ' self.entries = p.entries;') : ''}
+                        }
+                    }
+                    self.align = Some(Align { old_n: old_toks.len(), new_n: self.toks.len(), prefix: 0, suffix: 0, relexed: self.toks.len(), reused: 0, stream_eq: None, tree_eq: None });
+                }
+                Err(_) => {
+                    self.toks = Vec::new();
+                    self.root = None;
+                    self.align = Some(Align { old_n: old_toks.len(), new_n: 0, prefix: 0, suffix: 0, relexed: 0, reused: 0, stream_eq: None, tree_eq: None });
+                }
+            }
+        }
     }
 }
 impl Doc<CstBuilder> {

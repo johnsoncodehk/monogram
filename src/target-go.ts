@@ -148,8 +148,9 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
   }
   if (t.kind === 'string') return `\t\tif ${gate}c == ${t.delim.charCodeAt(0)} {
 \t\t\te := pos + 1
-\t\t\tfor e < n { ch := int(src[e]); if ch == 92 { e += 2; continue }; if ch == ${t.delim.charCodeAt(0)} { e++; break }; e++ }
-\t\t\t${push('e')}pos = e; continue
+\t\t\tclosed := false
+\t\t\tfor e < n { ch := int(src[e]); if ch == 92 { e += 2; continue }; if ch == ${t.delim.charCodeAt(0)} { e++; closed = true; break }; e++ }
+\t\t\tif closed { ${push('e')}pos = e; continue }
 \t\t}`;
   if (t.kind === 'line') return `\t\tif ${gate}strings.HasPrefix(src[pos:], ${J(t.prefix)}) {
 \t\t\te := pos + ${t.prefix.length}
@@ -159,8 +160,7 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
   if (t.kind === 'block') return `\t\tif ${gate}strings.HasPrefix(src[pos:], ${J(t.open)}) {
 \t\t\te := pos + ${t.open.length}
 \t\t\tfor e < n && !strings.HasPrefix(src[e:], ${J(t.close)}) { e++ }
-\t\t\tif e < n { e += ${t.close.length} }
-\t\t\t${push('e')}pos = e; continue
+\t\t\tif e < n { e += ${t.close.length}; ${push('e')}pos = e; continue }
 \t\t}`;
   const m = compilePat(t.pattern, defs);
   return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(pos); e > pos { ${push('e')}pos = e; continue } }`;
@@ -306,7 +306,7 @@ const LID_INTERP_CLOSE uint16 = ${lidOf(ids, tpl.interpClose)}
 \t\t\tif strings.HasPrefix(src[p:], ${J(tpl.open)}) { return false, p + ${tpl.open.length} }
 \t\t\tp++
 \t\t}
-\t\treturn false, p
+\t\tpanic(fmt.Sprintf("Unterminated template literal at offset %d", p))
 \t}
 \t_ = scanTplSpan
 ` : '';
@@ -343,7 +343,7 @@ ${emitHooks}
 \t\t\tif strings.HasPrefix(src[p:], ${J(tpl.open)}) { return false, p + ${tpl.open.length} }
 \t\t\tp++
 \t\t}
-\t\treturn false, p
+\t\tpanic(fmt.Sprintf("Unterminated template literal at offset %d", p))
 \t}
 \t_ = scanTplSpan
 ` : '';
@@ -418,7 +418,7 @@ ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendi
 `;
   const loopBody = `${nlBoundary}\t\tc := int(src[pos])
 ${nlWs}${tplDispatch}${cascade}
-\t\tpanic(fmt.Sprintf("lex error at %d", pos))`;
+\t\tpanic(fmt.Sprintf("Unexpected character at offset %d: '%c'", pos, src[pos]))`;
   const idTables = renderIdTablesGo(ids);
   if (rxOnly) {
     return `${idTables}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
@@ -1318,6 +1318,9 @@ func checkStreamEq(text string, meta []alignMeta) bool {
 }
 `;
   const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(tokenize(src))';
+  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(d.text)' : 'toMeta(tokenize(d.text))';
+  const parseFreshRetry = `\td.root = parse(toksFromMeta(d.text, d.toks))
+\tif d.root < 0 { d.toks = ${freshMeta}; d.root = parse(toksFromMeta(d.text, d.toks)) }`;
   const reuseFns = topReuse ? `
 func countLive(id int32) int {
 	if id < 0 { return 0 }
@@ -1645,12 +1648,12 @@ func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText s
 \t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = n
 \t\t} else {
-\t\t\td.root = parse(toksFromMeta(d.text, d.toks))
+${parseFreshRetry}
 \t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = 0
 \t\t}
 \t} else {
-\t\td.root = parse(toksFromMeta(d.text, d.toks))
+${parseFreshRetry}
 \t\td.entries = append([]EntryMeta(nil), entries...)
 \t\treused = 0
 \t}`
@@ -1666,17 +1669,17 @@ func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText s
 \t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = n
 \t\t} else {
-\t\t\td.root = parse(toksFromMeta(d.text, d.toks))
+${parseFreshRetry}
 \t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = 0
 \t\t}
 \t} else {
-\t\td.root = parse(toksFromMeta(d.text, d.toks))
+${parseFreshRetry}
 \t\td.entries = append([]EntryMeta(nil), entries...)
 \t\treused = 0
 \t}`
     : `\treused := 0
-\td.root = parse(toksFromMeta(d.text, d.toks))`;
+${parseFreshRetry}`;
   const treeEqFn = shapeB ? `
 func checkTreeEq(text string, root int32) bool {
 	rootOk := root >= 0 && pos == len(toks)
@@ -1809,21 +1812,39 @@ func applyEdit(text string, e Edit) string {
 	if end > n { end = n }
 	return text[:start] + e.Text + text[end:]
 }
-func (d *Doc) Edit(edits []Edit) int32 {
+func (d *Doc) Edit(edits []Edit) (ret int32) {
 	oldText, oldToks := d.text, d.toks
 	relexed := 0
+	defer func() {
+		if rec := recover(); rec != nil {
+			d.text = oldText
+			for _, e := range edits { d.text = applyEdit(d.text, e) }
+			func() {
+				defer func() {
+					if recover() != nil {
+						d.toks = nil
+						d.root = -1
+						d.align = &Align{OldN: len(oldToks), NewN: 0, Prefix: 0, Suffix: 0, Relexed: 0, Reused: 0}
+					}
+				}()
+				d.toks = ${freshMeta}
+				d.root = parse(toksFromMeta(d.text, d.toks))
+				d.align = &Align{OldN: len(oldToks), NewN: len(d.toks), Prefix: 0, Suffix: 0, Relexed: len(d.toks), Reused: 0}
+			}()
+			ret = d.root
+		}
+	}()
 ${editBody}
 	oldN, newN, prefix, suffix := computeAlignCore(oldText, oldToks, d.text, d.toks)
 ${editParse}
 	a := &Align{OldN: oldN, NewN: newN, Prefix: prefix, Suffix: suffix, Relexed: relexed, Reused: reused}
 	if d.validate {
-		v := checkStreamEq(d.text, d.toks)
-		a.StreamEq = &v
-		t := checkTreeEq(d.text, d.root)
-		a.TreeEq = &t
+		func() { defer func() { recover() }(); v := checkStreamEq(d.text, d.toks); a.StreamEq = &v }()
+		func() { defer func() { recover() }(); t := checkTreeEq(d.text, d.root); a.TreeEq = &t }()
 	}
 	d.align = a
-	return d.root
+	ret = d.root
+	return
 }`;
 }
 

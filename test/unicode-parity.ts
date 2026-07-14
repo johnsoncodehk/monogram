@@ -1,6 +1,7 @@
 // Gate: emitted ts/go/rust parsers must accept the same Unicode adversarial inputs as the
 // createParser oracle (no panic / no silent reject), and agree on rule-node CST skeletons.
-// Also pins edit-session ≡ fresh when edits land near multi-byte characters.
+// Also pins edit-session ≡ fresh when edits land near multi-byte characters, and unterminated
+// closed-token reject (block comment / template / string) with lexer messages ≡ oracle.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
@@ -41,6 +42,15 @@ function runEdit(cmd: string, args: string[], json: string): Outcome {
   catch { return { ok: false, err: 'bad json' }; }
 }
 
+/** Primary lexer-error text shared with createLexer (gen-lexer.ts). */
+function primaryLexMsg(err?: string): string | null {
+  if (!err) return null;
+  const u = err.match(/Unterminated template literal at offset \d+/);
+  if (u) return u[0];
+  const c = err.match(/Unexpected character at offset \d+: '[\s\S]'/);
+  return c ? c[0] : null;
+}
+
 const ACCEPT: string[] = [
   // template head / middle / tail each carry non-ASCII
   'const head = `héllo`;',
@@ -58,10 +68,27 @@ const ACCEPT: string[] = [
   'const u = "\u{1F600}";',
   'const mix = `café /* not comment */`;',
   'const line = "你好"; // 行尾é',
+  // critical closed forms (guard against over-reject after unterminated fix)
+  '/* abc */',
+  '`cafe`',
+  '"abc"',
+  "const x = /* abc */ 1;",
+  'const x = `cafe`;',
+  'const x = "abc";',
+];
+
+/** Reject cases. `lexMsg` set ⇒ expect that primary lexer message in stderr (≡ oracle). */
+const REJECT: { src: string; lexMsg: string | null }[] = [
+  { src: '/* abc', lexMsg: null }, // unterminated block → `/`+`*` puncts → parse reject (not a lex throw)
+  { src: '`cafe', lexMsg: 'Unterminated template literal at offset 5' },
+  { src: '"abc', lexMsg: 'Unexpected character at offset 0: \'"\'' },
+  { src: "'abc", lexMsg: "Unexpected character at offset 0: '''" },
+  { src: 'const x = `cafe', lexMsg: 'Unterminated template literal at offset 15' },
+  { src: 'const x = "abc', lexMsg: 'Unexpected character at offset 10: \'"\'' },
 ];
 
 type EditBatch = [number, number, string][];
-type EditSc = { name: string; init: string; batchesJs: EditBatch[] };
+type EditSc = { name: string; init: string; batchesJs: EditBatch[]; expectFinalOk?: boolean };
 
 // init = 'const x = "café";' — JS indices: " @10, c@11, a@12, f@13, é@14, "@15, ;@16
 const EDIT: EditSc[] = [
@@ -79,6 +106,22 @@ const EDIT: EditSc[] = [
     name: 'edit-after-multibyte',
     init: 'const x = "café";',
     batchesJs: [[[15, 15, '!']]], // after é, before closing quote
+  },
+  // delete closing backtick → reject; restore → accept (edit ≡ fresh)
+  {
+    name: 'edit-unterm-template-restore',
+    // const x = `cafe`;  — closing ` at 15
+    init: 'const x = `cafe`;',
+    batchesJs: [[[15, 16, '']], [[15, 15, '`']]],
+    expectFinalOk: true,
+  },
+  // delete `*/` → reject; restore → accept
+  {
+    name: 'edit-unterm-block-restore',
+    // /* abc */\nconst a = 1;  — `*/` at 7..9
+    init: '/* abc */\nconst a = 1;',
+    batchesJs: [[[7, 9, '']], [[7, 7, '*/']]],
+    expectFinalOk: true,
   },
 ];
 
@@ -115,7 +158,7 @@ const oracleOut = (src: string): Outcome => {
     const cst = oracle.parse(src);
     if (!cst) return { ok: false };
     return { ok: true, cst: canon(cst) };
-  } catch { return { ok: false }; }
+  } catch (e) { return { ok: false, err: (e as Error).message }; }
 };
 
 type Runner = { label: string; run: (src: string) => Outcome; editCmd: string; editArgs: string[]; utf8Edits: boolean };
@@ -139,7 +182,7 @@ if (HAS_RUST) {
 }
 
 let failures = 0;
-console.log(`unicode-parity: ${ACCEPT.length} accept cases × ${runners.length} targets + ${EDIT.length} edit-sessions`);
+console.log(`unicode-parity: ${ACCEPT.length} accept + ${REJECT.length} reject × ${runners.length} targets + ${EDIT.length} edit-sessions`);
 
 for (const r of runners) {
   let acc = 0, snap = 0;
@@ -165,15 +208,53 @@ for (const r of runners) {
   }
   console.log(`  ${r.label}: ${acc}/${ACCEPT.length} accept ≡ oracle${snap ? ` · ${snap} shape drift` : ''}`);
 
+  let rej = 0;
+  for (const { src, lexMsg } of REJECT) {
+    const want = oracleOut(src);
+    const got = r.run(src);
+    if (want.ok || got.ok) {
+      failures++;
+      console.log(`  ${r.label}: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
+      continue;
+    }
+    if (lexMsg !== null) {
+      const gotMsg = primaryLexMsg(got.err);
+      const wantMsg = primaryLexMsg(want.err) ?? lexMsg;
+      if (gotMsg !== wantMsg) {
+        failures++;
+        console.log(`  ${r.label}: REJECT msg drift on ${JSON.stringify(src)}\n    want ${wantMsg}\n    got  ${gotMsg ?? got.err}`);
+        continue;
+      }
+    }
+    rej++;
+  }
+  console.log(`  ${r.label}: ${rej}/${REJECT.length} reject ≡ oracle`);
+
   let editOk = 0;
   for (const sc of EDIT) {
+    // Intermediate: after the first batch alone, unterminated-restore cases must reject.
+    if (sc.name.startsWith('edit-unterm-') && sc.batchesJs.length >= 2) {
+      const mid = applyJs(sc.init, sc.batchesJs.slice(0, 1));
+      const midBatch = r.utf8Edits ? toUtf8Batches(sc.init, sc.batchesJs.slice(0, 1)) : sc.batchesJs.slice(0, 1);
+      const midEdit = runEdit(r.editCmd, r.editArgs, JSON.stringify({ init: sc.init, batches: midBatch }));
+      const midFresh = r.run(mid);
+      const midOracle = oracleOut(mid);
+      if (midEdit.ok || midFresh.ok || midOracle.ok) {
+        failures++;
+        console.log(`  ${r.label}: edit mid-state should reject (${sc.name}) mid=${JSON.stringify(mid)} edit=${midEdit.ok} fresh=${midFresh.ok} oracle=${midOracle.ok}`);
+      }
+    }
     const final = applyJs(sc.init, sc.batchesJs);
     const batches = r.utf8Edits ? toUtf8Batches(sc.init, sc.batchesJs) : sc.batchesJs;
     const payload = JSON.stringify({ init: sc.init, batches });
     const a = runEdit(r.editCmd, r.editArgs, payload);
     const b = r.run(final);
     const o = oracleOut(final);
-    if (a.ok === b.ok && (!a.ok || a.cst === b.cst) && a.ok === o.ok) editOk++;
+    const finalOk = sc.expectFinalOk === undefined ? true : sc.expectFinalOk;
+    if (finalOk && (!a.ok || !b.ok || !o.ok)) {
+      failures++;
+      console.log(`  ${r.label}: edit-session final should accept (${sc.name}) final=${JSON.stringify(final)} A ok=${a.ok} B ok=${b.ok} oracle ok=${o.ok} err=${a.err ?? ''}`);
+    } else if (a.ok === b.ok && (!a.ok || a.cst === b.cst) && a.ok === o.ok) editOk++;
     else {
       failures++;
       console.log(`  ${r.label}: edit-session mismatch (${sc.name}) final=${JSON.stringify(final)} A ok=${a.ok} B ok=${b.ok} oracle ok=${o.ok} err=${a.err ?? ''}`);
@@ -186,4 +267,4 @@ if (failures) {
   console.log(`\n✗ unicode-parity: ${failures} failure(s)`);
   process.exit(1);
 }
-console.log(`\n✓ unicode-parity: ${ACCEPT.length} cases × ${runners.length} targets + ${EDIT.length} edits/target ≡ oracle`);
+console.log(`\n✓ unicode-parity: ${ACCEPT.length} accept + ${REJECT.length} reject × ${runners.length} targets + ${EDIT.length} edits/target ≡ oracle`);
