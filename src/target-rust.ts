@@ -1995,6 +1995,615 @@ ${editParse}
 }
 
 
+
+// ─── Builder API (additive parse_with) — second instantiation ────────────────
+// Parallel combinators / rules ending in `_w`. Existing `parse`/arena/`Doc` above
+// are byte-identical to pre-addon emit; this block is appended only.
+
+function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  switch (s.t) {
+    case 'lit': return `self.match_lit_w(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'tok': return `self.match_tok_w(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'rule': return `self.call_rule_w(ParserW::parse_${s.name}_w)`;
+    case 'ruleBp': return `self.call_rule_w(|p| p.${s.name}_bp_w(${s.bp}))`;
+    case 'star': return `self.star_w(|p| ${stepCondPW(s.step, ids, ar)})`;
+    case 'opt': return `self.opt_w(|p| ${s.steps.map((x) => stepCondPW(x, ids, ar)).join(' && ')})`;
+    case 'sep': return `self.sep_by_w(|p| ${stepCondPW(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
+    case 'altlit': return `self.alt_lit_w(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'alt': return s.predictive
+      ? `(|p: &mut ParserW<'a, B>| -> bool { ${predAltBodyW(s.branches, ids, ar, s.firsts)} })(self)`
+      : `(|p: &mut ParserW<'a, B>| -> bool { ${altBodyW(s.branches, ids, ar, s.firsts)} })(self)`;
+    case 'not': return `(|p: &mut ParserW<'a, B>| -> bool { ${notBodyW(s.steps, ids, ar)} })(self)`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar)).join(' && ') : 'true'})`;
+    case 'sameLine': return `matches!(self.peek_w(), Some(t) if !t.nl)`;
+    case 'suppress': return `{ self.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar)).join(' && ') : 'true'}); self.suppress_next = Vec::new(); _r }`;
+  }
+}
+function stepCondPW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  switch (s.t) {
+    case 'lit': return `p.match_lit_w(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'tok': return `p.match_tok_w(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'rule': return `p.call_rule_w(ParserW::parse_${s.name}_w)`;
+    case 'ruleBp': return `p.call_rule_w(|p| p.${s.name}_bp_w(${s.bp}))`;
+    case 'star': return `p.star_w(|p| ${stepCondPW(s.step, ids, ar)})`;
+    case 'opt': return `p.opt_w(|p| ${s.steps.map((x) => stepCondPW(x, ids, ar)).join(' && ')})`;
+    case 'sep': return `p.sep_by_w(|p| ${stepCondPW(s.elem, ids, ar)}, ${lidOf(ids, s.delim)})`;
+    case 'altlit': return `p.alt_lit_w(&[${s.opts.map((o) => `(${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)})`).join(', ')}])`;
+    case 'alt': return s.predictive
+      ? `(|p: &mut ParserW<'a, B>| -> bool { ${predAltBodyW(s.branches, ids, ar, s.firsts)} })(p)`
+      : `(|p: &mut ParserW<'a, B>| -> bool { ${altBodyW(s.branches, ids, ar, s.firsts)} })(p)`;
+    case 'not': return `(|p: &mut ParserW<'a, B>| -> bool { ${notBodyW(s.steps, ids, ar)} })(p)`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondPW(x, ids, ar)).join(' && ') : 'true'})`;
+    case 'sameLine': return `matches!(p.peek_w(), Some(t) if !t.nl)`;
+    case 'suppress': return `{ p.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCondPW(x, ids, ar)).join(' && ') : 'true'}); p.suppress_next = Vec::new(); _r }`;
+  }
+}
+function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
+  const fs = firsts ?? [];
+  const nAlts = branches.length;
+  const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
+  const peekInit = needPeek ? `let _ft = p.peek_w(); ` : '';
+  const tries = branches.map((br, i) => {
+    const body = `{ let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${br.length ? br.map((x) => stepCondPW(x, ids, ar)).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); }`;
+    const f = fs[i] ?? null;
+    if (!isGuardable(f, nAlts)) return body;
+    return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
+  }).join(' ');
+  return `${peekInit}${tries} false`;
+}
+function notBodyW(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return `let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${steps.length ? steps.map((x) => stepCondPW(x, ids, ar)).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); !m`;
+}
+function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
+  const arms = branches.map((br, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCondPW(x, ids, ar)).join(' && ') : 'true'} { return true; } }`).join('\n');
+  return `let t = match p.peek_w() { Some(t) => t, None => return false };\n${arms}\n        false`;
+}
+
+function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const rid = ruleIdOf(ar, r.cstName);
+  if (r.predictive) {
+    const arm = (steps: Step[], i: number) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCondW(x, ids, ar)).join(' && ')} { return Some(self.finish_w(${rid}, sb, self.off_at_w(save), save)); } }`;
+    return `    fn parse_${r.name}_w(&mut self) -> Option<Spanned<B::H>> {
+        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+        let t = match self.peek_w() { Some(t) => t, None => return None };
+${r.alts.map(arm).join('\n')}
+        self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);
+        None
+    }`;
+  }
+  const alt = (steps: Step[], i: number) => {
+    const cond = steps.map((x) => stepCondW(x, ids, ar)).join(' && ');
+    const restore = `self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);`;
+    if (!isGuardable(r.altFirst[i], r.alts.length)) {
+      return `        if ${cond} { return Some(self.finish_w(${rid}, sb, self.off_at_w(save), save)); }
+        ${restore}`;
+    }
+    return `        if let Some(t) = _ft { if ${firstCond(r.altFirst[i], 't', ids)} {
+            if ${cond} { return Some(self.finish_w(${rid}, sb, self.off_at_w(save), save)); }
+            ${restore}
+        } }`;
+  };
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
+  return `    fn parse_${r.name}_w(&mut self) -> Option<Spanned<B::H>> {
+        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+${needPeek ? '        let _ft = self.peek_w();\n' : ''}${r.alts.map(alt).join('\n')}
+        None
+    }`;
+}
+
+function topOneBodyW(plan: ReusePlanA): string {
+  return plan.topOneBody
+    .replace(/self\.parse_([A-Za-z0-9_]+)\(\)/g, 'self.parse_$1_w()');
+}
+
+function rdEntryWithReuseAW(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string {
+  const rid = ruleIdOf(ar, r.cstName);
+  return `    fn parse_top_one_w(&mut self) -> Option<Spanned<B::H>> {
+${topOneBodyW(plan)}
+    }
+    fn parse_${r.name}_w(&mut self) -> Option<Spanned<B::H>> {
+        let save = self.pos; let sb = self.scratch.len();         loop {
+            let sp = self.pos;
+            self.max_look = 0;
+            match self.parse_top_one_w() {
+                None => { self.pos = sp; break; }
+                Some(fr) => { if fr.present { self.scratch.push(fr.h); } }
+            }
+        }
+        Some(self.finish_w(${rid}, sb, self.off_at_w(save), save))
+    }`;
+}
+
+function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const rid = ruleIdOf(ar, r.cstName);
+  const headFn = plan.hasHead && plan.headRule
+    ? `    fn parse_head_seg_w(&mut self) -> bool {
+        self.max_look = 0;
+        let before = self.scratch.len();
+        self.opt_w(|p| p.call_rule_w(ParserW::parse_${plan.headRule}_w));
+        self.scratch.len() > before
+    }
+`
+    : '';
+  const headBlock = plan.hasHead && plan.headRule
+    ? `        let _ = self.parse_head_seg_w();
+`
+    : '';
+  return `${headFn}    fn parse_loop_seg_w(&mut self) -> bool {
+        let sp = self.pos; let before = self.scratch.len(); let ck = self.b.checkpoint();
+        self.max_look = 0;
+        if !self.match_tok_w(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+            self.pos = sp; self.scratch.truncate(before); self.b.restore(ck);
+            return false;
+        }
+        self.opt_w(|p| p.call_rule_w(ParserW::parse_${plan.loopRule}_w));
+        true
+    }
+    fn parse_${r.name}_w(&mut self) -> Option<Spanned<B::H>> {
+        let save = self.pos; let sb = self.scratch.len(); ${headBlock}        loop {
+            if !self.parse_loop_seg_w() { break; }
+        }
+        Some(self.finish_w(${rid}, sb, self.off_at_w(save), save))
+    }`;
+}
+
+function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return plan.kind === 'A' ? rdEntryWithReuseAW(r, plan, ar) : rdEntryWithReuseBW(r, plan, ids, ar);
+}
+
+function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const rid = ruleIdOf(ar, r.cstName);
+  const tplNud = tpl && r.nudToks.includes(tpl.token)
+    ? `        if t.kid == ${kidOf(ids, "$templateHead")} {
+            let n = match self.match_template_w() { Some(n) => n, None => return None };
+            let sb = self.scratch.len();
+            if n.present { self.scratch.push(n.h); }
+            return Some(self.finish_w(${rid}, sb, n.off as usize, n.tok_start as usize));
+        }\n`
+    : '';
+  const bracketNudBody = (b: Bracket) => `{
+            let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+            if ${b.steps.map((x) => stepCondW(x, ids, ar)).join(' && ')} { return Some(self.finish_w(${rid}, sb, self.off_at_w(save), save)); }
+            self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);
+        }`;
+  const bracketNudMatch = (() => {
+    if (r.nudBrackets.length === 0) return '';
+    const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
+    return `        match t.lid {
+${groups.map((g) => `            ${g.key} => {
+${g.members.map(({ item: b }) => `                ${bracketNudBody(b)}`).join('\n')}
+            }`).join('\n')}
+            _ => {}
+        }`;
+  })();
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+    const parts: string[] = [];
+    if (accessTail) parts.push('!tail_closed');
+    if (lbp !== null) parts.push(`${lbp} > min_bp`);
+    if (sameLine) parts.push('!t.nl');
+    if (nll) parts.push(`!self.nll_blocked_w(&[${nll.map(J).join(', ')}], &left)`);
+    parts.push(`!self.suppress_cur.iter().any(|c| *c == ${lid})`);
+    return parts.join(' && ');
+  };
+  const ledBody = (b: Bracket) => `{
+                let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+                self.scratch.push(left.h);
+                if ${b.steps.map((x) => stepCondW(x, ids, ar)).join(' && ')} { left = self.finish_w(${rid}, sb, left.off as usize, left.tok_start as usize); continue; }
+                self.pos = led_save; self.scratch.truncate(sb); self.b.restore(ck); break;
+            }`;
+  const ledMatch = (() => {
+    if (r.leds.length === 0) return '';
+    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
+    return `            match t.lid {
+${groups.map((g) => {
+  const lid = g.key as number;
+  const arms = g.members.map(({ item: b, index: i }) =>
+    `                if ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b)}`);
+  return `                ${lid} => {\n${arms.join('\n')}\n                }`;
+}).join('\n')}
+                _ => {}
+            }`;
+  })();
+  const postfixTokMatch = (() => {
+    if (r.postfixToks.length === 0) return '';
+    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
+    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
+    const tplPart = hasTpl ? `
+            if !tail_closed && t.kid == ${kidOf(ids, "$templateHead")} { if let Some(n) = self.match_template_w() { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = self.finish_w(${rid}, sb, left.off as usize, left.tok_start as usize); continue; } }` : '';
+    return `            match t.kid {
+${groups.map((g) => `                ${g.key} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf_w(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; left = self.finish_w(${rid}, sb, left.off as usize, left.tok_start as usize); continue; } }`).join('\n')}
+                _ => {}
+            }${tplPart}`;
+  })();
+  return `    fn parse_${r.name}_w(&mut self) -> Option<Spanned<B::H>> {
+        let prev = std::mem::take(&mut self.suppress_cur);
+        self.suppress_cur = std::mem::take(&mut self.suppress_next);
+        let r = self.${r.name}_bp_w(0);
+        self.suppress_cur = prev;
+        r
+    }
+    fn ${r.name}_bp_w(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
+        let mut left = self.${r.name}_nud_w(min_bp)?;
+        if self.capped { return Some(left); }
+        let mut tail_closed = false;
+        loop {
+            let t = match self.peek_w() { Some(t) => t, None => break };
+${ledMatch}
+${postfixTokMatch}
+            if let Some(plbp) = Parser::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf_w(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = self.finish_w(${rid}, sb, left.off as usize, left.tok_start as usize); tail_closed = true; continue; } }
+            let (lbp, rbp) = match Parser::${r.name}_bin(t.lid) { Some(x) => x, None => break };
+            if lbp <= min_bp { break; }
+            let led_save = self.pos;
+            let sb = self.scratch.len();             self.scratch.push(left.h);
+            self.push_leaf_w(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end);
+            self.pos += 1;
+            let rhs = match self.${r.name}_bp_w(rbp) { Some(r) => r, None => { self.pos = led_save; self.scratch.truncate(sb); break; } };
+            if rhs.present { self.scratch.push(rhs.h); }
+            left = self.finish_w(${rid}, sb, left.off as usize, left.tok_start as usize);
+        }
+        Some(left)
+    }
+    fn ${r.name}_nud_w(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
+        self.capped = false;
+        let t = self.peek_w()?;
+${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint(); if ${c.steps.length ? c.steps.map((x) => stepCondW(x, ids, ar)).join(' && ') : 'true'} { self.capped = true; return Some(self.finish_w(${rid}, sb, self.off_at_w(save), save)); } self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); }`).join('\n')}
+        let r = self.${r.name}_nud_rest_w(t);
+        self.capped = false;
+        r
+    }
+    fn ${r.name}_nud_rest_w(&mut self, t: Tok) -> Option<Spanned<B::H>> {
+${tplNud}        if Parser::${r.name}_atom(t.kid) {
+            let sb = self.scratch.len(); let ts = self.pos;
+            self.push_leaf_w(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1;
+            return Some(self.finish_w(${rid}, sb, t.off as usize, ts));
+        }
+${bracketNudMatch}
+        if let Some(pbp) = Parser::${r.name}_pre(t.lid) {
+            let save = self.pos; let sb = self.scratch.len(); self.push_leaf_w(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
+            match self.${r.name}_bp_w(pbp) {
+                Some(operand) => { if operand.present { self.scratch.push(operand.h); } return Some(self.finish_w(${rid}, sb, self.off_at_w(save), save)); }
+                None => { self.pos = save; self.scratch.truncate(sb); return None; }
+            }
+        }
+${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint(); if ${seq.length ? seq.map((x) => stepCondW(x, ids, ar)).join(' && ') : 'true'} { return Some(self.finish_w(${rid}, sb, self.off_at_w(save), save)); } self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); }`).join('\n')}
+        None
+    }`;
+}
+
+function emitBuilderAddonRust(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const reuse = topReusePlan(ir);
+  const ruleFnsW = ir.rules.map((r) => {
+    if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids, ar);
+    if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids, ar);
+    return rdRuleW(r, ids, ar);
+  }).join('\n\n');
+  const matchTemplateW = ir.tpl ? `    fn match_template_w(&mut self) -> Option<Spanned<B::H>> {
+        let t = self.peek_w()?;
+        if t.kid != ${kidOf(ids, "$templateHead")} { return None; }
+        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+        self.push_leaf_w(${ttIdOf(ar, '$templateHead')}, self.pos as u32, t.off, t.end); self.pos += 1;
+        loop {
+            let expr = match self.parse_${ir.tpl.interpRule}_w() { Some(e) => e, None => { self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); return None; } };
+            if expr.present { self.scratch.push(expr.h); }
+            let next = match self.peek_w() { Some(x) => x, None => { self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); return None; } };
+            if next.kid == ${kidOf(ids, "$templateMiddle")} { self.push_leaf_w(${ttIdOf(ar, '$templateMiddle')}, self.pos as u32, next.off, next.end); self.pos += 1; continue; }
+            if next.kid == ${kidOf(ids, "$templateTail")} { self.push_leaf_w(${ttIdOf(ar, '$templateTail')}, self.pos as u32, next.off, next.end); self.pos += 1; break; }
+            self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); return None;
+        }
+        Some(self.finish_w(${ruleIdOf(ar, '$template')}, sb, self.off_at_w(save), save))
+    }
+` : '';
+
+  // IDs of token types SlimBuilder drops
+  const dropTtIds = ['$punct', '$keyword', '$operator']
+    .map((n) => {
+      try { return ttIdOf(ar, n); } catch { return null; }
+    })
+    .filter((x): x is number => x !== null);
+  const punctId = TT_SKIP_PUNCT;
+  const slimDropMatch = dropTtIds.length
+    ? dropTtIds.map((id) => `${id}`).join(' | ')
+    : 'u16::MAX'; // no-op pattern if grammar lacks these
+
+  return `// ─── Builder API (additive; CST parse() / Doc above are unchanged) ───────────
+// Builder is pure / bottom-up. Backtracking truncates scratch (+ optional arena
+// checkpoint); discarded handles are garbage. H: Copy (arena i32) — owning
+// builders that need cleanup on truncate must self-manage.
+pub trait Builder {
+    type H: Copy;
+    fn leaf(&mut self, scratch: &mut Vec<Self::H>, tt_id: u16, tok_idx: u32, off: u32, end: u32) -> bool;
+    /// Consume scratch[sb..] → 0..=n handles; return (primary H, off, present).
+    /// Default: span_of + node (drop/splice via leftover scratch count). CstBuilder overrides
+    /// with an arena \`finish\` twin so monomorphization matches native parse.
+    #[inline(always)]
+    fn finish(
+        &mut self, scratch: &mut Vec<Self::H>, sb: usize, rule_id: u16,
+        fallback_off: u32, tok_start: u32, tok_end: u32, toks: &[Tok],
+    ) -> (Self::H, u32, bool) {
+        let nn = scratch.len();
+        let (offset, end) = if nn > sb {
+            let (o0, _) = self.span_of(scratch[sb], toks);
+            let (_, e1) = self.span_of(scratch[nn - 1], toks);
+            (o0, e1)
+        } else {
+            (fallback_off, fallback_off)
+        };
+        self.node(scratch, sb, rule_id, offset, end, tok_start, tok_end);
+        let n = scratch.len() - sb;
+        if n == 1 {
+            (scratch.pop().unwrap(), offset, true)
+        } else if n == 0 {
+            (Self::dummy_h(), offset, false)
+        } else {
+            let h = scratch[sb];
+            scratch.truncate(sb);
+            (h, offset, true)
+        }
+    }
+    fn node(&mut self, scratch: &mut Vec<Self::H>, sb: usize, rule_id: u16, off: u32, end: u32, tok_start: u32, tok_end: u32);
+    fn span_of(&self, h: Self::H, toks: &[Tok]) -> (u32, u32);
+    fn head_span(&self, h: Self::H, toks: &[Tok]) -> (u32, u32);
+    /// Arena builders: (nodes.len(), kids.len()). Default no-op for pure builders.
+    #[inline(always)] fn checkpoint(&self) -> (usize, usize) { (0, 0) }
+    #[inline(always)] fn restore(&mut self, _ck: (usize, usize)) {}
+    fn dummy_h() -> Self::H;
+}
+
+/// Parser-side span+handle frame. Span fields are independent of H (Pratt never reads H for spans).
+#[derive(Clone, Copy)]
+struct Spanned<H: Copy> { h: H, off: u32, tok_start: u32, present: bool }
+
+struct ParserW<'a, B: Builder> {
+    toks: Vec<Tok>,
+    pos: usize,
+    max_look: usize,
+    capped: bool,
+    suppress_next: Vec<u16>,
+    suppress_cur: Vec<u16>,
+    src: &'a str,
+    /// Owned for the parse (taken from &mut via Default) so arena fields sit in-line
+    /// like native \`Parser.nodes/kids\` (field order: …, b.nodes, b.kids, scratch).
+    b: B,
+    scratch: Vec<B::H>,
+}
+
+impl<'a, B: Builder> ParserW<'a, B> {
+    #[inline(always)]
+    fn peek_w(&mut self) -> Option<Tok> {
+        if self.pos + 1 > self.max_look { self.max_look = self.pos + 1; }
+        if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None }
+    }
+    #[inline(always)]
+    fn off_at_w(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off as usize } else { 0 } }
+    #[inline(always)]
+    fn push_leaf_w(&mut self, tt_id: u16, tok_idx: u32, off: u32, end: u32) {
+        let _ = self.b.leaf(&mut self.scratch, tt_id, tok_idx, off, end);
+    }
+    #[inline(always)]
+    fn finish_w(&mut self, rule_id: u16, sb: usize, fallback_off: usize, tok_start: usize) -> Spanned<B::H> {
+        let (h, off, present) = self.b.finish(
+            &mut self.scratch, sb, rule_id, fallback_off as u32, tok_start as u32, self.pos as u32, &self.toks,
+        );
+        Spanned { h, off, tok_start: tok_start as u32, present }
+    }
+    #[inline(always)]
+    fn head_leaf_text_w(&self, f: &Spanned<B::H>) -> &'a str {
+        if !f.present { return ""; }
+        let (a, b) = self.b.head_span(f.h, &self.toks);
+        let a = a as usize; let b = b as usize;
+        if a <= b && b <= self.src.len() { &self.src[a..b] } else { "" }
+    }
+    #[inline(always)]
+    fn nll_blocked_w(&self, words: &[&str], left: &Spanned<B::H>) -> bool {
+        let h = self.head_leaf_text_w(left); words.iter().any(|w| *w == h)
+    }
+    #[inline(always)]
+    fn match_lit_w(&mut self, lid: u16, tt_id: u16) -> bool {
+        match self.peek_w() {
+            Some(t) if t.lid == lid => { self.push_leaf_w(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            _ => false
+        }
+    }
+    #[inline(always)]
+    fn match_tok_w(&mut self, kid: u16, tt_id: u16) -> bool {
+        match self.peek_w() {
+            Some(t) if t.kid == kid => { self.push_leaf_w(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            _ => false
+        }
+    }
+    #[inline(always)]
+    fn call_rule_w(&mut self, f: fn(&mut ParserW<'a, B>) -> Option<Spanned<B::H>>) -> bool {
+        match f(self) {
+            Some(fr) => { if fr.present { self.scratch.push(fr.h); } true }
+            None => false
+        }
+    }
+    #[inline(always)]
+    fn star_w(&mut self, once: fn(&mut ParserW<'a, B>) -> bool) -> bool {
+        loop {
+            let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+            if !once(self) { self.pos = sp; self.scratch.truncate(sb); self.b.restore(ck); break; }
+        }
+        true
+    }
+    #[inline(always)]
+    fn opt_w(&mut self, body: fn(&mut ParserW<'a, B>) -> bool) -> bool {
+        let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+        if !body(self) { self.pos = sp; self.scratch.truncate(sb); self.b.restore(ck); }
+        true
+    }
+    #[inline(always)]
+    fn sep_by_w(&mut self, elem: fn(&mut ParserW<'a, B>) -> bool, delim: u16) -> bool {
+        if !elem(self) { return true; }
+        loop {
+            let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+            if !self.match_lit_w(delim, ${punctId}) { self.pos = sp; self.scratch.truncate(sb); self.b.restore(ck); break; }
+            if !elem(self) { break; }
+        }
+        true
+    }
+    #[inline(always)]
+    fn alt_lit_w(&mut self, opts: &[(u16, u16)]) -> bool {
+        for (lid, tt) in opts { if self.match_lit_w(*lid, *tt) { return true; } }
+        false
+    }
+
+${matchTemplateW}${ruleFnsW}
+}
+
+#[derive(Default)]
+pub struct CstBuilder {
+    pub nodes: Vec<Node>,
+    pub kids: Vec<i32>,
+}
+impl CstBuilder {
+    pub fn new() -> Self { Self::default() }
+}
+impl Builder for CstBuilder {
+    type H = i32;
+    #[inline(always)]
+    fn dummy_h() -> i32 { 0 }
+    #[inline(always)]
+    fn checkpoint(&self) -> (usize, usize) { (self.nodes.len(), self.kids.len()) }
+    #[inline(always)]
+    fn restore(&mut self, ck: (usize, usize)) { self.nodes.truncate(ck.0); self.kids.truncate(ck.1); }
+    #[inline(always)]
+    fn leaf(&mut self, scratch: &mut Vec<i32>, tt_id: u16, tok_idx: u32, _off: u32, _end: u32) -> bool {
+        if tt_id == ${punctId} { return false; }
+        scratch.push(encode_leaf(tok_idx, tt_id as u8));
+        true
+    }
+    /// Byte-twin of Parser::finish (arena path): compute span, extend kids, push node, return id.
+    #[inline(always)]
+    fn finish(
+        &mut self, scratch: &mut Vec<i32>, sb: usize, rule_id: u16,
+        fallback_off: u32, tok_start: u32, tok_end: u32, toks: &[Tok],
+    ) -> (i32, u32, bool) {
+        let nn = scratch.len();
+        let kid_start = self.kids.len();
+        let (offset, end) = if nn > sb {
+            let (o0, _) = Self::kid_off_end(&self.nodes, toks, scratch[sb]);
+            let (_, e1) = Self::kid_off_end(&self.nodes, toks, scratch[nn - 1]);
+            (o0, e1)
+        } else {
+            (fallback_off, fallback_off)
+        };
+        self.kids.extend(scratch[sb..nn].iter().copied());
+        scratch.truncate(sb);
+        self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset, end, tok_start, tok_end, ext: 0 });
+        ((self.nodes.len() - 1) as i32, offset, true)
+    }
+    #[inline(always)]
+    fn node(&mut self, scratch: &mut Vec<i32>, sb: usize, rule_id: u16, off: u32, end: u32, tok_start: u32, tok_end: u32) {
+        let nn = scratch.len();
+        let kid_start = self.kids.len();
+        self.kids.extend(scratch[sb..nn].iter().copied());
+        scratch.truncate(sb);
+        self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: (nn - sb) as u32, offset: off, end, tok_start, tok_end, ext: 0 });
+        scratch.push((self.nodes.len() - 1) as i32);
+    }
+    #[inline(always)]
+    fn span_of(&self, h: i32, toks: &[Tok]) -> (u32, u32) {
+        Self::kid_off_end(&self.nodes, toks, h)
+    }
+    #[inline(always)]
+    fn head_span(&self, h: i32, toks: &[Tok]) -> (u32, u32) {
+        let mut id = h;
+        loop {
+            if id < 0 { let (ti, _) = decode_leaf(id); let t = &toks[ti as usize]; return (t.off, t.end); }
+            let nd = &self.nodes[id as usize];
+            if nd.kid_count == 0 { return (nd.offset, nd.end); }
+            id = self.kids[nd.kid_start as usize];
+        }
+    }
+}
+impl CstBuilder {
+    #[inline(always)]
+    fn kid_off_end(nodes: &[Node], toks: &[Tok], kid: i32) -> (u32, u32) {
+        if kid < 0 { let (ti, _) = decode_leaf(kid); let t = &toks[ti as usize]; (t.off, t.end) }
+        else { let nd = &nodes[kid as usize]; (nd.offset, nd.end) }
+    }
+}
+
+#[derive(Default)]
+pub struct SlimBuilder {
+    pub nodes: Vec<Node>,
+    pub kids: Vec<i32>,
+}
+impl SlimBuilder {
+    pub fn new() -> Self { Self::default() }
+}
+impl Builder for SlimBuilder {
+    type H = i32;
+    #[inline(always)]
+    fn dummy_h() -> i32 { 0 }
+    #[inline(always)]
+    fn checkpoint(&self) -> (usize, usize) { (self.nodes.len(), self.kids.len()) }
+    #[inline(always)]
+    fn restore(&mut self, ck: (usize, usize)) { self.nodes.truncate(ck.0); self.kids.truncate(ck.1); }
+    #[inline(always)]
+    fn leaf(&mut self, scratch: &mut Vec<i32>, tt_id: u16, tok_idx: u32, _off: u32, _end: u32) -> bool {
+        match tt_id { ${slimDropMatch} => return false, _ => {} }
+        if tt_id == ${punctId} { return false; }
+        scratch.push(encode_leaf(tok_idx, tt_id as u8));
+        true
+    }
+    #[inline(always)]
+    fn node(&mut self, scratch: &mut Vec<i32>, sb: usize, rule_id: u16, off: u32, end: u32, tok_start: u32, tok_end: u32) {
+        let nn = scratch.len();
+        let count = nn - sb;
+        if count == 1 { return; }
+        if count == 0 { scratch.truncate(sb); return; }
+        let kid_start = self.kids.len();
+        self.kids.extend(scratch[sb..nn].iter().copied());
+        scratch.truncate(sb);
+        self.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: count as u32, offset: off, end, tok_start, tok_end, ext: 0 });
+        scratch.push((self.nodes.len() - 1) as i32);
+    }
+    #[inline(always)]
+    fn span_of(&self, h: i32, toks: &[Tok]) -> (u32, u32) {
+        if h < 0 { let (ti, _) = decode_leaf(h); let t = &toks[ti as usize]; (t.off, t.end) }
+        else { let nd = &self.nodes[h as usize]; (nd.offset, nd.end) }
+    }
+    #[inline(always)]
+    fn head_span(&self, h: i32, toks: &[Tok]) -> (u32, u32) {
+        let mut id = h;
+        loop {
+            if id < 0 { let (ti, _) = decode_leaf(id); let t = &toks[ti as usize]; return (t.off, t.end); }
+            let nd = &self.nodes[id as usize];
+            if nd.kid_count == 0 { return (nd.offset, nd.end); }
+            id = self.kids[nd.kid_start as usize];
+        }
+    }
+}
+
+pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
+    let toks = lex(src);
+    let n = toks.len();
+    let owned = std::mem::take(b);
+    let mut p = ParserW { toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: owned, scratch: Vec::new() };
+    let root = match p.parse_${ir.entry}_w() {
+        Some(fr) if p.pos == n && fr.present => Some(fr.h),
+        _ => None,
+    };
+    *b = p.b;
+    root
+}
+
+pub fn cst_json_with(b: &CstBuilder, toks: &[Tok], root: i32) -> String {
+    let mut out = String::new();
+    write_json_arena(&b.nodes, &b.kids, toks, root, &mut out);
+    out
+}
+
+pub fn slim_json_with(b: &SlimBuilder, toks: &[Tok], root: i32) -> String {
+    let mut out = String::new();
+    write_json_arena(&b.nodes, &b.kids, toks, root, &mut out);
+    out
+}
+`;
+}
+
 export const rustTarget: Target = {
   name: 'rust',
   ext: 'rs',
@@ -2222,6 +2831,7 @@ fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
 }
 
 ${docEditBlockRust(ir)}
+${emitBuilderAddonRust(ir, ids, ar)}
 `;
   },
   emitRunner(): string {

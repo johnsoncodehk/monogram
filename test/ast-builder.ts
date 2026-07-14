@@ -1,8 +1,9 @@
 // Gate: TS-target Builder / parseWith — default cstBuilder ≡ parse(), demo ESTree-style
 // builder golden snapshots, and (when run as main) CST-prefix identity vs master emit tip.
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { emitParser, tsTarget } from '../src/emit.ts';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { emitParser, rustTarget, tsTarget } from '../src/emit.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; seeds: string[] };
@@ -360,6 +361,173 @@ console.log('\nast-builder: demo ESTree-ish builder golden');
   const prefix = emitted.slice(0, emitted.indexOf('// ─── Builder API'));
   check('CST prefix stable hash (nonempty)', prefix.length > 1000,
     createHash('sha256').update(prefix).digest('hex').slice(0, 12));
+}
+
+// ─── 4. Rust target: parse_with(CstBuilder) ≡ parse + SlimBuilder smoke ──────
+console.log('\nast-builder: rust parse_with(CstBuilder) ≡ parse()');
+const RUST_TMP = '/tmp/ast-builder-rust-gate';
+mkdirSync(RUST_TMP, { recursive: true });
+
+function haveRustc(): boolean {
+  try { execFileSync('rustc', ['--version'], { stdio: 'pipe' }); return true; }
+  catch { return false; }
+}
+
+const rustHarness = `
+fn gate_skip_ws(s: &[u8], mut i: usize) -> usize { while i < s.len() && (s[i] as char).is_whitespace() { i += 1; } i }
+fn gate_parse_str(s: &[u8], mut i: usize) -> Option<(String, usize)> {
+    if s.get(i)? != &b'"' { return None; }
+    i += 1;
+    let mut out = String::new();
+    while i < s.len() {
+        match s[i] {
+            b'"' => return Some((out, i + 1)),
+            b'\\\\' => { i += 1; if i >= s.len() { return None; }
+                out.push(match s[i] { b'n' => '\\n', b'r' => '\\r', b't' => '\\t', b'"' => '"', b'\\\\' => '\\\\', b'/' => '/', c => c as char });
+                i += 1; }
+            c if c < 0x80 => { out.push(c as char); i += 1; }
+            _ => {
+                let w = match s[i] { 0xC0..=0xDF => 2, 0xE0..=0xEF => 3, 0xF0..=0xF7 => 4, _ => return None };
+                if i + w > s.len() { return None; }
+                let ch = std::str::from_utf8(&s[i..i + w]).ok()?.chars().next()?;
+                out.push(ch); i += w;
+            }
+        }
+    }
+    None
+}
+fn parse_json_str_array(s: &str) -> Option<Vec<String>> {
+    let b = s.as_bytes();
+    let mut i = gate_skip_ws(b, 0);
+    if *b.get(i)? != b'[' { return None; }
+    i = gate_skip_ws(b, i + 1);
+    let mut out = Vec::new();
+    if *b.get(i)? == b']' { return Some(out); }
+    loop {
+        let (v, ni) = gate_parse_str(b, i)?;
+        out.push(v);
+        i = gate_skip_ws(b, ni);
+        if *b.get(i)? == b']' { return Some(out); }
+        if *b.get(i)? != b',' { return None; }
+        i = gate_skip_ws(b, i + 1);
+    }
+}
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let mode = args.get(1).map(|s| s.as_str()).unwrap_or("eq-batch");
+    if mode == "slim-demo" {
+        for src in &["(1);", "1;"] {
+            let mut s = SlimBuilder::new();
+            match parse_with(src, &mut s) {
+                Some(h) if h < 0 => {
+                    let toks = lex(src);
+                    let (ti, tt) = decode_leaf(h);
+                    let t = &toks[ti as usize];
+                    println!("LEAF\\t{}\\t{}\\t{}", src, TT_NAMES[tt as usize], t.off);
+                }
+                Some(h) => println!("NODE\\t{}\\t{}", src, slim_json_with(&s, &lex(src), h)),
+                None => println!("NULL\\t{}", src),
+            }
+        }
+        return;
+    }
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw).unwrap();
+    let inputs = parse_json_str_array(&raw).expect("json string array");
+    let mut bad = 0usize;
+    for (i, src) in inputs.iter().enumerate() {
+        let a = parse(tokenize(src));
+        let mut b = CstBuilder::new();
+        let root = parse_with(src, &mut b);
+        match (a.as_ref(), root) {
+            (Some((p, r)), Some(rw)) => {
+                let mut ja = String::new();
+                write_json(p, *r, &mut ja);
+                let jb = cst_json_with(&b, &lex(src), rw);
+                if ja != jb {
+                    bad += 1;
+                    if bad <= 3 { eprintln!("mismatch[{}]: {:?}", i, src); }
+                }
+            }
+            (None, None) => {}
+            _ => { bad += 1; if bad <= 3 { eprintln!("accept[{}]: {:?}", i, src); } }
+        }
+    }
+    if bad == 0 { println!("ok {}", inputs.len()); } else { println!("bad {}", bad); std::process::exit(1); }
+}
+`;
+
+if (!haveRustc()) {
+  check('rust toolchain present', false, 'rustc missing — rust builder gates skipped');
+} else {
+  // Additive marker + prefix tip on calc
+  {
+    const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
+    const emitted = emitParser(grammar, rustTarget);
+    check('rust builder addon marker', emitted.includes('// ─── Builder API'));
+    check('rust exports parse_with + CstBuilder + Builder',
+      emitted.includes('pub fn parse_with') && emitted.includes('pub struct CstBuilder') && emitted.includes('pub trait Builder'));
+    const prefix = emitted.slice(0, emitted.indexOf('// ─── Builder API'));
+    check('rust CST prefix nonempty', prefix.length > 1000,
+      createHash('sha256').update(prefix).digest('hex').slice(0, 12));
+  }
+
+  for (const c of CASES) {
+    const grammar: CstGrammar = (await import(c.path)).default;
+    const rfile = `${RUST_TMP}/${c.grammar}.rs`;
+    const bin = `${RUST_TMP}/${c.grammar}`;
+    writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
+    try {
+      execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 120_000 });
+    } catch (e) {
+      check(`rustc ${c.grammar}`, false, String(e).slice(0, 200));
+      continue;
+    }
+    const inputs = variants(c.seeds, 300);
+    const out = execFileSync(bin, ['eq-batch'], {
+      input: JSON.stringify(inputs), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120_000,
+    }).trim();
+    check(`rust ${c.grammar} (${inputs.length} inputs)`, out.startsWith('ok '), out);
+  }
+
+  // SlimBuilder smoke on javascript
+  {
+    const grammar: CstGrammar = (await import('../javascript.ts')).default;
+    const rfile = `${RUST_TMP}/javascript-slim.rs`;
+    const bin = `${RUST_TMP}/javascript-slim`;
+    writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
+    execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 120_000 });
+    const slimOut = execFileSync(bin, ['slim-demo'], { encoding: 'utf8' }).trim().split('\n');
+    check('rust slim (1); → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t(1);\tNumber\t')));
+    check('rust slim 1; → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t1;\tNumber\t')));
+  }
+
+  // 2MB corpus equivalence (rebuild if missing)
+  {
+    const corpusPath = '/tmp/p6c-corpus-2mb.ts';
+    if (!existsSync(corpusPath)) {
+      // Minimal rebuild: concatenate typescript seeds enough to pass ~2MB
+      const seeds = CASES.find((x) => x.grammar === 'typescript')!.seeds;
+      let body = '';
+      let i = 0;
+      while (Buffer.byteLength(body) < 2_100_000) {
+        body += seeds[i % seeds.length] + '\n';
+        i++;
+      }
+      writeFileSync(corpusPath, body);
+    }
+    const corpus = readFileSync(corpusPath, 'utf8');
+    check('2MB corpus present', Buffer.byteLength(corpus) >= 2_000_000, `${Buffer.byteLength(corpus)} bytes`);
+    const grammar: CstGrammar = (await import('../typescript.ts')).default;
+    const rfile = `${RUST_TMP}/typescript-2mb.rs`;
+    const bin = `${RUST_TMP}/typescript-2mb`;
+    writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
+    execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 180_000 });
+    const out = execFileSync(bin, ['eq-batch'], {
+      input: JSON.stringify([corpus]), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 180_000,
+    }).trim();
+    check('rust 2MB corpus parse_with ≡ parse', out === 'ok 1', out);
+  }
 }
 
 console.log(`\n${failures === 0 ? 'PASS' : 'FAIL'} ast-builder (${failures} failure(s))`);
