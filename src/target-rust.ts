@@ -773,8 +773,15 @@ function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan): string
   return `    fn parse_top_one(&mut self) -> Option<Spanned<B::H>> {
 ${plan.topOneBody}
     }
+    #[inline(always)]
+    fn push_entry_from_h(&mut self, h: B::H) {
+        let meta = self.b.entry_meta(h, self.max_look as u32, &self.toks);
+        self.entries.push(meta);
+    }
     fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len();
+        self.entries.clear();
+        self.entries.reserve((self.toks.len().saturating_sub(self.pos) / 2).max(8));
         loop {
             let sp = self.pos;
             self.max_look = 0;
@@ -782,7 +789,8 @@ ${plan.topOneBody}
                 None => { self.pos = sp; break; }
                 Some(fr) => {
                     if fr.present {
-                        self.b.note_look(fr.h, self.max_look as u32);
+                        // Engine-side side table (decision input). CstBuilder.entry_meta also stamps Node.ext.
+                        self.push_entry_from_h(fr.h);
                         self.scratch.push(fr.h);
                     }
                 }
@@ -795,7 +803,7 @@ ${plan.topOneBody}
 function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.cstName);
   const headFn = plan.hasHead && plan.headRule
-    ? `    fn parse_head_seg(&mut self, sb: usize) -> Option<Seg> {
+    ? `    fn parse_head_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         self.max_look = 0;
         let before = self.scratch.len();
         self.opt(|p| p.call_rule(Parser::parse_${plan.headRule}));
@@ -804,15 +812,18 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
         let (tok_start, tok_end) = self.b.tok_range(n);
         let mut ext = tok_end;
         if (self.max_look as u32) > ext { ext = self.max_look as u32; }
-        Some(Seg { kid_start: before - sb, kid_count: 1, tok_start: tok_start as usize, tok_end: tok_end as usize, ext: ext as usize })
+        let (off, end) = self.b.span_of(n, &self.toks);
+        let kid_start = (before - sb) as u32;
+        let meta = EntryMeta { tok_start: tok_start as u32, tok_end: tok_end as u32, ext: ext as u32, off, end, kid_start, kid_count: 1 };
+        Some((Seg { kid_start: before - sb, kid_count: 1, tok_start: tok_start as usize, tok_end: tok_end as usize, ext: ext as usize }, meta))
     }
 `
     : '';
   const headBlock = plan.hasHead && plan.headRule
-    ? `        if let Some(h) = self.parse_head_seg(sb) { local.push(h); }
+    ? `        if let Some((h, m)) = self.parse_head_seg(sb) { local.push(h); local_e.push(m); }
 `
     : '';
-  return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<Seg> {
+  return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         let sp = self.pos; let before = self.scratch.len(); let ck = self.b.checkpoint();
         self.max_look = 0;
         if !self.match_tok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
@@ -826,18 +837,25 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
         if count > 1 { tok_end = self.b.tok_range(self.scratch[before + 1]).1; }
         let mut ext = tok_end;
         if (self.max_look as u32) > ext { ext = self.max_look as u32; }
-        Some(Seg { kid_start: before - sb, kid_count: count, tok_start: tok_start as usize, tok_end: tok_end as usize, ext: ext as usize })
+        let (off, mut end) = self.b.span_of(leaf, &self.toks);
+        if count > 1 { end = self.b.span_of(self.scratch[before + 1], &self.toks).1; }
+        let kid_start = (before - sb) as u32;
+        let meta = EntryMeta { tok_start: tok_start as u32, tok_end: tok_end as u32, ext: ext as u32, off, end, kid_start, kid_count: count as u32 };
+        // Engine-side EntryMeta is the reuse decision source; Seg kept as validate oracle (+ SEGK mirror).
+        Some((Seg { kid_start: before - sb, kid_count: count, tok_start: tok_start as usize, tok_end: tok_end as usize, ext: ext as usize }, meta))
     }
     fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len();
         let mut local: Vec<Seg> = Vec::new();
+        let mut local_e: Vec<EntryMeta> = Vec::new();
 ${headBlock}        loop {
             match self.parse_loop_seg(sb) {
-                Some(seg) => local.push(seg),
+                Some((seg, meta)) => { local.push(seg); local_e.push(meta); }
                 None => break,
             }
         }
         self.segs = local;
+        self.entries = local_e;
         Some(self.finish(${rid}, sb, self.off_at(save), save))
     }`;
 }
@@ -984,8 +1002,12 @@ function docEditBlockRust(ir: ParserIR): string {
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
+  const entriesInit = topReuse ? ', entries: Vec::new()' : '';
+  const entriesMove = topReuse ? ' self.entries = p.entries;' : '';
   const segsInit = shapeB ? ', segs: Vec::new()' : '';
   const segsMove = shapeB ? ' self.segs = p.segs;' : '';
+  const reuseInit = `${entriesInit}${segsInit}`;
+  const reuseMove = `${entriesMove}${segsMove}`;
   const adoptSuffix = `                        for j in (o_idx + 1)..old_toks.len() {
                             let ot = &old_toks[j];
                             out.push(AlignMeta { kind: ot.kind, off: (ot.off as isize + delta) as usize, end: (ot.end as isize + delta) as usize, nl: ot.nl, fd: ot.fd, pd: ot.pd, lc: ot.lc, lb: ot.lb, hd: ot.hd, td: ot.td });
@@ -1499,131 +1521,151 @@ fn shift_subtree(nodes: &mut [Node], kids: &mut [i32], id: i32, byte_delta: isiz
         }
     }
 }
+#[inline(always)]
+fn shift_entry_meta(m: &mut EntryMeta, byte_delta: isize, tok_delta: isize) {
+    m.tok_start = (m.tok_start as isize + tok_delta) as u32;
+    m.tok_end = (m.tok_end as isize + tok_delta) as u32;
+    m.ext = (m.ext as isize + tok_delta) as u32;
+    m.off = (m.off as isize + byte_delta) as u32;
+    m.end = (m.end as isize + byte_delta) as u32;
+}
+fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], old_root: i32) {
+    let old = &nodes[old_root as usize];
+    assert_eq!(entries.len(), old.kid_count as usize, "entry count vs root kids");
+    for i in 0..entries.len() {
+        let kid = kids[old.kid_start as usize + i];
+        assert!(kid >= 0, "entry {} expected rule node kid", i);
+        let nd = &nodes[kid as usize];
+        let e = &entries[i];
+        assert_eq!(e.tok_start, nd.tok_start, "tok_start entry {}", i);
+        assert_eq!(e.tok_end, nd.tok_end, "tok_end entry {}", i);
+        assert_eq!(e.ext, nd.ext, "ext entry {}", i);
+        assert_eq!(e.off, nd.offset, "off entry {}", i);
+        assert_eq!(e.end, nd.end, "end entry {}", i);
+    }
+}
 ` : '';
   const reuseFnsA = shapeA ? `${reuseShared}impl<'a> Parser<'a> {
-    fn kid_off_end(&self, kid: i32) -> (u32, u32) {
-        if kid < 0 {
-            let (ti, _) = decode_leaf(kid);
-            let t = &self.toks[ti as usize];
-            (t.off as u32, t.end as u32)
-        } else {
-            let nd = &self.b.nodes[kid as usize];
-            (nd.offset, nd.end)
-        }
-    }
-    fn kid_tok_range(&self, kid: i32) -> (u32, u32) {
-        if kid < 0 {
-            let (ti, _) = decode_leaf(kid);
-            (ti, ti + 1)
-        } else {
-            let nd = &self.b.nodes[kid as usize];
-            (nd.tok_start, nd.tok_end)
-        }
-    }
-    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[i32], mid: &[i32], suffix_cand: &[i32], adopt_from: usize, byte_delta: isize, tok_delta: isize, new_n: usize) -> (i32, usize) {
+    fn finish_reuse(&mut self, rule_id: u16, prefix_kids: &[i32], mid: &[i32], suffix_cand: &[i32], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], adopt_from: usize, byte_delta: isize, tok_delta: isize, new_n: usize) -> (i32, usize) {
         let adopted = &suffix_cand[adopt_from..];
         for &s in adopted { shift_subtree(&mut self.b.nodes, &mut self.b.kids, s, byte_delta, tok_delta); }
         let mut children: Vec<i32> = Vec::with_capacity(prefix_kids.len() + mid.len() + adopted.len());
         children.extend_from_slice(prefix_kids);
         children.extend_from_slice(mid);
         children.extend_from_slice(adopted);
-        let (off, end, tok_start, tok_end) = if children.is_empty() {
+        let mut new_entries: Vec<EntryMeta> = Vec::with_capacity(prefix_meta.len() + mid_meta.len() + suffix_meta.len().saturating_sub(adopt_from));
+        new_entries.extend_from_slice(prefix_meta);
+        new_entries.extend_from_slice(mid_meta);
+        for m in &suffix_meta[adopt_from..] {
+            let mut em = *m;
+            shift_entry_meta(&mut em, byte_delta, tok_delta);
+            new_entries.push(em);
+        }
+        let (off, end, tok_start, tok_end) = if new_entries.is_empty() {
             (0u32, 0u32, 0u32, 0u32)
         } else {
-            let (o0, _) = self.kid_off_end(children[0]);
-            let (_, e1) = self.kid_off_end(*children.last().unwrap());
-            let (ts, _) = self.kid_tok_range(children[0]);
-            let (_, te) = self.kid_tok_range(*children.last().unwrap());
-            (o0, e1, ts, te)
+            let first = &new_entries[0];
+            let last = new_entries.last().unwrap();
+            (first.off, last.end, first.tok_start, last.tok_end)
         };
         let kid_start = self.b.kids.len();
         self.b.kids.extend_from_slice(&children);
         self.b.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: children.len() as u32, offset: off, end, tok_start, tok_end, ext: 0 });
+        self.entries = new_entries;
         self.pos = new_n;
         ((self.b.nodes.len() - 1) as i32, prefix_kids.len() + adopted.len())
     }
-    fn try_reuse_top(&mut self, old_root: i32, byte_delta: isize, old_n: usize, new_n: usize, prefix: usize, suffix: usize) -> Option<(i32, usize)> {
+    fn try_reuse_top(&mut self, old_root: i32, old_entries: &[EntryMeta], byte_delta: isize, old_n: usize, new_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(i32, usize)> {
         if old_root < 0 { return None; }
+        if validate { assert_entries_vs_nodes(old_entries, &self.b.nodes, &self.b.kids, old_root); }
         let old = self.b.nodes[old_root as usize];
         let old_kids: Vec<i32> = (0..old.kid_count).map(|i| self.b.kids[old.kid_start as usize + i as usize]).collect();
         let mut prefix_len = 0usize;
-        while prefix_len < old_kids.len() {
-            if self.b.nodes[old_kids[prefix_len] as usize].ext <= prefix as u32 { prefix_len += 1; } else { break; }
+        while prefix_len < old_entries.len() {
+            if old_entries[prefix_len].ext <= prefix as u32 { prefix_len += 1; } else { break; }
         }
-        let mut suffix_start = old_kids.len();
-        let mut i = old_kids.len();
+        let mut suffix_start = old_entries.len();
+        let mut i = old_entries.len();
         while i > prefix_len {
             i -= 1;
-            if self.b.nodes[old_kids[i] as usize].tok_start as usize >= old_n - suffix { suffix_start = i; } else { break; }
+            if old_entries[i].tok_start as usize >= old_n - suffix { suffix_start = i; } else { break; }
         }
         let prefix_kids = old_kids[..prefix_len].to_vec();
         let suffix_cand = old_kids[suffix_start..].to_vec();
+        let prefix_meta = &old_entries[..prefix_len];
+        let suffix_meta = &old_entries[suffix_start..];
         let tok_delta = new_n as isize - old_n as isize;
-        self.pos = if prefix_len > 0 { self.b.nodes[prefix_kids[prefix_len - 1] as usize].tok_end as usize } else { 0 };
+        self.pos = if prefix_len > 0 { prefix_meta[prefix_len - 1].tok_end as usize } else { 0 };
         self.scratch.clear();
         let mut mid: Vec<i32> = Vec::new();
+        let mut mid_meta: Vec<EntryMeta> = Vec::new();
         let suffix_bound = new_n - suffix;
         let mut max_cand: isize = -1;
-        for &id in &suffix_cand {
-            let c = self.b.nodes[id as usize].tok_start as isize + tok_delta;
+        for m in suffix_meta {
+            let c = m.tok_start as isize + tok_delta;
             if c > max_cand { max_cand = c; }
         }
         let rule_id = old.rule_id;
-        let try_hit = |p: &mut Parser<'a>, mid: &[i32]| -> Option<(i32, usize)> {
+        let try_hit = |p: &mut Parser<'a>, mid: &[i32], mid_meta: &[EntryMeta]| -> Option<(i32, usize)> {
             if p.pos < suffix_bound { return None; }
             if suffix_cand.is_empty() {
-                if p.pos == new_n { return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, 0, byte_delta, tok_delta, new_n)); }
+                if p.pos == new_n { return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, 0, byte_delta, tok_delta, new_n)); }
                 return None;
             }
-            for (hi, &id) in suffix_cand.iter().enumerate() {
-                if p.b.nodes[id as usize].tok_start as isize + tok_delta == p.pos as isize {
-                    return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, hi, byte_delta, tok_delta, new_n));
+            for (hi, m) in suffix_meta.iter().enumerate() {
+                if m.tok_start as isize + tok_delta == p.pos as isize {
+                    return Some(p.finish_reuse(rule_id, &prefix_kids, mid, &suffix_cand, prefix_meta, mid_meta, suffix_meta, hi, byte_delta, tok_delta, new_n));
                 }
             }
             None
         };
-        if let Some(hit) = try_hit(self, &mid) { return Some(hit); }
+        if let Some(hit) = try_hit(self, &mid, &mid_meta) { return Some(hit); }
         if !suffix_cand.is_empty() && max_cand >= 0 && (self.pos as isize) > max_cand { return None; }
         loop {
             if self.pos >= self.toks.len() {
                 if suffix_cand.is_empty() && self.pos == new_n {
-                    return Some(self.finish_reuse(rule_id, &prefix_kids, &mid, &suffix_cand, 0, byte_delta, tok_delta, new_n));
+                    return Some(self.finish_reuse(rule_id, &prefix_kids, &mid, &suffix_cand, prefix_meta, &mid_meta, suffix_meta, 0, byte_delta, tok_delta, new_n));
                 }
-                return try_hit(self, &mid);
+                return try_hit(self, &mid, &mid_meta);
             }
             self.max_look = 0;
             let sp = self.pos;
             let fr = match self.parse_top_one() { Some(fr) => fr, None => { self.pos = sp; return None; } };
             if !fr.present { self.pos = sp; return None; }
-            self.b.note_look(fr.h, self.max_look as u32);
+            let em = self.b.entry_meta(fr.h, self.max_look as u32, &self.toks);
+            mid_meta.push(em);
             mid.push(fr.h);
-            if let Some(hit) = try_hit(self, &mid) { return Some(hit); }
+            if let Some(hit) = try_hit(self, &mid, &mid_meta) { return Some(hit); }
             if !suffix_cand.is_empty() && max_cand >= 0 && (self.pos as isize) > max_cand { return None; }
         }
     }
 }
 ` : '';
-  const reuseFnsB = shapeB ? `${reuseShared}impl<'a> Parser<'a> {
-    fn kid_off_end(&self, kid: i32) -> (u32, u32) {
-        if kid < 0 {
-            let (ti, _) = decode_leaf(kid);
-            let t = &self.toks[ti as usize];
-            (t.off as u32, t.end as u32)
-        } else {
-            let nd = &self.b.nodes[kid as usize];
-            (nd.offset, nd.end)
+  const reuseFnsB = shapeB ? `${reuseShared}fn assert_entries_vs_segs(entries: &[EntryMeta], segs: &[Seg], nodes: &[Node], kids: &[i32], old_root: i32) {
+    assert_eq!(entries.len(), segs.len(), "entry count vs segs");
+    let old = &nodes[old_root as usize];
+    for i in 0..entries.len() {
+        let e = &entries[i];
+        let s = &segs[i];
+        assert_eq!(e.tok_start as usize, s.tok_start, "tok_start entry {}", i);
+        assert_eq!(e.tok_end as usize, s.tok_end, "tok_end entry {}", i);
+        assert_eq!(e.ext as usize, s.ext, "ext entry {}", i);
+        assert_eq!(e.kid_start as usize, s.kid_start, "kid_start entry {}", i);
+        assert_eq!(e.kid_count as usize, s.kid_count, "kid_count entry {}", i);
+        // off/end vs rule-node kids only — leaf endpoints need the old tok stream, which
+        // the edit Parser no longer holds (self.toks is the new stream).
+        let first = kids[old.kid_start as usize + s.kid_start];
+        let last = kids[old.kid_start as usize + s.kid_start + s.kid_count - 1];
+        if first >= 0 {
+            assert_eq!(e.off, nodes[first as usize].offset, "off entry {}", i);
+        }
+        if last >= 0 {
+            assert_eq!(e.end, nodes[last as usize].end, "end entry {}", i);
         }
     }
-    fn kid_tok_range(&self, kid: i32) -> (u32, u32) {
-        if kid < 0 {
-            let (ti, _) = decode_leaf(kid);
-            (ti, ti + 1)
-        } else {
-            let nd = &self.b.nodes[kid as usize];
-            (nd.tok_start, nd.tok_end)
-        }
-    }
-    fn finish_reuse_seg(&mut self, rule_id: u16, prefix_segs: &[Seg], prefix_kids: &[i32], mid_segs: &[Seg], mid_kids: &[i32], suffix_cand: &[Seg], old_kid_start: u32, adopt_from: usize, byte_delta: isize, tok_delta: isize, new_n: usize) -> (i32, usize) {
+}
+impl<'a> Parser<'a> {
+    fn finish_reuse_seg(&mut self, rule_id: u16, prefix_segs: &[Seg], prefix_kids: &[i32], mid_segs: &[Seg], mid_kids: &[i32], suffix_cand: &[Seg], prefix_meta: &[EntryMeta], mid_meta: &[EntryMeta], suffix_meta: &[EntryMeta], old_kid_start: u32, adopt_from: usize, byte_delta: isize, tok_delta: isize, new_n: usize) -> (i32, usize) {
         let adopted_segs = &suffix_cand[adopt_from..];
         let mut adopted_kids: Vec<i32> = Vec::new();
         for s in adopted_segs {
@@ -1644,50 +1686,63 @@ fn shift_subtree(nodes: &mut [Node], kids: &mut [i32], id: i32, byte_delta: isiz
         children.extend_from_slice(mid_kids);
         children.extend_from_slice(&adopted_kids);
         let mut new_segs: Vec<Seg> = Vec::with_capacity(prefix_segs.len() + mid_segs.len() + adopted_segs.len());
+        let mut new_entries: Vec<EntryMeta> = Vec::with_capacity(prefix_meta.len() + mid_meta.len() + suffix_meta.len().saturating_sub(adopt_from));
         let mut k_off = 0usize;
-        for s in prefix_segs {
+        for (s, m) in prefix_segs.iter().zip(prefix_meta.iter()) {
             new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: s.tok_start, tok_end: s.tok_end, ext: s.ext });
+            let mut em = *m;
+            em.kid_start = k_off as u32;
+            new_entries.push(em);
             k_off += s.kid_count;
         }
-        for s in mid_segs {
+        for (s, m) in mid_segs.iter().zip(mid_meta.iter()) {
             new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: s.tok_start, tok_end: s.tok_end, ext: s.ext });
+            let mut em = *m;
+            em.kid_start = k_off as u32;
+            new_entries.push(em);
             k_off += s.kid_count;
         }
-        for s in adopted_segs {
+        for (s, m) in adopted_segs.iter().zip(suffix_meta[adopt_from..].iter()) {
             new_segs.push(Seg { kid_start: k_off, kid_count: s.kid_count, tok_start: (s.tok_start as isize + tok_delta) as usize, tok_end: (s.tok_end as isize + tok_delta) as usize, ext: (s.ext as isize + tok_delta) as usize });
+            let mut em = *m;
+            shift_entry_meta(&mut em, byte_delta, tok_delta);
+            em.kid_start = k_off as u32;
+            new_entries.push(em);
             k_off += s.kid_count;
         }
-        let (off, end, tok_start, tok_end) = if children.is_empty() {
+        let (off, end, tok_start, tok_end) = if new_entries.is_empty() {
             (0u32, 0u32, 0u32, 0u32)
         } else {
-            let (o0, _) = self.kid_off_end(children[0]);
-            let (_, e1) = self.kid_off_end(*children.last().unwrap());
-            let (ts, _) = self.kid_tok_range(children[0]);
-            let (_, te) = self.kid_tok_range(*children.last().unwrap());
-            (o0, e1, ts, te)
+            let first = &new_entries[0];
+            let last = new_entries.last().unwrap();
+            (first.off, last.end, first.tok_start, last.tok_end)
         };
         let kid_start = self.b.kids.len();
         self.b.kids.extend_from_slice(&children);
         self.b.nodes.push(Node { rule_id, kid_start: kid_start as u32, kid_count: children.len() as u32, offset: off, end, tok_start, tok_end, ext: 0 });
         self.segs = new_segs;
+        self.entries = new_entries;
         self.pos = new_n;
         ((self.b.nodes.len() - 1) as i32, prefix_segs.len() + adopted_segs.len())
     }
-    fn try_reuse_seg(&mut self, old_root: i32, old_segs: &[Seg], byte_delta: isize, old_n: usize, new_n: usize, prefix: usize, suffix: usize) -> Option<(i32, usize)> {
+    fn try_reuse_seg(&mut self, old_root: i32, old_segs: &[Seg], old_entries: &[EntryMeta], byte_delta: isize, old_n: usize, new_n: usize, prefix: usize, suffix: usize, validate: bool) -> Option<(i32, usize)> {
         if old_root < 0 || old_segs.is_empty() { return None; }
+        if validate { assert_entries_vs_segs(old_entries, old_segs, &self.b.nodes, &self.b.kids, old_root); }
         let old = self.b.nodes[old_root as usize];
         let mut prefix_len = 0usize;
-        while prefix_len < old_segs.len() {
-            if old_segs[prefix_len].ext <= prefix { prefix_len += 1; } else { break; }
+        while prefix_len < old_entries.len() {
+            if old_entries[prefix_len].ext as usize <= prefix { prefix_len += 1; } else { break; }
         }
-        let mut suffix_start = old_segs.len();
-        let mut i = old_segs.len();
+        let mut suffix_start = old_entries.len();
+        let mut i = old_entries.len();
         while i > prefix_len {
             i -= 1;
-            if old_segs[i].tok_start >= old_n - suffix { suffix_start = i; } else { break; }
+            if old_entries[i].tok_start as usize >= old_n - suffix { suffix_start = i; } else { break; }
         }
         let prefix_segs = &old_segs[..prefix_len];
         let suffix_cand = &old_segs[suffix_start..];
+        let prefix_meta = &old_entries[..prefix_len];
+        let suffix_meta = &old_entries[suffix_start..];
         let mut prefix_kids: Vec<i32> = Vec::new();
         for s in prefix_segs {
             for j in 0..s.kid_count {
@@ -1695,66 +1750,70 @@ fn shift_subtree(nodes: &mut [Node], kids: &mut [i32], id: i32, byte_delta: isiz
             }
         }
         let tok_delta = new_n as isize - old_n as isize;
-        self.pos = if prefix_len > 0 { prefix_segs[prefix_len - 1].tok_end } else { 0 };
+        self.pos = if prefix_len > 0 { prefix_meta[prefix_len - 1].tok_end as usize } else { 0 };
         self.scratch.clear();
         let mut mid_kids: Vec<i32> = Vec::new();
         let mut mid_segs: Vec<Seg> = Vec::new();
+        let mut mid_meta: Vec<EntryMeta> = Vec::new();
         let suffix_bound = new_n - suffix;
         let mut max_cand: isize = -1;
-        for s in suffix_cand {
-            let c = s.tok_start as isize + tok_delta;
+        for m in suffix_meta {
+            let c = m.tok_start as isize + tok_delta;
             if c > max_cand { max_cand = c; }
         }
         let rule_id = old.rule_id;
         let old_kid_start = old.kid_start;
-        let try_hit = |p: &mut Parser<'a>, mid_kids: &[i32], mid_segs: &[Seg]| -> Option<(i32, usize)> {
+        let try_hit = |p: &mut Parser<'a>, mid_kids: &[i32], mid_segs: &[Seg], mid_meta: &[EntryMeta]| -> Option<(i32, usize)> {
             if p.pos < suffix_bound { return None; }
             if suffix_cand.is_empty() {
-                if p.pos == new_n { return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n)); }
+                if p.pos == new_n { return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, prefix_meta, mid_meta, suffix_meta, old_kid_start, 0, byte_delta, tok_delta, new_n)); }
                 return None;
             }
-            for (hi, s) in suffix_cand.iter().enumerate() {
-                if s.tok_start as isize + tok_delta == p.pos as isize {
-                    return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, old_kid_start, hi, byte_delta, tok_delta, new_n));
+            for (hi, m) in suffix_meta.iter().enumerate() {
+                if m.tok_start as isize + tok_delta == p.pos as isize {
+                    return Some(p.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, mid_segs, mid_kids, suffix_cand, prefix_meta, mid_meta, suffix_meta, old_kid_start, hi, byte_delta, tok_delta, new_n));
                 }
             }
             None
         };
-        if let Some(hit) = try_hit(self, &mid_kids, &mid_segs) { return Some(hit); }
+        if let Some(hit) = try_hit(self, &mid_kids, &mid_segs, &mid_meta) { return Some(hit); }
         if !suffix_cand.is_empty() && max_cand >= 0 && (self.pos as isize) > max_cand { return None; }
         ${hasHeadB ? `if prefix_len == 0 {
             let sb = self.scratch.len();
-            if let Some(mut h) = self.parse_head_seg(sb) {
+            if let Some((mut h, mut m)) = self.parse_head_seg(sb) {
                 h.kid_start = 0;
+                m.kid_start = 0;
                 mid_kids.extend_from_slice(&self.scratch[sb..]);
                 self.scratch.truncate(sb);
                 mid_segs.push(h);
-                if let Some(hit) = try_hit(self, &mid_kids, &mid_segs) { return Some(hit); }
+                mid_meta.push(m);
+                if let Some(hit) = try_hit(self, &mid_kids, &mid_segs, &mid_meta) { return Some(hit); }
                 if !suffix_cand.is_empty() && max_cand >= 0 && (self.pos as isize) > max_cand { return None; }
             }
         }
         ` : ''}loop {
             if self.pos >= self.toks.len() {
                 if suffix_cand.is_empty() && self.pos == new_n {
-                    return Some(self.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n));
+                    return Some(self.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, prefix_meta, &mid_meta, suffix_meta, old_kid_start, 0, byte_delta, tok_delta, new_n));
                 }
-                return try_hit(self, &mid_kids, &mid_segs);
+                return try_hit(self, &mid_kids, &mid_segs, &mid_meta);
             }
             let sb = self.scratch.len();
-            let seg = match self.parse_loop_seg(sb) {
-                Some(s) => s,
+            let (seg, meta) = match self.parse_loop_seg(sb) {
+                Some(pair) => pair,
                 None => {
                     if suffix_cand.is_empty() && self.pos == new_n {
-                        return Some(self.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, old_kid_start, 0, byte_delta, tok_delta, new_n));
+                        return Some(self.finish_reuse_seg(rule_id, prefix_segs, &prefix_kids, &mid_segs, &mid_kids, suffix_cand, prefix_meta, &mid_meta, suffix_meta, old_kid_start, 0, byte_delta, tok_delta, new_n));
                     }
-                    return try_hit(self, &mid_kids, &mid_segs);
+                    return try_hit(self, &mid_kids, &mid_segs, &mid_meta);
                 }
             };
             let count = self.scratch.len() - sb;
             mid_kids.extend_from_slice(&self.scratch[sb..]);
             self.scratch.truncate(sb);
             mid_segs.push(Seg { kid_start: 0, kid_count: count, tok_start: seg.tok_start, tok_end: seg.tok_end, ext: seg.ext });
-            if let Some(hit) = try_hit(self, &mid_kids, &mid_segs) { return Some(hit); }
+            mid_meta.push(EntryMeta { kid_start: 0, kid_count: count as u32, tok_start: meta.tok_start, tok_end: meta.tok_end, ext: meta.ext, off: meta.off, end: meta.end });
+            if let Some(hit) = try_hit(self, &mid_kids, &mid_segs, &mid_meta) { return Some(hit); }
             if !suffix_cand.is_empty() && max_cand >= 0 && (self.pos as isize) > max_cand { return None; }
         }
     }
@@ -1814,40 +1873,41 @@ fn check_tree_eq(text: &str, nodes: &[Node], kids: &[i32], root: Option<i32>) ->
             let nodes = std::mem::take(&mut self.nodes);
             let kids = std::mem::take(&mut self.kids);
             let scratch = std::mem::take(&mut self.scratch);
+            let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.unwrap();
-            let mut p = Parser { toks: toks_from_meta(&text, &meta), pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder { nodes, kids }, scratch };
-            if let Some((root, n)) = p.try_reuse_top(old_root, byte_delta, old_n, new_n, prefix, suffix) {
+            let mut p = Parser { toks: toks_from_meta(&text, &meta), pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder { nodes, kids }, scratch, entries: Vec::new() };
+            if let Some((root, n)) = p.try_reuse_top(old_root, &old_entries, byte_delta, old_n, new_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
                 self.last_pos = p.pos;
-                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;
+                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.entries = p.entries;
             } else {
                 let ntoks = toks_from_meta(&text, &meta);
                 let nlen = ntoks.len();
-                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new() };
+                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new(), entries: Vec::new() };
                 match p.parse_${ir.entry}() {
                     Some(fr) if p.pos == nlen && fr.present => {
                         self.root = Some(fr.h); self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                        self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; reused = 0;
+                        self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.entries = p.entries; reused = 0;
                     }
                     _ => {
                         self.root = None; self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                        self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; reused = 0;
+                        self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.entries = p.entries; reused = 0;
                     }
                 }
             }
         } else {
             let ntoks = toks_from_meta(&text, &meta);
             let nlen = ntoks.len();
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new() };
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new(), entries: Vec::new() };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == nlen && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                    self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;
+                    self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.entries = p.entries;
                 }
                 _ => {
                     self.root = None; self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                    self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;
+                    self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.entries = p.entries;
                 }
             }
             reused = 0;
@@ -1867,40 +1927,41 @@ fn check_tree_eq(text: &str, nodes: &[Node], kids: &[i32], root: Option<i32>) ->
             let kids = std::mem::take(&mut self.kids);
             let scratch = std::mem::take(&mut self.scratch);
             let old_segs = std::mem::take(&mut self.segs);
+            let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.unwrap();
-            let mut p = Parser { toks: toks_from_meta(&text, &meta), pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder { nodes, kids }, scratch, segs: Vec::new() };
-            if let Some((root, n)) = p.try_reuse_seg(old_root, &old_segs, byte_delta, old_n, new_n, prefix, suffix) {
+            let mut p = Parser { toks: toks_from_meta(&text, &meta), pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder { nodes, kids }, scratch, entries: Vec::new(), segs: Vec::new() };
+            if let Some((root, n)) = p.try_reuse_seg(old_root, &old_segs, &old_entries, byte_delta, old_n, new_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
                 self.last_pos = p.pos;
-                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs;
+                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs; self.entries = p.entries;
             } else {
                 let ntoks = toks_from_meta(&text, &meta);
                 let nlen = ntoks.len();
-                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new(), segs: Vec::new() };
+                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
                 match p.parse_${ir.entry}() {
                     Some(fr) if p.pos == nlen && fr.present => {
                         self.root = Some(fr.h); self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                        self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs; reused = 0;
+                        self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs; self.entries = p.entries; reused = 0;
                     }
                     _ => {
                         self.root = None; self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                        self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs; reused = 0;
+                        self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs; self.entries = p.entries; reused = 0;
                     }
                 }
             }
         } else {
             let ntoks = toks_from_meta(&text, &meta);
             let nlen = ntoks.len();
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new(), segs: Vec::new() };
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == nlen && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                    self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs;
+                    self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs; self.entries = p.entries;
                 }
                 _ => {
                     self.root = None; self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                    self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs;
+                    self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch; self.segs = p.segs; self.entries = p.entries;
                 }
             }
             reused = 0;
@@ -1917,15 +1978,15 @@ fn check_tree_eq(text: &str, nodes: &[Node], kids: &[i32], root: Option<i32>) ->
         let meta = self.toks.clone();
         let ntoks = toks_from_meta(&text, &meta);
         let nlen = ntoks.len();
-        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new()${segsInit} };
+        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == nlen && fr.present => {
                 self.root = Some(fr.h); self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;${segsMove}
+                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;${reuseMove}
             }
             _ => {
                 self.root = None; self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;${segsMove}
+                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;${reuseMove}
             }
         }
         let reused = 0usize;
@@ -1933,7 +1994,11 @@ fn check_tree_eq(text: &str, nodes: &[Node], kids: &[i32], root: Option<i32>) ->
         let tree_eq = if self.validate { Some(check_tree_eq(&self.text, &self.nodes, &self.kids, self.root)) } else { None };
         self.align = Some(Align { old_n, new_n, prefix, suffix, relexed, reused, stream_eq, tree_eq });`;
   const docSegField = shapeB ? '\n    segs: Vec<Seg>,' : '';
+  const docEntriesField = topReuse ? '\n    entries: Vec<EntryMeta>,' : '';
   const docSegInit = shapeB ? ', segs: Vec::new()' : '';
+  const docEntriesInit = topReuse ? ', entries: Vec::new()' : '';
+  const docExtraField = `${docEntriesField}${docSegField}`;
+  const docExtraInit = `${docEntriesInit}${docSegInit}`;
   return `pub struct Edit { pub start: usize, pub end: usize, pub text: String }
 #[derive(Clone)]
 struct AlignMeta { kind: &'static str, off: usize, end: usize, nl: bool, fd: i64, pd: i64, lc: bool, lb: bool, hd: bool, td: i64 }
@@ -1973,7 +2038,7 @@ ${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}pub struct Doc {
     validate: bool,
     nodes: Vec<Node>,
     kids: Vec<i32>,
-    scratch: Vec<i32>,${docSegField}
+    scratch: Vec<i32>,${docExtraField}
     root: Option<i32>,
     baseline: usize,
     last_pos: usize,
@@ -1981,7 +2046,7 @@ ${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}pub struct Doc {
 impl Doc {
     pub fn new(text: String) -> Doc {
         let toks = ${initToks};
-        let mut d = Doc { text, toks, align: None, validate: false, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new()${docSegInit}, root: None, baseline: 0, last_pos: 0 };
+        let mut d = Doc { text, toks, align: None, validate: false, nodes: Vec::new(), kids: Vec::new(), scratch: Vec::new()${docExtraInit}, root: None, baseline: 0, last_pos: 0 };
         d.reparse_fresh();
         d
     }
@@ -1990,15 +2055,15 @@ impl Doc {
         let meta = self.toks.clone();
         let ntoks = toks_from_meta(&text, &meta);
         let nlen = ntoks.len();
-        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new()${segsInit} };
+        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == nlen && fr.present => {
                 self.root = Some(fr.h); self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;${segsMove}
+                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;${reuseMove}
             }
             _ => {
                 self.root = None; self.baseline = p.b.nodes.len(); self.last_pos = p.pos;
-                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;${segsMove}
+                self.nodes = p.b.nodes; self.kids = p.b.kids; self.scratch = p.scratch;${reuseMove}
             }
         }
     }
@@ -2025,7 +2090,7 @@ ${editParse}
         // Fresh independent parse (does not touch Doc arena) — used by non-edit callers.
         let toks = toks_from_meta(&self.text, &self.toks);
         let n = toks.len();
-        let mut p = Parser { toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${segsInit} };
+        let mut p = Parser { toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == n && fr.present => Some((p, fr.h)),
             _ => None,
@@ -2040,6 +2105,7 @@ ${editParse}
 /** Emit Builder trait, CstBuilder/SlimBuilder, sole Parser machine, and parse_with helpers. */
 function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB: boolean): string {
   const reuse = topReusePlan(ir);
+  const entriesField = reuse ? '\n    entries: Vec<EntryMeta>,' : '';
   const segsField = shapeB ? '\n    segs: Vec<Seg>,' : '';
   const ruleFns = ir.rules.map((r) => {
     if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids, ar);
@@ -2117,6 +2183,15 @@ pub trait Builder {
     fn dummy_h() -> Self::H;
     /// Record lookahead watermark on a finished kid (shape-A reuse). Default no-op.
     #[inline(always)] fn note_look(&mut self, _h: Self::H, _max_look: u32) {}
+    /// Build EntryMeta for an entry handle; CstBuilder also stamps Node.ext (note_look fused).
+    #[inline(always)]
+    fn entry_meta(&mut self, h: Self::H, max_look: u32, toks: &[Tok]) -> EntryMeta {
+        let (tok_start, tok_end) = self.tok_range(h);
+        let mut ext = tok_end;
+        if max_look > ext { ext = max_look; }
+        let (off, end) = self.span_of(h, toks);
+        EntryMeta { tok_start, tok_end, ext, off, end, kid_start: 0, kid_count: 1 }
+    }
     /// Token span of handle h (leaf encoding or rule node).
     fn tok_range(&self, h: Self::H) -> (u32, u32);
 }
@@ -2200,6 +2275,23 @@ impl Builder for CstBuilder {
         }
     }
     #[inline(always)]
+    fn entry_meta(&mut self, h: i32, max_look: u32, toks: &[Tok]) -> EntryMeta {
+        if h < 0 {
+            let (ti, _) = decode_leaf(h);
+            let t = &toks[ti as usize];
+            let tok_end = ti + 1;
+            let mut ext = tok_end;
+            if max_look > ext { ext = max_look; }
+            EntryMeta { tok_start: ti, tok_end, ext, off: t.off, end: t.end, kid_start: 0, kid_count: 1 }
+        } else {
+            let nd = &mut self.nodes[h as usize];
+            let mut ext = nd.tok_end;
+            if max_look > ext { ext = max_look; }
+            nd.ext = ext;
+            EntryMeta { tok_start: nd.tok_start, tok_end: nd.tok_end, ext, off: nd.offset, end: nd.end, kid_start: 0, kid_count: 1 }
+        }
+    }
+    #[inline(always)]
     fn tok_range(&self, h: i32) -> (u32, u32) {
         if h < 0 { let (ti, _) = decode_leaf(h); (ti, ti + 1) }
         else { let nd = &self.nodes[h as usize]; (nd.tok_start, nd.tok_end) }
@@ -2279,7 +2371,7 @@ struct Parser<'a, B: Builder = CstBuilder> {
     suppress_cur: Vec<u16>,
     src: &'a str,
     b: B,
-    scratch: Vec<B::H>,${segsField}
+    scratch: Vec<B::H>,${entriesField}${segsField}
 }
 
 impl<'a, B: Builder> Parser<'a, B> {
@@ -2369,13 +2461,14 @@ ${matchTemplate}${ruleFns}
 }
 
 function emitParseWithHelpers(ir: ParserIR, shapeB: boolean): string {
-  const segsInit = shapeB ? ', segs: Vec::new()' : '';
+  const reuse = !!topReusePlan(ir);
+  const reuseInit = `${reuse ? ', entries: Vec::new()' : ''}${shapeB ? ', segs: Vec::new()' : ''}`;
   return `
 pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B::H> {
     let toks = lex(src);
     let n = toks.len();
     let owned = std::mem::take(b);
-    let mut p = Parser { toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: owned, scratch: Vec::new()${segsInit} };
+    let mut p = Parser { toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: owned, scratch: Vec::new()${reuseInit} };
     let root = match p.parse_${ir.entry}() {
         Some(fr) if p.pos == n && fr.present => Some(fr.h),
         _ => None,
@@ -2429,7 +2522,9 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<RichTok<'a>> {
     const ar = buildArenaIdPlan(ir, ids);
     const reuse = topReusePlan(ir);
     const shapeB = reuse?.kind === 'B';
-    const segsInit = shapeB ? ', segs: Vec::new()' : '';
+    const reuseInit = `${reuse ? ', entries: Vec::new()' : ''}${shapeB ? ', segs: Vec::new()' : ''}`;
+    // EntryMeta is always emitted — Builder::entry_meta returns it (even when the side table is unused).
+    const entryMetaStruct = `\n#[derive(Clone, Copy)]\nstruct EntryMeta { tok_start: u32, tok_end: u32, ext: u32, off: u32, end: u32, kid_start: u32, kid_count: u32 }\n`;
     const segStruct = shapeB
       ? `\n#[derive(Clone, Copy)]\nstruct Seg { kid_start: usize, kid_count: usize, tok_start: usize, tok_end: usize, ext: usize }\n`
       : '';
@@ -2450,7 +2545,7 @@ const _: () = assert!(std::mem::size_of::<Tok>() == 16);
 #[derive(Clone, Copy)]
 struct Node { rule_id: u16, kid_start: u32, kid_count: u32, offset: u32, end: u32, tok_start: u32, tok_end: u32, ext: u32 }
 const _: () = assert!(std::mem::size_of::<Node>() == 32);
-${segStruct}
+${entryMetaStruct}${segStruct}
 ${lexerSrc ?? ''}
 
 ${arenaIdTables}
@@ -2502,7 +2597,7 @@ struct Tokens<'a> { src: &'a str, toks: Vec<Tok> }
 fn tokenize<'a>(src: &'a str) -> Tokens<'a> { Tokens { src, toks: lex(src) } }
 fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
     let n = tokens.toks.len();
-    let mut p = Parser { toks: tokens.toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: tokens.src, b: CstBuilder::default(), scratch: Vec::new()${segsInit} };
+    let mut p = Parser { toks: tokens.toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: tokens.src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
     match p.parse_${ir.entry}() {
         Some(fr) if p.pos == n && fr.present => Some((p, fr.h)),
         _ => None,
