@@ -151,16 +151,28 @@ function variants(seeds: string[], n = 300): string[] {
 }
 
 type Tok = { off: number; end: number; nl: boolean; kid: number; lid: number };
+type Align = {
+  oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number;
+  streamEq?: boolean; treeEq?: boolean | null;
+};
+type Doc<H> = {
+  text(): string;
+  root(): H | null;
+  align(): Align | null;
+  edit(edits: { start: number; end: number; text: string }[]): H | null;
+};
 type Mod = {
   tokenize: (src: string) => { off: number; end: number; nl: boolean; kid: number; lid: number }[];
   parse: (toks: Tok[]) => unknown;
   parseWith: <H>(src: string, b: Builder<H>) => H | null;
   cstBuilder: Builder<unknown>;
+  createDoc: <H = unknown>(src: string, opts?: { validate?: boolean; builder?: Builder<H> }) => Doc<H>;
 };
 
 type Builder<H> = {
   leaf(tokenType: string, kid: number, lid: number, off: number, end: number): H | null;
   node(rule: string, children: H[], off: number, end: number): H | H[] | null;
+  shift?(h: H, byteDelta: number, tokDelta: number): H;
 };
 
 async function loadMod(grammar: CstGrammar, name: string): Promise<Mod> {
@@ -365,9 +377,90 @@ console.log('\nast-builder: demo ESTree-ish builder golden');
   check('builder addon marker present', emitted.includes('// ─── Builder API'));
   check('exports parseWith + cstBuilder + Builder',
     emitted.includes('export function parseWith') && emitted.includes('export const cstBuilder') && emitted.includes('export type Builder'));
+  check('exports createDoc + optional Builder.shift',
+    emitted.includes('export function createDoc') && emitted.includes('shift?(h: H, byteDelta: number, tokDelta: number): H'));
   const prefix = emitted.slice(0, emitted.indexOf('// ─── Builder API'));
   check('CST prefix stable hash (nonempty)', prefix.length > 1000,
     createHash('sha256').update(prefix).digest('hex').slice(0, 12));
+}
+
+// ─── 3b. TS Doc + optional shift (D2 semantics on createDoc) ─────────────────
+console.log('\nast-builder: ts createDoc builder / shift contracts');
+{
+  const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
+  const mod = await loadMod(grammar, 'calc-doc-shift');
+  const init = '1+2;\n3+4;\n5+6;';
+
+  // cstBuilder Doc (or bare createDoc): align JSON field-by-field ≡ bare createDoc
+  {
+    const bare = mod.createDoc(init, { validate: true });
+    bare.edit([{ start: 0, end: 1, text: '9' }]);
+    const withCst = mod.createDoc(init, { validate: true, builder: mod.cstBuilder as Builder<unknown> });
+    withCst.edit([{ start: 0, end: 1, text: '9' }]);
+    const a = JSON.stringify(bare.align());
+    const b = JSON.stringify(withCst.align());
+    check('ts createDoc(cstBuilder) align ≡ createDoc()', a === b, `bare=${a} with=${b}`);
+    check('ts createDoc(cstBuilder) reused>0 + streamEq/treeEq',
+      !!bare.align() && (bare.align()!.reused > 0) && bare.align()!.streamEq === true && bare.align()!.treeEq === true,
+      JSON.stringify(bare.align()));
+  }
+
+  // Slim (no shift): multi-step edit ≡ fresh parseWith; reused=0; treeEq=null
+  {
+    const slim: Builder<unknown> = slimBuilder();
+    const steps: { text: string; edits: { start: number; end: number; text: string }[] }[] = [
+      { text: init, edits: [] },
+      { text: '9+2;\n3+4;\n5+6;', edits: [{ start: 0, end: 1, text: '9' }] },
+      { text: '9+2;\n3+4;\n5+7;', edits: [{ start: 12, end: 13, text: '7' }] },
+    ];
+    const doc = mod.createDoc(init, { validate: true, builder: slim });
+    let ok = true;
+    const aligns: Align[] = [];
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i]!;
+      if (step.edits.length) doc.edit(step.edits);
+      if (doc.text() !== step.text) { ok = false; console.log(`    slim text[${i}] got=${JSON.stringify(doc.text())}`); }
+      const a = doc.align();
+      if (i > 0) {
+        if (!a) { ok = false; console.log(`    slim missing align[${i}]`); }
+        else {
+          aligns.push(a);
+          if (a.reused !== 0) { ok = false; console.log(`    slim reused[${i}]=${a.reused}`); }
+          if (a.streamEq !== true) { ok = false; console.log(`    slim streamEq[${i}]=${a.streamEq}`); }
+          if (a.treeEq !== null) { ok = false; console.log(`    slim treeEq[${i}]=${JSON.stringify(a.treeEq)}`); }
+        }
+      }
+      const fresh = mod.parseWith(doc.text(), slim);
+      if (JSON.stringify(doc.root()) !== JSON.stringify(fresh)) {
+        ok = false;
+        console.log(`    slim≠fresh[${i}]`);
+      }
+    }
+    check('ts Slim Doc multi-edit ≡ fresh', ok);
+    check('ts Slim reused=0 each step + streamEq + treeEq=null',
+      aligns.length >= 2 && aligns.every((a) => a.reused === 0 && a.streamEq === true && a.treeEq === null),
+      aligns.map((a) => `reused=${a.reused},treeEq=${a.treeEq}`).join(' | '));
+  }
+
+  // Mirror (third-party shift): reuse engages; result ≡ fresh; treeEq=null
+  {
+    const mirror: Builder<unknown> = {
+      leaf: (tt, k, l, off, end) => mod.cstBuilder.leaf(tt, k, l, off, end),
+      node: (rule, children, off, end) => mod.cstBuilder.node(rule, children, off, end),
+      shift: (h, bd, td) => {
+        const sh = mod.cstBuilder.shift;
+        if (!sh) throw new Error('cstBuilder.shift missing');
+        return sh.call(mod.cstBuilder, h, bd, td);
+      },
+    };
+    const doc = mod.createDoc(init, { validate: true, builder: mirror });
+    doc.edit([{ start: 0, end: 1, text: '9' }]);
+    const a = doc.align();
+    const fresh = mod.parseWith(doc.text(), mirror);
+    check('ts Mirror Doc.edit reuse+≡fresh',
+      !!a && a.reused > 0 && a.streamEq === true && a.treeEq === null && cstCanon(doc.root()) === cstCanon(fresh),
+      JSON.stringify(a));
+  }
 }
 
 // ─── 4. Rust target: parse_with(CstBuilder) ≡ parse + SlimBuilder smoke ──────

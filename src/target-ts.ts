@@ -641,6 +641,7 @@ function parse${r.name}W(): Frame | null {
     absorbFrame(kids, spans, n);
   }
   _entries = localE;
+  _entryHs = kids.slice();
   return branchW(${J(r.cstName)}, kids, spans, save);
 }`;
   }
@@ -699,6 +700,7 @@ ${headBlock}  for (;;) {
   }
   _segs = segs;
   _entries = localE;
+  _entryHs = kids.slice();
   return branchW(${J(r.cstName)}, kids, spans, save);
 }`;
 }
@@ -707,6 +709,7 @@ ${headBlock}  for (;;) {
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, _ids: LexIdPlan): string {
   return `type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidStart: number; kidCount: number };
 let _entries: EntryMeta[] = [];
+let _entryHs: any[] = [];
 function parseTopOne(): Node | null {
 ${plan.topOneBody}
 }
@@ -725,6 +728,7 @@ function parse${r.name}(): Node | null {
     kids.push(n);
   }
   _entries = localE;
+  _entryHs = kids;
   return branch(${J(r.cstName)}, kids, save);
 }`;
 }
@@ -756,6 +760,7 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string 
 type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidStart: number; kidCount: number };
 let _segs: Seg[] = [];
 let _entries: EntryMeta[] = [];
+let _entryHs: any[] = [];
 ${headFn}function parseLoopSeg(kids: Cst[]): { seg: Seg; meta: EntryMeta } | null {
   const sp = pos;
   const kidStart = kids.length;
@@ -784,6 +789,7 @@ ${headBlock}  for (;;) {
   }
   _segs = segs;
   _entries = localE;
+  _entryHs = kids;
   return branch(${J(r.cstName)}, kids, save);
 }`;
 }
@@ -1027,9 +1033,23 @@ ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: any[] = []; const sp
 }`;
 }
 
+type DocEditParts = {
+  editBody: string;
+  initToks: string;
+  shapeA: boolean;
+  shapeB: boolean;
+  hasHeadB: boolean;
+  topReuse: boolean;
+  entryCst: string;
+};
+
 /** Additive parseWith / Builder / cstBuilder — appended after the unchanged CST library. */
-function emitBuilderAddon(ir: ParserIR, ids: LexIdPlan): string {
+function emitBuilderAddon(ir: ParserIR, ids: LexIdPlan, doc: DocEditParts): string {
   const reuse = topReusePlan(ir);
+  const shapeA = doc.shapeA;
+  const shapeB = doc.shapeB;
+  const hasHeadB = doc.hasHeadB;
+  const entryCst = doc.entryCst;
   const ruleFnsW = ir.rules.map((r) => {
     if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids);
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids);
@@ -1060,9 +1080,13 @@ function emitBuilderAddon(ir: ParserIR, ids: LexIdPlan): string {
   return `// ─── Builder API (additive; CST parse() above is unchanged) ─────────────────
 // Builder must be pure / bottom-up. Backtracking simply abandons Frame values —
 // there is no rollback callback; discarded handles become garbage.
+// Optional shift: method presence (builder.shift == null → Doc.edit fresh parseWith).
+// treeEq on validate: only when builder === cstBuilder (rust SUPPORTS_TREE_EQ analogue).
 export type Builder<H> = {
   leaf(tokenType: string, kid: number, lid: number, off: number, end: number): H | null;
   node(rule: string, children: H[], off: number, end: number): H | H[] | null;
+  /** Optional incremental shift. Missing → Doc.edit degenerates to fresh parseWith. */
+  shift?(h: H, byteDelta: number, tokDelta: number): H;
 };
 type BWSpan = { off: number; end: number; tokStart: number; tokEnd: number; headOff: number; headEnd: number };
 type Frame = { hs: any[]; off: number; end: number; tokStart: number; tokEnd: number; headOff: number; headEnd: number };
@@ -1168,7 +1192,11 @@ export const cstBuilder: Builder<Cst> = {
   node(rule, children, off, end) {
     // _bSave is set by branchW/nodeW immediately before this callback.
     return { rule, children, offset: off, end, tokStart: _bSave, tokEnd: pos };
-  },
+  },${reuse ? `
+  shift(h, byteDelta, tokDelta) {
+    shiftSubtree(h, byteDelta, tokDelta);
+    return h;
+  },` : ''}
 };
 
 /**
@@ -1189,10 +1217,307 @@ export function parseWith<H>(src: string, builder: Builder<H>): H | null {
   // Root spliced into multiple handles — not representable as single H; reject.
   return null;
 }
+
+/** Parse with builder over AlignMeta-backed toks (Doc.edit path; avoids relex). */
+function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>): { root: H | null; entries: any[]; entryHs: any[]; segs: any[] } {
+  _src = text;
+  toks = toksFromMeta(text, meta);
+  pos = 0;
+  maxLook = 0;
+  _builder = builder;
+  const fr = parse${ir.entry}W();
+  if (fr === null || pos !== toks.length || fr.hs.length !== 1) {
+    return { root: null, entries: [], entryHs: [], segs: [] };
+  }
+  return {
+    root: fr.hs[0] as H,
+    entries: ${doc.topReuse ? '_entries.slice()' : '[] as any[]'},
+    entryHs: ${doc.topReuse ? '_entryHs.slice()' : '[] as any[]'},
+    segs: ${shapeB ? '_segs.slice()' : '[] as any[]'},
+  };
+}
+${shapeA ? `
+function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldHs: H[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
+  let prefixLen = 0;
+  while (prefixLen < oldEntries.length) {
+    if (oldEntries[prefixLen]!.ext <= prefix) prefixLen++;
+    else break;
+  }
+  let suffixStart = oldEntries.length;
+  for (let i = oldEntries.length - 1; i >= prefixLen; i--) {
+    if (oldEntries[i]!.tokStart >= oldN - suffix) suffixStart = i;
+    else break;
+  }
+  const prefixKids = oldHs.slice(0, prefixLen);
+  const suffixCand = oldHs.slice(suffixStart);
+  const prefixMeta = oldEntries.slice(0, prefixLen);
+  const suffixMeta = oldEntries.slice(suffixStart);
+  const tokDelta = newN - oldN;
+  _src = newText;
+  toks = toksFromMeta(newText, newMeta);
+  pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
+  _builder = builder;
+  const mid: H[] = [];
+  const midMeta: EntryMeta[] = [];
+  const suffixBound = newN - suffix;
+  const maxCand = suffixMeta.length > 0 ? Math.max(...suffixMeta.map((m) => m.tokStart + tokDelta)) : -1;
+  const finish = (adoptFrom: number): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
+    const adopted = suffixCand.slice(adoptFrom).map((h) => shift(h, byteDelta, tokDelta));
+    const children: H[] = [...prefixKids, ...mid, ...adopted];
+    const adoptedMeta = suffixMeta.slice(adoptFrom);
+    const newEntries: EntryMeta[] = new Array(prefixMeta.length + midMeta.length + adoptedMeta.length);
+    let ei = 0;
+    for (let i = 0; i < prefixMeta.length; i++) newEntries[ei++] = prefixMeta[i]!;
+    for (let i = 0; i < midMeta.length; i++) newEntries[ei++] = midMeta[i]!;
+    for (let i = 0; i < adoptedMeta.length; i++) {
+      const m = { ...adoptedMeta[i]! };
+      shiftEntryMeta(m, byteDelta, tokDelta);
+      newEntries[ei++] = m;
+    }
+    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
+    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
+    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
+    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    _bSave = tokStart;
+    const savePos = pos;
+    pos = tokEnd;
+    const r = builder.node(${J(entryCst)}, children, offset, end);
+    pos = savePos;
+    if (r === null || Array.isArray(r)) return null;
+    return { root: r as H, entries: newEntries, entryHs: children, reused: prefixKids.length + adopted.length };
+  };
+  const tryHit = (): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
+    if (pos < suffixBound) return null;
+    if (suffixCand.length === 0) {
+      if (pos === newN) return finish(0);
+      return null;
+    }
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
+    if (hit >= 0) return finish(hit);
+    return null;
+  };
+  {
+    const early = tryHit();
+    if (early) return early;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+  }
+  for (;;) {
+    if (pos >= toks.length) {
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      return tryHit();
+    }
+    maxLook = 0;
+    const sp = pos;
+    const fr = parseTopOneW();
+    if (fr === null || fr.hs.length !== 1) { pos = sp; return null; }
+    const ext = Math.max(fr.tokEnd, maxLook);
+    midMeta.push({ tokStart: fr.tokStart, tokEnd: fr.tokEnd, ext, off: fr.off, end: fr.end, kidStart: 0, kidCount: 1 });
+    mid.push(fr.hs[0] as H);
+    const hit = tryHit();
+    if (hit) return hit;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+  }
+}
+` : ''}${shapeB ? `
+function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number) => H, oldRootHs: H[], oldSegs: Seg[], oldEntries: EntryMeta[], newText: string, newMeta: AlignMeta[], byteDelta: number, oldN: number, newN: number, prefix: number, suffix: number): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null {
+  if (oldSegs.length === 0) return null;
+  let prefixLen = 0;
+  while (prefixLen < oldEntries.length) {
+    if (oldEntries[prefixLen]!.ext <= prefix) prefixLen++;
+    else break;
+  }
+  let suffixStart = oldEntries.length;
+  for (let i = oldEntries.length - 1; i >= prefixLen; i--) {
+    if (oldEntries[i]!.tokStart >= oldN - suffix) suffixStart = i;
+    else break;
+  }
+  const prefixSegs = oldSegs.slice(0, prefixLen);
+  const suffixCand = oldSegs.slice(suffixStart);
+  const prefixMeta = oldEntries.slice(0, prefixLen);
+  const suffixMeta = oldEntries.slice(suffixStart);
+  const prefixKids: H[] = [];
+  for (const s of prefixSegs) {
+    for (let i = 0; i < s.kidCount; i++) prefixKids.push(oldRootHs[s.kidStart + i]!);
+  }
+  const tokDelta = newN - oldN;
+  _src = newText;
+  toks = toksFromMeta(newText, newMeta);
+  pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
+  _builder = builder;
+  const midKids: H[] = [];
+  const midSegs: Seg[] = [];
+  const midMeta: EntryMeta[] = [];
+  const suffixBound = newN - suffix;
+  const maxCand = suffixMeta.length > 0 ? Math.max(...suffixMeta.map((m) => m.tokStart + tokDelta)) : -1;
+  const finish = (adoptFrom: number): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
+    const adoptedSegs = suffixCand.slice(adoptFrom);
+    const adoptedKids: H[] = [];
+    for (const s of adoptedSegs) {
+      for (let i = 0; i < s.kidCount; i++) {
+        adoptedKids.push(shift(oldRootHs[s.kidStart + i]!, byteDelta, tokDelta));
+      }
+    }
+    const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
+    const newSegs: Seg[] = [];
+    const newEntries: EntryMeta[] = [];
+    let kOff = 0;
+    for (let i = 0; i < prefixSegs.length; i++) {
+      const s = prefixSegs[i]!;
+      const m = { ...prefixMeta[i]!, kidStart: kOff };
+      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
+      newEntries.push(m);
+      kOff += s.kidCount;
+    }
+    for (let i = 0; i < midSegs.length; i++) {
+      const s = midSegs[i]!;
+      const m = { ...midMeta[i]!, kidStart: kOff };
+      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart, tokEnd: s.tokEnd, ext: s.ext });
+      newEntries.push(m);
+      kOff += s.kidCount;
+    }
+    const adoptedMeta = suffixMeta.slice(adoptFrom);
+    for (let i = 0; i < adoptedSegs.length; i++) {
+      const s = adoptedSegs[i]!;
+      const em = { ...adoptedMeta[i]! };
+      shiftEntryMeta(em, byteDelta, tokDelta);
+      em.kidStart = kOff;
+      newSegs.push({ kidStart: kOff, kidCount: s.kidCount, tokStart: s.tokStart + tokDelta, tokEnd: s.tokEnd + tokDelta, ext: s.ext + tokDelta });
+      newEntries.push(em);
+      kOff += s.kidCount;
+    }
+    const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
+    const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
+    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
+    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
+    _bSave = tokStart;
+    const savePos = pos;
+    pos = tokEnd;
+    const r = builder.node(${J(entryCst)}, children, offset, end);
+    pos = savePos;
+    if (r === null || Array.isArray(r)) return null;
+    return { root: r as H, segs: newSegs, entries: newEntries, entryHs: children, reused: prefixSegs.length + adoptedSegs.length };
+  };
+  const tryHit = (): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
+    if (pos < suffixBound) return null;
+    if (suffixCand.length === 0) {
+      if (pos === newN) return finish(0);
+      return null;
+    }
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
+    if (hit >= 0) return finish(hit);
+    return null;
+  };
+  {
+    const early = tryHit();
+    if (early) return early;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+  }
+  ${hasHeadB ? `if (prefixLen === 0) {
+    const spans: BWSpan[] = [];
+    const pair = parseHeadSegW(midKids, spans);
+    if (pair) {
+      midSegs.push({ kidStart: 0, kidCount: pair.seg.kidCount, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
+      midMeta.push({ ...pair.meta, kidStart: 0 });
+      const hit = tryHit();
+      if (hit) return hit;
+      if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    }
+  }
+  ` : ''}for (;;) {
+    if (pos >= toks.length) {
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      return tryHit();
+    }
+    const before = midKids.length;
+    const spans: BWSpan[] = [];
+    const pair = parseLoopSegW(midKids, spans);
+    if (pair === null) {
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      return tryHit();
+    }
+    midSegs.push({ kidStart: before, kidCount: midKids.length - before, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
+    midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
+    const hit = tryHit();
+    if (hit) return hit;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+  }
+}
+` : ''}
+function createDocWithBuilder<H>(src: string, opts: { validate?: boolean; builder: Builder<H> }): { text(): string; root(): H | null; align(): Align | null; edit(edits: Edit[]): H | null } {
+  const builder = opts.builder;
+  const validate = opts.validate === true;
+  const supportsShift = typeof builder.shift === 'function';
+  const shift = supportsShift ? builder.shift!.bind(builder) : null;
+  let text = src;
+  let prevToks = ${doc.initToks};
+  let align: Align | null = null;${shapeB ? `
+  let segs: Seg[] = [];` : ''}${doc.topReuse ? `
+  let entries: EntryMeta[] = [];
+  let entryHs: H[] = [];` : ''}
+  let root: H | null = null;
+  {
+    const got = parseWithMeta(src, prevToks, builder);
+    root = got.root;${doc.topReuse ? `
+    entries = got.entries;
+    entryHs = got.entryHs as H[];` : ''}${shapeB ? `
+    segs = got.segs;` : ''}
+  }
+  return {
+    text(): string { return text; },
+    root(): H | null { return root; },
+    align(): Align | null { return align; },
+    edit(edits: Edit[]): H | null {
+      const oldText = text, oldToks = prevToks;
+      let relexed = 0;
+${doc.editBody}
+      const core = { ...computeAlign(oldText, oldToks, text, prevToks), relexed };
+      const byteDelta = text.length - oldText.length;
+      let reused = 0;
+      let next: H | null = null;
+      const forceFresh = !supportsShift || root === null;${shapeA ? `
+      if (!forceFresh) {
+        const got = tryReuseTopW(builder, shift!, entryHs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
+        if (got) { next = got.root; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
+      }` : ''}${shapeB ? `
+      if (!forceFresh && segs.length > 0) {
+        const got = tryReuseSegW(builder, shift!, entryHs, segs, entries, text, prevToks, byteDelta, core.oldN, core.newN, core.prefix, core.suffix);
+        if (got) { next = got.root; segs = got.segs; entries = got.entries; entryHs = got.entryHs; reused = got.reused; }
+      }` : ''}
+      if (next === null) {
+        const got = parseWithMeta(text, prevToks, builder);
+        next = got.root;${doc.topReuse ? `
+        entries = got.entries;
+        entryHs = got.entryHs as H[];` : ''}${shapeB ? `
+        segs = got.segs;` : ''}
+        reused = 0;
+      }
+      root = next;
+      if (validate) {
+        const streamEq = checkStreamEq(text, prevToks);
+        // Non-cstBuilder: treeEq reports null (rust SUPPORTS_TREE_EQ=false). D3 asserts stay on CST Doc path.
+        align = { ...core, reused, streamEq, treeEq: null };
+      } else {
+        align = { ...core, reused };
+      }
+      return root;
+    },
+  };
+}
+
+/**
+ * createDoc: default (no builder / cstBuilder) keeps the CST fast path (createDocCst).
+ * Consumer builders → parseWith + optional shift reuse.
+ */
+export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; builder?: Builder<H> }): { text(): string; root(): H | null; align(): Align | null; edit(edits: Edit[]): H | null } {
+  if (opts?.builder != null && opts.builder !== (cstBuilder as unknown as Builder<H>)) {
+    return createDocWithBuilder(src, opts as { validate?: boolean; builder: Builder<H> });
+  }
+  return createDocCst(src, opts) as { text(): string; root(): H | null; align(): Align | null; edit(edits: Edit[]): H | null };
+}
 `;
 }
 
-function docEditBlock(ir: ParserIR): string {
+function docEditBlock(ir: ParserIR): { code: string; parts: DocEditParts } {
   const windowLex = (!ir.regexCtx && !ir.tpl) || !ir.newlineCfg;
   const hasNewline = !!(ir.newlineCfg && !ir.regexCtx && !ir.tpl);
   const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
@@ -1201,7 +1526,9 @@ function docEditBlock(ir: ParserIR): string {
   const topReuse = topReusePlan(ir);
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
-  const hasHeadB = shapeB && topReuse.kind === 'B' && topReuse.hasHead;
+  const hasHeadB = !!(shapeB && topReuse && topReuse.kind === 'B' && topReuse.hasHead);
+  const entryRule = ir.rules.find((r) => r.name === ir.entry);
+  const entryCst = entryRule && 'cstName' in entryRule ? entryRule.cstName : ir.entry;
   const zeroMeta = ', fd: 0, pd: 0, lc: false, lb: false, hd: false, td: 0';
   const adoptSuffix = `for (let j = oIdx + 1; j < oldToks.length; j++) {
             const ot = oldToks[j];
@@ -1916,9 +2243,9 @@ function checkTreeEq(text: string, root: Node | null): boolean {
     ? `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;
   entries = root !== null ? _entries.slice() : [];`
     : `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;`;
-  return `export type Edit = { start: number; end: number; text: string };
+  const code = `export type Edit = { start: number; end: number; text: string };
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean; fd: number; pd: number; lc: boolean; lb: boolean; hd: boolean; td: number };
-type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; streamEq?: boolean; treeEq?: boolean };
+type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number; streamEq?: boolean; treeEq?: boolean | null };
 ${toMetaFn}
 function computeAlign(oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Omit<Align, 'relexed' | 'reused' | 'streamEq' | 'treeEq'> {
   const oldN = oldToks.length, newN = newToks.length;
@@ -1946,7 +2273,8 @@ function toksFromMeta(text: string, meta: AlignMeta[]): Tok[] {
     return mk_tok(m.off, m.end, m.nl, kid_of(m.kind), lid_of(tx));
   });
 }
-${checkStreamEqFn}${windowHelpers}${reuseFns}export function createDoc(src: string, opts?: { validate?: boolean }): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
+${checkStreamEqFn}${windowHelpers}${reuseFns}/** CST fast-path Doc (unchanged semantics). createDoc() without consumer builder dispatches here. */
+function createDocCst(src: string, opts?: { validate?: boolean }): { text(): string; root(): Node | null; align(): Align | null; edit(edits: Edit[]): Node | null } {
   const validate = opts?.validate === true;
   let text = src;
   let prevToks = ${initToks};
@@ -1966,6 +2294,18 @@ ${editParse}
     },
   };
 }`;
+  return {
+    code,
+    parts: {
+      editBody,
+      initToks,
+      shapeA: !!shapeA,
+      shapeB: !!shapeB,
+      hasHeadB,
+      topReuse: !!topReuse,
+      entryCst,
+    },
+  };
 }
 
 export const tsTarget: Target = {
@@ -2104,8 +2444,7 @@ export function parse(tokens: Tok[]): Cst | null {
   return root !== null && pos === toks.length ? root : null;
 }
 
-${docEditBlock(ir)}
-${emitBuilderAddon(ir, ids)}
+${(() => { const doc = docEditBlock(ir); return doc.code + '\n' + emitBuilderAddon(ir, ids, doc.parts); })()}
 `;
   },
   emitRunner(): string {
