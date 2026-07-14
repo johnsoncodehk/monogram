@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { emitParser, rustTarget, tsTarget } from '../src/emit.ts';
+import { emitParser, goTarget, rustTarget, tsTarget } from '../src/emit.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; seeds: string[] };
@@ -527,6 +527,254 @@ if (!haveRustc()) {
       input: JSON.stringify([corpus]), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 180_000,
     }).trim();
     check('rust 2MB corpus parse_with ≡ parse', out === 'ok 1', out);
+  }
+}
+
+// ─── 5. Go target: ParseWith(CstBuilder) ≡ parse + SlimBuilder smoke ─────────
+console.log('\nast-builder: go ParseWith(CstBuilder) ≡ parse()');
+const GO_TMP = '/tmp/ast-builder-go-gate';
+mkdirSync(GO_TMP, { recursive: true });
+
+function haveGo(): boolean {
+  try { execFileSync('go', ['version'], { stdio: 'pipe' }); return true; }
+  catch { return false; }
+}
+
+const goHarness = `
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+)
+
+// MirrorBuilder is intentionally NOT *CstBuilder, so ParseWith routes through
+// parserW (interface path). Rebuilds full CST shape isomorphic to native JSON.
+type MirrorBuilder struct {
+	Nodes []Node
+	Kids  []int32
+}
+
+func (b *MirrorBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
+func (b *MirrorBuilder) Restore(nb, kb int)       { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
+func (b *MirrorBuilder) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool {
+	_ = off
+	_ = end
+	if ttId == TT_SKIP_PUNCT {
+		return false
+	}
+	*scratch = append(*scratch, encodeLeaf(tokIdx, uint8(ttId)))
+	return true
+}
+func (b *MirrorBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
+	nn := len(*scratch)
+	kidStart := len(b.Kids)
+	off, end := fallbackOff, fallbackOff
+	if nn > sb {
+		o0, _ := cstKidOffEnd(b.Nodes, toks, (*scratch)[sb])
+		_, e1 := cstKidOffEnd(b.Nodes, toks, (*scratch)[nn-1])
+		off, end = o0, e1
+	}
+	b.Kids = append(b.Kids, (*scratch)[sb:nn]...)
+	*scratch = (*scratch)[:sb]
+	b.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
+	return int32(len(b.Nodes) - 1), off, true
+}
+func (b *MirrorBuilder) Node(scratch *[]int32, sb int, ruleId uint16, off, end, tokStart, tokEnd uint32) {
+	nn := len(*scratch)
+	kidStart := len(b.Kids)
+	b.Kids = append(b.Kids, (*scratch)[sb:nn]...)
+	*scratch = (*scratch)[:sb]
+	b.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
+	*scratch = append(*scratch, int32(len(b.Nodes)-1))
+}
+func (b *MirrorBuilder) SpanOf(h int32, toks []Tok) (uint32, uint32) {
+	return cstKidOffEnd(b.Nodes, toks, h)
+}
+func (b *MirrorBuilder) HeadSpan(h int32, toks []Tok) (uint32, uint32) {
+	id := h
+	for {
+		if id < 0 {
+			ti, _ := decodeLeaf(id)
+			t := &toks[ti]
+			return t.Off, t.End
+		}
+		nd := &b.Nodes[id]
+		if nd.KidCount == 0 {
+			return nd.Offset, nd.End
+		}
+		id = b.Kids[nd.KidStart]
+	}
+}
+func MirrorJSONWith(b *MirrorBuilder, toks []Tok, root int32) string {
+	var buf strings.Builder
+	writeJSONWith(b.Nodes, b.Kids, toks, root, &buf)
+	return buf.String()
+}
+
+func main() {
+	mode := "eq-batch"
+	if len(os.Args) > 1 {
+		mode = os.Args[1]
+	}
+	if mode == "slim-demo" {
+		for _, src := range []string{"(1);", "1;"} {
+			b := &SlimBuilder{}
+			h, ok := ParseWith(src, b)
+			if !ok {
+				fmt.Printf("NULL\\t%s\\n", src)
+				continue
+			}
+			toks := lex(src)
+			if h < 0 {
+				ti, tt := decodeLeaf(h)
+				t := toks[ti]
+				fmt.Printf("LEAF\\t%s\\t%s\\t%d\\n", src, TT_NAMES[tt], t.Off)
+			} else {
+				fmt.Printf("NODE\\t%s\\t%s\\n", src, SlimJSONWith(b, toks, h))
+			}
+		}
+		return
+	}
+	raw, _ := io.ReadAll(os.Stdin)
+	var inputs []string
+	if err := json.Unmarshal(raw, &inputs); err != nil {
+		fmt.Fprintf(os.Stderr, "json: %v\\n", err)
+		os.Exit(1)
+	}
+	bad := 0
+	useMirror := mode == "eq-mirror"
+	for i, src := range inputs {
+		a := parse(tokenize(src))
+		var rw int32
+		var ok bool
+		var jb string
+		if useMirror {
+			b := &MirrorBuilder{}
+			rw, ok = ParseWith(src, b)
+			if ok && a >= 0 {
+				jb = MirrorJSONWith(b, lex(src), rw)
+			}
+		} else {
+			b := &CstBuilder{}
+			rw, ok = ParseWith(src, b)
+			if ok && a >= 0 {
+				jb = CstJSONWith(b, lex(src), rw)
+			}
+		}
+		if (a < 0) != !ok {
+			bad++
+			if bad <= 3 {
+				fmt.Fprintf(os.Stderr, "accept[%d]: %q a=%d ok=%v\\n", i, src, a, ok)
+			}
+			continue
+		}
+		if a < 0 {
+			continue
+		}
+		var ja strings.Builder
+		writeJSON(a, &ja)
+		if ja.String() != jb {
+			bad++
+			if bad <= 3 {
+				fmt.Fprintf(os.Stderr, "mismatch[%d]: %q\\n", i, src)
+			}
+		}
+	}
+	if bad == 0 {
+		fmt.Printf("ok %d\\n", len(inputs))
+	} else {
+		fmt.Printf("bad %d\\n", bad)
+		os.Exit(1)
+	}
+}
+`;
+
+if (!haveGo()) {
+  check('go toolchain present', false, 'go missing — go builder gates skipped');
+} else {
+  {
+    const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
+    const emitted = emitParser(grammar, goTarget);
+    check('go builder addon marker', emitted.includes('// ─── Builder API'));
+    check('go exports ParseWith + CstBuilder + Builder',
+      emitted.includes('func ParseWith') && emitted.includes('type CstBuilder') && emitted.includes('type Builder interface'));
+    const prefix = emitted.slice(0, emitted.indexOf('// ─── Builder API'));
+    check('go CST prefix nonempty', prefix.length > 1000,
+      createHash('sha256').update(prefix).digest('hex').slice(0, 12));
+  }
+
+  for (const c of CASES) {
+    const grammar: CstGrammar = (await import(c.path)).default;
+    const gfile = `${GO_TMP}/${c.grammar}.go`;
+    const hfile = `${GO_TMP}/${c.grammar}_harness.go`;
+    const bin = `${GO_TMP}/${c.grammar}`;
+    writeFileSync(gfile, emitParser(grammar, goTarget));
+    writeFileSync(hfile, goHarness);
+    try {
+      execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 180_000 });
+    } catch (e) {
+      check(`go build ${c.grammar}`, false, String(e).slice(0, 200));
+      continue;
+    }
+    const inputs = variants(c.seeds, 300);
+    const out = execFileSync(bin, ['eq-batch'], {
+      input: JSON.stringify(inputs), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120_000,
+    }).trim();
+    check(`go ${c.grammar} (${inputs.length} inputs)`, out.startsWith('ok '), out);
+    const outM = execFileSync(bin, ['eq-mirror'], {
+      input: JSON.stringify(inputs), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120_000,
+    }).trim();
+    check(`go ${c.grammar} eq-mirror (${inputs.length} inputs)`, outM.startsWith('ok '), outM);
+  }
+
+  // SlimBuilder smoke on javascript
+  {
+    const grammar: CstGrammar = (await import('../javascript.ts')).default;
+    const gfile = `${GO_TMP}/javascript-slim.go`;
+    const hfile = `${GO_TMP}/javascript-slim_harness.go`;
+    const bin = `${GO_TMP}/javascript-slim`;
+    writeFileSync(gfile, emitParser(grammar, goTarget));
+    writeFileSync(hfile, goHarness);
+    execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 180_000 });
+    const slimOut = execFileSync(bin, ['slim-demo'], { encoding: 'utf8' }).trim().split('\n');
+    check('go slim (1); → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t(1);\tNumber\t')));
+    check('go slim 1; → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t1;\tNumber\t')));
+  }
+
+  // 2MB corpus equivalence
+  {
+    const corpusPath = '/tmp/p6c-corpus-2mb.ts';
+    if (!existsSync(corpusPath)) {
+      const seeds = CASES.find((x) => x.grammar === 'typescript')!.seeds;
+      let body = '';
+      let i = 0;
+      while (Buffer.byteLength(body) < 2_100_000) {
+        body += seeds[i % seeds.length] + '\n';
+        i++;
+      }
+      writeFileSync(corpusPath, body);
+    }
+    const corpus = readFileSync(corpusPath, 'utf8');
+    check('go 2MB corpus present', Buffer.byteLength(corpus) >= 2_000_000, `${Buffer.byteLength(corpus)} bytes`);
+    const grammar: CstGrammar = (await import('../typescript.ts')).default;
+    const gfile = `${GO_TMP}/typescript-2mb.go`;
+    const hfile = `${GO_TMP}/typescript-2mb_harness.go`;
+    const bin = `${GO_TMP}/typescript-2mb`;
+    writeFileSync(gfile, emitParser(grammar, goTarget));
+    writeFileSync(hfile, goHarness);
+    execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 600_000 });
+    const out = execFileSync(bin, ['eq-batch'], {
+      input: JSON.stringify([corpus]), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 600_000,
+    }).trim();
+    check('go 2MB corpus ParseWith ≡ parse', out === 'ok 1', out);
+    const outM = execFileSync(bin, ['eq-mirror'], {
+      input: JSON.stringify([corpus]), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 600_000,
+    }).trim();
+    check('go 2MB corpus eq-mirror ok', outM === 'ok 1', outM);
   }
 }
 

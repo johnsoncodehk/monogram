@@ -1751,6 +1751,698 @@ ${editParse}
 }`;
 }
 
+// ─── Builder API (additive parse_with) — second instantiation ────────────────
+// Parallel combinators / rules ending in `W`. Existing `parse`/arena/`Doc` above
+// are byte-identical to pre-addon emit; this block is appended only.
+
+/** parserCst: direct arena ckpt on embedded Nodes/Kids (native twin). parserW: Builder.Checkpoint. */
+function arenaCkpt(recv: string): string {
+  return recv === 'parserCst'
+    ? 'nb, kb := len(p.Nodes), len(p.Kids)'
+    : 'nb, kb := p.b.Checkpoint()';
+}
+/** parserCst: slice-truncate restore. parserW: Builder.Restore. */
+function arenaRestore(recv: string): string {
+  return recv === 'parserCst'
+    ? 'p.Nodes = p.Nodes[:nb]; p.Kids = p.Kids[:kb]'
+    : 'p.b.Restore(nb, kb)';
+}
+
+function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  switch (s.t) {
+    case 'lit': return `p.matchLitW(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'tok': return `p.matchTokW(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
+    case 'rule': return `p.callRuleW((*${recv}).parse${s.name}W)`;
+    case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.${s.name}BpW(${s.bp}) })`;
+    case 'star': return `p.starW(func() bool { return ${stepCondW(s.step, ids, ar, recv)} })`;
+    case 'opt': return `p.optW(func() bool { return ${s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} })`;
+    case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${lidOf(ids, s.delim)})`;
+    case 'altlit': return `p.altLitW([]struct{ Lid, TtId uint16 }{${s.opts.map((o) => `{${lidOf(ids, o.value)}, ${ttIdOf(ar, o.ttype)}}`).join(', ')}})`;
+    case 'alt': return s.predictive
+      ? `func() bool { ${predAltBodyW(s.branches, ids, ar, s.firsts, recv)} }()`
+      : `func() bool { ${altBodyW(s.branches, ids, ar, s.firsts, recv)} }()`;
+    case 'not': return `func() bool { ${notBodyW(s.steps, ids, ar, recv)} }()`;
+    case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
+    case 'sameLine': return `func() bool { t := p.peekW(); return t != nil && !t.Nl }()`;
+    case 'suppress': return `func() bool { p.suppressNext = map[uint16]bool{${s.connectors.map((c) => `${lidOf(ids, c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = nil; return _r }()`;
+  }
+}
+function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
+  const fs = firsts ?? [];
+  const nAlts = branches.length;
+  const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
+  const peekInit = needPeek ? `_ft := p.peekW(); ` : '';
+  const tries = branches.map((br, i) => {
+    const body = `{ sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { return true }; p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`;
+    const f = fs[i] ?? null;
+    if (!isGuardable(f, nAlts)) return body;
+    return `if _ft != nil && ${firstCond(f, '_ft', ids)} ${body}`;
+  }).join('; ');
+  return `${peekInit}${tries}; return false`;
+}
+function notBodyW(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  return `sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; m := ${steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}; p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return !m`;
+}
+function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
+  // Same-line `} else if` (native predAltBody joins with ' else '); newlines break Go ASI.
+  const arms = branches.map((br, i) => `if ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { return true } }`).join(' else ');
+  return `t := p.peekW(); if t == nil { return false }; ${arms}; return false`;
+}
+
+function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  const rid = ruleIdOf(ar, r.cstName);
+  if (r.predictive) {
+    // Join with space (not newline): Go ASI inserts ';' after '}' at EOL, which
+    // breaks `} \\n else if` — native rdRule uses the same same-line join.
+    const arm = (steps: Step[], i: number) => `\t${i === 0 ? 'if' : 'else if'} ${firstCond(r.altFirst[i], 't', ids)} { if ${steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAtW(save), save), true } }`;
+    return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tt := p.peekW(); if t == nil { return spanned{}, false }
+${r.alts.map(arm).join(' ')}
+\tp.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
+\treturn spanned{}, false
+}`;
+  }
+  const alt = (steps: Step[], i: number) => {
+    const cond = steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
+    const restore = `p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
+    if (!isGuardable(r.altFirst[i], r.alts.length)) {
+      return `\tif ${cond} { return p.finishW(${rid}, sb, p.offAtW(save), save), true }
+\t${restore}`;
+    }
+    return `\tif _ft != nil && ${firstCond(r.altFirst[i], '_ft', ids)} {
+\t\tif ${cond} { return p.finishW(${rid}, sb, p.offAtW(save), save), true }
+\t\t${restore}
+\t}`;
+  };
+  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
+  return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+${needPeek ? '\t_ft := p.peekW()\n' : ''}${r.alts.map(alt).join('\n')}
+\treturn spanned{}, false
+}`;
+}
+
+function topOneBodyW(plan: ReusePlanA): string {
+  return plan.topOneBody
+    .replace(/\{ sp := pos; n := parse([A-Za-z0-9_]+)\(\); if n >= 0 \{ return n \}; pos = sp \}/g,
+      '{ sp := p.pos; fr, ok := p.parse$1W(); if ok { return fr, true }; p.pos = sp }')
+    .replace(/return parse([A-Za-z0-9_]+)\(\)/g, 'return p.parse$1W()')
+    .replace(/return -1/g, 'return spanned{}, false');
+}
+
+function rdEntryWithReuseAW(r: RdRule, plan: ReusePlanA, ar: ArenaIdPlan, recv: string): string {
+  const rid = ruleIdOf(ar, r.cstName);
+  return `func (p *${recv}) parseTopOneW() (spanned, bool) {
+${topOneBodyW(plan)}
+}
+func (p *${recv}) parse${r.name}W() (spanned, bool) {
+\tsave := p.pos; sb := len(p.scratch)
+\tfor {
+\t\tsp := p.pos
+\t\tp.maxLook = 0
+\t\tfr, ok := p.parseTopOneW()
+\t\tif !ok { p.pos = sp; break }
+\t\tif fr.present { p.scratch = append(p.scratch, fr.h) }
+\t}
+\treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
+}`;
+}
+
+function rdEntryWithReuseBW(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  const rid = ruleIdOf(ar, r.cstName);
+  const headFn = plan.hasHead && plan.headRule
+    ? `func (p *${recv}) parseHeadSegW() bool {
+\tp.maxLook = 0
+\tbefore := len(p.scratch)
+\tp.optW(func() bool { return p.callRuleW((*${recv}).parse${plan.headRule}W) })
+\treturn len(p.scratch) > before
+}
+`
+    : '';
+  const headBlock = plan.hasHead && plan.headRule
+    ? `\t_ = p.parseHeadSegW()
+`
+    : '';
+  return `${headFn}func (p *${recv}) parseLoopSegW() bool {
+\tsp := p.pos; before := len(p.scratch); ${arenaCkpt(recv)}
+\tp.maxLook = 0
+\tif !p.matchTokW(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
+\t\tp.pos = sp; p.scratch = p.scratch[:before]; ${arenaRestore(recv)}
+\t\treturn false
+\t}
+\tp.optW(func() bool { return p.callRuleW((*${recv}).parse${plan.loopRule}W) })
+\treturn true
+}
+func (p *${recv}) parse${r.name}W() (spanned, bool) {
+\tsave := p.pos; sb := len(p.scratch)
+${headBlock}\tfor {
+\t\tif !p.parseLoopSegW() { break }
+\t}
+\treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
+}`;
+}
+
+function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  return plan.kind === 'A' ? rdEntryWithReuseAW(r, plan, ar, recv) : rdEntryWithReuseBW(r, plan, ids, ar, recv);
+}
+
+function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  const rid = ruleIdOf(ar, r.cstName);
+  const tplNud = tpl && r.nudToks.includes(tpl.token)
+    ? `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
+\t\tn, ok := p.matchTemplateW()
+\t\tif !ok { return spanned{}, false }
+\t\tsb := len(p.scratch)
+\t\tif n.present { p.scratch = append(p.scratch, n.h) }
+\t\treturn p.finishW(${rid}, sb, int(n.off), int(n.tokStart)), true
+\t}\n`
+    : '';
+  const bracketNudBody = (b: Bracket) => `{
+\t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAtW(save), save), true }
+\t\tp.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
+\t}`;
+  const bracketNudSwitch = (() => {
+    if (r.nudBrackets.length === 0) return '';
+    const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
+    return `\tswitch t.Lid {
+${groups.map((g) => `\tcase ${g.key}:
+${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join('\n')}
+\t}`;
+  })();
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+    const parts: string[] = [];
+    if (accessTail) parts.push('!tailClosed');
+    if (lbp !== null) parts.push(`${lbp} > minBp`);
+    if (sameLine) parts.push('!t.Nl');
+    if (nll) parts.push(`!p.nllBlockedW([]string{${nll.map(J).join(', ')}}, left)`);
+    parts.push(`!p.suppressCur[${lid}]`);
+    return parts.join(' && ');
+  };
+  const ledBody = (b: Bracket) => `{
+\t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\t\t\tp.scratch = append(p.scratch, left.h)
+\t\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { left = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); continue LedLoop }
+\t\t\tp.pos = ledSave; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break LedLoop
+\t\t}`;
+  const ledSwitch = (() => {
+    if (r.leds.length === 0) return '';
+    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
+    return `\t\tswitch t.Lid {
+${groups.map((g) => {
+  const lid = g.key as number;
+  const arms = g.members.map(({ item: b, index: i }) =>
+    `\t\t\tif ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b)}`);
+  return `\t\tcase ${lid}:\n${arms.join('\n')}`;
+}).join('\n')}
+\t\t}`;
+  })();
+  const postfixTokSwitch = (() => {
+    if (r.postfixToks.length === 0) return '';
+    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
+    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
+    const tplPart = hasTpl ? `
+\t\tif !tailClosed && t.Kid == ${kidOf(ids, '$templateHead')} {
+\t\t\tif n, ok := p.matchTemplateW(); ok {
+\t\t\t\tsb := len(p.scratch)
+\t\t\t\tif left.present { p.scratch = append(p.scratch, left.h) }
+\t\t\t\tif n.present { p.scratch = append(p.scratch, n.h) }
+\t\t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); continue LedLoop
+\t\t\t}
+\t\t}` : '';
+    return `\t\tswitch t.Kid {
+${groups.map((g) => `\t\tcase ${g.key}:
+\t\t\tif !tailClosed {
+\t\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++
+\t\t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); continue LedLoop
+\t\t\t}`).join('\n')}
+\t\t}${tplPart}`;
+  })();
+  const needLedLoop = r.leds.length > 0 || r.postfixToks.length > 0;
+  return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
+\tprev := p.suppressCur
+\tp.suppressCur = p.suppressNext
+\tp.suppressNext = nil
+\tr, ok := p.${r.name}BpW(0)
+\tp.suppressCur = prev
+\treturn r, ok
+}
+func (p *${recv}) ${r.name}BpW(minBp int) (spanned, bool) {
+\tleft, ok := p.${r.name}NudW(minBp)
+\tif !ok { return spanned{}, false }
+\tif p.capped { return left, true }
+\ttailClosed := false
+${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
+\t\tt := p.peekW()
+\t\tif t == nil { break }
+${ledSwitch}
+${postfixTokSwitch}
+\t\tif post, ok := ${r.name}POST[t.Lid]; ok && !tailClosed && post > minBp {
+\t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
+\t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); continue
+\t\t}
+\t\tinfo, ok := ${r.name}BIN[t.Lid]
+\t\tif !ok || info.lbp <= minBp { break }
+\t\tledSave := p.pos; sb := len(p.scratch)
+\t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End)
+\t\tp.pos++
+\t\trhs, rok := p.${r.name}BpW(info.rbp)
+\t\tif !rok { p.pos = ledSave; p.scratch = p.scratch[:sb]; break }
+\t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
+\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart))
+\t}
+\treturn left, true
+}
+func (p *${recv}) ${r.name}NudW(minBp int) (spanned, bool) {
+\tp.capped = false
+\tt := p.peekW()
+\tif t == nil { return spanned{}, false }
+${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${c.steps.length ? c.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { p.capped = true; return p.finishW(${rid}, sb, p.offAtW(save), save), true }; p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`).join('\n')}
+\t_r, _ok := func() (spanned, bool) {
+${tplNud}\tif ${r.name}ATOM[t.Kid] {
+\t\tsb := len(p.scratch); ts := p.pos; p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++
+\t\treturn p.finishW(${rid}, sb, int(t.Off), ts), true
+\t}
+${bracketNudSwitch}
+\tif pbp, ok := ${r.name}PRE[t.Lid]; ok {
+\t\tsave := p.pos; sb := len(p.scratch)
+\t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
+\t\toperand, ook := p.${r.name}BpW(pbp)
+\t\tif !ook { p.pos = save; p.scratch = p.scratch[:sb]; return spanned{}, false }
+\t\tif operand.present { p.scratch = append(p.scratch, operand.h) }
+\t\treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
+\t}
+${r.nudSeqs.map((seq) => `\t{ save := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${seq.length ? seq.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { return p.finishW(${rid}, sb, p.offAtW(save), save), true }; p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`).join('\n')}
+\treturn spanned{}, false
+\t}()
+\tp.capped = false
+\treturn _r, _ok
+}`;
+}
+
+function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const reuse = topReusePlan(ir);
+  const ruleFnsW = ir.rules.map((r) => {
+    if (r.kind === 'pratt') return prattRuleW(r, ir.tpl, ids, ar, recv);
+    if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids, ar, recv);
+    return rdRuleW(r, ids, ar, recv);
+  }).join('\n\n');
+  const matchTemplateW = ir.tpl ? `func (p *${recv}) matchTemplateW() (spanned, bool) {
+\tt := p.peekW()
+\tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return spanned{}, false }
+\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tp.pushLeafW(${ttIdOf(ar, '$templateHead')}, uint32(p.pos), t.Off, t.End); p.pos++
+\tfor {
+\t\texpr, ok := p.parse${ir.tpl.interpRule}W()
+\t\tif !ok { p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
+\t\tif expr.present { p.scratch = append(p.scratch, expr.h) }
+\t\tnext := p.peekW()
+\t\tif next == nil { p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
+\t\tif next.Kid == ${kidOf(ids, '$templateMiddle')} { p.pushLeafW(${ttIdOf(ar, '$templateMiddle')}, uint32(p.pos), next.Off, next.End); p.pos++; continue }
+\t\tif next.Kid == ${kidOf(ids, '$templateTail')} { p.pushLeafW(${ttIdOf(ar, '$templateTail')}, uint32(p.pos), next.Off, next.End); p.pos++; break }
+\t\tp.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false
+\t}
+\treturn p.finishW(${ruleIdOf(ar, '$template')}, sb, p.offAtW(save), save), true
+}
+` : '';
+  const cstDirect = recv === 'parserCst';
+  // parserCst: Nodes/Kids embedded (Rust by-value layout). parserW: interface Builder.
+  const pushLeafW = cstDirect ? `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
+\t_ = off; _ = end
+\tif ttId == TT_SKIP_PUNCT { return }
+\tp.scratch = append(p.scratch, encodeLeaf(tokIdx, uint8(ttId)))
+}` : `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
+\t_ = p.b.Leaf(&p.scratch, ttId, tokIdx, off, end)
+}`;
+  const finishW = cstDirect ? `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
+\tnn := len(p.scratch)
+\tkidStart := len(p.Kids)
+\toff, end := uint32(fallbackOff), uint32(fallbackOff)
+\tif nn > sb {
+\t\tfirst := p.scratch[sb]
+\t\tlast := p.scratch[nn-1]
+\t\tif first < 0 {
+\t\t\tti, _ := decodeLeaf(first)
+\t\t\toff = uint32(p.toks[ti].Off)
+\t\t} else {
+\t\t\toff = p.Nodes[first].Offset
+\t\t}
+\t\tif last < 0 {
+\t\t\tti, _ := decodeLeaf(last)
+\t\t\tend = uint32(p.toks[ti].End)
+\t\t} else {
+\t\t\tend = p.Nodes[last].End
+\t\t}
+\t}
+\tp.Kids = append(p.Kids, p.scratch[sb:nn]...)
+\tp.scratch = p.scratch[:sb]
+\tp.Nodes = append(p.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: uint32(tokStart), TokEnd: uint32(p.pos), Ext: 0})
+\treturn spanned{h: int32(len(p.Nodes) - 1), off: off, tokStart: uint32(tokStart), present: true}
+}` : `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
+\th, off, present := p.b.Finish(&p.scratch, sb, ruleId, uint32(fallbackOff), uint32(tokStart), uint32(p.pos), p.toks)
+\treturn spanned{h: h, off: off, tokStart: uint32(tokStart), present: present}
+}`;
+  const headLeafTextW = cstDirect ? `func (p *${recv}) headLeafTextW(f spanned) string {
+\tif !f.present { return "" }
+\tid := f.h
+\tfor {
+\t\tif id < 0 {
+\t\t\tti, _ := decodeLeaf(id)
+\t\t\tt := p.toks[ti]
+\t\t\treturn p.src[t.Off:t.End]
+\t\t}
+\t\tnd := &p.Nodes[id]
+\t\tif nd.KidCount == 0 { break }
+\t\tid = p.Kids[nd.KidStart]
+\t}
+\tnd := &p.Nodes[id]
+\treturn p.src[nd.Offset:nd.End]
+}` : `func (p *${recv}) headLeafTextW(f spanned) string {
+\tif !f.present { return "" }
+\ta, b := p.b.HeadSpan(f.h, p.toks)
+\tif a <= b && int(b) <= len(p.src) { return p.src[a:b] }
+\treturn ""
+}`;
+  const structFields = cstDirect
+    ? `\ttoks []Tok
+\tpos, maxLook int
+\tcapped bool
+\tsuppressNext, suppressCur map[uint16]bool
+\tsrc string
+\tNodes []Node
+\tKids []int32
+\tscratch []int32`
+    : `\ttoks []Tok
+\tpos, maxLook int
+\tcapped bool
+\tsuppressNext, suppressCur map[uint16]bool
+\tsrc string
+\tb Builder
+\tscratch []int32`;
+  return `type ${recv} struct {
+${structFields}
+}
+
+func (p *${recv}) peekW() *Tok {
+\tif p.pos+1 > p.maxLook { p.maxLook = p.pos + 1 }
+\tif p.pos < len(p.toks) { return &p.toks[p.pos] }
+\treturn nil
+}
+func (p *${recv}) offAtW(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
+${pushLeafW}
+${finishW}
+${headLeafTextW}
+func (p *${recv}) nllBlockedW(words []string, left spanned) bool {
+\th := p.headLeafTextW(left)
+\tfor _, w := range words { if w == h { return true } }
+\treturn false
+}
+func (p *${recv}) matchLitW(lid, ttId uint16) bool {
+\tt := p.peekW()
+\tif t != nil && t.Lid == lid { p.pushLeafW(ttId, uint32(p.pos), t.Off, t.End); p.pos++; return true }
+\treturn false
+}
+func (p *${recv}) matchTokW(kid, ttId uint16) bool {
+\tt := p.peekW()
+\tif t != nil && t.Kid == kid { p.pushLeafW(ttId, uint32(p.pos), t.Off, t.End); p.pos++; return true }
+\treturn false
+}
+func (p *${recv}) callRuleW(fn func(*${recv}) (spanned, bool)) bool {
+\tfr, ok := fn(p)
+\tif !ok { return false }
+\tif fr.present { p.scratch = append(p.scratch, fr.h) }
+\treturn true
+}
+func (p *${recv}) starW(once func() bool) bool {
+\tfor {
+\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\t\tif !once() { p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
+\t}
+\treturn true
+}
+func (p *${recv}) optW(body func() bool) bool {
+\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\tif !body() { p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }
+\treturn true
+}
+func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
+\tif !elem() { return true }
+\tfor {
+\t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
+\t\tif !p.matchLitW(delim, TT_SKIP_PUNCT) { p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
+\t\tif !elem() { break }
+\t}
+\treturn true
+}
+func (p *${recv}) altLitW(opts []struct{ Lid, TtId uint16 }) bool {
+\tfor _, o := range opts { if p.matchLitW(o.Lid, o.TtId) { return true } }
+\treturn false
+}
+
+${matchTemplateW}${ruleFnsW}
+`;
+}
+
+function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  const dropTtIds = ['$punct', '$keyword', '$operator']
+    .map((n) => {
+      try { return ttIdOf(ar, n); } catch { return null; }
+    })
+    .filter((x): x is number => x !== null);
+  const punctId = TT_SKIP_PUNCT;
+  const slimDropCases = dropTtIds.length
+    ? dropTtIds.map((id) => `${id}`).join(', ')
+    : '/* none */';
+  const slimDropBody = dropTtIds.length
+    ? `\tswitch ttId {\n\tcase ${slimDropCases}:\n\t\treturn false\n\t}\n`
+    : '';
+  // Selection: Go cannot monomorphize a second parse instantiation for free
+  // (measured ~6–8ms / ~12–15% on 2MB TS). Hot path for *CstBuilder reuses
+  // native parse() via arena slice swap; other Builders use interface parserW.
+  const wMethods = emitParserMethodsW('parserW', ir, ids, ar);
+  return `// ─── Builder API (additive; CST parse() / Doc above are unchanged) ───────────
+// Builder is pure / bottom-up. Backtracking truncates scratch (+ optional arena
+// checkpoint); discarded handles are garbage.
+// *CstBuilder hot path = native parse() (arena swap). Interface path = parserW.
+
+type Builder interface {
+\tLeaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool
+\tFinish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (h int32, off uint32, present bool)
+\tNode(scratch *[]int32, sb int, ruleId uint16, off, end, tokStart, tokEnd uint32)
+\tSpanOf(h int32, toks []Tok) (uint32, uint32)
+\tHeadSpan(h int32, toks []Tok) (uint32, uint32)
+\tCheckpoint() (nb, kb int)
+\tRestore(nb, kb int)
+}
+
+// spanned: span fields are independent of the handle (Pratt never reads H for spans).
+type spanned struct {
+\th int32
+\toff, tokStart uint32
+\tpresent bool
+}
+
+func builderFinishDefault(b Builder, scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
+\tnn := len(*scratch)
+\tvar offset, end uint32
+\tif nn > sb {
+\t\to0, _ := b.SpanOf((*scratch)[sb], toks)
+\t\t_, e1 := b.SpanOf((*scratch)[nn-1], toks)
+\t\toffset, end = o0, e1
+\t} else {
+\t\toffset, end = fallbackOff, fallbackOff
+\t}
+\tb.Node(scratch, sb, ruleId, offset, end, tokStart, tokEnd)
+\tn := len(*scratch) - sb
+\tif n == 1 {
+\t\th := (*scratch)[len(*scratch)-1]
+\t\t*scratch = (*scratch)[:len(*scratch)-1]
+\t\treturn h, offset, true
+\t} else if n == 0 {
+\t\treturn 0, offset, false
+\t}
+\th := (*scratch)[sb]
+\t*scratch = (*scratch)[:sb]
+\treturn h, offset, true
+}
+
+type CstBuilder struct {
+\tNodes []Node
+\tKids  []int32
+}
+
+func (b *CstBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
+func (b *CstBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
+func (b *CstBuilder) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool {
+\t_ = off; _ = end
+\tif ttId == ${punctId} { return false }
+\t*scratch = append(*scratch, encodeLeaf(tokIdx, uint8(ttId)))
+\treturn true
+}
+// Finish is a byte-twin of native finish (always creates a node, present=true).
+func (b *CstBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
+\tnn := len(*scratch)
+\tkidStart := len(b.Kids)
+\toff, end := fallbackOff, fallbackOff
+\tif nn > sb {
+\t\to0, _ := cstKidOffEnd(b.Nodes, toks, (*scratch)[sb])
+\t\t_, e1 := cstKidOffEnd(b.Nodes, toks, (*scratch)[nn-1])
+\t\toff, end = o0, e1
+\t}
+\tb.Kids = append(b.Kids, (*scratch)[sb:nn]...)
+\t*scratch = (*scratch)[:sb]
+\tb.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
+\treturn int32(len(b.Nodes) - 1), off, true
+}
+func (b *CstBuilder) Node(scratch *[]int32, sb int, ruleId uint16, off, end, tokStart, tokEnd uint32) {
+\tnn := len(*scratch)
+\tkidStart := len(b.Kids)
+\tb.Kids = append(b.Kids, (*scratch)[sb:nn]...)
+\t*scratch = (*scratch)[:sb]
+\tb.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(nn - sb), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
+\t*scratch = append(*scratch, int32(len(b.Nodes)-1))
+}
+func (b *CstBuilder) SpanOf(h int32, toks []Tok) (uint32, uint32) {
+\treturn cstKidOffEnd(b.Nodes, toks, h)
+}
+func (b *CstBuilder) HeadSpan(h int32, toks []Tok) (uint32, uint32) {
+\tid := h
+\tfor {
+\t\tif id < 0 {
+\t\t\tti, _ := decodeLeaf(id)
+\t\t\tt := &toks[ti]
+\t\t\treturn t.Off, t.End
+\t\t}
+\t\tnd := &b.Nodes[id]
+\t\tif nd.KidCount == 0 { return nd.Offset, nd.End }
+\t\tid = b.Kids[nd.KidStart]
+\t}
+}
+func cstKidOffEnd(nodes []Node, toks []Tok, kid int32) (uint32, uint32) {
+\tif kid < 0 {
+\t\tti, _ := decodeLeaf(kid)
+\t\tt := &toks[ti]
+\t\treturn t.Off, t.End
+\t}
+\tnd := &nodes[kid]
+\treturn nd.Offset, nd.End
+}
+
+type SlimBuilder struct {
+\tNodes []Node
+\tKids  []int32
+}
+
+func (b *SlimBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
+func (b *SlimBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
+func (b *SlimBuilder) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool {
+\t_ = off; _ = end
+${slimDropBody}\tif ttId == ${punctId} { return false }
+\t*scratch = append(*scratch, encodeLeaf(tokIdx, uint8(ttId)))
+\treturn true
+}
+func (b *SlimBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
+\treturn builderFinishDefault(b, scratch, sb, ruleId, fallbackOff, tokStart, tokEnd, toks)
+}
+func (b *SlimBuilder) Node(scratch *[]int32, sb int, ruleId uint16, off, end, tokStart, tokEnd uint32) {
+\tnn := len(*scratch)
+\tcount := nn - sb
+\tif count == 1 { return }
+\tif count == 0 { *scratch = (*scratch)[:sb]; return }
+\tkidStart := len(b.Kids)
+\tb.Kids = append(b.Kids, (*scratch)[sb:nn]...)
+\t*scratch = (*scratch)[:sb]
+\tb.Nodes = append(b.Nodes, Node{RuleId: ruleId, KidStart: uint32(kidStart), KidCount: uint32(count), Offset: off, End: end, TokStart: tokStart, TokEnd: tokEnd, Ext: 0})
+\t*scratch = append(*scratch, int32(len(b.Nodes)-1))
+}
+func (b *SlimBuilder) SpanOf(h int32, toks []Tok) (uint32, uint32) {
+\tif h < 0 {
+\t\tti, _ := decodeLeaf(h)
+\t\tt := &toks[ti]
+\t\treturn t.Off, t.End
+\t}
+\tnd := &b.Nodes[h]
+\treturn nd.Offset, nd.End
+}
+func (b *SlimBuilder) HeadSpan(h int32, toks []Tok) (uint32, uint32) {
+\tid := h
+\tfor {
+\t\tif id < 0 {
+\t\t\tti, _ := decodeLeaf(id)
+\t\t\tt := &toks[ti]
+\t\t\treturn t.Off, t.End
+\t\t}
+\t\tnd := &b.Nodes[id]
+\t\tif nd.KidCount == 0 { return nd.Offset, nd.End }
+\t\tid = b.Kids[nd.KidStart]
+\t}
+}
+
+${wMethods}
+// parseWithCst: concrete hot path — native parse codegen with builder arena swap.
+// Keeps ParseWith(CstBuilder) within the additive-prefix / byte-equal contract
+// without paying for a second method-instantiation (Go GC-shape stenciling tax).
+func parseWithCst(src string, b *CstBuilder) (int32, bool) {
+\tsaveNodes, saveKids := nodes, kids
+\tnodes, kids = b.Nodes[:0], b.Kids[:0]
+\th := parse(tokenize(src))
+\tb.Nodes, b.Kids = nodes, kids
+\tnodes, kids = saveNodes, saveKids
+\tif h < 0 { return 0, false }
+\treturn h, true
+}
+func parseWithW(src string, b Builder) (int32, bool) {
+\ttoks := lex(src)
+\tn := len(toks)
+\tp := &parserW{toks: toks, src: src, b: b, scratch: nil}
+\tfr, ok := p.parse${ir.entry}W()
+\tif !ok || p.pos != n || !fr.present { return 0, false }
+\treturn fr.h, true
+}
+
+// ParseWith runs the builder-driven parse. *CstBuilder uses the concrete hot path
+// (native parse + arena swap); other Builders (e.g. *SlimBuilder) use interface parserW.
+// ok=false is reject (distinct from a leaf handle, which may also be negative).
+func ParseWith(src string, b Builder) (h int32, ok bool) {
+\tif cb, is := b.(*CstBuilder); is {
+\t\treturn parseWithCst(src, cb)
+\t}
+\treturn parseWithW(src, b)
+}
+
+func writeKidWith(nodes []Node, kids []int32, toks []Tok, v int32, b *strings.Builder) {
+\tif v < 0 {
+\t\tti, tt := decodeLeaf(v)
+\t\tt := toks[ti]
+\t\tfmt.Fprintf(b, "{\\"tokenType\\":%q,\\"offset\\":%d,\\"end\\":%d}", TT_NAMES[tt], t.Off, t.End)
+\t\treturn
+\t}
+\twriteJSONWith(nodes, kids, toks, v, b)
+}
+func writeJSONWith(nodes []Node, kids []int32, toks []Tok, id int32, b *strings.Builder) {
+\tnd := &nodes[id]
+\tfmt.Fprintf(b, "{\\"rule\\":%q,\\"children\\":[", RULE_NAMES[nd.RuleId])
+\tfor i := uint32(0); i < nd.KidCount; i++ {
+\t\tif i > 0 { b.WriteByte(',') }
+\t\twriteKidWith(nodes, kids, toks, kids[nd.KidStart+i], b)
+\t}
+\tfmt.Fprintf(b, "],\\"offset\\":%d,\\"end\\":%d}", nd.Offset, nd.End)
+}
+
+func CstJSONWith(b *CstBuilder, toks []Tok, root int32) string {
+\tvar buf strings.Builder
+\twriteJSONWith(b.Nodes, b.Kids, toks, root, &buf)
+\treturn buf.String()
+}
+func SlimJSONWith(b *SlimBuilder, toks []Tok, root int32) string {
+\tvar buf strings.Builder
+\twriteJSONWith(b.Nodes, b.Kids, toks, root, &buf)
+\treturn buf.String()
+}
+`;
+}
+
 export const goTarget: Target = {
   name: 'go',
   ext: 'go',
@@ -2014,6 +2706,7 @@ func parse(t []Tok) int32 {
 }
 
 ${docEditBlockGo(ir)}
+${emitBuilderAddonGo(ir, ids, ar)}
 `;
   },
   emitRunner(): string {
