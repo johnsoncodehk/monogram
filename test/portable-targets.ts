@@ -369,6 +369,11 @@ const envMultiBatches: EditBatch[] = [
   [[envReuseInit.indexOf('K5=') + 'K5='.length, envReuseInit.indexOf('K5=') + 'K5='.length + 1, '7']],
   [[envReuseLastEq, envReuseLastEq + 1, '8']],
 ];
+// Shape-B adopted Seg.Ext must shift with tokDelta: insert-front (adopt suffix) then poke a later
+// value whose align.prefix sits in the stale-ext..shifted-ext window — unshifted Ext over-reuses.
+const envSegExtInit = Array.from({ length: 8 }, (_, i) => `K${i}=${i}`).join('\n');
+const envSegExtIns = 'Z=9\n';
+const envSegExtPoke = envSegExtInit.indexOf('K3=') + 'K3='.length + envSegExtIns.length;
 const regexjsLargeInit = 'var r = /abc/g; a / b;\n'.repeat(60);
 const jsLookaheadInit = 'let x = (a)\nfoo;\nbar;';
 const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peeked-into second stmt
@@ -437,6 +442,8 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'A=1\n\nB=2', batches: [[[4, 4, '\n']]], minReused: 1 }, // blank-line expand
     { init: envFlowInit, batches: [[[envFlowEdit, envFlowEdit + 1, 'x']]], minReused: 2 }, // mid flow stmt; sides reused
     { init: envReuseInit, batches: envMultiBatches, longSession: true, minReused: 1 },
+    // Go adopted Seg.Ext + tokDelta (pre-fix: reused 9 from stale keep-prefix watermarks).
+    { init: envSegExtInit, batches: [[[0, 0, envSegExtIns]], [[envSegExtPoke, envSegExtPoke + 1, '9']]], reused: 8 },
   ],
   regexjs: [
     { init: 'var re = /[a-z]+/i; x / y;', batches: [[[11, 12, '0']]] },

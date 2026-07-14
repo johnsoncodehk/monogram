@@ -1502,7 +1502,7 @@ ${shapeA ? `func tryReuseTop(oldRoot int32, newText string, newMeta []alignMeta,
 			kOff += s.KidCount
 		}
 		for _, s := range adoptedSegs {
-			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext})
+			newSegs = append(newSegs, Seg{kOff, s.KidCount, s.TokStart + tokDelta, s.TokEnd + tokDelta, s.Ext + tokDelta})
 			kOff += s.KidCount
 		}
 		off, end, tokStart, tokEnd := 0, 0, 0, 0
