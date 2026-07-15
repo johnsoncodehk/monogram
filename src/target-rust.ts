@@ -18,7 +18,7 @@ import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
-  FieldBind, TokenLeafPolicy, CustomShape,
+  FieldBind, TokenLeafPolicy, CustomShape, ParentFold,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 
@@ -2689,17 +2689,21 @@ function rustShapeScalar(fn: string): string {
   return 'String';
 }
 
-function rustShapeHint(hint: string | string[] | undefined): string {
+function rustShapeHint(hint: string | string[] | undefined, known?: Set<string>): string {
   const h = Array.isArray(hint) ? hint[0] : hint;
   if (!h || h === 'unknown') return 'AstValue';
   if (h === 'string' || h === 'Identifier') return 'String';
   if (h === 'number' || h === 'Number') return 'f64';
   if (h === 'boolean' || h === 'Boolean') return 'bool';
-  return rustShapeIdent(h);
+  const id = rustShapeIdent(h);
+  const shape = `${id}Shape`;
+  if (known?.has(id)) return id;
+  if (known?.has(shape)) return shape;
+  return 'AstValue';
 }
 
-function rustShapeFieldType(field: FieldDecl): string {
-  let ty = field.bind === 'opText' ? 'String' : rustShapeHint(field.typeHint);
+function rustShapeFieldType(field: FieldDecl, known?: Set<string>): string {
+  let ty = field.bind === 'opText' ? 'String' : rustShapeHint(field.typeHint, known);
   const isList = typeof field.bind === 'object' && 'from' in field.bind && field.bind.from === 'list';
   const scalar = ty === 'String' || ty === 'f64' || ty === 'bool' || ty === 'AstValue';
   if (isList) ty = `Vec<${ty}>`;
@@ -2734,22 +2738,26 @@ function collectRustShapeNodes(shapeIR: ShapeIR): Map<string, NodeShape> {
 
 function rustShapeUnions(shapeIR: ShapeIR): RustShapeUnion[] {
   const out: RustShapeUnion[] = [];
+  const aliasesUsed = new Set<string>();
   for (const rule of shapeIR.rules) {
     if (rule.shape.kind === 'choice') {
-      const members: RustShapeUnionMember[] = rule.shape.arms.map((arm) => {
-        if (arm.shape.kind === 'node') {
-          return { variant: rustShapeIdent(arm.shape.type), ty: rustShapeIdent(arm.shape.type), boxed: true };
+      const members: RustShapeUnionMember[] = [];
+      const seen = new Set<string>();
+      for (const arm of rule.shape.arms) {
+        const member: RustShapeUnionMember = arm.shape.kind === 'node'
+          ? { variant: rustShapeIdent(arm.shape.type), ty: rustShapeIdent(arm.shape.type), boxed: true }
+          : { variant: rustShapeIdent(arm.name), ty: 'AstValue', boxed: false };
+        if (!seen.has(member.variant)) {
+          seen.add(member.variant);
+          members.push(member);
         }
-        if (arm.shape.kind === 'inline' || arm.shape.kind === 'keep' || arm.shape.kind === 'list') {
-          return { variant: rustShapeIdent(arm.name), ty: 'AstValue', boxed: false };
-        }
-        return { variant: rustShapeIdent(arm.name), ty: 'AstValue', boxed: false };
-      });
-      out.push({
-        name: rustShapeUnionName(rule.name),
-        alias: rule.cstName === 'Stmt' || rule.name === 'Stmt' ? 'Statement' : undefined,
-        members,
-      });
+      }
+      let alias: string | undefined;
+      if (rule.name === 'Stmt' && !aliasesUsed.has('Statement')) {
+        alias = 'Statement';
+        aliasesUsed.add('Statement');
+      }
+      out.push({ name: rustShapeUnionName(rule.name), alias, members });
     } else if (rule.shape.kind === 'pratt') {
       const members: RustShapeUnionMember[] = [];
       for (const tok of (portableRule(shapeIR, rule.name) as PrattRule).nudToks) {
@@ -2764,9 +2772,14 @@ function rustShapeUnions(shapeIR: ShapeIR): RustShapeUnion[] {
         }
       }
       members.push({ variant: 'Keep', ty: 'AstValue', boxed: false });
+      let alias: string | undefined;
+      if (rule.name === 'Expr' && !aliasesUsed.has('Expression')) {
+        alias = 'Expression';
+        aliasesUsed.add('Expression');
+      }
       out.push({
         name: rustShapeUnionName(rule.name),
-        alias: rule.cstName === 'Expr' || rule.name === 'Expr' ? 'Expression' : undefined,
+        alias,
         members,
       });
     }
@@ -2833,6 +2846,18 @@ function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
   _rustShapeParserIR = ir;
   const nodes = collectRustShapeNodes(shapeIR);
   const unions = rustShapeUnions(shapeIR);
+  const known = new Set<string>();
+  for (const name of nodes.keys()) {
+    known.add(name);
+    known.add(rustShapeIdent(name));
+  }
+  for (const u of unions) {
+    known.add(u.name);
+    for (const m of u.members) {
+      known.add(m.ty);
+      known.add(m.variant);
+    }
+  }
   _rustShapeParserIR = null;
   const lines: string[] = [
     '// ─── Shape AST types (generated) ────────────────────────────────────────────',
@@ -2865,6 +2890,8 @@ function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
     '    String(String),',
     '    Array(Vec<AstValue>),',
     '    Object { typ: String, fields: Vec<(String, AstValue)> },',
+    '    /// Child partial for parentFold — folded away before parent custom runs.',
+    '    Partial { tag: String, mode: String, value: Box<AstValue> },',
     '}',
     'impl ShapeJson for AstValue {',
     '    fn write_shape_json(&self, out: &mut String) {',
@@ -2875,8 +2902,16 @@ function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
     '            AstValue::String(s) => s.write_shape_json(out),',
     '            AstValue::Array(xs) => xs.write_shape_json(out),',
     '            AstValue::Object { typ, fields } => {',
-    '                out.push_str("{\\"type\\":"); _shape_json_string(typ, out);',
-    '                for (k, v) in fields { out.push(\',\'); _shape_json_string(k, out); out.push(\':\'); v.write_shape_json(out); }',
+    "                out.push('{');",
+    '                let mut wrote = false;',
+    '                if !typ.is_empty() { _shape_json_string("type", out); out.push(\':\'); _shape_json_string(typ, out); wrote = true; }',
+    '                for (k, v) in fields { if wrote { out.push(\',\'); } _shape_json_string(k, out); out.push(\':\'); v.write_shape_json(out); wrote = true; }',
+    "                out.push('}');",
+    '            }',
+    '            AstValue::Partial { tag, mode, value } => {',
+    '                out.push_str("{\\"__shapePartial\\":"); _shape_json_string(tag, out);',
+    '                out.push_str(",\\"mode\\":"); _shape_json_string(mode, out);',
+    '                out.push_str(",\\"value\\":"); value.write_shape_json(out);',
     "                out.push('}');",
     '            }',
     '        }',
@@ -2887,7 +2922,7 @@ function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
   for (const [name, node] of [...nodes.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     lines.push('#[derive(Debug, PartialEq)]');
     lines.push(`pub struct ${rustShapeIdent(name)} {`);
-    for (const field of node.fields) lines.push(`    pub ${rustShapeIdent(field.name)}: ${rustShapeFieldType(field)},`);
+    for (const field of node.fields) lines.push(`    pub ${rustShapeIdent(field.name)}: ${rustShapeFieldType(field, known)},`);
     if (shapeIR.spans !== 'none') {
       const spanTy = shapeIR.spans === 'optional' ? 'Option<usize>' : 'usize';
       lines.push(`    pub off: ${spanTy},`, `    pub end: ${spanTy},`);
@@ -2916,6 +2951,13 @@ function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
     lines.push('} } }');
     if (union.alias) lines.push(`pub type ${union.alias} = ${union.name};`);
   }
+  const unionNames = new Set(unions.map((u) => u.name));
+  if (unionNames.has('StmtShape') && !unions.some((u) => u.alias === 'Statement')) {
+    lines.push('pub type Statement = StmtShape;');
+  }
+  if (unionNames.has('ExprShape') && !unions.some((u) => u.alias === 'Expression')) {
+    lines.push('pub type Expression = ExprShape;');
+  }
 
   lines.push('pub type AstRoot = AstValue;');
   return lines.join('\n');
@@ -2938,6 +2980,8 @@ function emitRustAstRdAltSteps(
   listsVar: string,
   holesVar: string,
   altVar: string,
+  selfRule?: string,
+  selfRuleUseBp?: boolean,
 ): { ok: string; okVar: string } {
   const visible = (s: Step): boolean => {
     switch (s.t) {
@@ -2975,7 +3019,10 @@ function emitRustAstRdAltSteps(
       }
       case 'rule': {
         const v = local('rule');
-        return `if ${okVar} { match self.parse_ast_${s.name}() { Some(${v}) => { ${sink}.push(${v}); } None => { ${okVar} = false; } } }`;
+        const call = selfRuleUseBp && s.name === selfRule
+          ? `self.parse_ast_${s.name}_bp(1)`
+          : `self.parse_ast_${s.name}()`;
+        return `if ${okVar} { match ${call} { Some(${v}) => { ${sink}.push(${v}); } None => { ${okVar} = false; } } }`;
       }
       case 'ruleBp': {
         const v = local('rulebp');
@@ -2986,25 +3033,27 @@ function emitRustAstRdAltSteps(
       case 'sameLine':
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
       case 'not': {
+        // Gate on okVar to match TS `&&` short-circuit — otherwise probe still
+        // runs after a failed predecessor and can re-enter recursive rules.
         const nv = local('not_kids');
         const poke = local('probe');
         const body = emitSteps(s.steps, nv, poke);
-        return `{
+        return `if ${okVar} {
             let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
             let mut ${nv}: Vec<AstValue> = Vec::new();
             let mut ${poke} = true;
             ${body}
             let _probe_hit = ${poke};
             self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
-            if ${okVar} && _probe_hit { ${okVar} = false; }
+            if _probe_hit { ${okVar} = false; }
         }`;
       }
       case 'suppress': {
         const sok = local('sup_ok');
-        return `{
+        return `if ${okVar} {
             let _sn_save = self.suppress_next.clone();
             self.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}];
-            let mut ${sok} = ${okVar};
+            let mut ${sok} = true;
             ${emitSteps(s.steps, sink, sok)}
             self.suppress_next = _sn_save;
             if !${sok} { ${okVar} = false; }
@@ -3032,6 +3081,8 @@ function emitRustAstRdAltSteps(
         }`;
       }
       case 'alt': {
+        // Must short-circuit on okVar — ungated alt/star/opt closed the
+        // ClassMember↔Block↔Stmt↔Decl infinite recursion on shallow inputs.
         const flag = local('alt_ok');
         const tries = s.branches.map((b, i) => {
           const av = local('alt');
@@ -3052,7 +3103,7 @@ function emitRustAstRdAltSteps(
                 }
             }`;
         }).join('\n            ');
-        return `{
+        return `if ${okVar} {
             let mut ${flag} = false;
             ${tries}
             if !${flag} { ${okVar} = false; }
@@ -3065,7 +3116,7 @@ function emitRustAstRdAltSteps(
         const body = emitStep(s.step, sv, sok);
         const add = visible(s.step) ? `${out}.push(Self::shape_pack(${sv}));` : '';
         const finish = visible(s.step) ? `${sink}.push(AstValue::Array(${out}));` : '';
-        return `{
+        return `if ${okVar} {
             let mut ${out}: Vec<AstValue> = Vec::new();
             loop {
                 let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
@@ -3088,7 +3139,7 @@ function emitRustAstRdAltSteps(
         const push = s.steps.some(visible)
           ? `${sink}.push(if ${ook} { Self::shape_pack(${ov}) } else { AstValue::Null });`
           : '';
-        return `{
+        return `if ${okVar} {
             let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
             let mut ${ov}: Vec<AstValue> = Vec::new();
             let mut ${ook} = true;
@@ -3110,7 +3161,7 @@ function emitRustAstRdAltSteps(
         // After first failure: push empty array (zero elems). After success path: move out.
         const finishEmpty = visible(s.elem) ? `${sink}.push(AstValue::Array(Vec::new()));` : '';
         const finishMove = visible(s.elem) ? `${sink}.push(AstValue::Array(${out}));` : '';
-        return `{
+        return `if ${okVar} {
             let mut ${out}: Vec<AstValue> = Vec::new();
             let mut ${ev}: Vec<AstValue> = Vec::new();
             let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
@@ -3158,6 +3209,49 @@ function emitRustAstRdAltSteps(
   };
 }
 
+
+/** Emit ShapeCustoms::ast_custom call with owned AstCustomCtx (no &mut parser borrow). */
+function rustAstCustomCall(
+  fn: string,
+  ruleName: string,
+  kidsExpr: string,
+  altPathExpr: string,
+  offExpr: string,
+  endExpr: string,
+  opts?: {
+    leftExpr?: string;
+    /** Expression yielding String (`.as_str()` applied) or already `&str` when opIsStr. */
+    opExpr?: string;
+    opIsStr?: boolean;
+    folds?: ParentFold[];
+  },
+): string {
+  const folds = opts?.folds ?? [];
+  const foldPairs = folds.map((f) => `(${J(f.tag)}, ${J(f.into)})`).join(', ');
+  const kidsPrep = folds.length > 0
+    ? `let (__fk, __fs) = Self::shape_fold_kids(${kidsExpr}, &[${foldPairs}]);`
+    : `let __fk = ${kidsExpr};`;
+  const stateExpr = folds.length > 0 ? '__fs' : 'None';
+  const opText = opts?.opExpr
+    ? (opts.opIsStr ? `Some(${opts.opExpr})` : `Some((${opts.opExpr}).as_str())`)
+    : 'None';
+  return `{
+            ${kidsPrep}
+            self.customs.ast_custom(${J(fn)}, AstCustomCtx {
+                name: ${J(fn)},
+                rule: ${J(ruleName)},
+                src: self.src,
+                kids: __fk,
+                alt_path: ${altPathExpr},
+                off: ${offExpr},
+                end: ${endExpr},
+                left: ${opts?.leftExpr ? `Some(${opts.leftExpr})` : 'None'},
+                op_text: ${opText},
+                state: ${stateExpr},
+            })
+        }`;
+}
+
 function emitRustRdMethod(
   rule: RdRule,
   sir: ShapeIRRule,
@@ -3185,7 +3279,8 @@ function emitRustRdMethod(
                 let mut _sk: Vec<AstValue> = Vec::new();
                 ${steps.ok}
                 if ${steps.okVar} {
-                    return ${finished};
+                    let _shape_finished = ${finished};
+                    if _shape_finished.is_some() { return _shape_finished; }
                 }
                 self.pos = sp;
             }
@@ -3201,9 +3296,16 @@ function emitRustRdMethod(
     }`;
   }
   if (sir.shape.kind === 'custom') {
+    const shape = sir.shape;
+    const tries = rule.alts.map((_, ai) => {
+      const altPathExpr = `{ let mut __ap = vec![${ai}usize]; __ap.extend(_ap.iter().copied()); __ap }`;
+      const finish = `match ${rustAstCustomCall(shape.fn, rule.name, '_sk', altPathExpr, 'sp_off', 'self.last_end(sp_off)', { folds: shape.folds })} { AstValue::Null => None, v => Some(v) }`;
+      return tryAlt(ai, finish, true);
+    }).join('\n        ');
+    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        let _ = self;
-        unimplemented!("shape rust: custom ${sir.shape.fn} — SH3-4")
+        ${needPeek ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tries}
+        None
     }`;
   }
   if (sir.shape.kind === 'inline') {
@@ -3265,8 +3367,8 @@ function emitRustRdMethod(
       } else if (arm.shape.kind === 'list') {
         finish = `Some(AstValue::Array(__SK__))`;
       } else if (arm.shape.kind === 'custom') {
-        // Fail-fast at emit time — should not reach here.
-        finish = `unimplemented!("shape rust: choice-arm custom")`;
+        const altPathExpr = '{ let mut __ap = vec![__ALT__usize]; __ap.extend(_ap.iter().copied()); __ap }';
+        finish = `match ${rustAstCustomCall(arm.shape.fn, rule.name, '__SK__', altPathExpr, '__SPOFF__', 'self.last_end(__SPOFF__)', { folds: arm.shape.folds })} { AstValue::Null => None, v => Some(v) }`;
       } else {
         finish = `None`;
       }
@@ -3327,8 +3429,8 @@ function emitRustPrattMethod(
   const leaves = shapeIR.leaves;
   const ret = 'AstValue';
   const tpl = ir.tpl;
-  const emptySteps = (steps: Step[]) =>
-    emitRustAstRdAltSteps(steps, ids, leaves, '_sk', '_lists', '_holes', '_ap');
+  const emptySteps = (steps: Step[], selfBp = false) =>
+    emitRustAstRdAltSteps(steps, ids, leaves, '_sk', '_lists', '_holes', '_ap', selfBp ? rule.name : undefined, selfBp);
 
   /** Missing Pratt slot → keep (positional), matching TS emitAstPrattRule. */
   const slotOf = (declared: { kind: string } | undefined, present: boolean): { kind: string } | null => {
@@ -3358,10 +3460,13 @@ function emitRustPrattMethod(
     endExpr: string,
     leftExpr?: string,
     opExpr?: string,
-  ): string =>
-    `self.customs.ast_custom(${J(fn)}, ${kidsExpr}, &${altExpr}, ${offExpr}, ${endExpr}, ${
-      leftExpr ? `Some(${leftExpr})` : 'None'
-    }, ${opExpr ? `Some(${opExpr}.as_str())` : 'None'})`;
+    folds?: ParentFold[],
+  ): string => {
+    const altPathExpr = altExpr === '[]' ? 'Vec::new()' : `vec!${altExpr}`;
+    return rustAstCustomCall(fn, rule.name, kidsExpr, altPathExpr, offExpr, endExpr, {
+      leftExpr, opExpr, folds,
+    });
+  };
 
   /** Explicit pratt.template only — omitted keeps legacy `$template` + interpRule holes. */
   const templateSlot = ps.template as CustomShape | { kind: 'keep' } | undefined;
@@ -3369,7 +3474,7 @@ function emitRustPrattMethod(
   const hasTplPostfix = !!(tpl && rule.postfixToks.includes(tpl.token));
   const templateFinish = (kidsExpr: string, offExpr: string, endExpr: string): string => {
     if (!templateSlot || templateSlot.kind === 'keep') return keepFinish(kidsExpr, '$template');
-    return customCall(templateSlot.fn, kidsExpr, '[]', offExpr, endExpr);
+    return customCall(templateSlot.fn, kidsExpr, '[]', offExpr, endExpr, undefined, undefined, templateSlot.folds);
   };
   const templateDual = !!(templateSlot && tpl && rule.name !== tpl.interpRule);
   const tplHelperCode = tpl && (hasTplNud || hasTplPostfix)
@@ -3447,7 +3552,7 @@ function emitRustPrattMethod(
                 let mut leaf_kids: Vec<AstValue> = Vec::new();
                 ${arms}
                 self.pos += 1;
-                return Some(${customCall(ps.atom.fn, 'leaf_kids', '[]', 'sp_off', 't.end as usize')});
+                return Some(${customCall(ps.atom.fn, 'leaf_kids', '[]', 'sp_off', 't.end as usize', undefined, undefined, ps.atom.folds)});
             }
         }`;
   } else if (!ps.atom || ps.atom.kind === 'keep' || (ps.atom as { kind: string }).kind === 'leafValue' || ps.atom.kind === undefined) {
@@ -3493,8 +3598,8 @@ function emitRustPrattMethod(
         if (groupSlot.kind === 'inline') {
           finish = inlineFinishReturn('_sk');
         } else if (groupSlot.kind === 'custom') {
-          const fn = (groupSlot as CustomShape).fn;
-          finish = `return Some(${customCall(fn, '_sk', `[${bi}]`, 'save_off', 'self.last_end(save_off)')});`;
+          const gs = groupSlot as CustomShape;
+          finish = `return Some(${customCall(gs.fn, '_sk', `[${bi}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, gs.folds)});`;
         } else if (groupSlot.kind === 'node') {
           finish = `return Some(${rustShapeNodeObjectExpr(groupSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
         } else {
@@ -3504,9 +3609,6 @@ function emitRustPrattMethod(
             let save = self.pos;
             let save_off = self.current_off();
             let mut _sk: Vec<AstValue> = Vec::new();
-            let mut _lists: Vec<Vec<AstValue>> = Vec::new();
-            let mut _holes: Vec<Option<AstValue>> = Vec::new();
-            let mut _ap: Vec<usize> = Vec::new();
             ${st.ok}
             if ${st.okVar} {
                 ${finish}
@@ -3540,7 +3642,7 @@ function emitRustPrattMethod(
             return Some(${rustShapeNodeObjectExpr(prefixSlot as NodeShape, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')});
         }\n        `;
       } else if (prefixSlot.kind === 'custom') {
-        const fn = (prefixSlot as CustomShape).fn;
+        const psCustom = prefixSlot as CustomShape;
         prefixCode += `if self.peek_lid() == Some(${lid}) {
             let save = self.pos;
             let _off = self.current_off();
@@ -3550,7 +3652,7 @@ function emitRustPrattMethod(
                 Some(v) => v,
                 None => { self.pos = save; return None; }
             };
-            return Some(${customCall(fn, 'vec![argument]', '[]', '_off', 'self.last_end(_off)', undefined, '_op')});
+            return Some(${customCall(psCustom.fn, 'vec![argument]', '[]', '_off', 'self.last_end(_off)', undefined, '_op', psCustom.folds)});
         }\n        `;
       } else if (prefixSlot.kind === 'inline') {
         prefixCode += `if self.peek_lid() == Some(${lid}) {
@@ -3582,11 +3684,11 @@ function emitRustPrattMethod(
   const nudSeqSlot = slotOf(ps.nudSeq as { kind: string } | undefined, rule.nudSeqs.length > 0);
   if (nudSeqSlot && rule.nudSeqs.length) {
     nudSeqCode = rule.nudSeqs.map((seq, si) => {
-      const st = emptySteps(seq);
+      const st = emptySteps(seq, true);
       let finish: string;
       if (nudSeqSlot.kind === 'custom') {
-        const fn = (nudSeqSlot as CustomShape).fn;
-        finish = `return Some(${customCall(fn, '_sk', `[${si}]`, 'save_off', 'self.last_end(save_off)')});`;
+        const ns = nudSeqSlot as CustomShape;
+        finish = `return Some(${customCall(ns.fn, '_sk', `[${si}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, ns.folds)});`;
       } else if (nudSeqSlot.kind === 'node') {
         finish = `return Some(${rustShapeNodeObjectExpr(nudSeqSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
       } else if (nudSeqSlot.kind === 'inline') {
@@ -3596,14 +3698,13 @@ function emitRustPrattMethod(
       }
       return `{
             let save = self.pos;
-            let save_off = self.current_off();
-            let mut _sk: Vec<AstValue> = Vec::new();
-            let mut _lists: Vec<Vec<AstValue>> = Vec::new();
-            let mut _holes: Vec<Option<AstValue>> = Vec::new();
-            let mut _ap: Vec<usize> = Vec::new();
-            ${st.ok}
-            if ${st.okVar} {
-                ${finish}
+            {
+                let save_off = self.current_off();
+                let mut _sk: Vec<AstValue> = Vec::new();
+                ${st.ok}
+                if ${st.okVar} {
+                    ${finish}
+                }
             }
             self.pos = save;
         }`;
@@ -3615,11 +3716,11 @@ function emitRustPrattMethod(
   const nudCappedSlot = slotOf(ps.nudCapped as { kind: string } | undefined, rule.nudCapped.length > 0);
   if (nudCappedSlot && rule.nudCapped.length) {
     nudCappedCode = rule.nudCapped.map((c, ci) => {
-      const st = emptySteps(c.steps);
+      const st = emptySteps(c.steps, true);
       let finish: string;
       if (nudCappedSlot.kind === 'custom') {
-        const fn = (nudCappedSlot as CustomShape).fn;
-        finish = `self.capped = true; return Some(${customCall(fn, '_sk', `[${ci}]`, 'save_off', 'self.last_end(save_off)')});`;
+        const nc = nudCappedSlot as CustomShape;
+        finish = `self.capped = true; return Some(${customCall(nc.fn, '_sk', `[${ci}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, nc.folds)});`;
       } else if (nudCappedSlot.kind === 'node') {
         finish = `self.capped = true; return Some(${rustShapeNodeObjectExpr(nudCappedSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
       } else if (nudCappedSlot.kind === 'inline') {
@@ -3629,14 +3730,13 @@ function emitRustPrattMethod(
       }
       return `if min_bp < ${c.capBp} {
             let save = self.pos;
-            let save_off = self.current_off();
-            let mut _sk: Vec<AstValue> = Vec::new();
-            let mut _lists: Vec<Vec<AstValue>> = Vec::new();
-            let mut _holes: Vec<Option<AstValue>> = Vec::new();
-            let mut _ap: Vec<usize> = Vec::new();
-            ${st.ok}
-            if ${st.okVar} {
-                ${finish}
+            {
+                let save_off = self.current_off();
+                let mut _sk: Vec<AstValue> = Vec::new();
+                ${st.ok}
+                if ${st.okVar} {
+                    ${finish}
+                }
             }
             self.pos = save;
         }`;
@@ -3669,7 +3769,7 @@ function emitRustPrattMethod(
             continue;
         }`;
     } else if (binarySlot.kind === 'custom') {
-      const fn = (binarySlot as CustomShape).fn;
+      const bs = binarySlot as CustomShape;
       binaryBody = `{
             let (_lbp, _rbp) = match self.peek_lid() {
                 ${binaryArms}
@@ -3683,7 +3783,7 @@ function emitRustPrattMethod(
                 Some(v) => v,
                 None => { self.pos = _save; break; }
             };
-            left = ${customCall(fn, 'vec![_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op')};
+            left = ${customCall(bs.fn, 'vec![_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', bs.folds)};
             continue;
         }`;
     } else {
@@ -3731,7 +3831,7 @@ function emitRustPrattMethod(
                 }
             }`;
     } else if (postfixSlot.kind === 'custom') {
-      const fn = (postfixSlot as CustomShape).fn;
+      const pfs = postfixSlot as CustomShape;
       postfixCode = `{
                 let post = match self.peek_lid() {
                     ${postArms}
@@ -3740,7 +3840,7 @@ function emitRustPrattMethod(
                 if !tail_closed && post > min_bp {
                     let _op = self.current_text().to_owned();
                     self.pos += 1;
-                    left = ${customCall(fn, 'Vec::new()', '[]', '_off', 'self.last_end(_off)', 'left', '_op')};
+                    left = ${customCall(pfs.fn, 'Vec::new()', '[]', '_off', 'self.last_end(_off)', 'left', '_op', pfs.folds)};
                     tail_closed = true;
                     continue;
                 }
@@ -3773,8 +3873,8 @@ function emitRustPrattMethod(
       const policy = leaves[tokName] ?? { action: 'keep' as const };
       let finish: string;
       if (postfixTokSlot.kind === 'custom') {
-        const fn = (postfixTokSlot as CustomShape).fn;
-        finish = `left = ${customCall(fn, 'vec![leaf]', '[]', '_off', 't.end as usize', 'left', 'op_owned')};`;
+        const pts = postfixTokSlot as CustomShape;
+        finish = `left = ${customCall(pts.fn, 'vec![leaf]', '[]', '_off', 't.end as usize', 'left', 'op_owned', pts.folds)};`;
       } else if (postfixTokSlot.kind === 'node') {
         const node = postfixTokSlot as NodeShape;
         const fieldMap = node.fields.map((f: FieldDecl) => {
@@ -3816,8 +3916,8 @@ function emitRustPrattMethod(
     if (hasTplPostfix) {
       let tplFinish: string;
       if (postfixTokSlot.kind === 'custom') {
-        const fn = (postfixTokSlot as CustomShape).fn;
-        tplFinish = `left = ${customCall(fn, 'vec![node]', '[]', '_off', 'node_end', 'left', 'op_owned')};`;
+        const pts = postfixTokSlot as CustomShape;
+        tplFinish = `left = ${customCall(pts.fn, 'vec![node]', '[]', '_off', 'node_end', 'left', 'op_owned', pts.folds)};`;
       } else if (postfixTokSlot.kind === 'node') {
         const nodeShape = postfixTokSlot as NodeShape;
         const fieldMap = nodeShape.fields.map((f: FieldDecl) => {
@@ -3876,8 +3976,8 @@ function emitRustPrattMethod(
         const st = emptySteps(b.steps);
         let finish: string;
         if (ledSlot.kind === 'custom') {
-          const fn = (ledSlot as CustomShape).fn;
-          finish = `left = ${customCall(fn, '_sk', `[${i}]`, '_off', 'self.last_end(_off)', 'left', '_op')};`;
+          const ls = ledSlot as CustomShape;
+          finish = `left = ${customCall(ls.fn, '_sk', `[${i}]`, '_off', 'self.last_end(_off)', 'left', '_op', ls.folds)};`;
         } else if (ledSlot.kind === 'node') {
           finish = `left = ${rustShapeNodeObjectExpr(ledSlot as NodeShape, '_sk', '_op.clone()', shapeIR.spans, '_off', 'self.last_end(_off)', 'left')};`;
         } else if (ledSlot.kind === 'inline') {
@@ -3974,8 +4074,9 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
     // rule/ruleBp/altlit/sameLine: ok
   };
   const walkShape = (rule: string, shape: RuleShape): void => {
-    if (shape.kind === 'custom') note(rule, `shape:custom:${shape.fn}`);
-    else if (shape.kind === 'choice') for (const arm of shape.arms) walkShape(rule, arm.shape);
+    if (shape.kind === 'custom') {
+      // SH3-4: custom supported (ast_custom + parentFold)
+    } else if (shape.kind === 'choice') for (const arm of shape.arms) walkShape(rule, arm.shape);
     else if (shape.kind === 'keep' || shape.kind === 'inline' || shape.kind === 'list' || shape.kind === 'node' || shape.kind === 'pratt' || shape.kind === 'drop') {
       // supported RD shape kinds
     } else if (shape.kind === 'leafValue') note(rule, `shape:${shape.kind}`);
@@ -3990,8 +4091,9 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
         for (const alt of rule.alts) for (const step of alt) walkStep(rule.name, step);
       } else if (sir.shape.kind === 'choice') {
         for (const arm of sir.shape.arms) {
-          if (arm.shape.kind === 'custom') note(rule.name, `choice-arm:custom:${arm.shape.fn}`);
-          else if (!['node', 'keep', 'inline', 'list', 'drop'].includes(arm.shape.kind)) {
+          if (arm.shape.kind === 'custom') {
+            // SH3-4: choice-arm custom supported
+          } else if (!['node', 'keep', 'inline', 'list', 'drop'].includes(arm.shape.kind)) {
             note(rule.name, `choice-arm:${arm.shape.kind}`);
           }
           for (const ai of arm.altIndices) for (const step of rule.alts[ai] ?? []) walkStep(rule.name, step);
@@ -4012,14 +4114,12 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
     const ps = sir.shape;
     // Supported toy/calc Pratt slots:
     const atomOk = !ps.atom || ps.atom.kind === 'keep' || ps.atom.kind === 'leafValue' || ps.atom.kind === 'rule'
-      || (ps.atom.kind === 'drop');
+      || ps.atom.kind === 'drop' || ps.atom.kind === 'custom';
     if (ps.atom && !atomOk) {
-      if (ps.atom.kind === 'custom') note(rule.name, `pratt-shape:atom:custom:${ps.atom.fn}`);
-      else note(rule.name, `pratt-shape:atom:${ps.atom.kind}`);
+      note(rule.name, `pratt-shape:atom:${ps.atom.kind}`);
     }
-    if (ps.group && !['inline', 'keep', 'node'].includes(ps.group.kind)) {
-      if (ps.group.kind === 'custom') note(rule.name, `pratt-shape:group:custom:${ps.group.fn}`);
-      else note(rule.name, `pratt-shape:group:${ps.group.kind}`);
+    if (ps.group && !['inline', 'keep', 'node', 'custom'].includes(ps.group.kind)) {
+      note(rule.name, `pratt-shape:group:${ps.group.kind}`);
     }
     // Complex groups: allow if we render via RD steps (all brackets ok in SH3-1 for keep/inline/node)
     for (const tok of rule.nudToks) {
@@ -4073,13 +4173,31 @@ ${emitRustShapeTypes(ir, shapeIR)}
 
 // Generic C makes every hook statically dispatched and monomorphized. No trait object,
 // callback table, or per-node allocation is introduced by the customs boundary.
+#[derive(Debug, Clone, Default)]
+pub struct AstFoldCounts { pub starts: usize, pub appends: usize }
+
+/// Owned snapshot for a custom finish — no &mut borrow of the parser.
+pub struct AstCustomCtx<'a> {
+    pub name: &'a str,
+    pub rule: &'a str,
+    pub src: &'a str,
+    pub kids: Vec<AstValue>,
+    pub alt_path: Vec<usize>,
+    pub off: usize,
+    pub end: usize,
+    pub left: Option<AstValue>,
+    pub op_text: Option<&'a str>,
+    /// Present only when the parent custom declares folds (start/append counters per tag).
+    pub state: Option<Vec<(String, AstFoldCounts)>>,
+}
+
 pub trait ShapeCustoms {
     #[inline(always)] fn leaf_number(&self, text: &str) -> f64 { text.parse::<f64>().expect("shape number") }
     #[inline(always)] fn leaf_ident(&self, text: &str) -> String { text.to_owned() }
     #[inline(always)] fn leaf_boolean(&self, text: &str) -> bool { text == "true" }
     #[inline(always)] fn bind_op(&self, text: &str) -> String { text.to_owned() }
-    fn ast_custom(&self, name: &str, kids: Vec<AstValue>, alt_path: &[usize], off: usize, end: usize, left: Option<AstValue>, op_text: Option<&str>) -> AstValue {
-        let _ = (kids, alt_path, off, end, left, op_text);
+    fn ast_custom(&self, name: &str, ctx: AstCustomCtx<'_>) -> AstValue {
+        let _ = ctx;
         panic!("shape rust: custom {} not provided — SH3-4", name)
     }
 }
@@ -4175,6 +4293,59 @@ impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
         else if values.len() == 1 { values.into_iter().next() }
         else { Some(AstValue::Array(values)) }
     }
+    /// Fold child partial markers per parent folds (recursive into list slots). Equals TS _shapeFoldKids.
+    fn shape_fold_kids(kids: Vec<AstValue>, folds: &[(&str, &str)]) -> (Vec<AstValue>, Option<Vec<(String, AstFoldCounts)>>) {
+        if folds.is_empty() { return (kids, None); }
+        let mut state: Vec<(String, AstFoldCounts)> = folds.iter().map(|(tag, _)| ((*tag).to_owned(), AstFoldCounts::default())).collect();
+        let out = Self::shape_fold_list(kids, folds, &mut state);
+        (out, Some(state))
+    }
+    fn shape_fold_list(list: Vec<AstValue>, folds: &[(&str, &str)], state: &mut Vec<(String, AstFoldCounts)>) -> Vec<AstValue> {
+        let into_of = |tag: &str| -> Option<&str> {
+            folds.iter().find(|(t, _)| *t == tag).map(|(_, into)| *into)
+        };
+        let bump = |state: &mut Vec<(String, AstFoldCounts)>, tag: &str, start: bool| {
+            if let Some((_, c)) = state.iter_mut().find(|(t, _)| t == tag) {
+                if start { c.starts += 1; } else { c.appends += 1; }
+            }
+        };
+        let mut out: Vec<AstValue> = Vec::new();
+        for k in list {
+            match k {
+                AstValue::Partial { tag, mode, value } => {
+                    if let Some(into) = into_of(tag.as_str()) {
+                        if mode == "start" {
+                            bump(state, tag.as_str(), true);
+                            out.push(*value);
+                        } else if mode == "append" {
+                            match out.last_mut() {
+                                Some(AstValue::Object { fields, .. }) => {
+                                    if let Some((_, slot)) = fields.iter_mut().find(|(key, _)| key == into) {
+                                        if let AstValue::Array(arr) = slot {
+                                            arr.push(*value);
+                                        } else {
+                                            *slot = AstValue::Array(vec![*value]);
+                                        }
+                                    } else {
+                                        fields.push((into.to_owned(), AstValue::Array(vec![*value])));
+                                    }
+                                    bump(state, tag.as_str(), false);
+                                }
+                                _ => panic!("shape: partial append has no preceding start for {}", tag),
+                            }
+                        } else {
+                            out.push(AstValue::Partial { tag, mode, value });
+                        }
+                    } else {
+                        out.push(AstValue::Partial { tag, mode, value });
+                    }
+                }
+                AstValue::Array(xs) => out.push(AstValue::Array(Self::shape_fold_list(xs, folds, state))),
+                other => out.push(other),
+            }
+        }
+        out
+    }
     fn shape_head_text(v: Option<&AstValue>) -> String {
         match v {
             None | Some(AstValue::Null) => String::new(),
@@ -4182,6 +4353,7 @@ impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
             Some(AstValue::Number(n)) => n.to_string(),
             Some(AstValue::Bool(b)) => b.to_string(),
             Some(AstValue::Array(xs)) => Self::shape_head_text(xs.first()),
+            Some(AstValue::Partial { value, .. }) => Self::shape_head_text(Some(value)),
             Some(AstValue::Object { typ: _, fields }) => {
                 if let Some((_, ht)) = fields.iter().find(|(k, _)| k == "headText") {
                     if let AstValue::String(s) = ht { if !s.is_empty() { return s.clone(); } }
