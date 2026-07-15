@@ -32,6 +32,8 @@ export type LeafValueShape = {
 };
 export type CustomShape = { kind: 'custom'; fn: string; reason: string };
 export type KeepShape = { kind: 'keep' };
+/** Delegate Pratt atom NUD to an RD rule (e.g. Atom choice → Number|Identifier nodes). */
+export type RuleRefShape = { kind: 'rule'; name: string };
 
 export type ChoiceArm = {
   name: string;
@@ -42,7 +44,7 @@ export type ChoiceShape = { kind: 'choice'; arms: ChoiceArm[] };
 
 export type PrattShape = {
   kind: 'pratt';
-  atom?: LeafValueShape | KeepShape | DropShape | CustomShape;
+  atom?: LeafValueShape | KeepShape | DropShape | CustomShape | RuleRefShape;
   group?: InlineShape | NodeShape | CustomShape;
   nudSeq?: RuleShapeAtom;
   nudCapped?: RuleShapeAtom;

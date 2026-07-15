@@ -126,12 +126,8 @@ export const toyShape: ShapeSpec = {
     },
     Expr: {
       kind: 'pratt',
-      // keep yields bare leafScalars; toy golden needs Number|Identifier products.
-      atom: {
-        kind: 'custom',
-        fn: 'atom',
-        reason: 'Pratt atom products are Number|Identifier nodes; keep+leafValue only yields scalars',
-      },
+      // Delegate to Atom choice so Number|Identifier nodes need no runtime custom.
+      atom: { kind: 'rule', name: 'Atom' },
       group: { kind: 'inline' },
       prefix: {
         kind: 'node',
@@ -159,18 +155,42 @@ export const toyShape: ShapeSpec = {
         ],
       },
     },
+    // Three node arms (FIRST-overlap + true backtrack). Multi-alt single custom arm
+    // remains proven via shape-parity's taggedCustomShape emit (altPath witness).
     Tagged: {
       kind: 'choice',
       arms: [
         {
-          name: 'Tagged',
-          altIndices: [0, 1, 2],
+          name: 'ColonTag',
+          altIndices: [0],
           shape: {
-            kind: 'custom',
-            fn: 'Tagged',
-            reason:
-              'Three alts share FIRST "tag" and yield ColonTag|EqualsTag|BareTag; ' +
-              'one arm must try alts sequentially and hand altPath to custom',
+            kind: 'node',
+            type: 'ColonTag',
+            fields: [
+              { name: 'name', bind: { at: 0 }, typeHint: 'string' },
+              { name: 'value', bind: { at: 1 }, typeHint: 'ExprShape' },
+            ],
+          },
+        },
+        {
+          name: 'EqualsTag',
+          altIndices: [1],
+          shape: {
+            kind: 'node',
+            type: 'EqualsTag',
+            fields: [
+              { name: 'name', bind: { at: 0 }, typeHint: 'string' },
+              { name: 'value', bind: { at: 1 }, typeHint: 'ExprShape' },
+            ],
+          },
+        },
+        {
+          name: 'BareTag',
+          altIndices: [2],
+          shape: {
+            kind: 'node',
+            type: 'BareTag',
+            fields: [{ name: 'name', bind: { at: 0 }, typeHint: 'string' }],
           },
         },
       ],
@@ -230,7 +250,7 @@ export type ToyAstCustoms = Record<string, (ctx: ToyAstCustomCtx) => unknown>;
 const I = (name: string) => ({ type: 'Identifier', name });
 const N = (value: number) => ({ type: 'Number', value });
 
-/** Default customs so golden rows work without per-call overrides. */
+/** Optional customs for override/witness tests (default toy shape needs none). */
 export const toyCustoms: ToyAstCustoms = {
   atom: (ctx) => {
     const t = ctx.kids[0];
@@ -244,6 +264,30 @@ export const toyCustoms: ToyAstCustoms = {
     const forms = ['ColonTag', 'EqualsTag', 'BareTag'] as const;
     const type = forms[ctx.altPath[0]!]!;
     return value === undefined ? { type, name } : { type, name, value };
+  },
+};
+
+/** Multi-alt single custom arm — used by shape-parity altPath witness emit. */
+export const toyTaggedCustomShape: ShapeSpec = {
+  ...toyShape,
+  rules: {
+    ...toyShape.rules,
+    Tagged: {
+      kind: 'choice',
+      arms: [
+        {
+          name: 'Tagged',
+          altIndices: [0, 1, 2],
+          shape: {
+            kind: 'custom',
+            fn: 'Tagged',
+            reason:
+              'Three alts share FIRST "tag" and yield ColonTag|EqualsTag|BareTag; ' +
+              'one arm must try alts sequentially and hand altPath to custom',
+          },
+        },
+      ],
+    },
   },
 };
 
@@ -282,7 +326,7 @@ export const toyGolden: { src: string; expect: unknown; customs?: ToyAstCustoms 
   },
 ];
 
-/** Seeded corpus builder identical to proto2-harness (seed 0x5a2_2026 → 520). */
+/** Seeded corpus: SH2-0 base + SH2-0b multi-stmt / nested-group / adv-112 (seed → 800). */
 export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string }[] {
   function rng32(s: number) {
     return () => {
@@ -305,11 +349,24 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
     if (r < .56) return `${expr(depth + 1)}(${expr(depth + 1)},${rng() < .25 ? '' : expr(depth + 1)})`;
     return `${expr(depth + 1)}${pick(['+', '-', '*', '/'])}${expr(depth + 1)}`;
   }
+  /** Nested grouping for choice-arm Expr tails. */
+  function groupedExpr(depth = 1): string {
+    let e = atom();
+    for (let i = 0; i < depth; i++) e = `(${e})`;
+    return e;
+  }
   function validItem(): string {
     const r = rng();
     if (r < .18) return `bang ${rng() < .5 ? '!' : '!!'}${atom()}`;
     if (r < .40) {
-      const tail = pick([`:${expr()}`, `=${expr()}`, '']);
+      const nest = 1 + Math.floor(rng() * 4);
+      const tail = pick([
+        `:${expr()}`,
+        `=${expr()}`,
+        `:${groupedExpr(nest)}`,
+        `=${groupedExpr(nest)}`,
+        '',
+      ]);
       return `tag ${pick(ids)}${tail}`;
     }
     if (r < .56) return `guard ${pick(ids)}${rng() < .5 ? `:${pick(ids)}` : ''}`;
@@ -319,6 +376,11 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
       return `args(${values}${n && rng() < .25 ? ',' : ''})`;
     }
     return expr();
+  }
+  /** Always 2–5 statements (SH2-0b multi-stmt coverage). */
+  function multiProgram(): string {
+    const n = 2 + Math.floor(rng() * 4);
+    return Array.from({ length: n }, () => validItem() + ';').join(rng() < .3 ? '\n' : ' ');
   }
   function validProgram(): string {
     const n = Math.floor(rng() * 5);
@@ -331,14 +393,34 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
       'tag x', 'bang !!x', 'unknown unknown;', 'guard ;', 'args(1 2);',
     ]);
   }
+  // Planner adversarial 112 cases (depth groups + fragment cross-product).
+  const advCases: string[] = [];
+  for (let d = 1; d <= 40; d += 3) {
+    advCases.push('tag x' + '='.repeat(1) + '('.repeat(d) + '1' + ')'.repeat(d) + ';');
+  }
+  const frag = [
+    'tag x:1;', 'tag y=2;', 'tag z;', 'bang!x;', 'bang x;', 'f(1,2,)( );', 'a:(-b);',
+    'tag x:1', 'tag x=;', 'tag :1;', 'bang !;', 'f(,);', 'f(1,,2);', 'tag x:1;tag y=2;tag z;',
+  ];
+  for (const a of frag) for (const b of frag.slice(0, 7)) advCases.push(a + b);
+
   const anchors = [
     '', 'bang !x;', 'bang !!x;', 'bang !!!x;', 'tag x:1;', 'tag x=1;', 'tag x;',
     'tag x:;', 'tag x=;', 'guard bad;', 'guard good;', 'guard good:a;',
     'args();', 'args(1,);', 'args(1,2);', 'f();', 'f(1,);', 'f(1)(2);',
     '1+2*3;', '-x(1);', 'tag t:f(1,2); bang !!7;',
+    // SH2-0b: choice-arm nested groups + multi-stmt
+    'tag x=(1);', 'tag x=((1));', 'tag y=(((2)));', 'tag z:(3);', 'tag z:((a));',
+    'tag x:1;tag y=2;', 'bang!x;tag z;', 'tag x=(1);tag y=2;tag z;',
+    'tag a=(1);tag b=((2));tag c:(((3)));bang!x;guard ok;',
   ].map((src) => ({ src, source: 'boundary' }));
-  const corpus = [...anchors];
-  while (corpus.length < 360) corpus.push({ src: validProgram(), source: 'random-valid' });
-  while (corpus.length < 520) corpus.push({ src: invalidProgram(), source: 'random-invalid' });
+
+  const corpus = [
+    ...anchors,
+    ...advCases.map((src) => ({ src, source: 'adv-112' as const })),
+  ];
+  while (corpus.length < 560) corpus.push({ src: multiProgram(), source: 'multi-stmt' });
+  while (corpus.length < 680) corpus.push({ src: validProgram(), source: 'random-valid' });
+  while (corpus.length < 800) corpus.push({ src: invalidProgram(), source: 'random-invalid' });
   return corpus;
 }

@@ -2494,8 +2494,12 @@ function emitShapeTypeDecls(ir: ParserIR, shapeIR: ShapeIR): string {
       if (r.name === ir.entry) lines.push(`export type AstRoot = ${name};`);
     } else if (r.shape.kind === 'pratt') {
       const members: string[] = [];
-      const add = (s: RuleShape | undefined) => {
+      const add = (s: RuleShape | { kind: 'rule'; name: string } | undefined) => {
         if (!s) return;
+        if (s.kind === 'rule') {
+          members.push(`${s.name}Shape`);
+          return;
+        }
         if (s.kind === 'node') members.push(s.type);
         else if (s.kind === 'leafValue') {
           const ts = s.fn === 'number' ? 'number' : s.fn === 'bigint' ? 'bigint' : s.fn === 'boolean' ? 'boolean' : 'string';
@@ -3044,7 +3048,12 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   // ── atom ──────────────────────────────────────────────────────────────────
   ctx.pratt.atom++;
   let atomCode = '';
-  if (ps.atom?.kind === 'custom') {
+  if (ps.atom?.kind === 'rule') {
+    // Delegate to an RD rule that covers the same atom tokens (no runtime custom).
+    atomCode = `  if (${r.name}_ATOM.has(t.kid)) {
+    return parseAst${ps.atom.name}() as ${retType};
+  }`;
+  } else if (ps.atom?.kind === 'custom') {
     atomCode = `  if (${r.name}_ATOM.has(t.kid)) {
     const save = pos; const spOff = t.off; pos++;
     const _lv = t.kid === ${kidOf(ids, 'Number')} ? _shapeLeafNumber(t)
@@ -3077,7 +3086,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         const close = b.steps[b.steps.length - 1]?.t === 'lit' ? lidOf(ids, (b.steps[b.steps.length - 1] as { value: string }).value) : 0;
         groupCode = `  if (t.lid === ${open}) {
     const save = pos;
-    if (!_shapeDropLit(${open})) return null;
+    if (!_shapeDropLit(${open})) { pos = save; return null; }
     const inner = parseAst${r.name}();
     if (inner === null || !_shapeDropLit(${close})) { pos = save; return null; }
     return inner;

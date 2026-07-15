@@ -1,4 +1,4 @@
-// Gate: SH2-0 shape CST↔parseAst parity — calc+toy corpus ≥800, toy golden 10/10,
+// Gate: SH2-0b shape CST↔parseAst parity — calc+toy corpus ≥1200, toy golden 10/10,
 // coverage table, typescript+SH0 fail-fast (no home-path permanent dependency).
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -9,7 +9,7 @@ import { calcShape } from '../src/shape-calc.ts';
 import type { ShapeSpec } from '../src/shape-schema.ts';
 import calcGrammar from './fixtures/calc.ts';
 import toyGrammar, {
-  toyShape, toyCustoms, toyGolden, buildToyCorpus, type ToyAstCustoms,
+  toyShape, toyCustoms, toyTaggedCustomShape, toyGolden, buildToyCorpus, type ToyAstCustoms,
 } from './fixtures/shape-toy.ts';
 import typescriptGrammar from '../typescript.ts';
 
@@ -83,11 +83,15 @@ function buildCalcCorpus(): { src: string; source: string }[] {
     'let x = 1;', '1 + 2;', '1 + 2 * 3;', '-a;', '(1);',
     'let a = 1; let b = 2; a + b;', '1 - 2 - 3;', '-(a * b);',
     'foo; bar; baz;', '2 / 3;', '--x;',
+    // SH2-0b: choice-arm group + multi-stmt (star Stmt)
+    'let x = (1+2);', 'let y = ((3));', 'let a = (1); let b = (2+3); a + b;',
+    'let x = 1; let y = 2; let z = 3; x + y + z;',
+    '(1+2); (3);', 'let x = (1+2); 3 + 4;',
     'let ;', '1+', '(1', 'let x =', ';;;', 'x = 1;',
   ].map((src) => ({ src, source: 'boundary' }));
   const out = [...anchors];
-  while (out.length < 220) out.push({ src: prog(), source: 'random-valid' });
-  while (out.length < 320) {
+  while (out.length < 320) out.push({ src: prog(), source: 'random-valid' });
+  while (out.length < 450) {
     out.push({
       src: pick(['let ;', '1+', '(1', 'let x =', 'x = 1;', '* 2;', 'let let = 1;']),
       source: 'random-invalid',
@@ -188,7 +192,7 @@ async function main(): Promise<void> {
 
   let goldenOk = 0;
   for (const g of toyGolden) {
-    const got = toyMod.parseAst(g.src, { customs: toyCustoms });
+    const got = toyMod.parseAst(g.src);
     if (deepEq(got, g.expect)) goldenOk++;
     else {
       console.error(`  golden fail ${JSON.stringify(g.src)}`);
@@ -196,8 +200,10 @@ async function main(): Promise<void> {
       console.error(`    want ${JSON.stringify(g.expect)}`);
     }
   }
+  // Multi-alt custom arm + altPath witness (separate emit; default toy is node arms).
+  const taggedCustomMod = await emitLoad('toy-tagged-custom', toyGrammar, toyTaggedCustomShape);
   let customSeen: unknown = null;
-  const customGot = toyMod.parseAst('tag ctx=9;', {
+  const customGot = taggedCustomMod.parseAst('tag ctx=9;', {
     customs: {
       ...toyCustoms,
       Tagged: (ctx) => {
@@ -224,10 +230,10 @@ async function main(): Promise<void> {
   check(goldenOk === 10, `toy golden ${goldenOk}/10`);
 
   const toyCorpus = buildToyCorpus(0x5a2_2026);
-  check(toyCorpus.length === 520, `toy corpus exact 520 (got ${toyCorpus.length})`);
+  check(toyCorpus.length === 800, `toy corpus exact 800 (got ${toyCorpus.length})`);
   const calcCorpus = buildCalcCorpus();
   const totalN = toyCorpus.length + calcCorpus.length;
-  check(totalN >= 800, `corpus total ≥800 (got ${totalN})`);
+  check(totalN >= 1200, `corpus total ≥1200 (got ${totalN})`);
 
   function parity(
     label: string,
@@ -259,7 +265,7 @@ async function main(): Promise<void> {
     return { diverge, cstAcc, astAcc };
   }
 
-  const toyP = parity('toy', toyMod, toyCorpus, toyCustoms);
+  const toyP = parity('toy', toyMod, toyCorpus);
   const calcP = parity('calc', calcMod, calcCorpus);
 
   const calcSpot = stripSpans(calcMod.parseAst('let x = 1; 2 + 3;'));
@@ -272,6 +278,20 @@ async function main(): Promise<void> {
       ],
     }),
     'calc spot golden',
+  );
+  const calcGroup = stripSpans(calcMod.parseAst('let x = (1+2); let y = ((3));'));
+  check(
+    deepEq(calcGroup, {
+      type: 'Program',
+      body: [
+        {
+          type: 'LetStatement', id: 'x',
+          init: { type: 'BinaryExpression', left: 1, operator: '+', right: 2 },
+        },
+        { type: 'LetStatement', id: 'y', init: 3 },
+      ],
+    }),
+    'calc group-in-let + multi-stmt',
   );
 
   let tsErr = '';
