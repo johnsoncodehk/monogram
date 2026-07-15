@@ -1006,6 +1006,18 @@ async function main(): Promise<void> {
 
   }
 
+  // ── SH3-1b: suppress is LED-only; prec-binary survives exclude('*', Expr) ─
+  const sh31bNoplus = [
+    'noplus 1 * 2;', 'noplus 1 * 2 * 3;', 'noplus (1*2);', 'noplus 1*2;',
+    'noplus 1/2;', 'noplus 1*2+3;', 'noplus (1*2)*3;', 'noplus 1*(2*3);',
+  ];
+  for (const src of sh31bNoplus) {
+    check(
+      accepts(toyMod, src, false) && accepts(toyMod, src, true),
+      `SH3-1b suppress/binary accept ${JSON.stringify(src)}`,
+    );
+  }
+
   // ── Guard + capped witnesses (toy) ────────────────────────────────────────
   check(
     accepts(toyMod, 'a::b;', false) && accepts(toyMod, 'a::b;', true),

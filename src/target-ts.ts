@@ -3429,12 +3429,13 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     }
   }
 
+  // Binary `$ op $` path must NOT consult `_suppressCur` — exclude/suppress only
+  // disables literal-headed LEDs (e.g. `[$, 'in', $]`), matching CST / interpreter.
   let binaryCode = '    break;';
   if (binarySlot) {
     if (binarySlot.kind === 'node') {
       const binaryNode = binarySlot as NodeShape;
-      binaryCode = `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
-    const info = ${r.name}_BIN[t.lid];
+      binaryCode = `    const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
     const opText = _src.slice(t.off, t.end);
@@ -3448,8 +3449,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     leftOff = spOff;
     leftEnd = end;`;
     } else if (binarySlot.kind === 'custom') {
-      binaryCode = `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
-    const info = ${r.name}_BIN[t.lid];
+      binaryCode = `    const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
     const opText = _src.slice(t.off, t.end);
@@ -3459,8 +3459,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     left = ${customFinish((binarySlot as CustomShape).fn, '[right]', 'ledSave', '[]', 'left', 'opText')} as ${retType};
     leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;`;
     } else {
-      binaryCode = `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
-    const info = ${r.name}_BIN[t.lid];
+      binaryCode = `    const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
     const opText = _src.slice(t.off, t.end);

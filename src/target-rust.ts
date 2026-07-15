@@ -3456,10 +3456,9 @@ function emitRustPrattMethod(
     const binaryArms = rule.binary.map((b) =>
       `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}),`,
     ).join('\n                ');
+    // Binary `$ op $` must NOT consult suppress_cur — exclude only disables
+    // literal-headed LEDs (≡ CST / interpreter / TS shape).
     binaryBody = `{
-            if let Some(t) = self.toks.get(self.pos) {
-                if self.suppress_cur.contains(&t.lid) { break; }
-            }
             let (_lbp, _rbp) = match self.peek_lid() {
                 ${binaryArms}
                 _ => break,

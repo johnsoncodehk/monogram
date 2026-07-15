@@ -582,7 +582,16 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
     }
     if (r < .50) return `txn ${pick(ids)}${rng() < .6 ? `:${pick(ids)}` : ''}${pick(['!', '.', '?'])}`;
     if (r < .58) return `line ${pick(ids)} ${pick(ids)}`;
-    if (r < .66) return `noplus ${atom()}+${atom()}`;
+    // SH3-1b: suppress only disables literal LEDs — binary `*`/`/` must still parse
+    // under exclude('*', Expr). Mix ops + grouping so the arm is not `+`-only.
+    if (r < .66) {
+      const op = pick(['+', '-', '*', '/', '+', '*']);
+      const form = rng();
+      if (form < .35) return `noplus ${atom()}${op}${atom()}`;
+      if (form < .55) return `noplus ${atom()}${op}${atom()}${op}${atom()}`;
+      if (form < .75) return `noplus (${atom()}${op}${atom()})`;
+      return `noplus ${atom()}${op}(${atom()}${op}${atom()})`;
+    }
     if (r < .75) {
       const n = 2 + Math.floor(rng() * 5);
       return `repeat ${Array.from({ length: n }, atom).join(' ')}`;
@@ -591,9 +600,16 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
       const n = Math.floor(rng() * 5);
       return `maybe${n ? ' ' + Array.from({ length: n }, atom).join(' ') : ''}`;
     }
+    // SH3-1b: sep(alt([Ident,':',Number], Number)) — include multi-pair + trailing
+    // delim; incomplete `id:` forms are CST-over-accept (see SH3-1b reply), not emitted.
     if (r < .90) {
       const n = Math.floor(rng() * 4);
-      const pairs = Array.from({ length: n }, () => rng() < .55 ? `${pick(ids)}:${pick(nums)}` : pick(nums));
+      const pairs = Array.from({ length: n }, () => {
+        const k = rng();
+        if (k < .45) return `${pick(ids)}:${pick(nums)}`;
+        if (k < .75) return pick(nums);
+        return `${pick(ids)} : ${pick(nums)}`;
+      });
       return `pairs(${pairs.join(',')}${n && rng() < .3 ? ',' : ''})`;
     }
     if (r < .95) return `notany ${pick(ids.filter((x) => x !== 'bad' && x !== 'worse'))}`;
@@ -637,6 +653,11 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
     'txn a:b?;', 'txn a:b!;', 'txn a.;', 'line a b;', 'line a\nb;',
     'noplus 1+2;', 'repeat a 1 b 2;', 'maybe;', 'maybe a 1;',
     'pairs();', 'pairs(a:1,2,b:3,);', 'notany good;', 'notany bad;',
+    // SH3-1b: suppress must not block prec-binary `*` (LED-only exclude)
+    'noplus 1 * 2;', 'noplus 1 * 2 * 3;', 'noplus (1*2);', 'noplus 1*2;',
+    'noplus 1/2;', 'noplus 1*2+3;', 'noplus (1*2)*3;', 'noplus 1*(2*3);',
+    // SH3-1b: well-formed sep+alt (incomplete `pairs(a:)` is CST-over-accept — not here)
+    'pairs(a:1);', 'pairs(1, a:2);', 'pairs(a:1, 2, b:3);', 'pairs( a : 1 , );',
     // SH2-0b: choice-arm nested groups + multi-stmt
     'tag x=(1);', 'tag x=((1));', 'tag y=(((2)));', 'tag z:(3);', 'tag z:((a));',
     'tag x:1;tag y=2;', 'bang!x;tag z;', 'tag x=(1);tag y=2;tag z;',

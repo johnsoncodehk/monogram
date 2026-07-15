@@ -286,6 +286,24 @@ async function main(): Promise<void> {
   check('toy CST≡AST accept equivalence', toyAcceptDiv === 0, `${toyCorpus.length} cases, ${toyAcceptDiv} divergences`);
   check('toy TS↔Rust AST isomorphism', toyIsoBad === 0, `${toyIsoN} compared, ${toyIsoBad} divergences`);
 
+  // SH3-1b: suppress is LED-only — prec-binary under exclude('*') must accept + iso
+  const sh31bNoplus = [
+    'noplus 1 * 2;', 'noplus 1 * 2 * 3;', 'noplus (1*2);', 'noplus 1*2;',
+    'noplus 1/2;', 'noplus 1*2+3;', 'noplus (1*2)*3;', 'noplus 1*(2*3);',
+  ];
+  const sh31bLines = runBatch(toyBin, sh31bNoplus);
+  let sh31bBad = 0;
+  for (let i = 0; i < sh31bNoplus.length; i++) {
+    const src = sh31bNoplus[i]!;
+    const tsCst = toyTs.parse(toyTs.tokenize(src)) !== null;
+    const tsAst = toyTs.parseAst(src);
+    const rustOk = sh31bLines[i]!.startsWith('A\t');
+    if (!tsCst || tsAst === null || !rustOk) { sh31bBad++; continue; }
+    const rust = stripSpans(JSON.parse(sh31bLines[i]!.slice(2)));
+    if (JSON.stringify(rust) !== JSON.stringify(stripSpans(tsAst))) sh31bBad++;
+  }
+  check('SH3-1b noplus suppress/binary TS↔Rust', sh31bBad === 0, `${sh31bNoplus.length - sh31bBad}/${sh31bNoplus.length}`);
+
   let failFast = '';
   try {
     emitRust(typescriptGrammar, { shape: typescriptShape });
