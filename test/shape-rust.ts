@@ -7,6 +7,11 @@ import { pathToFileURL } from 'node:url';
 import { emitParser, rustTarget } from '../src/emit.ts';
 import { emitRust } from '../src/target-rust.ts';
 import { emitTs } from '../src/target-ts.ts';
+import {
+  token, rule, defineGrammar, left, op, seq, oneOf, range, star,
+  altPattern, noneOf, notFollowedBy,
+} from '../src/api.ts';
+import type { ShapeSpec } from '../src/shape-schema.ts';
 import { calcShape } from '../src/shape-calc.ts';
 import calcGrammar from './fixtures/calc.ts';
 import toyGrammar, { toyShape, toyGolden, buildToyCorpus, toyPrattWitnesses } from './fixtures/shape-toy.ts';
@@ -16,6 +21,72 @@ import { typescriptShape } from './fixtures/shape-typescript.ts';
 type Ast = Record<string, unknown>;
 const TMP = '/tmp/shape-rust-gate';
 mkdirSync(TMP, { recursive: true });
+
+// SH3-3 mini grammar: Type deliberately precedes Expr, so portable interpRule=Type.
+// Explicit Expr.template must therefore dual-parse each hole to obtain Expr products.
+const tplDigit = range('0', '9');
+const tplIdentStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');
+const tplIdentPart = oneOf(tplIdentStart, tplDigit);
+const TplIdent = token(seq(tplIdentStart, star(tplIdentPart)), { identifier: true });
+const TplNumber = token(seq(tplDigit, star(tplDigit)));
+const TplTemplate = token(
+  seq('`', star(altPattern(noneOf('`', '\\', '$'), seq('\\', noneOf('\n')), seq('$', notFollowedBy('{')))), '`'),
+  { template: { open: '`', interpOpen: '${', interpClose: '}' } },
+);
+const TplType = rule(($) => [
+  TplNumber, TplIdent, TplTemplate, ['(', $, ')'], [$, op, $], [$, TplTemplate],
+]);
+const TplExpr = rule(($) => [
+  TplNumber, TplIdent, TplTemplate, ['(', $, ')'], [$, op, $], [$, TplTemplate],
+]);
+const templateMiniGrammar = defineGrammar({
+  name: 'shape-template-mini',
+  tokens: { Ident: TplIdent, Number: TplNumber, Template: TplTemplate },
+  prec: [left('+', '-'), left('*', '/')],
+  rules: { Type: TplType, Expr: TplExpr },
+  entry: TplExpr,
+});
+const binaryNode = {
+  kind: 'node' as const,
+  type: 'BinaryExpression',
+  fields: [
+    { name: 'left', bind: { at: 0 } as const },
+    { name: 'operator', bind: 'opText' as const, typeHint: 'string' },
+    { name: 'right', bind: { at: 1 } as const },
+  ],
+};
+const taggedNode = {
+  kind: 'node' as const,
+  type: 'TaggedTemplate',
+  fields: [
+    { name: 'tag', bind: { at: 0 } as const },
+    { name: 'quasi', bind: { at: 1 } as const },
+  ],
+};
+const templateMiniShape: ShapeSpec = {
+  grammar: 'shape-template-mini',
+  spans: 'none',
+  unmapped: 'error',
+  leaves: {
+    $punct: { action: 'drop' },
+    $operator: { action: 'drop' },
+    Ident: { action: 'leafValue', fn: 'ident' },
+    Number: { action: 'leafValue', fn: 'number' },
+    Template: { action: 'leafValue', fn: 'string' },
+  },
+  rules: {
+    // Omitted template exercises legacy `$template` behavior on the accept parser.
+    Type: { kind: 'pratt', atom: { kind: 'keep' }, group: { kind: 'inline' }, binary: { kind: 'keep' }, postfixTok: { kind: 'keep' } },
+    Expr: {
+      kind: 'pratt',
+      atom: { kind: 'keep' },
+      group: { kind: 'inline' },
+      binary: binaryNode,
+      postfixTok: taggedNode,
+      template: { kind: 'keep' },
+    },
+  },
+};
 
 let pass = 0;
 let fail = 0;
@@ -376,6 +447,109 @@ async function main(): Promise<void> {
     `${toyPrattWitnesses.length - prattWitBad}/${toyPrattWitnesses.length}`,
   );
 
+  // SH3-3: template slot + dual-parse + tagged postfixTok.
+  const templateSrc = emitRust(templateMiniGrammar, { shape: templateMiniShape });
+  check(
+    'SH3-3 template mechanisms emit',
+    templateSrc.includes('match_template_ast_Expr') &&
+      templateSrc.includes('parse_ast_Type()') &&
+      templateSrc.includes('shape_tpl_restore') &&
+      templateSrc.includes('typ: "$template".to_owned()') &&
+      templateSrc.includes('typ: "TaggedTemplate".to_owned()'),
+  );
+  const customTemplateShape: ShapeSpec = {
+    ...templateMiniShape,
+    rules: {
+      ...templateMiniShape.rules,
+      Expr: {
+        kind: 'pratt',
+        atom: { kind: 'keep' },
+        group: { kind: 'inline' },
+        binary: binaryNode,
+        postfixTok: { kind: 'custom', fn: 'taggedCustom', reason: 'SH3-3 custom postfixTok emission witness.' },
+        template: { kind: 'custom', fn: 'templateCustom', reason: 'SH3-3 custom template-slot emission witness.' },
+      },
+    },
+  };
+  const customTemplateSrc = emitRust(templateMiniGrammar, { shape: customTemplateShape });
+  check(
+    'SH3-3 template custom/postfixTok custom emit',
+    customTemplateSrc.includes('ast_custom("templateCustom"') &&
+      customTemplateSrc.includes('ast_custom("taggedCustom"'),
+  );
+  const templateBin = compileShape('template-mini-shape', templateSrc);
+  const templateTsFile = `${TMP}/template-mini-shape.ts`;
+  writeFileSync(templateTsFile, emitTs(templateMiniGrammar, { shape: templateMiniShape }));
+  const templateTs = await import(pathToFileURL(templateTsFile).href + `?t=${Date.now()}`) as {
+    parseAst: (src: string) => unknown;
+    parse: (tokens: unknown[]) => unknown;
+    tokenize: (src: string) => unknown[];
+  };
+  const templateWitnesses: { kind: string; src: string; want: 'accept' | 'reject' }[] = [
+    { kind: 'plain', src: '`hello ${name}`', want: 'accept' },
+    { kind: 'nested', src: '`outer ${`inner ${x}`}`', want: 'accept' },
+    { kind: 'tagged', src: 'tag`hello ${name}`', want: 'accept' },
+    { kind: 'no-substitution', src: '`plain`', want: 'accept' },
+    { kind: 'multi-hole', src: '`a ${x} b ${y} c`', want: 'accept' },
+    { kind: 'complex-hole', src: '`sum ${1+2*3}`', want: 'accept' },
+    // Empty hole lexes but CST/AST reject (batch-safe). Unterminated EOF panics/throws — checked below.
+    { kind: 'empty-hole-reject', src: '`a${}`', want: 'reject' },
+    { kind: 'multiline', src: '`line1\n${x+1}\nline3`', want: 'accept' },
+    { kind: 'tagged-nested', src: 'tag`outer ${inner`x ${y}`}`', want: 'accept' },
+    { kind: 'grouped-hole', src: '`group ${((x+1))}`', want: 'accept' },
+  ];
+  const templateLines = runBatch(templateBin, templateWitnesses.map((w) => w.src));
+  let templateAcceptBad = 0;
+  let templateIsoBad = 0;
+  let templateCompared = 0;
+  let dualProductOk = false;
+  for (let i = 0; i < templateWitnesses.length; i++) {
+    const witness = templateWitnesses[i]!;
+    const tsCst = templateTs.parse(templateTs.tokenize(witness.src)) !== null;
+    const tsAst = templateTs.parseAst(witness.src);
+    const rustOk = templateLines[i]!.startsWith('A\t');
+    const wantOk = witness.want === 'accept';
+    if (tsCst !== wantOk || (tsAst !== null) !== wantOk || rustOk !== wantOk) {
+      templateAcceptBad++;
+      continue;
+    }
+    if (wantOk) {
+      templateCompared++;
+      const rust = stripSpans(JSON.parse(templateLines[i]!.slice(2)));
+      const tsNeutral = stripSpans(tsAst);
+      if (JSON.stringify(rust) !== JSON.stringify(tsNeutral)) templateIsoBad++;
+      if (witness.kind === 'complex-hole') {
+        dualProductOk = JSON.stringify(rust).includes('"BinaryExpression"');
+      }
+    }
+  }
+  // Unterminated templates fail in tokenize (TS throw ≡ Rust panic) before parse — separate probe.
+  const unterminated = '`oops ${name}';
+  let tsLexThrow = false;
+  try { templateTs.tokenize(unterminated); } catch { tsLexThrow = true; }
+  let rustLexPanic = false;
+  try {
+    execFileSync(templateBin, {
+      input: unterminated,
+      encoding: 'utf8',
+      timeout: 30_000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? String(error) : String(error);
+    rustLexPanic = /Unterminated template literal/.test(detail);
+  }
+  check(
+    'SH3-3 template witnesses TS↔Rust acceptance',
+    templateWitnesses.length >= 8 && templateAcceptBad === 0 && tsLexThrow && rustLexPanic,
+    `${templateWitnesses.length - templateAcceptBad}/${templateWitnesses.length} + unterminated throw/panic (${templateWitnesses.map((w) => w.kind).join(', ')}, unterminated)`,
+  );
+  check(
+    'SH3-3 template witnesses TS↔Rust AST isomorphism + dual product',
+    templateIsoBad === 0 && dualProductOk,
+    `${templateCompared - templateIsoBad}/${templateCompared}, Expr product=${dualProductOk}`,
+  );
+
   let failFast = '';
   try {
     emitRust(typescriptGrammar, { shape: typescriptShape });
@@ -401,7 +575,7 @@ async function main(): Promise<void> {
   }
   check(
     'TypeScript full shape fails fast at emit time',
-    unsupportedCount === 84 && rdStep === 0 && pratt === 0 && custom === 60 && template === 24 && other === 0 &&
+    unsupportedCount === 60 && rdStep === 0 && pratt === 0 && custom === 60 && template === 0 && other === 0 &&
       (pratt + custom + template) === unsupportedCount &&
       !failFast.toLowerCase().includes('panic'),
     `${unsupportedCount} unsupported (RD-step=${rdStep} Pratt=${pratt} custom=${custom} template=${template} other=${other})`,

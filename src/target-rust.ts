@@ -3363,6 +3363,70 @@ function emitRustPrattMethod(
       leftExpr ? `Some(${leftExpr})` : 'None'
     }, ${opExpr ? `Some(${opExpr}.as_str())` : 'None'})`;
 
+  /** Explicit pratt.template only — omitted keeps legacy `$template` + interpRule holes. */
+  const templateSlot = ps.template as CustomShape | { kind: 'keep' } | undefined;
+  const hasTplNud = !!(tpl && rule.nudToks.includes(tpl.token));
+  const hasTplPostfix = !!(tpl && rule.postfixToks.includes(tpl.token));
+  const templateFinish = (kidsExpr: string, offExpr: string, endExpr: string): string => {
+    if (!templateSlot || templateSlot.kind === 'keep') return keepFinish(kidsExpr, '$template');
+    return customCall(templateSlot.fn, kidsExpr, '[]', offExpr, endExpr);
+  };
+  const templateDual = !!(templateSlot && tpl && rule.name !== tpl.interpRule);
+  const tplHelperCode = tpl && (hasTplNud || hasTplPostfix)
+    ? `    fn match_template_ast_${rule.name}(&mut self) -> Option<(Vec<AstValue>, usize)> {
+        let t = self.toks.get(self.pos).copied()?;
+        if t.kid != ${kidOf(ids, '$templateHead')} { return None; }
+        let save = self.pos;
+        let save_snap = self.shape_tpl_snap();
+        let mut kids: Vec<AstValue> = vec![AstValue::String(tok_text(self.src, &t).to_owned())];
+        self.pos += 1;
+        loop {
+            let before = self.shape_tpl_snap();
+            let accept_hole = match self.parse_ast_${tpl.interpRule}() {
+                Some(v) => v,
+                None => { self.shape_tpl_restore(&save_snap); return None; }
+            };
+            let end_pos = self.pos;
+            let hole_ast = ${templateDual
+      ? `{
+                self.shape_tpl_restore(&before);
+                match self.parse_ast_${rule.name}() {
+                    Some(v) if self.pos == end_pos => v,
+                    _ => {
+                        self.shape_tpl_restore(&before);
+                        let again = match self.parse_ast_${tpl.interpRule}() {
+                            Some(v) => v,
+                            None => { self.shape_tpl_restore(&save_snap); return None; }
+                        };
+                        if self.pos != end_pos { self.shape_tpl_restore(&save_snap); return None; }
+                        again
+                    }
+                }
+            }`
+      : 'accept_hole'};
+            kids.push(hole_ast);
+            let next = match self.toks.get(self.pos).copied() {
+                Some(v) => v,
+                None => { self.shape_tpl_restore(&save_snap); return None; }
+            };
+            if next.kid == ${kidOf(ids, '$templateMiddle')} {
+                kids.push(AstValue::String(tok_text(self.src, &next).to_owned()));
+                self.pos += 1;
+                continue;
+            }
+            if next.kid == ${kidOf(ids, '$templateTail')} {
+                kids.push(AstValue::String(tok_text(self.src, &next).to_owned()));
+                self.pos += 1;
+                break;
+            }
+            self.shape_tpl_restore(&save_snap);
+            return None;
+        }
+        Some((kids, save))
+    }
+`
+    : '';
+
   // ── atom ──
   let atomCode = '';
   const atomKids = rule.nudToks.map((k) => kidOf(ids, k));
@@ -3389,12 +3453,33 @@ function emitRustPrattMethod(
   } else if (!ps.atom || ps.atom.kind === 'keep' || (ps.atom as { kind: string }).kind === 'leafValue' || ps.atom.kind === undefined) {
     for (const tok of rule.nudToks) {
       const policy = leaves[tok] ?? { action: 'keep' as const };
+      if (tpl && tok === tpl.token && templateSlot) {
+        atomCode += `if self.peek_kid() == Some(${kidOf(ids, tok)}) {
+            let t = self.toks[self.pos];
+            let _text = tok_text(self.src, &t);
+            let leaf = ${rustShapeLeafAstExpr(policy, '_text')};
+            self.pos += 1;
+            return Some(${templateFinish('vec![leaf]', 't.off as usize', 't.end as usize')});
+        }\n        `;
+        continue;
+      }
       atomCode += `if self.peek_kid() == Some(${kidOf(ids, tok)}) {
             let _text = self.take_text(${kidOf(ids, tok)})?;
             return Some(${rustShapeLeafAstExpr(policy, '_text')});
         }\n        `;
     }
   }
+
+  // ── template NUD ──
+  const tplNudCode = hasTplNud
+    ? `if self.peek_kid() == Some(${kidOf(ids, '$templateHead')}) {
+            let (_tm_kids, _tm_save) = self.match_template_ast_${rule.name}()?;
+            let _tm_off = self.toks[_tm_save].off as usize;
+            let _tm_end = self.last_end(_tm_off);
+            return Some(${templateFinish('_tm_kids', '_tm_off', '_tm_end')});
+        }
+        `
+    : '';
 
   // ── group (lid-grouped; RD steps; custom slot reserved but inventory fail-fast) ──
   let groupCode = '';
@@ -3678,14 +3763,13 @@ function emitRustPrattMethod(
     }
   }
 
-  // ── postfixTok (non-template face; template dual-parse remains SH3-3 fail-fast) ──
+  // ── postfixTok (plain token + template-headed tagged form) ──
   let postfixTokCode = '';
   const postfixTokSlot = slotOf(ps.postfixTok as { kind: string } | undefined, rule.postfixToks.length > 0);
   if (postfixTokSlot && rule.postfixToks.length) {
     const groups = groupByPreserveOrder(rule.postfixToks, (tok) => kidOf(ids, tok));
     const cases = groups.map((g) => {
       const tokName = rule.postfixToks.find((t) => kidOf(ids, t) === g.key)!;
-      if (tpl && tokName === tpl.token) return '';
       const policy = leaves[tokName] ?? { action: 'keep' as const };
       let finish: string;
       if (postfixTokSlot.kind === 'custom') {
@@ -3718,14 +3802,57 @@ function emitRustPrattMethod(
                     let t = self.toks[self.pos];
                     let _text = tok_text(self.src, &t);
                     let op_owned = _text.to_owned();
-                    let leaf = ${rustShapeLeafAstExpr(policy, '_text')};
+                    let leaf_value = ${rustShapeLeafAstExpr(policy, '_text')};
                     self.pos += 1;
+                    let leaf = ${tpl && tokName === tpl.token && templateSlot
+        ? templateFinish('vec![leaf_value]', 't.off as usize', 't.end as usize')
+        : 'leaf_value'};
                     ${finish}
                     continue;
                 }
             }`;
-    }).filter(Boolean).join('\n            ');
-    postfixTokCode = cases;
+    }).join('\n            ');
+    let tplPart = '';
+    if (hasTplPostfix) {
+      let tplFinish: string;
+      if (postfixTokSlot.kind === 'custom') {
+        const fn = (postfixTokSlot as CustomShape).fn;
+        tplFinish = `left = ${customCall(fn, 'vec![node]', '[]', '_off', 'node_end', 'left', 'op_owned')};`;
+      } else if (postfixTokSlot.kind === 'node') {
+        const nodeShape = postfixTokSlot as NodeShape;
+        const fieldMap = nodeShape.fields.map((f: FieldDecl) => {
+          if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 0) {
+            return `fields.push((${J(f.name)}.to_owned(), left.clone()));`;
+          }
+          if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 1) {
+            return `fields.push((${J(f.name)}.to_owned(), node.clone()));`;
+          }
+          if (f.bind === 'opText') {
+            return `fields.push((${J(f.name)}.to_owned(), AstValue::String(op_owned.clone())));`;
+          }
+          return `fields.push((${J(f.name)}.to_owned(), left.clone()));`;
+        }).join('\n                        ');
+        tplFinish = `{
+                        let mut fields: Vec<(String, AstValue)> = Vec::new();
+                        ${fieldMap}
+                        left = AstValue::Object { typ: ${J(nodeShape.type)}.to_owned(), fields };
+                    }`;
+      } else {
+        tplFinish = `{ let _sk = vec![left, node]; left = ${keepFinish('_sk', rule.cstName)}; }`;
+      }
+      tplPart = `
+            if !tail_closed && self.peek_kid() == Some(${kidOf(ids, '$templateHead')}) {
+                let node_off = self.current_off();
+                if let Some((_tm_kids, _tm_save)) = self.match_template_ast_${rule.name}() {
+                    let node_end = self.last_end(node_off);
+                    let node = ${templateFinish('_tm_kids', 'node_off', 'node_end')};
+                    let op_owned = self.src[node_off..node_end].to_owned();
+                    ${tplFinish}
+                    continue;
+                }
+            }`;
+    }
+    postfixTokCode = cases + tplPart;
   }
 
   // ── LED (mixfix; RD steps; guards; success-only commit) ──
@@ -3785,7 +3912,7 @@ function emitRustPrattMethod(
 
   const hasLoop = !!(ledCode || postfixCode || postfixTokCode || binaryBody);
 
-  return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+  return `${tplHelperCode}    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let prev = self.suppress_cur.clone();
         self.suppress_cur = std::mem::take(&mut self.suppress_next);
         let r = self.parse_ast_${rule.name}_bp(0);
@@ -3816,6 +3943,7 @@ function emitRustPrattMethod(
     }
     fn parse_ast_${rule.name}_nud_rest(&mut self, min_bp: i64) -> Option<${ret}> {
         let _ = min_bp;
+        ${tplNudCode}
         ${atomCode}
         ${groupCode}
         ${nudSeqCode}
@@ -3918,8 +4046,9 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
       const kind = slot?.kind ?? 'keep';
       if (!['keep', 'inline', 'node', 'custom'].includes(kind)) note(rule.name, `pratt-shape:${slotName}:${kind}`);
     }
-    if (ps.template) note(rule.name, `pratt-shape:template:${ps.template.kind}`);
-    if (ir.tpl) note(rule.name, 'pratt-ir:template');
+    if (ps.template && !['keep', 'custom'].includes(ps.template.kind)) {
+      note(rule.name, `pratt-shape:template:${ps.template.kind}`);
+    }
   }
   return out;
 }
@@ -3969,6 +4098,14 @@ struct ShapeCk {
     capped: bool,
 }
 
+#[derive(Clone)]
+struct ShapeTplSnap {
+    pos: usize,
+    suppress_next: Vec<u16>,
+    suppress_cur: Vec<u16>,
+    capped: bool,
+}
+
 struct ShapeParser<'a, C: ShapeCustoms> {
     src: &'a str,
     toks: Vec<Tok>,
@@ -3994,6 +4131,20 @@ impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
         let text = tok_text(self.src, &self.toks[self.pos]);
         self.pos += 1;
         Some(text)
+    }
+    fn shape_tpl_snap(&self) -> ShapeTplSnap {
+        ShapeTplSnap {
+            pos: self.pos,
+            suppress_next: self.suppress_next.clone(),
+            suppress_cur: self.suppress_cur.clone(),
+            capped: self.capped,
+        }
+    }
+    fn shape_tpl_restore(&mut self, snap: &ShapeTplSnap) {
+        self.pos = snap.pos;
+        self.suppress_next = snap.suppress_next.clone();
+        self.suppress_cur = snap.suppress_cur.clone();
+        self.capped = snap.capped;
     }
     fn shape_ck(&self, kids_len: usize, lists_len: usize, holes_len: usize, alt_path_len: usize) -> ShapeCk {
         ShapeCk {
