@@ -67,12 +67,14 @@ export const SHAPE_TRANSACTION_CONTRACT = {
   controlFlags: 'restore-with-checkpoint',
 } as const;
 
-/** Local custom context (SH2-0). Full AltPathPart form is deferred. */
+/** Local custom context (SH2-0/SH2-2). Full AltPathPart form is deferred to SH2-3. */
 export type AstCustomCtx = {
   kids: readonly unknown[];
   altPath: readonly number[];
   src: string;
   off: number;
   end: number;
+  left?: unknown;
+  opText?: string;
 };
 export type AstCustom = (ctx: AstCustomCtx) => unknown;

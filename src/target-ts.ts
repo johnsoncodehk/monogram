@@ -10,7 +10,7 @@ import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
-  RuleShape, TokenLeafPolicy, ShapeIRRule,
+  RuleShape, TokenLeafPolicy, ShapeIRRule, CustomShape,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 
@@ -2535,7 +2535,7 @@ function emitShapeTypeDecls(ir: ParserIR, shapeIR: ShapeIR): string {
   if (!lines.some((l) => l.includes('AstRoot'))) {
     lines.push(`export type AstRoot = unknown;`);
   }
-  lines.push(`export type AstCustomCtx = { kids: readonly unknown[]; altPath: readonly number[]; src: string; off: number; end: number };`);
+  lines.push(`export type AstCustomCtx = { kids: readonly unknown[]; altPath: readonly number[]; src: string; off: number; end: number; left?: unknown; opText?: string };`);
   lines.push(`export type AstCustoms = Record<string, (ctx: AstCustomCtx) => unknown>;`);
   lines.push('let _astCustoms: AstCustoms = {};');
   return lines.join('\n');
@@ -2607,8 +2607,7 @@ function emitAstRdAltSteps(
       case 'rule':
         return `(() => { const _rv = parseAst${s.name}(); if (_rv === null) return false; ${sink}.push(_rv); return true; })()`;
       case 'ruleBp':
-        ctx.note(`ruleBp(${s.name},${s.bp})`);
-        return 'false';
+        return `(() => { const _rv = parseAst${s.name}_bp(${s.bp}); if (_rv === null) return false; ${sink}.push(_rv); return true; })()`;
       case 'seq':
         return `(${emitSteps(s.steps, sink)})`;
       case 'sameLine':
@@ -2918,13 +2917,15 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${tries}
   return finalize(`function parseAst${r.name}(): unknown { throw new Error('shape: unsupported RD shape for ${r.name}'); }`);
 }
 
-function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: ShapeIR, parentCtx: ShapeEmitCtx): string {
+function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: ShapeIR, parentCtx: ShapeEmitCtx, ir: ParserIR): string {
   const ctx = newShapeEmitCtx(r.name);
   const finalize = (code: string): string => {
     mergeShapeEmitCtx(parentCtx, ctx);
     return code;
   };
-  const shape = sir.shape;
+  // Bare keep on a Pratt IR rule → empty pratt shape (all slots default keep).
+  let shape: RuleShape = sir.shape;
+  if (shape.kind === 'keep') shape = { kind: 'pratt' };
   if (shape.kind !== 'pratt') {
     ctx.note('expected-pratt-shape');
     return finalize(`function parseAst${r.name}(): unknown { throw new Error('shape: expected pratt shape'); }`);
@@ -2933,73 +2934,161 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   const retType = prattUnionName(r.name);
   const spans = shapeIR.spans;
   const leaves = shapeIR.leaves;
+  const tpl = ir.tpl;
+  const emptyB = new Map<number, string>();
+
   const spanObj = (off: string, end: string) =>
     spans === 'none' ? ''
       : spans === 'required' ? `, off: ${off}, end: ${end}`
       : `, ...( ${off} >= 0 ? { off: ${off}, end: ${end} } : {} )`;
+  const spanKeep = (off: string, end: string) =>
+    spans === 'none' ? '' : `, off: ${off}, end: ${end}`;
+
+  /** Missing Pratt slot → keep (positional), matching RD unmapped default. */
+  const slotOf = (declared: { kind: string } | undefined, present: boolean): { kind: string } | null => {
+    if (!present) return null;
+    return declared ?? { kind: 'keep' };
+  };
+
+  const txnInner = (steps: Step[], armCtx: ShapeEmitCtx): string => {
+    const emit = emitAstRdAltSteps(steps, ids, leaves, emptyB, emptyB, emptyB, emptyB, armCtx);
+    const m = emit.ok.match(/_shapeTxn\(_sk, _ap, \(\) => ([\s\S]*)\)\) \{ pos = sp; return null; \}/);
+    return m ? m[1]! : 'true';
+  };
+
+  const keepFinish = (kidsExpr: string, saveExpr: string) =>
+    `{ type: ${J(r.cstName)}, children: ${kidsExpr}, headText: _shapeHeadText(${kidsExpr}[0])${spanKeep(
+      `${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0`,
+      `pos > 0 ? toks[pos - 1]!.end : (${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0)`,
+    )} }`;
+
+  const customFinish = (fn: string, kidsExpr: string, saveExpr: string, altExpr: string, leftExpr?: string) =>
+    `(() => { const _fn = _astCustoms[${J(fn)}]; if (!_fn) throw new Error(${J('shape: custom ' + fn + ' not provided')});`
+    + ` const _off = ${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0;`
+    + ` const _end = pos > 0 ? toks[pos - 1]!.end : _off;`
+    + ` return _fn({ kids: ${kidsExpr}, altPath: ${altExpr}, src: _src, off: _off, end: _end${leftExpr ? `, left: ${leftExpr}` : ''} }); })()`;
+
+  const nodeFieldsFromSk = (node: NodeShape, leftExpr?: string): Array<{ name: string; expr: string }> =>
+    node.fields.map((f: FieldDecl) => {
+      if (f.bind === 'opText') return { name: f.name, expr: 'opText' };
+      if (isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'list') {
+        return { name: f.name, expr: `_sk[${f.bind.of}] as any` };
+      }
+      if (isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'opt') {
+        return { name: f.name, expr: `_sk[${f.bind.at}] as any` };
+      }
+      if (isFieldBindObj(f.bind) && 'at' in f.bind) {
+        if (leftExpr && f.bind.at === 0) return { name: f.name, expr: leftExpr };
+        if (leftExpr) return { name: f.name, expr: `_sk[${f.bind.at - 1}] as any` };
+        return { name: f.name, expr: `_sk[${f.bind.at}] as any` };
+      }
+      return { name: f.name, expr: 'undefined' };
+    });
+
+  const leafValExpr = (tok: string, tVar = 't'): string => {
+    const pol = leaves[tok];
+    if (pol?.action === 'leafValue') {
+      if (pol.fn === 'number') return `_shapeLeafNumber(${tVar})`;
+      if (pol.fn === 'bigint') return `_shapeLeafBigint(${tVar})`;
+      if (pol.fn === 'boolean') return `_shapeLeafBoolean(${tVar})`;
+      if (pol.fn === 'string') return `_shapeLeafString(${tVar})`;
+      return `_shapeLeafIdent(${tVar})`;
+    }
+    return `_shapeLeafIdent(${tVar})`;
+  };
 
   // ── atom ──────────────────────────────────────────────────────────────────
   ctx.pratt.atom++;
   let atomCode = '';
   if (ps.atom?.kind === 'rule') {
-    // Delegate to an RD rule that covers the same atom tokens (no runtime custom).
-    atomCode = `  if (${r.name}_ATOM.has(t.kid)) {
-    return parseAst${ps.atom.name}() as ${retType};
-  }`;
+    atomCode = `  if (${r.name}_ATOM.has(t.kid)) {\n    return parseAst${ps.atom.name}() as ${retType};\n  }`;
   } else if (ps.atom?.kind === 'custom') {
+    const arms = r.nudToks.map((tok) =>
+      `if (t.kid === ${kidOf(ids, tok)}) leafKids.push(${leafValExpr(tok)});`).join(' else ');
     atomCode = `  if (${r.name}_ATOM.has(t.kid)) {
-    const save = pos; const spOff = t.off; pos++;
-    const _lv = t.kid === ${kidOf(ids, 'Number')} ? _shapeLeafNumber(t)
-      : t.kid === ${kidOf(ids, 'Ident')} ? _shapeLeafIdent(t)
-      : _shapeLeafString(t);
+    const spOff = t.off; const leafKids: unknown[] = [];
+    ${arms}
+    pos++;
     const fn = _astCustoms[${J(ps.atom.fn)}];
     if (!fn) throw new Error('shape: custom ${ps.atom.fn} not provided');
-    return fn({ kids: [_lv], altPath: [], src: _src, off: spOff, end: t.end }) as ${retType};
+    return fn({ kids: leafKids, altPath: [], src: _src, off: spOff, end: t.end }) as ${retType};
   }`;
   } else if (ps.atom && ps.atom.kind !== 'drop') {
-    if (ps.atom.kind === 'leafValue') {
-      const fn = ps.atom.fn === 'number' ? '_shapeLeafNumber' : ps.atom.fn === 'ident' ? '_shapeLeafIdent' : '_shapeLeafString';
-      atomCode = `  if (${r.name}_ATOM.has(t.kid)) { pos++; return ${fn}(t) as ${retType}; }`;
-    } else {
-      atomCode = `  if (${r.name}_ATOM.has(t.kid)) {
-    if (t.kid === ${kidOf(ids, 'Number')}) { pos++; return _shapeLeafNumber(t) as ${retType}; }
-    if (t.kid === ${kidOf(ids, 'Ident')}) { pos++; return _shapeLeafIdent(t) as ${retType}; }
-  }`;
-    }
+    const atomShape = ps.atom;
+    const arms = r.nudToks.map((tok) => {
+      const k = kidOf(ids, tok);
+      const pol = leaves[tok];
+      if (atomShape.kind === 'leafValue') {
+        const fn = atomShape.fn === 'number' ? '_shapeLeafNumber'
+          : atomShape.fn === 'ident' ? '_shapeLeafIdent'
+          : atomShape.fn === 'bigint' ? '_shapeLeafBigint'
+          : atomShape.fn === 'boolean' ? '_shapeLeafBoolean'
+          : '_shapeLeafString';
+        return `if (t.kid === ${k}) { pos++; return ${fn}(t) as ${retType}; }`;
+      }
+      if (pol?.action === 'leafValue') {
+        return `if (t.kid === ${k}) { pos++; return ${leafValExpr(tok)} as ${retType}; }`;
+      }
+      return `if (t.kid === ${k}) { const save = pos; const _lv = ${leafValExpr(tok)}; pos++; return ${keepFinish('[_lv]', 'save')} as ${retType}; }`;
+    }).join('\n    ');
+    atomCode = `  if (${r.name}_ATOM.has(t.kid)) {\n    ${arms}\n  }`;
   }
 
-  // ── group ─────────────────────────────────────────────────────────────────
+  // ── template NUD ──────────────────────────────────────────────────────────
+  let tplNudCode = '';
+  if (tpl && r.nudToks.includes(tpl.token)) {
+    tplNudCode = `  if (t.kid === ${kidOf(ids, '$templateHead')}) {
+    const node = matchTemplateAst();
+    if (node === null) return null;
+    return node as ${retType};
+  }
+`;
+  }
+
+  // ── group / nudBrackets ───────────────────────────────────────────────────
+  const groupSlot = slotOf(ps.group as { kind: string } | undefined, r.nudBrackets.length > 0);
   let groupCode = '';
-  if (ps.group) {
-    ctx.pratt.group++;
-    if (ps.group.kind === 'inline') {
-      const b = r.nudBrackets[0];
-      if (b) {
-        const open = b.steps[0]?.t === 'lit' ? lidOf(ids, (b.steps[0] as { value: string }).value) : 0;
-        const close = b.steps[b.steps.length - 1]?.t === 'lit' ? lidOf(ids, (b.steps[b.steps.length - 1] as { value: string }).value) : 0;
-        groupCode = `  if (t.lid === ${open}) {
-    const save = pos;
-    if (!_shapeDropLit(${open})) { pos = save; return null; }
-    const inner = parseAst${r.name}();
-    if (inner === null || !_shapeDropLit(${close})) { pos = save; return null; }
-    return inner;
-  }`;
-      }
-    } else if (ps.group.kind === 'custom') {
-      ctx.note('pratt.group.custom');
-    } else {
-      ctx.note(`pratt.group.${ps.group.kind}`);
-    }
-  } else if (r.nudBrackets.length > 0) {
-    ctx.note('pratt.group-missing');
+  if (groupSlot && r.nudBrackets.length > 0) {
+    ctx.pratt.group += r.nudBrackets.length;
+    const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
+    const caseBlocks = groups.map((g) => {
+      const armBlocks = g.members.map(({ item: b, index: bi }) => {
+        const armCtx = newShapeEmitCtx(r.name);
+        const inner = txnInner(b.steps, armCtx);
+        mergeShapeEmitCtx(ctx, armCtx);
+        let finish: string;
+        if (groupSlot.kind === 'inline') {
+          finish = `if (_sk.length === 1) return _sk[0] as ${retType}; if (_sk.length === 0) return null; return _sk as unknown as ${retType};`;
+        } else if (groupSlot.kind === 'custom') {
+          finish = `return ${customFinish((groupSlot as CustomShape).fn, '_sk', 'save', `[${bi}]`)} as ${retType};`;
+        } else if (groupSlot.kind === 'node') {
+          const node = groupSlot as NodeShape;
+          finish = `return ${emitAstNodeCtor(node, spans, nodeFieldsFromSk(node), 'save < toks.length ? toks[save]!.off : 0', 'pos > 0 ? toks[pos - 1]!.end : (save < toks.length ? toks[save]!.off : 0)')} as ${retType};`;
+        } else {
+          finish = `return ${keepFinish('_sk', 'save')} as ${retType};`;
+        }
+        return `      {
+        const save = pos;
+        const _sk: unknown[] = [];
+        const _ap: number[] = [];
+        if (_shapeTxn(_sk, _ap, () => ${inner})) {
+          ${finish}
+        }
+        pos = save;
+      }`;
+      }).join('\n');
+      return `    case ${g.key}:\n${armBlocks}\n      break;`;
+    }).join('\n');
+    groupCode = `  switch (t.lid) {\n${caseBlocks}\n  }`;
   }
 
   // ── prefix ────────────────────────────────────────────────────────────────
-  const prefixNode = ps.prefix?.kind === 'node' ? ps.prefix : null;
+  const prefixSlot = slotOf(ps.prefix as { kind: string } | undefined, r.prefix.length > 0);
   let prefixCode = '';
-  if (ps.prefix) {
-    ctx.pratt.prefix++;
-    if (prefixNode) {
+  if (prefixSlot) {
+    ctx.pratt.prefix += Math.max(1, r.prefix.length);
+    if (prefixSlot.kind === 'node') {
+      const prefixNode = prefixSlot as NodeShape;
       prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
   if (pbp !== undefined) {
     const save = pos;
@@ -3009,115 +3098,237 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     if (argument === null) { pos = save; return null; }
     const spOff = save < toks.length ? toks[save]!.off : 0;
     const end = pos > 0 ? toks[pos - 1]!.end : spOff;
-    return { type: ${J(prefixNode.type)}, operator: opText, argument${spanObj('spOff', 'end')} } as ${retType};
+    const _sk: unknown[] = [argument];
+    return ${emitAstNodeCtor(prefixNode, spans, nodeFieldsFromSk(prefixNode), 'spOff', 'end')} as ${retType};
   }`;
-    } else if (ps.prefix.kind === 'custom') {
-      ctx.note('pratt.prefix.custom');
+    } else if (prefixSlot.kind === 'custom') {
+      prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
+  if (pbp !== undefined) {
+    const save = pos;
+    const opText = _src.slice(t.off, t.end);
+    pos++;
+    const argument = parseAst${r.name}_bp(pbp);
+    if (argument === null) { pos = save; return null; }
+    return ${customFinish((prefixSlot as CustomShape).fn, '[opText, argument]', 'save', '[]')} as ${retType};
+  }`;
+    } else if (prefixSlot.kind === 'inline') {
+      prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
+  if (pbp !== undefined) {
+    const save = pos;
+    pos++;
+    const argument = parseAst${r.name}_bp(pbp);
+    if (argument === null) { pos = save; return null; }
+    return argument;
+  }`;
     } else {
-      ctx.note(`pratt.prefix.${ps.prefix.kind}`);
+      prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
+  if (pbp !== undefined) {
+    const save = pos;
+    const opText = _src.slice(t.off, t.end);
+    pos++;
+    const argument = parseAst${r.name}_bp(pbp);
+    if (argument === null) { pos = save; return null; }
+    return ${keepFinish('[opText, argument]', 'save')} as ${retType};
+  }`;
     }
-  } else if (r.prefix.length > 0) {
-    ctx.note('pratt.prefix-missing');
   }
 
-  // ── nudSeq / nudCapped ────────────────────────────────────────────────────
-  if (r.nudSeqs.length > 0) {
+  // ── nudSeq ────────────────────────────────────────────────────────────────
+  const nudSeqSlot = slotOf(ps.nudSeq as { kind: string } | undefined, r.nudSeqs.length > 0);
+  let nudSeqCode = '';
+  if (nudSeqSlot) {
     ctx.pratt.nudSeq += r.nudSeqs.length;
-    if (!ps.nudSeq) ctx.note('pratt.nudSeq');
-    else if (ps.nudSeq.kind !== 'custom' && ps.nudSeq.kind !== 'keep') ctx.note(`pratt.nudSeq.${ps.nudSeq.kind}`);
-    else if (ps.nudSeq.kind === 'custom') ctx.note('pratt.nudSeq.custom'); // SH2-0: not yet rendered
-    else ctx.note('pratt.nudSeq.keep');
-  }
-  if (r.nudCapped.length > 0) {
-    ctx.pratt.nudCapped += r.nudCapped.length;
-    if (!ps.nudCapped) ctx.note('pratt.nudCapped');
-    else ctx.note(`pratt.nudCapped.${ps.nudCapped.kind}`);
-  }
-
-  // ── binary ────────────────────────────────────────────────────────────────
-  const binaryNode = ps.binary?.kind === 'node' ? ps.binary : null;
-  if (ps.binary) {
-    ctx.pratt.binary++;
-    if (!binaryNode) {
-      if (ps.binary.kind === 'custom') ctx.note('pratt.binary.custom');
-      else ctx.note(`pratt.binary.${ps.binary.kind}`);
-    }
-  } else if (r.binary.length > 0) {
-    ctx.note('pratt.binary-missing');
-  }
-
-  // ── postfix / postfixTok ──────────────────────────────────────────────────
-  if (r.postfix.length > 0) {
-    ctx.pratt.postfix += r.postfix.length;
-    if (!ps.postfix) ctx.note('pratt.postfix');
-    else ctx.note(`pratt.postfix.${ps.postfix.kind}`);
-  }
-  if (r.postfixToks.length > 0) {
-    ctx.pratt.postfixTok += r.postfixToks.length;
-    if (!ps.postfixTok) ctx.note('pratt.postfixTok');
-    else ctx.note(`pratt.postfixTok.${ps.postfixTok.kind}`);
-  }
-
-  // ── LED (general call: lit '(' + sep(rule) + lit ')') ─────────────────────
-  let ledCode = '';
-  if (r.leds.length > 0) {
-    ctx.pratt.led += r.leds.length;
-    if (!ps.led) {
-      ctx.note('pratt.led-missing');
-    } else if (ps.led.kind === 'custom') {
-      ctx.note('pratt.led.custom');
-    } else if (ps.led.kind === 'node') {
-      const ledNode = ps.led;
-      const callLeds: string[] = [];
-      for (let i = 0; i < r.leds.length; i++) {
-        const b = r.leds[i]!;
-        const steps = b.steps;
-        // Expected: lit(open) sep(rule,delim) lit(close)
-        if (steps.length === 3
-          && steps[0]!.t === 'lit'
-          && steps[1]!.t === 'sep' && steps[1].elem.t === 'rule'
-          && steps[2]!.t === 'lit') {
-          const open = lidOf(ids, steps[0].value);
-          const delim = lidOf(ids, steps[1].delim);
-          const close = lidOf(ids, steps[2].value);
-          const elem = steps[1].elem.name;
-          const accessTail = r.ledAccessTail[i];
-          const lbp = r.ledLbp[i];
-          const guards: string[] = [`t.lid === ${open}`];
-          if (accessTail) guards.push('!tailClosed');
-          if (lbp !== null && lbp !== undefined) guards.push(`${lbp} > minBp`);
-          guards.push(`(_suppressCur === null || !_suppressCur.has(${open}))`);
-          // Count sep/lit when rendering LED body
-          ctx.step.lit += 2;
-          ctx.step.sep++;
-          ctx.step.rule++;
-          const argsField = ledNode.fields.find((f) => isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'list')?.name ?? 'arguments';
-          const calleeField = ledNode.fields.find((f) => isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 0)?.name ?? 'callee';
-          // Avoid reserved idents (e.g. `arguments`) as binding names.
-          const argsLocal = argsField === 'arguments' || argsField === 'eval' ? '_ledArgs' : argsField;
-          callLeds.push(`    if (${guards.join(' && ')}) {
-      const ledSave = pos;
-      if (!_shapeDropLit(${open})) { pos = ledSave; break; }
-      const ${argsLocal}: ${retType}[] = [];
-      if (!_shapeSepRule(() => parseAst${elem}(), ${delim}, ${argsLocal})) { pos = ledSave; break; }
-      if (!_shapeDropLit(${close})) { pos = ledSave; break; }
-      const spOff = leftOff;
-      const end = pos > 0 ? toks[pos - 1]!.end : spOff;
-      left = { type: ${J(ledNode.type)}, ${calleeField}: left, ${argsField}: ${argsLocal}${spanObj('spOff', 'end')} } as ${retType};
-      leftOff = spOff; leftEnd = end;
-      continue;
-    }`);
-        } else {
-          ctx.note(`pratt.led[${i}]-shape`);
-        }
+    nudSeqCode = r.nudSeqs.map((seq, si) => {
+      const armCtx = newShapeEmitCtx(r.name);
+      const inner = txnInner(seq, armCtx);
+      mergeShapeEmitCtx(ctx, armCtx);
+      let finish: string;
+      if (nudSeqSlot.kind === 'custom') {
+        finish = `return ${customFinish((nudSeqSlot as CustomShape).fn, '_sk', 'save', `[${si}]`)} as ${retType};`;
+      } else if (nudSeqSlot.kind === 'node') {
+        const node = nudSeqSlot as NodeShape;
+        finish = `return ${emitAstNodeCtor(node, spans, nodeFieldsFromSk(node), 'save < toks.length ? toks[save]!.off : 0', 'pos > 0 ? toks[pos - 1]!.end : (save < toks.length ? toks[save]!.off : 0)')} as ${retType};`;
+      } else if (nudSeqSlot.kind === 'inline') {
+        finish = `if (_sk.length === 1) return _sk[0] as ${retType}; if (_sk.length === 0) return null; return _sk as unknown as ${retType};`;
+      } else {
+        finish = `return ${keepFinish('_sk', 'save')} as ${retType};`;
       }
-      ledCode = callLeds.join('\n');
+      return `  { const save = pos; const _sk: unknown[] = []; const _ap: number[] = []; if (_shapeTxn(_sk, _ap, () => ${inner})) { ${finish} } pos = save; }`;
+    }).join('\n');
+  }
+
+  // ── nudCapped ─────────────────────────────────────────────────────────────
+  const nudCappedSlot = slotOf(ps.nudCapped as { kind: string } | undefined, r.nudCapped.length > 0);
+  let nudCappedCode = '';
+  if (nudCappedSlot) {
+    ctx.pratt.nudCapped += r.nudCapped.length;
+    nudCappedCode = r.nudCapped.map((c, ci) => {
+      const armCtx = newShapeEmitCtx(r.name);
+      const inner = txnInner(c.steps, armCtx);
+      mergeShapeEmitCtx(ctx, armCtx);
+      let finish: string;
+      if (nudCappedSlot.kind === 'custom') {
+        finish = `return ${customFinish((nudCappedSlot as CustomShape).fn, '_sk', 'save', `[${ci}]`)} as ${retType};`;
+      } else if (nudCappedSlot.kind === 'node') {
+        const node = nudCappedSlot as NodeShape;
+        finish = `return ${emitAstNodeCtor(node, spans, nodeFieldsFromSk(node), 'save < toks.length ? toks[save]!.off : 0', 'pos > 0 ? toks[pos - 1]!.end : (save < toks.length ? toks[save]!.off : 0)')} as ${retType};`;
+      } else if (nudCappedSlot.kind === 'inline') {
+        finish = `if (_sk.length === 1) return _sk[0] as ${retType}; if (_sk.length === 0) return null; return _sk as unknown as ${retType};`;
+      } else {
+        finish = `return ${keepFinish('_sk', 'save')} as ${retType};`;
+      }
+      return `  if (minBp < ${c.capBp}) { const save = pos; const _sk: unknown[] = []; const _ap: number[] = []; if (_shapeTxn(_sk, _ap, () => ${inner})) { _capped = true; ${finish} } pos = save; }`;
+    }).join('\n');
+  }
+
+  // ── binary / postfix / postfixTok / led slots ─────────────────────────────
+  const binarySlot = slotOf(ps.binary as { kind: string } | undefined, r.binary.length > 0);
+  if (binarySlot) ctx.pratt.binary += Math.max(1, r.binary.length);
+  const postfixSlot = slotOf(ps.postfix as { kind: string } | undefined, r.postfix.length > 0);
+  if (postfixSlot) ctx.pratt.postfix += r.postfix.length;
+  const postfixTokSlot = slotOf(ps.postfixTok as { kind: string } | undefined, r.postfixToks.length > 0);
+  if (postfixTokSlot) ctx.pratt.postfixTok += r.postfixToks.length;
+  const ledSlot = slotOf(ps.led as { kind: string } | undefined, r.leds.length > 0);
+  if (ledSlot) ctx.pratt.led += r.leds.length;
+
+  const ledGuard = (i: number, lid: number) => {
+    const parts: string[] = [];
+    if (r.ledAccessTail[i]) parts.push('!tailClosed');
+    if (r.ledLbp[i] !== null && r.ledLbp[i] !== undefined) parts.push(`${r.ledLbp[i]} > minBp`);
+    if (r.ledSameLine[i]) parts.push('!t.nl');
+    if (r.ledNotLeftLeaf[i]) parts.push(`!${J(r.ledNotLeftLeaf[i])}.includes(_shapeHeadText(left))`);
+    parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
+    return parts.join(' && ');
+  };
+
+  let ledSwitch = '';
+  if (ledSlot && r.leds.length > 0) {
+    const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
+    const cases = groups.map((g) => {
+      const lid = g.key as number;
+      const arms = g.members.map(({ item: b, index: i }) => {
+        const armCtx = newShapeEmitCtx(r.name);
+        const inner = txnInner(b.steps, armCtx);
+        mergeShapeEmitCtx(ctx, armCtx);
+        let finish: string;
+        if (ledSlot.kind === 'custom') {
+          finish = `left = ${customFinish((ledSlot as CustomShape).fn, '[left, ..._sk]', 'ledSave', `[${i}]`, 'left')} as ${retType};`;
+        } else if (ledSlot.kind === 'node') {
+          const ledNode = ledSlot as NodeShape;
+          // Visible _sk after drops; at:0 binds left (LED callee / receiver).
+          finish = `{ const spOff = leftOff; const end = pos > 0 ? toks[pos - 1]!.end : spOff;
+          left = ${emitAstNodeCtor(ledNode, spans, nodeFieldsFromSk(ledNode, 'left'), 'spOff', 'end')} as ${retType};
+          leftOff = spOff; leftEnd = end; }`;
+        } else if (ledSlot.kind === 'inline') {
+          finish = `{ left = (_sk.length === 1 ? _sk[0] : _sk) as ${retType}; leftEnd = pos > 0 ? toks[pos - 1]!.end : leftOff; }`;
+        } else {
+          finish = `{ const _kids = [left, ..._sk]; left = ${keepFinish('_kids', 'ledSave')} as ${retType}; leftEnd = pos > 0 ? toks[pos - 1]!.end : leftOff; }`;
+        }
+        return `      if (${ledGuard(i, lid)}) {
+        const ledSave = pos;
+        const _cappedSave = _capped;
+        const _sk: unknown[] = [];
+        const _ap: number[] = [];
+        if (_shapeTxn(_sk, _ap, () => ${inner})) {
+          ${finish}
+          continue ledLoop;
+        }
+        pos = ledSave;
+        _capped = _cappedSave;
+        break ledLoop;
+      }`;
+      }).join('\n');
+      return `      case ${lid}:\n${arms}\n        break;`;
+    }).join('\n');
+    ledSwitch = `    switch (t.lid) {\n${cases}\n    }`;
+  }
+
+  let postfixTokSwitch = '';
+  if (postfixTokSlot && r.postfixToks.length > 0) {
+    const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
+    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
+    const cases = groups.map((g) => {
+      const tokName = r.postfixToks.find((t) => kidOf(ids, t) === g.key)!;
+      let finish: string;
+      if (postfixTokSlot.kind === 'custom') {
+        finish = `left = ${customFinish((postfixTokSlot as CustomShape).fn, '[left, leaf]', 'leftTokStart', '[]', 'left')} as ${retType};`;
+      } else if (postfixTokSlot.kind === 'node') {
+        const node = postfixTokSlot as NodeShape;
+        finish = `{ const spOff = leftOff; const end = t.end;
+          left = ${emitAstNodeCtor(node, spans, node.fields.map((f: FieldDecl) => {
+            if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 0) return { name: f.name, expr: 'left' };
+            if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 1) return { name: f.name, expr: 'leaf' };
+            return { name: f.name, expr: 'left' };
+          }), 'spOff', 'end')} as ${retType}; leftOff = spOff; leftEnd = end; }`;
+      } else {
+        finish = `{ const _kids = [left, leaf]; left = ${keepFinish('_kids', 'leftTokStart')} as ${retType}; leftEnd = t.end; }`;
+      }
+      return `      case ${g.key}:
+        if (!tailClosed) {
+          const leaf = ${leafValExpr(tokName)};
+          const leftTokStart = pos;
+          pos++;
+          ${finish}
+          continue ledLoop;
+        }
+        break;`;
+    }).join('\n');
+    const tplPart = hasTpl ? `
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) {
+      const node = matchTemplateAst();
+      if (node !== null) {
+        const save = pos;
+        const _kids = [left, node];
+        left = ${keepFinish('_kids', 'save')} as ${retType};
+        leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
+        continue ledLoop;
+      }
+    }` : '';
+    postfixTokSwitch = `    switch (t.kid) {\n${cases}\n    }${tplPart}`;
+  }
+
+  let postfixCode = '';
+  if (postfixSlot) {
+    if (postfixSlot.kind === 'node') {
+      const node = postfixSlot as NodeShape;
+      postfixCode = `    const post = ${r.name}_POST[t.lid];
+    if (!tailClosed && post !== undefined && post > minBp) {
+      const opText = _src.slice(t.off, t.end);
+      pos++;
+      const spOff = leftOff;
+      const end = t.end;
+      const _sk: unknown[] = [left];
+      left = ${emitAstNodeCtor(node, spans, nodeFieldsFromSk(node), 'spOff', 'end')} as ${retType};
+      leftOff = spOff; leftEnd = end;
+      tailClosed = true; continue;
+    }`;
+    } else if (postfixSlot.kind === 'custom') {
+      postfixCode = `    const post = ${r.name}_POST[t.lid];
+    if (!tailClosed && post !== undefined && post > minBp) {
+      const opText = _src.slice(t.off, t.end);
+      const save = pos; pos++;
+      left = ${customFinish((postfixSlot as CustomShape).fn, '[left, opText]', 'save', '[]', 'left')} as ${retType};
+      leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
+      tailClosed = true; continue;
+    }`;
     } else {
-      ctx.note(`pratt.led.${ps.led.kind}`);
+      postfixCode = `    const post = ${r.name}_POST[t.lid];
+    if (!tailClosed && post !== undefined && post > minBp) {
+      const opText = _src.slice(t.off, t.end);
+      const save = pos; pos++;
+      const _kids = [left, opText];
+      left = ${keepFinish('_kids', 'save')} as ${retType};
+      leftEnd = t.end;
+      tailClosed = true; continue;
+    }`;
     }
   }
 
-  const binaryCode = binaryNode ? `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
+  let binaryCode = '    break;';
+  if (binarySlot) {
+    if (binarySlot.kind === 'node') {
+      const binaryNode = binarySlot as NodeShape;
+      binaryCode = `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
     const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
@@ -3127,12 +3338,40 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     if (right === null) { pos = ledSave; break; }
     const spOff = leftOff;
     const end = pos > 0 ? toks[pos - 1]!.end : spOff;
-    left = { type: ${J(binaryNode.type)}, left, operator: opText, right${spanObj('spOff', 'end')} } as ${retType};
+    const _sk: unknown[] = [left, right];
+    left = ${emitAstNodeCtor(binaryNode, spans, nodeFieldsFromSk(binaryNode), 'spOff', 'end')} as ${retType};
     leftOff = spOff;
-    leftEnd = end;` : `    break;`;
+    leftEnd = end;`;
+    } else if (binarySlot.kind === 'custom') {
+      binaryCode = `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
+    const info = ${r.name}_BIN[t.lid];
+    if (info === undefined || info.lbp <= minBp) break;
+    const ledSave = pos;
+    const opText = _src.slice(t.off, t.end);
+    pos++;
+    const right = parseAst${r.name}_bp(info.rbp);
+    if (right === null) { pos = ledSave; break; }
+    left = ${customFinish((binarySlot as CustomShape).fn, '[left, opText, right]', 'ledSave', '[]', 'left')} as ${retType};
+    leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;`;
+    } else {
+      binaryCode = `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
+    const info = ${r.name}_BIN[t.lid];
+    if (info === undefined || info.lbp <= minBp) break;
+    const ledSave = pos;
+    const opText = _src.slice(t.off, t.end);
+    pos++;
+    const right = parseAst${r.name}_bp(info.rbp);
+    if (right === null) { pos = ledSave; break; }
+    const _kids = [left, opText, right];
+    left = ${keepFinish('_kids', 'ledSave')} as ${retType};
+    leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;`;
+    }
+  }
 
-  const hasLedLoop = ledCode.length > 0;
+  const hasLedLoop = !!(ledSwitch || postfixTokSwitch || postfixCode);
 
+  // Capped NUD returns early with _capped=true BEFORE the IIFE (CST oracle).
+  // Non-capped path forces _capped=false after the IIFE — only the capped arms above produce a capped node.
   return finalize(`function parseAst${r.name}(): ${retType} | null {
   const prev = _suppressCur;
   _suppressCur = _suppressNext;
@@ -3144,28 +3383,64 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
 function parseAst${r.name}_bp(minBp: number): ${retType} | null {
   let left = parseAst${r.name}_nud(minBp);
   if (left === null) return null;
-  let leftOff = pos > 0 && toks[pos - 1] ? (typeof left === 'object' && left !== null && 'off' in left ? (left as { off?: number }).off ?? toks[pos - 1]!.off : toks[pos - 1]!.off) : 0;
-  let leftEnd = pos > 0 ? toks[pos - 1]!.end : leftOff;
+  if (_capped) return left;
+  let leftOff = (typeof left === 'object' && left !== null && 'off' in left && typeof (left as { off?: number }).off === 'number')
+    ? (left as { off: number }).off
+    : (pos > 0 ? toks[Math.max(0, pos - 1)]!.off : 0);
+  let leftEnd = (typeof left === 'object' && left !== null && 'end' in left && typeof (left as { end?: number }).end === 'number')
+    ? (left as { end: number }).end
+    : (pos > 0 ? toks[pos - 1]!.end : leftOff);
   let tailClosed = false;
   ${hasLedLoop ? 'ledLoop: ' : ''}for (;;) {
     const t = peek();
     if (t === null) break;
-${ledCode}
+${ledSwitch}
+${postfixTokSwitch}
+${postfixCode}
 ${binaryCode}
   }
   return left;
 }
-function parseAst${r.name}_nud(_minBp: number): ${retType} | null {
+function parseAst${r.name}_nud(minBp: number): ${retType} | null {
+  _capped = false;
   const t = peek();
   if (t === null) return null;
-${atomCode}
+${nudCappedCode}
+  const _r = ((): ${retType} | null => {
+${tplNudCode}${atomCode}
 ${groupCode}
 ${prefixCode}
+${nudSeqCode}
   return null;
+  })();
+  _capped = false;
+  return _r;
 }`);
 }
 
-function emitShapeParseHelpers(): string {
+function emitShapeParseHelpers(ir: ParserIR, ids: LexIdPlan): string {
+  const tpl = ir.tpl;
+  const tplHelper = tpl ? `function matchTemplateAst(): unknown | null {
+  const t = peek();
+  if (t === null || t.kid !== ${kidOf(ids, '$templateHead')}) return null;
+  const kids: unknown[] = [];
+  const save = pos;
+  kids.push(_shapeLeafString(t)); pos++;
+  for (;;) {
+    const expr = parseAst${tpl.interpRule}();
+    if (expr === null) { pos = save; return null; }
+    kids.push(expr);
+    const next = peek();
+    if (next === null) { pos = save; return null; }
+    if (next.kid === ${kidOf(ids, '$templateMiddle')}) { kids.push(_shapeLeafString(next)); pos++; continue; }
+    if (next.kid === ${kidOf(ids, '$templateTail')}) { kids.push(_shapeLeafString(next)); pos++; break; }
+    pos = save; return null;
+  }
+  const off = save < toks.length ? toks[save]!.off : 0;
+  const end = pos > 0 ? toks[pos - 1]!.end : off;
+  return { type: '$template', children: kids, headText: _shapeHeadText(kids[0]), off, end };
+}
+` : '';
   return `// ─── Shape parse helpers ─────────────────────────────────────────────────────
 function _shapeDropLit(lid: number): boolean {
   const t = peek();
@@ -3195,17 +3470,38 @@ function _shapeLeafBoolean(t: Tok): boolean { return _src.slice(t.off, t.end) ==
 function _shapePack(values: unknown[]): unknown {
   return values.length === 0 ? null : values.length === 1 ? values[0] : values.slice();
 }
-/** Transaction boundary for every speculative RD body. */
+/** Head-leaf text for notLeftLeaf guards (CST headLeafText analogue). */
+function _shapeHeadText(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean') return String(v);
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (typeof o.headText === 'string' && o.headText.length > 0) return o.headText;
+    // Unary / Update: CST first child is the operator leaf.
+    if (typeof o.operator === 'string' && 'argument' in o && !('left' in o) && !('right' in o)) return o.operator;
+    if (typeof o.name === 'string') return o.name;
+    if (typeof o.value === 'string' || typeof o.value === 'number' || typeof o.value === 'bigint') return String(o.value);
+    if ('left' in o) return _shapeHeadText(o.left);
+    if ('callee' in o) return _shapeHeadText(o.callee);
+    if (Array.isArray(o.children) && o.children.length > 0) return _shapeHeadText(o.children[0]);
+    if ('argument' in o) return _shapeHeadText(o.argument);
+    if ('expression' in o) return _shapeHeadText(o.expression);
+  }
+  return '';
+}
+/** Transaction boundary for every speculative RD/Pratt body. */
 function _shapeTxn(kids: unknown[], altPath: number[], body: () => boolean): boolean {
   const sp = pos;
   const kk = kids.length;
   const ak = altPath.length;
   const sn = _suppressNext;
+  const cap = _capped;
   if (body()) return true;
   pos = sp;
   kids.length = kk;
   altPath.length = ak;
   _suppressNext = sn;
+  _capped = cap;
   return false;
 }
 /** Zero-width trial: restore all recognizer state whether the body succeeds or fails. */
@@ -3214,11 +3510,13 @@ function _shapeProbe(kids: unknown[], altPath: number[], body: () => boolean): b
   const kk = kids.length;
   const ak = altPath.length;
   const sn = _suppressNext;
+  const cap = _capped;
   const ok = body();
   pos = sp;
   kids.length = kk;
   altPath.length = ak;
   _suppressNext = sn;
+  _capped = cap;
   return ok;
 }
 /** sepBy aligned with CST: zero elements ok; trailing delimiter consumed. */
@@ -3235,7 +3533,7 @@ function _shapeSepRule(elem: () => unknown | null, delimLid: number, out: unknow
   }
   return true;
 }
-`;
+${tplHelper}`;
 }
 
 function emitShapeCoverageExport(cov: ShapeEmitCtx): string {
@@ -3252,7 +3550,7 @@ function emitShapeAstAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): stri
   const fns = shapeIR.rules.map((sir: ShapeIRRule) => {
     const r = ir.rules.find((x) => x.name === sir.name);
     if (!r) return '';
-    if (r.kind === 'pratt') return emitAstPrattRule(r, sir, ids, shapeIR, cov);
+    if (r.kind === 'pratt') return emitAstPrattRule(r, sir, ids, shapeIR, cov, ir);
     return emitAstRdRule(r, sir, ids, shapeIR, cov);
   }).filter(Boolean).join('\n\n');
 
@@ -3268,7 +3566,7 @@ function emitShapeAstAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): stri
   return `
 ${emitShapeTypeDecls(ir, shapeIR)}
 
-${emitShapeParseHelpers()}
+${emitShapeParseHelpers(ir, ids)}
 
 ${fns}
 

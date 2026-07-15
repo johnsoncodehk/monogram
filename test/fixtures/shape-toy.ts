@@ -5,8 +5,9 @@
  * opt(seq), sep (zero + trailing), not, star(seq(rule,lit)), Pratt call LED.
  */
 import {
-  token, rule, defineGrammar, left, prefix, op,
+  token, rule, defineGrammar, left, right, prefix, postfix, op,
   seq, oneOf, range, star, many, opt, sep, not, alt, sameLine, exclude,
+  capExpr, notLeftLeaf,
 } from '../../src/api.ts';
 import type { ShapeSpec } from '../../src/shape-schema.ts';
 
@@ -15,6 +16,7 @@ const identStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');
 const identPart = oneOf(identStart, digit);
 const Ident = token(seq(identStart, star(identPart)), { identifier: true });
 const Number_ = token(seq(digit, star(digit)), { scope: 'constant.numeric' });
+const AtMark = token(seq('@', identStart, star(identPart)), { scope: 'meta.decorator' });
 
 const Atom = rule(() => [Number_, Ident]);
 
@@ -30,7 +32,15 @@ const Expr = rule(($) => [
   ['(', $, ')'],
   [prefix, $],
   [$, op, $],
-  [$, '(', sep($, ','), ')'], // general Pratt LED (call)
+  [$, '(', sep($, ','), ')'], // call LED — accessTail
+  [$, '.', Ident], // member LED — accessTail
+  [$, postfix], // postfix ++
+  [$, sameLine, '::', Ident], // sameLine LED guard
+  [notLeftLeaf('void'), $, '##', Ident], // notLeftLeaf LED guard
+  [$, '?', $, ':', $], // lbp-gated ternary
+  // nudSeq: AtMark is a distinct token kind (not Ident), so atom cannot steal it
+  [AtMark, Ident],
+  capExpr('=', Ident, '=>', $), // nudCapped
 ]);
 
 /** FIRST overlap on "tag"; single choice arm covers all three alts (multi-alt bug). */
@@ -97,8 +107,15 @@ const Program = rule(() => [many(Item, ';')]);
 
 export const toyGrammar = defineGrammar({
   name: 'shape-toy',
-  tokens: { Ident, Number: Number_ },
-  prec: [left('+', '-'), left('*', '/'), left(prefix('-'))],
+  tokens: { Ident, Number: Number_, AtMark },
+  prec: [
+    right('='),
+    left('+', '-'),
+    left('*', '/'),
+    left(prefix('-')),
+    left(postfix('++')),
+  ],
+  ledPrec: [{ connector: '?', below: '=' }],
   rules: {
     Atom, Bang, Expr, Tagged, Guarded, Transaction, LinePair, Suppressed,
     Repeated, OptionalRepeated, Separated, NotAny, Item, Program,
@@ -119,6 +136,7 @@ export const toyShape: ShapeSpec = {
     $operator: { action: 'drop' },
     Number: { action: 'leafValue', fn: 'number' },
     Ident: { action: 'leafValue', fn: 'ident' },
+    AtMark: { action: 'leafValue', fn: 'ident' },
   },
   rules: {
     Atom: {
@@ -189,14 +207,18 @@ export const toyShape: ShapeSpec = {
           { name: 'right', bind: { at: 1 }, typeHint: 'ExprShape' },
         ],
       },
-      led: {
+      postfix: {
         kind: 'node',
-        type: 'CallExpression',
+        type: 'UpdateExpression',
         fields: [
-          { name: 'callee', bind: { at: 0 }, typeHint: 'ExprShape' },
-          { name: 'arguments', bind: { from: 'list', of: 0 }, typeHint: 'ExprShape' },
+          { name: 'operator', bind: 'opText', typeHint: 'string' },
+          { name: 'argument', bind: { at: 0 }, typeHint: 'ExprShape' },
         ],
       },
+      // Heterogeneous mixfix LEDs (call/member/sameLine/notLeftLeaf/ternary) → keep positional.
+      led: { kind: 'keep' },
+      nudSeq: { kind: 'keep' },
+      nudCapped: { kind: 'keep' },
     },
     // Three node arms (FIRST-overlap + true backtrack). Multi-alt single custom arm
     // remains proven via shape-parity's taggedCustomShape emit (altPath witness).
@@ -405,10 +427,67 @@ export const toyGolden: { src: string; expect: unknown; customs?: ToyAstCustoms 
       body: [{
         type: 'ExprItem',
         expression: {
-          type: 'CallExpression',
-          callee: I('f'),
-          arguments: [N(1), { type: 'BinaryExpression', left: N(2), operator: '+', right: N(3) }],
+          type: 'Expr',
+          children: [
+            I('f'),
+            [N(1), { type: 'BinaryExpression', left: N(2), operator: '+', right: N(3) }],
+          ],
+          headText: 'f',
         },
+      }],
+    },
+  },
+  // SH2-2 Pratt: postfix
+  {
+    src: 'x++;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExprItem',
+        expression: { type: 'UpdateExpression', operator: '++', argument: I('x') },
+      }],
+    },
+  },
+  // SH2-2 Pratt: nudSeq
+  {
+    src: '@foo bar;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExprItem',
+        expression: { type: 'Expr', children: ['@foo', 'bar'], headText: '@foo' },
+      }],
+    },
+  },
+  {
+    src: '@foo bar;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExprItem',
+        expression: { type: 'Expr', children: ['@foo', 'bar'], headText: '@foo' },
+      }],
+    },
+  },
+  // SH2-2 Pratt: nudCapped
+  {
+    src: 'x=>1;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExprItem',
+        expression: { type: 'Expr', children: ['x', N(1)], headText: 'x' },
+      }],
+    },
+  },
+  // SH2-2 Pratt: accessTail member
+  {
+    src: 'a.b;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'ExprItem',
+        expression: { type: 'Expr', children: [I('a'), 'b'], headText: 'a' },
       }],
     },
   },
@@ -571,5 +650,31 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
   while (corpus.length < 1500) corpus.push({ src: multiProgram(), source: 'multi-stmt-rd' });
   while (corpus.length < 1850) corpus.push({ src: validProgram(), source: 'random-valid-rd' });
   while (corpus.length < 2100) corpus.push({ src: invalidProgram(), source: 'random-invalid-rd' });
+  // SH2-2: Pratt construct mix (postfix / nudSeq / nudCapped / guards / accessTail)
+  function prattItem(): string {
+    return pick([
+      `${pick(ids)}++`,
+      `@${pick(ids)} ${pick(ids)}`,
+      `@${pick(ids)} ${pick(ids)}`,
+      `${pick(ids)}=>${atom()}`,
+      `${pick(ids)}.${pick(ids)}`,
+      `${pick(ids)}::${pick(ids)}`,
+      `${pick(ids)}?${atom()}:${atom()}`,
+      `${pick(ids)}(${expr()})`,
+      `void##${pick(ids)}`, // should reject via notLeftLeaf when used as void##x as full expr... void is Ident
+      `(${pick(ids)}=>${atom()})`,
+    ]);
+  }
+  const prattAnchors = [
+    'x++;', 'a.b;', '@foo bar;', '@a b;', 'x=>1;', 'a::b;', 'a?1:2;',
+    'void##x;', 'a##x;', 'a:\nb;', 'line a\nb;',
+    'x++ + 1;', '(x=>1)+2;', 'f(x=>1);', 'a.b(c);',
+  ].map((src) => ({ src, source: 'pratt-boundary' }));
+  corpus.push(...prattAnchors);
+  while (corpus.length < 2600) corpus.push({ src: prattItem() + ';', source: 'pratt-valid' });
+  while (corpus.length < 2800) corpus.push({
+    src: pick(['x=>;', 'fn(;', 'a..b;', '++ ;', 'a?b;', 'a::;', 'void##;', 'async;']),
+    source: 'pratt-invalid',
+  });
   return corpus;
 }

@@ -1,5 +1,5 @@
-// Gate: SH2-1 shape CST↔parseAst parity — calc+toy corpus ≥2500, toy golden ≥14,
-// coverage table, typescript+SH0 fail-fast (no home-path permanent dependency).
+// Gate: SH2-2 shape CST↔parseAst parity — calc+toy ≥2800, golden ≥22,
+// typescript+SH0 full emit + ≥2000 accept-parity (blocking).
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -12,6 +12,8 @@ import toyGrammar, {
   toyShape, toyCustoms, toyTaggedCustomShape, toyGolden, buildToyCorpus, type ToyAstCustoms,
 } from './fixtures/shape-toy.ts';
 import typescriptGrammar from '../typescript.ts';
+import { typescriptShape, typescriptStubCustoms } from './fixtures/shape-typescript.ts';
+import { CURATED_TS, CURATED_TS_INVALID } from './emit-corpus.ts';
 
 const OUT = '/tmp/shape-parity';
 mkdirSync(OUT, { recursive: true });
@@ -100,64 +102,36 @@ function buildCalcCorpus(): { src: string; source: string }[] {
   return out;
 }
 
-/** SH0 representative fragments inlined — no permanent home-path gate. */
-function sh0SampleShape(): ShapeSpec {
-  return {
-    grammar: 'typescript',
-    spans: 'optional',
-    unmapped: 'default',
-    leaves: {
-      $punct: { action: 'drop' },
-      $keyword: { action: 'drop' },
-      $operator: { action: 'drop' },
-      Ident: { action: 'leafValue', fn: 'ident' },
-      Number: { action: 'leafValue', fn: 'number' },
-    },
-    rules: {
-      Program: {
-        kind: 'node',
-        type: 'Program',
-        fields: [{ name: 'body', bind: { from: 'list', of: 0 }, typeHint: 'Statement' }],
-      },
-      Expr: {
-        kind: 'pratt',
-        atom: { kind: 'keep' },
-        group: {
-          kind: 'custom', fn: 'estreeParenOrComma',
-          reason: 'SH0: nudBracket "(" is Expr star(, Expr) — not pure group',
-        },
-        prefix: {
-          kind: 'node',
-          type: 'UnaryExpression',
-          fields: [{ name: 'argument', bind: { at: 0 }, typeHint: 'Expression' }],
-        },
-        binary: {
-          kind: 'node',
-          type: 'BinaryExpression',
-          fields: [
-            { name: 'left', bind: { at: 0 }, typeHint: 'Expression' },
-            { name: 'right', bind: { at: 1 }, typeHint: 'Expression' },
-          ],
-        },
-        led: {
-          kind: 'custom', fn: 'estreeExprLed',
-          reason: 'SH0: ≥7 mixfix LED shapes need connector→node dispatch',
-        },
-        nudSeq: {
-          kind: 'custom', fn: 'estreeExprNudSeq',
-          reason: 'SH0: bare Ident + decorated class forms',
-        },
-        nudCapped: {
-          kind: 'custom', fn: 'estreeArrow',
-          reason: 'SH0: ArrowFunctionExpression forms',
-        },
-      },
-      Stmt: {
-        kind: 'custom', fn: 'estreeStmt',
-        reason: 'SH0: Stmt has 19 RD alts with distinct ESTree products',
-      },
-    },
-  };
+/** TypeScript acceptance corpus: curated + seeds + generated expansions ≥2000. */
+function buildTsCorpus(): { src: string; source: string }[] {
+  function rng32(seed: number) {
+    return () => {
+      let t = (seed += 0x6d2b79f5);
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const rng = rng32(0x75_2026);
+  const seeds = [
+    ...CURATED_TS,
+    ...CURATED_TS_INVALID,
+    'const a: number = 1;', 'let s: string;', 'type Alias = { a: number; b?: string };',
+    'type U = "a" | "b" | "c";', 'function gen2<T, U extends T>(x: T, y: U): T { return x; }',
+    'x => x + 1;', 'a ? b : c;', 'a.b.c();', 'f(g(1, 2), 3);', 'a++; b--;',
+    'typeof x; void 0;', 'new Foo(1, 2);', 'a ?? b; a?.b?.c;', 'class C { m() {} }',
+    'const n = maybe!;', 'enum E { A, B }', 'interface I { x: number }',
+  ];
+  const pads = ['', ' ', '  ', '\n', ' \n ', '\t'];
+  const out: { src: string; source: string }[] = seeds.map((src) => ({ src, source: 'seed' }));
+  let i = 0;
+  while (out.length < 2000) {
+    const s = seeds[i % seeds.length]!;
+    const pad = pads[Math.floor(rng() * pads.length)]!;
+    out.push({ src: pad + s + pad, source: 'pad-variant' });
+    i++;
+  }
+  return out;
 }
 
 function printCoverage(label: string, cov: Emitted['shapeCoverage']): void {
@@ -228,13 +202,13 @@ async function main(): Promise<void> {
   if (deepEq(customGot, customExpect) && deepEq(customSeen, customCtxExpect)) goldenOk++;
   else console.error('  custom-ctx fail', { customGot, customSeen });
   const goldenTotal = toyGolden.length + 1;
-  check(goldenOk === goldenTotal && goldenTotal >= 14, `toy golden ${goldenOk}/${goldenTotal}`);
+  check(goldenOk === goldenTotal && goldenTotal >= 22, `toy golden ${goldenOk}/${goldenTotal}`);
 
   const toyCorpus = buildToyCorpus(0x5a2_2026);
-  check(toyCorpus.length === 2100, `toy corpus exact 2100 (got ${toyCorpus.length})`);
+  check(toyCorpus.length >= 2800, `toy corpus ≥2800 (got ${toyCorpus.length})`);
   const calcCorpus = buildCalcCorpus();
   const totalN = toyCorpus.length + calcCorpus.length;
-  check(totalN >= 2500, `corpus total ≥2500 (got ${totalN})`);
+  check(totalN >= 3200, `corpus total ≥3200 (got ${totalN})`);
 
   function parity(
     label: string,
@@ -244,19 +218,23 @@ async function main(): Promise<void> {
   ): { diverge: number; cstAcc: number; astAcc: number } {
     let diverge = 0, cstAcc = 0, astAcc = 0;
     for (const x of corpus) {
-      const toks = mod.tokenize(x.src).map((t) => ({
-        off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid,
-      }));
       let cst = false, ast = false, cstErr: string | null = null, astErr: string | null = null;
-      try { cst = mod.parse(toks) !== null; } catch (e) { cstErr = String(e); }
+      try {
+        const toks = mod.tokenize(x.src).map((t) => ({
+          off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid,
+        }));
+        try { cst = mod.parse(toks) !== null; } catch (e) { cstErr = String(e); }
+      } catch (e) { cstErr = String(e); }
       try { ast = mod.parseAst(x.src, customs ? { customs } : undefined) !== null; }
       catch (e) { astErr = String(e); }
       if (cst) cstAcc++;
       if (ast) astAcc++;
-      if (cst !== ast || cstErr || astErr) {
+      // Throw-reject on both sides is agreement (lex errors, missing customs, …).
+      const disagree = cst !== ast || (!!cstErr !== !!astErr);
+      if (disagree) {
         diverge++;
         if (diverge <= 5) {
-          console.error(`  diverge[${label}] ${JSON.stringify(x.src)} cst=${cst} ast=${ast} ${cstErr ?? ''} ${astErr ?? ''}`);
+          console.error(`  diverge[${label}] ${JSON.stringify(x.src).slice(0, 100)} cst=${cst} ast=${ast} ${cstErr ?? ''} ${astErr ?? ''}`);
         }
       }
     }
@@ -332,28 +310,68 @@ async function main(): Promise<void> {
     'calc group-in-let + multi-stmt',
   );
 
-  let tsErr = '';
+  // ── typescript + SH0 full emit (blocking) ─────────────────────────────────
+  let tsMod: Emitted | null = null;
+  let tsEmitErr = '';
   try {
-    emitTs(typescriptGrammar, { shape: sh0SampleShape() });
-    tsErr = '';
+    tsMod = await emitLoad('typescript-sh0', typescriptGrammar, typescriptShape);
   } catch (e) {
-    tsErr = String(e);
+    tsEmitErr = String(e);
   }
-  const hasRuleConstruct = /Program:|Expr:/.test(tsErr) && /unsupported construct/.test(tsErr);
-  const multi = (tsErr.match(/\n\s+\S+:/g) ?? []).length >= 2
-    || (tsErr.match(/pratt\./g) ?? []).length >= 2
-    || (tsErr.match(/star\(/g) ?? []).length + (tsErr.match(/pratt\./g) ?? []).length >= 2;
-  check(!!tsErr && hasRuleConstruct && multi, 'typescript+SH0 emit fail-fast lists unsupported',
-    tsErr ? tsErr.slice(0, 400) : 'no error');
-  const remaining = [...tsErr.matchAll(/\n\s+([^:\n]+): ([^\n]+)/g)]
-    .map((m) => ({ rule: m[1]!, construct: m[2]! }));
-  const isPrattDeferred = (construct: string) =>
-    construct.startsWith('pratt.') || construct === 'expected-pratt-shape';
-  const rdRemaining = remaining.filter((x) => !isPrattDeferred(x.construct));
+  check(!tsEmitErr && !!tsMod, 'typescript+SH0 emit succeeds (unsupported=0)', tsEmitErr.slice(0, 500));
+  if (tsMod) {
+    check(tsMod.shapeCoverage.unsupported.length === 0, 'typescript coverage unsupported=0');
+    printCoverage('typescript', tsMod.shapeCoverage);
+    const want: Record<string, number> = {
+      led: 116, nudSeq: 28, nudCapped: 16, postfix: 8, postfixTok: 4,
+      group: 216, prefix: 44, binary: 156,
+    };
+    const got = tsMod.shapeCoverage.pratt;
+    const prattOk = Object.keys(want).every((k) => got[k] === want[k]);
+    check(prattOk, 'typescript Pratt slot counters ≡ SH2a inventory',
+      JSON.stringify({ want, got }));
+
+    const tsCorpus = buildTsCorpus();
+    check(tsCorpus.length >= 2000, `typescript corpus ≥2000 (got ${tsCorpus.length})`);
+    parity('typescript', tsMod, tsCorpus, typescriptStubCustoms as ToyAstCustoms);
+  }
+
+  // ── Guard + capped witnesses (toy) ────────────────────────────────────────
   check(
-    remaining.length > 0 && rdRemaining.length === 0,
-    `typescript+SH0 RD unsupported=0; Pratt deferred=${remaining.length}`,
-    rdRemaining.slice(0, 10).map((x) => `${x.rule}:${x.construct}`).join(', '),
+    accepts(toyMod, 'a::b;', false) && accepts(toyMod, 'a::b;', true),
+    'LED sameLine accepts same-line ::',
+  );
+  check(
+    !accepts(toyMod, 'a\n::b;', false) && !accepts(toyMod, 'a\n::b;', true),
+    'LED sameLine rejects cross-line :: (newline before connector)',
+  );
+  check(
+    !accepts(toyMod, 'void##x;', false) && !accepts(toyMod, 'void##x;', true),
+    'LED notLeftLeaf rejects void##x',
+  );
+  check(
+    accepts(toyMod, 'a##x;', false) && accepts(toyMod, 'a##x;', true),
+    'LED notLeftLeaf accepts a##x',
+  );
+  check(
+    accepts(toyMod, 'a?1:2;', false) && accepts(toyMod, 'a?1:2;', true),
+    'LED lbp ternary accepts a?1:2',
+  );
+  check(
+    accepts(toyMod, 'a.b;', false) && accepts(toyMod, 'a.b;', true),
+    'LED accessTail member accepts a.b',
+  );
+  check(
+    !accepts(toyMod, 'a++.b;', false) && !accepts(toyMod, 'a++.b;', true),
+    'LED accessTail rejects after postfix close a++.b',
+  );
+  check(
+    accepts(toyMod, 'x=>1;', false) && accepts(toyMod, 'x=>1;', true),
+    'nudCapped arrow accepts',
+  );
+  check(
+    accepts(toyMod, 'f(x=>1);', false) && accepts(toyMod, 'f(x=>1);', true),
+    'capped nested in call LED; transaction keeps parse correct',
   );
 
   console.log(`\nshape-parity summary: toy ${toyP.cstAcc}/${toyCorpus.length} accept, calc ${calcP.cstAcc}/${calcCorpus.length} accept, corpus=${totalN}`);

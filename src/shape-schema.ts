@@ -45,13 +45,14 @@ export type ChoiceShape = { kind: 'choice'; arms: ChoiceArm[] };
 export type PrattShape = {
   kind: 'pratt';
   atom?: LeafValueShape | KeepShape | DropShape | CustomShape | RuleRefShape;
-  group?: InlineShape | NodeShape | CustomShape;
+  /** Unmapped IR brackets default to keep (positional node). */
+  group?: InlineShape | NodeShape | CustomShape | KeepShape;
   nudSeq?: RuleShapeAtom;
   nudCapped?: RuleShapeAtom;
-  prefix?: NodeShape | CustomShape | InlineShape;
-  binary?: NodeShape | CustomShape;
-  postfix?: NodeShape | CustomShape;
-  led?: RuleShapeAtom | CustomShape;
+  prefix?: NodeShape | CustomShape | InlineShape | KeepShape;
+  binary?: NodeShape | CustomShape | KeepShape;
+  postfix?: NodeShape | CustomShape | KeepShape | InlineShape;
+  led?: RuleShapeAtom;
   postfixTok?: RuleShapeAtom;
 };
 
