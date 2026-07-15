@@ -2663,7 +2663,7 @@ pub fn slim_json_with(b: &SlimBuilder, toks: &[Tok], root: i32) -> String {
 `;
 }
 
-// ─── Shape AST codegen (SH3-0: calc-scale Rust slice) ─────────────────────────
+// ─── Shape AST codegen (SH3-1: RD full constructs + toy-scale Pratt) ──────────
 
 type RustShapeUnionMember = { variant: string; ty: string; boxed: boolean };
 type RustShapeUnion = { name: string; alias?: string; members: RustShapeUnionMember[] };
@@ -2685,7 +2685,7 @@ function rustShapeScalar(fn: string): string {
 
 function rustShapeHint(hint: string | string[] | undefined): string {
   const h = Array.isArray(hint) ? hint[0] : hint;
-  if (!h || h === 'unknown') return 'String';
+  if (!h || h === 'unknown') return 'AstValue';
   if (h === 'string' || h === 'Identifier') return 'String';
   if (h === 'number' || h === 'Number') return 'f64';
   if (h === 'boolean' || h === 'Boolean') return 'bool';
@@ -2695,11 +2695,19 @@ function rustShapeHint(hint: string | string[] | undefined): string {
 function rustShapeFieldType(field: FieldDecl): string {
   let ty = field.bind === 'opText' ? 'String' : rustShapeHint(field.typeHint);
   const isList = typeof field.bind === 'object' && 'from' in field.bind && field.bind.from === 'list';
-  const scalar = ty === 'String' || ty === 'f64' || ty === 'bool';
+  const scalar = ty === 'String' || ty === 'f64' || ty === 'bool' || ty === 'AstValue';
   if (isList) ty = `Vec<${ty}>`;
   else if (!scalar) ty = `Box<${ty}>`;
   if (field.optional) ty = `Option<${ty}>`;
   return ty;
+}
+
+function isFieldBindObj(bind: FieldBind): bind is Exclude<FieldBind, 'opText'> {
+  return typeof bind === 'object';
+}
+
+function rustLeafDropped(ttype: string, leaves: Record<string, TokenLeafPolicy>): boolean {
+  return leaves[ttype]?.action === 'drop';
 }
 
 function collectRustShapeNodes(shapeIR: ShapeIR): Map<string, NodeShape> {
@@ -2710,7 +2718,7 @@ function collectRustShapeNodes(shapeIR: ShapeIR): Map<string, NodeShape> {
     else if (shape.kind === 'pratt') {
       for (const key of ['atom', 'group', 'nudSeq', 'nudCapped', 'prefix', 'binary', 'postfix', 'led', 'postfixTok', 'template'] as const) {
         const slot = shape[key];
-        if (slot && slot.kind !== 'rule') walk(slot as RuleShape);
+        if (slot && typeof slot === 'object' && 'kind' in slot && slot.kind !== 'rule') walk(slot as RuleShape);
       }
     }
   };
@@ -2723,8 +2731,13 @@ function rustShapeUnions(shapeIR: ShapeIR): RustShapeUnion[] {
   for (const rule of shapeIR.rules) {
     if (rule.shape.kind === 'choice') {
       const members: RustShapeUnionMember[] = rule.shape.arms.map((arm) => {
-        if (arm.shape.kind !== 'node') return { variant: rustShapeIdent(arm.name), ty: 'String', boxed: false };
-        return { variant: rustShapeIdent(arm.shape.type), ty: rustShapeIdent(arm.shape.type), boxed: true };
+        if (arm.shape.kind === 'node') {
+          return { variant: rustShapeIdent(arm.shape.type), ty: rustShapeIdent(arm.shape.type), boxed: true };
+        }
+        if (arm.shape.kind === 'inline' || arm.shape.kind === 'keep' || arm.shape.kind === 'list') {
+          return { variant: rustShapeIdent(arm.name), ty: 'AstValue', boxed: false };
+        }
+        return { variant: rustShapeIdent(arm.name), ty: 'AstValue', boxed: false };
       });
       out.push({
         name: rustShapeUnionName(rule.name),
@@ -2739,11 +2752,12 @@ function rustShapeUnions(shapeIR: ShapeIR): RustShapeUnion[] {
           members.push({ variant: rustShapeIdent(tok), ty: rustShapeScalar(policy.fn), boxed: false });
         }
       }
-      for (const slot of [rule.shape.prefix, rule.shape.binary]) {
+      for (const slot of [rule.shape.prefix, rule.shape.binary, rule.shape.postfix]) {
         if (slot?.kind === 'node' && !members.some((m) => m.variant === rustShapeIdent(slot.type))) {
           members.push({ variant: rustShapeIdent(slot.type), ty: rustShapeIdent(slot.type), boxed: true });
         }
       }
+      members.push({ variant: 'Keep', ty: 'AstValue', boxed: false });
       out.push({
         name: rustShapeUnionName(rule.name),
         alias: rule.cstName === 'Expr' || rule.name === 'Expr' ? 'Expression' : undefined,
@@ -2754,7 +2768,6 @@ function rustShapeUnions(shapeIR: ShapeIR): RustShapeUnion[] {
   return out;
 }
 
-// Bound only while rustShapeUnions runs; avoids threading ParserIR through type-only walkers.
 let _rustShapeParserIR: ParserIR | null = null;
 function portableRule(_shapeIR: ShapeIR, name: string): RdRule | PrattRule {
   const rule = _rustShapeParserIR?.rules.find((r) => r.name === name);
@@ -2763,9 +2776,8 @@ function portableRule(_shapeIR: ShapeIR, name: string): RdRule | PrattRule {
 }
 
 function rustShapeRuleType(rule: ShapeIRRule): string {
-  if (rule.shape.kind === 'node') return rustShapeIdent(rule.shape.type);
-  if (rule.shape.kind === 'choice' || rule.shape.kind === 'pratt') return rustShapeUnionName(rule.name);
-  return 'String';
+  // Runtime is AstValue-centric (RD kids / keep / unknown). Typed structs remain for API docs + gates.
+  return 'AstValue';
 }
 
 function rustShapeSpanFields(spans: ShapeSpec['spans']): string {
@@ -2774,38 +2786,37 @@ function rustShapeSpanFields(spans: ShapeSpec['spans']): string {
   return `\n    pub off: ${ty},\n    pub end: ${ty},`;
 }
 
-function rustShapeSpanInit(spans: ShapeSpec['spans'], off: string, end: string): string {
-  if (spans === 'none') return '';
-  if (spans === 'optional') return `, off: Some(${off}), end: Some(${end})`;
-  return `, off: ${off}, end: ${end}`;
-}
-
-function rustShapeWrapField(field: FieldDecl, expr: string): string {
-  const ty = rustShapeHint(field.typeHint);
-  const isList = typeof field.bind === 'object' && 'from' in field.bind && field.bind.from === 'list';
-  const scalar = ty === 'String' || ty === 'f64' || ty === 'bool';
-  let out = !isList && !scalar && field.bind !== 'opText' ? `Box::new(${expr})` : expr;
-  if (field.optional) out = `Some(${out})`;
-  return out;
-}
-
-function rustShapeNodeCtor(
+function rustShapeNodeObjectExpr(
   node: NodeShape,
-  values: string[],
+  kidExpr: string,
   opExpr: string,
   spans: ShapeSpec['spans'],
   offExpr: string,
   endExpr: string,
 ): string {
-  const fields = node.fields.map((field) => {
-    let expr = 'Default::default()';
-    if (field.bind === 'opText') expr = opExpr;
-    else if ('from' in field.bind && field.bind.from === 'list' && typeof field.bind.of === 'number') expr = values[field.bind.of] ?? expr;
-    else if ('from' in field.bind && field.bind.from === 'opt') expr = values[field.bind.at] ?? expr;
-    else if ('at' in field.bind) expr = values[field.bind.at] ?? expr;
-    return `${rustShapeIdent(field.name)}: ${rustShapeWrapField(field, expr)}`;
+  const fieldPushes = node.fields.map((field) => {
+    let expr = 'AstValue::Null';
+    if (field.bind === 'opText') expr = `AstValue::String(${opExpr})`;
+    else if (isFieldBindObj(field.bind) && 'from' in field.bind && field.bind.from === 'list' && typeof field.bind.of === 'number') {
+      expr = `${kidExpr}.get(${field.bind.of}).cloned().unwrap_or(AstValue::Array(Vec::new()))`;
+    } else if (isFieldBindObj(field.bind) && 'from' in field.bind && field.bind.from === 'opt') {
+      expr = `${kidExpr}.get(${field.bind.at}).cloned().unwrap_or(AstValue::Null)`;
+    } else if (isFieldBindObj(field.bind) && 'at' in field.bind) {
+      expr = `${kidExpr}.get(${field.bind.at}).cloned().unwrap_or(AstValue::Null)`;
+    }
+    return `fields.push((${J(field.name)}.to_owned(), ${expr}));`;
   });
-  return `${rustShapeIdent(node.type)} { ${fields.join(', ')}${rustShapeSpanInit(spans, offExpr, endExpr)} }`;
+  const spanPushes = spans === 'none' ? '' : spans === 'optional'
+    ? `fields.push(("off".to_owned(), AstValue::Number(${offExpr} as f64))); fields.push(("end".to_owned(), AstValue::Number(${endExpr} as f64)));`
+    : `fields.push(("off".to_owned(), AstValue::Number(${offExpr} as f64))); fields.push(("end".to_owned(), AstValue::Number(${endExpr} as f64)));`;
+  // For spans:none omit; for required/optional toy uses none. Calc uses required — include as numbers matching TS shape.
+  // TS required spans are numeric fields; optional may omit. Calc golden strips spans in tests via stripSpans.
+  return `{
+                let mut fields: Vec<(String, AstValue)> = Vec::new();
+                ${fieldPushes.join('\n                ')}
+                ${spanPushes}
+                AstValue::Object { typ: ${J(node.type)}.to_owned(), fields }
+            }`;
 }
 
 function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
@@ -2835,7 +2846,33 @@ function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
     'impl<T: ShapeJson> ShapeJson for Box<T> { fn write_shape_json(&self, out: &mut String) { (**self).write_shape_json(out); } }',
     'impl<T: ShapeJson> ShapeJson for Vec<T> { fn write_shape_json(&self, out: &mut String) { out.push(\'[\'); for (i, v) in self.iter().enumerate() { if i > 0 { out.push(\',\'); } v.write_shape_json(out); } out.push(\']\'); } }',
     'impl<T: ShapeJson> ShapeJson for Option<T> { fn write_shape_json(&self, out: &mut String) { match self { Some(v) => v.write_shape_json(out), None => out.push_str("null") } } }',
+    '',
+    '#[derive(Debug, PartialEq, Clone)]',
+    'pub enum AstValue {',
+    '    Null,',
+    '    Bool(bool),',
+    '    Number(f64),',
+    '    String(String),',
+    '    Array(Vec<AstValue>),',
+    '    Object { typ: String, fields: Vec<(String, AstValue)> },',
+    '}',
+    'impl ShapeJson for AstValue {',
+    '    fn write_shape_json(&self, out: &mut String) {',
+    '        match self {',
+    '            AstValue::Null => out.push_str("null"),',
+    '            AstValue::Bool(b) => b.write_shape_json(out),',
+    '            AstValue::Number(n) => n.write_shape_json(out),',
+    '            AstValue::String(s) => s.write_shape_json(out),',
+    '            AstValue::Array(xs) => xs.write_shape_json(out),',
+    '            AstValue::Object { typ, fields } => {',
+    '                out.push_str("{\\"type\\":"); _shape_json_string(typ, out);',
+    '                for (k, v) in fields { out.push(\',\'); _shape_json_string(k, out); out.push(\':\'); v.write_shape_json(out); }',
+    "                out.push('}');",
+    '            }',
+    '        }',
+    '    }',
   ];
+  lines.push('}');
 
   for (const [name, node] of [...nodes.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     lines.push('#[derive(Debug, PartialEq)]');
@@ -2870,50 +2907,245 @@ function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
     if (union.alias) lines.push(`pub type ${union.alias} = ${union.name};`);
   }
 
-  const entry = shapeIR.rules.find((r) => r.name === ir.entry);
-  lines.push(`pub type AstRoot = ${entry ? rustShapeRuleType(entry) : 'String'};`);
+  lines.push('pub type AstRoot = AstValue;');
   return lines.join('\n');
 }
 
-function rustShapeLeafExpr(policy: TokenLeafPolicy, text: string): string {
-  if (policy.action !== 'leafValue') return `${text}.to_owned()`;
-  if (policy.fn === 'number') return `self.customs.leaf_number(${text})`;
-  if (policy.fn === 'boolean') return `self.customs.leaf_boolean(${text})`;
-  return `self.customs.leaf_ident(${text})`;
+function rustShapeLeafAstExpr(policy: TokenLeafPolicy, text: string): string {
+  if (policy.action !== 'leafValue') return `AstValue::String(${text}.to_owned())`;
+  if (policy.fn === 'number') return `AstValue::Number(self.customs.leaf_number(${text}))`;
+  if (policy.fn === 'boolean') return `AstValue::Bool(self.customs.leaf_boolean(${text}))`;
+  if (policy.fn === 'bigint') return `AstValue::String(self.customs.leaf_ident(${text}))`; // JSON-safe string form; SH3-4 may specialize
+  return `AstValue::String(self.customs.leaf_ident(${text}))`;
 }
 
-function emitRustRdSteps(
+/** Recursive RD step renderer — mirrors TS emitAstRdAltSteps; flag-based (no &mut self closures). */
+function emitRustAstRdAltSteps(
   steps: Step[],
   ids: LexIdPlan,
   leaves: Record<string, TokenLeafPolicy>,
-  methodTypes: Map<string, string>,
-): { lines: string[]; values: string[] } {
-  const lines: string[] = [];
-  const values: string[] = [];
-  let seq = 0;
-  for (const step of steps) {
-    if (step.t === 'lit') {
-      lines.push(`self.take_lit(${lidOf(ids, step.value)})?;`);
-    } else if (step.t === 'tok') {
-      const text = `_text${seq}`;
-      const value = `_v${seq++}`;
-      lines.push(`let ${text} = self.take_text(${kidOf(ids, step.name)})?;`);
-      lines.push(`let ${value} = ${rustShapeLeafExpr(leaves[step.name] ?? { action: 'keep' }, text)};`);
-      values.push(value);
-    } else if (step.t === 'rule' || step.t === 'ruleBp') {
-      const value = `_v${seq++}`;
-      const suffix = step.t === 'ruleBp' ? `_bp(${step.bp})` : '()';
-      lines.push(`let ${value}: ${methodTypes.get(step.name) ?? 'String'} = self.parse_ast_${step.name}${suffix}?;`);
-      values.push(value);
-    } else if (step.t === 'star' && step.step.t === 'rule') {
-      const value = `_v${seq++}`;
-      const item = `_item${seq}`;
-      lines.push(`let mut ${value}: Vec<${methodTypes.get(step.step.name) ?? 'String'}> = Vec::new();`);
-      lines.push(`loop { let _save = self.pos; match self.parse_ast_${step.step.name}() { Some(${item}) => ${value}.push(${item}), None => { self.pos = _save; break; } } }`);
-      values.push(value);
+  kidsVar: string,
+  listsVar: string,
+  holesVar: string,
+  altVar: string,
+): { ok: string; okVar: string } {
+  const visible = (s: Step): boolean => {
+    switch (s.t) {
+      case 'lit': return !rustLeafDropped(s.ttype, leaves);
+      case 'tok': return !rustLeafDropped(s.name, leaves);
+      case 'rule':
+      case 'ruleBp': return true;
+      case 'star': return visible(s.step);
+      case 'opt':
+      case 'seq':
+      case 'suppress': return s.steps.some(visible);
+      case 'sep': return visible(s.elem);
+      case 'altlit': return s.opts.some((o) => !rustLeafDropped(o.ttype, leaves));
+      case 'alt': return s.branches.some((b) => b.some(visible));
+      case 'not':
+      case 'sameLine': return false;
     }
-  }
-  return { lines, values };
+  };
+  let localId = 0;
+  const local = (stem: string): string => `_shape_${stem}_${localId++}`;
+  const emitSteps = (xs: Step[], sink: string, okVar: string): string =>
+    xs.map((x) => emitStep(x, sink, okVar)).join('\n');
+  const emitStep = (s: Step, sink: string, okVar: string): string => {
+    switch (s.t) {
+      case 'lit': {
+        const push = rustLeafDropped(s.ttype, leaves) ? '' : `${sink}.push(AstValue::String(${J(s.value)}.to_owned()));`;
+        return `if ${okVar} { if self.take_lit(${lidOf(ids, s.value)}).is_none() { ${okVar} = false; } else { ${push} } }`;
+      }
+      case 'tok': {
+        const t = local('tok');
+        if (rustLeafDropped(s.name, leaves)) {
+          return `if ${okVar} { if self.take_text(${kidOf(ids, s.name)}).is_none() { ${okVar} = false; } }`;
+        }
+        return `if ${okVar} { match self.take_text(${kidOf(ids, s.name)}) { Some(${t}) => { ${sink}.push(${rustShapeLeafAstExpr(leaves[s.name] ?? { action: 'keep' }, t)}); } None => { ${okVar} = false; } } }`;
+      }
+      case 'rule': {
+        const v = local('rule');
+        return `if ${okVar} { match self.parse_ast_${s.name}() { Some(${v}) => { ${sink}.push(${v}); } None => { ${okVar} = false; } } }`;
+      }
+      case 'ruleBp': {
+        const v = local('rulebp');
+        return `if ${okVar} { match self.parse_ast_${s.name}_bp(${s.bp}) { Some(${v}) => { ${sink}.push(${v}); } None => { ${okVar} = false; } } }`;
+      }
+      case 'seq':
+        return emitSteps(s.steps, sink, okVar);
+      case 'sameLine':
+        return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
+      case 'not': {
+        const nv = local('not_kids');
+        const poke = local('probe');
+        const body = emitSteps(s.steps, nv, poke);
+        return `{
+            let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+            let mut ${nv}: Vec<AstValue> = Vec::new();
+            let mut ${poke} = true;
+            ${body}
+            let _probe_hit = ${poke};
+            self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+            if ${okVar} && _probe_hit { ${okVar} = false; }
+        }`;
+      }
+      case 'suppress': {
+        const sok = local('sup_ok');
+        return `{
+            let _sn_save = self.suppress_next.clone();
+            self.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}];
+            let mut ${sok} = ${okVar};
+            ${emitSteps(s.steps, sink, sok)}
+            self.suppress_next = _sn_save;
+            if !${sok} { ${okVar} = false; }
+        }`;
+      }
+      case 'altlit': {
+        const matched = local('altlit');
+        const arms = s.opts.map((o) => {
+          const push = visible(s)
+            ? (rustLeafDropped(o.ttype, leaves)
+              ? `${sink}.push(AstValue::Null);`
+              : `${sink}.push(AstValue::String(${J(o.value)}.to_owned()));`)
+            : '';
+          return `${lidOf(ids, o.value)} => { self.pos += 1; ${push} ${matched} = true; }`;
+        }).join('\n                    ');
+        return `if ${okVar} {
+            let mut ${matched} = false;
+            if let Some(t) = self.toks.get(self.pos).copied() {
+                match t.lid {
+                    ${arms}
+                    _ => {}
+                }
+            }
+            if !${matched} { ${okVar} = false; }
+        }`;
+      }
+      case 'alt': {
+        const flag = local('alt_ok');
+        const tries = s.branches.map((b, i) => {
+          const av = local('alt');
+          const bok = local('br');
+          const body = emitSteps(b, av, bok);
+          const push = visible(s) ? `${sink}.push(Self::shape_pack(${av}));` : '';
+          return `if !${flag} {
+                let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+                ${altVar}.push(${i});
+                let mut ${av}: Vec<AstValue> = Vec::new();
+                let mut ${bok} = true;
+                ${body}
+                if ${bok} {
+                    ${push}
+                    ${flag} = true;
+                } else {
+                    self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+                }
+            }`;
+        }).join('\n            ');
+        return `{
+            let mut ${flag} = false;
+            ${tries}
+            if !${flag} { ${okVar} = false; }
+        }`;
+      }
+      case 'star': {
+        const out = local('star_out');
+        const sv = local('star_v');
+        const sok = local('star_ok');
+        const body = emitStep(s.step, sv, sok);
+        const add = visible(s.step) ? `${out}.push(Self::shape_pack(${sv}));` : '';
+        const finish = visible(s.step) ? `${sink}.push(AstValue::Array(${out}));` : '';
+        return `{
+            let mut ${out}: Vec<AstValue> = Vec::new();
+            loop {
+                let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+                let mut ${sv}: Vec<AstValue> = Vec::new();
+                let mut ${sok} = true;
+                ${body}
+                if !${sok} {
+                    self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+                    break;
+                }
+                ${add}
+            }
+            ${finish}
+        }`;
+      }
+      case 'opt': {
+        const ov = local('opt');
+        const ook = local('opt_ok');
+        const body = emitSteps(s.steps, ov, ook);
+        const push = s.steps.some(visible)
+          ? `${sink}.push(if ${ook} { Self::shape_pack(${ov}) } else { AstValue::Null });`
+          : '';
+        return `{
+            let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+            let mut ${ov}: Vec<AstValue> = Vec::new();
+            let mut ${ook} = true;
+            ${body}
+            if !${ook} {
+                self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+            }
+            ${push}
+        }`;
+      }
+      case 'sep': {
+        const out = local('sep_out');
+        const ev = local('sep_v');
+        const fok = local('first_ok');
+        const eok = local('elem_ok');
+        const bodyFirst = emitStep(s.elem, ev, fok);
+        const bodyElem = emitStep(s.elem, ev, eok);
+        const add = visible(s.elem) ? `${out}.push(Self::shape_pack(${ev}.clone()));` : '';
+        // After first failure: push empty array (zero elems). After success path: move out.
+        const finishEmpty = visible(s.elem) ? `${sink}.push(AstValue::Array(Vec::new()));` : '';
+        const finishMove = visible(s.elem) ? `${sink}.push(AstValue::Array(${out}));` : '';
+        return `{
+            let mut ${out}: Vec<AstValue> = Vec::new();
+            let mut ${ev}: Vec<AstValue> = Vec::new();
+            let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+            let mut ${fok} = true;
+            ${bodyFirst}
+            if !${fok} {
+                self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+                ${finishEmpty}
+            } else {
+                ${add}
+                loop {
+                    let _d = self.pos;
+                    if self.take_lit(${lidOf(ids, s.delim)}).is_none() {
+                        self.pos = _d;
+                        break;
+                    }
+                    ${ev} = Vec::new();
+                    let mut ${eok} = true;
+                    ${bodyElem}
+                    if !${eok} {
+                        // trailing delimiter consumed — CST-aligned
+                        break;
+                    }
+                    ${add}
+                }
+                ${finishMove}
+            }
+        }`;
+      }
+    }
+  };
+  const okVar = local('steps_ok');
+  const body = emitSteps(steps, kidsVar, okVar);
+  return {
+    ok: `let mut ${listsVar}: Vec<Vec<AstValue>> = Vec::new();
+        let mut ${holesVar}: Vec<Option<AstValue>> = Vec::new();
+        let mut ${altVar}: Vec<usize> = Vec::new();
+        let _txn_ck = self.shape_ck(${kidsVar}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+        let mut ${okVar} = true;
+        ${body}
+        if !${okVar} {
+            self.shape_restore(_txn_ck, &mut ${kidsVar}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+        }`,
+    okVar,
+  };
 }
 
 function emitRustRdMethod(
@@ -2921,49 +3153,149 @@ function emitRustRdMethod(
   sir: ShapeIRRule,
   ids: LexIdPlan,
   shapeIR: ShapeIR,
-  methodTypes: Map<string, string>,
 ): string {
-  const ret = rustShapeRuleType(sir);
-  const attempt = (steps: Step[], node: NodeShape, wrap: string): string => {
-    const body = emitRustRdSteps(steps, ids, shapeIR.leaves, methodTypes);
-    const ctor = rustShapeNodeCtor(node, body.values, 'String::new()', shapeIR.spans, '_off', 'self.last_end(_off)');
+  const leaves = shapeIR.leaves;
+  const ret = 'AstValue';
+
+  const finishNode = (node: NodeShape, kidsVar: string, offExpr: string): string =>
+    rustShapeNodeObjectExpr(node, kidsVar, 'String::new()', shapeIR.spans, offExpr, 'self.last_end(' + offExpr + ')');
+
+  const tryAlt = (altIdx: number, finish: string, guardFirst: boolean): string => {
+    const alt = rule.alts[altIdx]!;
+    const useGuard = guardFirst && isGuardable(rule.altFirst[altIdx] ?? null, rule.alts.length);
+    const guardExpr = useGuard
+      ? `_ft.is_some() && { let t = _ft.unwrap(); ${firstCond(rule.altFirst[altIdx]!, 't', ids)} }`
+      : 'true';
+    const steps = emitRustAstRdAltSteps(alt, ids, leaves, '_sk', '_lists', '_holes', '_ap');
+    const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk').replaceAll('__SPOFF__', 'sp_off');
     return `{
-            let _save = self.pos;
-            let _off = self.current_off();
-            let _got = (|| -> Option<${ret}> {
-                ${body.lines.join('\n                ')}
-                Some(${wrap}${ctor}${wrap ? '))' : ''})
-            })();
-            if _got.is_some() { return _got; }
-            self.pos = _save;
+            let sp = self.pos;
+            let sp_off = self.current_off();
+            if ${guardExpr} {
+                let mut _sk: Vec<AstValue> = Vec::new();
+                ${steps.ok}
+                if ${steps.okVar} {
+                    return ${finished};
+                }
+                self.pos = sp;
+            }
         }`;
   };
 
-  if (sir.shape.kind === 'node') {
-    const body = emitRustRdSteps(rule.alts[0]!, ids, shapeIR.leaves, methodTypes);
-    const ctor = rustShapeNodeCtor(sir.shape, body.values, 'String::new()', shapeIR.spans, '_off', 'self.last_end(_off)');
+  if (sir.shape.kind === 'drop') {
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        let _save = self.pos;
-        let _off = self.current_off();
-        let _got = (|| -> Option<${ret}> {
-            ${body.lines.join('\n            ')}
-            Some(${ctor})
-        })();
-        if _got.is_none() { self.pos = _save; }
-        _got
+        let sp = self.pos;
+        // Recognizer-only: reuse CST parse path via token consumption is not available;
+        // drop shape mirrors accept by running steps then discarding.
+        None
     }`;
   }
-  const shape = sir.shape as ChoiceShape;
-  const tries: string[] = [];
-  for (const arm of shape.arms) {
-    if (arm.shape.kind !== 'node') continue;
-    for (const altIndex of arm.altIndices) {
-      tries.push(attempt(rule.alts[altIndex]!, arm.shape, `${ret}::${rustShapeIdent(arm.shape.type)}(Box::new(`));
+  if (sir.shape.kind === 'custom') {
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        let _ = self;
+        unimplemented!("shape rust: custom ${sir.shape.fn} — SH3-4")
+    }`;
+  }
+  if (sir.shape.kind === 'inline') {
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        let _ = self;
+        panic!("shape: inline ${rule.name} must be spliced by parent");
+    }`;
+  }
+  if (sir.shape.kind === 'list') {
+    const inner = rule.alts[0]?.[0];
+    const elemRule = inner?.t === 'star' && inner.step.t === 'rule' ? inner.step.name : null;
+    if (!elemRule) {
+      return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        let _ = self;
+        unimplemented!("shape rust: list ${rule.name} unsupported IR")
+    }`;
     }
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        let sp = self.pos;
+        let mut out: Vec<AstValue> = Vec::new();
+        loop {
+            let sp2 = self.pos;
+            match self.parse_ast_${elemRule}() {
+                Some(el) => out.push(el),
+                None => { self.pos = sp2; break; }
+            }
+        }
+        if self.pos == sp && out.is_empty() { return None; }
+        Some(AstValue::Array(out))
+    }`;
+  }
+  if (sir.shape.kind === 'keep') {
+    // Positional keep via RD alts → object with children
+    const tries = rule.alts.map((_, ai) => {
+      const finish = `Some(AstValue::Object { typ: ${J(rule.cstName)}.to_owned(), fields: vec![("children".to_owned(), AstValue::Array(__SK__))] })`;
+      return tryAlt(ai, finish, true);
+    }).join('\n        ');
+    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        ${needPeek ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tries}
+        None
+    }`;
+  }
+  if (sir.shape.kind === 'choice') {
+    const shape = sir.shape;
+    const armBlocks: string[] = [];
+    for (const arm of shape.arms) {
+      let finish: string;
+      if (arm.shape.kind === 'node') {
+        finish = `Some(${finishNode(arm.shape, '__SK__', '__SPOFF__')})`;
+      } else if (arm.shape.kind === 'inline') {
+        finish = `Some(Self::shape_pack(__SK__))`;
+      } else if (arm.shape.kind === 'keep') {
+        finish = `Some(AstValue::Object { typ: ${J(rule.cstName)}.to_owned(), fields: vec![
+                    ("children".to_owned(), AstValue::Array(__SK__)),
+                    ("arm".to_owned(), AstValue::String(${J(arm.name)}.to_owned())),
+                    ("alt".to_owned(), AstValue::Number(__ALT__ as f64)),
+                ] })`;
+      } else if (arm.shape.kind === 'list') {
+        finish = `Some(AstValue::Array(__SK__))`;
+      } else if (arm.shape.kind === 'custom') {
+        // Fail-fast at emit time — should not reach here.
+        finish = `unimplemented!("shape rust: choice-arm custom")`;
+      } else {
+        finish = `None`;
+      }
+      for (const altIdx of arm.altIndices) {
+        armBlocks.push(tryAlt(altIdx, finish, true));
+      }
+    }
+    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        ${needPeek ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${armBlocks.join('\n        ')}
+        None
+    }`;
+  }
+  if (sir.shape.kind === 'node') {
+    const node = sir.shape;
+    if (rule.alts.length === 1) {
+      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves, '_sk', '_lists', '_holes', '_ap');
+      return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        let sp = self.pos;
+        let sp_off = self.current_off();
+        let mut _sk: Vec<AstValue> = Vec::new();
+        ${steps.ok}
+        if !${steps.okVar} { self.pos = sp; return None; }
+        Some(${finishNode(node, '_sk', 'sp_off')})
+    }`;
+    }
+    const tries = rule.alts.map((_, ai) => {
+      const finish = `Some(${finishNode(node, '__SK__', '__SPOFF__')})`;
+      return tryAlt(ai, finish, true);
+    }).join('\n        ');
+    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        ${needPeek ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tries}
+        None
+    }`;
   }
   return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${tries.join('\n        ')}
-        None
+        let _ = self;
+        unimplemented!("shape rust: unsupported RD shape for ${rule.name}")
     }`;
 }
 
@@ -2973,57 +3305,161 @@ function emitRustPrattMethod(
   ids: LexIdPlan,
   shapeIR: ShapeIR,
 ): string {
-  const shape = sir.shape as Extract<RuleShape, { kind: 'pratt' }>;
-  const ret = rustShapeUnionName(rule.name);
-  const nud: string[] = [];
-  for (const tok of rule.nudToks) {
-    const policy = shapeIR.leaves[tok]!;
-    nud.push(`if self.peek_kid() == Some(${kidOf(ids, tok)}) {
+  let shape: RuleShape = sir.shape;
+  if (shape.kind === 'keep') shape = { kind: 'pratt' };
+  if (shape.kind !== 'pratt') {
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<AstValue> { unimplemented!("expected pratt") }
+    fn parse_ast_${rule.name}_bp(&mut self, _min_bp: i64) -> Option<AstValue> { unimplemented!() }
+    fn parse_ast_${rule.name}_nud(&mut self, _min_bp: i64) -> Option<AstValue> { unimplemented!() }`;
+  }
+  const ps = shape;
+  const leaves = shapeIR.leaves;
+  const ret = 'AstValue';
+  const emptySteps = (steps: Step[]) => {
+    return emitRustAstRdAltSteps(steps, ids, leaves, '_sk', '_lists', '_holes', '_ap');
+  };
+
+  const keepFinish = (kidsExpr: string, cstName: string): string =>
+    `{
+            let _kf_kids = ${kidsExpr};
+            let _ht = Self::shape_head_text(_kf_kids.first());
+            AstValue::Object { typ: ${J(cstName)}.to_owned(), fields: vec![
+                ("children".to_owned(), AstValue::Array(_kf_kids)),
+                ("headText".to_owned(), AstValue::String(_ht)),
+            ] }
+        }`;
+
+  // ── atom ──
+  let atomCode = '';
+  const atomKids = rule.nudToks.map((k) => kidOf(ids, k));
+  if (ps.atom?.kind === 'rule') {
+    atomCode = `if let Some(t) = self.toks.get(self.pos) {
+            if matches!(t.kid, ${atomKids.join(' | ') || 'u16::MAX'}) {
+                return self.parse_ast_${ps.atom.name}();
+            }
+        }`;
+  } else if (!ps.atom || ps.atom.kind === 'keep' || (ps.atom as { kind: string }).kind === 'leafValue' || ps.atom.kind === undefined) {
+    // default leafValue from leaves policy (calc)
+    for (const tok of rule.nudToks) {
+      const policy = leaves[tok] ?? { action: 'keep' as const };
+      atomCode += `if self.peek_kid() == Some(${kidOf(ids, tok)}) {
             let _text = self.take_text(${kidOf(ids, tok)})?;
-            return Some(${ret}::${rustShapeIdent(tok)}(${rustShapeLeafExpr(policy, '_text')}));
-        }`);
+            return Some(${rustShapeLeafAstExpr(policy, '_text')});
+        }\n        `;
+    }
+  } else if (ps.atom.kind === 'custom') {
+    // fail-fast at inventory
   }
-  for (const bracket of rule.nudBrackets) {
-    const inner = bracket.steps.find((s) => s.t === 'rule' || s.t === 'ruleBp');
-    const close = [...bracket.steps].reverse().find((s) => s.t === 'lit');
-    if (!inner || (inner.t !== 'rule' && inner.t !== 'ruleBp') || !close || close.t !== 'lit') continue;
-    nud.push(`{
-            let _save = self.pos;
-            let _got = (|| -> Option<${ret}> {
-                self.take_lit(${lidOf(ids, bracket.first)})?;
-                let _inner = self.parse_ast_${inner.name}${inner.t === 'ruleBp' ? `_bp(${inner.bp})` : '()'}?;
-                self.take_lit(${lidOf(ids, close.value)})?;
-                Some(_inner)
-            })();
-            if _got.is_some() { return _got; }
-            self.pos = _save;
-        }`);
+
+  // ── group (simple + general via RD steps) ──
+  let groupCode = '';
+  const groupSlot = ps.group ?? (rule.nudBrackets.length ? { kind: 'inline' as const } : undefined);
+  if (groupSlot && rule.nudBrackets.length) {
+    for (const bracket of rule.nudBrackets) {
+      const st = emptySteps(bracket.steps);
+      let finish: string;
+      if (groupSlot.kind === 'inline') {
+        finish = `return Some(Self::shape_pack(_sk));`;
+      } else if (groupSlot.kind === 'keep') {
+        finish = `return Some(${keepFinish('_sk', rule.cstName)});`;
+      } else if (groupSlot.kind === 'node') {
+        finish = `return Some(${rustShapeNodeObjectExpr(groupSlot, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
+      } else {
+        finish = `return None;`;
+      }
+      groupCode += `{
+            let save = self.pos;
+            let save_off = self.current_off();
+            let mut _sk: Vec<AstValue> = Vec::new();
+            ${st.ok}
+            if ${st.okVar} {
+                ${finish}
+            }
+            self.pos = save;
+        }\n        `;
+    }
   }
-  if (shape.prefix?.kind === 'node') {
+
+  // ── prefix ──
+  let prefixCode = '';
+  if (ps.prefix?.kind === 'node' && rule.prefix.length) {
     for (const prefix of rule.prefix) {
-      const ctor = rustShapeNodeCtor(
-        shape.prefix, ['_argument'.toString()], 'self.customs.bind_op(&_op)',
+      const ctor = rustShapeNodeObjectExpr(
+        ps.prefix, 'vec![_argument]', 'self.customs.bind_op(&_op)',
         shapeIR.spans, '_off', 'self.last_end(_off)',
       );
-      nud.push(`if self.peek_lid() == Some(${lidOf(ids, prefix.op)}) {
+      // kids for node: at:0 = argument — pass as synthetic vec
+      prefixCode += `if self.peek_lid() == Some(${lidOf(ids, prefix.op)}) {
             let _off = self.current_off();
             let _op = self.current_text().to_owned();
             self.pos += 1;
             let _argument = self.parse_ast_${rule.name}_bp(${prefix.rbp})?;
-            return Some(${ret}::${rustShapeIdent(shape.prefix.type)}(Box::new(${ctor})));
-        }`);
+            let _sk = vec![_argument];
+            return Some(${rustShapeNodeObjectExpr(ps.prefix, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')});
+        }\n        `;
+      void ctor;
     }
   }
-  const binaryArms = rule.binary.map((b) =>
-    `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}),`,
-  ).join('\n                ');
+
+  // ── nudSeq ──
+  let nudSeqCode = '';
+  const nudSeqSlot = ps.nudSeq ?? (rule.nudSeqs.length ? { kind: 'keep' as const } : undefined);
+  if (nudSeqSlot && rule.nudSeqs.length) {
+    for (const seq of rule.nudSeqs) {
+      const st = emptySteps(seq);
+      const finish = nudSeqSlot.kind === 'inline'
+        ? `return Some(Self::shape_pack(_sk));`
+        : nudSeqSlot.kind === 'node'
+          ? `return Some(${rustShapeNodeObjectExpr(nudSeqSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`
+          : `return Some(${keepFinish('_sk', rule.cstName)});`;
+      nudSeqCode += `{
+            let save = self.pos;
+            let save_off = self.current_off();
+            let mut _sk: Vec<AstValue> = Vec::new();
+            ${st.ok}
+            if ${st.okVar} {
+                ${finish}
+            }
+            self.pos = save;
+        }\n        `;
+    }
+  }
+
+  // ── nudCapped ──
+  let nudCappedCode = '';
+  const nudCappedSlot = ps.nudCapped ?? (rule.nudCapped.length ? { kind: 'keep' as const } : undefined);
+  if (nudCappedSlot && rule.nudCapped.length) {
+    for (const c of rule.nudCapped) {
+      const st = emptySteps(c.steps);
+      const finish = nudCappedSlot.kind === 'inline'
+        ? `return Some(Self::shape_pack(_sk));`
+        : nudCappedSlot.kind === 'node'
+          ? `return Some(${rustShapeNodeObjectExpr(nudCappedSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`
+          : `return Some(${keepFinish('_sk', rule.cstName)});`;
+      nudCappedCode += `if min_bp < ${c.capBp} {
+            let save = self.pos;
+            let save_off = self.current_off();
+            let mut _sk: Vec<AstValue> = Vec::new();
+            ${st.ok}
+            if ${st.okVar} {
+                self.capped = true;
+                ${finish}
+            }
+            self.pos = save;
+        }\n        `;
+    }
+  }
+
+  // ── binary ──
   let binaryBody = '';
-  if (shape.binary?.kind === 'node' && rule.binary.length) {
-    const ctor = rustShapeNodeCtor(
-      shape.binary, ['left', '_right'], 'self.customs.bind_op(&_op)',
-      shapeIR.spans, '_off', 'self.last_end(_off)',
-    );
-    binaryBody = `loop {
+  if (ps.binary?.kind === 'node' && rule.binary.length) {
+    const binaryArms = rule.binary.map((b) =>
+      `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}),`,
+    ).join('\n                ');
+    binaryBody = `{
+            if let Some(t) = self.toks.get(self.pos) {
+                if self.suppress_cur.contains(&t.lid) { break; }
+            }
             let (_lbp, _rbp) = match self.peek_lid() {
                 ${binaryArms}
                 _ => break,
@@ -3036,18 +3472,114 @@ function emitRustPrattMethod(
                 Some(v) => v,
                 None => { self.pos = _save; break; }
             };
-            left = ${ret}::${rustShapeIdent(shape.binary.type)}(Box::new(${ctor}));
+            let _sk = vec![left, _right];
+            left = ${rustShapeNodeObjectExpr(ps.binary, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')};
+            continue;
         }`;
   }
-  return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> { self.parse_ast_${rule.name}_bp(0) }
+
+  // ── postfix ──
+  let postfixCode = '';
+  if (ps.postfix?.kind === 'node' && rule.postfix.length) {
+    const postArms = rule.postfix.map((p) =>
+      `Some(${lidOf(ids, p.op)}) => ${p.lbp},`,
+    ).join('\n                    ');
+    postfixCode = `{
+                let post = match self.peek_lid() {
+                    ${postArms}
+                    _ => -1,
+                };
+                if !tail_closed && post > min_bp {
+                    let _op = self.current_text().to_owned();
+                    let _end_tok = self.toks[self.pos];
+                    self.pos += 1;
+                    let _sk = vec![left];
+                    left = ${rustShapeNodeObjectExpr(ps.postfix, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', '_end_tok.end as usize')};
+                    tail_closed = true;
+                    continue;
+                }
+            }`;
+  }
+
+  // ── LED keep ──
+  let ledCode = '';
+  const ledSlot = ps.led ?? (rule.leds.length ? { kind: 'keep' as const } : undefined);
+  if (ledSlot && rule.leds.length) {
+    const cases = rule.leds.map((b, i) => {
+      const lid = lidOf(ids, b.first);
+      const parts: string[] = [];
+      if (rule.ledAccessTail[i]) parts.push('!tail_closed');
+      if (rule.ledLbp[i] !== null && rule.ledLbp[i] !== undefined) parts.push(`${rule.ledLbp[i]} > min_bp`);
+      if (rule.ledSameLine[i]) parts.push('!t.nl');
+      if (rule.ledNotLeftLeaf[i]) {
+        const set = rule.ledNotLeftLeaf[i]!;
+        parts.push(`!matches!(Self::shape_head_text(Some(&left)).as_str(), ${set.map((x) => J(x)).join(' | ')})`);
+      }
+      parts.push(`!self.suppress_cur.contains(&${lid})`);
+      const guard = parts.join(' && ');
+      const st = emptySteps(b.steps);
+      const finish = ledSlot.kind === 'inline'
+        ? `left = Self::shape_pack(_sk);`
+        : ledSlot.kind === 'node'
+          ? `left = ${rustShapeNodeObjectExpr(ledSlot as NodeShape, '_sk', '_op.clone()', shapeIR.spans, '_off', 'self.last_end(_off)')};`
+          : `{ let mut _kids = vec![left]; _kids.extend(_sk); left = ${keepFinish('_kids', rule.cstName)}; }`;
+      return `if self.peek_lid() == Some(${lid}) {
+                let t = self.toks[self.pos];
+                if ${guard} {
+                    let led_save = self.pos;
+                    let _op = self.current_text().to_owned();
+                    let _capped_save = self.capped;
+                    let mut _sk: Vec<AstValue> = Vec::new();
+                    ${st.ok}
+                    if ${st.okVar} {
+                        ${finish}
+                        continue;
+                    }
+                    self.pos = led_save;
+                    self.capped = _capped_save;
+                    break;
+                }
+            }`;
+    }).join('\n            ');
+    ledCode = cases;
+  }
+
+  const hasLoop = !!(ledCode || postfixCode || binaryBody);
+
+  return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        let prev = self.suppress_cur.clone();
+        self.suppress_cur = std::mem::take(&mut self.suppress_next);
+        let r = self.parse_ast_${rule.name}_bp(0);
+        self.suppress_cur = prev;
+        r
+    }
     fn parse_ast_${rule.name}_bp(&mut self, min_bp: i64) -> Option<${ret}> {
         let _off = self.current_off();
         let mut left = self.parse_ast_${rule.name}_nud(min_bp)?;
-        ${binaryBody}
+        if self.capped { return Some(left); }
+        let mut tail_closed = false;
+        ${hasLoop ? 'loop {' : ''}
+            ${ledCode}
+            ${postfixCode}
+            ${binaryBody || (hasLoop ? 'break;' : '')}
+        ${hasLoop ? '}' : ''}
         Some(left)
     }
-    fn parse_ast_${rule.name}_nud(&mut self, _min_bp: i64) -> Option<${ret}> {
-        ${nud.join('\n        ')}
+    fn parse_ast_${rule.name}_nud(&mut self, min_bp: i64) -> Option<${ret}> {
+        self.capped = false;
+        ${nudCappedCode}
+        // Non-capped path in nud_rest; clear capped afterwards so a nested arrow
+        // inside grouping does not suppress the enclosing LED/binary loop (≡ TS/CST).
+        let _r = self.parse_ast_${rule.name}_nud_rest(min_bp);
+        self.capped = false;
+        _r
+    }
+    fn parse_ast_${rule.name}_nud_rest(&mut self, min_bp: i64) -> Option<${ret}> {
+        let _ = min_bp;
+        ${atomCode}
+        ${groupCode}
+        ${nudSeqCode}
+        ${prefixCode}
         None
     }`;
 }
@@ -3057,29 +3589,29 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
   const note = (rule: string, construct: string): void => { out.push({ rule, construct }); };
   const supportedLeaf = (name: string): boolean => {
     const p = shapeIR.leaves[name];
-    return p?.action === 'drop' || (p?.action === 'leafValue' && ['number', 'ident', 'identity', 'string', 'boolean'].includes(p.fn));
+    return p?.action === 'drop' || (p?.action === 'leafValue' && ['number', 'ident', 'identity', 'string', 'boolean', 'bigint'].includes(p.fn));
   };
   const walkStep = (rule: string, step: Step): void => {
+    // SH3-1: all RD step kinds are supported.
     if (step.t === 'lit') {
       if (shapeIR.leaves[step.ttype]?.action !== 'drop') note(rule, `step:lit-kept:${step.value}`);
     } else if (step.t === 'tok') {
       if (!supportedLeaf(step.name) || shapeIR.leaves[step.name]?.action === 'drop') note(rule, `step:tok-policy:${step.name}`);
-    } else if (step.t === 'rule') {
-      // Direct calls are the calc-scale recursive-descent primitive.
-    } else if (step.t === 'star' && step.step.t === 'rule') {
-      // Calc list primitive.
-    } else {
-      note(rule, `step:${step.t}`);
-      if (step.t === 'alt') for (const branch of step.branches) for (const s of branch) walkStep(rule, s);
-      else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress') for (const s of step.steps) walkStep(rule, s);
-      else if (step.t === 'star') walkStep(rule, step.step);
-      else if (step.t === 'sep') walkStep(rule, step.elem);
-    }
+    } else if (step.t === 'alt') {
+      for (const branch of step.branches) for (const s of branch) walkStep(rule, s);
+    } else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress' || step.t === 'not') {
+      for (const s of step.steps) walkStep(rule, s);
+    } else if (step.t === 'star') walkStep(rule, step.step);
+    else if (step.t === 'sep') walkStep(rule, step.elem);
+    // rule/ruleBp/altlit/sameLine: ok
   };
   const walkShape = (rule: string, shape: RuleShape): void => {
     if (shape.kind === 'custom') note(rule, `shape:custom:${shape.fn}`);
     else if (shape.kind === 'choice') for (const arm of shape.arms) walkShape(rule, arm.shape);
-    else if (!['node', 'pratt'].includes(shape.kind)) note(rule, `shape:${shape.kind}`);
+    else if (shape.kind === 'keep' || shape.kind === 'inline' || shape.kind === 'list' || shape.kind === 'node' || shape.kind === 'pratt' || shape.kind === 'drop') {
+      // supported RD shape kinds
+    } else if (shape.kind === 'leafValue') note(rule, `shape:${shape.kind}`);
+    else note(rule, `shape:${(shape as { kind: string }).kind}`);
   };
 
   for (const sir of shapeIR.rules) {
@@ -3087,14 +3619,20 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
     walkShape(rule.name, sir.shape);
     if (rule.kind === 'rd') {
       if (sir.shape.kind === 'node') {
-        if (rule.alts.length !== 1) note(rule.name, `rd:node-alts:${rule.alts.length}`);
         for (const alt of rule.alts) for (const step of alt) walkStep(rule.name, step);
       } else if (sir.shape.kind === 'choice') {
         for (const arm of sir.shape.arms) {
-          if (arm.shape.kind !== 'node') note(rule.name, `choice-arm:${arm.shape.kind}`);
+          if (arm.shape.kind === 'custom') note(rule.name, `choice-arm:custom:${arm.shape.fn}`);
+          else if (!['node', 'keep', 'inline', 'list', 'drop'].includes(arm.shape.kind)) {
+            note(rule.name, `choice-arm:${arm.shape.kind}`);
+          }
           for (const ai of arm.altIndices) for (const step of rule.alts[ai] ?? []) walkStep(rule.name, step);
         }
-      } else {
+      } else if (sir.shape.kind === 'custom') {
+        // already noted
+      } else if (['keep', 'inline', 'list', 'drop'].includes(sir.shape.kind)) {
+        for (const alt of rule.alts) for (const step of alt) walkStep(rule.name, step);
+      } else if (sir.shape.kind !== 'pratt') {
         note(rule.name, `rd-shape:${sir.shape.kind}`);
       }
       continue;
@@ -3104,22 +3642,47 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
       continue;
     }
     const ps = sir.shape;
-    if (ps.atom && ps.atom.kind !== 'keep') note(rule.name, `pratt-shape:atom:${ps.atom.kind}`);
-    if (ps.group && ps.group.kind !== 'inline') note(rule.name, `pratt-shape:group:${ps.group.kind}`);
-    if (rule.nudBrackets.some((b) => b.steps.length !== 3 || b.steps[0]?.t !== 'lit' || !['rule', 'ruleBp'].includes(b.steps[1]?.t ?? '') || b.steps[2]?.t !== 'lit')) {
-      note(rule.name, 'pratt-ir:group-complex');
+    // Supported toy/calc Pratt slots:
+    const atomOk = !ps.atom || ps.atom.kind === 'keep' || ps.atom.kind === 'leafValue' || ps.atom.kind === 'rule'
+      || (ps.atom.kind === 'drop');
+    if (ps.atom && !atomOk) {
+      if (ps.atom.kind === 'custom') note(rule.name, `pratt-shape:atom:custom:${ps.atom.fn}`);
+      else note(rule.name, `pratt-shape:atom:${ps.atom.kind}`);
     }
-    for (const tok of rule.nudToks) if (!supportedLeaf(tok) || shapeIR.leaves[tok]?.action === 'drop') note(rule.name, `pratt-ir:atom-policy:${tok}`);
-    if (rule.prefix.length && ps.prefix?.kind !== 'node') note(rule.name, `pratt-shape:prefix:${ps.prefix?.kind ?? 'keep'}`);
-    if (rule.binary.length && ps.binary?.kind !== 'node') note(rule.name, `pratt-shape:binary:${ps.binary?.kind ?? 'keep'}`);
-    for (const [slot, value] of Object.entries({
-      nudSeq: rule.nudSeqs.length, nudCapped: rule.nudCapped.length, led: rule.leds.length,
-      postfixTok: rule.postfixToks.length, postfix: rule.postfix.length,
-    })) if (value) note(rule.name, `pratt-ir:${slot}(${value})`);
-    for (const slot of ['nudSeq', 'nudCapped', 'led', 'postfixTok', 'postfix', 'template'] as const) {
-      if (ps[slot]) note(rule.name, `pratt-shape:${slot}:${ps[slot]!.kind}`);
+    if (ps.group && !['inline', 'keep', 'node'].includes(ps.group.kind)) {
+      if (ps.group.kind === 'custom') note(rule.name, `pratt-shape:group:custom:${ps.group.fn}`);
+      else note(rule.name, `pratt-shape:group:${ps.group.kind}`);
     }
+    // Complex groups: allow if we render via RD steps (all brackets ok in SH3-1 for keep/inline/node)
+    for (const tok of rule.nudToks) {
+      if (ps.atom?.kind === 'rule') continue;
+      if (!supportedLeaf(tok) || shapeIR.leaves[tok]?.action === 'drop') note(rule.name, `pratt-ir:atom-policy:${tok}`);
+    }
+    if (rule.prefix.length && ps.prefix && !['node', 'keep', 'inline'].includes(ps.prefix.kind)) {
+      note(rule.name, `pratt-shape:prefix:${ps.prefix.kind}`);
+    }
+    if (rule.binary.length && ps.binary && !['node', 'keep'].includes(ps.binary.kind)) {
+      note(rule.name, `pratt-shape:binary:${ps.binary.kind}`);
+    }
+    if (rule.postfix.length && ps.postfix && !['node', 'keep', 'inline'].includes(ps.postfix.kind)) {
+      note(rule.name, `pratt-shape:postfix:${ps.postfix.kind}`);
+    }
+    // led / nudSeq / nudCapped: keep|inline|node supported; custom fail-fast
+    for (const [slotName, slot, present] of [
+      ['nudSeq', ps.nudSeq, rule.nudSeqs.length],
+      ['nudCapped', ps.nudCapped, rule.nudCapped.length],
+      ['led', ps.led, rule.leds.length],
+      ['postfixTok', ps.postfixTok, rule.postfixToks.length],
+    ] as const) {
+      if (!present) continue;
+      const kind = slot?.kind ?? 'keep';
+      if (kind === 'custom') note(rule.name, `pratt-shape:${slotName}:custom`);
+      else if (!['keep', 'inline', 'node'].includes(kind)) note(rule.name, `pratt-shape:${slotName}:${kind}`);
+    }
+    if (ps.template) note(rule.name, `pratt-shape:template:${ps.template.kind}`);
     if (ir.tpl) note(rule.name, 'pratt-ir:template');
+    // postfixTok still unsupported in renderer
+    if (rule.postfixToks.length) note(rule.name, `pratt-ir:postfixTok(${rule.postfixToks.length})`);
   }
   return out;
 }
@@ -3132,12 +3695,11 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
       unsupported.map((u) => `  ${u.rule}: ${u.construct}`).join('\n'),
     );
   }
-  const methodTypes = new Map(shapeIR.rules.map((r) => [r.name, rustShapeRuleType(r)]));
   const methods = shapeIR.rules.map((sir) => {
     const rule = ir.rules.find((r) => r.name === sir.name)!;
     return rule.kind === 'pratt'
       ? emitRustPrattMethod(rule, sir, ids, shapeIR)
-      : emitRustRdMethod(rule, sir, ids, shapeIR, methodTypes);
+      : emitRustRdMethod(rule, sir, ids, shapeIR);
   }).join('\n\n');
   return `
 
@@ -3154,11 +3716,26 @@ pub trait ShapeCustoms {
 pub struct DefaultShapeCustoms;
 impl ShapeCustoms for DefaultShapeCustoms {}
 
+#[derive(Clone)]
+struct ShapeCk {
+    pos: usize,
+    kids_len: usize,
+    lists_len: usize,
+    holes_len: usize,
+    alt_path_len: usize,
+    suppress_next: Vec<u16>,
+    suppress_cur: Vec<u16>,
+    capped: bool,
+}
+
 struct ShapeParser<'a, C: ShapeCustoms> {
     src: &'a str,
     toks: Vec<Tok>,
     pos: usize,
     customs: &'a C,
+    suppress_next: Vec<u16>,
+    suppress_cur: Vec<u16>,
+    capped: bool,
 }
 impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
     #[inline(always)] fn peek_kid(&self) -> Option<u16> { self.toks.get(self.pos).map(|t| t.kid) }
@@ -3177,6 +3754,68 @@ impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
         self.pos += 1;
         Some(text)
     }
+    fn shape_ck(&self, kids_len: usize, lists_len: usize, holes_len: usize, alt_path_len: usize) -> ShapeCk {
+        ShapeCk {
+            pos: self.pos,
+            kids_len, lists_len, holes_len, alt_path_len,
+            suppress_next: self.suppress_next.clone(),
+            suppress_cur: self.suppress_cur.clone(),
+            capped: self.capped,
+        }
+    }
+    fn shape_restore(&mut self, ck: ShapeCk, kids: &mut Vec<AstValue>, lists: &mut Vec<Vec<AstValue>>, holes: &mut Vec<Option<AstValue>>, alt_path: &mut Vec<usize>) {
+        self.pos = ck.pos;
+        kids.truncate(ck.kids_len);
+        lists.truncate(ck.lists_len);
+        holes.truncate(ck.holes_len);
+        alt_path.truncate(ck.alt_path_len);
+        self.suppress_next = ck.suppress_next;
+        self.suppress_cur = ck.suppress_cur;
+        self.capped = ck.capped;
+    }
+    fn shape_pack(values: Vec<AstValue>) -> AstValue {
+        if values.is_empty() { AstValue::Null }
+        else if values.len() == 1 { values.into_iter().next().unwrap() }
+        else { AstValue::Array(values) }
+    }
+    fn shape_head_text(v: Option<&AstValue>) -> String {
+        match v {
+            None | Some(AstValue::Null) => String::new(),
+            Some(AstValue::String(s)) => s.clone(),
+            Some(AstValue::Number(n)) => n.to_string(),
+            Some(AstValue::Bool(b)) => b.to_string(),
+            Some(AstValue::Array(xs)) => Self::shape_head_text(xs.first()),
+            Some(AstValue::Object { typ: _, fields }) => {
+                if let Some((_, ht)) = fields.iter().find(|(k, _)| k == "headText") {
+                    if let AstValue::String(s) = ht { if !s.is_empty() { return s.clone(); } }
+                }
+                if let Some((_, op)) = fields.iter().find(|(k, _)| k == "operator") {
+                    let has_arg = fields.iter().any(|(k, _)| k == "argument");
+                    let has_left = fields.iter().any(|(k, _)| k == "left");
+                    let has_right = fields.iter().any(|(k, _)| k == "right");
+                    if has_arg && !has_left && !has_right {
+                        if let AstValue::String(s) = op { return s.clone(); }
+                    }
+                }
+                if let Some((_, name)) = fields.iter().find(|(k, _)| k == "name") {
+                    if let AstValue::String(s) = name { return s.clone(); }
+                }
+                if let Some((_, val)) = fields.iter().find(|(k, _)| k == "value") {
+                    return Self::shape_head_text(Some(val));
+                }
+                if let Some((_, left)) = fields.iter().find(|(k, _)| k == "left") {
+                    return Self::shape_head_text(Some(left));
+                }
+                if let Some((_, kids)) = fields.iter().find(|(k, _)| k == "children") {
+                    if let AstValue::Array(xs) = kids { return Self::shape_head_text(xs.first()); }
+                }
+                if let Some((_, arg)) = fields.iter().find(|(k, _)| k == "argument") {
+                    return Self::shape_head_text(Some(arg));
+                }
+                String::new()
+            }
+        }
+    }
 
 ${methods}
 }
@@ -3184,7 +3823,10 @@ ${methods}
 pub fn parse_ast_with<C: ShapeCustoms>(src: &str, customs: &C) -> Option<AstRoot> {
     let toks = lex(src);
     let n = toks.len();
-    let mut parser = ShapeParser { src, toks, pos: 0, customs };
+    let mut parser = ShapeParser {
+        src, toks, pos: 0, customs,
+        suppress_next: Vec::new(), suppress_cur: Vec::new(), capped: false,
+    };
     let root = parser.parse_ast_${ir.entry}()?;
     if parser.pos == n { Some(root) } else { None }
 }

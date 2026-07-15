@@ -1,13 +1,15 @@
-// Gate: Rust calc shape codegen — rustc -O, CST≡AST acceptance, TS≡Rust neutral AST,
-// no-shape byte identity, and fail-fast inventory for the full TypeScript shape.
+// Gate: Rust shape codegen — calc + toy RD, CST≡AST acceptance, TS≡Rust neutral AST,
+// no-shape byte identity, and fail-fast inventory (RD steps = 0; Pratt/custom/template remain).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { emitParser, rustTarget } from '../src/emit.ts';
 import { emitRust } from '../src/target-rust.ts';
 import { emitTs } from '../src/target-ts.ts';
 import { calcShape } from '../src/shape-calc.ts';
 import calcGrammar from './fixtures/calc.ts';
+import toyGrammar, { toyShape, toyGolden, buildToyCorpus } from './fixtures/shape-toy.ts';
 import typescriptGrammar from '../typescript.ts';
 import { typescriptShape } from './fixtures/shape-typescript.ts';
 
@@ -113,7 +115,6 @@ const GOLDEN: { src: string; expect: Ast }[] = [
   },
 ];
 
-// Mixed valid/invalid, precedence, whitespace, rollback, and prefix cases (≥30 adversarial).
 const CORPUS = [...new Set([...GOLDEN.map((golden) => golden.src), ...[
   '', '1;', 'a;', 'let x = 1;', 'let long_name=42;', '1+2;', '1 + 2 * 3;',
   '(1);', '((1));', '-1;', '--x;', '-(a*b);', '1-2-3;', '8/4/2;', '1+-2;',
@@ -144,6 +145,26 @@ fn main() {
 }
 `;
 
+function compileShape(name: string, source: string): string {
+  const rustFile = `${TMP}/${name}.rs`;
+  const rustBin = `${TMP}/${name}`;
+  writeFileSync(rustFile, source + harness);
+  execFileSync('rustc', ['-O', '-A', 'warnings', rustFile, '-o', rustBin], {
+    stdio: 'pipe',
+    timeout: 180_000,
+  });
+  return rustBin;
+}
+
+function runBatch(bin: string, inputs: string[]): string[] {
+  return execFileSync(bin, {
+    input: inputs.join('\0'),
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 120_000,
+  }).trimEnd().split('\n');
+}
+
 async function main(): Promise<void> {
   const noShape = emitRust(calcGrammar);
   const base = emitParser(calcGrammar, rustTarget);
@@ -156,30 +177,23 @@ async function main(): Promise<void> {
     'generated Rust AST structs/enums',
     generated.includes('pub struct Program') &&
       generated.includes('pub enum ExprShape') &&
-      generated.includes('pub enum StmtShape'),
+      generated.includes('pub enum StmtShape') &&
+      generated.includes('struct ShapeCk') &&
+      generated.includes('pub enum AstValue'),
   );
   check(
-    'zero-cost generic customs + bindOp',
+    'zero-cost generic customs + bindOp + ShapeCk',
     generated.includes('pub trait ShapeCustoms') &&
       generated.includes('pub fn parse_ast_with<C: ShapeCustoms>') &&
-      generated.includes('self.customs.bind_op'),
+      generated.includes('self.customs.bind_op') &&
+      generated.includes('fn shape_ck(') &&
+      generated.includes('fn shape_restore('),
   );
 
-  const rustFile = `${TMP}/calc-shape.rs`;
-  const rustBin = `${TMP}/calc-shape`;
-  writeFileSync(rustFile, generated + harness);
-  execFileSync('rustc', ['-O', '-A', 'warnings', rustFile, '-o', rustBin], {
-    stdio: 'pipe',
-    timeout: 120_000,
-  });
+  const calcBin = compileShape('calc-shape', generated);
   check('rustc -O calc shape', true);
 
-  const rustLines = execFileSync(rustBin, {
-    input: CORPUS.join('\0'),
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: 30_000,
-  }).trimEnd().split('\n');
+  const rustLines = runBatch(calcBin, CORPUS);
   check('calc CST parse ≡ Rust parse_ast acceptance', rustLines.length === CORPUS.length, `${CORPUS.length} cases, 0 divergences`);
 
   const tsFile = `${TMP}/calc-shape.ts`;
@@ -198,12 +212,7 @@ async function main(): Promise<void> {
   }
   check('calc TS CST/AST ≡ Rust AST acceptance', parityBad === 0, `${CORPUS.length} cases, ${parityBad} divergences`);
 
-  const goldenLines = execFileSync(rustBin, {
-    input: GOLDEN.map((golden) => golden.src).join('\0'),
-    encoding: 'utf8',
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: 30_000,
-  }).trimEnd().split('\n');
+  const goldenLines = runBatch(calcBin, GOLDEN.map((golden) => golden.src));
   let goldenBad = 0;
   let crossBad = 0;
   for (let i = 0; i < GOLDEN.length; i++) {
@@ -222,6 +231,61 @@ async function main(): Promise<void> {
   check('Rust handwritten golden AST', goldenBad === 0, `${GOLDEN.length - goldenBad}/${GOLDEN.length}`);
   check('TS vs Rust neutral JSON AST isomorphism', crossBad === 0, `${GOLDEN.length - crossBad}/${GOLDEN.length}`);
 
+  // ── toy RD full constructs ───────────────────────────────────────────────
+  const toySrc = emitRust(toyGrammar, { shape: toyShape });
+  check('toy shape emits (RD + toy-scale Pratt)', toySrc.includes('parse_ast_Transaction') && toySrc.includes('shape_ck'));
+  const toyBin = compileShape('toy-shape', toySrc);
+  check('rustc -O toy shape', true);
+
+  const toyTsFile = `${TMP}/toy-shape.ts`;
+  writeFileSync(toyTsFile, emitTs(toyGrammar, { shape: toyShape }));
+  const toyTs = await import(pathToFileURL(toyTsFile).href + `?t=${Date.now()}`) as {
+    parseAst: (src: string) => unknown;
+    parse: (tokens: unknown[]) => unknown;
+    tokenize: (src: string) => unknown[];
+  };
+
+  const toyGoldenLines = runBatch(toyBin, toyGolden.map((g) => g.src));
+  let toyGoldenBad = 0;
+  let toyCrossBad = 0;
+  for (let i = 0; i < toyGolden.length; i++) {
+    const g = toyGolden[i]!;
+    if (!toyGoldenLines[i]?.startsWith('A\t')) {
+      toyGoldenBad++;
+      continue;
+    }
+    const rust = stripSpans(JSON.parse(toyGoldenLines[i]!.slice(2)));
+    const tsAst = stripSpans(toyTs.parseAst(g.src));
+    if (JSON.stringify(rust) !== JSON.stringify(g.expect)) toyGoldenBad++;
+    if (JSON.stringify(rust) !== JSON.stringify(tsAst)) toyCrossBad++;
+  }
+  check('toy Rust golden AST', toyGoldenBad === 0, `${toyGolden.length - toyGoldenBad}/${toyGolden.length}`);
+  check('toy TS↔Rust golden isomorphism', toyCrossBad === 0, `${toyGolden.length - toyCrossBad}/${toyGolden.length}`);
+
+  const toyCorpus = buildToyCorpus();
+  check('toy corpus size ≥1000', toyCorpus.length >= 1000, `${toyCorpus.length}`);
+  const toyCorpusLines = runBatch(toyBin, toyCorpus.map((c) => c.src));
+  let toyAcceptDiv = 0;
+  let toyIsoBad = 0;
+  let toyIsoN = 0;
+  for (let i = 0; i < toyCorpus.length; i++) {
+    const src = toyCorpus[i]!.src;
+    const tsCst = toyTs.parse(toyTs.tokenize(src));
+    const tsAst = toyTs.parseAst(src);
+    const rustOk = toyCorpusLines[i]!.startsWith('A\t');
+    if ((tsCst !== null) !== rustOk || (tsAst !== null) !== rustOk) {
+      toyAcceptDiv++;
+      continue;
+    }
+    if (tsCst !== null && rustOk) {
+      toyIsoN++;
+      const rust = stripSpans(JSON.parse(toyCorpusLines[i]!.slice(2)));
+      if (JSON.stringify(rust) !== JSON.stringify(stripSpans(tsAst))) toyIsoBad++;
+    }
+  }
+  check('toy CST≡AST accept equivalence', toyAcceptDiv === 0, `${toyCorpus.length} cases, ${toyAcceptDiv} divergences`);
+  check('toy TS↔Rust AST isomorphism', toyIsoBad === 0, `${toyIsoN} compared, ${toyIsoBad} divergences`);
+
   let failFast = '';
   try {
     emitRust(typescriptGrammar, { shape: typescriptShape });
@@ -229,13 +293,27 @@ async function main(): Promise<void> {
     failFast = error instanceof Error ? error.message : String(error);
   }
   const unsupportedCount = Number(failFast.match(/shape rust emit: (\d+) unsupported construct/)?.[1] ?? 0);
+  const items = failFast.split('\n').map((line) => {
+    const m = line.match(/^\s+([^:]+): (.+)$/);
+    return m ? m[2]! : null;
+  }).filter((x): x is string => !!x);
+  let rdStep = 0;
+  let pratt = 0;
+  let custom = 0;
+  let template = 0;
+  let other = 0;
+  for (const c of items) {
+    if (c.startsWith('step:')) rdStep++;
+    else if (c.includes('template')) template++;
+    else if (c.startsWith('shape:custom') || c.startsWith('choice-arm:custom') || c.includes(':custom:')) custom++;
+    else if (c.startsWith('pratt-')) pratt++;
+    else other++;
+  }
   check(
     'TypeScript full shape fails fast at emit time',
-    unsupportedCount > 0 &&
-      failFast.includes('pratt-ir:') &&
-      failFast.includes('step:') &&
+    unsupportedCount > 0 && rdStep === 0 && other === 0 && (pratt + custom + template) === unsupportedCount &&
       !failFast.toLowerCase().includes('panic'),
-    `${unsupportedCount} unsupported constructs`,
+    `${unsupportedCount} unsupported (RD-step=${rdStep} Pratt=${pratt} custom=${custom} template=${template} other=${other})`,
   );
 
   const total = pass + fail;
