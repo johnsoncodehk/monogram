@@ -230,18 +230,28 @@ async function main(): Promise<void> {
     console.log('✓ validateShapeOrThrow throws on field-oob');
   }
 
-  // no-shape SHA256 ≡ master emitParser prefix
+  // no-shape: emitTs byte-identical to emitParser (full file); SHA256 recorded for master proof
   const noShape = emitTs(calcGrammar);
   const master = emitParser(calcGrammar, tsTarget);
-  const hNo = createHash('sha256').update(cstPrefix(noShape)).digest('hex').slice(0, 12);
-  const hMa = createHash('sha256').update(cstPrefix(master)).digest('hex').slice(0, 12);
-  if (hNo !== hMa) {
-    console.error(`✗ no-shape prefix sha256 ${hNo} !== master ${hMa}`);
+  const hNo = createHash('sha256').update(noShape).digest('hex');
+  const hMa = createHash('sha256').update(master).digest('hex');
+  if (noShape !== master || hNo !== hMa) {
+    console.error(`✗ no-shape emitTs !== emitParser (sha ${hNo.slice(0,12)} vs ${hMa.slice(0,12)})`);
     fail++;
   } else {
     pass++;
-    console.log(`✓ no-shape emitted prefix sha256=${hNo} ≡ master`);
+    console.log(`✓ no-shape emitted full-file sha256=${hNo.slice(0,12)} ≡ emitParser`);
   }
+  // Generated types: list fields must be T[]; opText fields must be string
+  const withShapeSrc = emitTs(calcGrammar, { shape: calcShape });
+  if (!/export interface Program \{[^}]*body: Statement\[\];/.test(withShapeSrc)) {
+    console.error('✗ Program.body must be typed Statement[]');
+    fail++;
+  } else { pass++; console.log('✓ Program.body: Statement[]'); }
+  if (!/operator: string;/.test(withShapeSrc)) {
+    console.error('✗ opText fields must be typed string');
+    fail++;
+  } else { pass++; console.log('✓ opText fields: string'); }
 
   // golden parseAst
   const mod = await emitAndLoad(calcShape);

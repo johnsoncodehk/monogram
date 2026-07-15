@@ -2428,7 +2428,9 @@ function emitShapeTypeDecls(ir: ParserIR, shapeIR: ShapeIR): string {
   for (const [type, node] of [...nodes.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const fields = node.fields.map((f: FieldDecl) => {
       const opt = f.optional ? '?' : '';
-      const ty = shapeTsTypeHint(f.typeHint, 'unknown');
+      let ty = shapeTsTypeHint(f.typeHint, 'unknown');
+      if (f.bind === 'opText') ty = 'string';
+      else if (isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'list') ty = `${ty}[]`;
       return `${f.name}${opt}: ${ty};`;
     }).join(' ');
     lines.push(`export interface ${type} { type: ${J(type)}; ${fields}${fields && span ? ' ' : ''}${span} }`);

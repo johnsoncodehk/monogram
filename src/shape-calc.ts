@@ -20,7 +20,7 @@ export const calcShape: ShapeSpec = {
         kind: 'node',
         type: 'UnaryExpression',
         fields: [
-          { name: 'operator', bind: 'opText' },
+          { name: 'operator', bind: 'opText', typeHint: 'string' },
           { name: 'argument', bind: { at: 0 }, typeHint: 'Expression' },
         ],
       },
@@ -29,7 +29,7 @@ export const calcShape: ShapeSpec = {
         type: 'BinaryExpression',
         fields: [
           { name: 'left', bind: { at: 0 }, typeHint: 'Expression' },
-          { name: 'operator', bind: 'opText' },
+          { name: 'operator', bind: 'opText', typeHint: 'string' },
           { name: 'right', bind: { at: 1 }, typeHint: 'Expression' },
         ],
       },
