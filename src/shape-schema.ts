@@ -105,3 +105,26 @@ export const ADJUDICATIONS = {
   altHeterogeneous: 'Choice arms partition every RD alternative exactly once.',
   ruleKeying: 'Exact IR rule names override inherited cstName mappings.',
 } as const;
+
+/** Emit-time static coverage of Shape AST step/pratt rendering. */
+export type ShapeStepKind =
+  | 'lit' | 'tok' | 'rule' | 'ruleBp' | 'star' | 'opt' | 'sep'
+  | 'altlit' | 'alt' | 'not' | 'seq' | 'sameLine' | 'suppress';
+export type ShapePrattKind =
+  | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
+  | 'led' | 'nudSeq' | 'nudCapped';
+export type ShapeUnsupported = { rule: string; construct: string };
+export type ShapeCoverage = {
+  step: Record<ShapeStepKind, number>;
+  pratt: Record<ShapePrattKind, number>;
+  unsupported: ShapeUnsupported[];
+};
+
+export const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
+  'lit', 'tok', 'rule', 'ruleBp', 'star', 'opt', 'sep',
+  'altlit', 'alt', 'not', 'seq', 'sameLine', 'suppress',
+] as const;
+export const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
+  'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',
+  'led', 'nudSeq', 'nudCapped',
+] as const;
