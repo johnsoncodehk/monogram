@@ -8,6 +8,13 @@ import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, ty
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
+import type {
+  ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
+  RuleShape, TokenLeafPolicy, ShapeIRRule,
+} from './shape-schema.ts';
+import { validateShapeOrThrow } from './shape-validate.ts';
+
+export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
@@ -2363,6 +2370,480 @@ ${editParse}
   };
 }
 
+// ─── Shape AST codegen (SH1) ─────────────────────────────────────────────────
+
+function isFieldBindObj(bind: FieldBind): bind is Exclude<FieldBind, 'opText'> {
+  return typeof bind !== 'string';
+}
+
+function shapeSpanFields(spans: ShapeSpec['spans']): string {
+  if (spans === 'none') return '';
+  if (spans === 'required') return 'off: number; end: number;';
+  return 'off?: number; end?: number;';
+}
+
+function shapeTsTypeHint(hint: string | string[] | undefined, fallback: string): string {
+  if (!hint) return fallback;
+  return Array.isArray(hint) ? hint.join(' | ') : hint;
+}
+
+function collectNodeTypes(shapeIR: ShapeIR): Map<string, NodeShape> {
+  const out = new Map<string, NodeShape>();
+  const walk = (s: RuleShape): void => {
+    if (s.kind === 'node') out.set(s.type, s);
+    else if (s.kind === 'choice') for (const a of s.arms) walk(a.shape);
+    else if (s.kind === 'pratt') {
+      for (const k of ['atom', 'group', 'nudSeq', 'nudCapped', 'prefix', 'binary', 'postfix', 'led', 'postfixTok'] as const) {
+        const x = s[k];
+        if (x && typeof x === 'object' && 'kind' in x) walk(x as RuleShape);
+      }
+    }
+  };
+  for (const r of shapeIR.rules) walk(r.shape);
+  return out;
+}
+
+function choiceUnionName(ruleName: string, shape: ChoiceShape): string {
+  return ruleName + 'Shape';
+}
+
+function prattUnionName(ruleName: string): string {
+  return ruleName + 'Shape';
+}
+
+function emitShapeTypeDecls(ir: ParserIR, shapeIR: ShapeIR): string {
+  const span = shapeSpanFields(shapeIR.spans);
+  const nodes = collectNodeTypes(shapeIR);
+  const lines: string[] = ['// ─── Shape AST types (generated) ────────────────────────────────────────────'];
+  const leafScalars = new Set<string>();
+  for (const [tt, pol] of Object.entries(shapeIR.leaves) as [string, TokenLeafPolicy][]) {
+    if (pol.action === 'leafValue') {
+      const ts = pol.fn === 'number' ? 'number' : pol.fn === 'bigint' ? 'bigint' : pol.fn === 'boolean' ? 'boolean' : 'string';
+      leafScalars.add(ts);
+    }
+  }
+  if (leafScalars.size) {
+    for (const ts of [...leafScalars].sort()) lines.push(`export type ${ts === 'string' ? 'Identifier' : ts[0]!.toUpperCase() + ts.slice(1)} = ${ts};`);
+  }
+  for (const [type, node] of [...nodes.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const fields = node.fields.map((f: FieldDecl) => {
+      const opt = f.optional ? '?' : '';
+      const ty = shapeTsTypeHint(f.typeHint, 'unknown');
+      return `${f.name}${opt}: ${ty};`;
+    }).join(' ');
+    lines.push(`export interface ${type} { type: ${J(type)}; ${fields}${fields && span ? ' ' : ''}${span} }`);
+  }
+  for (const r of shapeIR.rules) {
+    if (r.shape.kind === 'choice') {
+      const members = r.shape.arms.map((a: ChoiceArm) => {
+        if (a.shape.kind === 'node') return a.shape.type;
+        if (a.shape.kind === 'list') return `${shapeTsTypeHint(a.shape.elemHint, 'unknown')}[]`;
+        return 'unknown';
+      });
+      const name = choiceUnionName(r.name, r.shape);
+      lines.push(`export type ${name} = ${members.join(' | ')};`);
+      if (r.cstName === 'Stmt' || r.name === 'Stmt') lines.push(`export type Statement = ${name};`);
+      if (r.name === ir.entry) lines.push(`export type AstRoot = ${name};`);
+    } else if (r.shape.kind === 'pratt') {
+      const members: string[] = [];
+      const add = (s: RuleShape | undefined) => {
+        if (!s) return;
+        if (s.kind === 'node') members.push(s.type);
+        else if (s.kind === 'leafValue') {
+          const ts = s.fn === 'number' ? 'number' : s.fn === 'bigint' ? 'bigint' : s.fn === 'boolean' ? 'boolean' : 'string';
+          members.push(ts);
+        } else if (s.kind === 'keep') {
+          for (const [tt, pol] of Object.entries(shapeIR.leaves) as [string, TokenLeafPolicy][]) {
+            if (pol.action === 'leafValue') {
+              const ts = pol.fn === 'number' ? 'number' : pol.fn === 'bigint' ? 'bigint' : pol.fn === 'boolean' ? 'boolean' : 'string';
+              members.push(ts);
+            }
+          }
+        }
+      };
+      add(r.shape.atom);
+      add(r.shape.prefix);
+      add(r.shape.binary);
+      add(r.shape.group);
+      const uniq = [...new Set(members)];
+      const name = prattUnionName(r.name);
+      lines.push(`export type ${name} = ${uniq.join(' | ')};`);
+      if (r.cstName === 'Expr' || r.name === 'Expr') lines.push(`export type Expression = ${name};`);
+      if (r.name === ir.entry) lines.push(`export type AstRoot = ${name};`);
+    } else if (r.shape.kind === 'node' && r.name === ir.entry) {
+      lines.push(`export type AstRoot = ${r.shape.type};`);
+    } else if (r.shape.kind === 'list' && r.name === ir.entry) {
+      lines.push(`export type AstRoot = ${shapeTsTypeHint(r.shape.elemHint, 'unknown')}[];`);
+    }
+  }
+  if (!lines.some((l) => l.includes('AstRoot'))) {
+    const entry = shapeIR.rules.find((x) => x.name === ir.entry);
+    lines.push(`export type AstRoot = ${entry ? 'unknown' : 'unknown'};`);
+  }
+  lines.push('export type AstCustoms = Record<string, (src: string, cst: Cst) => unknown>;');
+  lines.push('let _astCustoms: AstCustoms = {};');
+  return lines.join('\n');
+}
+
+function leafDropped(ttype: string, leaves: Record<string, TokenLeafPolicy>): boolean {
+  return leaves[ttype]?.action === 'drop';
+}
+
+function emitAstNodeCtor(
+  node: NodeShape, spans: ShapeSpec['spans'], fields: Array<{ name: string; expr: string }>, offExpr: string, endExpr: string,
+): string {
+  const spanPart = spans === 'none' ? '' : spans === 'required' ? `, off: ${offExpr}, end: ${endExpr}` : `, ...( ${offExpr} >= 0 ? { off: ${offExpr}, end: ${endExpr} } : {} )`;
+  const body = fields.map((f) => `${f.name}: ${f.expr}`).join(', ');
+  return `{ type: ${J(node.type)}, ${body}${spanPart} }`;
+}
+
+function emitAstRdAltSteps(
+  steps: Step[], ids: LexIdPlan, leaves: Record<string, TokenLeafPolicy>,
+  bindings: Map<number, string>, listBindings: Map<number, string>,
+  listElemHints: Map<number, string> = new Map(),
+): { ok: string } {
+  const checks: string[] = [];
+  let visSlot = 0;
+  for (const s of steps) {
+    switch (s.t) {
+      case 'lit':
+        checks.push(leafDropped(s.ttype, leaves)
+          ? `if (!_shapeDropLit(${lidOf(ids, s.value)})) { pos = sp; return null; }`
+          : `if (!_shapeKeepLit(${lidOf(ids, s.value)}, ${J(s.ttype)})) { pos = sp; return null; }`);
+        if (!leafDropped(s.ttype, leaves)) visSlot++;
+        break;
+      case 'tok': {
+        if (leafDropped(s.name, leaves)) {
+          checks.push(`if (!_shapeDropTok(${kidOf(ids, s.name)})) { pos = sp; return null; }`);
+          break;
+        }
+        const bind = bindings.get(visSlot);
+        const pol = leaves[s.name];
+        if (bind && pol?.action === 'leafValue') {
+          checks.push(`{ const t = peek(); if (t === null || t.kid !== ${kidOf(ids, s.name)}) { pos = sp; return null; } var ${bind} = ${pol.fn === 'number' ? '_shapeLeafNumber(t)' : pol.fn === 'ident' ? '_shapeLeafIdent(t)' : '_shapeLeafString(t)'}; pos++; }`);
+        } else if (bind) {
+          checks.push(`{ const t = peek(); if (t === null || t.kid !== ${kidOf(ids, s.name)}) { pos = sp; return null; } var ${bind} = _shapeLeafIdent(t); pos++; }`);
+        } else {
+          checks.push(`if (!_shapeKeepTok(${kidOf(ids, s.name)})) { pos = sp; return null; }`);
+        }
+        visSlot++;
+        break;
+      }
+      case 'rule': {
+        const bind = bindings.get(visSlot);
+        const call = `parseAst${s.name}()`;
+        if (bind) checks.push(`var ${bind} = ${call}; if (${bind} === null) { pos = sp; return null; }`);
+        else checks.push(`{ const _v = ${call}; if (_v === null) { pos = sp; return null; } }`);
+        visSlot++;
+        break;
+      }
+      case 'star': {
+        const listBind = listBindings.get(visSlot) ?? listBindings.get(0) ?? 'body';
+        if (s.step.t === 'rule') {
+          const elem = `parseAst${s.step.name}()`;
+          const hint = shapeTsTypeHint(listElemHints.get(visSlot) ?? listElemHints.get(0), 'unknown');
+          checks.push(`var ${listBind}: ${hint}[] = []; for (;;) { const _sp2 = pos; const _el = ${elem}; if (_el === null) { pos = _sp2; break; } ${listBind}.push(_el); }`);
+        }
+        visSlot++;
+        break;
+      }
+      case 'opt':
+        for (const st of s.steps) {
+          if (st.t === 'rule') checks.push(`{ const _sp3 = pos; const _o = parseAst${st.name}(); if (_o === null) pos = _sp3; }`);
+        }
+        break;
+      case 'seq':
+        for (const st of s.steps) {
+          const sub = emitAstRdAltSteps([st], ids, leaves, bindings, listBindings, listElemHints);
+          if (sub.ok) checks.push(sub.ok);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return { ok: checks.join('\n    ') };
+}
+
+function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: ShapeIR): string {
+  const leaves = shapeIR.leaves;
+  const spans = shapeIR.spans;
+  const shape = sir.shape;
+  if (shape.kind === 'drop') {
+    return `function parseAst${r.name}(): null { const sp = pos; if (parse${r.name}() === null) { pos = sp; return null; } return null; }`;
+  }
+  if (shape.kind === 'custom') {
+    return `function parseAst${r.name}(): unknown {
+  const fn = _astCustoms[${J(shape.fn)}];
+  if (!fn) throw new Error('shape: custom ${shape.fn} not provided');
+  const cst = parse${r.name}();
+  if (cst === null) return null;
+  return fn(_src, cst);
+}`;
+  }
+  if (shape.kind === 'inline') {
+    return `function parseAst${r.name}(): unknown { throw new Error('shape: inline ${r.name} must be spliced by parent'); }`;
+  }
+  if (shape.kind === 'list') {
+    const inner = r.alts[0]?.[0];
+    const elemRule = inner?.t === 'star' && inner.step.t === 'rule' ? inner.step.name : null;
+    if (!elemRule) return `function parseAst${r.name}(): unknown[] { throw new Error('shape: list ${r.name} unsupported IR'); }`;
+    const elemHint = shapeTsTypeHint(shape.elemHint, 'unknown');
+    return `function parseAst${r.name}(): ${elemHint}[] | null {
+  const sp = pos;
+  const out: ${elemHint}[] = [];
+  for (;;) {
+    const sp2 = pos;
+    const el = parseAst${elemRule}();
+    if (el === null) { pos = sp2; break; }
+    out.push(el);
+  }
+  if (pos === sp && out.length === 0) return null;
+  return out;
+}`;
+  }
+  if (shape.kind === 'keep') {
+    return `function parseAst${r.name}(): unknown {
+  const cst = parse${r.name}();
+  if (cst === null) return null;
+  return { type: ${J(r.cstName)}, children: cst };
+}`;
+  }
+  if (shape.kind === 'choice') {
+    const retType = choiceUnionName(r.name, shape);
+    const arms = shape.arms.map((arm: ChoiceArm) => {
+      const altIdx = arm.altIndices[0]!;
+      const alt = r.alts[altIdx]!;
+      const node = arm.shape.kind === 'node' ? arm.shape : null;
+      if (!node) return `  /* arm ${arm.name} non-node */`;
+      const bindings = new Map<number, string>();
+      const listBindings = new Map<number, string>();
+      const listElemHints = new Map<number, string>();
+      for (const f of node.fields) {
+        if (f.bind === 'opText') continue;
+        if (isFieldBindObj(f.bind) && 'at' in f.bind) bindings.set(f.bind.at, f.name);
+        if (isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'list' && typeof f.bind.of === 'number') {
+          listBindings.set(f.bind.of, f.name);
+          if (f.typeHint) listElemHints.set(f.bind.of, shapeTsTypeHint(f.typeHint, 'unknown'));
+        }
+      }
+      const stepsCode = emitAstRdAltSteps(alt, ids, leaves, bindings, listBindings, listElemHints);
+      const fieldExprs = node.fields.map((f: FieldDecl) => {
+        if (f.bind === 'opText') return { name: f.name, expr: `''` };
+        if ('at' in f.bind) return { name: f.name, expr: f.name };
+        if ('from' in f.bind && f.bind.from === 'list') return { name: f.name, expr: f.name };
+        return { name: f.name, expr: 'undefined' };
+      });
+      const guard = isGuardable(r.altFirst[altIdx] ?? null, r.alts.length)
+        ? `_ft !== null && ${firstCond(r.altFirst[altIdx]!, '_ft', ids)}`
+        : 'true';
+      const ctor = emitAstNodeCtor(node, spans, fieldExprs, 'spOff', 'pos > 0 ? toks[pos - 1]!.end : spOff');
+      return `  { const sp = pos; const spOff = sp < toks.length ? toks[sp]!.off : 0; if (${guard}) {
+    ${stepsCode.ok}
+    return ${ctor};
+  } pos = sp; }`;
+    }).join('\n');
+    const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i] ?? null, r.alts.length));
+    return `function parseAst${r.name}(): ${retType} | null {
+  const save = pos;
+${needPeek ? '  const _ft = peek();\n' : ''}${arms}
+  pos = save;
+  return null;
+}`;
+  }
+  if (shape.kind === 'node') {
+    const node = shape;
+    const alt = r.alts[0] ?? [];
+    const bindings = new Map<number, string>();
+    const listBindings = new Map<number, string>();
+    const listElemHints = new Map<number, string>();
+    for (const f of node.fields) {
+      if (isFieldBindObj(f.bind) && 'at' in f.bind) bindings.set(f.bind.at, f.name);
+      if (isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'list' && typeof f.bind.of === 'number') {
+        listBindings.set(f.bind.of, f.name);
+        if (f.typeHint) listElemHints.set(f.bind.of, shapeTsTypeHint(f.typeHint, 'unknown'));
+      }
+    }
+    const stepsCode = emitAstRdAltSteps(alt, ids, leaves, bindings, listBindings, listElemHints);
+    const fieldExprs = node.fields.map((f: FieldDecl) => {
+      if (f.bind === 'opText') return { name: f.name, expr: `''` };
+      if (isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'list') return { name: f.name, expr: f.name };
+      if (isFieldBindObj(f.bind) && 'at' in f.bind) return { name: f.name, expr: f.name };
+      return { name: f.name, expr: 'undefined' };
+    });
+    const ctor = emitAstNodeCtor(node, spans, fieldExprs, 'spOff', 'pos > 0 ? toks[pos - 1]!.end : spOff');
+    return `function parseAst${r.name}(): ${node.type} | null {
+  const sp = pos;
+  const spOff = sp < toks.length ? toks[sp]!.off : 0;
+  ${stepsCode.ok}
+  return ${ctor};
+}`;
+  }
+  return `function parseAst${r.name}(): unknown { throw new Error('shape: unsupported RD shape for ${r.name}'); }`;
+}
+
+function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: ShapeIR): string {
+  const shape = sir.shape;
+  if (shape.kind !== 'pratt') return `function parseAst${r.name}(): unknown { throw new Error('shape: expected pratt shape'); }`;
+  const ps = shape;
+  const retType = prattUnionName(r.name);
+  const spans = shapeIR.spans;
+  const leaves = shapeIR.leaves;
+  const spanObj = (off: string, end: string) =>
+    spans === 'none' ? '' : spans === 'required' ? `, off: ${off}, end: ${end}` : `, ...( ${off} >= 0 ? { off: ${off}, end: ${end} } : {} )`;
+
+  const atomCode = (() => {
+    if (!ps.atom || ps.atom.kind === 'drop') return '';
+    if (ps.atom.kind === 'leafValue') {
+      const fn = ps.atom.fn === 'number' ? '_shapeLeafNumber' : ps.atom.fn === 'ident' ? '_shapeLeafIdent' : '_shapeLeafString';
+      return `  if (${r.name}_ATOM.has(t.kid)) { pos++; return ${fn}(t); }`;
+    }
+    return `  if (${r.name}_ATOM.has(t.kid)) {
+    if (t.kid === ${kidOf(ids, 'Number')}) { pos++; return _shapeLeafNumber(t); }
+    if (t.kid === ${kidOf(ids, 'Ident')}) { pos++; return _shapeLeafIdent(t); }
+  }`;
+  })();
+
+  const groupCode = (() => {
+    if (!ps.group) return '';
+    if (ps.group.kind === 'inline') {
+      const b = r.nudBrackets[0];
+      if (!b) return '';
+      const open = b.steps[0]?.t === 'lit' ? lidOf(ids, (b.steps[0] as { value: string }).value) : 0;
+      const close = b.steps[b.steps.length - 1]?.t === 'lit' ? lidOf(ids, (b.steps[b.steps.length - 1] as { value: string }).value) : 0;
+      return `  if (t.lid === ${open}) {
+    const save = pos;
+    if (!_shapeDropLit(${open})) return null;
+    const inner = parseAst${r.name}();
+    if (inner === null || !_shapeDropLit(${close})) { pos = save; return null; }
+    return inner;
+  }`;
+    }
+    return `  throw new Error('shape: ${r.name} group shape not supported');`;
+  })();
+
+  const prefixNode = ps.prefix?.kind === 'node' ? ps.prefix : null;
+  const prefixCode = prefixNode ? `  const pbp = ${r.name}_PRE[t.lid];
+  if (pbp !== undefined) {
+    const save = pos;
+    const opText = _src.slice(t.off, t.end);
+    pos++;
+    const argument = parseAst${r.name}_bp(pbp);
+    if (argument === null) { pos = save; return null; }
+    const spOff = save < toks.length ? toks[save]!.off : 0;
+    const end = pos > 0 ? toks[pos - 1]!.end : spOff;
+    return { type: ${J(prefixNode.type)}, operator: opText, argument${spanObj('spOff', 'end')} };
+  }` : '';
+
+  const binaryNode = ps.binary?.kind === 'node' ? ps.binary : null;
+
+  const nudThrow = [
+    r.nudSeqs.length > 0 && !ps.nudSeq ? `  throw new Error('shape: ${r.name} nudSeq not supported');` : '',
+    r.nudCapped.length > 0 && !ps.nudCapped ? `  throw new Error('shape: ${r.name} nudCapped not supported');` : '',
+  ].filter(Boolean).join('\n');
+
+  const ledThrow = (r.leds.length > 0 || r.postfixToks.length > 0 || r.postfix.length > 0) && !ps.led && !ps.postfix
+    ? `    if (${r.leds.map((b) => `t.lid === ${lidOf(ids, b.first)}`).concat(r.postfixToks.map((k) => `t.kid === ${kidOf(ids, k)}`)).concat(r.postfix.map((p) => `t.lid === ${lidOf(ids, p.op)}`)).join(' || ') || 'false'}) throw new Error('shape: ${r.name} Pratt led/postfix not supported');`
+    : '';
+
+  const binaryCode = binaryNode ? `    const info = ${r.name}_BIN[t.lid];
+    if (info === undefined || info.lbp <= minBp) break;
+    const ledSave = pos;
+    const opText = _src.slice(t.off, t.end);
+    pos++;
+    const right = parseAst${r.name}_bp(info.rbp);
+    if (right === null) { pos = ledSave; break; }
+    const spOff = leftOff;
+    const end = pos > 0 ? toks[pos - 1]!.end : spOff;
+    left = { type: ${J(binaryNode.type)}, left, operator: opText, right${spanObj('spOff', 'end')} };
+    leftOff = spOff;
+    leftEnd = end;` : `    break;`;
+
+  return `function parseAst${r.name}(): ${retType} | null {
+  return parseAst${r.name}_bp(0);
+}
+function parseAst${r.name}_bp(minBp: number): ${retType} | null {
+  let left = parseAst${r.name}_nud(minBp);
+  if (left === null) return null;
+  let leftOff = pos > 0 && toks[pos - 1] ? (typeof left === 'object' && left !== null && 'off' in left ? (left as { off?: number }).off ?? toks[pos - 1]!.off : toks[pos - 1]!.off) : 0;
+  let leftEnd = pos > 0 ? toks[pos - 1]!.end : leftOff;
+  for (;;) {
+    const t = peek();
+    if (t === null) break;
+${ledThrow}
+${binaryCode}
+  }
+  return left;
+}
+function parseAst${r.name}_nud(_minBp: number): ${retType} | null {
+  const t = peek();
+  if (t === null) return null;
+${atomCode}
+${groupCode}
+${prefixCode}
+${nudThrow}
+  return null;
+}`;
+}
+
+function emitShapeParseHelpers(ids: LexIdPlan, shapeIR: ShapeIR): string {
+  return `// ─── Shape parse helpers ─────────────────────────────────────────────────────
+function _shapeDropLit(lid: number): boolean {
+  const t = peek();
+  if (t === null || t.lid !== lid) return false;
+  pos++; return true;
+}
+function _shapeKeepLit(lid: number, _tt: string): boolean {
+  const t = peek();
+  if (t === null || t.lid !== lid) return false;
+  pos++; return true;
+}
+function _shapeDropTok(kid: number): boolean {
+  const t = peek();
+  if (t === null || t.kid !== kid) return false;
+  pos++; return true;
+}
+function _shapeKeepTok(kid: number): boolean {
+  const t = peek();
+  if (t === null || t.kid !== kid) return false;
+  pos++; return true;
+}
+function _shapeLeafNumber(t: Tok): number { return Number(_src.slice(t.off, t.end)); }
+function _shapeLeafIdent(t: Tok): string { return _src.slice(t.off, t.end); }
+function _shapeLeafString(t: Tok): string { return _src.slice(t.off, t.end); }
+function _shapeLeafBigint(t: Tok): bigint { return BigInt(_src.slice(t.off, t.end)); }
+function _shapeLeafBoolean(t: Tok): boolean { return _src.slice(t.off, t.end) === 'true'; }
+`;
+}
+
+function emitShapeAstAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): string {
+  const fns = shapeIR.rules.map((sir: ShapeIRRule) => {
+    const r = ir.rules.find((x) => x.name === sir.name);
+    if (!r) return '';
+    if (r.kind === 'pratt') return emitAstPrattRule(r, sir, ids, shapeIR);
+    return emitAstRdRule(r, sir, ids, shapeIR);
+  }).filter(Boolean).join('\n\n');
+  const entry = ir.entry;
+  const rootType = 'AstRoot';
+  return `
+${emitShapeTypeDecls(ir, shapeIR)}
+
+${emitShapeParseHelpers(ids, shapeIR)}
+
+${fns}
+
+// ─── Shape parseAst entry ────────────────────────────────────────────────────
+export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootType} | null {
+  _astCustoms = opts?.customs ?? {};
+  _src = src;
+  toks = lex(src);
+  pos = 0;
+  const root = parseAst${entry}();
+  return root !== null && pos === toks.length ? (root as ${rootType}) : null;
+}
+`;
+}
+
 export const tsTarget: Target = {
   name: 'typescript',
   ext: 'ts',
@@ -2535,3 +3016,14 @@ if (_editFast || process.argv.includes('edit-session')) {
 `;
   },
 };
+
+/** Emit TS parser; optional shape appends AST types + specialized parseAst. Without shape, byte-identical to tsTarget.emitParser(grammar, tsTarget.embedLexer(grammar)). */
+export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
+  const lexerSrc = tsTarget.embedLexer(grammar);
+  const base = tsTarget.emitParser(grammar, lexerSrc);
+  if (!opts?.shape) return base;
+  const shapeIR = validateShapeOrThrow(grammar, opts.shape);
+  const ir = portableIR(grammar);
+  const ids = buildLexIdPlan(ir);
+  return base + emitShapeAstAddon(ir, shapeIR, ids);
+}

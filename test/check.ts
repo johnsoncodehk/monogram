@@ -32,6 +32,7 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'portable-targets', args: ['test/portable-targets.ts'] },
   { group: 'emit-parity', name: 'unicode-parity', args: ['test/unicode-parity.ts'] },
   { group: 'emit-parity', name: 'ast-builder', args: ['test/ast-builder.ts'] },
+  { group: 'emit-parity', name: 'shape-codegen', args: ['test/shape-codegen.ts'] },
   { group: 'core', name: 'multi-doc', args: ['test/multi-doc.ts'] },
   { group: 'core', name: 'recovery', args: ['test/recovery.ts'] },
   { group: 'core', name: 'incremental-grammars', args: ['test/incremental-grammars.ts'] },
