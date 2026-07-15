@@ -67,14 +67,25 @@ export const SHAPE_TRANSACTION_CONTRACT = {
   controlFlags: 'restore-with-checkpoint',
 } as const;
 
-/** Local custom context (SH2-0/SH2-2). Full AltPathPart form is deferred to SH2-3. */
+/**
+ * Local custom context, populated only after the recognizer has successfully
+ * finished the current rule/Pratt event.
+ *
+ * `kids` preserves star/sep groups as arrays and absent optional values as
+ * null holes. `off`/`end` cover the consumed source range. `altPath` is filled
+ * outermost-first with the selected RD/Pratt arm followed by nested inline
+ * alternatives. Pratt LED callbacks additionally receive the committed
+ * `left` value and connector `opText`. `state` is present only when the
+ * enclosing shape explicitly declares a parent fold.
+ */
 export type AstCustomCtx = {
+  src: string;
   kids: readonly unknown[];
   altPath: readonly number[];
-  src: string;
   off: number;
   end: number;
-  left?: unknown;
   opText?: string;
+  left?: unknown;
+  state?: unknown;
 };
 export type AstCustom = (ctx: AstCustomCtx) => unknown;

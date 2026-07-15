@@ -278,6 +278,24 @@ function checkRuleShape(
     if (shape.kind === 'custom' && !shape.reason) {
       diags.push({ level: 'error', rule: r.name, code: 'custom-no-reason', message: 'custom() requires reason' });
     }
+    if (shape.kind === 'custom' && shape.folds) {
+      const tags = new Set<string>();
+      for (const fold of shape.folds) {
+        if (!fold.tag || !fold.into) {
+          diags.push({
+            level: 'error', rule: r.name, code: 'fold-empty',
+            message: 'custom fold requires non-empty tag and into',
+          });
+        }
+        if (tags.has(fold.tag)) {
+          diags.push({
+            level: 'error', rule: r.name, code: 'fold-duplicate',
+            message: `custom fold tag '${fold.tag}' is declared more than once`,
+          });
+        }
+        tags.add(fold.tag);
+      }
+    }
     return;
   }
   if (shape.kind === 'inline') {
@@ -362,6 +380,11 @@ function checkChoice(
         inlineRules.add(r.name);
       } else if (arm.shape.kind === 'custom' && !arm.shape.reason) {
         diags.push({ level: 'error', rule: r.name, code: 'custom-no-reason', message: `arm '${arm.name}' custom lacks reason` });
+      } else if (arm.shape.kind === 'custom' && arm.shape.result === 'partial') {
+        diags.push({
+          level: 'error', rule: r.name, code: 'partial-choice-root',
+          message: `arm '${arm.name}' returns a partial but choice arms have no declared parent fold`,
+        });
       }
     }
   }

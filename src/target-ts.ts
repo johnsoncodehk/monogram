@@ -2535,7 +2535,7 @@ function emitShapeTypeDecls(ir: ParserIR, shapeIR: ShapeIR): string {
   if (!lines.some((l) => l.includes('AstRoot'))) {
     lines.push(`export type AstRoot = unknown;`);
   }
-  lines.push(`export type AstCustomCtx = { kids: readonly unknown[]; altPath: readonly number[]; src: string; off: number; end: number; left?: unknown; opText?: string };`);
+  lines.push(`export type AstCustomCtx = { src: string; kids: readonly unknown[]; off: number; end: number; altPath: readonly number[]; opText?: string; left?: unknown; state?: unknown };`);
   lines.push(`export type AstCustoms = Record<string, (ctx: AstCustomCtx) => unknown>;`);
   lines.push('let _astCustoms: AstCustoms = {};');
   return lines.join('\n');
@@ -2783,15 +2783,33 @@ function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: Sha
     return finalize(`function parseAst${r.name}(): null { const sp = pos; if (parse${r.name}() === null) { pos = sp; return null; } return null; }`);
   }
   if (shape.kind === 'custom') {
+    const tries = r.alts.map((alt, ai) => {
+      const guard = isGuardable(r.altFirst[ai] ?? null, r.alts.length)
+        ? `_ft !== null && ${firstCond(r.altFirst[ai]!, '_ft', ids)}`
+        : 'true';
+      const emptyB = new Map<number, string>();
+      const stepsCode = emitAstRdAltSteps(alt, ids, leaves, emptyB, emptyB, emptyB, emptyB, ctx);
+      const folds = J(shape.folds ?? []);
+      return `  { const sp = pos; const spOff = sp < toks.length ? toks[sp]!.off : 0; if (${guard}) {
+    const _got = (() => {
+      const _sk: unknown[] = [];
+      ${stepsCode.ok}
+      const end = pos > 0 ? toks[pos - 1]!.end : spOff;
+      const fn = _astCustoms[${J(shape.fn)}];
+      if (!fn) throw new Error('shape: custom ${shape.fn} not provided');
+      const _fold = _shapeFoldKids(_sk, ${folds});
+      return fn({ src: _src, kids: _fold.kids, off: spOff, end, altPath: [${ai}, ..._ap]${shape.folds?.length ? ', state: _fold.state' : ''} });
+    })();
+    if (_got !== null && _got !== undefined) return _got;
+    pos = sp;
+  } }`;
+    }).join('\n');
+    const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i] ?? null, r.alts.length));
     return finalize(`function parseAst${r.name}(): unknown {
-  const fn = _astCustoms[${J(shape.fn)}];
-  if (!fn) throw new Error('shape: custom ${shape.fn} not provided');
-  const sp = pos;
-  const spOff = sp < toks.length ? toks[sp]!.off : 0;
-  const cst = parse${r.name}();
-  if (cst === null) return null;
-  const end = pos > 0 ? toks[pos - 1]!.end : spOff;
-  return fn({ kids: [cst], altPath: [], src: _src, off: spOff, end });
+  const save = pos;
+${needPeek ? '  const _ft = peek();\n' : ''}${tries}
+  pos = save;
+  return null;
 }`);
   }
   if (shape.kind === 'inline') {
@@ -2854,7 +2872,8 @@ function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: Sha
       const end = pos > 0 ? toks[pos - 1]!.end : __SPOFF__;
       const fn = _astCustoms[${J(arm.shape.fn)}];
       if (!fn) throw new Error('shape: custom ${arm.shape.fn} not provided');
-      return fn({ kids: __SK__, altPath: [__ALT__, ..._ap], src: _src, off: __SPOFF__, end });
+      const _fold = _shapeFoldKids(__SK__, ${J(arm.shape.folds ?? [])});
+      return fn({ src: _src, kids: _fold.kids, off: __SPOFF__, end, altPath: [__ALT__, ..._ap]${arm.shape.folds?.length ? ', state: _fold.state' : ''} });
     }`;
       } else if (arm.shape.kind === 'keep') {
         finish = `return { type: ${J(r.cstName)}, children: __SK__, arm: ${J(arm.name)}, alt: __ALT__ };`;
@@ -2962,11 +2981,14 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
       `pos > 0 ? toks[pos - 1]!.end : (${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0)`,
     )} }`;
 
-  const customFinish = (fn: string, kidsExpr: string, saveExpr: string, altExpr: string, leftExpr?: string) =>
+  const customFinish = (
+    fn: string, kidsExpr: string, saveExpr: string, altExpr: string,
+    leftExpr?: string, opTextExpr?: string,
+  ) =>
     `(() => { const _fn = _astCustoms[${J(fn)}]; if (!_fn) throw new Error(${J('shape: custom ' + fn + ' not provided')});`
     + ` const _off = ${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0;`
     + ` const _end = pos > 0 ? toks[pos - 1]!.end : _off;`
-    + ` return _fn({ kids: ${kidsExpr}, altPath: ${altExpr}, src: _src, off: _off, end: _end${leftExpr ? `, left: ${leftExpr}` : ''} }); })()`;
+    + ` return _fn({ src: _src, kids: ${kidsExpr}, off: _off, end: _end, altPath: ${altExpr}${opTextExpr ? `, opText: ${opTextExpr}` : ''}${leftExpr ? `, left: ${leftExpr}` : ''} }); })()`;
 
   const nodeFieldsFromSk = (node: NodeShape, leftExpr?: string): Array<{ name: string; expr: string }> =>
     node.fields.map((f: FieldDecl) => {
@@ -3109,7 +3131,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     pos++;
     const argument = parseAst${r.name}_bp(pbp);
     if (argument === null) { pos = save; return null; }
-    return ${customFinish((prefixSlot as CustomShape).fn, '[opText, argument]', 'save', '[]')} as ${retType};
+    return ${customFinish((prefixSlot as CustomShape).fn, '[argument]', 'save', '[]', undefined, 'opText')} as ${retType};
   }`;
     } else if (prefixSlot.kind === 'inline') {
       prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
@@ -3212,7 +3234,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         mergeShapeEmitCtx(ctx, armCtx);
         let finish: string;
         if (ledSlot.kind === 'custom') {
-          finish = `left = ${customFinish((ledSlot as CustomShape).fn, '[left, ..._sk]', 'ledSave', `[${i}]`, 'left')} as ${retType};`;
+          finish = `left = ${customFinish((ledSlot as CustomShape).fn, '_sk', 'ledSave', `[${i}]`, 'left', 'opText')} as ${retType};`;
         } else if (ledSlot.kind === 'node') {
           const ledNode = ledSlot as NodeShape;
           // Visible _sk after drops; at:0 binds left (LED callee / receiver).
@@ -3226,6 +3248,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         }
         return `      if (${ledGuard(i, lid)}) {
         const ledSave = pos;
+        const opText = _src.slice(t.off, t.end);
         const _cappedSave = _capped;
         const _sk: unknown[] = [];
         const _ap: number[] = [];
@@ -3251,7 +3274,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
       const tokName = r.postfixToks.find((t) => kidOf(ids, t) === g.key)!;
       let finish: string;
       if (postfixTokSlot.kind === 'custom') {
-        finish = `left = ${customFinish((postfixTokSlot as CustomShape).fn, '[left, leaf]', 'leftTokStart', '[]', 'left')} as ${retType};`;
+        finish = `left = ${customFinish((postfixTokSlot as CustomShape).fn, '[leaf]', 'leftTokStart', '[]', 'left', '_src.slice(t.off, t.end)')} as ${retType};`;
       } else if (postfixTokSlot.kind === 'node') {
         const node = postfixTokSlot as NodeShape;
         finish = `{ const spOff = leftOff; const end = t.end;
@@ -3307,7 +3330,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     if (!tailClosed && post !== undefined && post > minBp) {
       const opText = _src.slice(t.off, t.end);
       const save = pos; pos++;
-      left = ${customFinish((postfixSlot as CustomShape).fn, '[left, opText]', 'save', '[]', 'left')} as ${retType};
+      left = ${customFinish((postfixSlot as CustomShape).fn, '[]', 'save', '[]', 'left', 'opText')} as ${retType};
       leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
       tailClosed = true; continue;
     }`;
@@ -3351,7 +3374,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     pos++;
     const right = parseAst${r.name}_bp(info.rbp);
     if (right === null) { pos = ledSave; break; }
-    left = ${customFinish((binarySlot as CustomShape).fn, '[left, opText, right]', 'ledSave', '[]', 'left')} as ${retType};
+    left = ${customFinish((binarySlot as CustomShape).fn, '[right]', 'ledSave', '[]', 'left', 'opText')} as ${retType};
     leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;`;
     } else {
       binaryCode = `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
@@ -3465,7 +3488,7 @@ function _shapeKeepTok(kid: number): boolean {
 function _shapeLeafNumber(t: Tok): number { return Number(_src.slice(t.off, t.end)); }
 function _shapeLeafIdent(t: Tok): string { return _src.slice(t.off, t.end); }
 function _shapeLeafString(t: Tok): string { return _src.slice(t.off, t.end); }
-function _shapeLeafBigint(t: Tok): bigint { return BigInt(_src.slice(t.off, t.end)); }
+function _shapeLeafBigint(t: Tok): bigint { const s = _src.slice(t.off, t.end); return BigInt(s.endsWith('n') ? s.slice(0, -1) : s); }
 function _shapeLeafBoolean(t: Tok): boolean { return _src.slice(t.off, t.end) === 'true'; }
 function _shapePack(values: unknown[]): unknown {
   return values.length === 0 ? null : values.length === 1 ? values[0] : values.slice();
@@ -3532,6 +3555,50 @@ function _shapeSepRule(elem: () => unknown | null, delimLid: number, out: unknow
     out.push(el);
   }
   return true;
+}
+
+function _shapeIsPartial(v: unknown): v is { __shapePartial: string; mode: 'start' | 'append'; value: unknown } {
+  return typeof v === 'object' && v !== null && '__shapePartial' in (v as object);
+}
+function _shapeFoldList(
+  list: unknown[],
+  folds: { tag: string; into: string }[],
+  state: Record<string, { starts: number; appends: number }>,
+): unknown[] {
+  const byTag = new Map(folds.map((f) => [f.tag, f.into]));
+  const out: unknown[] = [];
+  for (const k of list) {
+    if (_shapeIsPartial(k) && byTag.has(k.__shapePartial)) {
+      const into = byTag.get(k.__shapePartial)!;
+      if (k.mode === 'start') {
+        state[k.__shapePartial]!.starts++;
+        out.push(k.value);
+      } else if (k.mode === 'append') {
+        const prev = out[out.length - 1];
+        if (prev === null || prev === undefined || typeof prev !== 'object') {
+          throw new Error('shape: partial append has no preceding start for ' + k.__shapePartial);
+        }
+        const p = prev as Record<string, unknown>;
+        let arr = p[into];
+        if (!Array.isArray(arr)) { arr = []; p[into] = arr; }
+        (arr as unknown[]).push(k.value);
+        state[k.__shapePartial]!.appends++;
+      }
+      continue;
+    }
+    if (Array.isArray(k)) { out.push(_shapeFoldList(k, folds, state)); continue; }
+    out.push(k);
+  }
+  return out;
+}
+/** Fold child partial markers per parent custom folds spec (recursive into list slots). */
+function _shapeFoldKids(kids: unknown[], folds: { tag: string; into: string }[]): {
+  kids: unknown[];
+  state?: Record<string, { starts: number; appends: number }>;
+} {
+  if (!folds.length) return { kids };
+  const state = Object.fromEntries(folds.map((f) => [f.tag, { starts: 0, appends: 0 }]));
+  return { kids: _shapeFoldList(kids, folds, state), state };
 }
 ${tplHelper}`;
 }

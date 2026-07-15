@@ -12,7 +12,8 @@ import toyGrammar, {
   toyShape, toyCustoms, toyTaggedCustomShape, toyGolden, buildToyCorpus, type ToyAstCustoms,
 } from './fixtures/shape-toy.ts';
 import typescriptGrammar from '../typescript.ts';
-import { typescriptShape, typescriptStubCustoms } from './fixtures/shape-typescript.ts';
+import javascriptGrammar from '../javascript.ts';
+import { typescriptShape, typescriptEstreeCustoms } from './fixtures/shape-typescript.ts';
 import { CURATED_TS, CURATED_TS_INVALID } from './emit-corpus.ts';
 
 const OUT = '/tmp/shape-parity';
@@ -38,6 +39,10 @@ type Emitted = {
   parseAst: (src: string, opts?: { customs?: ToyAstCustoms }) => unknown;
   tokenize: (src: string) => { off: number; end: number; nl: boolean; kid: number; lid: number }[];
   parse: (toks: { off: number; end: number; nl: boolean; kid: number; lid: number }[]) => unknown;
+  parseWith: (src: string, builder: {
+    leaf: (tokenType: string, kid: number, lid: number, off: number, end: number) => unknown;
+    node: (rule: string, children: unknown[], off: number, end: number) => unknown;
+  }) => unknown;
   shapeCoverage: {
     step: Record<string, number>;
     pratt: Record<string, number>;
@@ -49,6 +54,12 @@ async function emitLoad(name: string, grammar: unknown, shape: ShapeSpec): Promi
   const src = emitTs(grammar as any, { shape });
   const file = `${OUT}/${name}.ts`;
   writeFileSync(file, src);
+  return import(pathToFileURL(file).href + `?t=${Date.now()}`) as Promise<Emitted>;
+}
+
+async function emitLoadNoShape(name: string, grammar: unknown): Promise<Emitted> {
+  const file = `${OUT}/${name}.ts`;
+  writeFileSync(file, emitTs(grammar as any));
   return import(pathToFileURL(file).href + `?t=${Date.now()}`) as Promise<Emitted>;
 }
 
@@ -155,6 +166,11 @@ async function main(): Promise<void> {
   const hNo = createHash('sha256').update(noShape).digest('hex');
   const hMa = createHash('sha256').update(master).digest('hex');
   check(noShape === master && hNo === hMa, `no-shape calc ≡ emitParser sha=${hNo.slice(0, 12)}`);
+  const noShapeTs = emitTs(typescriptGrammar);
+  const masterTs = emitParser(typescriptGrammar, tsTarget);
+  const hNoTs = createHash('sha256').update(noShapeTs).digest('hex');
+  const hMaTs = createHash('sha256').update(masterTs).digest('hex');
+  check(noShapeTs === masterTs && hNoTs === hMaTs, `no-shape typescript ≡ emitParser sha=${hNoTs.slice(0, 12)}`);
 
   const calcMod = await emitLoad('calc', calcGrammar, calcShape);
   check(calcMod.shapeCoverage.unsupported.length === 0, 'calc unsupported=0');
@@ -333,7 +349,143 @@ async function main(): Promise<void> {
 
     const tsCorpus = buildTsCorpus();
     check(tsCorpus.length >= 2000, `typescript corpus ≥2000 (got ${tsCorpus.length})`);
-    parity('typescript', tsMod, tsCorpus, typescriptStubCustoms as ToyAstCustoms);
+    parity('typescript', tsMod, tsCorpus, typescriptEstreeCustoms as ToyAstCustoms);
+
+    // ── SH2-3: typescript AST goldens (handwritten) ─────────────────────────
+    const TS_GOLDEN: { label: string; src: string; expect: unknown }[] = [
+      { label: 'C1 estreeStmt expr', src: '1 + 2;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'BinaryExpression', left: 1, operator: '+', right: 2 } }] } },
+      { label: 'C1 estreeStmt decl', src: 'let x = 1;', expect: { type: 'Program', body: [{ type: 'VariableDeclaration', kind: 'let', declarations: [{ type: 'VariableDeclarator', id: 'x', typeAnnotation: null, init: 1 }] }] } },
+      { label: 'C2 estreeDecl fn', src: 'function f() {}', expect: { type: 'Program', body: [{ type: 'FunctionDeclaration', async: false, generator: false, id: 'f', typeParameters: null, params: [], returnType: null, body: { type: 'BlockStatement', body: [] } }] } },
+      { label: 'C3 estreeParenOrComma', src: '(1, 2);', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'SequenceExpression', expressions: [1, 2] } }] } },
+      { label: 'C4 estreeExprLed call', src: 'a.b();', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'CallExpression', callee: { type: 'MemberExpression', object: { type: 'Identifier', name: 'a' }, property: { type: 'Identifier', name: 'b' }, computed: false, optional: false }, arguments: [] } }] } },
+      { label: 'C5 estreeExprNudSeq', src: 'foo;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'Identifier', name: 'foo' } }] } },
+      { label: 'C6 estreeArrow', src: 'x => x + 1;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'ArrowFunctionExpression', params: [{ type: 'Identifier', name: 'x' }], body: { type: 'BinaryExpression', left: { type: 'Identifier', name: 'x' }, operator: '+', right: 1 }, async: false, expression: true } }] } },
+      { label: 'C7 tsTypeLed', src: 'type U = A<B>;', expect: { type: 'Program', body: [{ type: 'TSTypeAliasDeclaration', id: 'U', typeParameters: null, typeAnnotation: { type: 'TSTypeReference', typeName: { type: 'Type', children: ['A'], headText: 'A' }, typeParameters: [{ type: 'Type', children: ['B'], headText: 'B' }], meta: { op: '<' } } }] } },
+      { label: 'C8 estreeNewTargetLed', src: 'new Foo.bar();', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'MemberExpression', object: 'Foo', property: { type: 'Identifier', name: 'bar' }, computed: false, optional: false } }] } },
+      { label: 'C9 estreeArrayPattern', src: 'const [a, , b] = arr;', expect: { type: 'Program', body: [{ type: 'VariableDeclaration', kind: 'const', declarations: [{ type: 'VariableDeclarator', id: { type: 'ArrayPattern', elements: [{ type: 'AssignmentPatternOrId', id: 'a', init: null }, null, { type: 'AssignmentPatternOrId', id: 'b', init: null }] }, typeAnnotation: null, init: { type: 'Identifier', name: 'arr' } }] }] } },
+      { label: 'C10 estreeBindingProperty', src: 'const { a, b: c } = obj;', expect: { type: 'Program', body: [{ type: 'VariableDeclaration', kind: 'const', declarations: [{ type: 'VariableDeclarator', id: { type: 'ObjectPattern', properties: [{ type: 'Property', key: { type: 'Identifier', name: 'a' }, value: { type: 'Identifier', name: 'a' }, kind: 'init', method: false, shorthand: true, computed: false }, { type: 'Property', key: { type: 'Identifier', name: 'b' }, value: { type: 'AssignmentPatternOrId', id: 'c', init: null }, kind: 'init', method: false, shorthand: false, computed: false }] }, typeAnnotation: null, init: { type: 'Identifier', name: 'obj' } }] }] } },
+      { label: 'C11 estreeParam', src: 'function g(this: T) {}', expect: { type: 'Program', body: [{ type: 'FunctionDeclaration', async: false, generator: false, id: 'g', typeParameters: null, params: [{ type: 'Identifier', name: 'this', typeAnnotation: { type: 'Type', children: ['T'], headText: 'T' } }], returnType: null, body: { type: 'BlockStatement', body: [] } }] } },
+      { label: 'C12 estreeForHead', src: 'for (x in y) z;', expect: { type: 'Program', body: [{ type: 'ForInStatement', left: { type: 'Identifier', name: 'x' }, right: { type: 'Identifier', name: 'y' }, body: { type: 'ExpressionStatement', expression: { type: 'Identifier', name: 'z' } } }] } },
+      { label: 'C13 estreeSwitchCase fold', src: 'switch (1) { case 1: break; default: x; }', expect: { type: 'Program', body: [{ type: 'SwitchStatement', discriminant: 1, cases: [{ type: 'SwitchCase', test: 1, consequent: [{ type: 'BreakStatement', label: null }] }, { type: 'SwitchCase', test: null, consequent: [{ type: 'ExpressionStatement', expression: { type: 'Identifier', name: 'x' } }] }] }] } },
+      { label: 'C13 multi-case fold', src: 'switch (x) { case 1: case 2: y; break; default: z; }', expect: { type: 'Program', body: [{ type: 'SwitchStatement', discriminant: { type: 'Identifier', name: 'x' }, cases: [{ type: 'SwitchCase', test: 1, consequent: [] }, { type: 'SwitchCase', test: 2, consequent: [{ type: 'ExpressionStatement', expression: { type: 'Identifier', name: 'y' } }, { type: 'BreakStatement', label: null }] }, { type: 'SwitchCase', test: null, consequent: [{ type: 'ExpressionStatement', expression: { type: 'Identifier', name: 'z' } }] }] }] } },
+      { label: 'C14 estreeDecorator', src: '@Dec class C {}', expect: { type: 'Program', body: [{ type: 'ClassDeclaration', decorators: [{ type: 'Decorator', expression: { type: 'Identifier', name: 'Dec' } }], id: 'C', superClass: null, body: { type: 'ClassBody', body: [] } }] } },
+      { label: 'C15 estreeClassMember', src: 'class C { m() {} }', expect: { type: 'Program', body: [{ type: 'ClassDeclaration', decorators: [], id: 'C', superClass: null, body: { type: 'ClassBody', body: [{ type: 'MethodDefinition', kind: 'method', key: { type: 'MemberName', children: ['m'], arm: 'passthrough', alt: 0 }, value: { type: 'FunctionExpression', params: [], body: { type: 'BlockStatement', body: [] }, async: false, generator: false }, static: false, computed: false }] } }] } },
+      { label: 'C16 tsInterfaceMember', src: 'interface I { x: number; }', expect: { type: 'Program', body: [{ type: 'TSInterfaceDeclaration', id: 'I', typeParameters: null, extends: [], body: { type: 'TSInterfaceBody', body: [{ type: 'TSPropertySignature', key: { type: 'MemberName', children: ['x'], arm: 'passthrough', alt: 0 }, typeAnnotation: { type: 'Type', children: ['number'], headText: 'number' }, optional: false, readonly: false }] } }] } },
+      { label: 'C17 tsTypeMember', src: 'type T = { x: number };', expect: { type: 'Program', body: [{ type: 'TSTypeAliasDeclaration', id: 'T', typeParameters: null, typeAnnotation: { type: 'Type', children: [[{ type: 'TSPropertySignature', key: 'x', typeAnnotation: { type: 'Type', children: ['number'], headText: 'number' }, optional: false, readonly: false }]], headText: '' } }] } },
+      { label: 'C18 estreeProp object', src: '({ a: 1, b });', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'SequenceExpression', expressions: [{ type: 'Property', key: { type: 'MemberName', children: ['a'], arm: 'passthrough', alt: 0 }, value: 1, kind: 'init', shorthand: false, computed: false, method: false }, { type: 'Property', key: { type: 'Identifier', name: 'b' }, value: null, kind: 'init', shorthand: false, computed: false, method: false }] } }] } },
+      { label: 'C1+C3 deep 1+2*3', src: '1 + 2 * 3;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'BinaryExpression', left: 1, operator: '+', right: { type: 'BinaryExpression', left: 2, operator: '*', right: 3 } } }] } },
+      { label: 'C6 deep arrow nested', src: 'const g = (x) => x * 2;', expect: { type: 'Program', body: [{ type: 'VariableDeclaration', kind: 'const', declarations: [{ type: 'VariableDeclarator', id: 'g', typeAnnotation: null, init: { type: 'ArrowFunctionExpression', params: [{ type: 'Identifier', decorators: [], optional: false }], body: { type: 'BinaryExpression', left: { type: 'Identifier', name: 'x' }, operator: '*', right: 2 }, async: false, expression: true } }] }] } },
+      { label: 'C4 deep member chain', src: 'a.b.c;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'MemberExpression', object: { type: 'MemberExpression', object: { type: 'Identifier', name: 'a' }, property: { type: 'Identifier', name: 'b' }, computed: false, optional: false }, property: { type: 'Identifier', name: 'c' }, computed: false, optional: false } }] } },
+      { label: 'C1 if stmt', src: 'if (a) b(); else c();', expect: { type: 'Program', body: [{ type: 'IfStatement', test: { type: 'Identifier', name: 'a' }, consequent: { type: 'ExpressionStatement', expression: { type: 'CallExpression', callee: { type: 'Identifier', name: 'b' }, arguments: [] } }, alternate: { type: 'ExpressionStatement', expression: { type: 'CallExpression', callee: { type: 'Identifier', name: 'c' }, arguments: [] } } }] } },
+    ];
+    let tsGoldenOk = 0;
+    for (const g of TS_GOLDEN) {
+      const got = stripSpans(tsMod.parseAst(g.src, { customs: typescriptEstreeCustoms as ToyAstCustoms }));
+      if (deepEq(got, g.expect)) tsGoldenOk++;
+      else console.error(`  ts golden fail ${g.label}`, JSON.stringify(got).slice(0, 200));
+    }
+    check(tsGoldenOk === TS_GOLDEN.length && TS_GOLDEN.length >= 18, `typescript AST golden ${tsGoldenOk}/${TS_GOLDEN.length} (≥18)`);
+    let switchFoldState: unknown = null;
+    const foldCustoms = { ...typescriptEstreeCustoms } as Record<string, (ctx: any) => unknown>;
+    const stmtCustom = foldCustoms.estreeStmt!;
+    foldCustoms.estreeStmt = (ctx) => {
+      if (ctx.altPath[0] === 6) switchFoldState = ctx.state;
+      return stmtCustom(ctx);
+    };
+    tsMod.parseAst('switch (x) { case 1: case 2: y; break; default: z; }', {
+      customs: foldCustoms as ToyAstCustoms,
+    });
+    check(
+      deepEq(switchFoldState, { 'switch-consequent': { starts: 3, appends: 3 } }),
+      'SwitchCase parent fold state starts=3 appends=3',
+      JSON.stringify(switchFoldState),
+    );
+
+    // alt / LED identity counterexamples (wrong altPath → different shape)
+    let altNegOk = 0;
+    const bindAlt = (fn: string, src: string, good: number[], bad: number[]) => {
+      const wrap = (altPath: number[]) => {
+        const customs = { ...typescriptEstreeCustoms } as Record<string, (ctx: any) => unknown>;
+        const orig = customs[fn]!;
+        customs[fn] = (ctx) => orig({ ...ctx, altPath });
+        return stripSpans(tsMod!.parseAst(src, { customs: customs as ToyAstCustoms }));
+      };
+      return !deepEq(wrap(good), wrap(bad));
+    };
+    if (bindAlt('estreeBindingProperty', 'const { a } = o;', [1], [0])) altNegOk++;
+    if (bindAlt('estreeBindingProperty', 'const { x: y } = o;', [0], [1])) altNegOk++;
+    if (bindAlt('estreeSwitchCase', 'switch(0){case 1:x;}', [0], [1])) altNegOk++;
+    if (bindAlt('estreeProp', '({ a, b: 1 });', [4], [0])) altNegOk++;
+    check(altNegOk >= 4, `typescript alt identity counterexamples ${altNegOk}/4`);
+    let ledNegOk = 0;
+    if (bindAlt('estreeExprLed', 'a.b;', [3], [2])) ledNegOk++;
+    if (bindAlt('estreeExprLed', 'f();', [2], [5])) ledNegOk++;
+    check(ledNegOk >= 2, `typescript LED identity counterexamples ${ledNegOk}/2`);
+
+    // Independent cross-validation against test/ast-builder.ts demoBuilder semantics.
+    const demoMod = await emitLoadNoShape('javascript-demo-xval', javascriptGrammar);
+    const DROP = new Set(['$punct', '$keyword', '$operator', '$templateHead', '$templateMiddle', '$templateTail']);
+    const demoBuilder = (src: string) => ({
+      leaf(tokenType: string, _kid: number, _lid: number, off: number, end: number) {
+        return DROP.has(tokenType) ? null : src.slice(off, end);
+      },
+      node(rule: string, children: unknown[]) {
+        if (children.length === 1) return children;
+        if (children.length === 0) return null;
+        if (rule === 'Program') return { type: 'Program', body: children };
+        if (rule === 'Stmt' || rule === 'Stmt_A') return { type: 'ExpressionStatement', expression: children[0] };
+        if (rule === 'Expr' || rule === 'Expr_A') {
+          if (children.length === 2) return { type: 'BinaryExpression', left: children[0], right: children[1] };
+          if (children.length === 3) return { type: 'BinaryExpression', left: children[0], operator: children[1], right: children[2] };
+          return { type: 'Expression', children };
+        }
+        if (rule === 'Decl' || rule === 'Decl_A') return { type: 'Declaration', children };
+        if (rule === 'Block' || rule === 'Block_A') return { type: 'BlockStatement', body: children };
+        return { type: rule.replace(/_A$/, ''), children };
+      },
+    });
+    const projectToDemo = (tree: unknown): unknown => {
+      if (tree === null) return tree;
+      if (typeof tree === 'number' || typeof tree === 'bigint' || typeof tree === 'boolean') return String(tree);
+      if (typeof tree !== 'object') return tree;
+      if (Array.isArray(tree)) {
+        const xs = tree.map(projectToDemo);
+        return xs.length === 1 ? xs[0] : xs;
+      }
+      const o = tree as Record<string, unknown>;
+      if (o.type === 'Program') return projectToDemo(o.body);
+      if (o.type === 'ExpressionStatement') return projectToDemo(o.expression);
+      if (o.type === 'Identifier') return o.name;
+      if (o.type === 'BinaryExpression') return { type: 'BinaryExpression', left: projectToDemo(o.left), right: projectToDemo(o.right) };
+      if (o.type === 'MemberExpression') return { type: 'BinaryExpression', left: projectToDemo(o.object), right: projectToDemo(o.property) };
+      if (o.type === 'VariableDeclaration') return projectToDemo(o.declarations);
+      if (o.type === 'VariableDeclarator') return { type: 'Binding', children: [projectToDemo(o.id), projectToDemo(o.init)] };
+      if (o.type === 'BlockStatement') return { type: 'BlockStatement', body: projectToDemo(o.body) };
+      return o;
+    };
+    const DEMO_XVAL = [
+      '1 + 2;', '1 + 2 * 3;', '1 - 2 - 3;', '(1);', 'foo;',
+      'var x = 1;', 'a.b.c;', 'if (a) b(); else c();',
+      'const g = (x) => x * 2;', 'class C {}', 'function f(){}',
+    ];
+    const KNOWN_DEMO_DIFF = new Set([
+      'if (a) b(); else c();', 'const g = (x) => x * 2;', 'class C {}', 'function f(){}',
+    ]);
+    let xvalSame = 0, xvalKnown = 0;
+    const xvalUnexpected: string[] = [];
+    for (const src of DEMO_XVAL) {
+      const ast = stripSpans(tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }));
+      const demo = demoMod.parseWith(src, demoBuilder(src));
+      if (deepEq(projectToDemo(ast), demo)) xvalSame++;
+      else if (KNOWN_DEMO_DIFF.has(src)) xvalKnown++;
+      else xvalUnexpected.push(src);
+    }
+    check(
+      xvalSame + xvalKnown === DEMO_XVAL.length && DEMO_XVAL.length >= 10,
+      `demo parseWith cross-validation ${xvalSame} same + ${xvalKnown} declared differences / ${DEMO_XVAL.length}`,
+      xvalUnexpected.join('; '),
+    );
+
   }
 
   // ── Guard + capped witnesses (toy) ────────────────────────────────────────

@@ -30,7 +30,21 @@ export type LeafValueShape = {
   kind: 'leafValue';
   fn: 'identity' | 'number' | 'bigint' | 'string' | 'boolean' | 'ident' | (string & {});
 };
-export type CustomShape = { kind: 'custom'; fn: string; reason: string };
+/**
+ * Generic child-partial fold. A partial-producing custom returns
+ * `{ __shapePartial: tag, mode: 'start'|'append', value }`. At parent finish,
+ * matching groups are folded before the parent's custom callback runs:
+ * `start` opens an output item and `append` pushes into that item's `into`
+ * array. No grammar/rule name is embedded in the mechanism.
+ */
+export type ParentFold = { tag: string; into: string };
+export type CustomShape = {
+  kind: 'custom';
+  fn: string;
+  reason: string;
+  result?: 'value' | 'partial';
+  folds?: ParentFold[];
+};
 export type KeepShape = { kind: 'keep' };
 /** Delegate Pratt atom NUD to an RD rule (e.g. Atom choice → Number|Identifier nodes). */
 export type RuleRefShape = { kind: 'rule'; name: string };
@@ -100,6 +114,7 @@ export const ADDED_PRIMITIVES: { name: string; reason: string }[] = [
   { name: 'pratt', reason: 'Pratt classes have distinct atom, prefix, binary, and mixfix products.' },
   { name: 'keep', reason: 'Sugar for the adjudicated default positional node.' },
   { name: 'bindOp', reason: 'Dropped Pratt operators must expose their source text.' },
+  { name: 'parentFold', reason: 'Explicitly declared child partials may accumulate into a parent field.' },
 ];
 
 export const ADJUDICATIONS = {
