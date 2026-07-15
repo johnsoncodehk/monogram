@@ -2560,216 +2560,94 @@ function emitAstRdAltSteps(
   steps: Step[],
   ids: LexIdPlan,
   leaves: Record<string, TokenLeafPolicy>,
-  bindings: Map<number, string>,
-  listBindings: Map<number, string>,
-  optBindings: Map<number, string>,
-  listElemHints: Map<number, string>,
+  _bindings: Map<number, string>,
+  _listBindings: Map<number, string>,
+  _optBindings: Map<number, string>,
+  _listElemHints: Map<number, string>,
   ctx: ShapeEmitCtx,
 ): { ok: string } {
-  const checks: string[] = [];
-  let visSlot = 0;
-
-  const emitStep = (s: Step): void => {
-    ctx.step[s.t] = (ctx.step[s.t] ?? 0) + 1;
+  const visible = (s: Step): boolean => {
     switch (s.t) {
-      case 'lit':
-        checks.push(leafDropped(s.ttype, leaves)
-          ? `if (!_shapeDropLit(${lidOf(ids, s.value)})) { pos = sp; return null; }`
-          : `if (!_shapeKeepLit(${lidOf(ids, s.value)}, ${J(s.ttype)})) { pos = sp; return null; }`);
-        if (!leafDropped(s.ttype, leaves)) {
-          const bind = bindings.get(visSlot);
-          if (bind) checks.push(`var ${bind} = ${J(s.value)}; _sk.push(${bind});`);
-          else checks.push(`_sk.push(${J(s.value)});`);
-          visSlot++;
-        }
-        break;
-      case 'tok': {
-        if (leafDropped(s.name, leaves)) {
-          checks.push(`if (!_shapeDropTok(${kidOf(ids, s.name)})) { pos = sp; return null; }`);
-          break;
-        }
-        const bind = bindings.get(visSlot);
-        const pol = leaves[s.name];
-        const leafExpr = pol?.action === 'leafValue'
-          ? (pol.fn === 'number' ? '_shapeLeafNumber(t)'
-            : pol.fn === 'ident' ? '_shapeLeafIdent(t)'
-            : pol.fn === 'bigint' ? '_shapeLeafBigint(t)'
-            : pol.fn === 'boolean' ? '_shapeLeafBoolean(t)'
-            : '_shapeLeafString(t)')
-          : '_shapeLeafIdent(t)';
-        if (bind) {
-          checks.push(`{ const t = peek(); if (t === null || t.kid !== ${kidOf(ids, s.name)}) { pos = sp; return null; } var ${bind} = ${leafExpr}; pos++; _sk.push(${bind}); }`);
-        } else {
-          checks.push(`{ const t = peek(); if (t === null || t.kid !== ${kidOf(ids, s.name)}) { pos = sp; return null; } const _lv = ${leafExpr}; pos++; _sk.push(_lv); }`);
-        }
-        visSlot++;
-        break;
-      }
-      case 'rule': {
-        const bind = bindings.get(visSlot);
-        const call = `parseAst${s.name}()`;
-        if (bind) checks.push(`var ${bind} = ${call}; if (${bind} === null) { pos = sp; return null; } _sk.push(${bind});`);
-        else checks.push(`{ const _v = ${call}; if (_v === null) { pos = sp; return null; } _sk.push(_v); }`);
-        visSlot++;
-        break;
-      }
-      case 'ruleBp':
-        ctx.note(`ruleBp(${s.name},${s.bp})`);
-        checks.push(`{ pos = sp; return null; }`);
-        break;
-      case 'star': {
-        const listBind = listBindings.get(visSlot) ?? listBindings.get(0);
-        const hint = shapeTsTypeHint(listElemHints.get(visSlot) ?? listElemHints.get(0), 'unknown');
-        const lb = listBind ?? `_star${visSlot}`;
-        if (s.step.t === 'rule') {
-          ctx.step.rule++;
-          const elem = `parseAst${s.step.name}()`;
-          checks.push(`var ${lb}: ${hint}[] = []; for (;;) { const _sp2 = pos; const _el = ${elem}; if (_el === null) { pos = _sp2; break; } ${lb}.push(_el); } _sk.push(${lb});`);
-        } else if (s.step.t === 'seq' && s.step.steps.length === 2
-          && s.step.steps[0]!.t === 'rule'
-          && s.step.steps[1]!.t === 'lit') {
-          ctx.step.seq++;
-          ctx.step.rule++;
-          ctx.step.lit++;
-          const rn = s.step.steps[0].name;
-          const lit = s.step.steps[1];
-          checks.push(`var ${lb}: ${hint}[] = []; for (;;) { const _sp2 = pos; const _el = parseAst${rn}(); if (_el === null) { pos = _sp2; break; } if (!_shapeDropLit(${lidOf(ids, lit.value)})) { pos = _sp2; break; } ${lb}.push(_el); } _sk.push(${lb});`);
-        } else {
-          ctx.note(`star(${s.step.t})`);
-          checks.push(`{ pos = sp; return null; }`);
-        }
-        visSlot++;
-        break;
-      }
-      case 'sep': {
-        const listBind = listBindings.get(visSlot) ?? listBindings.get(0);
-        const hint = shapeTsTypeHint(listElemHints.get(visSlot) ?? listElemHints.get(0), 'unknown');
-        const lb = listBind ?? `_sep${visSlot}`;
-        if (s.elem.t === 'rule') {
-          ctx.step.rule++;
-          checks.push(`var ${lb}: ${hint}[] = []; if (!_shapeSepRule(() => parseAst${s.elem.name}(), ${lidOf(ids, s.delim)}, ${lb})) { pos = sp; return null; } _sk.push(${lb});`);
-        } else {
-          ctx.note(`sep(${s.elem.t})`);
-          checks.push(`{ pos = sp; return null; }`);
-        }
-        visSlot++;
-        break;
-      }
-      case 'opt': {
-        const optBind = optBindings.get(visSlot);
-        const optName = optBind ?? `_opt${visSlot}`;
-        // Collect visible leaf/rule from opt body (after drops).
-        const bodyParts: string[] = [];
-        let gotVisible = false;
-        for (const st of s.steps) {
-          ctx.step[st.t]++;
-          if (st.t === 'lit') {
-            bodyParts.push(leafDropped(st.ttype, leaves)
-              ? `if (!_shapeDropLit(${lidOf(ids, st.value)})) { pos = _sp3; }`
-              : `if (!_shapeKeepLit(${lidOf(ids, st.value)}, ${J(st.ttype)})) { pos = _sp3; } else { ${optName} = ${J(st.value)}; }`);
-            if (!leafDropped(st.ttype, leaves)) gotVisible = true;
-          } else if (st.t === 'tok' && !leafDropped(st.name, leaves)) {
-            const pol = leaves[st.name];
-            const leafExpr = pol?.action === 'leafValue'
-              ? (pol.fn === 'number' ? '_shapeLeafNumber(t)'
-                : pol.fn === 'ident' ? '_shapeLeafIdent(t)'
-                : '_shapeLeafString(t)')
-              : '_shapeLeafIdent(t)';
-            bodyParts.push(`{ const t = peek(); if (t === null || t.kid !== ${kidOf(ids, st.name)}) { pos = _sp3; } else { ${optName} = ${leafExpr}; pos++; } }`);
-            gotVisible = true;
-          } else if (st.t === 'rule') {
-            bodyParts.push(`{ const _o = parseAst${st.name}(); if (_o === null) pos = _sp3; else ${optName} = _o; }`);
-            gotVisible = true;
-          } else if (st.t === 'seq') {
-            ctx.note('opt(nested-seq)');
-          } else {
-            ctx.note(`opt(${st.t})`);
-          }
-        }
-        // Flat opt(seq(...)) lands as opt with multiple steps (seq inlined by caller via walking).
-        if (s.steps.length >= 1 && !gotVisible && s.steps.every((st) => st.t === 'lit' || st.t === 'tok' || st.t === 'rule' || st.t === 'seq')) {
-          // steps may be lit+tok from opt(':', Ident) — handled above.
-        }
-        const init = `var ${optName}: unknown = null;`;
-        const body = bodyParts.length
-          ? `{ const _sp3 = pos; ${bodyParts.join(' ')} if (pos === _sp3) { /* absent */ } }`
-          : `{ const _sp3 = pos; /* empty opt */ }`;
-        // Rebuild opt(seq) as a single transaction: all steps must succeed.
-        if (s.steps.length > 1) {
-          const seqParts: string[] = [];
-          let capture = '';
-          for (const st of s.steps) {
-            if (st.t === 'lit') {
-              seqParts.push(leafDropped(st.ttype, leaves)
-                ? `!_shapeDropLit(${lidOf(ids, st.value)})`
-                : `!_shapeKeepLit(${lidOf(ids, st.value)}, ${J(st.ttype)})`);
-              if (!leafDropped(st.ttype, leaves)) capture = `${optName} = ${J(st.value)}`;
-            } else if (st.t === 'tok' && !leafDropped(st.name, leaves)) {
-              const pol = leaves[st.name];
-              const leafExpr = pol?.action === 'leafValue'
-                ? (pol.fn === 'number' ? '_shapeLeafNumber(t)'
-                  : pol.fn === 'ident' ? '_shapeLeafIdent(t)'
-                  : '_shapeLeafString(t)')
-                : '_shapeLeafIdent(t)';
-              seqParts.push(`(() => { const t = peek(); if (t === null || t.kid !== ${kidOf(ids, st.name)}) return true; ${optName} = ${leafExpr}; pos++; return false; })()`);
-              capture = '/* tok */';
-            } else if (st.t === 'rule') {
-              seqParts.push(`(() => { const _o = parseAst${st.name}(); if (_o === null) return true; ${optName} = _o; return false; })()`);
-            } else {
-              ctx.note(`opt-step(${st.t})`);
-              seqParts.push('true');
-            }
-          }
-          checks.push(`${init} { const _sp3 = pos; if (${seqParts.join(' || ')}) { pos = _sp3; ${optName} = null; } } _sk.push(${optName});`);
-        } else {
-          checks.push(`${init} ${body} _sk.push(${optName});`);
-        }
-        visSlot++;
-        break;
-      }
-      case 'not': {
-        const inner = s.steps.map((st) => {
-          ctx.step[st.t]++;
-          if (st.t === 'lit') return leafDropped(st.ttype, leaves)
-            ? `_shapeDropLit(${lidOf(ids, st.value)})`
-            : `_shapeKeepLit(${lidOf(ids, st.value)}, ${J(st.ttype)})`;
-          if (st.t === 'tok') return leafDropped(st.name, leaves)
-            ? `_shapeDropTok(${kidOf(ids, st.name)})`
-            : `_shapeKeepTok(${kidOf(ids, st.name)})`;
-          ctx.note(`not(${st.t})`);
-          return 'false';
-        });
-        checks.push(`{ const _nsp = pos; const _nm = ${inner.length ? inner.join(' && ') : 'true'}; pos = _nsp; if (_nm) { pos = sp; return null; } }`);
-        break;
-      }
+      case 'lit': return !leafDropped(s.ttype, leaves);
+      case 'tok': return !leafDropped(s.name, leaves);
+      case 'rule':
+      case 'ruleBp': return true;
+      case 'star': return visible(s.step);
+      case 'opt':
       case 'seq':
-        for (const st of s.steps) emitStep(st);
-        break;
-      case 'alt':
-        ctx.note('alt');
-        checks.push(`{ pos = sp; return null; }`);
-        break;
-      case 'altlit':
-        ctx.note('altlit');
-        checks.push(`{ pos = sp; return null; }`);
-        break;
-      case 'sameLine':
-        ctx.note('sameLine');
-        checks.push(`{ pos = sp; return null; }`);
-        break;
-      case 'suppress':
-        ctx.note('suppress');
-        checks.push(`{ pos = sp; return null; }`);
-        break;
-      default:
-        ctx.note(`unknown-step`);
-        checks.push(`{ pos = sp; return null; }`);
-        break;
+      case 'suppress': return s.steps.some(visible);
+      case 'sep': return visible(s.elem);
+      case 'altlit': return s.opts.some((o) => !leafDropped(o.ttype, leaves));
+      case 'alt': return s.branches.some((b) => b.some(visible));
+      case 'not':
+      case 'sameLine': return false;
     }
   };
-
-  for (const s of steps) emitStep(s);
-  return { ok: checks.join('\n    ') };
+  const valueOf = (name: string): string => {
+    const fn = leaves[name]?.action === 'leafValue' ? leaves[name].fn : 'ident';
+    return fn === 'number' ? '_shapeLeafNumber(t)'
+      : fn === 'bigint' ? '_shapeLeafBigint(t)'
+      : fn === 'boolean' ? '_shapeLeafBoolean(t)'
+      : fn === 'string' ? '_shapeLeafString(t)'
+      : '_shapeLeafIdent(t)';
+  };
+  const emitSteps = (xs: Step[], sink: string): string =>
+    xs.length ? xs.map((x) => emitStep(x, sink)).join(' && ') : 'true';
+  const emitStep = (s: Step, sink: string): string => {
+    ctx.step[s.t]++;
+    switch (s.t) {
+      case 'lit':
+        return leafDropped(s.ttype, leaves)
+          ? `_shapeDropLit(${lidOf(ids, s.value)})`
+          : `(() => { if (!_shapeKeepLit(${lidOf(ids, s.value)}, ${J(s.ttype)})) return false; ${sink}.push(${J(s.value)}); return true; })()`;
+      case 'tok':
+        return leafDropped(s.name, leaves)
+          ? `_shapeDropTok(${kidOf(ids, s.name)})`
+          : `(() => { const t = peek(); if (t === null || t.kid !== ${kidOf(ids, s.name)}) return false; ${sink}.push(${valueOf(s.name)}); pos++; return true; })()`;
+      case 'rule':
+        return `(() => { const _rv = parseAst${s.name}(); if (_rv === null) return false; ${sink}.push(_rv); return true; })()`;
+      case 'ruleBp':
+        ctx.note(`ruleBp(${s.name},${s.bp})`);
+        return 'false';
+      case 'seq':
+        return `(${emitSteps(s.steps, sink)})`;
+      case 'sameLine':
+        return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
+      case 'not':
+        return `(() => { const _nv: unknown[] = []; return !_shapeProbe(_nv, _ap, () => ${emitSteps(s.steps, '_nv')}); })()`;
+      case 'suppress':
+        return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${emitSteps(s.steps, sink)}); _suppressNext = null; return _r; })()`;
+      case 'altlit': {
+        const arms = s.opts.map((o) =>
+          `if (t.lid === ${lidOf(ids, o.value)}) { pos++; ${visible(s) ? `${sink}.push(${leafDropped(o.ttype, leaves) ? 'null' : J(o.value)});` : ''} return true; }`,
+        ).join(' ');
+        return `(() => { const t = peek(); if (t === null) return false; ${arms} return false; })()`;
+      }
+      case 'alt': {
+        const tries = s.branches.map((b, i) =>
+          `{ const _av: unknown[] = []; if (_shapeTxn(_av, _ap, () => { _ap.push(${i}); return ${emitSteps(b, '_av')}; })) { ${visible(s) ? `${sink}.push(_shapePack(_av));` : ''} return true; } }`,
+        ).join(' ');
+        return `(() => { ${tries} return false; })()`;
+      }
+      case 'star': {
+        const body = emitStep(s.step, '_sv');
+        return `(() => { const _out: unknown[] = []; for (;;) { const _sv: unknown[] = []; if (!_shapeTxn(_sv, _ap, () => ${body})) break; ${visible(s.step) ? '_out.push(_shapePack(_sv));' : ''} } ${visible(s.step) ? `${sink}.push(_out);` : ''} return true; })()`;
+      }
+      case 'opt': {
+        const body = emitSteps(s.steps, '_ov');
+        return `(() => { const _ov: unknown[] = []; const _ok = _shapeTxn(_ov, _ap, () => ${body}); ${s.steps.some(visible) ? `${sink}.push(_ok ? _shapePack(_ov) : null);` : ''} return true; })()`;
+      }
+      case 'sep': {
+        const body = emitStep(s.elem, '_ev');
+        const add = visible(s.elem) ? '_out.push(_shapePack(_ev));' : '';
+        const finish = visible(s.elem) ? `${sink}.push(_out);` : '';
+        return `(() => { const _out: unknown[] = []; let _ev: unknown[] = []; if (!_shapeTxn(_ev, _ap, () => ${body})) { ${finish} return true; } ${add} for (;;) { const _d = pos; if (!_shapeDropLit(${lidOf(ids, s.delim)})) { pos = _d; break; } _ev = []; if (!_shapeTxn(_ev, _ap, () => ${body})) break; ${add} } ${finish} return true; })()`;
+      }
+    }
+  };
+  return {
+    ok: `const _ap: number[] = [];\n      if (!_shapeTxn(_sk, _ap, () => ${emitSteps(steps, '_sk')})) { pos = sp; return null; }`,
+  };
 }
 
 function fieldMaps(node: NodeShape): {
@@ -2800,13 +2678,13 @@ function nodeFieldExprs(node: NodeShape): Array<{ name: string; expr: string }> 
   return node.fields.map((f: FieldDecl) => {
     if (f.bind === 'opText') return { name: f.name, expr: `''` };
     if (isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'list') {
-      return { name: f.name, expr: f.name };
+      return { name: f.name, expr: `_sk[${f.bind.of}] as any` };
     }
     if (isFieldBindObj(f.bind) && 'from' in f.bind && f.bind.from === 'opt') {
       // Prefer null over undefined to match toy Guarded golden.
-      return { name: f.name, expr: `${f.name} as any` };
+      return { name: f.name, expr: `_sk[${f.bind.at}] as any` };
     }
-    if (isFieldBindObj(f.bind) && 'at' in f.bind) return { name: f.name, expr: f.name };
+    if (isFieldBindObj(f.bind) && 'at' in f.bind) return { name: f.name, expr: `_sk[${f.bind.at}] as any` };
     return { name: f.name, expr: 'undefined' };
   });
 }
@@ -2870,7 +2748,20 @@ function emitChoiceArmTry(
     pos = sp;
   } }`;
   }
-  if (arm.shape.kind === 'keep' || arm.shape.kind === 'drop' || arm.shape.kind === 'leafValue' || arm.shape.kind === 'list') {
+  if (arm.shape.kind === 'keep') {
+    const emptyB = new Map<number, string>();
+    const stepsCode = emitAstRdAltSteps(alt, ids, leaves, emptyB, emptyB, emptyB, emptyB, ctx);
+    return `  { const sp = pos; const spOff = sp < toks.length ? toks[sp]!.off : 0; if (${guard}) {
+    const _got = (() => {
+      const _sk: unknown[] = [];
+      ${stepsCode.ok}
+      ${finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk').replaceAll('__SPOFF__', 'spOff')}
+    })();
+    if (_got !== null && _got !== undefined) return _got as any;
+    pos = sp;
+  } }`;
+  }
+  if (arm.shape.kind === 'drop' || arm.shape.kind === 'leafValue' || arm.shape.kind === 'list') {
     ctx.note(`choice-arm-${arm.shape.kind}`);
     return `  /* unsupported choice arm ${arm.name} kind=${arm.shape.kind} */`;
   }
@@ -2964,8 +2855,10 @@ function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: Sha
       const end = pos > 0 ? toks[pos - 1]!.end : __SPOFF__;
       const fn = _astCustoms[${J(arm.shape.fn)}];
       if (!fn) throw new Error('shape: custom ${arm.shape.fn} not provided');
-      return fn({ kids: __SK__, altPath: [__ALT__], src: _src, off: __SPOFF__, end });
+      return fn({ kids: __SK__, altPath: [__ALT__, ..._ap], src: _src, off: __SPOFF__, end });
     }`;
+      } else if (arm.shape.kind === 'keep') {
+        finish = `return { type: ${J(r.cstName)}, children: __SK__, arm: ${J(arm.name)}, alt: __ALT__ };`;
       } else {
         finish = `return null;`;
       }
@@ -3193,6 +3086,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
           const guards: string[] = [`t.lid === ${open}`];
           if (accessTail) guards.push('!tailClosed');
           if (lbp !== null && lbp !== undefined) guards.push(`${lbp} > minBp`);
+          guards.push(`(_suppressCur === null || !_suppressCur.has(${open}))`);
           // Count sep/lit when rendering LED body
           ctx.step.lit += 2;
           ctx.step.sep++;
@@ -3223,7 +3117,8 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     }
   }
 
-  const binaryCode = binaryNode ? `    const info = ${r.name}_BIN[t.lid];
+  const binaryCode = binaryNode ? `    if (_suppressCur !== null && _suppressCur.has(t.lid)) break;
+    const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
     const opText = _src.slice(t.off, t.end);
@@ -3239,7 +3134,12 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   const hasLedLoop = ledCode.length > 0;
 
   return finalize(`function parseAst${r.name}(): ${retType} | null {
-  return parseAst${r.name}_bp(0);
+  const prev = _suppressCur;
+  _suppressCur = _suppressNext;
+  _suppressNext = null;
+  const r = parseAst${r.name}_bp(0);
+  _suppressCur = prev;
+  return r;
 }
 function parseAst${r.name}_bp(minBp: number): ${retType} | null {
   let left = parseAst${r.name}_nud(minBp);
@@ -3292,6 +3192,35 @@ function _shapeLeafIdent(t: Tok): string { return _src.slice(t.off, t.end); }
 function _shapeLeafString(t: Tok): string { return _src.slice(t.off, t.end); }
 function _shapeLeafBigint(t: Tok): bigint { return BigInt(_src.slice(t.off, t.end)); }
 function _shapeLeafBoolean(t: Tok): boolean { return _src.slice(t.off, t.end) === 'true'; }
+function _shapePack(values: unknown[]): unknown {
+  return values.length === 0 ? null : values.length === 1 ? values[0] : values.slice();
+}
+/** Transaction boundary for every speculative RD body. */
+function _shapeTxn(kids: unknown[], altPath: number[], body: () => boolean): boolean {
+  const sp = pos;
+  const kk = kids.length;
+  const ak = altPath.length;
+  const sn = _suppressNext;
+  if (body()) return true;
+  pos = sp;
+  kids.length = kk;
+  altPath.length = ak;
+  _suppressNext = sn;
+  return false;
+}
+/** Zero-width trial: restore all recognizer state whether the body succeeds or fails. */
+function _shapeProbe(kids: unknown[], altPath: number[], body: () => boolean): boolean {
+  const sp = pos;
+  const kk = kids.length;
+  const ak = altPath.length;
+  const sn = _suppressNext;
+  const ok = body();
+  pos = sp;
+  kids.length = kk;
+  altPath.length = ak;
+  _suppressNext = sn;
+  return ok;
+}
 /** sepBy aligned with CST: zero elements ok; trailing delimiter consumed. */
 function _shapeSepRule(elem: () => unknown | null, delimLid: number, out: unknown[]): boolean {
   const first = elem();

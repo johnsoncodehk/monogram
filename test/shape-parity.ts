@@ -1,4 +1,4 @@
-// Gate: SH2-0b shape CST↔parseAst parity — calc+toy corpus ≥1200, toy golden 10/10,
+// Gate: SH2-1 shape CST↔parseAst parity — calc+toy corpus ≥2500, toy golden ≥14,
 // coverage table, typescript+SH0 fail-fast (no home-path permanent dependency).
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -227,13 +227,14 @@ async function main(): Promise<void> {
   };
   if (deepEq(customGot, customExpect) && deepEq(customSeen, customCtxExpect)) goldenOk++;
   else console.error('  custom-ctx fail', { customGot, customSeen });
-  check(goldenOk === 10, `toy golden ${goldenOk}/10`);
+  const goldenTotal = toyGolden.length + 1;
+  check(goldenOk === goldenTotal && goldenTotal >= 14, `toy golden ${goldenOk}/${goldenTotal}`);
 
   const toyCorpus = buildToyCorpus(0x5a2_2026);
-  check(toyCorpus.length === 800, `toy corpus exact 800 (got ${toyCorpus.length})`);
+  check(toyCorpus.length === 2100, `toy corpus exact 2100 (got ${toyCorpus.length})`);
   const calcCorpus = buildCalcCorpus();
   const totalN = toyCorpus.length + calcCorpus.length;
-  check(totalN >= 1200, `corpus total ≥1200 (got ${totalN})`);
+  check(totalN >= 2500, `corpus total ≥2500 (got ${totalN})`);
 
   function parity(
     label: string,
@@ -267,6 +268,43 @@ async function main(): Promise<void> {
 
   const toyP = parity('toy', toyMod, toyCorpus);
   const calcP = parity('calc', calcMod, calcCorpus);
+
+  const requiredRdKinds = [
+    'lit', 'tok', 'rule', 'star', 'opt', 'sep', 'altlit', 'alt',
+    'not', 'seq', 'sameLine', 'suppress',
+  ];
+  check(
+    requiredRdKinds.every((k) => toyMod.shapeCoverage.step[k] > 0)
+      && toyMod.shapeCoverage.unsupported.length === 0,
+    'toy RD Step coverage handled; unsupported=0',
+    JSON.stringify(toyMod.shapeCoverage.step),
+  );
+
+  const accepts = (mod: Emitted, src: string, ast: boolean): boolean => {
+    if (ast) return mod.parseAst(src) !== null;
+    const toks = mod.tokenize(src).map((t) => ({
+      off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid,
+    }));
+    return mod.parse(toks) !== null;
+  };
+  const txnExpect = {
+    type: 'Program',
+    body: [{ type: 'Transaction', value: [['a'], 'b'] }],
+  };
+  check(
+    accepts(toyMod, 'txn a:b?;', false)
+      && accepts(toyMod, 'txn a:b?;', true)
+      && deepEq(toyMod.parseAst('txn a:b?;'), txnExpect),
+    'transaction rollback restores failed-arm list/hole kids',
+  );
+  check(
+    accepts(toyMod, 'line a b;', false) && accepts(toyMod, 'line a b;', true),
+    'sameLine accepts same-line on CST/AST',
+  );
+  check(
+    !accepts(toyMod, 'line a\nb;', false) && !accepts(toyMod, 'line a\nb;', true),
+    'sameLine rejects cross-line on CST/AST',
+  );
 
   const calcSpot = stripSpans(calcMod.parseAst('let x = 1; 2 + 3;'));
   check(
@@ -307,6 +345,16 @@ async function main(): Promise<void> {
     || (tsErr.match(/star\(/g) ?? []).length + (tsErr.match(/pratt\./g) ?? []).length >= 2;
   check(!!tsErr && hasRuleConstruct && multi, 'typescript+SH0 emit fail-fast lists unsupported',
     tsErr ? tsErr.slice(0, 400) : 'no error');
+  const remaining = [...tsErr.matchAll(/\n\s+([^:\n]+): ([^\n]+)/g)]
+    .map((m) => ({ rule: m[1]!, construct: m[2]! }));
+  const isPrattDeferred = (construct: string) =>
+    construct.startsWith('pratt.') || construct === 'expected-pratt-shape';
+  const rdRemaining = remaining.filter((x) => !isPrattDeferred(x.construct));
+  check(
+    remaining.length > 0 && rdRemaining.length === 0,
+    `typescript+SH0 RD unsupported=0; Pratt deferred=${remaining.length}`,
+    rdRemaining.slice(0, 10).map((x) => `${x.rule}:${x.construct}`).join(', '),
+  );
 
   console.log(`\nshape-parity summary: toy ${toyP.cstAcc}/${toyCorpus.length} accept, calc ${calcP.cstAcc}/${calcCorpus.length} accept, corpus=${totalN}`);
   console.log(`shape-parity: ${pass}/${pass + fail} checks passed`);

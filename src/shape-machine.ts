@@ -56,13 +56,15 @@ export type ShapeTransaction<H = unknown> = {
  * Transaction contract:
  * - append-only arrays roll back by restoring their checkpointed lengths;
  * - overwrites must be recorded in `undo`, or staged and applied only on commit;
- * - parser position and every mutable Pratt/control flag join the same transaction;
+ * - parser position and every mutable Pratt/control flag (`_suppressNext` /
+ *   `_suppressCur` / capped) join the same transaction;
  * - function-local `left`/`opText` values need no log when assigned only after success.
  */
 export const SHAPE_TRANSACTION_CONTRACT = {
   appendOnly: 'restore-lengths',
   overwrite: 'undo-log-or-commit-on-success',
   prattLocals: 'commit-on-success',
+  controlFlags: 'restore-with-checkpoint',
 } as const;
 
 /** Local custom context (SH2-0). Full AltPathPart form is deferred. */

@@ -256,7 +256,10 @@ function checkNodeAgainstSlots(
       }
     }
   }
-  if (hasListSlot(v) && !sawListBind && !node.fields.some((f) => f.bind !== 'opText' && typeof f.bind === 'object' && 'from' in f.bind && f.bind.from === 'list')) {
+  // A list nested inside opt/alt is one packed visible slot, not a direct list
+  // channel. Only direct star/sep slots require a list binding.
+  const hasDirectList = v.some((s) => s.k === 'star' || s.k === 'sep');
+  if (hasDirectList && !sawListBind && !node.fields.some((f) => f.bind !== 'opText' && typeof f.bind === 'object' && 'from' in f.bind && f.bind.from === 'list')) {
     diags.push({
       level: 'error', rule: ruleName, code: 'star-needs-list',
       message: `${where}: visible stream has star/sep (${summarizeSlots(v)}) but no list-binding field`,

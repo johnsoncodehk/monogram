@@ -6,7 +6,7 @@
  */
 import {
   token, rule, defineGrammar, left, prefix, op,
-  seq, oneOf, range, star, many, opt, sep, not,
+  seq, oneOf, range, star, many, opt, sep, not, alt, sameLine, exclude,
 } from '../../src/api.ts';
 import type { ShapeSpec } from '../../src/shape-schema.ts';
 
@@ -45,11 +45,51 @@ const Guarded = rule(() => [
   ['guard', not('bad'), Ident, opt(':', Ident)],
 ]);
 
+/** Failed branch consumes both a list and an opt slot before true rollback. */
+const Transaction = rule(() => [
+  ['txn', alt(
+    [many(Ident), opt(':', Ident), alt('!', '.')],
+    [many(Ident), opt(':', Ident), '?'],
+  )],
+]);
+
+const LinePair = rule(() => [
+  ['line', Ident, sameLine, Ident],
+]);
+
+/** suppress: parse Expr with '*' disabled at its top-level LED loop. */
+const Suppressed = rule(() => [
+  ['noplus', exclude('*', Expr)],
+]);
+
+const Repeated = rule(() => [
+  ['repeat', many(alt(Ident, Number_))],
+]);
+
+const OptionalRepeated = rule(() => [
+  ['maybe', opt(many(alt(Ident, Number_)))],
+]);
+
+const Separated = rule(() => [
+  ['pairs', '(', sep(alt([Ident, ':', Number_], Number_), ','), ')'],
+]);
+
+const NotAny = rule(() => [
+  ['notany', not(alt('bad', ['worse', Ident])), Ident],
+]);
+
 const Item = rule(() => [
   ['bang', Bang],
   Tagged,
   Guarded,
   ['args', '(', sep(Expr, ','), ')'],
+  Transaction,
+  LinePair,
+  Suppressed,
+  Repeated,
+  OptionalRepeated,
+  Separated,
+  NotAny,
   [Expr],
 ]);
 
@@ -59,7 +99,10 @@ export const toyGrammar = defineGrammar({
   name: 'shape-toy',
   tokens: { Ident, Number: Number_ },
   prec: [left('+', '-'), left('*', '/'), left(prefix('-'))],
-  rules: { Atom, Bang, Expr, Tagged, Guarded, Item, Program },
+  rules: {
+    Atom, Bang, Expr, Tagged, Guarded, Transaction, LinePair, Suppressed,
+    Repeated, OptionalRepeated, Separated, NotAny, Item, Program,
+  },
   entry: Program,
 });
 
@@ -203,6 +246,44 @@ export const toyShape: ShapeSpec = {
         { name: 'alias', bind: { from: 'opt', at: 1 }, optional: true, typeHint: 'string' },
       ],
     },
+    Transaction: {
+      kind: 'node',
+      type: 'Transaction',
+      fields: [{ name: 'value', bind: { at: 0 }, typeHint: 'unknown' }],
+    },
+    LinePair: {
+      kind: 'node',
+      type: 'LinePair',
+      fields: [
+        { name: 'first', bind: { at: 0 }, typeHint: 'string' },
+        { name: 'second', bind: { at: 1 }, typeHint: 'string' },
+      ],
+    },
+    Suppressed: {
+      kind: 'node',
+      type: 'Suppressed',
+      fields: [{ name: 'expression', bind: { at: 0 }, typeHint: 'ExprShape' }],
+    },
+    Repeated: {
+      kind: 'node',
+      type: 'Repeated',
+      fields: [{ name: 'values', bind: { from: 'list', of: 0 }, typeHint: 'unknown' }],
+    },
+    OptionalRepeated: {
+      kind: 'node',
+      type: 'OptionalRepeated',
+      fields: [{ name: 'values', bind: { from: 'opt', at: 0 }, optional: true, typeHint: 'unknown' }],
+    },
+    Separated: {
+      kind: 'node',
+      type: 'Separated',
+      fields: [{ name: 'values', bind: { from: 'list', of: 0 }, typeHint: 'unknown' }],
+    },
+    NotAny: {
+      kind: 'node',
+      type: 'NotAny',
+      fields: [{ name: 'name', bind: { at: 0 }, typeHint: 'string' }],
+    },
     Item: {
       kind: 'choice',
       arms: [
@@ -218,9 +299,16 @@ export const toyShape: ShapeSpec = {
             fields: [{ name: 'values', bind: { from: 'list', of: 0 }, typeHint: 'ExprShape' }],
           },
         },
+        { name: 'Transaction', altIndices: [4], shape: { kind: 'inline' } },
+        { name: 'LinePair', altIndices: [5], shape: { kind: 'inline' } },
+        { name: 'Suppressed', altIndices: [6], shape: { kind: 'inline' } },
+        { name: 'Repeated', altIndices: [7], shape: { kind: 'inline' } },
+        { name: 'OptionalRepeated', altIndices: [8], shape: { kind: 'inline' } },
+        { name: 'Separated', altIndices: [9], shape: { kind: 'inline' } },
+        { name: 'NotAny', altIndices: [10], shape: { kind: 'inline' } },
         {
           name: 'ExprItem',
-          altIndices: [4],
+          altIndices: [11],
           shape: {
             kind: 'node',
             type: 'ExprItem',
@@ -291,7 +379,7 @@ export const toyTaggedCustomShape: ShapeSpec = {
   },
 };
 
-/** Proto2 golden (10), including custom-ctx row. */
+/** Toy golden; shape-parity adds one custom-ctx row. */
 export const toyGolden: { src: string; expect: unknown; customs?: ToyAstCustoms }[] = [
   { src: 'bang !x;', expect: { type: 'Program', body: [{ type: 'BangOne', arg: I('x') }] } },
   { src: 'bang !!7;', expect: { type: 'Program', body: [{ type: 'BangTwo', arg: N(7) }] } },
@@ -324,9 +412,47 @@ export const toyGolden: { src: string; expect: unknown; customs?: ToyAstCustoms 
       }],
     },
   },
+  {
+    src: 'txn a:b?;',
+    expect: { type: 'Program', body: [{ type: 'Transaction', value: [['a'], 'b'] }] },
+  },
+  {
+    src: 'line a b;',
+    expect: { type: 'Program', body: [{ type: 'LinePair', first: 'a', second: 'b' }] },
+  },
+  {
+    src: 'noplus 1+2;',
+    expect: {
+      type: 'Program',
+      body: [{
+        type: 'Suppressed',
+        expression: { type: 'BinaryExpression', left: N(1), operator: '+', right: N(2) },
+      }],
+    },
+  },
+  {
+    src: 'repeat a 1 b 2;',
+    expect: { type: 'Program', body: [{ type: 'Repeated', values: ['a', 1, 'b', 2] }] },
+  },
+  {
+    src: 'maybe a 1;',
+    expect: { type: 'Program', body: [{ type: 'OptionalRepeated', values: ['a', 1] }] },
+  },
+  {
+    src: 'maybe;',
+    expect: { type: 'Program', body: [{ type: 'OptionalRepeated', values: [] }] },
+  },
+  {
+    src: 'pairs(a:1,2,b:3,);',
+    expect: { type: 'Program', body: [{ type: 'Separated', values: [['a', 1], 2, ['b', 3]] }] },
+  },
+  {
+    src: 'notany good;',
+    expect: { type: 'Program', body: [{ type: 'NotAny', name: 'good' }] },
+  },
 ];
 
-/** Seeded corpus: SH2-0 base + SH2-0b multi-stmt / nested-group / adv-112 (seed → 800). */
+/** Seeded corpus: SH2-1 RD combinations and rollback/newline boundaries (seed → 2100). */
 export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string }[] {
   function rng32(s: number) {
     return () => {
@@ -357,8 +483,8 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
   }
   function validItem(): string {
     const r = rng();
-    if (r < .18) return `bang ${rng() < .5 ? '!' : '!!'}${atom()}`;
-    if (r < .40) {
+    if (r < .10) return `bang ${rng() < .5 ? '!' : '!!'}${atom()}`;
+    if (r < .22) {
       const nest = 1 + Math.floor(rng() * 4);
       const tail = pick([
         `:${expr()}`,
@@ -369,12 +495,29 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
       ]);
       return `tag ${pick(ids)}${tail}`;
     }
-    if (r < .56) return `guard ${pick(ids)}${rng() < .5 ? `:${pick(ids)}` : ''}`;
-    if (r < .72) {
+    if (r < .30) return `guard ${pick(ids)}${rng() < .5 ? `:${pick(ids)}` : ''}`;
+    if (r < .40) {
       const n = Math.floor(rng() * 4);
       const values = Array.from({ length: n }, () => expr()).join(',');
       return `args(${values}${n && rng() < .25 ? ',' : ''})`;
     }
+    if (r < .50) return `txn ${pick(ids)}${rng() < .6 ? `:${pick(ids)}` : ''}${pick(['!', '.', '?'])}`;
+    if (r < .58) return `line ${pick(ids)} ${pick(ids)}`;
+    if (r < .66) return `noplus ${atom()}+${atom()}`;
+    if (r < .75) {
+      const n = 2 + Math.floor(rng() * 5);
+      return `repeat ${Array.from({ length: n }, atom).join(' ')}`;
+    }
+    if (r < .82) {
+      const n = Math.floor(rng() * 5);
+      return `maybe${n ? ' ' + Array.from({ length: n }, atom).join(' ') : ''}`;
+    }
+    if (r < .90) {
+      const n = Math.floor(rng() * 4);
+      const pairs = Array.from({ length: n }, () => rng() < .55 ? `${pick(ids)}:${pick(nums)}` : pick(nums));
+      return `pairs(${pairs.join(',')}${n && rng() < .3 ? ',' : ''})`;
+    }
+    if (r < .95) return `notany ${pick(ids.filter((x) => x !== 'bad' && x !== 'worse'))}`;
     return expr();
   }
   /** Always 2–5 statements (SH2-0b multi-stmt coverage). */
@@ -391,6 +534,8 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
       'bang !!!x;', 'bang !;', 'tag ;', 'tag x:', 'tag x=;', 'guard bad;',
       'guard x:;', 'args(1,,2);', 'args(;', 'f(1,2;', '1+;', '(1+2;',
       'tag x', 'bang !!x', 'unknown unknown;', 'guard ;', 'args(1 2);',
+      'txn a:b;', 'txn ?', 'line a\nb;', 'line a;', 'noplus 1+;', 'repeat +;',
+      'pairs(a::1);', 'pairs(,);', 'notany bad;', 'notany worse x;',
     ]);
   }
   // Planner adversarial 112 cases (depth groups + fragment cross-product).
@@ -409,6 +554,10 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
     'tag x:;', 'tag x=;', 'guard bad;', 'guard good;', 'guard good:a;',
     'args();', 'args(1,);', 'args(1,2);', 'f();', 'f(1,);', 'f(1)(2);',
     '1+2*3;', '-x(1);', 'tag t:f(1,2); bang !!7;',
+    // SH2-1: nested alt/altlit, sameLine, suppress, star(alt), opt(star), sep(alt), not(alt)
+    'txn a:b?;', 'txn a:b!;', 'txn a.;', 'line a b;', 'line a\nb;',
+    'noplus 1+2;', 'repeat a 1 b 2;', 'maybe;', 'maybe a 1;',
+    'pairs();', 'pairs(a:1,2,b:3,);', 'notany good;', 'notany bad;',
     // SH2-0b: choice-arm nested groups + multi-stmt
     'tag x=(1);', 'tag x=((1));', 'tag y=(((2)));', 'tag z:(3);', 'tag z:((a));',
     'tag x:1;tag y=2;', 'bang!x;tag z;', 'tag x=(1);tag y=2;tag z;',
@@ -419,8 +568,8 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
     ...anchors,
     ...advCases.map((src) => ({ src, source: 'adv-112' as const })),
   ];
-  while (corpus.length < 560) corpus.push({ src: multiProgram(), source: 'multi-stmt' });
-  while (corpus.length < 680) corpus.push({ src: validProgram(), source: 'random-valid' });
-  while (corpus.length < 800) corpus.push({ src: invalidProgram(), source: 'random-invalid' });
+  while (corpus.length < 1500) corpus.push({ src: multiProgram(), source: 'multi-stmt-rd' });
+  while (corpus.length < 1850) corpus.push({ src: validProgram(), source: 'random-valid-rd' });
+  while (corpus.length < 2100) corpus.push({ src: invalidProgram(), source: 'random-invalid-rd' });
   return corpus;
 }
