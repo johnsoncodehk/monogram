@@ -1018,6 +1018,40 @@ async function main(): Promise<void> {
     );
   }
 
+  const cstFixSepAltWitnesses: { src: string; want: 'accept' | 'reject' }[] = [
+    { src: "pairs (a : );", want: 'reject' },
+    { src: "pairs (1, a : );", want: 'reject' },
+    { src: "pairs(a:);", want: 'reject' },
+    { src: "pairs(1,a:);", want: 'reject' },
+    { src: "pairs(a:1,b:);", want: 'reject' },
+    { src: "pairs(a : );", want: 'reject' },
+    { src: "pairs(1, a:);", want: 'reject' },
+    { src: "notany bad;", want: 'reject' },
+    { src: "txn a:b;", want: 'reject' },
+    { src: 'line a\nb;', want: 'reject' },
+    { src: "args(1,,2);", want: 'reject' },
+    { src: "pairs();", want: 'accept' },
+    { src: "pairs(a:1);", want: 'accept' },
+    { src: "pairs(1, a:2);", want: 'accept' },
+    { src: "pairs(a:1,2,b:3,);", want: 'accept' },
+    { src: "pairs( a : 1 , );", want: 'accept' },
+    { src: "maybe;", want: 'accept' },
+    { src: "maybe a 1;", want: 'accept' },
+    { src: "repeat a 1 b 2;", want: 'accept' },
+    { src: "notany good;", want: 'accept' },
+    { src: "txn a:b?;", want: 'accept' },
+    { src: "noplus 1 * 2;", want: 'accept' },
+    { src: "line a b;", want: 'accept' },
+    { src: "args();", want: 'accept' },
+    { src: "args(1,);", want: 'accept' },
+  ];
+  for (const { src, want } of cstFixSepAltWitnesses) {
+    const cst = accepts(toyMod, src, false);
+    const ast = accepts(toyMod, src, true);
+    const ok = want === 'accept' ? cst && ast : !cst && !ast;
+    check(ok, `cst-fix sepAlt witness ${want} ${JSON.stringify(src)} (cst=${cst} ast=${ast})`);
+  }
+
   // ── Guard + capped witnesses (toy) ────────────────────────────────────────
   check(
     accepts(toyMod, 'a::b;', false) && accepts(toyMod, 'a::b;', true),

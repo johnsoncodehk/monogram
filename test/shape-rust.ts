@@ -304,6 +304,47 @@ async function main(): Promise<void> {
   }
   check('SH3-1b noplus suppress/binary TS↔Rust', sh31bBad === 0, `${sh31bNoplus.length - sh31bBad}/${sh31bNoplus.length}`);
 
+  const cstFixSepAltWitnesses: { src: string; want: 'accept' | 'reject' }[] = [
+    { src: "pairs (a : );", want: 'reject' },
+    { src: "pairs (1, a : );", want: 'reject' },
+    { src: "pairs(a:);", want: 'reject' },
+    { src: "pairs(1,a:);", want: 'reject' },
+    { src: "pairs(a:1,b:);", want: 'reject' },
+    { src: "pairs(a : );", want: 'reject' },
+    { src: "pairs(1, a:);", want: 'reject' },
+    { src: "notany bad;", want: 'reject' },
+    { src: "txn a:b;", want: 'reject' },
+    { src: 'line a\nb;', want: 'reject' },
+    { src: "args(1,,2);", want: 'reject' },
+    { src: "pairs();", want: 'accept' },
+    { src: "pairs(a:1);", want: 'accept' },
+    { src: "pairs(1, a:2);", want: 'accept' },
+    { src: "pairs(a:1,2,b:3,);", want: 'accept' },
+    { src: "pairs( a : 1 , );", want: 'accept' },
+    { src: "maybe;", want: 'accept' },
+    { src: "maybe a 1;", want: 'accept' },
+    { src: "repeat a 1 b 2;", want: 'accept' },
+    { src: "notany good;", want: 'accept' },
+    { src: "txn a:b?;", want: 'accept' },
+    { src: "noplus 1 * 2;", want: 'accept' },
+    { src: "line a b;", want: 'accept' },
+    { src: "args();", want: 'accept' },
+    { src: "args(1,);", want: 'accept' },
+  ];
+  const cstFixWitnessSrcs = cstFixSepAltWitnesses.map((w) => w.src);
+  const cstFixLines = runBatch(toyBin, cstFixWitnessSrcs);
+  let cstFixBad = 0;
+  for (let i = 0; i < cstFixSepAltWitnesses.length; i++) {
+    const { src, want } = cstFixSepAltWitnesses[i]!;
+    const tsCst = toyTs.parse(toyTs.tokenize(src)) !== null;
+    const tsAst = toyTs.parseAst(src) !== null;
+    const rustOk = cstFixLines[i]!.startsWith('A	');
+    const ok = want === 'accept' ? tsCst && tsAst && rustOk : !tsCst && !tsAst && !rustOk;
+    if (!ok) cstFixBad++;
+  }
+  check('cst-fix sepAlt witnesses TS↔Rust', cstFixBad === 0, `${cstFixSepAltWitnesses.length - cstFixBad}/${cstFixSepAltWitnesses.length}`);
+
+
   let failFast = '';
   try {
     emitRust(typescriptGrammar, { shape: typescriptShape });

@@ -600,8 +600,8 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
       const n = Math.floor(rng() * 5);
       return `maybe${n ? ' ' + Array.from({ length: n }, atom).join(' ') : ''}`;
     }
-    // SH3-1b: sep(alt([Ident,':',Number], Number)) — include multi-pair + trailing
-    // delim; incomplete `id:` forms are CST-over-accept (see SH3-1b reply), not emitted.
+    // SH3-1b/cst-fix: sep(alt([Ident,':',Number], Number)) — multi-pair + trailing delim.
+    // Incomplete `id:` forms belong in invalidProgram / reject anchors (CST now restores).
     if (r < .90) {
       const n = Math.floor(rng() * 4);
       const pairs = Array.from({ length: n }, () => {
@@ -631,6 +631,9 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
       'tag x', 'bang !!x', 'unknown unknown;', 'guard ;', 'args(1 2);',
       'txn a:b;', 'txn ?', 'line a\nb;', 'line a;', 'noplus 1+;', 'repeat +;',
       'pairs(a::1);', 'pairs(,);', 'notany bad;', 'notany worse x;',
+      // incomplete sep+alt (predAlt half-fail must not over-accept)
+      'pairs (a : );', 'pairs (1, a : );', 'pairs(a:);', 'pairs(1,a:);',
+      'pairs(a:1,b:);', 'pairs(a : );', 'pairs(1, a:);',
     ]);
   }
   // Planner adversarial 112 cases (depth groups + fragment cross-product).
@@ -656,8 +659,11 @@ export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string
     // SH3-1b: suppress must not block prec-binary `*` (LED-only exclude)
     'noplus 1 * 2;', 'noplus 1 * 2 * 3;', 'noplus (1*2);', 'noplus 1*2;',
     'noplus 1/2;', 'noplus 1*2+3;', 'noplus (1*2)*3;', 'noplus 1*(2*3);',
-    // SH3-1b: well-formed sep+alt (incomplete `pairs(a:)` is CST-over-accept — not here)
+    // SH3-1b: well-formed sep+alt
     'pairs(a:1);', 'pairs(1, a:2);', 'pairs(a:1, 2, b:3);', 'pairs( a : 1 , );',
+    // cst-fix: incomplete sep+alt must REJECT (predAlt/sepBy restore)
+    'pairs (a : );', 'pairs (1, a : );', 'pairs(a:);', 'pairs(1,a:);',
+    'pairs(a:1,b:);', 'pairs(a : );', 'pairs(1, a:);',
     // SH2-0b: choice-arm nested groups + multi-stmt
     'tag x=(1);', 'tag x=((1));', 'tag y=(((2)));', 'tag z:(3);', 'tag z:((a));',
     'tag x:1;tag y=2;', 'bang!x;tag z;', 'tag x=(1);tag y=2;tag z;',

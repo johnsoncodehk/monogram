@@ -738,7 +738,11 @@ function notBody(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan): string {
   return `let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${steps.length ? steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); !m`;
 }
 function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
-  const arms = branches.map((br, i) => `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } }`).join('\n');
+  // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
+  const arms = branches.map((br, i) => {
+    const steps = br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true';
+    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${steps} { return true; } p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); }`;
+  }).join('\n');
   return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
 }
 
@@ -2613,11 +2617,13 @@ impl<'a, B: Builder> Parser<'a, B> {
     }
     #[inline(always)]
     fn sep_by(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
-        if !elem(self) { return true; }
+        let sp0 = self.pos; let sb0 = self.scratch.len(); let ck0 = self.b.checkpoint();
+        if !elem(self) { self.pos = sp0; self.scratch.truncate(sb0); self.b.restore(ck0); return true; }
         loop {
             let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             if !self.match_lit(delim, ${punctId}) { self.pos = sp; self.scratch.truncate(sb); self.b.restore(ck); break; }
-            if !elem(self) { break; }
+            let sp2 = self.pos; let sb2 = self.scratch.len(); let ck2 = self.b.checkpoint();
+            if !elem(self) { self.pos = sp2; self.scratch.truncate(sb2); self.b.restore(ck2); break; }
         }
         true
     }

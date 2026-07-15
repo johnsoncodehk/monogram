@@ -523,7 +523,14 @@ function stepCond(s: Step, ids: LexIdPlan, w = false): string {
 
 function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[], w = false): string {
   const sc = (x: Step) => stepCond(x, ids, w);
-  const arms = branches.map((br, i) => `if (${firstCond(firsts![i], 't', ids)}) { if (${br.length ? br.map(sc).join(' && ') : 'true'}) return true; }`).join(' else ');
+  // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred altBody.
+  const arms = branches.map((br, i) => {
+    const steps = br.length ? br.map(sc).join(' && ') : 'true';
+    const body = w
+      ? `{ const sp = pos; const bk = kids.length; const bs = spans.length; if (${steps}) return true; pos = sp; kids.length = bk; spans.length = bs; }`
+      : `{ const sp = pos; const bk = kids.length; if (${steps}) return true; pos = sp; kids.length = bk; }`;
+    return `if (${firstCond(firsts![i], 't', ids)}) ${body}`;
+  }).join(' else ');
   return `const t = peek(); if (t === null) return false; ${arms} return false;`;
 }
 
@@ -1176,11 +1183,14 @@ function optW(body: () => boolean, kids: any[], spans: BWSpan[]): boolean {
   const sp = pos; const before = kids.length; const bs = spans.length; if (!body()) { pos = sp; kids.length = before; spans.length = bs; } return true;
 }
 function sepByW(elem: () => boolean, delimLid: number, kids: any[], spans: BWSpan[]): boolean {
-  if (!elem()) return true;
+  // Match interpreter matchSep: restore on elem failure (zero elems OK; trailing delim keeps delim).
+  const sp0 = pos; const before0 = kids.length; const bs0 = spans.length;
+  if (!elem()) { pos = sp0; kids.length = before0; spans.length = bs0; return true; }
   for (;;) {
     const sp = pos; const before = kids.length; const bs = spans.length;
     if (!matchLitW(delimLid, '$punct', kids, spans)) { pos = sp; kids.length = before; spans.length = bs; break; }
-    if (!elem()) break;
+    const sp2 = pos; const before2 = kids.length; const bs2 = spans.length;
+    if (!elem()) { pos = sp2; kids.length = before2; spans.length = bs2; break; }
   }
   return true;
 }
@@ -3881,11 +3891,14 @@ function opt(body: () => boolean, kids: Cst[]): boolean {
   const sp = pos; const before = kids.length; if (!body()) { pos = sp; kids.length = before; } return true;
 }
 function sepBy(elem: () => boolean, delimLid: number, kids: Cst[]): boolean {
-  if (!elem()) return true;   // the whole separated list is optional — zero elements is valid
+  // Match interpreter matchSep: restore on elem failure (zero elems OK; trailing delim keeps delim).
+  const sp0 = pos; const before0 = kids.length;
+  if (!elem()) { pos = sp0; kids.length = before0; return true; }
   for (;;) {
     const sp = pos; const before = kids.length;
     if (!matchLit(delimLid, '$punct', kids)) { pos = sp; kids.length = before; break; }
-    if (!elem()) break;   // a trailing delimiter is allowed — keep the pushed delim and stop
+    const sp2 = pos; const before2 = kids.length;
+    if (!elem()) { pos = sp2; kids.length = before2; break; }   // trailing delim OK — keep delim, drop elem pollution
   }
   return true;
 }

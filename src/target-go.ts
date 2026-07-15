@@ -540,7 +540,11 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 }
 
 function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | undefined, ar: ArenaIdPlan): string {
-  const arms = branches.map((br, i) => `if ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return true } }`).join(' else ');
+  // FIRST dispatch still only tries the matching arm; on half-failure restore like non-pred alt.
+  const arms = branches.map((br, i) => {
+    const steps = br.length ? br.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true';
+    return `if ${firstCond(firsts![i], 't', ids)} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${steps} { return true }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`;
+  }).join(' else ');
   return `t := peek(); if t == nil { return false }; ${arms}; return false`;
 }
 
@@ -1895,7 +1899,11 @@ function notBodyW(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan, recv: string):
 }
 function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
   // Same-line `} else if` (native predAltBody joins with ' else '); newlines break Go ASI.
-  const arms = branches.map((br, i) => `if ${firstCond(firsts![i], 't', ids)} { if ${br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { return true } }`).join(' else ');
+  // FIRST dispatch; restore pos/scratch/arena on arm half-failure (like altBodyW).
+  const arms = branches.map((br, i) => {
+    const steps = br.length ? br.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true';
+    return `if ${firstCond(firsts![i], 't', ids)} { sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${steps} { return true }; p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`;
+  }).join(' else ');
   return `t := p.peekW(); if t == nil { return false }; ${arms}; return false`;
 }
 
@@ -2322,11 +2330,13 @@ func (p *${recv}) optW(body func() bool) bool {
 \treturn true
 }
 func (p *${recv}) sepByW(elem func() bool, delim uint16) bool {
-\tif !elem() { return true }
+\tsp0 := p.pos; sb0 := len(p.scratch); ${arenaCkpt(recv).replace('nb, kb', 'nb0, kb0')}
+\tif !elem() { p.pos = sp0; p.scratch = p.scratch[:sb0]; ${arenaRestore(recv).replace('nb', 'nb0').replace('kb', 'kb0')}; return true }
 \tfor {
 \t\tsp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
 \t\tif !p.matchLitW(delim, TT_SKIP_PUNCT) { p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break }
-\t\tif !elem() { break }
+\t\tsp2 := p.pos; sb2 := len(p.scratch); ${arenaCkpt(recv).replace('nb, kb', 'nb2, kb2')}
+\t\tif !elem() { p.pos = sp2; p.scratch = p.scratch[:sb2]; ${arenaRestore(recv).replace('nb', 'nb2').replace('kb', 'kb2')}; break }
 \t}
 \treturn true
 }
@@ -2398,8 +2408,13 @@ func (b *CstBuilder) Shift(h int32, byteDelta, tokDelta int) int32 {
 }
 `;
 
+  // EntryMeta is part of parseWithMetaW's signature always; reuse paths define it via
+  // rdEntryWithReuse{A,B}. Non-reuse grammars (e.g. toy) still emit DocWith and need the type.
+  const entryMetaType = topReuse ? '' : `type EntryMeta struct { TokStart, TokEnd, Ext, Off, End, KidStart, KidCount int }
+`;
+
   const parseWithMetaW = `
-func parseWithMetaW(text string, meta []alignMeta, b Builder) (h int32, entries []EntryMeta, entryHs []int32, ok bool) {
+${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h int32, entries []EntryMeta, entryHs []int32, ok bool) {
 	toks := toksFromMeta(text, meta)
 	n := len(toks)
 	p := &parserW{toks: toks, src: text, b: b, scratch: nil}
@@ -2905,7 +2920,7 @@ func NewDocWith(src string, b Builder) Document {
 func newDocWith(src string, b Builder) *DocWith {
 	d := &DocWith{text: src, b: b}
 	d.toks = ${initToks}
-	h, entries, entryHs, ok := parseWithMetaW(src, d.toks, b)
+	${topReuse ? 'h, entries, entryHs, ok' : 'h, _, _, ok'} := parseWithMetaW(src, d.toks, b)
 	if ok {
 ${initAssign}
 	} else {
@@ -2937,7 +2952,7 @@ ${recoverClear}
 					}
 				}()
 				d.toks = ${freshMeta}
-				h, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
+				${topReuse ? 'h, ne, nhs, ok' : 'h, _, _, ok'} := parseWithMetaW(d.text, d.toks, d.b)
 				if ok {
 ${recoverAssign}
 				} else {
@@ -3444,11 +3459,13 @@ func opt(body func() bool) bool {
 \tsp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if !body() { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }; return true
 }
 func sepBy(elem func() bool, delimLid uint16) bool {
-\tif !elem() { return true }   // the whole separated list is optional — zero elements is valid
+\tsp0 := pos; sb0 := len(scratch); nb0 := len(nodes); kb0 := len(kids)
+\tif !elem() { pos = sp0; scratch = scratch[:sb0]; nodes = nodes[:nb0]; kids = kids[:kb0]; return true }
 \tfor {
 \t\tsp := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\tif !matchLit(delimLid, TT_SKIP_PUNCT) { pos = sp; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; break }
-\t\tif !elem() { break }   // a trailing delimiter is allowed — keep the pushed delim and stop
+\t\tsp2 := pos; sb2 := len(scratch); nb2 := len(nodes); kb2 := len(kids)
+\t\tif !elem() { pos = sp2; scratch = scratch[:sb2]; nodes = nodes[:nb2]; kids = kids[:kb2]; break }   // trailing delim OK — keep delim
 \t}
 \treturn true
 }
