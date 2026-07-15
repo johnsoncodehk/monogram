@@ -357,6 +357,10 @@ const cst    = parse(tokens);   // same tokens → CST — no re-lexing
 
 The proof is the full languages: the real [`javascript.ts`](javascript.ts) and [`typescript.ts`](typescript.ts) grammars — including the `[Await]/[Yield]` fork, left recursion, the regex/division and template state machines, arrow functions, and the TS type grammar — emit to **TypeScript, Go, and Rust**, and every emitted parser agrees with the reference interpreter on accept/reject outcomes (plus a rule-skeleton guard on tiny inputs). [`test/portable-targets.ts`](test/portable-targets.ts) compiles and runs all three for sixteen grammars (the two real languages plus focused fixtures) on every CI run. The Rust output reaches [oxc](https://github.com/oxc-project/oxc) throughput and the Go output beats [tsgo](https://github.com/microsoft/typescript-go) on the same corpus (an arena keeps both near zero-allocation). Byte-based Go/Rust use UTF-8 offsets — identical to the JS interpreter's for ASCII; non-ASCII offset units differ inherently.
 
+### Shape mapping (AST on the emitted CST)
+
+[`emitTs(grammar, { shape })`](src/target-ts.ts) optionally appends a declarative AST layer (`parseAst`) on the TypeScript emit. Spec format, primitives, custom/`parentFold` contracts, and the calc walkthrough: [`docs/SHAPE.md`](docs/SHAPE.md).
+
 ## Adding a language
 
 A new language is **one grammar file** on the unchanged engine:

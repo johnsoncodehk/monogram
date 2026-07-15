@@ -28,7 +28,9 @@ export type PrattEvent<H = unknown> =
   | { kind: 'postfixTok'; left: H; token: H }
   | { kind: 'led'; left: H; slots: readonly VisibleSlot<H>[] }
   | { kind: 'nudSeq'; slots: readonly VisibleSlot<H>[] }
-  | { kind: 'nudCapped'; slots: readonly VisibleSlot<H>[] };
+  | { kind: 'nudCapped'; slots: readonly VisibleSlot<H>[] }
+  /** Template product: kids are head, expr, optional middle/expr pairs, and tail — or a lone no-subst leaf. */
+  | { kind: 'template'; slots: readonly VisibleSlot<H>[] };
 
 /** Length snapshots are valid only for append-only channels. */
 export type AppendOnlyCheckpoint = {

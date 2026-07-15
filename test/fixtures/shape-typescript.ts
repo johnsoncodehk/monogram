@@ -29,7 +29,7 @@ const leaves: ShapeSpec['leaves'] = {
   BinaryNumber: { action: 'leafValue', fn: 'number' },
   BigInt: { action: 'leafValue', fn: 'bigint' },
   String: { action: 'leafValue', fn: 'string' },
-  Template: { action: 'leafValue', fn: 'string' }, // no-subst; interp assembled by $template node
+  Template: { action: 'leafValue', fn: 'string' }, // no-subst → pratt.template slot when declared
   Regex: { action: 'leafValue', fn: 'string' },
   Decorator: { action: 'leafValue', fn: 'ident' },
   Shebang: { action: 'drop' },
@@ -132,8 +132,13 @@ export const typescriptShape: ShapeSpec = {
         'Params are sep(Param) and body is Block|Expr alt; flag async from leading keyword ' +
         '(dropped). Requires handwritten assembly.'),
       postfixTok: custom('estreeExprPostfixTok',
-        'postfixTok Template on Expr is TaggedTemplateExpression (tag=left, quasi=leaf); ' +
+        'postfixTok Template on Expr is TaggedTemplateExpression (tag=left, quasi=TemplateLiteral); ' +
         'keep would leave a raw Expr children pair.'),
+      template: custom('estreeTemplateLiteral',
+        'Template literal kids are head, expr, optional middle/expr pairs, then tail ' +
+        '(or a lone no-subst leaf). ESTree needs TemplateLiteral with quasis and ' +
+        'expressions; keep would leave raw $template children. Hole accept follows ' +
+        'portable interpRule (= CST); hole AST uses the enclosing Pratt via dual-parse.'),
     },
 
     // Type system Pratt — no demo coverage; ESTree/TS uses different node set
@@ -645,6 +650,67 @@ function estreeExprPostfixTok(ctx: TsAstCustomCtx): unknown {
   return { type: 'TaggedTemplateExpression', tag: ctx.left, quasi: ctx.kids[0] };
 }
 
+/** Strip lexer span markers (` / ${ / }) from template leaf texts for TemplateElement.raw. */
+function tplRaw(kind: 'head' | 'middle' | 'tail' | 'nosubst', text: string): string {
+  const open = '`', iOpen = '${', iClose = '}';
+  if (kind === 'nosubst') {
+    return text.startsWith(open) && text.endsWith(open)
+      ? text.slice(open.length, text.length - open.length)
+      : text;
+  }
+  let s = text;
+  if (kind === 'head') {
+    if (s.startsWith(open)) s = s.slice(open.length);
+    if (s.endsWith(iOpen)) s = s.slice(0, s.length - iOpen.length);
+    return s;
+  }
+  if (kind === 'middle') {
+    if (s.startsWith(iClose)) s = s.slice(iClose.length);
+    if (s.endsWith(iOpen)) s = s.slice(0, s.length - iOpen.length);
+    return s;
+  }
+  if (s.startsWith(iClose)) s = s.slice(iClose.length);
+  if (s.endsWith(open)) s = s.slice(0, s.length - open.length);
+  return s;
+}
+
+/**
+ * pratt.template product. Kids are either `[noSubstLeaf]` or
+ * `[head, expr0, middle?, expr?, ..., tail]` with leaf strings still carrying delimiters.
+ */
+function estreeTemplateLiteral(ctx: TsAstCustomCtx): unknown {
+  const kids = ctx.kids;
+  if (kids.length === 1 && typeof kids[0] === 'string') {
+    return {
+      type: 'TemplateLiteral',
+      quasis: [{ type: 'TemplateElement', value: { raw: tplRaw('nosubst', kids[0]) }, tail: true }],
+      expressions: [],
+    };
+  }
+  if (kids.length < 3 || kids.length % 2 === 0) {
+    return unhandledCustom('estreeTemplateLiteral', ctx);
+  }
+  const quasis: { type: 'TemplateElement'; value: { raw: string }; tail: boolean }[] = [];
+  const expressions: unknown[] = [];
+  for (let i = 0; i < kids.length; i++) {
+    if (i % 2 === 0) {
+      const text = kids[i];
+      if (typeof text !== 'string') return unhandledCustom('estreeTemplateLiteral', ctx);
+      const isHead = i === 0;
+      const isTail = i === kids.length - 1;
+      const kind = isHead ? 'head' : isTail ? 'tail' : 'middle';
+      quasis.push({
+        type: 'TemplateElement',
+        value: { raw: tplRaw(kind, text) },
+        tail: isTail,
+      });
+    } else {
+      expressions.push(kids[i]);
+    }
+  }
+  return { type: 'TemplateLiteral', quasis, expressions };
+}
+
 /** Optional-chain LED arm 4 — distinguish by kid shape (altPath is only [4]). */
 function estreeOptionalChain(left: unknown, kids: readonly unknown[]): unknown {
   const k0 = kids[0];
@@ -663,6 +729,9 @@ function estreeOptionalChain(left: unknown, kids: readonly unknown[]): unknown {
     return { type: 'CallExpression', callee: left, arguments: k0 as unknown[], optional: true };
   }
   if (typeof k0 === 'string' && k0.startsWith('`')) {
+    return { type: 'TaggedTemplateExpression', tag: left, quasi: k0 };
+  }
+  if (k0 !== null && typeof k0 === 'object' && (k0 as { type?: string }).type === 'TemplateLiteral') {
     return { type: 'TaggedTemplateExpression', tag: left, quasi: k0 };
   }
   if (typeof k0 === 'string') {
@@ -944,6 +1013,7 @@ export const typescriptEstreeCustoms: TsAstCustoms = {
   estreeExprBinary,
   estreeExprPrefix,
   estreeExprPostfixTok,
+  estreeTemplateLiteral,
   estreeExprLed,
   estreeExprNudSeq,
   estreeArrow,

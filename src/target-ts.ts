@@ -10,7 +10,7 @@ import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
-  RuleShape, TokenLeafPolicy, ShapeIRRule, CustomShape,
+  RuleShape, TokenLeafPolicy, ShapeIRRule, CustomShape, KeepShape,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 
@@ -2377,7 +2377,7 @@ type ShapeStepKind =
   | 'altlit' | 'alt' | 'not' | 'seq' | 'sameLine' | 'suppress';
 type ShapePrattKind =
   | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
-  | 'led' | 'nudSeq' | 'nudCapped';
+  | 'led' | 'nudSeq' | 'nudCapped' | 'template';
 type ShapeUnsupported = { rule: string; construct: string };
 
 const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
@@ -2386,7 +2386,7 @@ const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
 ];
 const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
   'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',
-  'led', 'nudSeq', 'nudCapped',
+  'led', 'nudSeq', 'nudCapped', 'template',
 ];
 
 type ShapeEmitCtx = {
@@ -2437,7 +2437,7 @@ function collectNodeTypes(shapeIR: ShapeIR): Map<string, NodeShape> {
     if (s.kind === 'node') out.set(s.type, s);
     else if (s.kind === 'choice') for (const a of s.arms) walk(a.shape);
     else if (s.kind === 'pratt') {
-      for (const k of ['atom', 'group', 'nudSeq', 'nudCapped', 'prefix', 'binary', 'postfix', 'led', 'postfixTok'] as const) {
+      for (const k of ['atom', 'group', 'nudSeq', 'nudCapped', 'prefix', 'binary', 'postfix', 'led', 'postfixTok', 'template'] as const) {
         const x = s[k];
         if (x && typeof x === 'object' && 'kind' in x) walk(x as RuleShape);
       }
@@ -3029,6 +3029,23 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     return `_shapeLeafIdent(${tVar})`;
   };
 
+  /** Explicit pratt.template only — omitted means legacy `$template` + interpRule. */
+  const templateSlot = ps.template as CustomShape | KeepShape | undefined;
+  const hasTplNud = !!(tpl && r.nudToks.includes(tpl.token));
+  const hasTplPostfix = !!(tpl && r.postfixToks.includes(tpl.token));
+  if (templateSlot && (hasTplNud || hasTplPostfix)) ctx.pratt.template++;
+
+  /** Finish kids from matchTemplateAstKids / no-subst leaf via template slot. */
+  const templateFinish = (kidsExpr: string, saveExpr: string): string => {
+    if (!templateSlot || templateSlot.kind === 'keep') {
+      return `{ type: ${J('$template')}, children: ${kidsExpr}, headText: _shapeHeadText(${kidsExpr}[0])${spanKeep(
+        `${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0`,
+        `pos > 0 ? toks[pos - 1]!.end : (${saveExpr} < toks.length ? toks[${saveExpr}]!.off : 0)`,
+      )} }`;
+    }
+    return customFinish(templateSlot.fn, kidsExpr, saveExpr, '[]');
+  };
+
   // ── atom ──────────────────────────────────────────────────────────────────
   ctx.pratt.atom++;
   let atomCode = '';
@@ -3050,6 +3067,9 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     const arms = r.nudToks.map((tok) => {
       const k = kidOf(ids, tok);
       const pol = leaves[tok];
+      if (tpl && tok === tpl.token && templateSlot) {
+        return `if (t.kid === ${k}) { const save = pos; const _lv = ${leafValExpr(tok)}; pos++; return ${templateFinish('[_lv]', 'save')} as ${retType}; }`;
+      }
       if (atomShape.kind === 'leafValue') {
         const fn = atomShape.fn === 'number' ? '_shapeLeafNumber'
           : atomShape.fn === 'ident' ? '_shapeLeafIdent'
@@ -3067,14 +3087,28 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   }
 
   // ── template NUD ──────────────────────────────────────────────────────────
+  // Dual hole parse when pratt.template is set: portable interpRule locks accept/
+  // consume end (≡ CST); enclosing Pratt builds the hole AST; ends must match.
   let tplNudCode = '';
-  if (tpl && r.nudToks.includes(tpl.token)) {
-    tplNudCode = `  if (t.kid === ${kidOf(ids, '$templateHead')}) {
-    const node = matchTemplateAst();
+  if (hasTplNud) {
+    if (templateSlot) {
+      const dual = r.name !== tpl!.interpRule;
+      tplNudCode = `  if (t.kid === ${kidOf(ids, '$templateHead')}) {
+    const _tm = matchTemplateAstKids(${dual
+      ? `() => parseAst${tpl!.interpRule}(), () => parseAst${r.name}()`
+      : `() => parseAst${r.name}(), null`});
+    if (_tm === null) return null;
+    return ${templateFinish('_tm.kids', '_tm.save')} as ${retType};
+  }
+`;
+    } else {
+      tplNudCode = `  if (t.kid === ${kidOf(ids, '$templateHead')}) {
+    const node = matchTemplateAstLegacy();
     if (node === null) return null;
     return node as ${retType};
   }
 `;
+    }
   }
 
   // ── group / nudBrackets ───────────────────────────────────────────────────
@@ -3279,7 +3313,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   let postfixTokSwitch = '';
   if (postfixTokSlot && r.postfixToks.length > 0) {
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
-    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
+    const hasTpl = hasTplPostfix;
     const cases = groups.map((g) => {
       const tokName = r.postfixToks.find((t) => kidOf(ids, t) === g.key)!;
       let finish: string;
@@ -3296,11 +3330,12 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
       } else {
         finish = `{ const _kids = [left, leaf]; left = ${keepFinish('_kids', 'leftTokStart')} as ${retType}; leftEnd = t.end; }`;
       }
+      const leafInit = (tpl && tokName === tpl.token && templateSlot)
+        ? `const leftTokStart = pos; const _lv = ${leafValExpr(tokName)}; const leaf = ${templateFinish('[_lv]', 'leftTokStart')}; pos++;`
+        : `const leaf = ${leafValExpr(tokName)}; const leftTokStart = pos; pos++;`;
       return `      case ${g.key}:
         if (!tailClosed) {
-          const leaf = ${leafValExpr(tokName)};
-          const leftTokStart = pos;
-          pos++;
+          ${leafInit}
           ${finish}
           continue ledLoop;
         }
@@ -3320,18 +3355,40 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     } else {
       tplFinish = `{ const _kids = [left, node]; left = ${keepFinish('_kids', 'leftTokStart')} as ${retType}; leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd; }`;
     }
-    const tplPart = hasTpl ? `
+    let tplPart = '';
+    if (hasTpl) {
+      if (templateSlot) {
+        const dual = r.name !== tpl!.interpRule;
+        tplPart = `
     if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) {
       const leftTokStart = pos;
       const node_off = t.off;
-      const node = matchTemplateAst();
+      const _tm = matchTemplateAstKids(${dual
+        ? `() => parseAst${tpl!.interpRule}(), () => parseAst${r.name}()`
+        : `() => parseAst${r.name}(), null`});
+      if (_tm !== null) {
+        const node = ${templateFinish('_tm.kids', '_tm.save')};
+        const node_end = pos > 0 ? toks[pos - 1]!.end : node_off;
+        ${tplFinish}
+        leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
+        continue ledLoop;
+      }
+    }`;
+      } else {
+        tplPart = `
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) {
+      const leftTokStart = pos;
+      const node_off = t.off;
+      const node = matchTemplateAstLegacy();
       const node_end = pos > 0 ? toks[pos - 1]!.end : node_off;
       if (node !== null) {
         ${tplFinish}
         leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
         continue ledLoop;
       }
-    }` : '';
+    }`;
+      }
+    }
     postfixTokSwitch = `    switch (t.kid) {\n${cases}\n    }${tplPart}`;
   }
 
@@ -3468,25 +3525,69 @@ ${nudSeqCode}
 
 function emitShapeParseHelpers(ir: ParserIR, ids: LexIdPlan): string {
   const tpl = ir.tpl;
-  const tplHelper = tpl ? `function matchTemplateAst(): unknown | null {
+  // Shape template kids helper. CST matchTemplate is untouched (byte-identical).
+  // parseAccept = portable interpRule (locks accept/consume ≡ CST).
+  // parseShape  = enclosing Pratt (builds hole AST); null → accept AST only (legacy).
+  // On shape miss/mismatch, fall back to accept AST so accept-set stays ≡ parse(toks).
+  const tplHelper = tpl ? `function _shapeTplSnap(): { pos: number; capped: boolean; sn: Set<number> | null; sc: Set<number> | null } {
+  return { pos, capped: _capped, sn: _suppressNext, sc: _suppressCur };
+}
+function _shapeTplRestore(s: { pos: number; capped: boolean; sn: Set<number> | null; sc: Set<number> | null }): void {
+  pos = s.pos; _capped = s.capped; _suppressNext = s.sn; _suppressCur = s.sc;
+}
+function matchTemplateAstKids(
+  parseAccept: () => unknown | null,
+  parseShape: (() => unknown | null) | null,
+): { kids: unknown[]; save: number } | null {
   const t = peek();
   if (t === null || t.kid !== ${kidOf(ids, '$templateHead')}) return null;
   const kids: unknown[] = [];
   const save = pos;
-  kids.push(_shapeLeafString(t)); pos++;
+  const saveSnap = _shapeTplSnap();
+  kids.push(_shapeLeafString(t));
+  pos++;
   for (;;) {
-    const expr = parseAst${tpl.interpRule}();
-    if (expr === null) { pos = save; return null; }
-    kids.push(expr);
+    const before = _shapeTplSnap();
+    const acceptHole = parseAccept();
+    if (acceptHole === null) { _shapeTplRestore(saveSnap); return null; }
+    const endPos = pos;
+    let holeAst: unknown = acceptHole;
+    if (parseShape !== null) {
+      _shapeTplRestore(before);
+      const shapeHole = parseShape();
+      if (shapeHole !== null && pos === endPos) {
+        holeAst = shapeHole;
+      } else {
+        _shapeTplRestore(before);
+        const again = parseAccept();
+        if (again === null || pos !== endPos) { _shapeTplRestore(saveSnap); return null; }
+        holeAst = again;
+      }
+    }
+    kids.push(holeAst);
     const next = peek();
-    if (next === null) { pos = save; return null; }
-    if (next.kid === ${kidOf(ids, '$templateMiddle')}) { kids.push(_shapeLeafString(next)); pos++; continue; }
-    if (next.kid === ${kidOf(ids, '$templateTail')}) { kids.push(_shapeLeafString(next)); pos++; break; }
-    pos = save; return null;
+    if (next === null) { _shapeTplRestore(saveSnap); return null; }
+    if (next.kid === ${kidOf(ids, '$templateMiddle')}) {
+      kids.push(_shapeLeafString(next));
+      pos++;
+      continue;
+    }
+    if (next.kid === ${kidOf(ids, '$templateTail')}) {
+      kids.push(_shapeLeafString(next));
+      pos++;
+      break;
+    }
+    _shapeTplRestore(saveSnap);
+    return null;
   }
-  const off = save < toks.length ? toks[save]!.off : 0;
+  return { kids, save };
+}
+function matchTemplateAstLegacy(): unknown | null {
+  const _tm = matchTemplateAstKids(() => parseAst${tpl.interpRule}(), null);
+  if (_tm === null) return null;
+  const off = _tm.save < toks.length ? toks[_tm.save]!.off : 0;
   const end = pos > 0 ? toks[pos - 1]!.end : off;
-  return { type: '$template', children: kids, headText: _shapeHeadText(kids[0]), off, end };
+  return { type: '$template', children: _tm.kids, headText: _shapeHeadText(_tm.kids[0]), off, end };
 }
 ` : '';
   return `// ─── Shape parse helpers ─────────────────────────────────────────────────────

@@ -68,6 +68,15 @@ export type PrattShape = {
   postfix?: NodeShape | CustomShape | KeepShape | InlineShape;
   led?: RuleShapeAtom;
   postfixTok?: RuleShapeAtom;
+  /**
+   * Template literal product (subst `$templateHead`… or no-subst Template leaf).
+   * Not a new primitive — only custom|keep. Omitted → legacy `$template` keep with
+   * portable interpRule holes (CST-parity accept set). Declared → kids are
+   * head, expr, optional middle/expr pairs, then tail (or `[leaf]` for no-subst)
+   * finished by this slot; hole accept still uses portable interpRule, hole AST
+   * uses enclosing Pratt.
+   */
+  template?: CustomShape | KeepShape;
 };
 
 export type RuleShapeAtom =
@@ -130,7 +139,7 @@ export type ShapeStepKind =
   | 'altlit' | 'alt' | 'not' | 'seq' | 'sameLine' | 'suppress';
 export type ShapePrattKind =
   | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
-  | 'led' | 'nudSeq' | 'nudCapped';
+  | 'led' | 'nudSeq' | 'nudCapped' | 'template';
 export type ShapeUnsupported = { rule: string; construct: string };
 export type ShapeCoverage = {
   step: Record<ShapeStepKind, number>;
@@ -144,5 +153,5 @@ export const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
 ] as const;
 export const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
   'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',
-  'led', 'nudSeq', 'nudCapped',
+  'led', 'nudSeq', 'nudCapped', 'template',
 ] as const;

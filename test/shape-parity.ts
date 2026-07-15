@@ -340,7 +340,7 @@ async function main(): Promise<void> {
     printCoverage('typescript', tsMod.shapeCoverage);
     const want: Record<string, number> = {
       led: 116, nudSeq: 28, nudCapped: 16, postfix: 8, postfixTok: 4,
-      group: 216, prefix: 44, binary: 156,
+      group: 216, prefix: 44, binary: 156, template: 4,
     };
     const got = tsMod.shapeCoverage.pratt;
     const prattOk = Object.keys(want).every((k) => got[k] === want[k]);
@@ -374,7 +374,105 @@ async function main(): Promise<void> {
       { label: 'C17 tsTypeMember + object TSTypeLiteral', src: 'type T = { x: number };', expect: { type: 'Program', body: [{ type: 'TSTypeAliasDeclaration', id: 'T', typeParameters: null, typeAnnotation: { type: 'TSTypeLiteral', members: [{ type: 'TSPropertySignature', key: 'x', typeAnnotation: { type: 'Type', children: ['number'], headText: 'number' }, optional: false, readonly: false }] } }] } },
       { label: 'C18 estreeProp object', src: '({ a: 1, b });', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'SequenceExpression', expressions: [{ type: 'Property', key: { type: 'MemberName', children: ['a'], arm: 'passthrough', alt: 0 }, value: 1, kind: 'init', shorthand: false, computed: false, method: false }, { type: 'Property', key: { type: 'Identifier', name: 'b' }, value: null, kind: 'init', shorthand: false, computed: false, method: false }] } }] } },
       { label: 'new.target MetaProperty', src: 'new.target;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'MetaProperty', meta: { type: 'Identifier', name: 'new' }, property: { type: 'Identifier', name: 'target' } } }] } },
-      { label: 'tagged template with substitution', src: 'tag`a${b}`;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'TaggedTemplateExpression', tag: { type: 'Identifier', name: 'tag' }, quasi: { type: '$template', children: ['`a${', { type: 'Type', children: ['b'], headText: 'b' }, '}`'], headText: '`a${' } } }] } },
+      // SH2-4d TemplateLiteral quasis/expressions (hole = enclosing Pratt, not global Type)
+      {
+        label: 'SH2-4d plain template with subst',
+        src: '`a${b}c`;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'TemplateLiteral',
+              quasis: [
+                { type: 'TemplateElement', value: { raw: 'a' }, tail: false },
+                { type: 'TemplateElement', value: { raw: 'c' }, tail: true },
+              ],
+              expressions: [{ type: 'Identifier', name: 'b' }],
+            },
+          }],
+        },
+      },
+      {
+        label: 'SH2-4d nested template',
+        src: '`a${`b${c}`}d`;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'TemplateLiteral',
+              quasis: [
+                { type: 'TemplateElement', value: { raw: 'a' }, tail: false },
+                { type: 'TemplateElement', value: { raw: 'd' }, tail: true },
+              ],
+              expressions: [{
+                type: 'TemplateLiteral',
+                quasis: [
+                  { type: 'TemplateElement', value: { raw: 'b' }, tail: false },
+                  { type: 'TemplateElement', value: { raw: '' }, tail: true },
+                ],
+                expressions: [{ type: 'Identifier', name: 'c' }],
+              }],
+            },
+          }],
+        },
+      },
+      {
+        label: 'SH2-4d tagged nested template',
+        src: 'tag`a${b}${`c${d}`}e`;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'TaggedTemplateExpression',
+              tag: { type: 'Identifier', name: 'tag' },
+              quasi: {
+                type: 'TemplateLiteral',
+                quasis: [
+                  { type: 'TemplateElement', value: { raw: 'a' }, tail: false },
+                  { type: 'TemplateElement', value: { raw: '' }, tail: false },
+                  { type: 'TemplateElement', value: { raw: 'e' }, tail: true },
+                ],
+                expressions: [
+                  { type: 'Identifier', name: 'b' },
+                  {
+                    type: 'TemplateLiteral',
+                    quasis: [
+                      { type: 'TemplateElement', value: { raw: 'c' }, tail: false },
+                      { type: 'TemplateElement', value: { raw: '' }, tail: true },
+                    ],
+                    expressions: [{ type: 'Identifier', name: 'd' }],
+                  },
+                ],
+              },
+            },
+          }],
+        },
+      },
+      {
+        label: 'tagged template with substitution',
+        src: 'tag`a${b}`;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'TaggedTemplateExpression',
+              tag: { type: 'Identifier', name: 'tag' },
+              quasi: {
+                type: 'TemplateLiteral',
+                quasis: [
+                  { type: 'TemplateElement', value: { raw: 'a' }, tail: false },
+                  { type: 'TemplateElement', value: { raw: '' }, tail: true },
+                ],
+                expressions: [{ type: 'Identifier', name: 'b' }],
+              },
+            },
+          }],
+        },
+      },
       { label: 'C1+C3 deep 1+2*3', src: '1 + 2 * 3;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'BinaryExpression', left: 1, operator: '+', right: { type: 'BinaryExpression', left: 2, operator: '*', right: 3 } } }] } },
       { label: 'C6 deep arrow nested', src: 'const g = (x) => x * 2;', expect: { type: 'Program', body: [{ type: 'VariableDeclaration', kind: 'const', declarations: [{ type: 'VariableDeclarator', id: 'g', typeAnnotation: null, init: { type: 'ArrowFunctionExpression', params: [{ type: 'Identifier', decorators: [], optional: false }], body: { type: 'BinaryExpression', left: { type: 'Identifier', name: 'x' }, operator: '*', right: 2 }, async: false, expression: true } }] }] } },
       { label: 'C4 deep member chain', src: 'a.b.c;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'MemberExpression', object: { type: 'MemberExpression', object: { type: 'Identifier', name: 'a' }, property: { type: 'Identifier', name: 'b' }, computed: false, optional: false }, property: { type: 'Identifier', name: 'c' }, computed: false, optional: false } }] } },
@@ -590,6 +688,183 @@ async function main(): Promise<void> {
       check(advP('a?.b;') !== null && advJ('a?.b;').includes('"optional":true'), 'adv optional member a?.b');
     }
 
+    // SH2-4d: consolidate remaining adversarial items from
+    // /tmp/sh23-adv.mts (A), /tmp/sh23-adv2.mts (B), /tmp/sh24-adv3.mts (C).
+    {
+      // B gaps (full expect trees)
+      const bGoldens: { label: string; src: string; expect: unknown }[] = [
+        {
+          label: 'adv2 as+satisfies chain',
+          src: 'x as A satisfies B;',
+          expect: {
+            type: 'Program',
+            body: [{
+              type: 'ExpressionStatement',
+              expression: {
+                type: 'TSSatisfiesExpression',
+                expression: {
+                  type: 'TSAsExpression',
+                  expression: { type: 'Identifier', name: 'x' },
+                  typeAnnotation: { type: 'Type', children: ['A'], headText: 'A' },
+                },
+                typeAnnotation: { type: 'Type', children: ['B'], headText: 'B' },
+              },
+            }],
+          },
+        },
+        {
+          label: 'adv2 &&= Assignment',
+          src: 'a &&= b;',
+          expect: {
+            type: 'Program',
+            body: [{
+              type: 'ExpressionStatement',
+              expression: {
+                type: 'AssignmentExpression',
+                left: { type: 'Identifier', name: 'a' },
+                operator: '&&=',
+                right: { type: 'Identifier', name: 'b' },
+              },
+            }],
+          },
+        },
+        {
+          label: 'adv2 ternary in += rhs',
+          src: 'x += a ? b : c;',
+          expect: {
+            type: 'Program',
+            body: [{
+              type: 'ExpressionStatement',
+              expression: {
+                type: 'AssignmentExpression',
+                left: { type: 'Identifier', name: 'x' },
+                operator: '+=',
+                right: {
+                  type: 'ConditionalExpression',
+                  test: { type: 'Identifier', name: 'a' },
+                  consequent: { type: 'Identifier', name: 'b' },
+                  alternate: { type: 'Identifier', name: 'c' },
+                },
+              },
+            }],
+          },
+        },
+        {
+          label: 'adv2 ++ Update',
+          src: '++x;',
+          expect: {
+            type: 'Program',
+            body: [{
+              type: 'ExpressionStatement',
+              expression: {
+                type: 'UpdateExpression',
+                operator: '++',
+                argument: { type: 'Identifier', name: 'x' },
+                prefix: true,
+              },
+            }],
+          },
+        },
+        {
+          label: 'adv2 non-null !',
+          src: 'a!.b;',
+          expect: {
+            type: 'Program',
+            body: [{
+              type: 'ExpressionStatement',
+              expression: {
+                type: 'MemberExpression',
+                object: { type: 'TSNonNullExpression', expression: { type: 'Identifier', name: 'a' } },
+                property: { type: 'Identifier', name: 'b' },
+                computed: false,
+                optional: false,
+              },
+            }],
+          },
+        },
+        {
+          label: 'adv2 ternary inside as',
+          src: '(a ? b : c) as T;',
+          expect: {
+            type: 'Program',
+            body: [{
+              type: 'ExpressionStatement',
+              expression: {
+                type: 'TSAsExpression',
+                expression: {
+                  type: 'ConditionalExpression',
+                  test: { type: 'Identifier', name: 'a' },
+                  consequent: { type: 'Identifier', name: 'b' },
+                  alternate: { type: 'Identifier', name: 'c' },
+                },
+                typeAnnotation: { type: 'Type', children: ['T'], headText: 'T' },
+              },
+            }],
+          },
+        },
+      ];
+      let bOk = 0;
+      for (const g of bGoldens) {
+        if (deepEq(advP(g.src), g.expect)) bOk++;
+        else console.error(`  ${g.label} fail`, JSON.stringify(advP(g.src)).slice(0, 240));
+      }
+      check(bOk === bGoldens.length, `adv2 gap goldens ${bOk}/${bGoldens.length}`);
+
+      // C: real-input no-throw suite (adv3 L15–26) + shape spot checks
+      const realNoThrow = [
+        'class A { constructor(private x: number) { super(); this.x = x; } static async *m<T>(a: T = 1 as T): Promise<void> { await a; } get p() { return 1; } set p(v) {} }',
+        'interface I { new (a: number): I; readonly [k: string]: number; m?(): void; }',
+        'type T = { a: 1; b?: () => void; readonly c: string[]; };',
+        'const o = { a, b: 1, [c]: 2, ...rest, m() {}, get g() { return 1; }, async *[Symbol.x]() {} };',
+        'for (const { a, b: [c, , d] = [], ...e } of xs) {}',
+        'switch (a) { case f(x)?.y: break; }',
+        'label: { break label; }',
+        'new.target;',
+        'tag`a${b}${`c${d}`}e`;',
+        'x = { t: new.target, u: tag`v${w}` };',
+      ];
+      let realOk = 0, realThrow = 0;
+      for (const src of realNoThrow) {
+        try {
+          const r = tsMod!.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms });
+          if (r !== null) realOk++;
+          else {
+            const toks = tsMod!.tokenize(src).map((t) => ({
+              off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid,
+            }));
+            if (tsMod!.parse(toks) === null) realOk++; // both reject
+            else console.error('  real-no-throw null while CST accepts', src.slice(0, 60));
+          }
+        } catch (e) {
+          realThrow++;
+          console.error('  real-no-throw THROW', src.slice(0, 60), String(e).slice(0, 120));
+        }
+      }
+      check(realOk === realNoThrow.length && realThrow === 0,
+        `adv3 real-no-throw ${realOk}/${realNoThrow.length} throws=${realThrow}`);
+
+      const nestedTpl = advJ('tag`a${b}${`c${d}`}e`;');
+      const taggedN = nestedTpl.split('TaggedTemplateExpression').length - 1;
+      const tplLitN = nestedTpl.split('TemplateLiteral').length - 1;
+      check(
+        taggedN === 1 && tplLitN >= 2 && !nestedTpl.includes('"$template"'),
+        'adv3 nested tagged tpl shape (1 Tagged + ≥2 TemplateLiteral)',
+        nestedTpl.slice(0, 300),
+      );
+      check(
+        advJ('x = { t: new.target };').includes('MetaProperty'),
+        'adv3 new.target in object',
+      );
+      check(
+        advJ('class C { m() { return 1; } }').includes('ReturnStatement'),
+        'adv3 class method body ReturnStatement',
+      );
+      check(
+        advJ('type T = { a: 1 };').includes('TSTypeLiteral'),
+        'adv3 type literal members',
+      );
+    }
+
     let switchFoldState: unknown = null;
     const foldCustoms = { ...typescriptEstreeCustoms } as Record<string, (ctx: any) => unknown>;
     const stmtCustom = foldCustoms.estreeStmt!;
@@ -650,7 +925,9 @@ async function main(): Promise<void> {
     }
     check(failLoudOk === 18, `typescript custom fallback fail-loud ${failLoudOk}/18`);
 
-    const extraFailLoudFns = ['estreeExprBinary', 'estreeExprPrefix', 'estreeExprPostfixTok'] as const;
+    const extraFailLoudFns = [
+      'estreeExprBinary', 'estreeExprPrefix', 'estreeExprPostfixTok', 'estreeTemplateLiteral',
+    ] as const;
     let extraFailLoudOk = 0;
     for (const fn of extraFailLoudFns) {
       try {
@@ -661,7 +938,7 @@ async function main(): Promise<void> {
         if (String(e).includes(`shape custom ${fn}`)) extraFailLoudOk++;
       }
     }
-    check(extraFailLoudOk === 3, `typescript Pratt subslot fallback fail-loud ${extraFailLoudOk}/3`);
+    check(extraFailLoudOk === 4, `typescript Pratt subslot fallback fail-loud ${extraFailLoudOk}/4`);
 
     // Independent cross-validation against test/ast-builder.ts demoBuilder semantics.
     const demoMod = await emitLoadNoShape('javascript-demo-xval', javascriptGrammar);

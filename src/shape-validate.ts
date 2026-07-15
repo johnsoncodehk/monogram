@@ -418,6 +418,16 @@ function checkPratt(r: PrattRule, shape: PrattShape, diags: ShapeDiag[]): void {
   checkC(shape.led as { kind: string; reason?: string } | undefined, 'led');
   checkC(shape.nudSeq as { kind: string; reason?: string } | undefined, 'nudSeq');
   checkC(shape.nudCapped as { kind: string; reason?: string } | undefined, 'nudCapped');
+  checkC(shape.template as { kind: string; reason?: string } | undefined, 'template');
+  if (shape.template) {
+    const k = shape.template.kind;
+    if (k !== 'custom' && k !== 'keep') {
+      diags.push({
+        level: 'error', rule: r.name, code: 'pratt-template-kind',
+        message: 'pratt.template must be custom or keep',
+      });
+    }
+  }
   if (shape.prefix?.kind === 'node') checkOpTextFields(r.name, shape.prefix, diags, 'pratt.prefix', true);
   if (shape.binary?.kind === 'node') checkOpTextFields(r.name, shape.binary, diags, 'pratt.binary', true);
   if (shape.postfix?.kind === 'node') checkOpTextFields(r.name, shape.postfix, diags, 'pratt.postfix', true);
