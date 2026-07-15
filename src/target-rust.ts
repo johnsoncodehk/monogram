@@ -18,7 +18,7 @@ import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
-  FieldBind, TokenLeafPolicy,
+  FieldBind, TokenLeafPolicy, CustomShape,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 
@@ -2799,6 +2799,8 @@ function rustShapeNodeObjectExpr(
   spans: ShapeSpec['spans'],
   offExpr: string,
   endExpr: string,
+  /** When set (LED/postfixTok), `at:0` binds left and later `at` indices shift into `_sk`. */
+  leftExpr?: string,
 ): string {
   const fieldPushes = node.fields.map((field) => {
     let expr = 'AstValue::Null';
@@ -2808,7 +2810,9 @@ function rustShapeNodeObjectExpr(
     } else if (isFieldBindObj(field.bind) && 'from' in field.bind && field.bind.from === 'opt') {
       expr = `${kidExpr}.get(${field.bind.at}).cloned().unwrap_or(AstValue::Null)`;
     } else if (isFieldBindObj(field.bind) && 'at' in field.bind) {
-      expr = `${kidExpr}.get(${field.bind.at}).cloned().unwrap_or(AstValue::Null)`;
+      if (leftExpr && field.bind.at === 0) expr = `${leftExpr}.clone()`;
+      else if (leftExpr) expr = `${kidExpr}.get(${field.bind.at - 1}).cloned().unwrap_or(AstValue::Null)`;
+      else expr = `${kidExpr}.get(${field.bind.at}).cloned().unwrap_or(AstValue::Null)`;
     }
     return `fields.push((${J(field.name)}.to_owned(), ${expr}));`;
   });
@@ -3310,6 +3314,7 @@ function emitRustPrattMethod(
   sir: ShapeIRRule,
   ids: LexIdPlan,
   shapeIR: ShapeIR,
+  ir: ParserIR,
 ): string {
   let shape: RuleShape = sir.shape;
   if (shape.kind === 'keep') shape = { kind: 'pratt' };
@@ -3321,8 +3326,14 @@ function emitRustPrattMethod(
   const ps = shape;
   const leaves = shapeIR.leaves;
   const ret = 'AstValue';
-  const emptySteps = (steps: Step[]) => {
-    return emitRustAstRdAltSteps(steps, ids, leaves, '_sk', '_lists', '_holes', '_ap');
+  const tpl = ir.tpl;
+  const emptySteps = (steps: Step[]) =>
+    emitRustAstRdAltSteps(steps, ids, leaves, '_sk', '_lists', '_holes', '_ap');
+
+  /** Missing Pratt slot → keep (positional), matching TS emitAstPrattRule. */
+  const slotOf = (declared: { kind: string } | undefined, present: boolean): { kind: string } | null => {
+    if (!present) return null;
+    return declared ?? { kind: 'keep' };
   };
 
   const keepFinish = (kidsExpr: string, cstName: string): string =>
@@ -3335,6 +3346,23 @@ function emitRustPrattMethod(
             ] }
         }`;
 
+  /** TS three-state inline finish: 1→unwrap, 0→None, else array. */
+  const inlineFinishReturn = (kidsExpr: string): string =>
+    `match Self::shape_inline_finish(${kidsExpr}) { Some(v) => return Some(v), None => return None }`;
+
+  const customCall = (
+    fn: string,
+    kidsExpr: string,
+    altExpr: string,
+    offExpr: string,
+    endExpr: string,
+    leftExpr?: string,
+    opExpr?: string,
+  ): string =>
+    `self.customs.ast_custom(${J(fn)}, ${kidsExpr}, &${altExpr}, ${offExpr}, ${endExpr}, ${
+      leftExpr ? `Some(${leftExpr})` : 'None'
+    }, ${opExpr ? `Some(${opExpr}.as_str())` : 'None'})`;
+
   // ── atom ──
   let atomCode = '';
   const atomKids = rule.nudToks.map((k) => kidOf(ids, k));
@@ -3344,8 +3372,21 @@ function emitRustPrattMethod(
                 return self.parse_ast_${ps.atom.name}();
             }
         }`;
+  } else if (ps.atom?.kind === 'custom') {
+    const arms = rule.nudToks.map((tok) => {
+      const policy = leaves[tok] ?? { action: 'keep' as const };
+      return `if t.kid == ${kidOf(ids, tok)} { leaf_kids.push(${rustShapeLeafAstExpr(policy, 'tok_text(self.src, &t)')}); }`;
+    }).join(' else ');
+    atomCode = `if let Some(t) = self.toks.get(self.pos).copied() {
+            if matches!(t.kid, ${atomKids.join(' | ') || 'u16::MAX'}) {
+                let sp_off = t.off as usize;
+                let mut leaf_kids: Vec<AstValue> = Vec::new();
+                ${arms}
+                self.pos += 1;
+                return Some(${customCall(ps.atom.fn, 'leaf_kids', '[]', 'sp_off', 't.end as usize')});
+            }
+        }`;
   } else if (!ps.atom || ps.atom.kind === 'keep' || (ps.atom as { kind: string }).kind === 'leafValue' || ps.atom.kind === undefined) {
-    // default leafValue from leaves policy (calc)
     for (const tok of rule.nudToks) {
       const policy = leaves[tok] ?? { action: 'keep' as const };
       atomCode += `if self.peek_kid() == Some(${kidOf(ids, tok)}) {
@@ -3353,118 +3394,179 @@ function emitRustPrattMethod(
             return Some(${rustShapeLeafAstExpr(policy, '_text')});
         }\n        `;
     }
-  } else if (ps.atom.kind === 'custom') {
-    // fail-fast at inventory
   }
 
-  // ── group (simple + general via RD steps) ──
+  // ── group (lid-grouped; RD steps; custom slot reserved but inventory fail-fast) ──
   let groupCode = '';
-  const groupSlot = ps.group ?? (rule.nudBrackets.length ? { kind: 'inline' as const } : undefined);
+  const groupSlot = slotOf(ps.group as { kind: string } | undefined, rule.nudBrackets.length > 0);
   if (groupSlot && rule.nudBrackets.length) {
-    for (const bracket of rule.nudBrackets) {
-      const st = emptySteps(bracket.steps);
-      let finish: string;
-      if (groupSlot.kind === 'inline') {
-        finish = `return Some(Self::shape_pack(_sk));`;
-      } else if (groupSlot.kind === 'keep') {
-        finish = `return Some(${keepFinish('_sk', rule.cstName)});`;
-      } else if (groupSlot.kind === 'node') {
-        finish = `return Some(${rustShapeNodeObjectExpr(groupSlot, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
-      } else {
-        finish = `return None;`;
-      }
-      groupCode += `{
+    const groups = groupByPreserveOrder(rule.nudBrackets, (b) => lidOf(ids, b.first));
+    for (const g of groups) {
+      const armBlocks = g.members.map(({ item: b, index: bi }) => {
+        const st = emptySteps(b.steps);
+        let finish: string;
+        if (groupSlot.kind === 'inline') {
+          finish = inlineFinishReturn('_sk');
+        } else if (groupSlot.kind === 'custom') {
+          const fn = (groupSlot as CustomShape).fn;
+          finish = `return Some(${customCall(fn, '_sk', `[${bi}]`, 'save_off', 'self.last_end(save_off)')});`;
+        } else if (groupSlot.kind === 'node') {
+          finish = `return Some(${rustShapeNodeObjectExpr(groupSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
+        } else {
+          finish = `return Some(${keepFinish('_sk', rule.cstName)});`;
+        }
+        return `{
             let save = self.pos;
             let save_off = self.current_off();
             let mut _sk: Vec<AstValue> = Vec::new();
+            let mut _lists: Vec<Vec<AstValue>> = Vec::new();
+            let mut _holes: Vec<Option<AstValue>> = Vec::new();
+            let mut _ap: Vec<usize> = Vec::new();
             ${st.ok}
             if ${st.okVar} {
                 ${finish}
             }
             self.pos = save;
+        }`;
+      }).join('\n            ');
+      groupCode += `if self.peek_lid() == Some(${g.key}) {
+            ${armBlocks}
         }\n        `;
     }
   }
 
   // ── prefix ──
   let prefixCode = '';
-  if (ps.prefix?.kind === 'node' && rule.prefix.length) {
+  const prefixSlot = slotOf(ps.prefix as { kind: string } | undefined, rule.prefix.length > 0);
+  if (prefixSlot && rule.prefix.length) {
     for (const prefix of rule.prefix) {
-      const ctor = rustShapeNodeObjectExpr(
-        ps.prefix, 'vec![_argument]', 'self.customs.bind_op(&_op)',
-        shapeIR.spans, '_off', 'self.last_end(_off)',
-      );
-      // kids for node: at:0 = argument — pass as synthetic vec
-      prefixCode += `if self.peek_lid() == Some(${lidOf(ids, prefix.op)}) {
+      const lid = lidOf(ids, prefix.op);
+      if (prefixSlot.kind === 'node') {
+        prefixCode += `if self.peek_lid() == Some(${lid}) {
+            let save = self.pos;
             let _off = self.current_off();
             let _op = self.current_text().to_owned();
             self.pos += 1;
-            let _argument = self.parse_ast_${rule.name}_bp(${prefix.rbp})?;
+            let _argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
+                Some(v) => v,
+                None => { self.pos = save; return None; }
+            };
             let _sk = vec![_argument];
-            return Some(${rustShapeNodeObjectExpr(ps.prefix, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')});
+            return Some(${rustShapeNodeObjectExpr(prefixSlot as NodeShape, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')});
         }\n        `;
-      void ctor;
+      } else if (prefixSlot.kind === 'custom') {
+        const fn = (prefixSlot as CustomShape).fn;
+        prefixCode += `if self.peek_lid() == Some(${lid}) {
+            let save = self.pos;
+            let _off = self.current_off();
+            let _op = self.current_text().to_owned();
+            self.pos += 1;
+            let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
+                Some(v) => v,
+                None => { self.pos = save; return None; }
+            };
+            return Some(${customCall(fn, 'vec![argument]', '[]', '_off', 'self.last_end(_off)', undefined, '_op')});
+        }\n        `;
+      } else if (prefixSlot.kind === 'inline') {
+        prefixCode += `if self.peek_lid() == Some(${lid}) {
+            let save = self.pos;
+            self.pos += 1;
+            match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
+                Some(v) => return Some(v),
+                None => { self.pos = save; return None; }
+            }
+        }\n        `;
+      } else {
+        prefixCode += `if self.peek_lid() == Some(${lid}) {
+            let save = self.pos;
+            let _op = self.current_text().to_owned();
+            self.pos += 1;
+            let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
+                Some(v) => v,
+                None => { self.pos = save; return None; }
+            };
+            let _sk = vec![AstValue::String(_op), argument];
+            return Some(${keepFinish('_sk', rule.cstName)});
+        }\n        `;
+      }
     }
   }
 
   // ── nudSeq ──
   let nudSeqCode = '';
-  const nudSeqSlot = ps.nudSeq ?? (rule.nudSeqs.length ? { kind: 'keep' as const } : undefined);
+  const nudSeqSlot = slotOf(ps.nudSeq as { kind: string } | undefined, rule.nudSeqs.length > 0);
   if (nudSeqSlot && rule.nudSeqs.length) {
-    for (const seq of rule.nudSeqs) {
+    nudSeqCode = rule.nudSeqs.map((seq, si) => {
       const st = emptySteps(seq);
-      const finish = nudSeqSlot.kind === 'inline'
-        ? `return Some(Self::shape_pack(_sk));`
-        : nudSeqSlot.kind === 'node'
-          ? `return Some(${rustShapeNodeObjectExpr(nudSeqSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`
-          : `return Some(${keepFinish('_sk', rule.cstName)});`;
-      nudSeqCode += `{
+      let finish: string;
+      if (nudSeqSlot.kind === 'custom') {
+        const fn = (nudSeqSlot as CustomShape).fn;
+        finish = `return Some(${customCall(fn, '_sk', `[${si}]`, 'save_off', 'self.last_end(save_off)')});`;
+      } else if (nudSeqSlot.kind === 'node') {
+        finish = `return Some(${rustShapeNodeObjectExpr(nudSeqSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
+      } else if (nudSeqSlot.kind === 'inline') {
+        finish = inlineFinishReturn('_sk');
+      } else {
+        finish = `return Some(${keepFinish('_sk', rule.cstName)});`;
+      }
+      return `{
             let save = self.pos;
             let save_off = self.current_off();
             let mut _sk: Vec<AstValue> = Vec::new();
+            let mut _lists: Vec<Vec<AstValue>> = Vec::new();
+            let mut _holes: Vec<Option<AstValue>> = Vec::new();
+            let mut _ap: Vec<usize> = Vec::new();
             ${st.ok}
             if ${st.okVar} {
                 ${finish}
             }
             self.pos = save;
-        }\n        `;
-    }
+        }`;
+    }).join('\n        ');
   }
 
   // ── nudCapped ──
   let nudCappedCode = '';
-  const nudCappedSlot = ps.nudCapped ?? (rule.nudCapped.length ? { kind: 'keep' as const } : undefined);
+  const nudCappedSlot = slotOf(ps.nudCapped as { kind: string } | undefined, rule.nudCapped.length > 0);
   if (nudCappedSlot && rule.nudCapped.length) {
-    for (const c of rule.nudCapped) {
+    nudCappedCode = rule.nudCapped.map((c, ci) => {
       const st = emptySteps(c.steps);
-      const finish = nudCappedSlot.kind === 'inline'
-        ? `return Some(Self::shape_pack(_sk));`
-        : nudCappedSlot.kind === 'node'
-          ? `return Some(${rustShapeNodeObjectExpr(nudCappedSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`
-          : `return Some(${keepFinish('_sk', rule.cstName)});`;
-      nudCappedCode += `if min_bp < ${c.capBp} {
+      let finish: string;
+      if (nudCappedSlot.kind === 'custom') {
+        const fn = (nudCappedSlot as CustomShape).fn;
+        finish = `self.capped = true; return Some(${customCall(fn, '_sk', `[${ci}]`, 'save_off', 'self.last_end(save_off)')});`;
+      } else if (nudCappedSlot.kind === 'node') {
+        finish = `self.capped = true; return Some(${rustShapeNodeObjectExpr(nudCappedSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
+      } else if (nudCappedSlot.kind === 'inline') {
+        finish = `self.capped = true; ${inlineFinishReturn('_sk')}`;
+      } else {
+        finish = `self.capped = true; return Some(${keepFinish('_sk', rule.cstName)});`;
+      }
+      return `if min_bp < ${c.capBp} {
             let save = self.pos;
             let save_off = self.current_off();
             let mut _sk: Vec<AstValue> = Vec::new();
+            let mut _lists: Vec<Vec<AstValue>> = Vec::new();
+            let mut _holes: Vec<Option<AstValue>> = Vec::new();
+            let mut _ap: Vec<usize> = Vec::new();
             ${st.ok}
             if ${st.okVar} {
-                self.capped = true;
                 ${finish}
             }
             self.pos = save;
-        }\n        `;
-    }
+        }`;
+    }).join('\n        ');
   }
 
   // ── binary ──
   let binaryBody = '';
-  if (ps.binary?.kind === 'node' && rule.binary.length) {
+  const binarySlot = slotOf(ps.binary as { kind: string } | undefined, rule.binary.length > 0);
+  if (binarySlot && rule.binary.length) {
     const binaryArms = rule.binary.map((b) =>
       `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}),`,
     ).join('\n                ');
-    // Binary `$ op $` must NOT consult suppress_cur — exclude only disables
-    // literal-headed LEDs (≡ CST / interpreter / TS shape).
-    binaryBody = `{
+    if (binarySlot.kind === 'node') {
+      binaryBody = `{
             let (_lbp, _rbp) = match self.peek_lid() {
                 ${binaryArms}
                 _ => break,
@@ -3478,18 +3580,57 @@ function emitRustPrattMethod(
                 None => { self.pos = _save; break; }
             };
             let _sk = vec![left, _right];
-            left = ${rustShapeNodeObjectExpr(ps.binary, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')};
+            left = ${rustShapeNodeObjectExpr(binarySlot as NodeShape, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')};
             continue;
         }`;
+    } else if (binarySlot.kind === 'custom') {
+      const fn = (binarySlot as CustomShape).fn;
+      binaryBody = `{
+            let (_lbp, _rbp) = match self.peek_lid() {
+                ${binaryArms}
+                _ => break,
+            };
+            if _lbp <= min_bp { break; }
+            let _save = self.pos;
+            let _op = self.current_text().to_owned();
+            self.pos += 1;
+            let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
+                Some(v) => v,
+                None => { self.pos = _save; break; }
+            };
+            left = ${customCall(fn, 'vec![_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op')};
+            continue;
+        }`;
+    } else {
+      binaryBody = `{
+            let (_lbp, _rbp) = match self.peek_lid() {
+                ${binaryArms}
+                _ => break,
+            };
+            if _lbp <= min_bp { break; }
+            let _save = self.pos;
+            let _op = self.current_text().to_owned();
+            self.pos += 1;
+            let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
+                Some(v) => v,
+                None => { self.pos = _save; break; }
+            };
+            let _sk = vec![left, AstValue::String(_op), _right];
+            left = ${keepFinish('_sk', rule.cstName)};
+            continue;
+        }`;
+    }
   }
 
   // ── postfix ──
   let postfixCode = '';
-  if (ps.postfix?.kind === 'node' && rule.postfix.length) {
+  const postfixSlot = slotOf(ps.postfix as { kind: string } | undefined, rule.postfix.length > 0);
+  if (postfixSlot && rule.postfix.length) {
     const postArms = rule.postfix.map((p) =>
       `Some(${lidOf(ids, p.op)}) => ${p.lbp},`,
     ).join('\n                    ');
-    postfixCode = `{
+    if (postfixSlot.kind === 'node') {
+      postfixCode = `{
                 let post = match self.peek_lid() {
                     ${postArms}
                     _ => -1,
@@ -3499,42 +3640,132 @@ function emitRustPrattMethod(
                     let _end_tok = self.toks[self.pos];
                     self.pos += 1;
                     let _sk = vec![left];
-                    left = ${rustShapeNodeObjectExpr(ps.postfix, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', '_end_tok.end as usize')};
+                    left = ${rustShapeNodeObjectExpr(postfixSlot as NodeShape, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', '_end_tok.end as usize')};
                     tail_closed = true;
                     continue;
                 }
             }`;
+    } else if (postfixSlot.kind === 'custom') {
+      const fn = (postfixSlot as CustomShape).fn;
+      postfixCode = `{
+                let post = match self.peek_lid() {
+                    ${postArms}
+                    _ => -1,
+                };
+                if !tail_closed && post > min_bp {
+                    let _op = self.current_text().to_owned();
+                    self.pos += 1;
+                    left = ${customCall(fn, 'Vec::new()', '[]', '_off', 'self.last_end(_off)', 'left', '_op')};
+                    tail_closed = true;
+                    continue;
+                }
+            }`;
+    } else {
+      postfixCode = `{
+                let post = match self.peek_lid() {
+                    ${postArms}
+                    _ => -1,
+                };
+                if !tail_closed && post > min_bp {
+                    let _op = self.current_text().to_owned();
+                    self.pos += 1;
+                    let _sk = vec![left, AstValue::String(_op)];
+                    left = ${keepFinish('_sk', rule.cstName)};
+                    tail_closed = true;
+                    continue;
+                }
+            }`;
+    }
   }
 
-  // ── LED keep ──
-  let ledCode = '';
-  const ledSlot = ps.led ?? (rule.leds.length ? { kind: 'keep' as const } : undefined);
-  if (ledSlot && rule.leds.length) {
-    const cases = rule.leds.map((b, i) => {
-      const lid = lidOf(ids, b.first);
-      const parts: string[] = [];
-      if (rule.ledAccessTail[i]) parts.push('!tail_closed');
-      if (rule.ledLbp[i] !== null && rule.ledLbp[i] !== undefined) parts.push(`${rule.ledLbp[i]} > min_bp`);
-      if (rule.ledSameLine[i]) parts.push('!t.nl');
-      if (rule.ledNotLeftLeaf[i]) {
-        const set = rule.ledNotLeftLeaf[i]!;
-        parts.push(`!matches!(Self::shape_head_text(Some(&left)).as_str(), ${set.map((x) => J(x)).join(' | ')})`);
+  // ── postfixTok (non-template face; template dual-parse remains SH3-3 fail-fast) ──
+  let postfixTokCode = '';
+  const postfixTokSlot = slotOf(ps.postfixTok as { kind: string } | undefined, rule.postfixToks.length > 0);
+  if (postfixTokSlot && rule.postfixToks.length) {
+    const groups = groupByPreserveOrder(rule.postfixToks, (tok) => kidOf(ids, tok));
+    const cases = groups.map((g) => {
+      const tokName = rule.postfixToks.find((t) => kidOf(ids, t) === g.key)!;
+      if (tpl && tokName === tpl.token) return '';
+      const policy = leaves[tokName] ?? { action: 'keep' as const };
+      let finish: string;
+      if (postfixTokSlot.kind === 'custom') {
+        const fn = (postfixTokSlot as CustomShape).fn;
+        finish = `left = ${customCall(fn, 'vec![leaf]', '[]', '_off', 't.end as usize', 'left', 'op_owned')};`;
+      } else if (postfixTokSlot.kind === 'node') {
+        const node = postfixTokSlot as NodeShape;
+        const fieldMap = node.fields.map((f: FieldDecl) => {
+          if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 0) {
+            return `fields.push((${J(f.name)}.to_owned(), left.clone()));`;
+          }
+          if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 1) {
+            return `fields.push((${J(f.name)}.to_owned(), leaf.clone()));`;
+          }
+          if (f.bind === 'opText') {
+            return `fields.push((${J(f.name)}.to_owned(), AstValue::String(op_owned.clone())));`;
+          }
+          return `fields.push((${J(f.name)}.to_owned(), left.clone()));`;
+        }).join('\n                        ');
+        finish = `{
+                        let mut fields: Vec<(String, AstValue)> = Vec::new();
+                        ${fieldMap}
+                        left = AstValue::Object { typ: ${J(node.type)}.to_owned(), fields };
+                    }`;
+      } else {
+        finish = `{ let _sk = vec![left, leaf]; left = ${keepFinish('_sk', rule.cstName)}; }`;
       }
-      parts.push(`!self.suppress_cur.contains(&${lid})`);
-      const guard = parts.join(' && ');
-      const st = emptySteps(b.steps);
-      const finish = ledSlot.kind === 'inline'
-        ? `left = Self::shape_pack(_sk);`
-        : ledSlot.kind === 'node'
-          ? `left = ${rustShapeNodeObjectExpr(ledSlot as NodeShape, '_sk', '_op.clone()', shapeIR.spans, '_off', 'self.last_end(_off)')};`
-          : `{ let mut _kids = vec![left]; _kids.extend(_sk); left = ${keepFinish('_kids', rule.cstName)}; }`;
-      return `if self.peek_lid() == Some(${lid}) {
-                let t = self.toks[self.pos];
-                if ${guard} {
+      return `if self.peek_kid() == Some(${g.key}) {
+                if !tail_closed {
+                    let t = self.toks[self.pos];
+                    let _text = tok_text(self.src, &t);
+                    let op_owned = _text.to_owned();
+                    let leaf = ${rustShapeLeafAstExpr(policy, '_text')};
+                    self.pos += 1;
+                    ${finish}
+                    continue;
+                }
+            }`;
+    }).filter(Boolean).join('\n            ');
+    postfixTokCode = cases;
+  }
+
+  // ── LED (mixfix; RD steps; guards; success-only commit) ──
+  let ledCode = '';
+  const ledSlot = slotOf(ps.led as { kind: string } | undefined, rule.leds.length > 0);
+  if (ledSlot && rule.leds.length) {
+    const groups = groupByPreserveOrder(rule.leds, (b) => lidOf(ids, b.first));
+    ledCode = groups.map((g) => {
+      const lid = g.key as number;
+      const arms = g.members.map(({ item: b, index: i }) => {
+        const parts: string[] = [];
+        if (rule.ledAccessTail[i]) parts.push('!tail_closed');
+        if (rule.ledLbp[i] !== null && rule.ledLbp[i] !== undefined) parts.push(`${rule.ledLbp[i]} > min_bp`);
+        if (rule.ledSameLine[i]) parts.push('!t.nl');
+        if (rule.ledNotLeftLeaf[i]) {
+          const set = rule.ledNotLeftLeaf[i]!;
+          parts.push(`!matches!(Self::shape_head_text(Some(&left)).as_str(), ${set.map((x) => J(x)).join(' | ')})`);
+        }
+        parts.push(`!self.suppress_cur.contains(&${lid})`);
+        const guard = parts.join(' && ');
+        const st = emptySteps(b.steps);
+        let finish: string;
+        if (ledSlot.kind === 'custom') {
+          const fn = (ledSlot as CustomShape).fn;
+          finish = `left = ${customCall(fn, '_sk', `[${i}]`, '_off', 'self.last_end(_off)', 'left', '_op')};`;
+        } else if (ledSlot.kind === 'node') {
+          finish = `left = ${rustShapeNodeObjectExpr(ledSlot as NodeShape, '_sk', '_op.clone()', shapeIR.spans, '_off', 'self.last_end(_off)', 'left')};`;
+        } else if (ledSlot.kind === 'inline') {
+          finish = `left = if _sk.len() == 1 { _sk.pop().unwrap() } else { AstValue::Array(_sk) };`;
+        } else {
+          finish = `{ let mut _kids = vec![left]; _kids.extend(_sk); left = ${keepFinish('_kids', rule.cstName)}; }`;
+        }
+        return `if ${guard} {
                     let led_save = self.pos;
                     let _op = self.current_text().to_owned();
                     let _capped_save = self.capped;
                     let mut _sk: Vec<AstValue> = Vec::new();
+                    let mut _lists: Vec<Vec<AstValue>> = Vec::new();
+                    let mut _holes: Vec<Option<AstValue>> = Vec::new();
+                    let mut _ap: Vec<usize> = Vec::new();
                     ${st.ok}
                     if ${st.okVar} {
                         ${finish}
@@ -3543,13 +3774,16 @@ function emitRustPrattMethod(
                     self.pos = led_save;
                     self.capped = _capped_save;
                     break;
-                }
+                }`;
+      }).join('\n                ');
+      return `if self.peek_lid() == Some(${lid}) {
+                let t = self.toks[self.pos];
+                ${arms}
             }`;
     }).join('\n            ');
-    ledCode = cases;
   }
 
-  const hasLoop = !!(ledCode || postfixCode || binaryBody);
+  const hasLoop = !!(ledCode || postfixCode || postfixTokCode || binaryBody);
 
   return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let prev = self.suppress_cur.clone();
@@ -3565,6 +3799,7 @@ function emitRustPrattMethod(
         let mut tail_closed = false;
         ${hasLoop ? 'loop {' : ''}
             ${ledCode}
+            ${postfixTokCode}
             ${postfixCode}
             ${binaryBody || (hasLoop ? 'break;' : '')}
         ${hasLoop ? '}' : ''}
@@ -3663,16 +3898,16 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
       if (ps.atom?.kind === 'rule') continue;
       if (!supportedLeaf(tok) || shapeIR.leaves[tok]?.action === 'drop') note(rule.name, `pratt-ir:atom-policy:${tok}`);
     }
-    if (rule.prefix.length && ps.prefix && !['node', 'keep', 'inline'].includes(ps.prefix.kind)) {
+    if (rule.prefix.length && ps.prefix && !['node', 'keep', 'inline', 'custom'].includes(ps.prefix.kind)) {
       note(rule.name, `pratt-shape:prefix:${ps.prefix.kind}`);
     }
-    if (rule.binary.length && ps.binary && !['node', 'keep'].includes(ps.binary.kind)) {
+    if (rule.binary.length && ps.binary && !['node', 'keep', 'custom'].includes(ps.binary.kind)) {
       note(rule.name, `pratt-shape:binary:${ps.binary.kind}`);
     }
-    if (rule.postfix.length && ps.postfix && !['node', 'keep', 'inline'].includes(ps.postfix.kind)) {
+    if (rule.postfix.length && ps.postfix && !['node', 'keep', 'inline', 'custom'].includes(ps.postfix.kind)) {
       note(rule.name, `pratt-shape:postfix:${ps.postfix.kind}`);
     }
-    // led / nudSeq / nudCapped: keep|inline|node supported; custom fail-fast
+    // led / nudSeq / nudCapped / postfixTok: keep|inline|node|custom supported
     for (const [slotName, slot, present] of [
       ['nudSeq', ps.nudSeq, rule.nudSeqs.length],
       ['nudCapped', ps.nudCapped, rule.nudCapped.length],
@@ -3681,13 +3916,10 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
     ] as const) {
       if (!present) continue;
       const kind = slot?.kind ?? 'keep';
-      if (kind === 'custom') note(rule.name, `pratt-shape:${slotName}:custom`);
-      else if (!['keep', 'inline', 'node'].includes(kind)) note(rule.name, `pratt-shape:${slotName}:${kind}`);
+      if (!['keep', 'inline', 'node', 'custom'].includes(kind)) note(rule.name, `pratt-shape:${slotName}:${kind}`);
     }
     if (ps.template) note(rule.name, `pratt-shape:template:${ps.template.kind}`);
     if (ir.tpl) note(rule.name, 'pratt-ir:template');
-    // postfixTok still unsupported in renderer
-    if (rule.postfixToks.length) note(rule.name, `pratt-ir:postfixTok(${rule.postfixToks.length})`);
   }
   return out;
 }
@@ -3703,7 +3935,7 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
   const methods = shapeIR.rules.map((sir) => {
     const rule = ir.rules.find((r) => r.name === sir.name)!;
     return rule.kind === 'pratt'
-      ? emitRustPrattMethod(rule, sir, ids, shapeIR)
+      ? emitRustPrattMethod(rule, sir, ids, shapeIR, ir)
       : emitRustRdMethod(rule, sir, ids, shapeIR);
   }).join('\n\n');
   return `
@@ -3717,6 +3949,10 @@ pub trait ShapeCustoms {
     #[inline(always)] fn leaf_ident(&self, text: &str) -> String { text.to_owned() }
     #[inline(always)] fn leaf_boolean(&self, text: &str) -> bool { text == "true" }
     #[inline(always)] fn bind_op(&self, text: &str) -> String { text.to_owned() }
+    fn ast_custom(&self, name: &str, kids: Vec<AstValue>, alt_path: &[usize], off: usize, end: usize, left: Option<AstValue>, op_text: Option<&str>) -> AstValue {
+        let _ = (kids, alt_path, off, end, left, op_text);
+        panic!("shape rust: custom {} not provided — SH3-4", name)
+    }
 }
 pub struct DefaultShapeCustoms;
 impl ShapeCustoms for DefaultShapeCustoms {}
@@ -3782,6 +4018,11 @@ impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
         if values.is_empty() { AstValue::Null }
         else if values.len() == 1 { values.into_iter().next().unwrap() }
         else { AstValue::Array(values) }
+    }
+    fn shape_inline_finish(values: Vec<AstValue>) -> Option<AstValue> {
+        if values.is_empty() { None }
+        else if values.len() == 1 { values.into_iter().next() }
+        else { Some(AstValue::Array(values)) }
     }
     fn shape_head_text(v: Option<&AstValue>) -> String {
         match v {

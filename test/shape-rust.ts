@@ -1,5 +1,5 @@
-// Gate: Rust shape codegen — calc + toy RD, CST≡AST acceptance, TS≡Rust neutral AST,
-// no-shape byte identity, and fail-fast inventory (RD steps = 0; Pratt/custom/template remain).
+// Gate: Rust shape codegen — calc + toy RD/Pratt full slots, CST≡AST acceptance,
+// TS≡Rust neutral AST, no-shape byte identity, fail-fast inventory (Pratt=0; custom+template remain).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -9,7 +9,7 @@ import { emitRust } from '../src/target-rust.ts';
 import { emitTs } from '../src/target-ts.ts';
 import { calcShape } from '../src/shape-calc.ts';
 import calcGrammar from './fixtures/calc.ts';
-import toyGrammar, { toyShape, toyGolden, buildToyCorpus } from './fixtures/shape-toy.ts';
+import toyGrammar, { toyShape, toyGolden, buildToyCorpus, toyPrattWitnesses } from './fixtures/shape-toy.ts';
 import typescriptGrammar from '../typescript.ts';
 import { typescriptShape } from './fixtures/shape-typescript.ts';
 
@@ -344,6 +344,37 @@ async function main(): Promise<void> {
   }
   check('cst-fix sepAlt witnesses TS↔Rust', cstFixBad === 0, `${cstFixSepAltWitnesses.length - cstFixBad}/${cstFixSepAltWitnesses.length}`);
 
+  // SH3-2: Pratt construct handwritten witnesses (≥3 each) — TS↔Rust iso
+  const prattByConstruct = new Map<string, string[]>();
+  for (const w of toyPrattWitnesses) {
+    const xs = prattByConstruct.get(w.construct) ?? [];
+    xs.push(w.src);
+    prattByConstruct.set(w.construct, xs);
+  }
+  const prattConstructs = [...prattByConstruct.entries()];
+  const prattCoverageOk = prattConstructs.length >= 9 && prattConstructs.every(([, srcs]) => srcs.length >= 3);
+  check(
+    'SH3-2 Pratt witness coverage ≥3 per construct',
+    prattCoverageOk,
+    prattConstructs.map(([k, v]) => `${k}=${v.length}`).join(' '),
+  );
+  const prattSrcs = toyPrattWitnesses.map((w) => w.src);
+  const prattLines = runBatch(toyBin, prattSrcs);
+  let prattWitBad = 0;
+  for (let i = 0; i < toyPrattWitnesses.length; i++) {
+    const src = prattSrcs[i]!;
+    const tsCst = toyTs.parse(toyTs.tokenize(src)) !== null;
+    const tsAst = toyTs.parseAst(src);
+    const rustOk = prattLines[i]!.startsWith('A\t');
+    if (!tsCst || tsAst === null || !rustOk) { prattWitBad++; continue; }
+    const rust = stripSpans(JSON.parse(prattLines[i]!.slice(2)));
+    if (JSON.stringify(rust) !== JSON.stringify(stripSpans(tsAst))) prattWitBad++;
+  }
+  check(
+    'SH3-2 Pratt handwritten witnesses TS↔Rust iso',
+    prattWitBad === 0,
+    `${toyPrattWitnesses.length - prattWitBad}/${toyPrattWitnesses.length}`,
+  );
 
   let failFast = '';
   try {
@@ -370,7 +401,8 @@ async function main(): Promise<void> {
   }
   check(
     'TypeScript full shape fails fast at emit time',
-    unsupportedCount > 0 && rdStep === 0 && other === 0 && (pratt + custom + template) === unsupportedCount &&
+    unsupportedCount === 84 && rdStep === 0 && pratt === 0 && custom === 60 && template === 24 && other === 0 &&
+      (pratt + custom + template) === unsupportedCount &&
       !failFast.toLowerCase().includes('panic'),
     `${unsupportedCount} unsupported (RD-step=${rdStep} Pratt=${pratt} custom=${custom} template=${template} other=${other})`,
   );

@@ -531,6 +531,52 @@ export const toyGolden: { src: string; expect: unknown; customs?: ToyAstCustoms 
   },
 ];
 
+/**
+ * SH3-2: handwritten Pratt construct witnesses (≥3 each).
+ * shape-rust checks TS↔Rust accept + AST isomorphism per entry (CST-FIX lesson).
+ */
+export const toyPrattWitnesses: { construct: string; src: string }[] = [
+  // call LED
+  { construct: 'callLed', src: 'f();' },
+  { construct: 'callLed', src: 'f(1);' },
+  { construct: 'callLed', src: 'f(1,2);' },
+  { construct: 'callLed', src: 'a(b)(c);' },
+  // member LED
+  { construct: 'memberLed', src: 'a.b;' },
+  { construct: 'memberLed', src: 'a.b.c;' },
+  { construct: 'memberLed', src: 'f().x;' },
+  // sameLine LED
+  { construct: 'sameLineLed', src: 'a::b;' },
+  { construct: 'sameLineLed', src: 'x::y;' },
+  { construct: 'sameLineLed', src: 'a::b::c;' },
+  // notLeftLeaf LED (head is not "void")
+  { construct: 'notLeftLeafLed', src: 'a##x;' },
+  { construct: 'notLeftLeafLed', src: 'foo##bar;' },
+  { construct: 'notLeftLeafLed', src: 'a##b##c;' },
+  // ternary (lbp-gated)
+  { construct: 'ternary', src: 'a?1:2;' },
+  { construct: 'ternary', src: 'a?b:c;' },
+  { construct: 'ternary', src: 'a?1:b?2:3;' },
+  // nudSeq
+  { construct: 'nudSeq', src: '@foo bar;' },
+  { construct: 'nudSeq', src: '@a b;' },
+  { construct: 'nudSeq', src: '@x y;' },
+  // nudCapped
+  { construct: 'nudCapped', src: 'x=>1;' },
+  { construct: 'nudCapped', src: 'a=>b;' },
+  { construct: 'nudCapped', src: '(x=>1);' },
+  // postfix
+  { construct: 'postfix', src: 'x++;' },
+  { construct: 'postfix', src: 'y++;' },
+  { construct: 'postfix', src: 'a++;' },
+  // precedence / associativity boundaries
+  { construct: 'precAssoc', src: '1+2*3;' },
+  { construct: 'precAssoc', src: '1-2-3;' },
+  { construct: 'precAssoc', src: '1*2+3;' },
+  { construct: 'precAssoc', src: '-1+2;' },
+  { construct: 'precAssoc', src: '(1+2)*3;' },
+];
+
 /** Seeded corpus: SH2-1 RD combinations and rollback/newline boundaries (seed → 2100). */
 export function buildToyCorpus(seed = 0x5a2_2026): { src: string; source: string }[] {
   function rng32(s: number) {
