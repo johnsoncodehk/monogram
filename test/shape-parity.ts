@@ -377,6 +377,159 @@ async function main(): Promise<void> {
       { label: 'C6 deep arrow nested', src: 'const g = (x) => x * 2;', expect: { type: 'Program', body: [{ type: 'VariableDeclaration', kind: 'const', declarations: [{ type: 'VariableDeclarator', id: 'g', typeAnnotation: null, init: { type: 'ArrowFunctionExpression', params: [{ type: 'Identifier', decorators: [], optional: false }], body: { type: 'BinaryExpression', left: { type: 'Identifier', name: 'x' }, operator: '*', right: 2 }, async: false, expression: true } }] }] } },
       { label: 'C4 deep member chain', src: 'a.b.c;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'MemberExpression', object: { type: 'MemberExpression', object: { type: 'Identifier', name: 'a' }, property: { type: 'Identifier', name: 'b' }, computed: false, optional: false }, property: { type: 'Identifier', name: 'c' }, computed: false, optional: false } }] } },
       { label: 'C1 if stmt', src: 'if (a) b(); else c();', expect: { type: 'Program', body: [{ type: 'IfStatement', test: { type: 'Identifier', name: 'a' }, consequent: { type: 'ExpressionStatement', expression: { type: 'CallExpression', callee: { type: 'Identifier', name: 'b' }, arguments: [] } }, alternate: { type: 'ExpressionStatement', expression: { type: 'CallExpression', callee: { type: 'Identifier', name: 'c' }, arguments: [] } } }] } },
+      // SH2-3b LED / binary family goldens
+      {
+        label: 'LED nested ternary right-assoc',
+        src: 'x = a ? b : c ? d : e;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'AssignmentExpression',
+              left: { type: 'Identifier', name: 'x' },
+              operator: '=',
+              right: {
+                type: 'ConditionalExpression',
+                test: { type: 'Identifier', name: 'a' },
+                consequent: { type: 'Identifier', name: 'b' },
+                alternate: {
+                  type: 'ConditionalExpression',
+                  test: { type: 'Identifier', name: 'c' },
+                  consequent: { type: 'Identifier', name: 'd' },
+                  alternate: { type: 'Identifier', name: 'e' },
+                },
+              },
+            },
+          }],
+        },
+      },
+      {
+        label: 'binary assignment =',
+        src: 'a = b;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'AssignmentExpression',
+              left: { type: 'Identifier', name: 'a' },
+              operator: '=',
+              right: { type: 'Identifier', name: 'b' },
+            },
+          }],
+        },
+      },
+      {
+        label: 'binary compound +=',
+        src: 'a += b;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'AssignmentExpression',
+              left: { type: 'Identifier', name: 'a' },
+              operator: '+=',
+              right: { type: 'Identifier', name: 'b' },
+            },
+          }],
+        },
+      },
+      {
+        label: 'binary logical ??',
+        src: 'a ?? b;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'LogicalExpression',
+              left: { type: 'Identifier', name: 'a' },
+              operator: '??',
+              right: { type: 'Identifier', name: 'b' },
+            },
+          }],
+        },
+      },
+      {
+        label: 'LED as → TSAsExpression',
+        src: 'a as T;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'TSAsExpression',
+              expression: { type: 'Identifier', name: 'a' },
+              typeAnnotation: { type: 'Type', children: ['T'], headText: 'T' },
+            },
+          }],
+        },
+      },
+      {
+        label: 'LED instanceof',
+        src: 'a instanceof b;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'BinaryExpression',
+              left: { type: 'Identifier', name: 'a' },
+              operator: 'instanceof',
+              right: { type: 'Identifier', name: 'b' },
+            },
+          }],
+        },
+      },
+      {
+        label: 'LED in',
+        src: 'a in b;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'BinaryExpression',
+              left: { type: 'Identifier', name: 'a' },
+              operator: 'in',
+              right: { type: 'Identifier', name: 'b' },
+            },
+          }],
+        },
+      },
+      {
+        label: 'LED satisfies → TSSatisfiesExpression',
+        src: 'a satisfies T;',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'TSSatisfiesExpression',
+              expression: { type: 'Identifier', name: 'a' },
+              typeAnnotation: { type: 'Type', children: ['T'], headText: 'T' },
+            },
+          }],
+        },
+      },
+      {
+        label: 'LED optional call a?.()',
+        src: 'a?.();',
+        expect: {
+          type: 'Program',
+          body: [{
+            type: 'ExpressionStatement',
+            expression: {
+              type: 'CallExpression',
+              callee: { type: 'Identifier', name: 'a' },
+              arguments: [],
+              optional: true,
+            },
+          }],
+        },
+      },
     ];
     let tsGoldenOk = 0;
     for (const g of TS_GOLDEN) {
@@ -385,6 +538,56 @@ async function main(): Promise<void> {
       else console.error(`  ts golden fail ${g.label}`, JSON.stringify(got).slice(0, 200));
     }
     check(tsGoldenOk === TS_GOLDEN.length && TS_GOLDEN.length >= 18, `typescript AST golden ${tsGoldenOk}/${TS_GOLDEN.length} (≥18)`);
+
+    // SH2-3b: fold adversarial fixed cases (≥10; shapes, not only accept)
+    const advP = (src: string) =>
+      stripSpans(tsMod!.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }));
+    const advJ = (src: string) => JSON.stringify(advP(src));
+    {
+      const s1 = advJ('x = a ? b : c ? d : e;');
+      check(
+        s1.includes('AssignmentExpression') && s1.includes('ConditionalExpression') && !s1.includes('SequenceExpression'),
+        'adv nested ternary Assignment+Conditional right-assoc',
+        s1.slice(0, 300),
+      );
+      const s2 = advJ('switch (x) { default: a; }');
+      check(
+        /"cases":\[\{[^\]]*"consequent":\[\{"type":"ExpressionStatement"/.test(s2),
+        'adv switch default-only fold',
+        s2.slice(0, 400),
+      );
+      const s3 = advJ('switch (a) { case 1: x; } switch (b) { case 2: y; }');
+      const caseCount = (s3.match(/SwitchCase/g) ?? []).length;
+      check(
+        caseCount === 2 && (s3.match(/"consequent":\[\{/g) ?? []).length === 2,
+        'adv two switches fold isolated',
+        `cases=${caseCount}`,
+      );
+      const t4 = advP('switch (a) { case 1: switch (b) { case 2: z; } break; }');
+      const s4 = JSON.stringify(t4);
+      check(
+        t4 !== null && (s4.match(/SwitchStatement/g) ?? []).length === 2,
+        'adv nested switch parses',
+      );
+      const s5 = advJ('const [a, , b] = xs;');
+      check(s5.includes('null') && s5.includes('ArrayPattern'), 'adv array pattern hole');
+      const t6a = advJ('(1, 2, 3);');
+      const t6b = advJ('(1);');
+      check(t6a.includes('SequenceExpression'), 'adv comma → SequenceExpression');
+      check(!t6b.includes('SequenceExpression'), 'adv paren single → inline');
+      const t7 = advJ('a.b().c[d]();');
+      check(
+        (t7.match(/CallExpression/g) ?? []).length === 2 && (t7.match(/MemberExpression/g) ?? []).length >= 2,
+        'adv member/call chain',
+      );
+      const t8 = advJ('x = 1 - 2 / 3;');
+      check(
+        t8.includes('"operator":"-"') && t8.includes('"operator":"/"') && t8.includes('AssignmentExpression'),
+        'adv binary ops under assignment',
+      );
+      check(advP('a?.b;') !== null && advJ('a?.b;').includes('"optional":true'), 'adv optional member a?.b');
+    }
+
     let switchFoldState: unknown = null;
     const foldCustoms = { ...typescriptEstreeCustoms } as Record<string, (ctx: any) => unknown>;
     const stmtCustom = foldCustoms.estreeStmt!;

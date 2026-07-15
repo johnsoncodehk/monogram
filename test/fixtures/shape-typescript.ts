@@ -98,23 +98,13 @@ export const typescriptShape: ShapeSpec = {
         '1..N expressions. Pure inline is only correct for N=1; N>1 must become ' +
         'SequenceExpression. Distinguishing N at shape-spec time needs a runtime arity ' +
         'branch — custom.'),
-      prefix: {
-        kind: 'node',
-        type: 'UnaryExpression',
-        fields: [
-          { name: 'operator', bind: 'opText', typeHint: 'string' },
-          { name: 'argument', bind: { at: 0 }, typeHint: 'Expression' },
-        ],
-      },
-      binary: {
-        kind: 'node',
-        type: 'BinaryExpression',
-        fields: [
-          { name: 'left', bind: { at: 0 }, typeHint: 'Expression' },
-          { name: 'operator', bind: 'opText', typeHint: 'string' },
-          { name: 'right', bind: { at: 1 }, typeHint: 'Expression' },
-        ],
-      },
+      prefix: custom('estreeExprPrefix',
+        'Prefix ++/-- must be UpdateExpression(prefix:true); other ops stay UnaryExpression. ' +
+        'A single declarative UnaryExpression node cannot branch on opText.'),
+      binary: custom('estreeExprBinary',
+        'Expr binary covers assignment (= += … ??= ||= &&=), logical (?? || &&), and relational/' +
+        'arithmetic ops — three ESTree families (AssignmentExpression / LogicalExpression / ' +
+        'BinaryExpression). Declarative BinaryExpression alone mis-types assignments and logicals.'),
       postfix: {
         kind: 'node',
         type: 'UpdateExpression',
@@ -123,13 +113,16 @@ export const typescriptShape: ShapeSpec = {
           { name: 'argument', bind: { at: 0 }, typeHint: 'Expression' },
         ],
       },
-      // leds: call / member / index / optional-chain / non-null / typed call — all different
+      // leds: typed call / instantiation / call / member / optional / index / non-null /
+      // ternary / as / instanceof / in / satisfies — all different product types
       led: custom('estreeExprLed',
-        'Expr has ≥7 mixfix LED shapes (type-args+call, type-args, call, member `.`, ' +
-        'optional `?.`, index `[]`, non-null `!`) plus postfix Template. Each LED yields a ' +
-        'different ESTree node (CallExpression / MemberExpression / ChainExpression / ' +
+        'Expr has 12 mixfix LED shapes (typed call/tag, bare instantiation, call, member `.`, ' +
+        'optional `?.`, index `[]`, non-null `!`, ternary `?`, `as`, `instanceof`, `in`, ' +
+        '`satisfies`) plus assignment/logical family on binary and optional Template postfixTok. ' +
+        'Each LED yields a different ESTree node (CallExpression / MemberExpression / ' +
+        'ConditionalExpression / TSAsExpression / TSSatisfiesExpression / BinaryExpression / ' +
         'TSNonNullExpression / TaggedTemplateExpression) with different field layouts. ' +
-        'A single pratt.led node(fields) cannot branch on connector text; needs custom.'),
+        'A single pratt.led node(fields) cannot branch on connector/alt; needs custom.'),
       nudSeq: custom('estreeExprNudSeq',
         'nudSeq covers bare Ident + decorated class expressions — product types Ident vs ' +
         'ClassExpression; class arm has star(Decorator) + many opt type-params/heritage/' +
@@ -138,7 +131,9 @@ export const typescriptShape: ShapeSpec = {
         'nudCapped are ArrowFunctionExpression forms (async/params/return-type/body). ' +
         'Params are sep(Param) and body is Block|Expr alt; flag async from leading keyword ' +
         '(dropped). Requires handwritten assembly.'),
-      postfixTok: { kind: 'keep' },
+      postfixTok: custom('estreeExprPostfixTok',
+        'postfixTok Template on Expr is TaggedTemplateExpression (tag=left, quasi=leaf); ' +
+        'keep would leave a raw Expr children pair.'),
     },
 
     // Type system Pratt — no demo coverage; ESTree/TS uses different node set
@@ -598,6 +593,63 @@ function estreeParenOrComma(ctx: TsAstCustomCtx): unknown {
   return { type: 'SequenceExpression', expressions: parts };
 }
 
+const ASSIGN_OPS = new Set([
+  '=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=',
+  '&=', '|=', '^=', '??=', '||=', '&&=',
+]);
+const LOGICAL_OPS = new Set(['??', '||', '&&']);
+const UPDATE_OPS = new Set(['++', '--']);
+
+function estreeExprBinary(ctx: TsAstCustomCtx): unknown {
+  const op = ctx.opText ?? '';
+  const right = ctx.kids[0];
+  if (ASSIGN_OPS.has(op)) {
+    return { type: 'AssignmentExpression', left: ctx.left, operator: op, right };
+  }
+  if (LOGICAL_OPS.has(op)) {
+    return { type: 'LogicalExpression', left: ctx.left, operator: op, right };
+  }
+  return { type: 'BinaryExpression', left: ctx.left, operator: op, right };
+}
+
+function estreeExprPrefix(ctx: TsAstCustomCtx): unknown {
+  const op = ctx.opText ?? '';
+  const argument = ctx.kids[0];
+  if (UPDATE_OPS.has(op)) return updateExpr(op, argument, true);
+  return unaryExpr(op, argument);
+}
+
+function estreeExprPostfixTok(ctx: TsAstCustomCtx): unknown {
+  return { type: 'TaggedTemplateExpression', tag: ctx.left, quasi: ctx.kids[0] };
+}
+
+/** Optional-chain LED arm 4 — distinguish by kid shape (altPath is only [4]). */
+function estreeOptionalChain(left: unknown, kids: readonly unknown[]): unknown {
+  const k0 = kids[0];
+  if (Array.isArray(k0)) {
+    // a?.() → [[]] ; a?.<T>() → [[[types],[args]]]
+    if (Array.isArray(k0[0])) {
+      const args = Array.isArray(k0[1]) ? k0[1] as unknown[] : [];
+      return {
+        type: 'CallExpression',
+        callee: left,
+        arguments: args,
+        optional: true,
+        typeArguments: k0[0],
+      };
+    }
+    return { type: 'CallExpression', callee: left, arguments: k0 as unknown[], optional: true };
+  }
+  if (typeof k0 === 'string' && k0.startsWith('`')) {
+    return { type: 'TaggedTemplateExpression', tag: left, quasi: k0 };
+  }
+  if (typeof k0 === 'string') {
+    return { ...memberExpr(left, k0), optional: true };
+  }
+  // a?.[b] → object kid → computed MemberExpression
+  return { ...memberExpr(left, k0 ?? 'undefined', true), optional: true };
+}
+
 function estreeExprLed(ctx: TsAstCustomCtx): unknown {
   const left = ctx.left;
   const op = ctx.opText ?? '';
@@ -609,9 +661,21 @@ function estreeExprLed(ctx: TsAstCustomCtx): unknown {
   }
   if (arm === 1) return { type: 'TSInstantiationExpression', expression: left, typeArguments: slots[0] ?? slots };
   if (arm === 3) return memberExpr(left, slots[0] ?? 'undefined');
-  if (arm === 4) return { ...memberExpr(left, slots[0] ?? 'undefined'), optional: true };
+  if (arm === 4) return estreeOptionalChain(left, ctx.kids);
   if (arm === 5) return memberExpr(left, slots[0], true);
   if (arm === 6) return { type: 'TSNonNullExpression', expression: left };
+  if (arm === 7) {
+    return {
+      type: 'ConditionalExpression',
+      test: left,
+      consequent: slots[0],
+      alternate: slots[1],
+    };
+  }
+  if (arm === 8) return { type: 'TSAsExpression', expression: left, typeAnnotation: slots[0] };
+  if (arm === 9) return binaryExpr(left, 'instanceof', slots[0]);
+  if (arm === 10) return binaryExpr(left, 'in', slots[0]);
+  if (arm === 11) return { type: 'TSSatisfiesExpression', expression: left, typeAnnotation: slots[0] };
   if (slots[0] && typeof slots[0] === 'object' && (slots[0] as any).type === '$template') {
     return { type: 'TaggedTemplateExpression', tag: left, quasi: slots[0] };
   }
@@ -808,6 +872,9 @@ export const typescriptEstreeCustoms: TsAstCustoms = {
   estreeStmt,
   estreeDecl,
   estreeParenOrComma,
+  estreeExprBinary,
+  estreeExprPrefix,
+  estreeExprPostfixTok,
   estreeExprLed,
   estreeExprNudSeq,
   estreeArrow,
