@@ -2591,6 +2591,8 @@ function emitAstRdAltSteps(
       : fn === 'string' ? '_shapeLeafString(t)'
       : '_shapeLeafIdent(t)';
   };
+  let localId = 0;
+  const local = (stem: string): string => `_shape${stem}${localId++}`;
   const emitSteps = (xs: Step[], sink: string): string =>
     xs.length ? xs.map((x) => emitStep(x, sink)).join(' && ') : 'true';
   const emitStep = (s: Step, sink: string): string => {
@@ -2612,8 +2614,10 @@ function emitAstRdAltSteps(
         return `(${emitSteps(s.steps, sink)})`;
       case 'sameLine':
         return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
-      case 'not':
-        return `(() => { const _nv: unknown[] = []; return !_shapeProbe(_nv, _ap, () => ${emitSteps(s.steps, '_nv')}); })()`;
+      case 'not': {
+        const nv = local('Not');
+        return `(() => { const ${nv}: unknown[] = []; return !_shapeProbe(${nv}, _ap, () => ${emitSteps(s.steps, nv)}); })()`;
+      }
       case 'suppress':
         return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${emitSteps(s.steps, sink)}); _suppressNext = null; return _r; })()`;
       case 'altlit': {
@@ -2623,24 +2627,30 @@ function emitAstRdAltSteps(
         return `(() => { const t = peek(); if (t === null) return false; ${arms} return false; })()`;
       }
       case 'alt': {
-        const tries = s.branches.map((b, i) =>
-          `{ const _av: unknown[] = []; if (_shapeTxn(_av, _ap, () => { _ap.push(${i}); return ${emitSteps(b, '_av')}; })) { ${visible(s) ? `${sink}.push(_shapePack(_av));` : ''} return true; } }`,
-        ).join(' ');
+        const tries = s.branches.map((b, i) => {
+          const av = local('Alt');
+          return `{ const ${av}: unknown[] = []; if (_shapeTxn(${av}, _ap, () => { _ap.push(${i}); return ${emitSteps(b, av)}; })) { ${visible(s) ? `${sink}.push(_shapePack(${av}));` : ''} return true; } }`;
+        }).join(' ');
         return `(() => { ${tries} return false; })()`;
       }
       case 'star': {
-        const body = emitStep(s.step, '_sv');
-        return `(() => { const _out: unknown[] = []; for (;;) { const _sv: unknown[] = []; if (!_shapeTxn(_sv, _ap, () => ${body})) break; ${visible(s.step) ? '_out.push(_shapePack(_sv));' : ''} } ${visible(s.step) ? `${sink}.push(_out);` : ''} return true; })()`;
+        const out = local('StarOut');
+        const sv = local('StarValue');
+        const body = emitStep(s.step, sv);
+        return `(() => { const ${out}: unknown[] = []; for (;;) { const ${sv}: unknown[] = []; if (!_shapeTxn(${sv}, _ap, () => ${body})) break; ${visible(s.step) ? `${out}.push(_shapePack(${sv}));` : ''} } ${visible(s.step) ? `${sink}.push(${out});` : ''} return true; })()`;
       }
       case 'opt': {
-        const body = emitSteps(s.steps, '_ov');
-        return `(() => { const _ov: unknown[] = []; const _ok = _shapeTxn(_ov, _ap, () => ${body}); ${s.steps.some(visible) ? `${sink}.push(_ok ? _shapePack(_ov) : null);` : ''} return true; })()`;
+        const ov = local('Opt');
+        const body = emitSteps(s.steps, ov);
+        return `(() => { const ${ov}: unknown[] = []; const _ok = _shapeTxn(${ov}, _ap, () => ${body}); ${s.steps.some(visible) ? `${sink}.push(_ok ? _shapePack(${ov}) : null);` : ''} return true; })()`;
       }
       case 'sep': {
-        const body = emitStep(s.elem, '_ev');
-        const add = visible(s.elem) ? '_out.push(_shapePack(_ev));' : '';
-        const finish = visible(s.elem) ? `${sink}.push(_out);` : '';
-        return `(() => { const _out: unknown[] = []; let _ev: unknown[] = []; if (!_shapeTxn(_ev, _ap, () => ${body})) { ${finish} return true; } ${add} for (;;) { const _d = pos; if (!_shapeDropLit(${lidOf(ids, s.delim)})) { pos = _d; break; } _ev = []; if (!_shapeTxn(_ev, _ap, () => ${body})) break; ${add} } ${finish} return true; })()`;
+        const out = local('SepOut');
+        const ev = local('SepValue');
+        const body = emitStep(s.elem, ev);
+        const add = visible(s.elem) ? `${out}.push(_shapePack(${ev}));` : '';
+        const finish = visible(s.elem) ? `${sink}.push(${out});` : '';
+        return `(() => { const ${out}: unknown[] = []; let ${ev}: unknown[] = []; if (!_shapeTxn(${ev}, _ap, () => ${body})) { ${finish} return true; } ${add} for (;;) { const _d = pos; if (!_shapeDropLit(${lidOf(ids, s.delim)})) { pos = _d; break; } ${ev} = []; if (!_shapeTxn(${ev}, _ap, () => ${body})) break; ${add} } ${finish} return true; })()`;
       }
     }
   };
@@ -3296,13 +3306,28 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         }
         break;`;
     }).join('\n');
+    let tplFinish: string;
+    if (postfixTokSlot.kind === 'custom') {
+      tplFinish = `left = ${customFinish((postfixTokSlot as CustomShape).fn, '[node]', 'leftTokStart', '[]', 'left', '_src.slice(node_off, node_end)')} as ${retType};`;
+    } else if (postfixTokSlot.kind === 'node') {
+      const node = postfixTokSlot as NodeShape;
+      tplFinish = `{ const spOff = leftOff; const end = pos > 0 ? toks[pos - 1]!.end : leftOff;
+          left = ${emitAstNodeCtor(node, spans, node.fields.map((f: FieldDecl) => {
+            if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 0) return { name: f.name, expr: 'left' };
+            if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 1) return { name: f.name, expr: 'node' };
+            return { name: f.name, expr: 'left' };
+          }), 'spOff', 'end')} as ${retType}; leftOff = spOff; leftEnd = end; }`;
+    } else {
+      tplFinish = `{ const _kids = [left, node]; left = ${keepFinish('_kids', 'leftTokStart')} as ${retType}; leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd; }`;
+    }
     const tplPart = hasTpl ? `
     if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) {
+      const leftTokStart = pos;
+      const node_off = t.off;
       const node = matchTemplateAst();
+      const node_end = pos > 0 ? toks[pos - 1]!.end : node_off;
       if (node !== null) {
-        const save = pos;
-        const _kids = [left, node];
-        left = ${keepFinish('_kids', 'save')} as ${retType};
+        ${tplFinish}
         leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
         continue ledLoop;
       }

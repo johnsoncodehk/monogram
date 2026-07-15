@@ -141,7 +141,10 @@ export const typescriptShape: ShapeSpec = {
       kind: 'pratt',
       atom: { kind: 'keep' },
       // IR encodes `| Type` / `& Type` as nudBrackets (not binary ops) — verified via dump.
-      group: { kind: 'keep' },
+      group: custom('tsTypeLed',
+        'Type group identities are heterogeneous; object-type group 7 lowers to TSTypeLiteral, ' +
+        'while other groups retain their explicit Type wrapper. C7 dispatches group vs LED ' +
+        'by whether opText is present.'),
       led: custom('tsTypeLed',
         'Type LEDs include conditional/indexed/keyof-style continuations with ' +
         'heterogeneous field shapes; keep covers atoms only. LED connector→node ' +
@@ -490,6 +493,11 @@ function arrowFn(params: unknown, body: unknown, async = false): unknown {
   return { type: 'ArrowFunctionExpression', params: ps, body, async, expression: typeof body !== 'object' || body === null || (body as any).type !== 'BlockStatement' };
 }
 
+function unhandledCustom(fn: string, ctx: TsAstCustomCtx, identity = ''): never {
+  const suffix = identity || `altPath=${JSON.stringify(ctx.altPath)}${ctx.opText === undefined ? '' : ` opText=${JSON.stringify(ctx.opText)}`}`;
+  throw new Error(`shape custom ${fn}: unhandled ${suffix}`);
+}
+
 function estreeStmt(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   const k = Array.isArray(ctx.kids) ? ctx.kids : [ctx.kids];
@@ -532,10 +540,11 @@ function estreeStmt(ctx: TsAstCustomCtx): unknown {
     case 15: return { type: 'WithStatement', object: k[1], body: k[2] };
     case 16: return { type: 'VariableDeclaration', kind: 'using', declarations: flatKids(k.slice(-1)) };
     case 17: return firstKid(k) ?? k[0];
-    default: {
+    case 18: {
       const expr = stripAsi(k)[0];
       return { type: 'ExpressionStatement', expression: expr };
     }
+    default: return unhandledCustom('estreeStmt', ctx);
   }
 }
 
@@ -584,10 +593,14 @@ function estreeDecl(ctx: TsAstCustomCtx): unknown {
   }
   if (arm === 15 || arm === 16) return { type: 'ExportNamedDeclaration', declaration: estreeDecl({ ...ctx, altPath: [arm === 15 ? 0 : 6], kids: k }) };
   if (arm === 14) return { type: 'TSDeclareFunction', ...estreeDecl({ ...ctx, altPath: [0], kids: k }) as object };
-  return { type: 'Declaration', alt: arm, children: ctx.kids };
+  if (arm !== undefined && arm >= 7 && arm <= 13) return { type: 'Declaration', alt: arm, children: ctx.kids };
+  return unhandledCustom('estreeDecl', ctx);
 }
 
 function estreeParenOrComma(ctx: TsAstCustomCtx): unknown {
+  const arm = ctx.altPath[0];
+  if (arm === undefined || arm < 0 || arm > 20) return unhandledCustom('estreeParenOrComma', ctx);
+  if (arm === 7) return { type: 'MetaProperty', meta: I('new'), property: I('target') };
   const parts = flatKids(ctx.kids);
   if (parts.length === 1) return parts[0];
   return { type: 'SequenceExpression', expressions: parts };
@@ -599,9 +612,16 @@ const ASSIGN_OPS = new Set([
 ]);
 const LOGICAL_OPS = new Set(['??', '||', '&&']);
 const UPDATE_OPS = new Set(['++', '--']);
+const BINARY_OPS = new Set([
+  ...ASSIGN_OPS, ...LOGICAL_OPS,
+  '|', '^', '&', '==', '!=', '===', '!==', '<', '>', '<=', '>=',
+  '<<', '>>', '>>>', '+', '-', '*', '/', '%', '**',
+]);
+const PREFIX_OPS = new Set(['!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield', '++', '--']);
 
 function estreeExprBinary(ctx: TsAstCustomCtx): unknown {
   const op = ctx.opText ?? '';
+  if (!BINARY_OPS.has(op)) return unhandledCustom('estreeExprBinary', ctx);
   const right = ctx.kids[0];
   if (ASSIGN_OPS.has(op)) {
     return { type: 'AssignmentExpression', left: ctx.left, operator: op, right };
@@ -614,12 +634,14 @@ function estreeExprBinary(ctx: TsAstCustomCtx): unknown {
 
 function estreeExprPrefix(ctx: TsAstCustomCtx): unknown {
   const op = ctx.opText ?? '';
+  if (!PREFIX_OPS.has(op)) return unhandledCustom('estreeExprPrefix', ctx);
   const argument = ctx.kids[0];
   if (UPDATE_OPS.has(op)) return updateExpr(op, argument, true);
   return unaryExpr(op, argument);
 }
 
 function estreeExprPostfixTok(ctx: TsAstCustomCtx): unknown {
+  if (ctx.opText === undefined || !ctx.opText.startsWith('`')) return unhandledCustom('estreeExprPostfixTok', ctx);
   return { type: 'TaggedTemplateExpression', tag: ctx.left, quasi: ctx.kids[0] };
 }
 
@@ -676,10 +698,7 @@ function estreeExprLed(ctx: TsAstCustomCtx): unknown {
   if (arm === 9) return binaryExpr(left, 'instanceof', slots[0]);
   if (arm === 10) return binaryExpr(left, 'in', slots[0]);
   if (arm === 11) return { type: 'TSSatisfiesExpression', expression: left, typeAnnotation: slots[0] };
-  if (slots[0] && typeof slots[0] === 'object' && (slots[0] as any).type === '$template') {
-    return { type: 'TaggedTemplateExpression', tag: left, quasi: slots[0] };
-  }
-  return { type: 'CallExpression', callee: left, arguments: slots, meta: { led: ctx.altPath[0], op } };
+  return unhandledCustom('estreeExprLed', ctx, `LED altPath=${JSON.stringify(ctx.altPath)} opText=${JSON.stringify(op)}`);
 }
 
 function estreeExprNudSeq(ctx: TsAstCustomCtx): unknown {
@@ -688,12 +707,14 @@ function estreeExprNudSeq(ctx: TsAstCustomCtx): unknown {
     const name = ctx.kids[0];
     return typeof name === 'string' ? I(name) : name;
   }
+  if (arm !== 1 && arm !== 2) return unhandledCustom('estreeExprNudSeq', ctx);
   return { type: 'ClassExpression', decorators: flatKids(ctx.kids[0] ?? []), id: ctx.kids[1] ?? null, body: { type: 'ClassBody', body: flatKids(ctx.kids.slice(3)) } };
 }
 
 function estreeArrow(ctx: TsAstCustomCtx): unknown {
   const async = ctx.src.slice(ctx.off, ctx.end).trimStart().startsWith('async');
   const arm = ctx.altPath[0];
+  if (arm === undefined || arm < 0 || arm > 3) return unhandledCustom('estreeArrow', ctx);
   const params = arm === 1 || arm === 2
     ? flatKids(ctx.kids[1] ?? [])
     : [typeof ctx.kids[0] === 'string' ? I(ctx.kids[0]) : ctx.kids[0]];
@@ -702,10 +723,27 @@ function estreeArrow(ctx: TsAstCustomCtx): unknown {
 }
 
 function tsTypeLed(ctx: TsAstCustomCtx): unknown {
+  if (ctx.opText === undefined) {
+    const arm = ctx.altPath[0];
+    if (arm === 7) return { type: 'TSTypeLiteral', members: flatKids(ctx.kids) };
+    if (arm === undefined || arm < 0 || arm > 20) {
+      return unhandledCustom('tsTypeLed', ctx, `group altPath=${JSON.stringify(ctx.altPath)}`);
+    }
+    return {
+      type: 'Type',
+      children: ctx.kids,
+      headText: ctx.kids.length ? String(ctx.kids[0] ?? '') : '',
+      off: ctx.off,
+      end: ctx.end,
+    };
+  }
   const op = ctx.opText ?? '';
   if (op === 'extends') return { type: 'TSConditionalType', checkType: ctx.left, extendsType: ctx.kids[0], trueType: ctx.kids[1], falseType: ctx.kids[2] };
   if (op === '[') return { type: 'TSIndexedAccessType', objectType: ctx.left, indexType: ctx.kids[0] };
-  return { type: 'TSTypeReference', typeName: ctx.left, typeParameters: ctx.kids[0] ?? null, meta: { op } };
+  if (op === '<' || op === '|' || op === '&' || op === '.' || op === '?' || op === '!') {
+    return { type: 'TSTypeReference', typeName: ctx.left, typeParameters: ctx.kids[0] ?? null, meta: { op } };
+  }
+  return unhandledCustom('tsTypeLed', ctx, `LED altPath=${JSON.stringify(ctx.altPath)} opText=${JSON.stringify(op)}`);
 }
 
 function estreeNewTargetLed(ctx: TsAstCustomCtx): unknown {
@@ -715,7 +753,7 @@ function estreeNewTargetLed(ctx: TsAstCustomCtx): unknown {
   }
   if (op === '.') return memberExpr(ctx.left, ctx.kids[0]);
   if (op === '[') return memberExpr(ctx.left, ctx.kids[0], true);
-  return memberExpr(ctx.left, ctx.kids[0]);
+  return unhandledCustom('estreeNewTargetLed', ctx);
 }
 
 function _headIsNew(v: unknown): boolean {
@@ -725,6 +763,7 @@ function _headIsNew(v: unknown): boolean {
 }
 
 function estreeArrayPattern(ctx: TsAstCustomCtx): unknown {
+  if (ctx.altPath[0] !== 1) return unhandledCustom('estreeArrayPattern', ctx);
   const elems: unknown[] = [];
   for (const k of ctx.kids) {
     if (Array.isArray(k)) elems.push(...k.map((x) => x ?? null));
@@ -739,12 +778,14 @@ function estreeBindingProperty(ctx: TsAstCustomCtx): unknown {
   if (arm === 1) return { type: 'Property', key: I(String(a)), value: I(String(a)), kind: 'init', method: false, shorthand: true, computed: false };
   if (arm === 3) return { type: 'RestElement', argument: a };
   if (arm === 2) return { type: 'Property', key: a, value: b, kind: 'init', method: false, shorthand: false, computed: true };
-  return { type: 'Property', key: typeof a === 'string' ? I(a) : a, value: b, kind: 'init', method: false, shorthand: false, computed: false };
+  if (arm === 0) return { type: 'Property', key: typeof a === 'string' ? I(a) : a, value: b, kind: 'init', method: false, shorthand: false, computed: false };
+  return unhandledCustom('estreeBindingProperty', ctx);
 }
 
 function estreeParam(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   if (arm === 0) return { type: 'Identifier', name: 'this', typeAnnotation: ctx.kids[0] };
+  if (arm !== 1 && arm !== 2) return unhandledCustom('estreeParam', ctx);
   const k = ctx.kids;
   const id = k[k.length - 2] ?? k[0];
   return { type: 'Identifier', ...(typeof id === 'string' ? { name: id } : id as object), decorators: flatKids(k[0] ?? []), optional: arm === 1 };
@@ -761,7 +802,8 @@ function estreeForHead(ctx: TsAstCustomCtx): unknown {
     update: seqExpr(ctx.kids[2], null),
   };
   if (arm === 2) return { type: 'ForHead', kind: 'in', left: ctx.kids[0], right: ctx.kids[1] };
-  return { type: 'ForHead', kind: 'of', left: ctx.kids[0], right: ctx.kids[1], await: ctx.src.slice(ctx.off, ctx.off + 5).includes('await') };
+  if (arm === 3) return { type: 'ForHead', kind: 'of', left: ctx.kids[0], right: ctx.kids[1], await: ctx.src.slice(ctx.off, ctx.off + 5).includes('await') };
+  return unhandledCustom('estreeForHead', ctx);
 }
 
 function kDecl(v: unknown): unknown {
@@ -777,14 +819,19 @@ function estreeSwitchCase(ctx: TsAstCustomCtx): unknown {
   if (arm === 1) {
     return shapePartial('switch-consequent', 'start', { type: 'SwitchCase', test: null, consequent: [] });
   }
-  return shapePartial('switch-consequent', 'start', {
-    type: 'SwitchCase',
-    test: seqExpr(ctx.kids[0], ctx.kids[1]),
-    consequent: [],
-  });
+  if (arm === 0) {
+    return shapePartial('switch-consequent', 'start', {
+      type: 'SwitchCase',
+      test: seqExpr(ctx.kids[0], ctx.kids[1]),
+      consequent: [],
+    });
+  }
+  return unhandledCustom('estreeSwitchCase', ctx);
 }
 
 function estreeDecorator(ctx: TsAstCustomCtx): unknown {
+  const arm = ctx.altPath[0];
+  if (arm === undefined || arm < 0 || arm > 1) return unhandledCustom('estreeDecorator', ctx);
   const chain = flatKids(ctx.kids);
   const head = chain[0];
   let expr: unknown = typeof head === 'string' && head.startsWith('@') ? I(head.slice(1)) : head;
@@ -803,16 +850,31 @@ function estreeClassMember(ctx: TsAstCustomCtx): unknown {
   if (arm === 1) return { type: 'MethodDefinition', kind: 'constructor', key: I('constructor'), value: { type: 'FunctionExpression', params: flatKids(ctx.kids[0] ?? []), body: ctx.kids[1] }, static: false };
   if (arm === 2) return { type: 'StaticBlock', body: ctx.kids[0] };
   if (arm === 4) return { type: 'PropertyDefinition', key: ctx.kids[0], value: ctx.kids[1] ?? null, static: false, readonly: false };
+  if (arm !== 3 && arm !== 5) return unhandledCustom('estreeClassMember', ctx);
   const nested = ctx.altPath[1];
-  if (nested === 8) return {
-    type: 'MethodDefinition',
-    kind: 'method',
-    key: ctx.kids[1] ?? ctx.kids[0],
-    value: { type: 'FunctionExpression', params: [], body: { type: 'BlockStatement', body: [] }, async: false, generator: false },
-    static: false,
-    computed: false,
-  };
-  return { type: 'MethodDefinition', kind: 'method', key: ctx.kids[0], value: ctx.kids[1], static: arm === 5 };
+  if (arm === 3 && nested === 8) {
+    const branch = Array.isArray(ctx.kids[1]) ? ctx.kids[1] as unknown[] : [];
+    const tail = Array.isArray(branch[1]) ? branch[1] as unknown[] : [];
+    return {
+      type: 'MethodDefinition',
+      kind: 'method',
+      key: branch[0],
+      value: {
+        type: 'FunctionExpression',
+        params: flatKids(tail[1] ?? []),
+        body: tail[3] ?? null,
+        async: false,
+        generator: false,
+      },
+      static: false,
+      computed: false,
+    };
+  }
+  if (arm === 5) return { type: 'MethodDefinition', kind: 'method', key: ctx.kids[0], value: ctx.kids[1], static: true };
+  if (nested !== undefined && nested >= 0 && nested <= 8) {
+    return { type: 'MethodDefinition', kind: 'method', key: ctx.kids[0], value: ctx.kids[1], static: false };
+  }
+  return unhandledCustom('estreeClassMember', ctx);
 }
 
 function tsInterfaceMember(ctx: TsAstCustomCtx): unknown {
@@ -835,7 +897,8 @@ function tsInterfaceMember(ctx: TsAstCustomCtx): unknown {
       ? { type: 'TSMethodSignature', key: ctx.kids[0], params: flatKids(ctx.kids[2]), returnType: ctx.kids[3] ?? null, optional: ctx.src.includes('?') }
       : { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly: false };
   }
-  return { type: 'TSIndexSignature', parameters: flatKids(ctx.kids[0] ?? []), typeAnnotation: ctx.kids[1] ?? null };
+  if (arm === 5) return { type: 'TSIndexSignature', parameters: flatKids(ctx.kids[0] ?? []), typeAnnotation: ctx.kids[1] ?? null };
+  return unhandledCustom('tsInterfaceMember', ctx);
 }
 
 function tsTypeMember(ctx: TsAstCustomCtx): unknown {
@@ -851,10 +914,13 @@ function tsTypeMember(ctx: TsAstCustomCtx): unknown {
   }
   if (arm === 1) return { type: 'TSIndexSignature', parameters: ctx.kids[0], typeAnnotation: ctx.kids[ctx.kids.length - 1] ?? null };
   if (arm === 2) return { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly: true };
-  const method = Array.isArray(ctx.kids[2]);
-  return method
-    ? { type: 'TSMethodSignature', key: ctx.kids[0], params: flatKids(ctx.kids[2]), returnType: ctx.kids[3] ?? null, optional: ctx.src.includes('?') }
-    : { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly: false };
+  if (arm === 3) {
+    const method = Array.isArray(ctx.kids[2]);
+    return method
+      ? { type: 'TSMethodSignature', key: ctx.kids[0], params: flatKids(ctx.kids[2]), returnType: ctx.kids[3] ?? null, optional: ctx.src.includes('?') }
+      : { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly: false };
+  }
+  return unhandledCustom('tsTypeMember', ctx);
 }
 
 function estreeProp(ctx: TsAstCustomCtx): unknown {
@@ -864,7 +930,10 @@ function estreeProp(ctx: TsAstCustomCtx): unknown {
   if (arm === 8) return { type: 'SpreadElement', argument: k[0] };
   if (arm === 6 || arm === 7) return { type: 'Property', key: k[0], value: k[1], kind: arm === 6 ? 'get' : 'set', shorthand: false, computed: false, method: false };
   if (arm === 2 || arm === 3) return { type: 'Property', key: k[0], value: { type: 'FunctionExpression', params: flatKids(k[1] ?? []), body: k[2] }, kind: 'init', method: true, shorthand: false, computed: false };
-  return { type: 'Property', key: typeof k[0] === 'string' ? I(k[0]) : k[0], value: k[1], kind: 'init', shorthand: false, computed: arm === 1, method: false };
+  if (arm === 0 || arm === 1 || (arm >= 9 && arm <= 11)) {
+    return { type: 'Property', key: typeof k[0] === 'string' ? I(k[0]) : k[0], value: k[1], kind: 'init', shorthand: false, computed: arm === 1, method: false };
+  }
+  return unhandledCustom('estreeProp', ctx);
 }
 
 /** Back-compat alias used by shape-parity acceptance gate. */
