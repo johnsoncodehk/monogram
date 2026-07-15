@@ -857,10 +857,31 @@ func (b *MirrorBuilder) HeadSpan(h int32, toks []Tok) (uint32, uint32) {
 		id = b.Kids[nd.KidStart]
 	}
 }
+// Shift implements Shifter — third-party incremental reuse without *CstBuilder identity.
+func (b *MirrorBuilder) Shift(h int32, byteDelta, tokDelta int) int32 {
+	cb := &CstBuilder{Nodes: b.Nodes, Kids: b.Kids}
+	out := cb.Shift(h, byteDelta, tokDelta)
+	b.Nodes, b.Kids = cb.Nodes, cb.Kids
+	return out
+}
 func MirrorJSONWith(b *MirrorBuilder, toks []Tok, root int32) string {
 	var buf strings.Builder
 	writeJSONWith(b.Nodes, b.Kids, toks, root, &buf)
 	return buf.String()
+}
+func gatePrintAlign(a *Align) {
+	if a == nil {
+		return
+	}
+	se, te := "null", "null"
+	if a.StreamEq != nil {
+		se = fmt.Sprintf("%v", *a.StreamEq)
+	}
+	if a.TreeEq != nil {
+		te = fmt.Sprintf("%v", *a.TreeEq)
+	}
+	fmt.Printf("ALIGN\\toldN=%d\\tnewN=%d\\tprefix=%d\\tsuffix=%d\\trelexed=%d\\treused=%d\\tstreamEq=%s\\ttreeEq=%s\\n",
+		a.OldN, a.NewN, a.Prefix, a.Suffix, a.Relexed, a.Reused, se, te)
 }
 
 func main() {
@@ -885,6 +906,113 @@ func main() {
 				fmt.Printf("NODE\\t%s\\t%s\\n", src, SlimJSONWith(b, toks, h))
 			}
 		}
+		return
+	}
+	if mode == "doc-cst-edit" {
+		init := "1+2;\\n3+4;\\n5+6;"
+		bare := NewDoc(init)
+		bare.SetValidate(true)
+		bare.Edit([]Edit{{Start: 0, End: 1, Text: "9"}})
+		with := NewDocWith(init, &CstBuilder{})
+		with.SetValidate(true)
+		with.Edit([]Edit{{Start: 0, End: 1, Text: "9"}})
+		a, b := bare.Align(), with.Align()
+		gatePrintAlign(a)
+		if a == nil || b == nil || a.Reused != b.Reused || a.OldN != b.OldN || a.NewN != b.NewN ||
+			a.Prefix != b.Prefix || a.Suffix != b.Suffix || a.Reused == 0 ||
+			a.StreamEq == nil || !*a.StreamEq || a.TreeEq == nil || !*a.TreeEq {
+			fmt.Println("fail cst-align mismatch")
+			os.Exit(1)
+		}
+		fmt.Println("ok")
+		return
+	}
+	if mode == "doc-slim-edit" {
+		init := "1+2;\\n3+4;\\n5+6;"
+		steps := []struct {
+			text  string
+			edits []Edit
+		}{
+			{init, nil},
+			{"9+2;\\n3+4;\\n5+6;", []Edit{{0, 1, "9"}}},
+			{"9+2;\\n3+4;\\n5+7;", []Edit{{12, 13, "7"}}},
+		}
+		doc := NewDocWith(init, &SlimBuilder{})
+		doc.SetValidate(true)
+		for i, step := range steps {
+			if len(step.edits) > 0 {
+				doc.Edit(step.edits)
+			}
+			if doc.Text() != step.text {
+				fmt.Printf("fail text[%d] got=%q\\n", i, doc.Text())
+				os.Exit(1)
+			}
+			if i > 0 {
+				a := doc.Align()
+				gatePrintAlign(a)
+				if a == nil || a.Reused != 0 {
+					fmt.Printf("fail reused[%d]\\n", i)
+					os.Exit(1)
+				}
+				if a.StreamEq == nil || !*a.StreamEq {
+					fmt.Println("fail streamEq")
+					os.Exit(1)
+				}
+				if a.TreeEq != nil {
+					fmt.Println("fail treeEq should be null")
+					os.Exit(1)
+				}
+			}
+			freshB := &SlimBuilder{}
+			fh, fok := ParseWith(doc.Text(), freshB)
+			dw := doc.(*DocWith)
+			j1 := SlimJSONWith(dw.b.(*SlimBuilder), lex(doc.Text()), doc.Root())
+			if !fok {
+				fmt.Printf("fail fresh[%d]\\n", i)
+				os.Exit(1)
+			}
+			j2 := SlimJSONWith(freshB, lex(doc.Text()), fh)
+			if j1 != j2 {
+				fmt.Printf("fail slim≠fresh[%d]\\n", i)
+				os.Exit(1)
+			}
+		}
+		fmt.Println("ok slim-edit")
+		return
+	}
+	if mode == "doc-mirror-shift" {
+		init := "1+2;\\n3+4;\\n5+6;"
+		doc := NewDocWith(init, &MirrorBuilder{})
+		doc.SetValidate(true)
+		doc.Edit([]Edit{{Start: 0, End: 1, Text: "9"}})
+		a := doc.Align()
+		gatePrintAlign(a)
+		if a == nil || a.Reused == 0 {
+			fmt.Println("fail expected reuse>0")
+			os.Exit(1)
+		}
+		if a.StreamEq == nil || !*a.StreamEq {
+			fmt.Println("fail streamEq")
+			os.Exit(1)
+		}
+		if a.TreeEq != nil {
+			fmt.Println("fail treeEq should be null for MirrorBuilder")
+			os.Exit(1)
+		}
+		mb := doc.(*DocWith).b.(*MirrorBuilder)
+		fresh := &MirrorBuilder{}
+		fh, fok := ParseWith(doc.Text(), fresh)
+		if !fok {
+			fmt.Println("fail fresh")
+			os.Exit(1)
+		}
+		j1 := MirrorJSONWith(mb, lex(doc.Text()), doc.Root())
+		j2 := MirrorJSONWith(fresh, lex(doc.Text()), fh)
+		if j1 != j2 {
+			fmt.Println("fail mirror≠fresh")
+			os.Exit(1)
+		}
+		fmt.Printf("ok mirror-shift reused=%d\\n", a.Reused)
 		return
 	}
 	raw, _ := io.ReadAll(os.Stdin)
@@ -950,6 +1078,8 @@ if (!haveGo()) {
     check('go builder addon marker', emitted.includes('// ─── Builder API'));
     check('go exports ParseWith + CstBuilder + Builder',
       emitted.includes('func ParseWith') && emitted.includes('type CstBuilder') && emitted.includes('type Builder interface'));
+    check('go exports NewDocWith + Shifter',
+      emitted.includes('func NewDocWith') && emitted.includes('type Shifter interface') && emitted.includes('func (b *CstBuilder) Shift'));
     const prefix = emitted.slice(0, emitted.indexOf('// ─── Builder API'));
     check('go CST prefix nonempty', prefix.length > 1000,
       createHash('sha256').update(prefix).digest('hex').slice(0, 12));
@@ -1023,6 +1153,40 @@ if (!haveGo()) {
       input: JSON.stringify([corpus]), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 600_000,
     }).trim();
     check('go 2MB corpus eq-mirror ok', outM === 'ok 1', outM);
+  }
+
+  // NewDocWith + optional Shifter: CstBuilder / SlimBuilder / MirrorBuilder
+  {
+    console.log('ast-builder: go NewDocWith edit contracts');
+    const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
+    const gfile = `${GO_TMP}/calc-doc.go`;
+    const hfile = `${GO_TMP}/calc-doc_harness.go`;
+    const bin = `${GO_TMP}/calc-doc`;
+    writeFileSync(gfile, emitParser(grammar, goTarget));
+    writeFileSync(hfile, goHarness);
+    execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 120_000 });
+
+    const cstOut = execFileSync(bin, ['doc-cst-edit'], { encoding: 'utf8', timeout: 30_000 }).trim().split('\n');
+    const cstAlign = cstOut.find((l) => l.startsWith('ALIGN\t'));
+    check('go NewDocWith(CstBuilder) ≡ NewDoc', cstOut.includes('ok'), cstOut.slice(-3).join(' | '));
+    check('go NewDocWith(CstBuilder) align streamEq+treeEq',
+      !!cstAlign && cstAlign.includes('streamEq=true') && cstAlign.includes('treeEq=true'), cstAlign);
+    check('go NewDocWith(CstBuilder) reused > 0',
+      !!cstAlign && /reused=([1-9]\d*)/.test(cstAlign), cstAlign);
+
+    const slimOut = execFileSync(bin, ['doc-slim-edit'], { encoding: 'utf8', timeout: 30_000 }).trim().split('\n');
+    check('go Slim NewDocWith multi-edit ≡ fresh', slimOut.includes('ok slim-edit'), slimOut.slice(-5).join(' | '));
+    const slimAligns = slimOut.filter((l) => l.startsWith('ALIGN\t'));
+    check('go Slim reused=0 each step',
+      slimAligns.length >= 2 && slimAligns.every((l) => l.includes('reused=0')), slimAligns.join(' || '));
+    check('go Slim streamEq, treeEq=null',
+      slimAligns.every((l) => l.includes('streamEq=true') && l.includes('treeEq=null')), slimAligns.join(' || '));
+
+    const mirOut = execFileSync(bin, ['doc-mirror-shift'], { encoding: 'utf8', timeout: 30_000 }).trim().split('\n');
+    check('go Mirror NewDocWith reuse+≡fresh', mirOut.some((l) => l.startsWith('ok mirror-shift')), mirOut.join(' | '));
+    check('go Mirror reused>0 treeEq=null',
+      mirOut.some((l) => l.startsWith('ALIGN\t') && /reused=([1-9]\d*)/.test(l) && l.includes('treeEq=null') && l.includes('streamEq=true')),
+      mirOut.filter((l) => l.startsWith('ALIGN\t')).join(' || '));
   }
 }
 
