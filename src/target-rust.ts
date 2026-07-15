@@ -16,6 +16,13 @@ import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, bu
 import { isKeywordLiteral } from './grammar-utils.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
+import type {
+  ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
+  FieldBind, TokenLeafPolicy,
+} from './shape-schema.ts';
+import { validateShapeOrThrow } from './shape-validate.ts';
+
+export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
@@ -2656,6 +2663,537 @@ pub fn slim_json_with(b: &SlimBuilder, toks: &[Tok], root: i32) -> String {
 `;
 }
 
+// ─── Shape AST codegen (SH3-0: calc-scale Rust slice) ─────────────────────────
+
+type RustShapeUnionMember = { variant: string; ty: string; boxed: boolean };
+type RustShapeUnion = { name: string; alias?: string; members: RustShapeUnionMember[] };
+
+function rustShapeIdent(name: string): string {
+  const out = name.replace(/[^A-Za-z0-9_]/g, '_');
+  return /^[0-9]/.test(out) ? `_${out}` : out;
+}
+
+function rustShapeUnionName(ruleName: string): string {
+  return `${rustShapeIdent(ruleName)}Shape`;
+}
+
+function rustShapeScalar(fn: string): string {
+  if (fn === 'number') return 'f64';
+  if (fn === 'boolean') return 'bool';
+  return 'String';
+}
+
+function rustShapeHint(hint: string | string[] | undefined): string {
+  const h = Array.isArray(hint) ? hint[0] : hint;
+  if (!h || h === 'unknown') return 'String';
+  if (h === 'string' || h === 'Identifier') return 'String';
+  if (h === 'number' || h === 'Number') return 'f64';
+  if (h === 'boolean' || h === 'Boolean') return 'bool';
+  return rustShapeIdent(h);
+}
+
+function rustShapeFieldType(field: FieldDecl): string {
+  let ty = field.bind === 'opText' ? 'String' : rustShapeHint(field.typeHint);
+  const isList = typeof field.bind === 'object' && 'from' in field.bind && field.bind.from === 'list';
+  const scalar = ty === 'String' || ty === 'f64' || ty === 'bool';
+  if (isList) ty = `Vec<${ty}>`;
+  else if (!scalar) ty = `Box<${ty}>`;
+  if (field.optional) ty = `Option<${ty}>`;
+  return ty;
+}
+
+function collectRustShapeNodes(shapeIR: ShapeIR): Map<string, NodeShape> {
+  const out = new Map<string, NodeShape>();
+  const walk = (shape: RuleShape): void => {
+    if (shape.kind === 'node') out.set(shape.type, shape);
+    else if (shape.kind === 'choice') for (const arm of shape.arms) walk(arm.shape);
+    else if (shape.kind === 'pratt') {
+      for (const key of ['atom', 'group', 'nudSeq', 'nudCapped', 'prefix', 'binary', 'postfix', 'led', 'postfixTok', 'template'] as const) {
+        const slot = shape[key];
+        if (slot && slot.kind !== 'rule') walk(slot as RuleShape);
+      }
+    }
+  };
+  for (const rule of shapeIR.rules) walk(rule.shape);
+  return out;
+}
+
+function rustShapeUnions(shapeIR: ShapeIR): RustShapeUnion[] {
+  const out: RustShapeUnion[] = [];
+  for (const rule of shapeIR.rules) {
+    if (rule.shape.kind === 'choice') {
+      const members: RustShapeUnionMember[] = rule.shape.arms.map((arm) => {
+        if (arm.shape.kind !== 'node') return { variant: rustShapeIdent(arm.name), ty: 'String', boxed: false };
+        return { variant: rustShapeIdent(arm.shape.type), ty: rustShapeIdent(arm.shape.type), boxed: true };
+      });
+      out.push({
+        name: rustShapeUnionName(rule.name),
+        alias: rule.cstName === 'Stmt' || rule.name === 'Stmt' ? 'Statement' : undefined,
+        members,
+      });
+    } else if (rule.shape.kind === 'pratt') {
+      const members: RustShapeUnionMember[] = [];
+      for (const tok of (portableRule(shapeIR, rule.name) as PrattRule).nudToks) {
+        const policy = shapeIR.leaves[tok];
+        if (policy?.action === 'leafValue') {
+          members.push({ variant: rustShapeIdent(tok), ty: rustShapeScalar(policy.fn), boxed: false });
+        }
+      }
+      for (const slot of [rule.shape.prefix, rule.shape.binary]) {
+        if (slot?.kind === 'node' && !members.some((m) => m.variant === rustShapeIdent(slot.type))) {
+          members.push({ variant: rustShapeIdent(slot.type), ty: rustShapeIdent(slot.type), boxed: true });
+        }
+      }
+      out.push({
+        name: rustShapeUnionName(rule.name),
+        alias: rule.cstName === 'Expr' || rule.name === 'Expr' ? 'Expression' : undefined,
+        members,
+      });
+    }
+  }
+  return out;
+}
+
+// Bound only while rustShapeUnions runs; avoids threading ParserIR through type-only walkers.
+let _rustShapeParserIR: ParserIR | null = null;
+function portableRule(_shapeIR: ShapeIR, name: string): RdRule | PrattRule {
+  const rule = _rustShapeParserIR?.rules.find((r) => r.name === name);
+  if (!rule) throw new Error(`shape rust emit: missing IR rule ${name}`);
+  return rule;
+}
+
+function rustShapeRuleType(rule: ShapeIRRule): string {
+  if (rule.shape.kind === 'node') return rustShapeIdent(rule.shape.type);
+  if (rule.shape.kind === 'choice' || rule.shape.kind === 'pratt') return rustShapeUnionName(rule.name);
+  return 'String';
+}
+
+function rustShapeSpanFields(spans: ShapeSpec['spans']): string {
+  if (spans === 'none') return '';
+  const ty = spans === 'optional' ? 'Option<usize>' : 'usize';
+  return `\n    pub off: ${ty},\n    pub end: ${ty},`;
+}
+
+function rustShapeSpanInit(spans: ShapeSpec['spans'], off: string, end: string): string {
+  if (spans === 'none') return '';
+  if (spans === 'optional') return `, off: Some(${off}), end: Some(${end})`;
+  return `, off: ${off}, end: ${end}`;
+}
+
+function rustShapeWrapField(field: FieldDecl, expr: string): string {
+  const ty = rustShapeHint(field.typeHint);
+  const isList = typeof field.bind === 'object' && 'from' in field.bind && field.bind.from === 'list';
+  const scalar = ty === 'String' || ty === 'f64' || ty === 'bool';
+  let out = !isList && !scalar && field.bind !== 'opText' ? `Box::new(${expr})` : expr;
+  if (field.optional) out = `Some(${out})`;
+  return out;
+}
+
+function rustShapeNodeCtor(
+  node: NodeShape,
+  values: string[],
+  opExpr: string,
+  spans: ShapeSpec['spans'],
+  offExpr: string,
+  endExpr: string,
+): string {
+  const fields = node.fields.map((field) => {
+    let expr = 'Default::default()';
+    if (field.bind === 'opText') expr = opExpr;
+    else if ('from' in field.bind && field.bind.from === 'list' && typeof field.bind.of === 'number') expr = values[field.bind.of] ?? expr;
+    else if ('from' in field.bind && field.bind.from === 'opt') expr = values[field.bind.at] ?? expr;
+    else if ('at' in field.bind) expr = values[field.bind.at] ?? expr;
+    return `${rustShapeIdent(field.name)}: ${rustShapeWrapField(field, expr)}`;
+  });
+  return `${rustShapeIdent(node.type)} { ${fields.join(', ')}${rustShapeSpanInit(spans, offExpr, endExpr)} }`;
+}
+
+function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
+  _rustShapeParserIR = ir;
+  const nodes = collectRustShapeNodes(shapeIR);
+  const unions = rustShapeUnions(shapeIR);
+  _rustShapeParserIR = null;
+  const lines: string[] = [
+    '// ─── Shape AST types (generated) ────────────────────────────────────────────',
+    'pub trait ShapeJson {',
+    '    fn write_shape_json(&self, out: &mut String);',
+    '    fn to_shape_json(&self) -> String { let mut out = String::new(); self.write_shape_json(&mut out); out }',
+    '}',
+    'fn _shape_json_string(value: &str, out: &mut String) {',
+    "    out.push('\"');",
+    '    for c in value.chars() { match c {',
+    "        '\"' => out.push_str(\"\\\\\\\"\"), '\\\\' => out.push_str(\"\\\\\\\\\"), '\\n' => out.push_str(\"\\\\n\"),",
+    "        '\\r' => out.push_str(\"\\\\r\"), '\\t' => out.push_str(\"\\\\t\"), c if c < ' ' => out.push_str(&format!(\"\\\\u{:04x}\", c as u32)),",
+    '        c => out.push(c),',
+    '    }}',
+    "    out.push('\"');",
+    '}',
+    'impl ShapeJson for String { fn write_shape_json(&self, out: &mut String) { _shape_json_string(self, out); } }',
+    'impl ShapeJson for f64 { fn write_shape_json(&self, out: &mut String) { out.push_str(&self.to_string()); } }',
+    'impl ShapeJson for bool { fn write_shape_json(&self, out: &mut String) { out.push_str(if *self { "true" } else { "false" }); } }',
+    'impl ShapeJson for usize { fn write_shape_json(&self, out: &mut String) { out.push_str(&self.to_string()); } }',
+    'impl<T: ShapeJson> ShapeJson for Box<T> { fn write_shape_json(&self, out: &mut String) { (**self).write_shape_json(out); } }',
+    'impl<T: ShapeJson> ShapeJson for Vec<T> { fn write_shape_json(&self, out: &mut String) { out.push(\'[\'); for (i, v) in self.iter().enumerate() { if i > 0 { out.push(\',\'); } v.write_shape_json(out); } out.push(\']\'); } }',
+    'impl<T: ShapeJson> ShapeJson for Option<T> { fn write_shape_json(&self, out: &mut String) { match self { Some(v) => v.write_shape_json(out), None => out.push_str("null") } } }',
+  ];
+
+  for (const [name, node] of [...nodes.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    lines.push('#[derive(Debug, PartialEq)]');
+    lines.push(`pub struct ${rustShapeIdent(name)} {`);
+    for (const field of node.fields) lines.push(`    pub ${rustShapeIdent(field.name)}: ${rustShapeFieldType(field)},`);
+    if (shapeIR.spans !== 'none') {
+      const spanTy = shapeIR.spans === 'optional' ? 'Option<usize>' : 'usize';
+      lines.push(`    pub off: ${spanTy},`, `    pub end: ${spanTy},`);
+    }
+    lines.push('}');
+    lines.push(`impl ShapeJson for ${rustShapeIdent(name)} { fn write_shape_json(&self, out: &mut String) {`);
+    lines.push(`    out.push_str(${J(`{"type":${JSON.stringify(name)}`)});`);
+    for (const field of node.fields) {
+      lines.push(`    out.push_str(${J(`,"${field.name}":`)}); self.${rustShapeIdent(field.name)}.write_shape_json(out);`);
+    }
+    if (shapeIR.spans !== 'none') {
+      lines.push('    out.push_str(",\\"off\\":"); self.off.write_shape_json(out);');
+      lines.push('    out.push_str(",\\"end\\":"); self.end.write_shape_json(out);');
+    }
+    lines.push("    out.push('}');", '} }');
+  }
+
+  for (const union of unions) {
+    lines.push('#[derive(Debug, PartialEq)]', `pub enum ${union.name} {`);
+    for (const member of union.members) {
+      lines.push(`    ${member.variant}(${member.boxed ? `Box<${member.ty}>` : member.ty}),`);
+    }
+    lines.push('}');
+    lines.push(`impl ShapeJson for ${union.name} { fn write_shape_json(&self, out: &mut String) { match self {`);
+    for (const member of union.members) lines.push(`    Self::${member.variant}(v) => v.write_shape_json(out),`);
+    lines.push('} } }');
+    if (union.alias) lines.push(`pub type ${union.alias} = ${union.name};`);
+  }
+
+  const entry = shapeIR.rules.find((r) => r.name === ir.entry);
+  lines.push(`pub type AstRoot = ${entry ? rustShapeRuleType(entry) : 'String'};`);
+  return lines.join('\n');
+}
+
+function rustShapeLeafExpr(policy: TokenLeafPolicy, text: string): string {
+  if (policy.action !== 'leafValue') return `${text}.to_owned()`;
+  if (policy.fn === 'number') return `self.customs.leaf_number(${text})`;
+  if (policy.fn === 'boolean') return `self.customs.leaf_boolean(${text})`;
+  return `self.customs.leaf_ident(${text})`;
+}
+
+function emitRustRdSteps(
+  steps: Step[],
+  ids: LexIdPlan,
+  leaves: Record<string, TokenLeafPolicy>,
+  methodTypes: Map<string, string>,
+): { lines: string[]; values: string[] } {
+  const lines: string[] = [];
+  const values: string[] = [];
+  let seq = 0;
+  for (const step of steps) {
+    if (step.t === 'lit') {
+      lines.push(`self.take_lit(${lidOf(ids, step.value)})?;`);
+    } else if (step.t === 'tok') {
+      const text = `_text${seq}`;
+      const value = `_v${seq++}`;
+      lines.push(`let ${text} = self.take_text(${kidOf(ids, step.name)})?;`);
+      lines.push(`let ${value} = ${rustShapeLeafExpr(leaves[step.name] ?? { action: 'keep' }, text)};`);
+      values.push(value);
+    } else if (step.t === 'rule' || step.t === 'ruleBp') {
+      const value = `_v${seq++}`;
+      const suffix = step.t === 'ruleBp' ? `_bp(${step.bp})` : '()';
+      lines.push(`let ${value}: ${methodTypes.get(step.name) ?? 'String'} = self.parse_ast_${step.name}${suffix}?;`);
+      values.push(value);
+    } else if (step.t === 'star' && step.step.t === 'rule') {
+      const value = `_v${seq++}`;
+      const item = `_item${seq}`;
+      lines.push(`let mut ${value}: Vec<${methodTypes.get(step.step.name) ?? 'String'}> = Vec::new();`);
+      lines.push(`loop { let _save = self.pos; match self.parse_ast_${step.step.name}() { Some(${item}) => ${value}.push(${item}), None => { self.pos = _save; break; } } }`);
+      values.push(value);
+    }
+  }
+  return { lines, values };
+}
+
+function emitRustRdMethod(
+  rule: RdRule,
+  sir: ShapeIRRule,
+  ids: LexIdPlan,
+  shapeIR: ShapeIR,
+  methodTypes: Map<string, string>,
+): string {
+  const ret = rustShapeRuleType(sir);
+  const attempt = (steps: Step[], node: NodeShape, wrap: string): string => {
+    const body = emitRustRdSteps(steps, ids, shapeIR.leaves, methodTypes);
+    const ctor = rustShapeNodeCtor(node, body.values, 'String::new()', shapeIR.spans, '_off', 'self.last_end(_off)');
+    return `{
+            let _save = self.pos;
+            let _off = self.current_off();
+            let _got = (|| -> Option<${ret}> {
+                ${body.lines.join('\n                ')}
+                Some(${wrap}${ctor}${wrap ? '))' : ''})
+            })();
+            if _got.is_some() { return _got; }
+            self.pos = _save;
+        }`;
+  };
+
+  if (sir.shape.kind === 'node') {
+    const body = emitRustRdSteps(rule.alts[0]!, ids, shapeIR.leaves, methodTypes);
+    const ctor = rustShapeNodeCtor(sir.shape, body.values, 'String::new()', shapeIR.spans, '_off', 'self.last_end(_off)');
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        let _save = self.pos;
+        let _off = self.current_off();
+        let _got = (|| -> Option<${ret}> {
+            ${body.lines.join('\n            ')}
+            Some(${ctor})
+        })();
+        if _got.is_none() { self.pos = _save; }
+        _got
+    }`;
+  }
+  const shape = sir.shape as ChoiceShape;
+  const tries: string[] = [];
+  for (const arm of shape.arms) {
+    if (arm.shape.kind !== 'node') continue;
+    for (const altIndex of arm.altIndices) {
+      tries.push(attempt(rule.alts[altIndex]!, arm.shape, `${ret}::${rustShapeIdent(arm.shape.type)}(Box::new(`));
+    }
+  }
+  return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        ${tries.join('\n        ')}
+        None
+    }`;
+}
+
+function emitRustPrattMethod(
+  rule: PrattRule,
+  sir: ShapeIRRule,
+  ids: LexIdPlan,
+  shapeIR: ShapeIR,
+): string {
+  const shape = sir.shape as Extract<RuleShape, { kind: 'pratt' }>;
+  const ret = rustShapeUnionName(rule.name);
+  const nud: string[] = [];
+  for (const tok of rule.nudToks) {
+    const policy = shapeIR.leaves[tok]!;
+    nud.push(`if self.peek_kid() == Some(${kidOf(ids, tok)}) {
+            let _text = self.take_text(${kidOf(ids, tok)})?;
+            return Some(${ret}::${rustShapeIdent(tok)}(${rustShapeLeafExpr(policy, '_text')}));
+        }`);
+  }
+  for (const bracket of rule.nudBrackets) {
+    const inner = bracket.steps.find((s) => s.t === 'rule' || s.t === 'ruleBp');
+    const close = [...bracket.steps].reverse().find((s) => s.t === 'lit');
+    if (!inner || (inner.t !== 'rule' && inner.t !== 'ruleBp') || !close || close.t !== 'lit') continue;
+    nud.push(`{
+            let _save = self.pos;
+            let _got = (|| -> Option<${ret}> {
+                self.take_lit(${lidOf(ids, bracket.first)})?;
+                let _inner = self.parse_ast_${inner.name}${inner.t === 'ruleBp' ? `_bp(${inner.bp})` : '()'}?;
+                self.take_lit(${lidOf(ids, close.value)})?;
+                Some(_inner)
+            })();
+            if _got.is_some() { return _got; }
+            self.pos = _save;
+        }`);
+  }
+  if (shape.prefix?.kind === 'node') {
+    for (const prefix of rule.prefix) {
+      const ctor = rustShapeNodeCtor(
+        shape.prefix, ['_argument'.toString()], 'self.customs.bind_op(&_op)',
+        shapeIR.spans, '_off', 'self.last_end(_off)',
+      );
+      nud.push(`if self.peek_lid() == Some(${lidOf(ids, prefix.op)}) {
+            let _off = self.current_off();
+            let _op = self.current_text().to_owned();
+            self.pos += 1;
+            let _argument = self.parse_ast_${rule.name}_bp(${prefix.rbp})?;
+            return Some(${ret}::${rustShapeIdent(shape.prefix.type)}(Box::new(${ctor})));
+        }`);
+    }
+  }
+  const binaryArms = rule.binary.map((b) =>
+    `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}),`,
+  ).join('\n                ');
+  let binaryBody = '';
+  if (shape.binary?.kind === 'node' && rule.binary.length) {
+    const ctor = rustShapeNodeCtor(
+      shape.binary, ['left', '_right'], 'self.customs.bind_op(&_op)',
+      shapeIR.spans, '_off', 'self.last_end(_off)',
+    );
+    binaryBody = `loop {
+            let (_lbp, _rbp) = match self.peek_lid() {
+                ${binaryArms}
+                _ => break,
+            };
+            if _lbp <= min_bp { break; }
+            let _save = self.pos;
+            let _op = self.current_text().to_owned();
+            self.pos += 1;
+            let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
+                Some(v) => v,
+                None => { self.pos = _save; break; }
+            };
+            left = ${ret}::${rustShapeIdent(shape.binary.type)}(Box::new(${ctor}));
+        }`;
+  }
+  return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> { self.parse_ast_${rule.name}_bp(0) }
+    fn parse_ast_${rule.name}_bp(&mut self, min_bp: i64) -> Option<${ret}> {
+        let _off = self.current_off();
+        let mut left = self.parse_ast_${rule.name}_nud(min_bp)?;
+        ${binaryBody}
+        Some(left)
+    }
+    fn parse_ast_${rule.name}_nud(&mut self, _min_bp: i64) -> Option<${ret}> {
+        ${nud.join('\n        ')}
+        None
+    }`;
+}
+
+function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: string; construct: string }> {
+  const out: Array<{ rule: string; construct: string }> = [];
+  const note = (rule: string, construct: string): void => { out.push({ rule, construct }); };
+  const supportedLeaf = (name: string): boolean => {
+    const p = shapeIR.leaves[name];
+    return p?.action === 'drop' || (p?.action === 'leafValue' && ['number', 'ident', 'identity', 'string', 'boolean'].includes(p.fn));
+  };
+  const walkStep = (rule: string, step: Step): void => {
+    if (step.t === 'lit') {
+      if (shapeIR.leaves[step.ttype]?.action !== 'drop') note(rule, `step:lit-kept:${step.value}`);
+    } else if (step.t === 'tok') {
+      if (!supportedLeaf(step.name) || shapeIR.leaves[step.name]?.action === 'drop') note(rule, `step:tok-policy:${step.name}`);
+    } else if (step.t === 'rule') {
+      // Direct calls are the calc-scale recursive-descent primitive.
+    } else if (step.t === 'star' && step.step.t === 'rule') {
+      // Calc list primitive.
+    } else {
+      note(rule, `step:${step.t}`);
+      if (step.t === 'alt') for (const branch of step.branches) for (const s of branch) walkStep(rule, s);
+      else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress') for (const s of step.steps) walkStep(rule, s);
+      else if (step.t === 'star') walkStep(rule, step.step);
+      else if (step.t === 'sep') walkStep(rule, step.elem);
+    }
+  };
+  const walkShape = (rule: string, shape: RuleShape): void => {
+    if (shape.kind === 'custom') note(rule, `shape:custom:${shape.fn}`);
+    else if (shape.kind === 'choice') for (const arm of shape.arms) walkShape(rule, arm.shape);
+    else if (!['node', 'pratt'].includes(shape.kind)) note(rule, `shape:${shape.kind}`);
+  };
+
+  for (const sir of shapeIR.rules) {
+    const rule = ir.rules.find((r) => r.name === sir.name)!;
+    walkShape(rule.name, sir.shape);
+    if (rule.kind === 'rd') {
+      if (sir.shape.kind === 'node') {
+        if (rule.alts.length !== 1) note(rule.name, `rd:node-alts:${rule.alts.length}`);
+        for (const alt of rule.alts) for (const step of alt) walkStep(rule.name, step);
+      } else if (sir.shape.kind === 'choice') {
+        for (const arm of sir.shape.arms) {
+          if (arm.shape.kind !== 'node') note(rule.name, `choice-arm:${arm.shape.kind}`);
+          for (const ai of arm.altIndices) for (const step of rule.alts[ai] ?? []) walkStep(rule.name, step);
+        }
+      } else {
+        note(rule.name, `rd-shape:${sir.shape.kind}`);
+      }
+      continue;
+    }
+    if (sir.shape.kind !== 'pratt') {
+      note(rule.name, `pratt-shape:${sir.shape.kind}`);
+      continue;
+    }
+    const ps = sir.shape;
+    if (ps.atom && ps.atom.kind !== 'keep') note(rule.name, `pratt-shape:atom:${ps.atom.kind}`);
+    if (ps.group && ps.group.kind !== 'inline') note(rule.name, `pratt-shape:group:${ps.group.kind}`);
+    if (rule.nudBrackets.some((b) => b.steps.length !== 3 || b.steps[0]?.t !== 'lit' || !['rule', 'ruleBp'].includes(b.steps[1]?.t ?? '') || b.steps[2]?.t !== 'lit')) {
+      note(rule.name, 'pratt-ir:group-complex');
+    }
+    for (const tok of rule.nudToks) if (!supportedLeaf(tok) || shapeIR.leaves[tok]?.action === 'drop') note(rule.name, `pratt-ir:atom-policy:${tok}`);
+    if (rule.prefix.length && ps.prefix?.kind !== 'node') note(rule.name, `pratt-shape:prefix:${ps.prefix?.kind ?? 'keep'}`);
+    if (rule.binary.length && ps.binary?.kind !== 'node') note(rule.name, `pratt-shape:binary:${ps.binary?.kind ?? 'keep'}`);
+    for (const [slot, value] of Object.entries({
+      nudSeq: rule.nudSeqs.length, nudCapped: rule.nudCapped.length, led: rule.leds.length,
+      postfixTok: rule.postfixToks.length, postfix: rule.postfix.length,
+    })) if (value) note(rule.name, `pratt-ir:${slot}(${value})`);
+    for (const slot of ['nudSeq', 'nudCapped', 'led', 'postfixTok', 'postfix', 'template'] as const) {
+      if (ps[slot]) note(rule.name, `pratt-shape:${slot}:${ps[slot]!.kind}`);
+    }
+    if (ir.tpl) note(rule.name, 'pratt-ir:template');
+  }
+  return out;
+}
+
+function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): string {
+  const unsupported = rustShapeUnsupported(ir, shapeIR);
+  if (unsupported.length) {
+    throw new Error(
+      `shape rust emit: ${unsupported.length} unsupported construct(s):\n` +
+      unsupported.map((u) => `  ${u.rule}: ${u.construct}`).join('\n'),
+    );
+  }
+  const methodTypes = new Map(shapeIR.rules.map((r) => [r.name, rustShapeRuleType(r)]));
+  const methods = shapeIR.rules.map((sir) => {
+    const rule = ir.rules.find((r) => r.name === sir.name)!;
+    return rule.kind === 'pratt'
+      ? emitRustPrattMethod(rule, sir, ids, shapeIR)
+      : emitRustRdMethod(rule, sir, ids, shapeIR, methodTypes);
+  }).join('\n\n');
+  return `
+
+${emitRustShapeTypes(ir, shapeIR)}
+
+// Generic C makes every hook statically dispatched and monomorphized. No trait object,
+// callback table, or per-node allocation is introduced by the customs boundary.
+pub trait ShapeCustoms {
+    #[inline(always)] fn leaf_number(&self, text: &str) -> f64 { text.parse::<f64>().expect("shape number") }
+    #[inline(always)] fn leaf_ident(&self, text: &str) -> String { text.to_owned() }
+    #[inline(always)] fn leaf_boolean(&self, text: &str) -> bool { text == "true" }
+    #[inline(always)] fn bind_op(&self, text: &str) -> String { text.to_owned() }
+}
+pub struct DefaultShapeCustoms;
+impl ShapeCustoms for DefaultShapeCustoms {}
+
+struct ShapeParser<'a, C: ShapeCustoms> {
+    src: &'a str,
+    toks: Vec<Tok>,
+    pos: usize,
+    customs: &'a C,
+}
+impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
+    #[inline(always)] fn peek_kid(&self) -> Option<u16> { self.toks.get(self.pos).map(|t| t.kid) }
+    #[inline(always)] fn peek_lid(&self) -> Option<u16> { self.toks.get(self.pos).map(|t| t.lid) }
+    #[inline(always)] fn current_off(&self) -> usize { self.toks.get(self.pos).map(|t| t.off as usize).unwrap_or(self.src.len()) }
+    #[inline(always)] fn current_text(&self) -> &'a str { self.toks.get(self.pos).map(|t| tok_text(self.src, t)).unwrap_or("") }
+    #[inline(always)] fn last_end(&self, fallback: usize) -> usize { if self.pos > 0 { self.toks[self.pos - 1].end as usize } else { fallback } }
+    #[inline(always)] fn take_lit(&mut self, lid: u16) -> Option<()> {
+        if self.peek_lid() != Some(lid) { return None; }
+        self.pos += 1;
+        Some(())
+    }
+    #[inline(always)] fn take_text(&mut self, kid: u16) -> Option<&'a str> {
+        if self.peek_kid() != Some(kid) { return None; }
+        let text = tok_text(self.src, &self.toks[self.pos]);
+        self.pos += 1;
+        Some(text)
+    }
+
+${methods}
+}
+
+pub fn parse_ast_with<C: ShapeCustoms>(src: &str, customs: &C) -> Option<AstRoot> {
+    let toks = lex(src);
+    let n = toks.len();
+    let mut parser = ShapeParser { src, toks, pos: 0, customs };
+    let root = parser.parse_ast_${ir.entry}()?;
+    if parser.pos == n { Some(root) } else { None }
+}
+pub fn parse_ast(src: &str) -> Option<AstRoot> {
+    parse_ast_with(src, &DefaultShapeCustoms)
+}
+`;
+}
+
 export const rustTarget: Target = {
   name: 'rust',
   ext: 'rs',
@@ -2938,3 +3476,14 @@ fn main() {
 `;
   },
 };
+
+/** Emit a Rust parser with an optional specialized declarative-shape AST entry. */
+export function emitRust(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
+  const lexerSrc = rustTarget.embedLexer(grammar);
+  const base = rustTarget.emitParser(grammar, lexerSrc);
+  if (!opts?.shape) return base;
+  const shapeIR = validateShapeOrThrow(grammar, opts.shape);
+  const ir = portableIR(grammar);
+  const ids = buildLexIdPlan(ir);
+  return base + emitRustShapeAddon(ir, shapeIR, ids);
+}
