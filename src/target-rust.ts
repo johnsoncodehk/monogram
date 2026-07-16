@@ -3123,7 +3123,7 @@ function emitRustAstRdAltSteps(
         const sok = local('sup_ok');
         return `if ${okVar} {
             let _sn_save = self.suppress_next.clone();
-            self.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}];
+            self.suppress_next = Some(std::rc::Rc::from(vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]));
             let mut ${sok} = true;
             ${emitSteps(s.steps, sink, sok)}
             self.suppress_next = _sn_save;
@@ -4044,7 +4044,7 @@ function emitRustPrattMethod(
           const set = rule.ledNotLeftLeaf[i]!;
           parts.push(`!matches!(Self::shape_head_text(Some(&left)).as_str(), ${set.map((x) => J(x)).join(' | ')})`);
         }
-        parts.push(`!self.suppress_cur.contains(&${lid})`);
+        parts.push(`!self.suppress_cur.as_ref().map_or(false, |v| v.contains(&${lid}))`);
         const guard = parts.join(' && ');
         const st = emptySteps(b.steps);
         let finish: string;
@@ -4277,6 +4277,9 @@ pub trait ShapeCustoms {
 pub struct DefaultShapeCustoms;
 impl ShapeCustoms for DefaultShapeCustoms {}
 
+// suppress vectors are only ever wholesale-replaced, never mutated in place
+// (≡ TS _suppressNext = new Set(...) / null), so snapshots share them via Rc —
+// checkpoint/restore become refcount bumps instead of Vec clones + drops (SH3-5 O3).
 #[derive(Clone)]
 struct ShapeCk {
     pos: usize,
@@ -4284,16 +4287,16 @@ struct ShapeCk {
     lists_len: usize,
     holes_len: usize,
     alt_path_len: usize,
-    suppress_next: Vec<u16>,
-    suppress_cur: Vec<u16>,
+    suppress_next: Option<std::rc::Rc<[u16]>>,
+    suppress_cur: Option<std::rc::Rc<[u16]>>,
     capped: bool,
 }
 
 #[derive(Clone)]
 struct ShapeTplSnap {
     pos: usize,
-    suppress_next: Vec<u16>,
-    suppress_cur: Vec<u16>,
+    suppress_next: Option<std::rc::Rc<[u16]>>,
+    suppress_cur: Option<std::rc::Rc<[u16]>>,
     capped: bool,
 }
 
@@ -4302,8 +4305,8 @@ struct ShapeParser<'a, C: ShapeCustoms> {
     toks: Vec<Tok>,
     pos: usize,
     customs: &'a C,
-    suppress_next: Vec<u16>,
-    suppress_cur: Vec<u16>,
+    suppress_next: Option<std::rc::Rc<[u16]>>,
+    suppress_cur: Option<std::rc::Rc<[u16]>>,
     capped: bool,
 }
 impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
@@ -4467,7 +4470,7 @@ pub fn parse_ast_with<C: ShapeCustoms>(src: &str, customs: &C) -> Option<AstRoot
     let n = toks.len();
     let mut parser = ShapeParser {
         src, toks, pos: 0, customs,
-        suppress_next: Vec::new(), suppress_cur: Vec::new(), capped: false,
+        suppress_next: None, suppress_cur: None, capped: false,
     };
     let root = parser.parse_ast_${ir.entry}()?;
     if parser.pos == n { Some(root) } else { None }
