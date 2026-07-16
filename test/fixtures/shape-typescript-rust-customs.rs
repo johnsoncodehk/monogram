@@ -1,7 +1,7 @@
 
 // ── SH3-4 ESTree customs (mirrors shape-typescript.ts) ─────────────────────
-fn ts_obj(typ: &str, fields: Vec<(&str, AstValue)>) -> AstValue {
-    AstValue::Object { typ: typ.to_owned(), fields: fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect() }
+fn ts_obj(typ: &'static str, fields: Vec<(&'static str, AstValue)>) -> AstValue {
+    AstValue::Object { typ, fields }
 }
 fn ts_ident(name: &str) -> AstValue { ts_obj("Identifier", vec![("name", AstValue::String(name.to_owned()))]) }
 fn ts_lit_str(s: &str) -> AstValue { AstValue::String(s.to_owned()) }
@@ -9,8 +9,8 @@ fn ts_lit_num(n: f64) -> AstValue { AstValue::Number(n) }
 fn ts_null() -> AstValue { AstValue::Null }
 fn ts_arr(xs: Vec<AstValue>) -> AstValue { AstValue::Array(xs) }
 fn ts_bool(b: bool) -> AstValue { AstValue::Bool(b) }
-fn shape_partial(tag: &str, mode: &str, value: AstValue) -> AstValue {
-    AstValue::Partial { tag: tag.to_owned(), mode: mode.to_owned(), value: Box::new(value) }
+fn shape_partial(tag: &'static str, mode: &'static str, value: AstValue) -> AstValue {
+    AstValue::Partial { tag, mode, value: Box::new(value) }
 }
 fn ctx_span<'a>(ctx: &AstCustomCtx<'a>) -> &'a str {
     ctx.src.get(ctx.off..ctx.end).unwrap_or("")
@@ -113,7 +113,7 @@ fn update_expr(op: &str, arg: AstValue, prefix: bool) -> AstValue {
 }
 fn arrow_fn(params: Vec<AstValue>, body: AstValue, async_: bool) -> AstValue {
     let expression = match &body {
-        AstValue::Object { typ, .. } => typ != "BlockStatement",
+        AstValue::Object { typ, .. } => *typ != "BlockStatement",
         _ => true,
     };
     ts_obj("ArrowFunctionExpression", vec![
@@ -123,8 +123,8 @@ fn arrow_fn(params: Vec<AstValue>, body: AstValue, async_: bool) -> AstValue {
 fn head_is_new(v: &AstValue) -> bool {
     match v {
         AstValue::String(s) => s == "new",
-        AstValue::Object { typ, fields, .. } if typ == "Identifier" => {
-            fields.iter().any(|(k, v)| k == "name" && matches!(v, AstValue::String(s) if s == "new"))
+        AstValue::Object { typ, fields, .. } if *typ == "Identifier" => {
+            fields.iter().any(|(k, v)| *k == "name" && matches!(v, AstValue::String(s) if s == "new"))
         }
         _ => false,
     }
@@ -162,24 +162,24 @@ fn estree_optional_chain(left: AstValue, kids: &[AstValue]) -> AstValue {
                 ts_obj("CallExpression", fields)
             } else {
                 let mut o = call_expr(left, k0);
-                if let AstValue::Object { ref mut fields, .. } = o { fields.push(("optional".to_owned(), ts_bool(true))); }
+                if let AstValue::Object { ref mut fields, .. } = o { fields.push(("optional", ts_bool(true))); }
                 o
             }
         }
         Some(AstValue::String(ref s)) if s.starts_with('`') => {
             ts_obj("TaggedTemplateExpression", vec![("tag", left), ("quasi", AstValue::String(s.clone()))])
         }
-        Some(ref v) if matches!(v, AstValue::Object { typ, .. } if typ == "TemplateLiteral") => {
+        Some(ref v) if matches!(v, AstValue::Object { typ, .. } if *typ == "TemplateLiteral") => {
             ts_obj("TaggedTemplateExpression", vec![("tag", left), ("quasi", v.clone())])
         }
         Some(AstValue::String(ref s)) => {
             let mut o = member_expr(left, AstValue::String(s.clone()), false);
-            if let AstValue::Object { ref mut fields, .. } = o { fields.push(("optional".to_owned(), ts_bool(true))); }
+            if let AstValue::Object { ref mut fields, .. } = o { fields.push(("optional", ts_bool(true))); }
             o
         }
         other => {
             let mut o = member_expr(left, other.unwrap_or(ts_lit_str("undefined")), true);
-            if let AstValue::Object { ref mut fields, .. } = o { fields.push(("optional".to_owned(), ts_bool(true))); }
+            if let AstValue::Object { ref mut fields, .. } = o { fields.push(("optional", ts_bool(true))); }
             o
         }
     }
@@ -197,7 +197,7 @@ fn estree_stmt(ctx: &AstCustomCtx<'_>) -> AstValue {
         Some(0) => {
             if let Some(body) = first_kid(k) {
                 if let AstValue::Object { typ, .. } = &body {
-                    if typ == "BlockStatement" { return body; }
+                    if *typ == "BlockStatement" { return body; }
                 }
                 return ts_obj("BlockStatement", vec![("body", ts_arr(flat_kids(&[body])))]);
             }
@@ -216,26 +216,26 @@ fn estree_stmt(ctx: &AstCustomCtx<'_>) -> AstValue {
         Some(3) => {
             let body = k.get(1).cloned().unwrap_or(ts_null());
             if let Some(AstValue::Object { fields, .. }) = k.get(0) {
-                let kind = fields.iter().find(|(n,_)| n == "kind").and_then(|(_,v)| match v { AstValue::String(s) => Some(s.as_str()), _ => None });
+                let kind = fields.iter().find(|(n,_)| *n == "kind").and_then(|(_,v)| match v { AstValue::String(s) => Some(s.as_str()), _ => None });
                 if kind == Some("in") {
                     return ts_obj("ForInStatement", vec![
-                        ("left", fields.iter().find(|(n,_)| n == "left").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
-                        ("right", fields.iter().find(|(n,_)| n == "right").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
+                        ("left", fields.iter().find(|(n,_)| *n == "left").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
+                        ("right", fields.iter().find(|(n,_)| *n == "right").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
                         ("body", body),
                     ]);
                 }
                 if kind == Some("of") {
-                    let await_ = fields.iter().any(|(n,v)| n == "await" && matches!(v, AstValue::Bool(true)));
+                    let await_ = fields.iter().any(|(n, v)| *n == "await" && matches!(v, AstValue::Bool(true)));
                     return ts_obj("ForOfStatement", vec![
-                        ("left", fields.iter().find(|(n,_)| n == "left").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
-                        ("right", fields.iter().find(|(n,_)| n == "right").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
+                        ("left", fields.iter().find(|(n,_)| *n == "left").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
+                        ("right", fields.iter().find(|(n,_)| *n == "right").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
                         ("body", body), ("await", ts_bool(await_)),
                     ]);
                 }
                 return ts_obj("ForStatement", vec![
-                    ("init", fields.iter().find(|(n,_)| n == "init").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
-                    ("test", fields.iter().find(|(n,_)| n == "test").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
-                    ("update", fields.iter().find(|(n,_)| n == "update").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
+                    ("init", fields.iter().find(|(n,_)| *n == "init").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
+                    ("test", fields.iter().find(|(n,_)| *n == "test").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
+                    ("update", fields.iter().find(|(n,_)| *n == "update").map(|(_,v)| v.clone()).unwrap_or(ts_null())),
                     ("body", body),
                 ]);
             }
@@ -577,22 +577,22 @@ fn estree_param(ctx: &AstCustomCtx<'_>) -> AstValue {
         Some(0) => {
             let mut o = ts_obj("Identifier", vec![("name", ts_lit_str("this"))]);
             if let AstValue::Object { ref mut fields, .. } = o {
-                fields.push(("typeAnnotation".to_owned(), ctx.kids.get(0).cloned().unwrap_or(ts_null())));
+                fields.push(("typeAnnotation", ctx.kids.get(0).cloned().unwrap_or(ts_null())));
             }
             o
         }
         Some(1) | Some(2) => {
             let id = ctx.kids.get(ctx.kids.len().saturating_sub(2)).or_else(|| ctx.kids.first()).cloned().unwrap_or(ts_null());
-            let (typ, mut fields): (String, Vec<(String, AstValue)>) = match &id {
-                AstValue::String(s) => ("Identifier".to_owned(), vec![("name".to_owned(), ts_lit_str(s))]),
+            let (typ, mut fields): (&'static str, Vec<(&'static str, AstValue)>) = match &id {
+                AstValue::String(s) => ("Identifier", vec![("name", ts_lit_str(s))]),
                 AstValue::Object { typ, fields: fs } => (
-                    if typ.is_empty() { "Identifier".to_owned() } else { typ.clone() },
+                    if typ.is_empty() { "Identifier" } else { typ },
                     fs.clone(),
                 ),
-                _ => ("Identifier".to_owned(), vec![("name".to_owned(), ts_lit_str(""))]),
+                _ => ("Identifier", vec![("name", ts_lit_str(""))]),
             };
-            fields.push(("decorators".to_owned(), ts_arr(flat_kids(&[ctx.kids.get(0).cloned().unwrap_or(ts_arr(vec![]))]))));
-            fields.push(("optional".to_owned(), ts_bool(arm == Some(1))));
+            fields.push(("decorators", ts_arr(flat_kids(&[ctx.kids.get(0).cloned().unwrap_or(ts_arr(vec![]))]))));
+            fields.push(("optional", ts_bool(arm == Some(1))));
             AstValue::Object { typ, fields }
         }
         _ => unhandled("estreeParam", ctx, None),
