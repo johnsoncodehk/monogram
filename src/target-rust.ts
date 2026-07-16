@@ -152,7 +152,7 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined, identLike: Set<string>): string {
   const name = (t as { name: string }).name;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
@@ -163,15 +163,18 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
       ? `st.emit(pos, ${endE}, ${kid}, lid_of(&src[pos..${endE}])); `
       : `toks.push(mk_tok(pos, ${endE}, pending_nl, ${kid}, lid_of(&src[pos..${endE}]))); pending_nl = false; `);
   const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
+  // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (gen-lexer.ts).
+  const ext = (v: string) => (identLike.has(name) ? `let ${v} = _lx_ext(b, ${v}); ` : '');
   if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
             while e < n { let cc = b[e] as u32; if !${rangeCond('cc', t.cont)} { break } e += 1; }
-            ${push('e')}pos = e; continue;
+            ${ext('e')}${push('e')}pos = e; continue;
         }`;
   if (t.kind === 'runBail') {
     if (rangesHaveNonAscii(t.cont)) {
       const m = compilePat(t.pattern, defs);
-      return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
+      return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${ext('e')}${push('e')}pos = e; continue; } }`;
     }
     const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_').toUpperCase();
     const fTab = `_RB_F_${tag}`, cTab = `_RB_C_${tag}`;
@@ -184,10 +187,10 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
     return `        if ${gate}${fTab}[c as usize] {
             let mut e = pos + 1;
             while e < n && ${cTab}[b[e] as usize] { e += 1; }
-            if e >= n || !(${bailAt('b[e] as u32')}) { ${push('e')}pos = e; continue; }
-            { let e2 = ${m}(src, pos as i64); if e2 > pos as i64 { let e2 = e2 as usize; ${push('e2')}pos = e2; continue; } }
+            if e >= n || !(${bailAt('b[e] as u32')}) { ${ext('e')}${push('e')}pos = e; continue; }
+            { let e2 = ${m}(src, pos as i64); if e2 > pos as i64 { let e2 = e2 as usize; ${ext('e2')}${push('e2')}pos = e2; continue; } }
         } else if ${entryBail} {
-            let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; }
+            let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${ext('e')}${push('e')}pos = e; continue; }
         }`;
   }
   if (t.kind === 'string') return `        if ${gate}c == ${t.delim.charCodeAt(0)} {
@@ -238,10 +241,11 @@ function buildLexCandidates(
   ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
+  const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok);
+    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok, identLike);
     if (!code) continue;
     codes.push(code);
     firsts.push(lexTokFirstBytes(t));
@@ -333,19 +337,23 @@ ${commentSkipFrom}            pos = p;
             continue;
         }
 `,
-    ws: `        if c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos += 1; continue; }
+    // Byte-oriented: ASCII ws by lead byte; non-ASCII via UTF-8 decode (JS \\s set).
+    // LS/PS excluded: they fall to the unexpected-character panic, matching the interpreter.
+    ws: `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; continue; }
         if c == 10 || c == 13 {
             pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
             if st.flow_depth == 0 { st.line_start = true; }
             continue;
         }
+        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) && ch != '\\u{2028}' && ch != '\\u{2029}' { pos += w; continue; } } }
 `,
-    wsFrom: `        if c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos += 1; continue; }
+    wsFrom: `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; continue; }
         if c == 10 || c == 13 {
             pos += 1; if c == 13 && pos < n && b[pos] == 10 { pos += 1; }
             if st.flow_depth == 0 { st.line_start = true; }
             continue;
         }
+        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) && ch != '\\u{2028}' && ch != '\\u{2029}' { pos += w; continue; } } }
 `,
     hooks: `        if kid != _KID_NLTOK { self.emitted_content = true; }
         if kid == 0 && _in(_FLOW_OPEN, _LIDS[lid as usize]) { self.flow_depth += 1; }
@@ -404,8 +412,61 @@ const _LID_RPAREN: u16 = ${lidOf(ids, ')')};
   const tplLidConsts = tpl ? `const _LID_BRACE_OPEN: u16 = ${lidOf(ids, tpl.braceOpen)};
 const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ` : '';
+  const identName = ir.identToken;
+  const identKid = identName ? kidOf(ids, identName) : 0;
+  // Unicode ID_Start fallback (mirrors gen-lexer uniIdentReY) before unmatched-byte panic.
+  const uniIdentEmit = stateful
+    ? `st.emit(pos, e, ${identKid}, lid_of(&src[pos..e]));`
+    : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, lid_of(&src[pos..e]))); pending_nl = false;`;
+  const uniIdentOrPanic = identName
+    ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(b, pos) { ${uniIdentEmit} pos = e; continue; } }
+        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
+    : `        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
+  const lexUtf8Helpers = `#[inline(always)] fn _utf8_char_at(b: &[u8], pos: usize) -> Option<(char, usize)> {
+    let s = std::str::from_utf8(&b[pos..]).ok()?;
+    let ch = s.chars().next()?;
+    Some((ch, ch.len_utf8()))
+}
+#[inline(always)] fn _is_js_ws(ch: char) -> bool {
+    matches!(ch, '\\u{00A0}' | '\\u{1680}' | '\\u{2028}' | '\\u{2029}' | '\\u{202F}' | '\\u{205F}' | '\\u{3000}' | '\\u{FEFF}')
+        || { let u = ch as u32; (0x2000..=0x200A).contains(&u) }
+}
+// ID_Start ≈ Alphabetic (L + Nl + Other_Alphabetic); ID_Continue adds numerics + ZWNJ/ZWJ.
+// std has no general-category queries, so this is the closest dependency-free approximation
+// of gen-tm.ts's widened \\p{L}\\p{Nl} / +\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc} classes (combining
+// marks and connector punctuation outside Other_Alphabetic are not covered).
+#[inline(always)] fn _is_uni_id_start(ch: char) -> bool {
+    ch == '$' || ch == '_' || ch.is_alphabetic()
+}
+#[inline(always)] fn _is_uni_id_continue(ch: char) -> bool {
+    ch == '$' || ch == '_' || ch == '\\u{200C}' || ch == '\\u{200D}' || ch.is_alphanumeric()
+}
+fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
+    let (ch, w) = _utf8_char_at(b, pos)?;
+    if !_is_uni_id_start(ch) { return None; }
+    let mut e = pos + w;
+    while e < b.len() {
+        let Some((c2, w2)) = _utf8_char_at(b, e) else { break; };
+        if !_is_uni_id_continue(c2) { break; }
+        e += w2;
+    }
+    Some(e)
+}
+// Extend an identifier token that the ASCII pattern cut short at a non-ASCII
+// ID_Continue char (caf|é → café), mirroring gen-lexer's uniIdentContReY extension.
+fn _lx_ext(b: &[u8], e: usize) -> usize {
+    if e >= b.len() || b[e] < 0x80 { return e; }
+    let mut ee = e;
+    while ee < b.len() {
+        let Some((c2, w2)) = _utf8_char_at(b, ee) else { break; };
+        if !_is_uni_id_continue(c2) { break; }
+        ee += w2;
+    }
+    ee
+}
+`;
   const needIn = !!(nlRs); // newline flow still uses string _in
-  const rxConsts = `${rxBitTables}${tplLidConsts}${needIn ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }\n` : ''}${nlRs ? nlRs.consts : ''}`;
+  const rxConsts = `${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${needIn ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }\n` : ''}${nlRs ? nlRs.consts : ''}`;
   const pavHot = rx ? rsLidAny(ids, rx.postfixAfterValue, 'lid') : 'false';
   const tplFn = tpl ? `fn _scan_tpl_span(s: &str, mut p: usize) -> (bool, usize) {
     let b = s.as_bytes();
@@ -518,17 +579,18 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
         }
 ` : '';
   const nlBoundary = nlRs ? nlRs.boundary : '';
-  const nlWs = nlRs ? nlRs.ws : `        if c == 32 || c == 9 { pos += 1; continue; }
-        if pos + 2 < n && b[pos] == 0xE2 && b[pos + 1] == 0x80 && (b[pos + 2] == 0xA8 || b[pos + 2] == 0xA9) { ${nlVar} = true; pos += 3; continue; }   // LS/PS (UTF-8)
-        if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }   // LF/CR
+  // JS \\s: ASCII {9..13,32} + non-ASCII set (emit-lexer lxNonAsciiWs). Decode UTF-8 for multi-byte.
+  const nlWs = nlRs ? nlRs.ws : `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; continue; }
+        if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }
+        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
   const loopBody = `${nlBoundary}        let c = b[pos] as u32;
 ${nlWs}${tplDispatch}${cascade}
-        panic!("Unexpected character at offset {}: '{}'", pos, b[pos] as char);`;
+${uniIdentOrPanic}`;
   if (rxOnly) {
     const rxLoopBody = `${nlBoundary}        let c = b[pos] as u32;
 ${nlWs}${cascade}
-        panic!("Unexpected character at offset {}: '{}'", pos, b[pos] as char);`;
+${uniIdentOrPanic}`;
     return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
@@ -595,9 +657,12 @@ ${loopBody}
     const rustNlScan = (s: string) => s
       .replace(/toks\.push\(mk_tok\(pos, ([^,]+), pending_nl, ([^,]+), (.+)\)\); ?/g, 'st.push_tok(pos, $1, $2, $3); ')
       .replace(/pending_nl/g, 'st.pending_nl');
+    const nlUniIdentOrPanic = identName
+      ? rustNlScan(uniIdentOrPanic)
+      : `        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
     const nlLoopBody = `${nlRs!.boundaryFrom}        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
-        panic!("Unexpected character at offset {}: '{}'", pos, b[pos] as char);`;
+${nlUniIdentOrPanic}`;
     return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, line_start: bool, emitted_content: bool, flow_depth: i64 }
 impl<'a> NlScan<'a> {
     fn push_tok(&mut self, off: usize, end: usize, kid: u16, lid: u16) {

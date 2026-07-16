@@ -111,7 +111,7 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined, identLike: Set<string>): string {
   const name = (t as { name: string }).name;
   if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
   const kid = kidOf(ids, name);
@@ -119,15 +119,18 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
     ? `if strings.ContainsAny(src[pos:${endE}], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
     : `${stateful ? 'emit' : 'pushTok'}(pos, ${endE}, ${kid}, lidOf(src[pos:${endE}])); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
+  // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (gen-lexer.ts).
+  const ext = (v: string) => (identLike.has(name) ? `${v} = lxExt(src, ${v}); ` : '');
   if (t.kind === 'run') return `\t\tif ${gate}${rangeCond('c', t.first)} {
 \t\t\te := pos + 1
 \t\t\tfor e < n { cc := int(src[e]); if !${rangeCond('cc', t.cont)} { break }; e++ }
-\t\t\t${push('e')}pos = e; continue
+\t\t\t${ext('e')}${push('e')}pos = e; continue
 \t\t}`;
   if (t.kind === 'runBail') {
     if (rangesHaveNonAscii(t.cont)) {
       const m = compilePat(t.pattern, defs);
-      return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(pos); e > pos { ${push('e')}pos = e; continue } }`;
+      return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(pos); e > pos { ${ext('e')}${push('e')}pos = e; continue } }`;
     }
     const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_');
     const fTab = `_rbF_${tag}`, cTab = `_rbC_${tag}`;
@@ -140,10 +143,10 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
     return `\t\tif ${gate}${fTab}[c] {
 \t\t\te := pos + 1
 \t\t\tfor e < n && ${cTab}[src[e]] { e++ }
-\t\t\tif e >= n || !(${bailAt('int(src[e])')}) { ${push('e')}pos = e; continue }
-\t\t\tif e2 := ${m}(pos); e2 > pos { ${push('e2')}pos = e2; continue }
+\t\t\tif e >= n || !(${bailAt('int(src[e])')}) { ${ext('e')}${push('e')}pos = e; continue }
+\t\t\tif e2 := ${m}(pos); e2 > pos { ${ext('e2')}${push('e2')}pos = e2; continue }
 \t\t} else if ${entryBail} {
-\t\t\tif e := ${m}(pos); e > pos { ${push('e')}pos = e; continue }
+\t\t\tif e := ${m}(pos); e > pos { ${ext('e')}${push('e')}pos = e; continue }
 \t\t}`;
   }
   if (t.kind === 'string') return `\t\tif ${gate}c == ${t.delim.charCodeAt(0)} {
@@ -170,10 +173,11 @@ function buildLexCandidates(
   ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
+  const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok);
+    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok, identLike);
     if (!code) continue;
     codes.push(code);
     firsts.push(lexTokFirstBytes(t));
@@ -238,11 +242,16 @@ ${commentSkip}\t\t\tpos = p
 \t\t\tcontinue
 \t\t}
 `,
-    ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
+    ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 { pos++; continue }
 \t\tif c == 10 || c == 13 {
 \t\t\tpos++; if c == 13 && pos < n && src[pos] == 10 { pos++ }
 \t\t\tif flowDepth == 0 { lineStart = true }
 \t\t\tcontinue
+\t\t}
+\t\tif c >= 0x80 {
+\t\t\t// LS/PS excluded: they fall to the unexpected-character panic, matching the interpreter.
+\t\t\tr, w := utf8.DecodeRuneInString(src[pos:])
+\t\t\tif isJsWs(r) && r != 0x2028 && r != 0x2029 { pos += w; continue }
 \t\t}
 `,
     hooks: `\t\tif kid != ${kidNl} { emittedContent = true }
@@ -392,12 +401,58 @@ ${emitHooks}
 \t\t\tpos = e; continue
 \t\t}
 ` : '';
+  const identNameGo = ir.identToken;
+  const identKidGo = identNameGo ? kidOf(ids, identNameGo) : 0;
+  const lexGoHelpers = (identNameGo || ir.identLike.length) ? `func isJsWs(r rune) bool {
+	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
+		return true
+	}
+	return r >= 0x2000 && r <= 0x200A
+}
+// ID_Start ≈ L + Nl (gen-tm.ts's widened approximation); ID_Continue adds Nd/Mn/Mc/Pc + ZWNJ/ZWJ.
+func isUniIdStart(r rune) bool { return r == '$' || r == '_' || unicode.IsLetter(r) || unicode.Is(unicode.Nl, r) }
+func isUniIdContinue(r rune) bool {
+	return isUniIdStart(r) || r == 0x200C || r == 0x200D || unicode.In(r, unicode.Nd, unicode.Mn, unicode.Mc, unicode.Pc)
+}
+func scanUniIdent(src string, pos int) (int, bool) {
+	r, w := utf8.DecodeRuneInString(src[pos:])
+	if !isUniIdStart(r) { return pos, false }
+	e := pos + w
+	for e < len(src) {
+		r2, w2 := utf8.DecodeRuneInString(src[e:])
+		if !isUniIdContinue(r2) { break }
+		e += w2
+	}
+	return e, true
+}
+// Extend an identifier token that the ASCII pattern cut short at a non-ASCII
+// ID_Continue char (caf|é → café), mirroring gen-lexer's uniIdentContReY extension.
+func lxExt(src string, e int) int {
+	if e >= len(src) || src[e] < 0x80 { return e }
+	ee := e
+	for ee < len(src) {
+		r, w := utf8.DecodeRuneInString(src[ee:])
+		if !isUniIdContinue(r) { break }
+		ee += w
+	}
+	return ee
+}
+` : `func isJsWs(r rune) bool {
+	if r == 0xA0 || r == 0x1680 || r == 0x2028 || r == 0x2029 || r == 0x202F || r == 0x205F || r == 0x3000 || r == 0xFEFF {
+		return true
+	}
+	return r >= 0x2000 && r <= 0x200A
+}
+`;
   const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).state : '';
   const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok', ids).stateFrom : '';
   const nlBoundary = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).boundary : '';
-  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif strings.HasPrefix(src[pos:], ${J('\u2028')}) || strings.HasPrefix(src[pos:], ${J('\u2029')}) { pendingNl = true; pos += 3; continue }   // LS/PS (UTF-8)
-\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }   // LF/CR
-\t\tif c == 32 || c == 9 || c == 11 || c == 12 || c == 160 || c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 || c == 65279 { pos++; continue }
+  const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif c == 32 || c == 9 || c == 11 || c == 12 { pos++; continue }
+\t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }
+\t\tif c >= 0x80 {
+\t\t\tr, w := utf8.DecodeRuneInString(src[pos:])
+\t\t\tif isJsWs(r) { if r == 0x2028 || r == 0x2029 { pendingNl = true }; pos += w; continue }
+\t\t}
 `;
   const pushHooks = nl && !stateful ? newlinePartsGo(nl, 'pushTok', ids).hooks : '';
   const pushTokFn = stateful ? '' : nl
@@ -407,6 +462,17 @@ ${pushHooks}\t\ttoks = append(toks, mkTok(off, end, pendingNl, kid, lid)); pendi
 \t_ = pushTok
 `
     : `\tpushTok := func(off, end int, kid, lid uint16) { toks = append(toks, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false }\n\t_ = pushTok\n`;
+  const uniIdentPushGo = stateful ? 'emit' : 'pushTok';
+  const uniIdentFallbackGo = identNameGo
+    ? `\t\tif c >= 0x80 {
+\t\t\tif e, ok := scanUniIdent(src, pos); ok {
+\t\t\t\t${uniIdentPushGo}(pos, e, ${identKidGo}, lidOf(src[pos:e])); pos = e; continue
+\t\t\t}
+\t\t}
+`
+    : '';
+  const loopPanicGo = `\t\tr, _ := utf8.DecodeRuneInString(src[pos:])
+\t\tpanic(fmt.Sprintf("Unexpected character at offset %d: '%c'", pos, r))`;
   const pushTokAccFn = nl && !stateful
     ? `\tpushTok := func(off, end int, kid, lid uint16) {
 ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
@@ -418,10 +484,10 @@ ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendi
 `;
   const loopBody = `${nlBoundary}\t\tc := int(src[pos])
 ${nlWs}${tplDispatch}${cascade}
-\t\tpanic(fmt.Sprintf("Unexpected character at offset %d: '%c'", pos, src[pos]))`;
+${uniIdentFallbackGo}${loopPanicGo}`;
   const idTables = renderIdTablesGo(ids);
   if (rxOnly) {
-    return `${idTables}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
 \tn := len(src)
 ${rxStateFrom}${emitRxOnly}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -436,7 +502,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (tplOnly) {
-    return `${idTables}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
 \tn := len(src)
 ${tplStateFrom}${emitTplOnly}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -451,7 +517,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (rxTpl) {
-    return `${idTables}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
 \tn := len(src)
 ${rxStateFrom}${tplStateFrom}${emitRxTpl}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -466,7 +532,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (rxOrTpl) {
-    return `${idTables}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
 \ttoks := toks[:0]
 \tn := len(src)
 \tpos := 0
@@ -479,7 +545,7 @@ ${loopBody}
 }`;
   }
   if (newlineOnly) {
-    return `${idTables}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, lineStart bool, emittedContent bool, flowDepth int, acc *[]Tok, limit int) (int, bool, bool, bool, int) {
+    return `${idTables}${lexGoHelpers}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, lineStart bool, emittedContent bool, flowDepth int, acc *[]Tok, limit int) (int, bool, bool, bool, int) {
 \tn := len(src)
 ${nlStateFrom}${pushTokAccFn}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -493,7 +559,7 @@ func lex(src string) []Tok {
 \treturn out
 }`;
   }
-  return `${idTables}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
+  return `${idTables}${lexGoHelpers}${defs.length ? 'var _s string\n' + defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
 \tn := len(src)
 ${pushTokAccFn}${defs.length ? '\t_s = src\n' : ''}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -3283,11 +3349,14 @@ package lexer
 import (
 \t"fmt"
 \t"strings"
+\t"unicode"
+\t"unicode/utf8"
 )
 
-// The lexer panics via fmt on an unmatched char and uses strings for literal prefixes; pin both
-// imports so a grammar whose lexer happens to skip one still compiles.
-var _, _ = fmt.Sprintf, strings.HasPrefix
+// The lexer panics via fmt on an unmatched char, uses strings for literal prefixes, and decodes
+// runes for Unicode whitespace / identifier fallback; pin all so a grammar whose lexer happens
+// to skip one still compiles.
+var _, _, _, _ = fmt.Sprintf, strings.HasPrefix, unicode.IsLetter, utf8.DecodeRuneInString
 
 // Slim hot-path token (kind/text via KIND_STR / src[Off:End]).
 type Tok struct {
@@ -3356,7 +3425,13 @@ package main
 import (
 \t"fmt"
 \t"strings"
+\t"unicode"
+\t"unicode/utf8"
 )
+
+// unicode is only referenced when the grammar declares an identifier token; pin it so other
+// grammars still compile.
+var _ = unicode.IsLetter
 
 // Slim hot-path token (kind/text via KIND_STR / src[Off:End]).
 type Tok struct {

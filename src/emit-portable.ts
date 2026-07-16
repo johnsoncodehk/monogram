@@ -187,6 +187,11 @@ export type ParserIR = {
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
   newlineCfg: NewlineCfg | null;  // null unless the grammar declares `newline`
+  /** Token flagged `identifier` (Unicode ID_Start/ID_Continue fallback target); null if none. */
+  identToken: string | null;
+  /** Identifier-like tokens (bare identifier + identifierPrefix tokens): an adjacent
+   *  ID_Continue-only char run extends the previous token of one of these kinds. */
+  identLike: string[];
 };
 
 // The target-agnostic parse plan for a grammar. Applies the [Await]/[Yield] context fork
@@ -424,7 +429,12 @@ function buildIR(grammar: CstGrammar): ParserIR {
     }
   }
 
-  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, rules, regexCtx, tpl, newlineCfg };
+  const identToken = grammar.tokens.find((t) => t.identifier)?.name ?? null;
+  const identLike = [
+    ...(identToken ? [identToken] : []),
+    ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
+  ];
+  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, rules, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,

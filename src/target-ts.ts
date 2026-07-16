@@ -101,7 +101,7 @@ function compilePat(p: TokenPattern, defs: string[]): string {
   return name;
 }
 
-function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok?: string, tplTok?: string): string {
+function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined, identLike: Set<string>): string {
   const name = (t as { name: string }).name;
   if (tplTok !== undefined && name === tplTok) return '';   // template token is scanned by the state machine
   // `emit(...)` threads the lexer state in stateful mode; a plain push otherwise. A skipped
@@ -111,17 +111,20 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
     ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, ${endExpr}))) pendingNl = true; `
     : `${stateful ? 'emit' : 'push'}(pos, ${endExpr}, ${kid}, lid_of(src.slice(pos, ${endExpr}))); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
+  // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (gen-lexer.ts).
+  const ext = (v: string) => (identLike.has(name) ? `${v} = lx_ext(src, ${v}); ` : '');
   if (t.kind === 'run') return `    if (${gate}${rangeCond('c', t.first)}) {
       let e = pos + 1;
       while (e < n) { const cc = src.charCodeAt(e); if (!${rangeCond('cc', t.cont)}) break; e++; }
-      ${push('e')}pos = e; continue;
+      ${ext('e')}${push('e')}pos = e; continue;
     }`;
   if (t.kind === 'runBail') {
     // Cont with non-ASCII: refuse tight loop (byte-index unsafe for multi-unit chars in other
     // targets; keep three-target isomorphism — fall back to pattern cascade).
     if (rangesHaveNonAscii(t.cont)) {
       const m = compilePat(t.pattern, defs);
-      return `    if (${gate}true) { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
+      return `    if (${gate}true) { let e = ${m}(pos); if (e > pos) { ${ext('e')}${push('e')}pos = e; continue; } }`;
     }
     const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_');
     const fTab = `_rbF_${tag}`, cTab = `_rbC_${tag}`;
@@ -134,10 +137,10 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
     return `    if (${gate}${fTab}[c]) {
       let e = pos + 1;
       while (e < n && ${cTab}[src.charCodeAt(e)]) e++;
-      if (e >= n || !(${bailAt('src.charCodeAt(e)')})) { ${push('e')}pos = e; continue; }
-      { const e2 = ${m}(pos); if (e2 > pos) { ${push('e2')}pos = e2; continue; } }
+      if (e >= n || !(${bailAt('src.charCodeAt(e)')})) { ${ext('e')}${push('e')}pos = e; continue; }
+      { let e2 = ${m}(pos); if (e2 > pos) { ${ext('e2')}${push('e2')}pos = e2; continue; } }
     } else if (${entryBail}) {
-      const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; }
+      let e = ${m}(pos); if (e > pos) { ${ext('e')}${push('e')}pos = e; continue; }
     }`;
   }
   if (t.kind === 'string') return `    if (${gate}c === ${t.delim.charCodeAt(0)}) {
@@ -163,10 +166,11 @@ function buildLexCandidates(
   ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
+  const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok);
+    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok, identLike);
     if (!code) continue;
     codes.push(code);
     firsts.push(lexTokFirstBytes(t));
@@ -376,6 +380,28 @@ ${emitHooks}
       pos = sp.end; continue;
     }
 ` : '';
+  const identNameTs = ir.identToken;
+  const identKidTs = identNameTs ? kidOf(ids, identNameTs) : 0;
+  const lxExtConst = ir.identLike.length
+    ? `const LX_UNI_CONT = /[$\\u200c\\u200d\\p{ID_Continue}]+/uy;
+function lx_ext(src: string, e: number): number {
+  if (e >= src.length || src.charCodeAt(e) < 0x80) return e;
+  LX_UNI_CONT.lastIndex = e;
+  const m = LX_UNI_CONT.exec(src);
+  return m ? e + m[0].length : e;
+}
+`
+    : '';
+  const lxUniIdentConst = (identNameTs
+    ? 'const LX_UNI_IDENT = /[$_\\p{ID_Start}][$\\u200c\\u200d\\p{ID_Continue}]*/uy;\n'
+    : '') + lxExtConst;
+  const uniIdentPushTs = stateful ? 'emit' : 'push';
+  const uniIdentFallbackTs = identNameTs
+    ? `    LX_UNI_IDENT.lastIndex = pos;
+    const _um = LX_UNI_IDENT.exec(src);
+    if (_um) { ${uniIdentPushTs}(pos, pos + _um[0].length, ${identKidTs}, lid_of(_um[0])); pos += _um[0].length; continue; }
+`
+    : '';
   const nlState = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).state : '';
   const nlStateFrom = nl ? newlineParts(nl, 'push', ids).stateFrom : '';
   const nlBoundary = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).boundary : '';
@@ -392,9 +418,9 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
   const loopBody = `${nlBoundary}    const c = src.charCodeAt(pos);
     // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
-    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
+${uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
   if (rxOnly) {
-    return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, hasPrev: boolean, bpLid: number, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, hasPrev: boolean, bpLid: number, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${emitRxOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -409,7 +435,7 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${tplStateFrom}${emitTplOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -424,7 +450,7 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, hasPrev: boolean, bpLid: number, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, hasPrev: boolean, bpLid: number, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${tplStateFrom}${emitRxTpl}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -439,7 +465,7 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesTS(ids)}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
@@ -451,7 +477,7 @@ ${loopBody}
 }`;
   }
   if (newlineOnly) {
-    return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, lineStart: boolean, emittedContent: boolean, flowDepth: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; lineStart: boolean; emittedContent: boolean; flowDepth: number } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, lineStart: boolean, emittedContent: boolean, flowDepth: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; lineStart: boolean; emittedContent: boolean; flowDepth: number } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${nlStateFrom}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
@@ -465,7 +491,7 @@ function lex(src: string): Tok[] {
   return toks;
 }`;
   }
-  return `${renderIdTablesTS(ids)}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean } {
+  return `${renderIdTablesTS(ids)}${lxUniIdentConst}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {

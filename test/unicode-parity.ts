@@ -75,6 +75,19 @@ const ACCEPT: string[] = [
   "const x = /* abc */ 1;",
   'const x = `cafe`;',
   'const x = "abc";',
+  // Unicode whitespace between tokens (JS \s non-ASCII set) — interpreter skips these
+  'const a =\u00A01;',              // NBSP
+  'const b\u3000= 2;',              // ideographic space
+  '\uFEFFconst c = 3;',             // BOM
+  'const d\u2003=\u20024;',         // EM space / EN space
+  'const e\u202F= 5;',              // narrow NBSP
+  'const f\u1680= 6;',              // Ogham space mark
+  'const g\u2000=\u200A7;',         // en-quad / hair space (range ends)
+  // Unicode identifiers (ID_Start letters) — interpreter's \p{ID_Start} fallback
+  'const \u03B1 = \u03B2;',         // α = β
+  'const caf\u00E9 = 1;',           // precomposed é
+  'const \u5909\u6570 = 42;',       // CJK identifier
+  'let \u03C2 = \u03B1 + \u03B2;',  // Greek mix in expression
 ];
 
 /** Reject cases. `lexMsg` set ⇒ expect that primary lexer message in stderr (≡ oracle). */
@@ -85,6 +98,10 @@ const REJECT: { src: string; lexMsg: string | null }[] = [
   { src: "'abc", lexMsg: "Unexpected character at offset 0: '''" },
   { src: 'const x = `cafe', lexMsg: 'Unterminated template literal at offset 15' },
   { src: 'const x = "abc', lexMsg: 'Unexpected character at offset 10: \'"\'' },
+  // emoji is not ID_Start; ZWSP is not JS \s — all targets must reject (messages differ in
+  // encoding of the offending char across targets, so no lexMsg pin)
+  { src: 'const \u{1F600} = 1;', lexMsg: null },
+  { src: 'const x\u200B= 1;', lexMsg: null },
 ];
 
 type EditBatch = [number, number, string][];
