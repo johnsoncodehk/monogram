@@ -619,8 +619,8 @@ async function main(): Promise<void> {
     templateSrc.includes('match_template_ast_Expr') &&
       templateSrc.includes('parse_ast_Type()') &&
       templateSrc.includes('shape_tpl_restore') &&
-      templateSrc.includes('typ: "$template".to_owned()') &&
-      templateSrc.includes('typ: "TaggedTemplate".to_owned()'),
+      templateSrc.includes('typ: "$template"') &&
+      templateSrc.includes('typ: "TaggedTemplate"'),
   );
   const customTemplateShape: ShapeSpec = {
     ...templateMiniShape,
