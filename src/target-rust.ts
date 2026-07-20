@@ -2859,6 +2859,105 @@ function portableRule(_shapeIR: ShapeIR, name: string): RdRule | PrattRule {
   return rule;
 }
 
+// ── Step-level FIRST pre-filters (SH3-5 O5) ────────────────────────────────
+// Per-rule leading FIRST (null = unknown/unpredictable), built once per emit.
+// Soundness: a rule with a known FIRST is NON-nullable — a nullable alt is
+// always seqFirst-unpredictable (null), which poisons the union. Guards are
+// therefore pure pre-filters: reject ⇒ the walk would have failed anyway.
+let _rustShapeRuleFirst: Map<string, FirstSig> | null = null;
+
+/** FIRST of a step sequence (sound superset; null = unknown → no guard). */
+function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
+  const rf = _rustShapeRuleFirst;
+  if (!rf) return null;
+  const lits = new Set<string>();
+  const toks = new Set<string>();
+  // 'done' = a consuming step fixed the FIRST; 'nullable' = may derive ε (keep
+  // folding into the next step); 'unknown' = give up (null).
+  const walkSeq = (xs: Step[]): 'done' | 'nullable' | 'unknown' => {
+    for (const s of xs) {
+      const r = walkStep(s);
+      if (r !== 'nullable') return r;
+    }
+    return 'nullable';
+  };
+  const walkStep = (s: Step): 'done' | 'nullable' | 'unknown' => {
+    switch (s.t) {
+      case 'lit': lits.add(s.value); return 'done';
+      case 'tok': toks.add(s.name); return 'done';
+      case 'altlit': s.opts.forEach((o) => lits.add(o.value)); return 'done';
+      case 'rule':
+      case 'ruleBp': {
+        const f = rf.get(s.name);
+        if (f == null) return 'unknown';
+        f.lits.forEach((x) => lits.add(x));
+        f.toks.forEach((x) => toks.add(x));
+        return 'done';
+      }
+      case 'seq':
+      case 'suppress': return walkSeq(s.steps);
+      case 'not':
+      case 'sameLine': return 'nullable'; // zero-width: consumes nothing
+      case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
+      case 'star': return walkSeq([s.step]) === 'unknown' ? 'unknown' : 'nullable';
+      case 'sep': return walkStep(s.elem) === 'unknown' ? 'unknown' : 'nullable';
+      case 'alt': {
+        let sawBranch = false;
+        for (const b of s.branches) {
+          const r = walkSeq(b);
+          if (r === 'unknown') return 'unknown';
+          if (r === 'done') sawBranch = true;
+        }
+        // all-nullable (or empty) alt contributes its FIRST and stays nullable
+        return sawBranch ? 'done' : 'nullable';
+      }
+    }
+    return 'unknown';
+  };
+  const r = walkSeq(steps);
+  // Fully-nullable seqs (derive ε) would succeed even when the guard rejects
+  // (star/sep semantics diverge), so they get no guard.
+  if (r === 'unknown' || r === 'nullable') return null;
+  return { lits: [...lits], toks: [...toks] };
+}
+
+/** Build per-rule leading FIRST for all parser rules (rd unions + pratt nud). */
+function buildRustShapeRuleFirst(ir: ParserIR): Map<string, FirstSig> {
+  const out = new Map<string, FirstSig>();
+  for (const rule of ir.rules) {
+    if (rule.kind === 'rd') {
+      if (rule.altFirst.some((f) => f === null)) {
+        out.set(rule.name, null);
+        continue;
+      }
+      const lits = new Set<string>();
+      const toks = new Set<string>();
+      for (const f of rule.altFirst) {
+        f!.lits.forEach((x) => lits.add(x));
+        f!.toks.forEach((x) => toks.add(x));
+      }
+      out.set(rule.name, { lits: [...lits], toks: [...toks] });
+      continue;
+    }
+    // pratt: a parse must nud — leading FIRST is the nud dispatch set.
+    const lits = new Set<string>();
+    const toks = new Set<string>();
+    let unknown = false;
+    for (const t of rule.nudToks) toks.add(t);
+    for (const p of rule.prefix) lits.add(p.op);
+    for (const b of rule.nudBrackets) lits.add(b.first);
+    for (const f of [...rule.nudSeqFirst, ...rule.nudCappedFirst]) {
+      if (f === null) { unknown = true; break; }
+      f.lits.forEach((x) => lits.add(x));
+      f.toks.forEach((x) => toks.add(x));
+    }
+    if (!unknown && ir.tpl && rule.nudToks.includes(ir.tpl.token)) toks.add('$templateHead');
+    out.set(rule.name, unknown ? null : { lits: [...lits], toks: [...toks] });
+  }
+  return out;
+}
+
+
 function rustShapeRuleType(rule: ShapeIRRule): string {
   // Runtime is AstValue-centric (RD kids / keep / unknown). Typed structs remain for API docs + gates.
   return 'AstValue';
@@ -3048,8 +3147,6 @@ function emitRustAstRdAltSteps(
   ids: LexIdPlan,
   leaves: Record<string, TokenLeafPolicy>,
   kidsVar: string,
-  listsVar: string,
-  holesVar: string,
   altVar: string,
   selfRule?: string,
   selfRuleUseBp?: boolean,
@@ -3073,6 +3170,9 @@ function emitRustAstRdAltSteps(
   };
   let localId = 0;
   const local = (stem: string): string => `_shape_${stem}_${localId++}`;
+  /** FIRST pre-filter over the current token; null when not worth guarding. */
+  const firstGuard = (f: FirstSig, nAlts?: number): string | null =>
+    isFirstGuardable(f, nAlts) ? firstCond(f, 't', ids) : null;
   const emitSteps = (xs: Step[], sink: string, okVar: string): string =>
     xs.map((x) => emitStep(x, sink, okVar)).join('\n');
   const emitStep = (s: Step, sink: string, okVar: string): string => {
@@ -3110,12 +3210,12 @@ function emitRustAstRdAltSteps(
         const poke = local('probe');
         const body = emitSteps(s.steps, nv, poke);
         return `if ${okVar} {
-            let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+            let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
             let mut ${nv}: Vec<AstValue> = Vec::new();
             let mut ${poke} = true;
             ${body}
             let _probe_hit = ${poke};
-            self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+            self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
             if _probe_hit { ${okVar} = false; }
         }`;
       }
@@ -3123,10 +3223,10 @@ function emitRustAstRdAltSteps(
         const sok = local('sup_ok');
         return `if ${okVar} {
             let _sn_save = self.suppress_next.clone();
-            self.suppress_next = Some(std::rc::Rc::from(vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]));
+            self.set_suppress_next(Some(std::rc::Rc::from(vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}])));
             let mut ${sok} = true;
             ${emitSteps(s.steps, sink, sok)}
-            self.suppress_next = _sn_save;
+            self.set_suppress_next(_sn_save);
             if !${sok} { ${okVar} = false; }
         }`;
       }
@@ -3160,8 +3260,14 @@ function emitRustAstRdAltSteps(
           const bok = local('br');
           const body = emitSteps(b, av, bok);
           const push = visible(s) ? `${sink}.push(Self::shape_pack(${av}));` : '';
-          return `if !${flag} {
-                let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+          // FIRST pre-filter: a branch whose leading set misses the current
+          // token is skipped without ck + walk + restore (IR-annotated firsts).
+          const fguard = firstGuard(s.firsts?.[i] ?? null, s.branches.length);
+          const cond = fguard
+            ? `!${flag} && (match self.toks.get(self.pos) { Some(t) => ${fguard}, None => false })`
+            : `!${flag}`;
+          return `if ${cond} {
+                let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
                 ${altVar}.push(${i});
                 let mut ${av}: Vec<AstValue> = Vec::new();
                 let mut ${bok} = true;
@@ -3170,7 +3276,7 @@ function emitRustAstRdAltSteps(
                     ${push}
                     ${flag} = true;
                 } else {
-                    self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+                    self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
                 }
             }`;
         }).join('\n            ');
@@ -3187,15 +3293,21 @@ function emitRustAstRdAltSteps(
         const body = emitStep(s.step, sv, sok);
         const add = visible(s.step) ? `${out}.push(Self::shape_pack(${sv}));` : '';
         const finish = visible(s.step) ? `${sink}.push(AstValue::Array(${out}));` : '';
+        // FIRST pre-filter: skip the doomed exit walk (ck + failed body + restore).
+        const fguard = firstGuard(rustShapeFirstOfSteps([s.step]));
+        const cont = fguard
+          ? `if !(match self.toks.get(self.pos) { Some(t) => ${fguard}, None => false }) { break; }`
+          : '';
         return `if ${okVar} {
             let mut ${out}: Vec<AstValue> = Vec::new();
             loop {
-                let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+                ${cont}
+                let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
                 let mut ${sv}: Vec<AstValue> = Vec::new();
                 let mut ${sok} = true;
                 ${body}
                 if !${sok} {
-                    self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+                    self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
                     break;
                 }
                 ${add}
@@ -3204,20 +3316,23 @@ function emitRustAstRdAltSteps(
         }`;
       }
       case 'opt': {
+        // FIRST pre-filter: an absent optional skips ck + walk + restore.
         const ov = local('opt');
         const ook = local('opt_ok');
         const body = emitSteps(s.steps, ov, ook);
         const push = s.steps.some(visible)
           ? `${sink}.push(if ${ook} { Self::shape_pack(${ov}) } else { AstValue::Null });`
           : '';
-        return `if ${okVar} {
-            let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
-            let mut ${ov}: Vec<AstValue> = Vec::new();
-            let mut ${ook} = true;
+        const fguard = firstGuard(rustShapeFirstOfSteps(s.steps));
+        const inner = `let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
             ${body}
             if !${ook} {
-                self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
-            }
+                self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
+            }`;
+        return `if ${okVar} {
+            let mut ${ov}: Vec<AstValue> = Vec::new();
+            let mut ${ook} = true;
+            ${fguard ? `if (match self.toks.get(self.pos) { Some(t) => ${fguard}, None => false }) { ${inner} }` : inner}
             ${push}
         }`;
       }
@@ -3232,14 +3347,13 @@ function emitRustAstRdAltSteps(
         // After first failure: push empty array (zero elems). After success path: move out.
         const finishEmpty = visible(s.elem) ? `${sink}.push(AstValue::Array(Vec::new()));` : '';
         const finishMove = visible(s.elem) ? `${sink}.push(AstValue::Array(${out}));` : '';
-        return `if ${okVar} {
-            let mut ${out}: Vec<AstValue> = Vec::new();
-            let mut ${ev}: Vec<AstValue> = Vec::new();
-            let _ck = self.shape_ck(${sink}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+        // FIRST pre-filter on the leading element: absent list skips ck + walk.
+        const fguard = firstGuard(rustShapeFirstOfSteps([s.elem]));
+        const attempt = `let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
             let mut ${fok} = true;
             ${bodyFirst}
             if !${fok} {
-                self.shape_restore(_ck, &mut ${sink}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+                self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
                 ${finishEmpty}
             } else {
                 ${add}
@@ -3259,7 +3373,11 @@ function emitRustAstRdAltSteps(
                     ${add}
                 }
                 ${finishMove}
-            }
+            }`;
+        return `if ${okVar} {
+            let mut ${out}: Vec<AstValue> = Vec::new();
+            let mut ${ev}: Vec<AstValue> = Vec::new();
+            ${fguard ? `if (match self.toks.get(self.pos) { Some(t) => ${fguard}, None => false }) { ${attempt} } else { ${finishEmpty} }` : attempt}
         }`;
       }
     }
@@ -3267,14 +3385,12 @@ function emitRustAstRdAltSteps(
   const okVar = local('steps_ok');
   const body = emitSteps(steps, kidsVar, okVar);
   return {
-    ok: `let mut ${listsVar}: Vec<Vec<AstValue>> = Vec::new();
-        let mut ${holesVar}: Vec<Option<AstValue>> = Vec::new();
-        let mut ${altVar}: Vec<usize> = Vec::new();
-        let _txn_ck = self.shape_ck(${kidsVar}.len(), ${listsVar}.len(), ${holesVar}.len(), ${altVar}.len());
+    ok: `let mut ${altVar}: Vec<usize> = Vec::new();
+        let _txn_ck = self.shape_ck(${kidsVar}.len(), ${altVar}.len());
         let mut ${okVar} = true;
         ${body}
         if !${okVar} {
-            self.shape_restore(_txn_ck, &mut ${kidsVar}, &mut ${listsVar}, &mut ${holesVar}, &mut ${altVar});
+            self.shape_restore(_txn_ck, &mut ${kidsVar}, &mut ${altVar});
         }`,
     okVar,
   };
@@ -3341,7 +3457,7 @@ function emitRustRdMethod(
     const guardExpr = useGuard
       ? `_ft.is_some() && { let t = _ft.unwrap(); ${firstCond(rule.altFirst[altIdx]!, 't', ids)} }`
       : 'true';
-    const steps = emitRustAstRdAltSteps(alt, ids, leaves, '_sk', '_lists', '_holes', '_ap');
+    const steps = emitRustAstRdAltSteps(alt, ids, leaves, '_sk', '_ap');
     const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk').replaceAll('__SPOFF__', 'sp_off');
     return `{
             let sp = self.pos;
@@ -3456,7 +3572,7 @@ function emitRustRdMethod(
   if (sir.shape.kind === 'node') {
     const node = sir.shape;
     if (rule.alts.length === 1) {
-      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves, '_sk', '_lists', '_holes', '_ap');
+      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves, '_sk', '_ap');
       return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let sp = self.pos;
         let sp_off = self.current_off();
@@ -3501,7 +3617,7 @@ function emitRustPrattMethod(
   const ret = 'AstValue';
   const tpl = ir.tpl;
   const emptySteps = (steps: Step[], selfBp = false) =>
-    emitRustAstRdAltSteps(steps, ids, leaves, '_sk', '_lists', '_holes', '_ap', selfBp ? rule.name : undefined, selfBp);
+    emitRustAstRdAltSteps(steps, ids, leaves, '_sk', '_ap', selfBp ? rule.name : undefined, selfBp);
 
   /** Missing Pratt slot → keep (positional), matching TS emitAstPrattRule. */
   const slotOf = (declared: { kind: string } | undefined, present: boolean): { kind: string } | null => {
@@ -4063,8 +4179,6 @@ function emitRustPrattMethod(
                     let _op = self.current_text().to_owned();
                     let _capped_save = self.capped;
                     let mut _sk: Vec<AstValue> = Vec::new();
-                    let mut _lists: Vec<Vec<AstValue>> = Vec::new();
-                    let mut _holes: Vec<Option<AstValue>> = Vec::new();
                     let mut _ap: Vec<usize> = Vec::new();
                     ${st.ok}
                     if ${st.okVar} {
@@ -4087,9 +4201,10 @@ function emitRustPrattMethod(
 
   return `${tplHelperCode}    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let prev = self.suppress_cur.clone();
-        self.suppress_cur = std::mem::take(&mut self.suppress_next);
+        let _sn = self.take_suppress_next();
+        self.set_suppress_cur(_sn);
         let r = self.parse_ast_${rule.name}_bp(0);
-        self.suppress_cur = prev;
+        self.set_suppress_cur(prev);
         r
     }
     fn parse_ast_${rule.name}_bp(&mut self, min_bp: i64) -> Option<${ret}> {
@@ -4234,12 +4349,14 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
       unsupported.map((u) => `  ${u.rule}: ${u.construct}`).join('\n'),
     );
   }
+  _rustShapeRuleFirst = buildRustShapeRuleFirst(ir);
   const methods = shapeIR.rules.map((sir) => {
     const rule = ir.rules.find((r) => r.name === sir.name)!;
     return rule.kind === 'pratt'
       ? emitRustPrattMethod(rule, sir, ids, shapeIR, ir)
       : emitRustRdMethod(rule, sir, ids, shapeIR);
   }).join('\n\n');
+  _rustShapeRuleFirst = null;
   return `
 
 ${emitRustShapeTypes(ir, shapeIR)}
@@ -4278,17 +4395,17 @@ pub struct DefaultShapeCustoms;
 impl ShapeCustoms for DefaultShapeCustoms {}
 
 // suppress vectors are only ever wholesale-replaced, never mutated in place
-// (≡ TS _suppressNext = new Set(...) / null), so snapshots share them via Rc —
-// checkpoint/restore become refcount bumps instead of Vec clones + drops (SH3-5 O3).
-#[derive(Clone)]
+// (≡ TS _suppressNext = new Set(...) / null). Replacements are RARE compared to
+// checkpoint/restore traffic (~4.4M pairs on the 2MB bench), so snapshots keep
+// only a log watermark: every suppress write appends the old value to
+// suppress_log, and restore replays it back. This keeps ShapeCk Copy — no Rc
+// refcount churn per checkpoint (SH3-5 O4).
+#[derive(Clone, Copy)]
 struct ShapeCk {
     pos: usize,
     kids_len: usize,
-    lists_len: usize,
-    holes_len: usize,
     alt_path_len: usize,
-    suppress_next: Option<std::rc::Rc<[u16]>>,
-    suppress_cur: Option<std::rc::Rc<[u16]>>,
+    suppress_log_len: usize,
     capped: bool,
 }
 
@@ -4307,6 +4424,7 @@ struct ShapeParser<'a, C: ShapeCustoms> {
     customs: &'a C,
     suppress_next: Option<std::rc::Rc<[u16]>>,
     suppress_cur: Option<std::rc::Rc<[u16]>>,
+    suppress_log: Vec<(u8, Option<std::rc::Rc<[u16]>>)>,
     capped: bool,
 }
 impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
@@ -4326,6 +4444,22 @@ impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
         self.pos += 1;
         Some(text)
     }
+    #[inline(always)]
+    fn set_suppress_next(&mut self, v: Option<std::rc::Rc<[u16]>>) {
+        let old = std::mem::replace(&mut self.suppress_next, v);
+        self.suppress_log.push((0, old));
+    }
+    #[inline(always)]
+    fn set_suppress_cur(&mut self, v: Option<std::rc::Rc<[u16]>>) {
+        let old = std::mem::replace(&mut self.suppress_cur, v);
+        self.suppress_log.push((1, old));
+    }
+    #[inline(always)]
+    fn take_suppress_next(&mut self) -> Option<std::rc::Rc<[u16]>> {
+        let old = std::mem::take(&mut self.suppress_next);
+        self.suppress_log.push((0, old.clone()));
+        old
+    }
     fn shape_tpl_snap(&self) -> ShapeTplSnap {
         ShapeTplSnap {
             pos: self.pos,
@@ -4340,23 +4474,26 @@ impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
         self.suppress_cur = snap.suppress_cur.clone();
         self.capped = snap.capped;
     }
-    fn shape_ck(&self, kids_len: usize, lists_len: usize, holes_len: usize, alt_path_len: usize) -> ShapeCk {
+    #[inline(always)]
+    fn shape_ck(&self, kids_len: usize, alt_path_len: usize) -> ShapeCk {
         ShapeCk {
             pos: self.pos,
-            kids_len, lists_len, holes_len, alt_path_len,
-            suppress_next: self.suppress_next.clone(),
-            suppress_cur: self.suppress_cur.clone(),
+            kids_len, alt_path_len,
+            suppress_log_len: self.suppress_log.len(),
             capped: self.capped,
         }
     }
-    fn shape_restore(&mut self, ck: ShapeCk, kids: &mut Vec<AstValue>, lists: &mut Vec<Vec<AstValue>>, holes: &mut Vec<Option<AstValue>>, alt_path: &mut Vec<usize>) {
+    fn shape_restore(&mut self, ck: ShapeCk, kids: &mut Vec<AstValue>, alt_path: &mut Vec<usize>) {
         self.pos = ck.pos;
         kids.truncate(ck.kids_len);
-        lists.truncate(ck.lists_len);
-        holes.truncate(ck.holes_len);
         alt_path.truncate(ck.alt_path_len);
-        self.suppress_next = ck.suppress_next;
-        self.suppress_cur = ck.suppress_cur;
+        while self.suppress_log.len() > ck.suppress_log_len {
+            match self.suppress_log.pop() {
+                Some((0, old)) => self.suppress_next = old,
+                Some((_, old)) => self.suppress_cur = old,
+                None => break,
+            }
+        }
         self.capped = ck.capped;
     }
     fn shape_pack(values: Vec<AstValue>) -> AstValue {
@@ -4470,7 +4607,7 @@ pub fn parse_ast_with<C: ShapeCustoms>(src: &str, customs: &C) -> Option<AstRoot
     let n = toks.len();
     let mut parser = ShapeParser {
         src, toks, pos: 0, customs,
-        suppress_next: None, suppress_cur: None, capped: false,
+        suppress_next: None, suppress_cur: None, suppress_log: Vec::new(), capped: false,
     };
     let root = parser.parse_ast_${ir.entry}()?;
     if parser.pos == n { Some(root) } else { None }
