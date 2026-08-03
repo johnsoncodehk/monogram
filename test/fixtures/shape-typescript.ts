@@ -220,25 +220,18 @@ export const typescriptShape: ShapeSpec = {
 
     // ─── Bindings ──────────────────────────────────────────────────────
     Binding: {
-      kind: 'node',
-      type: 'VariableDeclarator',
-      // IR: alt(Ident|Pattern) opt(: Type) opt(= Expr)
-      // After drops/zero-width: [idOrPattern, opt type, opt init] — but alt+opt nesting
-      // means slots are [alt, opt, opt]. Bind positionally with optional trailing.
-      fields: [
-        { name: 'id', bind: { at: 0 }, typeHint: ['Identifier', 'BindingPattern'] },
-        { name: 'typeAnnotation', bind: { from: 'opt', at: 1 }, optional: true, typeHint: 'Type' },
-        { name: 'init', bind: { from: 'opt', at: 2 }, optional: true, typeHint: 'Expression' },
-      ],
+      kind: 'custom',
+      fn: 'estreeVariableDeclarator',
+      reason:
+        'M2 typed direct-emit: VariableDeclarator is a plain typed struct in the customs arena ' +
+        '(id, typeAnnotation, init, off, end) — routing via custom lets it bypass DynObj.',
     },
     ForBinding: {
-      kind: 'node',
-      type: 'VariableDeclarator',
-      fields: [
-        { name: 'id', bind: { at: 0 }, typeHint: ['Identifier', 'BindingPattern'] },
-        { name: 'typeAnnotation', bind: { from: 'opt', at: 1 }, optional: true, typeHint: 'Type' },
-        { name: 'init', bind: { from: 'opt', at: 2 }, optional: true, typeHint: 'Expression' },
-      ],
+      kind: 'custom',
+      fn: 'estreeVariableDeclarator',
+      reason:
+        'M2 typed direct-emit: VariableDeclarator is a plain typed struct in the customs arena ' +
+        '(id, typeAnnotation, init, off, end) — routing via custom lets it bypass DynObj.',
     },
     BindingElement: {
       kind: 'node',
@@ -551,6 +544,11 @@ function estreeStmt(ctx: TsAstCustomCtx): unknown {
     }
     default: return unhandledCustom('estreeStmt', ctx);
   }
+}
+
+function estreeVariableDeclarator(ctx: TsAstCustomCtx): unknown {
+  const k = Array.isArray(ctx.kids) ? ctx.kids : [ctx.kids];
+  return { type: 'VariableDeclarator', id: k[0] ?? null, typeAnnotation: k[1] ?? null, init: k[2] ?? null, off: ctx.off, end: ctx.end };
 }
 
 function estreeDecl(ctx: TsAstCustomCtx): unknown {
@@ -1010,6 +1008,7 @@ export const typescriptEstreeCustoms: TsAstCustoms = {
   estreeStmt,
   estreeDecl,
   estreeParenOrComma,
+  estreeVariableDeclarator,
   estreeExprBinary,
   estreeExprPrefix,
   estreeExprPostfixTok,

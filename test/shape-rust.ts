@@ -225,16 +225,24 @@ const tsCustomsHarness = `
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "batch".to_owned());
     if mode == "fail-loud" {
-        let customs = TsEstreeCustoms;
+        let customs = TsEstreeCustoms::default();
         let names: &[&str] = &["estreeStmt", "estreeDecl", "estreeProp", "estreeParenOrComma"];
         let mut ok = 0usize;
         for &name in names {
+            let fid = match name {
+                "estreeStmt" => FN_estreeStmt,
+                "estreeDecl" => FN_estreeDecl,
+                "estreeProp" => FN_estreeProp,
+                _ => FN_estreeParenOrComma,
+            };
+            let mut arena = AstArena::default();
             let ctx = AstCustomCtx {
                 name,
+                fn_id: fid,
                 rule: "Stmt",
                 src: "",
-                kids: Vec::new(),
-                alt_path: vec![99],
+                kids: &[],
+                alt_path: &[99],
                 off: 0,
                 end: 0,
                 left: None,
@@ -242,7 +250,7 @@ fn main() {
                 state: None,
             };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = customs.ast_custom(name, ctx);
+                let _ = customs.ast_custom(&ctx, &mut arena);
             }));
             match result {
                 Err(payload) => {
@@ -278,7 +286,7 @@ fn main() {
                 if is_cst {
                     let _ = parse(tokenize(&raw));
                 } else {
-                    let _ = parse_ast_with(&raw, &TsEstreeCustoms);
+                    let _ = parse_ast_with(&raw, &TsEstreeCustoms::default());
                 }
             })
             .expect("spawn bench thread")
@@ -297,7 +305,7 @@ fn main() {
             for src in raw.split("\u0000") {
                 let src_owned = src.to_owned();
                 let line = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let customs = TsEstreeCustoms;
+                    let customs = TsEstreeCustoms::default();
                     let cst_ok = parse(tokenize(&src_owned)).is_some();
                     let ast = parse_ast_with(&src_owned, &customs);
                     if cst_ok != ast.is_some() {
@@ -305,7 +313,7 @@ fn main() {
                         std::process::exit(2);
                     }
                     match ast {
-                        Some(root) => format!("A\\t{}", root.to_shape_json()),
+                        Some(root) => format!("A\\t{}", root.to_shape_json_with(&customs)),
                         None => "R".to_owned(),
                     }
                 })) {
@@ -410,18 +418,20 @@ async function main(): Promise<void> {
 
   const generated = emitRust(calcGrammar, { shape: calcShape });
   check(
-    'generated Rust AST structs/enums',
-    generated.includes('pub struct Program') &&
-      generated.includes('pub enum ExprShape') &&
-      generated.includes('pub enum StmtShape') &&
+    'generated Rust AST arena runtime',
+    generated.includes('pub enum SVal') &&
+      generated.includes('pub struct AstArena') &&
       generated.includes('struct ShapeCk') &&
-      generated.includes('pub enum AstValue'),
+      generated.includes('pub struct AstRoot'),
   );
   check(
     'zero-cost generic customs + bindOp + ShapeCk',
     generated.includes('pub trait ShapeCustoms') &&
-      generated.includes('pub fn parse_ast_with<C: ShapeCustoms>') &&
-      generated.includes('self.customs.bind_op') &&
+      generated.includes('pub fn parse_ast_with') &&
+      // M15: bind_op/leaf_ident call sites are gone from codegen (identity in
+      // every shipped customs — leaves are source spans); the hook itself
+      // stays on the trait for API compatibility.
+      generated.includes('fn bind_op') &&
       generated.includes('fn shape_ck(') &&
       generated.includes('fn shape_restore('),
   );
@@ -619,8 +629,8 @@ async function main(): Promise<void> {
     templateSrc.includes('match_template_ast_Expr') &&
       templateSrc.includes('parse_ast_Type()') &&
       templateSrc.includes('shape_tpl_restore') &&
-      templateSrc.includes('typ: "$template"') &&
-      templateSrc.includes('typ: "TaggedTemplate"'),
+      templateSrc.includes('"$template"') &&
+      templateSrc.includes('"TaggedTemplate"'),
   );
   const customTemplateShape: ShapeSpec = {
     ...templateMiniShape,
@@ -639,8 +649,8 @@ async function main(): Promise<void> {
   const customTemplateSrc = emitRust(templateMiniGrammar, { shape: customTemplateShape });
   check(
     'SH3-3 template custom/postfixTok custom emit',
-    customTemplateSrc.includes('ast_custom("templateCustom"') &&
-      customTemplateSrc.includes('ast_custom("taggedCustom"'),
+    customTemplateSrc.includes('self.customs.templateCustom(') &&
+      customTemplateSrc.includes('self.customs.taggedCustom('),
   );
   const templateBin = compileShape('template-mini-shape', templateSrc);
   const templateTsFile = `${TMP}/template-mini-shape.ts`;

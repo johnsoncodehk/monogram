@@ -602,7 +602,7 @@ ${rxLoopBody}
     (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
+    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
     lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, &mut toks, 0);
     toks
 }`;
@@ -619,7 +619,7 @@ ${loopBody}
     (pos, st.pending_nl, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
+    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
     lex_from(src, 0, false, Vec::new(), &mut toks, 0);
     toks
 }`;
@@ -636,7 +636,7 @@ ${loopBody}
     (pos, st.pending_nl, st.prev_lid, st.prev_kid, st.bp_lid, st.has_prev, st.has_prev2, st.paren_head, st.last_close, st.last_bang, st.template_stack)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
+    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
     lex_from(src, 0, false, 0, 0, 0, false, false, Vec::new(), false, false, Vec::new(), &mut toks, 0);
     toks
 }`;
@@ -681,7 +681,7 @@ ${nlLoopBody}
     (pos, st.pending_nl, st.line_start, st.emitted_content, st.flow_depth)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
+    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
     lex_from(src, 0, false, true, false, 0, &mut toks, 0);
     toks
 }`;
@@ -696,7 +696,7 @@ ${loopBody.replace(/pending_nl/g, 'pending_nl').replace(/toks\.push/g, 'acc.push
     (pos, pending_nl)
 }
 fn lex<'a>(src: &'a str) -> Vec<Tok> {
-    let mut toks = Vec::new();
+    let mut toks = Vec::with_capacity(src.len() / 2 + 16);
     lex_from(src, 0, false, &mut toks, 0);
     toks
 }`;
@@ -2859,12 +2859,39 @@ function portableRule(_shapeIR: ShapeIR, name: string): RdRule | PrattRule {
   return rule;
 }
 
+// ── Custom-fn id table (SH3-6 M5) ──────────────────────────────────────────
+// Customs dispatch by integer id, not name — string compares out of the hot
+// path. `pub const FN_<name>` constants are emitted into the generated file
+// so hand-written customs impls can match on them.
+
+/** Collect every custom fn name referenced by the shape spec (sorted, unique). */
+function collectShapeCustomFns(shapeIR: ShapeIR): string[] {
+  const out = new Set<string>();
+  const addSlot = (s: unknown): void => {
+    if (s && typeof s === 'object' && (s as { kind?: string }).kind === 'custom') {
+      out.add((s as { fn: string }).fn);
+    }
+  };
+  for (const sir of shapeIR.rules) {
+    const shape = sir.shape as { kind: string; fn?: string; arms?: Array<{ shape: unknown }> } & Record<string, unknown>;
+    if (shape.kind === 'custom' && shape.fn) out.add(shape.fn);
+    if (shape.kind === 'choice' && shape.arms) for (const arm of shape.arms) addSlot(arm.shape);
+    if (shape.kind === 'pratt') {
+      for (const key of ['atom', 'group', 'prefix', 'binary', 'led', 'postfix', 'postfixTok', 'nudSeq', 'nudCapped', 'template']) addSlot(shape[key]);
+    }
+  }
+  return [...out].sort();
+}
+
 // ── Step-level FIRST pre-filters (SH3-5 O5) ────────────────────────────────
 // Per-rule leading FIRST (null = unknown/unpredictable), built once per emit.
 // Soundness: a rule with a known FIRST is NON-nullable — a nullable alt is
 // always seqFirst-unpredictable (null), which poisons the union. Guards are
 // therefore pure pre-filters: reject ⇒ the walk would have failed anyway.
 let _rustShapeRuleFirst: Map<string, FirstSig> | null = null;
+/** M15: choice keep-arm names live in the OwnStr slab (prefilled once per
+ *  parse by parse_ast_with); this map assigns their slab indices during emit. */
+let _rustShapeArmNames: Map<string, number> | null = null;
 
 /** FIRST of a step sequence (sound superset; null = unknown → no guard). */
 function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
@@ -2971,68 +2998,48 @@ function rustShapeSpanFields(spans: ShapeSpec['spans']): string {
 
 function rustShapeNodeObjectExpr(
   node: NodeShape,
-  kidExpr: string,
+  baseExpr: string,
   opExpr: string,
   spans: ShapeSpec['spans'],
   offExpr: string,
   endExpr: string,
-  /** When set (LED/postfixTok), `at:0` binds left and later `at` indices shift into `_sk`. */
+  /** When set (LED/postfixTok), `at:0` binds left and later `at` indices shift into the kids range. */
   leftExpr?: string,
 ): string {
-  // Each kid index binds at most one field, so fields TAKE kids out of the scratch vec
-  // (mem::replace with Null) instead of cloning subtrees — the scratch is discarded after.
+  // Kids live on the arena vals stack at [baseExpr..] — Copy reads, no take/drain.
   const takeKid = (idx: string, fallback: string): string =>
-    `${kidExpr}.get_mut(${idx}).map(|v| std::mem::replace(v, AstValue::Null)).unwrap_or(${fallback})`;
+    `self.vals.get(${baseExpr} + ${idx}).copied().unwrap_or(${fallback})`;
   const fieldPushes = node.fields.map((field) => {
-    let expr = 'AstValue::Null';
-    if (field.bind === 'opText') expr = `AstValue::String(${opExpr})`;
+    let expr = 'SVal::Null';
+    // M15: opExpr evaluates to a (u32, u32) source span.
+    if (field.bind === 'opText') expr = `SVal::Str((${opExpr}).0, (${opExpr}).1)`;
     else if (isFieldBindObj(field.bind) && 'from' in field.bind && field.bind.from === 'list' && typeof field.bind.of === 'number') {
-      expr = takeKid(String(field.bind.of), 'AstValue::Array(Vec::new())');
+      expr = takeKid(String(field.bind.of), 'SVal::List(0, 0)');
     } else if (isFieldBindObj(field.bind) && 'from' in field.bind && field.bind.from === 'opt') {
-      expr = takeKid(String(field.bind.at), 'AstValue::Null');
+      expr = takeKid(String(field.bind.at), 'SVal::Null');
     } else if (isFieldBindObj(field.bind) && 'at' in field.bind) {
-      if (leftExpr && field.bind.at === 0) expr = `std::mem::replace(&mut ${leftExpr}, AstValue::Null)`;
-      else if (leftExpr) expr = takeKid(String(field.bind.at - 1), 'AstValue::Null');
-      else expr = takeKid(String(field.bind.at), 'AstValue::Null');
+      if (leftExpr && field.bind.at === 0) expr = `std::mem::replace(&mut ${leftExpr}, SVal::Null)`;
+      else if (leftExpr) expr = takeKid(String(field.bind.at - 1), 'SVal::Null');
+      else expr = takeKid(String(field.bind.at), 'SVal::Null');
     }
-    return `fields.push((${J(field.name)}, ${expr}));`;
+    return `self.arena.fields.push((${J(field.name)}, ${expr}));`;
   });
   const spanPushes = spans === 'none' ? '' : spans === 'optional'
-    ? `fields.push(("off", AstValue::Number(${offExpr} as f64))); fields.push(("end", AstValue::Number(${endExpr} as f64)));`
-    : `fields.push(("off", AstValue::Number(${offExpr} as f64))); fields.push(("end", AstValue::Number(${endExpr} as f64)));`;
-  // For spans:none omit; for required/optional toy uses none. Calc uses required — include as numbers matching TS shape.
-  // TS required spans are numeric fields; optional may omit. Calc golden strips spans in tests via stripSpans.
+    ? `self.arena.fields.push(("off", SVal::Number(${offExpr} as f64))); self.arena.fields.push(("end", SVal::Number(${endExpr} as f64)));`
+    : `self.arena.fields.push(("off", SVal::Number(${offExpr} as f64))); self.arena.fields.push(("end", SVal::Number(${endExpr} as f64)));`;
   return `{
-                let mut fields: Vec<(&'static str, AstValue)> = Vec::new();
+                let _fbase = self.arena.fields.len();
                 ${fieldPushes.join('\n                ')}
                 ${spanPushes}
-                AstValue::Object { typ: ${J(node.type)}, fields }
+                self.customs.finish_obj(&mut self.arena, ${J(node.type)}, _fbase)
             }`;
 }
 
 function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
   _rustShapeParserIR = ir;
-  const nodes = collectRustShapeNodes(shapeIR);
-  const unions = rustShapeUnions(shapeIR);
-  const known = new Set<string>();
-  for (const name of nodes.keys()) {
-    known.add(name);
-    known.add(rustShapeIdent(name));
-  }
-  for (const u of unions) {
-    known.add(u.name);
-    for (const m of u.members) {
-      known.add(m.ty);
-      known.add(m.variant);
-    }
-  }
   _rustShapeParserIR = null;
   const lines: string[] = [
-    '// ─── Shape AST types (generated) ────────────────────────────────────────────',
-    'pub trait ShapeJson {',
-    '    fn write_shape_json(&self, out: &mut String);',
-    '    fn to_shape_json(&self) -> String { let mut out = String::new(); self.write_shape_json(&mut out); out }',
-    '}',
+    '// ─── Shape AST runtime (arena values, SH3-6) ──────────────────────────────',
     'fn _shape_json_string(value: &str, out: &mut String) {',
     "    out.push('\"');",
     '    for c in value.chars() { match c {',
@@ -3042,112 +3049,170 @@ function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
     '    }}',
     "    out.push('\"');",
     '}',
-    'impl ShapeJson for String { fn write_shape_json(&self, out: &mut String) { _shape_json_string(self, out); } }',
-    'impl ShapeJson for f64 { fn write_shape_json(&self, out: &mut String) { out.push_str(&self.to_string()); } }',
-    'impl ShapeJson for bool { fn write_shape_json(&self, out: &mut String) { out.push_str(if *self { "true" } else { "false" }); } }',
-    'impl ShapeJson for usize { fn write_shape_json(&self, out: &mut String) { out.push_str(&self.to_string()); } }',
-    'impl<T: ShapeJson> ShapeJson for Box<T> { fn write_shape_json(&self, out: &mut String) { (**self).write_shape_json(out); } }',
-    'impl<T: ShapeJson> ShapeJson for Vec<T> { fn write_shape_json(&self, out: &mut String) { out.push(\'[\'); for (i, v) in self.iter().enumerate() { if i > 0 { out.push(\',\'); } v.write_shape_json(out); } out.push(\']\'); } }',
-    'impl<T: ShapeJson> ShapeJson for Option<T> { fn write_shape_json(&self, out: &mut String) { match self { Some(v) => v.write_shape_json(out), None => out.push_str("null") } } }',
-    '',
-    '#[derive(Debug, PartialEq, Clone)]',
-    'pub enum AstValue {',
+    '// Arena value: every variant Copy — speculative truncate on restore runs no',
+    '// drop glue. M15 slim: Str is a (off, len) span into AstArena.src, not a',
+    '// borrowed slice — the enum drops from 24B to 16B (max payload 8B).',
+    '#[derive(Clone, Copy, Debug)]',
+    "pub enum SVal<'a> {",
     '    Null,',
     '    Bool(bool),',
     '    Number(f64),',
-    '    String(String),',
-    '    Array(Vec<AstValue>),',
-    // typ / field keys / fold tags are always grammar-shape or custom literals — &'static str
-    // keeps node construction allocation-free (only the fields Vec itself allocates).
-    "    Object { typ: &'static str, fields: Vec<(&'static str, AstValue)> },",
-    '    /// Child partial for parentFold — folded away before parent custom runs.',
-    "    Partial { tag: &'static str, mode: &'static str, value: Box<AstValue> },",
+    '    /// (byte offset, byte length) into AstArena.src.',
+    '    Str(u32, u32),',
+    '    OwnStr(u32),',
+    '    Node(u32),',
+    '    List(u32, u32),',
+    '    /// Packed TNode range into AstArena.node_lists (each element = (tag<<24)|idx).',
+    '    /// Only lists whose elements are ALL TNode use this slab — 4B/element vs 16B.',
+    '    NodeList(u32, u32),',
+    '    Partial(u32),',
+    '    /// Typed custom node: (customs type tag, index into the customs-owned arena).',
+    '    /// JSON is written via ShapeCustoms::write_tnode_json (M2 typed direct-emit).',
+    '    TNode(u16, u32),',
+    '    /// Keeps the (now payload-less) lifetime parameter occupied: every existing',
+    '    /// SVal<\'a> signature stays valid. ZST — size is still 16B.',
+    '    #[doc(hidden)]',
+    "    _Marker(std::marker::PhantomData<&'a ()>),",
     '}',
-    'impl ShapeJson for AstValue {',
-    '    fn write_shape_json(&self, out: &mut String) {',
-    '        match self {',
-    '            AstValue::Null => out.push_str("null"),',
-    '            AstValue::Bool(b) => b.write_shape_json(out),',
-    '            AstValue::Number(n) => n.write_shape_json(out),',
-    '            AstValue::String(s) => s.write_shape_json(out),',
-    '            AstValue::Array(xs) => xs.write_shape_json(out),',
-    '            AstValue::Object { typ, fields } => {',
-    "                out.push('{');",
-    '                let mut wrote = false;',
-    '                if !typ.is_empty() { _shape_json_string("type", out); out.push(\':\'); _shape_json_string(typ, out); wrote = true; }',
-    '                for (k, v) in fields { if wrote { out.push(\',\'); } _shape_json_string(k, out); out.push(\':\'); v.write_shape_json(out); wrote = true; }',
-    "                out.push('}');",
-    '            }',
-    '            AstValue::Partial { tag, mode, value } => {',
-    '                out.push_str("{\\"__shapePartial\\":"); _shape_json_string(tag, out);',
-    '                out.push_str(",\\"mode\\":"); _shape_json_string(mode, out);',
-    '                out.push_str(",\\"value\\":"); value.write_shape_json(out);',
-    "                out.push('}');",
-    '            }',
+    '#[derive(Debug)]',
+    "struct DynObj { typ: &'static str, fields: (u32, u32) }",
+    '#[derive(Clone, Copy, Debug)]',
+    "struct PartialRec<'a> { tag: &'static str, mode: &'static str, value: SVal<'a> }",
+    '#[derive(Debug, Default)]',
+    "pub struct AstArena<'a> {",
+    "    /// Source text every SVal::Str span indexes into (M15). Default \"\" —",
+    '    /// any Str read on a default-built arena fails loud (out of bounds).',
+    "    pub src: &'a str,",
+    "    pub lists: Vec<SVal<'a>>,",
+    "    pub node_lists: Vec<u32>,",
+    "    pub fields: Vec<(&'static str, SVal<'a>)>,",
+    '    nodes: Vec<DynObj>,',
+    "    partials: Vec<PartialRec<'a>>,",
+    '    /// Monotonic count of mk_partial calls (never decremented, even on txn',
+    '    /// rollback). Zero means no Partial marker exists anywhere in the arena —',
+    '    /// shape_fold_kids can skip its recursive has_partial scan (M21).',
+    '    pub partial_count: usize,',
+    '    strings: Vec<String>,',
+    '}',
+    "impl<'a> AstArena<'a> {",
+    "    pub fn mk_own_str(&mut self, s: &str) -> SVal<'a> { self.strings.push(s.to_owned()); SVal::OwnStr((self.strings.len() - 1) as u32) }",
+    "    pub fn mk_partial(&mut self, tag: &'static str, mode: &'static str, value: SVal<'a>) -> SVal<'a> { self.partial_count += 1; self.partials.push(PartialRec { tag, mode, value }); SVal::Partial((self.partials.len() - 1) as u32) }",
+    "    pub fn mk_obj_raw(&mut self, typ: &'static str, fstart: usize) -> SVal<'a> {",
+    '        let start = fstart as u32;',
+    '        let len = (self.fields.len() - fstart) as u32;',
+    '        self.nodes.push(DynObj { typ, fields: (start, len) });',
+    '        SVal::Node((self.nodes.len() - 1) as u32)',
+    '    }',
+    "    pub fn mk_obj(&mut self, typ: &'static str, fields: &[(&'static str, SVal<'a>)]) -> SVal<'a> {",
+    '        let fbase = self.fields.len();',
+    '        self.fields.extend_from_slice(fields);',
+    '        self.mk_obj_raw(typ, fbase)',
+    '    }',
+    "    pub fn mk_list(&mut self, elems: &[SVal<'a>]) -> SVal<'a> {",
+    '        if elems.iter().all(|v| matches!(v, SVal::TNode(..))) {',
+    '            let st = self.node_lists.len() as u32;',
+    '            for v in elems { if let SVal::TNode(t, i) = *v { self.node_lists.push((t as u32) << 24 | i); } }',
+    '            SVal::NodeList(st, elems.len() as u32)',
+    '        } else {',
+    '            let start = self.lists.len() as u32;',
+    '            self.lists.extend_from_slice(elems);',
+    '            SVal::List(start, elems.len() as u32)',
     '        }',
     '    }',
+    "    pub fn typ_of(&self, v: SVal<'a>) -> &'static str { if let SVal::Node(i) = v { self.nodes[i as usize].typ } else { \"\" } }",
+    "    pub fn fields_of(&self, v: SVal<'a>) -> &[(&'static str, SVal<'a>)] {",
+    '        if let SVal::Node(i) = v {',
+    '            let (fs, fl) = self.nodes[i as usize].fields;',
+    '            &self.fields[fs as usize..(fs + fl) as usize]',
+    '        } else { &[] }',
+    '    }',
+    "    pub fn list_of(&self, v: SVal<'a>) -> &[SVal<'a>] {",
+    '        if let SVal::List(s, l) = v { &self.lists[s as usize..(s + l) as usize] } else { &[] }',
+    '    }',
+    "    pub fn obj_field(&self, v: SVal<'a>, name: &'static str) -> SVal<'a> {",
+    '        self.fields_of(v).iter().find(|(k, _)| *k == name).map(|(_, x)| *x).unwrap_or(SVal::Null)',
+    '    }',
+    "    pub fn fields_range_of(&self, v: SVal<'a>) -> (usize, usize) {",
+    '        if let SVal::Node(i) = v { let (fs, fl) = self.nodes[i as usize].fields; (fs as usize, fl as usize) } else { (0, 0) }',
+    '    }',
+    "    /// Span → source slice (M15). The slice keeps the source lifetime 'a,",
+    '    /// unlike str_of which reborrows through &self.',
+    "    pub fn str_span(&self, off: u32, len: u32) -> &'a str {",
+    '        &self.src[off as usize..(off + len) as usize]',
+    '    }',
+    "    pub fn str_of(&self, v: SVal<'a>) -> &str {",
+    '        match v {',
+    '            SVal::Str(o, l) => &self.src[o as usize..(o + l) as usize],',
+    '            SVal::OwnStr(i) => &self.strings[i as usize],',
+    '            _ => "",',
+    '        }',
+    '    }',
+    '}',
+    'fn write_sval_json<\'a, C: ShapeCustoms<\'a>>(ar: &AstArena<\'a>, customs: &C, v: SVal<\'a>, out: &mut String) {',
+    '    match v {',
+    '        SVal::Null => out.push_str("null"),',
+    '        SVal::Bool(b) => out.push_str(if b { "true" } else { "false" }),',
+    '        SVal::Number(n) => out.push_str(&n.to_string()),',
+    '        SVal::Str(o, l) => _shape_json_string(&ar.src[o as usize..(o + l) as usize], out),',
+    '        SVal::OwnStr(i) => _shape_json_string(&ar.strings[i as usize], out),',
+    '        SVal::Node(i) => {',
+    '            let o = &ar.nodes[i as usize];',
+    "            out.push('{');",
+    '            let mut wrote = false;',
+    '            if !o.typ.is_empty() { _shape_json_string("type", out); out.push(\':\'); _shape_json_string(o.typ, out); wrote = true; }',
+    '            let (fs, fl) = o.fields;',
+    '            for (k, v) in &ar.fields[fs as usize..(fs + fl) as usize] { if wrote { out.push(\',\'); } _shape_json_string(k, out); out.push(\':\'); write_sval_json(ar, customs, *v, out); wrote = true; }',
+    "            out.push('}');",
+    '        }',
+    '        SVal::List(s, l) => {',
+    "            out.push('[');",
+    '            for (i, v) in ar.lists[s as usize..(s + l) as usize].iter().enumerate() { if i > 0 { out.push(\',\'); } write_sval_json(ar, customs, *v, out); }',
+    "            out.push(']');",
+    '        }',
+    '        SVal::NodeList(s, l) => {',
+    "            out.push('[');",
+    '            for (i, e) in ar.node_lists[s as usize..(s + l) as usize].iter().enumerate() { if i > 0 { out.push(\',\'); } customs.write_tnode_json(ar, (e >> 24) as u16, e & 0xFFFFFF, out); }',
+    "            out.push(']');",
+    '        }',
+    '        SVal::Partial(i) => {',
+    '            let p = &ar.partials[i as usize];',
+    '            out.push_str("{\\"__shapePartial\\":"); _shape_json_string(p.tag, out);',
+    '            out.push_str(",\\"mode\\":"); _shape_json_string(p.mode, out);',
+    '            out.push_str(",\\"value\\":"); write_sval_json(ar, customs, p.value, out);',
+    "            out.push('}');",
+    '        }',
+    '        SVal::TNode(tag, idx) => customs.write_tnode_json(ar, tag, idx, out),',
+    '        SVal::_Marker(_) => {},',
+    '    }',
+    '}',
+    "pub struct AstRoot<'a> { pub root: SVal<'a>, pub arena: AstArena<'a> }",
+    "impl<'a> AstRoot<'a> {",
+    '    pub fn write_shape_json_with<C: ShapeCustoms<\'a>>(&self, customs: &C, out: &mut String) { write_sval_json(&self.arena, customs, self.root, out); }',
+    '    pub fn to_shape_json_with<C: ShapeCustoms<\'a>>(&self, customs: &C) -> String { let mut out = String::new(); self.write_shape_json_with(customs, &mut out); out }',
+    '    pub fn to_shape_json(&self) -> String { self.to_shape_json_with(&DefaultShapeCustoms) }',
+    '}',
   ];
-  lines.push('}');
-
-  for (const [name, node] of [...nodes.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    lines.push('#[derive(Debug, PartialEq)]');
-    lines.push(`pub struct ${rustShapeIdent(name)} {`);
-    for (const field of node.fields) lines.push(`    pub ${rustShapeIdent(field.name)}: ${rustShapeFieldType(field, known)},`);
-    if (shapeIR.spans !== 'none') {
-      const spanTy = shapeIR.spans === 'optional' ? 'Option<usize>' : 'usize';
-      lines.push(`    pub off: ${spanTy},`, `    pub end: ${spanTy},`);
-    }
-    lines.push('}');
-    lines.push(`impl ShapeJson for ${rustShapeIdent(name)} { fn write_shape_json(&self, out: &mut String) {`);
-    lines.push(`    out.push_str(${J(`{"type":${JSON.stringify(name)}`)});`);
-    for (const field of node.fields) {
-      lines.push(`    out.push_str(${J(`,"${field.name}":`)}); self.${rustShapeIdent(field.name)}.write_shape_json(out);`);
-    }
-    if (shapeIR.spans !== 'none') {
-      lines.push('    out.push_str(",\\"off\\":"); self.off.write_shape_json(out);');
-      lines.push('    out.push_str(",\\"end\\":"); self.end.write_shape_json(out);');
-    }
-    lines.push("    out.push('}');", '} }');
-  }
-
-  for (const union of unions) {
-    lines.push('#[derive(Debug, PartialEq)]', `pub enum ${union.name} {`);
-    for (const member of union.members) {
-      lines.push(`    ${member.variant}(${member.boxed ? `Box<${member.ty}>` : member.ty}),`);
-    }
-    lines.push('}');
-    lines.push(`impl ShapeJson for ${union.name} { fn write_shape_json(&self, out: &mut String) { match self {`);
-    for (const member of union.members) lines.push(`    Self::${member.variant}(v) => v.write_shape_json(out),`);
-    lines.push('} } }');
-    if (union.alias) lines.push(`pub type ${union.alias} = ${union.name};`);
-  }
-  const unionNames = new Set(unions.map((u) => u.name));
-  if (unionNames.has('StmtShape') && !unions.some((u) => u.alias === 'Statement')) {
-    lines.push('pub type Statement = StmtShape;');
-  }
-  if (unionNames.has('ExprShape') && !unions.some((u) => u.alias === 'Expression')) {
-    lines.push('pub type Expression = ExprShape;');
-  }
-
-  lines.push('pub type AstRoot = AstValue;');
   return lines.join('\n');
 }
 
-function rustShapeLeafAstExpr(policy: TokenLeafPolicy, text: string): string {
-  if (policy.action !== 'leafValue') return `AstValue::String(${text}.to_owned())`;
-  if (policy.fn === 'number') return `AstValue::Number(self.customs.leaf_number(${text}))`;
-  if (policy.fn === 'boolean') return `AstValue::Bool(self.customs.leaf_boolean(${text}))`;
-  if (policy.fn === 'bigint') return `AstValue::String(self.customs.leaf_ident(${text}))`; // JSON-safe string form; SH3-4 may specialize
-  return `AstValue::String(self.customs.leaf_ident(${text}))`;
+/** M15: leaves are source spans — offExpr/lenExpr are u32 code fragments.
+ *  leaf_number/leaf_boolean still go through the customs hook with a source
+ *  slice (TS overrides leaf_number); leaf_ident/bind_op are identity in every
+ *  shipped customs, so ident/bigint leaves construct the span directly. */
+function rustShapeLeafAstExpr(policy: TokenLeafPolicy, off: string, len: string): string {
+  const slice = `&self.src[${off} as usize..(${off} + ${len}) as usize]`;
+  if (policy.action !== 'leafValue') return `SVal::Str(${off}, ${len})`;
+  if (policy.fn === 'number') return `SVal::Number(self.customs.leaf_number(${slice}))`;
+  if (policy.fn === 'boolean') return `SVal::Bool(self.customs.leaf_boolean(${slice}))`;
+  return `SVal::Str(${off}, ${len})`; // bigint/ident: leaf hook is identity (M15)
 }
 
-/** Recursive RD step renderer — mirrors TS emitAstRdAltSteps; flag-based (no &mut self closures). */
+/** Recursive RD step renderer — arena stack model (SH3-6): every sink is the
+ *  parser's arena vals stack; per-construct "vecs" are base watermarks. */
 function emitRustAstRdAltSteps(
   steps: Step[],
   ids: LexIdPlan,
   leaves: Record<string, TokenLeafPolicy>,
-  kidsVar: string,
-  altVar: string,
   selfRule?: string,
   selfRuleUseBp?: boolean,
 ): { ok: string; okVar: string } {
@@ -3168,64 +3233,98 @@ function emitRustAstRdAltSteps(
       case 'sameLine': return false;
     }
   };
+  /** M18: txn purity — true when the step's OUTER trace is confined to
+   *  pos/vals (so a surrounding txn can use the 2-field light snapshot).
+   *  lit/tok/altlit touch pos + vals only; sameLine is read-only; not is
+   *  self-restoring (full ck/restore inside) and externally transparent;
+   *  suppress self-restores suppress_next. Visible star/opt/sep/alt write
+   *  the arena via shape_pack_range/shape_list_from on success paths —
+   *  impure. rule/ruleBp call parse_ast_* which may write the arena
+   *  (customs/pack) — always impure. */
+  const pure = (s: Step): boolean => {
+    switch (s.t) {
+      case 'lit':
+      case 'tok':
+      case 'altlit': return true;
+      case 'sameLine': return true;
+      case 'not': return true;
+      case 'suppress': return s.steps.every(pure);
+      case 'seq': return s.steps.every(pure);
+      case 'star': return !visible(s.step) && pure(s.step);
+      case 'opt': return !s.steps.some(visible) && s.steps.every(pure);
+      case 'sep': return !visible(s.elem) && pure(s.elem);
+      case 'alt': return !visible(s) && s.branches.every((b) => b.every(pure));
+      case 'rule':
+      case 'ruleBp': return false;
+    }
+  };
+  /** M18: txn snapshot pair — pure guarded steps get a light snapshot of the
+   *  three mutable channels a pure txn can touch (pos, vals, ap_stack — the
+   *  alt-branch shell pushes ap_stack inside the guarded region, so the light
+   *  restore must rewind it too); anything that can touch the arena, suppress
+   *  state or capped keeps the full 10-field ShapeCk. */
+  const txnCk = (v: string, light: boolean): string =>
+    light ? `let ${v} = (self.pos, self.vals.len(), self.ap_stack.len());` : `let ${v} = self.shape_ck();`;
+  const txnRestore = (v: string, light: boolean): string =>
+    light ? `self.pos = ${v}.0; self.vals.truncate(${v}.1); self.ap_stack.truncate(${v}.2);` : `self.shape_restore(${v});`;
   let localId = 0;
   const local = (stem: string): string => `_shape_${stem}_${localId++}`;
   /** FIRST pre-filter over the current token; null when not worth guarding. */
   const firstGuard = (f: FirstSig, nAlts?: number): string | null =>
     isFirstGuardable(f, nAlts) ? firstCond(f, 't', ids) : null;
-  const emitSteps = (xs: Step[], sink: string, okVar: string): string =>
-    xs.map((x) => emitStep(x, sink, okVar)).join('\n');
-  const emitStep = (s: Step, sink: string, okVar: string): string => {
+  const emitSteps = (xs: Step[], okVar: string): string =>
+    xs.map((x) => emitStep(x, okVar)).join('\n');
+  const emitStep = (s: Step, okVar: string): string => {
     switch (s.t) {
       case 'lit': {
-        const push = rustLeafDropped(s.ttype, leaves) ? '' : `${sink}.push(AstValue::String(${J(s.value)}.to_owned()));`;
+        // M15: a consumed literal's text is exactly its token span in src.
+        const push = rustLeafDropped(s.ttype, leaves) ? '' : `let _lt = self.toks[self.pos - 1]; self.vals.push(SVal::Str(_lt.off, _lt.end - _lt.off));`;
         return `if ${okVar} { if self.take_lit(${lidOf(ids, s.value)}).is_none() { ${okVar} = false; } else { ${push} } }`;
       }
       case 'tok': {
         const t = local('tok');
         if (rustLeafDropped(s.name, leaves)) {
-          return `if ${okVar} { if self.take_text(${kidOf(ids, s.name)}).is_none() { ${okVar} = false; } }`;
+          return `if ${okVar} { if self.take_span(${kidOf(ids, s.name)}).is_none() { ${okVar} = false; } }`;
         }
-        return `if ${okVar} { match self.take_text(${kidOf(ids, s.name)}) { Some(${t}) => { ${sink}.push(${rustShapeLeafAstExpr(leaves[s.name] ?? { action: 'keep' }, t)}); } None => { ${okVar} = false; } } }`;
+        return `if ${okVar} { match self.take_span(${kidOf(ids, s.name)}) { Some((${t}_o, ${t}_l)) => { self.vals.push(${rustShapeLeafAstExpr(leaves[s.name] ?? { action: 'keep' }, `${t}_o`, `${t}_l`)}); } None => { ${okVar} = false; } } }`;
       }
       case 'rule': {
         const v = local('rule');
         const call = selfRuleUseBp && s.name === selfRule
           ? `self.parse_ast_${s.name}_bp(1)`
           : `self.parse_ast_${s.name}()`;
-        return `if ${okVar} { match ${call} { Some(${v}) => { ${sink}.push(${v}); } None => { ${okVar} = false; } } }`;
+        return `if ${okVar} { match ${call} { Some(${v}) => { self.vals.push(${v}); } None => { ${okVar} = false; } } }`;
       }
       case 'ruleBp': {
         const v = local('rulebp');
-        return `if ${okVar} { match self.parse_ast_${s.name}_bp(${s.bp}) { Some(${v}) => { ${sink}.push(${v}); } None => { ${okVar} = false; } } }`;
+        return `if ${okVar} { match self.parse_ast_${s.name}_bp(${s.bp}) { Some(${v}) => { self.vals.push(${v}); } None => { ${okVar} = false; } } }`;
       }
       case 'seq':
-        return emitSteps(s.steps, sink, okVar);
+        return emitSteps(s.steps, okVar);
       case 'sameLine':
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
       case 'not': {
         // Gate on okVar to match TS `&&` short-circuit — otherwise probe still
         // runs after a failed predecessor and can re-enter recursive rules.
-        const nv = local('not_kids');
         const poke = local('probe');
-        const body = emitSteps(s.steps, nv, poke);
+        const body = emitSteps(s.steps, poke);
+        const light = s.steps.every(pure);
         return `if ${okVar} {
-            let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
-            let mut ${nv}: Vec<AstValue> = Vec::new();
+            ${txnCk('_ck', light)}
             let mut ${poke} = true;
             ${body}
             let _probe_hit = ${poke};
-            self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
+            ${txnRestore('_ck', light)}
             if _probe_hit { ${okVar} = false; }
         }`;
       }
       case 'suppress': {
         const sok = local('sup_ok');
         return `if ${okVar} {
-            let _sn_save = self.suppress_next.clone();
-            self.set_suppress_next(Some(std::rc::Rc::from(vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}])));
+            let _sn_save = self.suppress_next;
+            self.set_suppress_next(Some(&[${s.connectors.map((c) => lidOf(ids, c)).join(', ')}u16][..]));
             let mut ${sok} = true;
-            ${emitSteps(s.steps, sink, sok)}
+            ${emitSteps(s.steps, sok)}
             self.set_suppress_next(_sn_save);
             if !${sok} { ${okVar} = false; }
         }`;
@@ -3235,8 +3334,8 @@ function emitRustAstRdAltSteps(
         const arms = s.opts.map((o) => {
           const push = visible(s)
             ? (rustLeafDropped(o.ttype, leaves)
-              ? `${sink}.push(AstValue::Null);`
-              : `${sink}.push(AstValue::String(${J(o.value)}.to_owned()));`)
+              ? `self.vals.push(SVal::Null);`
+              : `self.vals.push(SVal::Str(t.off, t.end - t.off));`)
             : '';
           return `${lidOf(ids, o.value)} => { self.pos += 1; ${push} ${matched} = true; }`;
         }).join('\n                    ');
@@ -3256,27 +3355,28 @@ function emitRustAstRdAltSteps(
         // ClassMember↔Block↔Stmt↔Decl infinite recursion on shallow inputs.
         const flag = local('alt_ok');
         const tries = s.branches.map((b, i) => {
-          const av = local('alt');
+          const ab = local('alt_base');
           const bok = local('br');
-          const body = emitSteps(b, av, bok);
-          const push = visible(s) ? `${sink}.push(Self::shape_pack(${av}));` : '';
+          const body = emitSteps(b, bok);
+          const push = visible(s) ? `let _p = self.shape_pack_range(${ab}); self.vals.push(_p);` : '';
           // FIRST pre-filter: a branch whose leading set misses the current
           // token is skipped without ck + walk + restore (IR-annotated firsts).
           const fguard = firstGuard(s.firsts?.[i] ?? null, s.branches.length);
           const cond = fguard
             ? `!${flag} && (match self.toks.get(self.pos) { Some(t) => ${fguard}, None => false })`
             : `!${flag}`;
+          const light = b.every(pure);
           return `if ${cond} {
-                let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
-                ${altVar}.push(${i});
-                let mut ${av}: Vec<AstValue> = Vec::new();
+                ${txnCk('_ck', light)}
+                self.ap_stack.push(${i});
+                let ${ab} = self.vals.len();
                 let mut ${bok} = true;
                 ${body}
                 if ${bok} {
                     ${push}
                     ${flag} = true;
                 } else {
-                    self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
+                    ${txnRestore('_ck', light)}
                 }
             }`;
         }).join('\n            ');
@@ -3287,27 +3387,28 @@ function emitRustAstRdAltSteps(
         }`;
       }
       case 'star': {
-        const out = local('star_out');
-        const sv = local('star_v');
+        const ob = local('star_base');
+        const sb = local('star_vbase');
         const sok = local('star_ok');
-        const body = emitStep(s.step, sv, sok);
-        const add = visible(s.step) ? `${out}.push(Self::shape_pack(${sv}));` : '';
-        const finish = visible(s.step) ? `${sink}.push(AstValue::Array(${out}));` : '';
+        const body = emitStep(s.step, sok);
+        const add = visible(s.step) ? `let _p = self.shape_pack_range(${sb}); self.vals.push(_p);` : '';
+        const finish = visible(s.step) ? `let _lst = self.shape_list_from(${ob}); self.vals.push(_lst);` : '';
         // FIRST pre-filter: skip the doomed exit walk (ck + failed body + restore).
         const fguard = firstGuard(rustShapeFirstOfSteps([s.step]));
         const cont = fguard
           ? `if !(match self.toks.get(self.pos) { Some(t) => ${fguard}, None => false }) { break; }`
           : '';
+        const light = pure(s.step);
         return `if ${okVar} {
-            let mut ${out}: Vec<AstValue> = Vec::new();
+            let ${ob} = self.vals.len();
             loop {
                 ${cont}
-                let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
-                let mut ${sv}: Vec<AstValue> = Vec::new();
+                ${txnCk('_ck', light)}
+                let ${sb} = self.vals.len();
                 let mut ${sok} = true;
                 ${body}
                 if !${sok} {
-                    self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
+                    ${txnRestore('_ck', light)}
                     break;
                 }
                 ${add}
@@ -3317,43 +3418,46 @@ function emitRustAstRdAltSteps(
       }
       case 'opt': {
         // FIRST pre-filter: an absent optional skips ck + walk + restore.
-        const ov = local('opt');
+        const ob = local('opt_base');
         const ook = local('opt_ok');
-        const body = emitSteps(s.steps, ov, ook);
+        const body = emitSteps(s.steps, ook);
         const push = s.steps.some(visible)
-          ? `${sink}.push(if ${ook} { Self::shape_pack(${ov}) } else { AstValue::Null });`
+          ? `let _p = if ${ook} { self.shape_pack_range(${ob}) } else { SVal::Null }; self.vals.push(_p);`
           : '';
         const fguard = firstGuard(rustShapeFirstOfSteps(s.steps));
-        const inner = `let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
+        const light = s.steps.every(pure);
+        const inner = `${txnCk('_ck', light)}
             ${body}
             if !${ook} {
-                self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
+                ${txnRestore('_ck', light)}
             }`;
         return `if ${okVar} {
-            let mut ${ov}: Vec<AstValue> = Vec::new();
+            let ${ob} = self.vals.len();
             let mut ${ook} = true;
             ${fguard ? `if (match self.toks.get(self.pos) { Some(t) => ${fguard}, None => false }) { ${inner} }` : inner}
             ${push}
         }`;
       }
       case 'sep': {
-        const out = local('sep_out');
-        const ev = local('sep_v');
+        const ob = local('sep_base');
+        const eb = local('sep_vbase');
         const fok = local('first_ok');
         const eok = local('elem_ok');
-        const bodyFirst = emitStep(s.elem, ev, fok);
-        const bodyElem = emitStep(s.elem, ev, eok);
-        const add = visible(s.elem) ? `${out}.push(Self::shape_pack(std::mem::take(&mut ${ev})));` : '';
+        const bodyFirst = emitStep(s.elem, fok);
+        const bodyElem = emitStep(s.elem, eok);
+        const add = visible(s.elem) ? `let _p = self.shape_pack_range(${eb}); self.vals.push(_p);` : '';
         // After first failure: push empty array (zero elems). After success path: move out.
-        const finishEmpty = visible(s.elem) ? `${sink}.push(AstValue::Array(Vec::new()));` : '';
-        const finishMove = visible(s.elem) ? `${sink}.push(AstValue::Array(${out}));` : '';
+        const finishEmpty = visible(s.elem) ? `self.vals.push(SVal::List(0, 0));` : '';
+        const finishMove = visible(s.elem) ? `let _lst = self.shape_list_from(${ob}); self.vals.push(_lst);` : '';
         // FIRST pre-filter on the leading element: absent list skips ck + walk.
         const fguard = firstGuard(rustShapeFirstOfSteps([s.elem]));
-        const attempt = `let _ck = self.shape_ck(${sink}.len(), ${altVar}.len());
+        const light = pure(s.elem);
+        const attempt = `${txnCk('_ck', light)}
+            let ${eb} = self.vals.len();
             let mut ${fok} = true;
             ${bodyFirst}
             if !${fok} {
-                self.shape_restore(_ck, &mut ${sink}, &mut ${altVar});
+                ${txnRestore('_ck', light)}
                 ${finishEmpty}
             } else {
                 ${add}
@@ -3363,7 +3467,7 @@ function emitRustAstRdAltSteps(
                         self.pos = _d;
                         break;
                     }
-                    ${ev} = Vec::new();
+                    let ${eb} = self.vals.len();
                     let mut ${eok} = true;
                     ${bodyElem}
                     if !${eok} {
@@ -3375,68 +3479,68 @@ function emitRustAstRdAltSteps(
                 ${finishMove}
             }`;
         return `if ${okVar} {
-            let mut ${out}: Vec<AstValue> = Vec::new();
-            let mut ${ev}: Vec<AstValue> = Vec::new();
+            let ${ob} = self.vals.len();
             ${fguard ? `if (match self.toks.get(self.pos) { Some(t) => ${fguard}, None => false }) { ${attempt} } else { ${finishEmpty} }` : attempt}
         }`;
       }
     }
   };
   const okVar = local('steps_ok');
-  const body = emitSteps(steps, kidsVar, okVar);
+  const body = emitSteps(steps, okVar);
+  const light = steps.every(pure);
   return {
-    ok: `let mut ${altVar}: Vec<usize> = Vec::new();
-        let _txn_ck = self.shape_ck(${kidsVar}.len(), ${altVar}.len());
+    ok: `${txnCk('_txn_ck', light)}
         let mut ${okVar} = true;
         ${body}
         if !${okVar} {
-            self.shape_restore(_txn_ck, &mut ${kidsVar}, &mut ${altVar});
+            ${txnRestore('_txn_ck', light)}
         }`,
     okVar,
   };
 }
 
 
-/** Emit ShapeCustoms::ast_custom call with owned AstCustomCtx (no &mut parser borrow). */
+/** Emit ShapeCustoms::ast_custom call with borrowed ctx + arena (SH3-6). */
 function rustAstCustomCall(
   fn: string,
   ruleName: string,
-  kidsExpr: string,
-  altPathExpr: string,
-  offExpr: string,
-  endExpr: string,
-  opts?: {
+  args: {
+    /** Statements staging kids before the call (usually ''; kids slice borrows self.vals directly). */
+    kidsPrep: string;
+    /** `&[SVal]` expression usable after kidsPrep. */
+    kidsSlice: string;
+    /** Statements staging the alt path ('' when none). */
+    altPrep: string;
+    /** `&[usize]` expression usable after altPrep. */
+    altSlice: string;
+    offExpr: string;
+    endExpr: string;
     leftExpr?: string;
-    /** Expression yielding String (`.as_str()` applied) or already `&str` when opIsStr. */
     opExpr?: string;
-    opIsStr?: boolean;
     folds?: ParentFold[];
   },
 ): string {
-  const folds = opts?.folds ?? [];
+  const folds = args.folds ?? [];
   const foldPairs = folds.map((f) => `(${J(f.tag)}, ${J(f.into)})`).join(', ');
-  const kidsPrep = folds.length > 0
-    ? `let (__fk, __fs) = Self::shape_fold_kids(${kidsExpr}, &[${foldPairs}]);`
-    : `let __fk = ${kidsExpr};`;
+  const foldPrep = folds.length > 0
+    ? `let (__fk, __fs) = Self::shape_fold_kids(&mut self.arena, self.customs, ${args.kidsSlice}, &[${foldPairs}]);`
+    : '';
+  const kidsExpr = folds.length > 0 ? '&*__fk' : args.kidsSlice;
   const stateExpr = folds.length > 0 ? '__fs' : 'None';
-  const opText = opts?.opExpr
-    ? (opts.opIsStr ? `Some(${opts.opExpr})` : `Some((${opts.opExpr}).as_str())`)
-    : 'None';
-  return `{
-            ${kidsPrep}
-            self.customs.ast_custom(${J(fn)}, AstCustomCtx {
-                name: ${J(fn)},
-                rule: ${J(ruleName)},
-                src: self.src,
-                kids: __fk,
-                alt_path: ${altPathExpr},
-                off: ${offExpr},
-                end: ${endExpr},
-                left: ${opts?.leftExpr ? `Some(${opts.leftExpr})` : 'None'},
-                op_text: ${opText},
-                state: ${stateExpr},
-            })
+  const call = `{
+            let __off = ${args.offExpr};
+            let __end = ${args.endExpr};
+            ${args.kidsPrep}
+            ${args.altPrep}
+            ${foldPrep}
+            self.customs.${fn}(&mut self.arena, self.src, ${kidsExpr}, ${args.altSlice}, __off, __end, ${args.leftExpr ? `Some(${args.leftExpr})` : 'None'}, ${args.opExpr ? `Some(${args.opExpr})` : 'None'}, ${stateExpr})
         }`;
+  // A kids slice borrowed straight from self.vals is NOT consumed by the call
+  // (the retired kids_scratch drain was). Truncate after to restore drain
+  // semantics — the Pratt led/nud/group finishes have no truncate of their own.
+  return args.kidsSlice === '&self.vals[_sk_base..]'
+    ? `{ let _cv = ${call}; self.vals.truncate(_sk_base); _cv }`
+    : call;
 }
 
 function emitRustRdMethod(
@@ -3446,10 +3550,10 @@ function emitRustRdMethod(
   shapeIR: ShapeIR,
 ): string {
   const leaves = shapeIR.leaves;
-  const ret = 'AstValue';
+  const ret = "SVal<'a>";
 
-  const finishNode = (node: NodeShape, kidsVar: string, offExpr: string): string =>
-    rustShapeNodeObjectExpr(node, kidsVar, 'String::new()', shapeIR.spans, offExpr, 'self.last_end(' + offExpr + ')');
+  const finishNode = (node: NodeShape, baseExpr: string, offExpr: string): string =>
+    rustShapeNodeObjectExpr(node, baseExpr, '(0u32, 0u32)', shapeIR.spans, offExpr, 'self.last_end(' + offExpr + ')');
 
   const tryAlt = (altIdx: number, finish: string, guardFirst: boolean): string => {
     const alt = rule.alts[altIdx]!;
@@ -3457,19 +3561,66 @@ function emitRustRdMethod(
     const guardExpr = useGuard
       ? `_ft.is_some() && { let t = _ft.unwrap(); ${firstCond(rule.altFirst[altIdx]!, 't', ids)} }`
       : 'true';
-    const steps = emitRustAstRdAltSteps(alt, ids, leaves, '_sk', '_ap');
-    const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk').replaceAll('__SPOFF__', 'sp_off');
+    const steps = emitRustAstRdAltSteps(alt, ids, leaves);
+    const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk_base').replaceAll('__SPOFF__', 'sp_off');
     return `{
             let sp = self.pos;
             let sp_off = self.current_off();
             if ${guardExpr} {
-                let mut _sk: Vec<AstValue> = Vec::new();
+                let _sk_base = self.vals.len();
+                let _ap_base = self.ap_stack.len();
+                self.ap_stack.push(${altIdx}usize);
                 ${steps.ok}
                 if ${steps.okVar} {
                     let _shape_finished = ${finished};
-                    if _shape_finished.is_some() { return _shape_finished; }
+                    self.vals.truncate(_sk_base);
+                    if _shape_finished.is_some() { self.ap_stack.truncate(_ap_base); return _shape_finished; }
                 }
+                self.ap_stack.truncate(_ap_base);
                 self.pos = sp;
+            }
+        }`;
+  };
+
+  /** Alt composition: disjoint-FIRST rules dispatch via one match on the
+   *  current token instead of sequential guard evals (SH3-6 M3).
+   *  NOTE: partial-predictive (match on a disjoint subset) measured a
+   *  wash-to-loss on this grammar — or-pattern chains don't jump-table and
+   *  cost more than the cheap sequential FIRST guards they replace (M6
+   *  reverted). */
+  const tryAlts = (tries: Array<{ altIdx: number; finish: string }>): string => {
+    if (!rule.predictive) {
+      return tries.map((t) => tryAlt(t.altIdx, t.finish, true)).join('\n        ');
+    }
+    const arms = tries.map(({ altIdx, finish }) => {
+      const f = rule.altFirst[altIdx]!;
+      const pats = [
+        ...f.lits.map((l) => `Some((${lidOf(ids, l)}, _))`),
+        ...f.toks.map((k) => `Some((_, ${kidOf(ids, k)}))`),
+      ].join(' | ');
+      const alt = rule.alts[altIdx]!;
+      const steps = emitRustAstRdAltSteps(alt, ids, leaves);
+      const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk_base').replaceAll('__SPOFF__', 'sp_off');
+      return `${pats} => {
+                let _sk_base = self.vals.len();
+                let _ap_base = self.ap_stack.len();
+                self.ap_stack.push(${altIdx}usize);
+                ${steps.ok}
+                if ${steps.okVar} {
+                    let _shape_finished = ${finished};
+                    self.vals.truncate(_sk_base);
+                    if _shape_finished.is_some() { self.ap_stack.truncate(_ap_base); return _shape_finished; }
+                }
+                self.ap_stack.truncate(_ap_base);
+                self.pos = sp;
+            }`;
+    }).join('\n        ');
+    return `{
+            let sp = self.pos;
+            let sp_off = self.current_off();
+            match self.toks.get(self.pos).map(|t| (t.lid, t.kid)) {
+                ${arms}
+                _ => {}
             }
         }`;
   };
@@ -3484,14 +3635,21 @@ function emitRustRdMethod(
   }
   if (sir.shape.kind === 'custom') {
     const shape = sir.shape;
-    const tries = rule.alts.map((_, ai) => {
-      const altPathExpr = `{ let mut __ap = vec![${ai}usize]; __ap.extend(_ap.iter().copied()); __ap }`;
-      const finish = `match ${rustAstCustomCall(shape.fn, rule.name, '_sk', altPathExpr, 'sp_off', 'self.last_end(sp_off)', { folds: shape.folds })} { AstValue::Null => None, v => Some(v) }`;
-      return tryAlt(ai, finish, true);
-    }).join('\n        ');
+    const tries = rule.alts.map((_, ai) => ({
+      altIdx: ai,
+      finish: `match ${rustAstCustomCall(shape.fn, rule.name, {
+        kidsPrep: '',
+        kidsSlice: '&self.vals[_sk_base..]',
+        altPrep: '',
+        altSlice: '&self.ap_stack[_ap_base..]',
+        offExpr: 'sp_off',
+        endExpr: 'self.last_end(sp_off)',
+        folds: shape.folds,
+      })} { SVal::Null => None, v => Some(v) }`,
+    }));
     const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${needPeek ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tries}
+        ${needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tryAlts(tries)}
         None
     }`;
   }
@@ -3512,83 +3670,100 @@ function emitRustRdMethod(
     }
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let sp = self.pos;
-        let mut out: Vec<AstValue> = Vec::new();
+        let _out_base = self.vals.len();
         loop {
             let sp2 = self.pos;
             match self.parse_ast_${elemRule}() {
-                Some(el) => out.push(el),
+                Some(el) => self.vals.push(el),
                 None => { self.pos = sp2; break; }
             }
         }
-        if self.pos == sp && out.is_empty() { return None; }
-        Some(AstValue::Array(out))
+        if self.pos == sp && self.vals.len() == _out_base { return None; }
+        Some(self.shape_list_from(_out_base))
     }`;
   }
   if (sir.shape.kind === 'keep') {
     // Positional keep via RD alts → object with children
-    const tries = rule.alts.map((_, ai) => {
-      const finish = `Some(AstValue::Object { typ: ${J(rule.cstName)}, fields: vec![("children", AstValue::Array(__SK__))] })`;
-      return tryAlt(ai, finish, true);
-    }).join('\n        ');
+    const tries = rule.alts.map((_, ai) => ({
+      altIdx: ai,
+      finish: `Some({
+            let _cl = self.shape_list_from(_sk_base);
+            let _fbase = self.arena.fields.len();
+            self.arena.fields.push(("children", _cl));
+            self.customs.finish_obj(&mut self.arena, ${J(rule.cstName)}, _fbase)
+        })`,
+    }));
     const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${needPeek ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tries}
+        ${needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tryAlts(tries)}
         None
     }`;
   }
   if (sir.shape.kind === 'choice') {
     const shape = sir.shape;
-    const armBlocks: string[] = [];
+    const armBlocks: Array<{ altIdx: number; finish: string }> = [];
     for (const arm of shape.arms) {
       let finish: string;
       if (arm.shape.kind === 'node') {
         finish = `Some(${finishNode(arm.shape, '__SK__', '__SPOFF__')})`;
       } else if (arm.shape.kind === 'inline') {
-        finish = `Some(Self::shape_pack(__SK__))`;
+        finish = `Some(self.shape_pack_range(_sk_base))`;
       } else if (arm.shape.kind === 'keep') {
-        finish = `Some(AstValue::Object { typ: ${J(rule.cstName)}, fields: vec![
-                    ("children", AstValue::Array(__SK__)),
-                    ("arm", AstValue::String(${J(arm.name)}.to_owned())),
-                    ("alt", AstValue::Number(__ALT__ as f64)),
-                ] })`;
+        finish = `Some({
+                    let _cl = self.shape_list_from(_sk_base);
+                    let _fbase = self.arena.fields.len();
+                    self.arena.fields.push(("children", _cl));
+                    self.arena.fields.push(("arm", SVal::OwnStr(${_rustShapeArmNames!.get(arm.name)!})));
+                    self.arena.fields.push(("alt", SVal::Number(__ALT__ as f64)));
+                    self.customs.finish_obj(&mut self.arena, ${J(rule.cstName)}, _fbase)
+                })`;
       } else if (arm.shape.kind === 'list') {
-        finish = `Some(AstValue::Array(__SK__))`;
+        finish = `Some(self.shape_list_from(_sk_base))`;
       } else if (arm.shape.kind === 'custom') {
-        const altPathExpr = '{ let mut __ap = vec![__ALT__usize]; __ap.extend(_ap.iter().copied()); __ap }';
-        finish = `match ${rustAstCustomCall(arm.shape.fn, rule.name, '__SK__', altPathExpr, '__SPOFF__', 'self.last_end(__SPOFF__)', { folds: arm.shape.folds })} { AstValue::Null => None, v => Some(v) }`;
+        finish = `match ${rustAstCustomCall(arm.shape.fn, rule.name, {
+          kidsPrep: '',
+          kidsSlice: '&self.vals[_sk_base..]',
+          altPrep: '',
+          altSlice: '&self.ap_stack[_ap_base..]',
+          offExpr: '__SPOFF__',
+          endExpr: 'self.last_end(__SPOFF__)',
+          folds: arm.shape.folds,
+        })} { SVal::Null => None, v => Some(v) }`;
       } else {
         finish = `None`;
       }
       for (const altIdx of arm.altIndices) {
-        armBlocks.push(tryAlt(altIdx, finish, true));
+        armBlocks.push({ altIdx, finish });
       }
     }
     const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${needPeek ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${armBlocks.join('\n        ')}
+        ${needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tryAlts(armBlocks)}
         None
     }`;
   }
   if (sir.shape.kind === 'node') {
     const node = sir.shape;
     if (rule.alts.length === 1) {
-      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves, '_sk', '_ap');
+      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves);
       return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let sp = self.pos;
         let sp_off = self.current_off();
-        let mut _sk: Vec<AstValue> = Vec::new();
+        let _sk_base = self.vals.len();
         ${steps.ok}
         if !${steps.okVar} { self.pos = sp; return None; }
-        Some(${finishNode(node, '_sk', 'sp_off')})
+        let _shape_v = ${finishNode(node, '_sk_base', 'sp_off')};
+        self.vals.truncate(_sk_base);
+        Some(_shape_v)
     }`;
     }
-    const tries = rule.alts.map((_, ai) => {
-      const finish = `Some(${finishNode(node, '__SK__', '__SPOFF__')})`;
-      return tryAlt(ai, finish, true);
-    }).join('\n        ');
+    const tries = rule.alts.map((_, ai) => ({
+      altIdx: ai,
+      finish: `Some(${finishNode(node, '__SK__', '__SPOFF__')})`,
+    }));
     const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${needPeek ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tries}
+        ${needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tryAlts(tries)}
         None
     }`;
   }
@@ -3608,16 +3783,16 @@ function emitRustPrattMethod(
   let shape: RuleShape = sir.shape;
   if (shape.kind === 'keep') shape = { kind: 'pratt' };
   if (shape.kind !== 'pratt') {
-    return `    fn parse_ast_${rule.name}(&mut self) -> Option<AstValue> { unimplemented!("expected pratt") }
-    fn parse_ast_${rule.name}_bp(&mut self, _min_bp: i64) -> Option<AstValue> { unimplemented!() }
-    fn parse_ast_${rule.name}_nud(&mut self, _min_bp: i64) -> Option<AstValue> { unimplemented!() }`;
+    return `    fn parse_ast_${rule.name}(&mut self) -> Option<SVal<'a>> { unimplemented!("expected pratt") }
+    fn parse_ast_${rule.name}_bp(&mut self, _min_bp: i64) -> Option<SVal<'a>> { unimplemented!() }
+    fn parse_ast_${rule.name}_nud(&mut self, _min_bp: i64) -> Option<SVal<'a>> { unimplemented!() }`;
   }
   const ps = shape;
   const leaves = shapeIR.leaves;
-  const ret = 'AstValue';
+  const ret = "SVal<'a>";
   const tpl = ir.tpl;
   const emptySteps = (steps: Step[], selfBp = false) =>
-    emitRustAstRdAltSteps(steps, ids, leaves, '_sk', '_ap', selfBp ? rule.name : undefined, selfBp);
+    emitRustAstRdAltSteps(steps, ids, leaves, selfBp ? rule.name : undefined, selfBp);
 
   /** Missing Pratt slot → keep (positional), matching TS emitAstPrattRule. */
   const slotOf = (declared: { kind: string } | undefined, present: boolean): { kind: string } | null => {
@@ -3625,23 +3800,37 @@ function emitRustPrattMethod(
     return declared ?? { kind: 'keep' };
   };
 
-  const keepFinish = (kidsExpr: string, cstName: string): string =>
+  /** Keep finish from a stack range [baseExpr..] — drains it into a children list. */
+  const keepFinish = (baseExpr: string, cstName: string): string =>
     `{
-            let _kf_kids = ${kidsExpr};
-            let _ht = Self::shape_head_text(_kf_kids.first());
-            AstValue::Object { typ: ${J(cstName)}, fields: vec![
-                ("children", AstValue::Array(_kf_kids)),
-                ("headText", AstValue::String(_ht)),
-            ] }
+            let _cl = self.shape_list_from(${baseExpr});
+            let _ht = self.shape_head_text(_cl);
+            self.customs.keep_node(&mut self.arena, ${J(cstName)}, _cl, _ht)
+        }`;
+
+  /** Keep finish from a borrowed slice (template helper kids) — copies it. */
+  const keepFinishSlice = (kidsSlice: string, cstName: string): string =>
+    `{
+            let _ht = {
+                let _f = (${kidsSlice}).first().copied().unwrap_or(SVal::Null);
+                self.shape_head_text(_f)
+            };
+            let _lstart = self.arena.lists.len() as u32;
+            self.arena.lists.extend_from_slice((${kidsSlice}).as_ref());
+            self.customs.keep_node(&mut self.arena, ${J(cstName)}, SVal::List(_lstart, (${kidsSlice}).len() as u32), _ht)
         }`;
 
   /** TS three-state inline finish: 1→unwrap, 0→None, else array. */
-  const inlineFinishReturn = (kidsExpr: string): string =>
-    `match Self::shape_inline_finish(${kidsExpr}) { Some(v) => return Some(v), None => return None }`;
+  const inlineFinishReturn = (baseExpr: string): string =>
+    `match self.shape_inline_finish(${baseExpr}) { Some(v) => return Some(v), None => return None }`;
+
+  /** Node finishes only READ the kids range — consume it before returning. */
+  const nodeFinish = (nodeExpr: string, baseExpr: string): string =>
+    `{ let _shape_v = ${nodeExpr}; self.vals.truncate(${baseExpr}); _shape_v }`;
 
   const customCall = (
     fn: string,
-    kidsExpr: string,
+    kidsSlice: string,
     altExpr: string,
     offExpr: string,
     endExpr: string,
@@ -3649,9 +3838,19 @@ function emitRustPrattMethod(
     opExpr?: string,
     folds?: ParentFold[],
   ): string => {
-    const altPathExpr = altExpr === '[]' ? 'Vec::new()' : `vec!${altExpr}`;
-    return rustAstCustomCall(fn, rule.name, kidsExpr, altPathExpr, offExpr, endExpr, {
-      leftExpr, opExpr, folds,
+    const kidsPrep = '';
+    const kids = kidsSlice === '_sk_base' ? '&self.vals[_sk_base..]' : kidsSlice;
+    const altSlice = altExpr === '[]' ? '&[]' : `&${altExpr}`;
+    return rustAstCustomCall(fn, rule.name, {
+      kidsPrep,
+      kidsSlice: kids,
+      altPrep: '',
+      altSlice,
+      offExpr,
+      endExpr,
+      leftExpr,
+      opExpr,
+      folds,
     });
   };
 
@@ -3659,18 +3858,18 @@ function emitRustPrattMethod(
   const templateSlot = ps.template as CustomShape | { kind: 'keep' } | undefined;
   const hasTplNud = !!(tpl && rule.nudToks.includes(tpl.token));
   const hasTplPostfix = !!(tpl && rule.postfixToks.includes(tpl.token));
-  const templateFinish = (kidsExpr: string, offExpr: string, endExpr: string): string => {
-    if (!templateSlot || templateSlot.kind === 'keep') return keepFinish(kidsExpr, '$template');
-    return customCall(templateSlot.fn, kidsExpr, '[]', offExpr, endExpr, undefined, undefined, templateSlot.folds);
+  const templateFinish = (kidsSlice: string, offExpr: string, endExpr: string): string => {
+    if (!templateSlot || templateSlot.kind === 'keep') return keepFinishSlice(kidsSlice, '$template');
+    return customCall(templateSlot.fn, kidsSlice, '[]', offExpr, endExpr, undefined, undefined, templateSlot.folds);
   };
   const templateDual = !!(templateSlot && tpl && rule.name !== tpl.interpRule);
   const tplHelperCode = tpl && (hasTplNud || hasTplPostfix)
-    ? `    fn match_template_ast_${rule.name}(&mut self) -> Option<(Vec<AstValue>, usize)> {
+    ? `    fn match_template_ast_${rule.name}(&mut self) -> Option<(Vec<SVal<'a>>, usize)> {
         let t = self.toks.get(self.pos).copied()?;
         if t.kid != ${kidOf(ids, '$templateHead')} { return None; }
         let save = self.pos;
         let save_snap = self.shape_tpl_snap();
-        let mut kids: Vec<AstValue> = vec![AstValue::String(tok_text(self.src, &t).to_owned())];
+        let mut kids: Vec<SVal<'a>> = vec![SVal::Str(t.off, t.end - t.off)];
         self.pos += 1;
         loop {
             let before = self.shape_tpl_snap();
@@ -3702,12 +3901,12 @@ function emitRustPrattMethod(
                 None => { self.shape_tpl_restore(&save_snap); return None; }
             };
             if next.kid == ${kidOf(ids, '$templateMiddle')} {
-                kids.push(AstValue::String(tok_text(self.src, &next).to_owned()));
+                kids.push(SVal::Str(next.off, next.end - next.off));
                 self.pos += 1;
                 continue;
             }
             if next.kid == ${kidOf(ids, '$templateTail')} {
-                kids.push(AstValue::String(tok_text(self.src, &next).to_owned()));
+                kids.push(SVal::Str(next.off, next.end - next.off));
                 self.pos += 1;
                 break;
             }
@@ -3731,34 +3930,40 @@ function emitRustPrattMethod(
   } else if (ps.atom?.kind === 'custom') {
     const arms = rule.nudToks.map((tok) => {
       const policy = leaves[tok] ?? { action: 'keep' as const };
-      return `if t.kid == ${kidOf(ids, tok)} { leaf_kids.push(${rustShapeLeafAstExpr(policy, 'tok_text(self.src, &t)')}); }`;
+      return `if t.kid == ${kidOf(ids, tok)} { ${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')} }`;
     }).join(' else ');
     atomCode = `if let Some(t) = self.toks.get(self.pos).copied() {
             if matches!(t.kid, ${atomKids.join(' | ') || 'u16::MAX'}) {
                 let sp_off = t.off as usize;
-                let mut leaf_kids: Vec<AstValue> = Vec::new();
-                ${arms}
+                let _leaf = ${arms} else { SVal::Null };
                 self.pos += 1;
-                return Some(${customCall(ps.atom.fn, 'leaf_kids', '[]', 'sp_off', 't.end as usize', undefined, undefined, ps.atom.folds)});
+                return Some(${customCall(ps.atom.fn, '&[_leaf]', '[]', 'sp_off', 't.end as usize', undefined, undefined, ps.atom.folds)});
             }
         }`;
   } else if (!ps.atom || ps.atom.kind === 'keep' || (ps.atom as { kind: string }).kind === 'leafValue' || ps.atom.kind === undefined) {
-    for (const tok of rule.nudToks) {
-      const policy = leaves[tok] ?? { action: 'keep' as const };
-      if (tpl && tok === tpl.token && templateSlot) {
-        atomCode += `if self.peek_kid() == Some(${kidOf(ids, tok)}) {
-            let t = self.toks[self.pos];
-            let _text = tok_text(self.src, &t);
-            let leaf = ${rustShapeLeafAstExpr(policy, '_text')};
-            self.pos += 1;
-            return Some(${templateFinish('vec![leaf]', 't.off as usize', 't.end as usize')});
-        }\n        `;
-        continue;
-      }
-      atomCode += `if self.peek_kid() == Some(${kidOf(ids, tok)}) {
-            let _text = self.take_text(${kidOf(ids, tok)})?;
-            return Some(${rustShapeLeafAstExpr(policy, '_text')});
-        }\n        `;
+    if (rule.nudToks.length > 0) {
+      const arms = rule.nudToks.map((tok) => {
+        const policy = leaves[tok] ?? { action: 'keep' as const };
+        if (tpl && tok === tpl.token && templateSlot) {
+          return `${kidOf(ids, tok)} => {
+                let leaf = ${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')};
+                self.pos += 1;
+                return Some(${templateFinish('&[leaf]', 't.off as usize', 't.end as usize')});
+            }`;
+        }
+        return `${kidOf(ids, tok)} => {
+                self.pos += 1;
+                return Some(${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')});
+            }`;
+      }).join('\n            ');
+      atomCode = `if let Some(t) = self.toks.get(self.pos).copied() {
+            if matches!(t.kid, ${atomKids.join(' | ')}) {
+                match t.kid {
+                    ${arms}
+                    _ => {}
+                }
+            }
+        }`;
     }
   }
 
@@ -3768,7 +3973,7 @@ function emitRustPrattMethod(
             let (_tm_kids, _tm_save) = self.match_template_ast_${rule.name}()?;
             let _tm_off = self.toks[_tm_save].off as usize;
             let _tm_end = self.last_end(_tm_off);
-            return Some(${templateFinish('_tm_kids', '_tm_off', '_tm_end')});
+            return Some(${templateFinish('&_tm_kids', '_tm_off', '_tm_end')});
         }
         `
     : '';
@@ -3783,22 +3988,24 @@ function emitRustPrattMethod(
         const st = emptySteps(b.steps);
         let finish: string;
         if (groupSlot.kind === 'inline') {
-          finish = inlineFinishReturn('_sk');
+          finish = inlineFinishReturn('_sk_base');
         } else if (groupSlot.kind === 'custom') {
           const gs = groupSlot as CustomShape;
-          finish = `return Some(${customCall(gs.fn, '_sk', `[${bi}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, gs.folds)});`;
+          finish = `return Some(${customCall(gs.fn, '_sk_base', `[${bi}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, gs.folds)});`;
         } else if (groupSlot.kind === 'node') {
-          finish = `return Some(${rustShapeNodeObjectExpr(groupSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
+          finish = `return Some(${nodeFinish(rustShapeNodeObjectExpr(groupSlot as NodeShape, '_sk_base', '(0u32, 0u32)', shapeIR.spans, 'save_off', 'self.last_end(save_off)'), '_sk_base')});`;
         } else {
-          finish = `return Some(${keepFinish('_sk', rule.cstName)});`;
+          finish = `return Some(${keepFinish('_sk_base', rule.cstName)});`;
         }
         return `{
             let save = self.pos;
             let save_off = self.current_off();
-            let mut _sk: Vec<AstValue> = Vec::new();
+            let _sk_base = self.vals.len();
+            let _ap_base = self.ap_stack.len();
             ${st.ok}
             if ${st.okVar} {
                 ${finish}
+                self.ap_stack.truncate(_ap_base);
             }
             self.pos = save;
         }`;
@@ -3819,27 +4026,28 @@ function emitRustPrattMethod(
         prefixCode += `if self.peek_lid() == Some(${lid}) {
             let save = self.pos;
             let _off = self.current_off();
-            let _op = self.current_text().to_owned();
+            let _op = self.current_span();
             self.pos += 1;
             let _argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
                 Some(v) => v,
                 None => { self.pos = save; return None; }
             };
-            #[allow(unused_mut)] let mut _sk = vec![_argument];
-            return Some(${rustShapeNodeObjectExpr(prefixSlot as NodeShape, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')});
+            let _ab = self.vals.len();
+            self.vals.push(_argument);
+            return Some(${nodeFinish(rustShapeNodeObjectExpr(prefixSlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', 'self.last_end(_off)'), '_ab')});
         }\n        `;
       } else if (prefixSlot.kind === 'custom') {
         const psCustom = prefixSlot as CustomShape;
         prefixCode += `if self.peek_lid() == Some(${lid}) {
             let save = self.pos;
             let _off = self.current_off();
-            let _op = self.current_text().to_owned();
+            let _op = self.current_text();
             self.pos += 1;
             let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
                 Some(v) => v,
                 None => { self.pos = save; return None; }
             };
-            return Some(${customCall(psCustom.fn, 'vec![argument]', '[]', '_off', 'self.last_end(_off)', undefined, '_op', psCustom.folds)});
+            return Some(${customCall(psCustom.fn, '&[argument]', '[]', '_off', 'self.last_end(_off)', undefined, '_op', psCustom.folds)});
         }\n        `;
       } else if (prefixSlot.kind === 'inline') {
         prefixCode += `if self.peek_lid() == Some(${lid}) {
@@ -3853,14 +4061,16 @@ function emitRustPrattMethod(
       } else {
         prefixCode += `if self.peek_lid() == Some(${lid}) {
             let save = self.pos;
-            let _op = self.current_text().to_owned();
+            let _op = self.current_span();
             self.pos += 1;
             let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
                 Some(v) => v,
                 None => { self.pos = save; return None; }
             };
-            #[allow(unused_mut)] let mut _sk = vec![AstValue::String(_op), argument];
-            return Some(${keepFinish('_sk', rule.cstName)});
+            let _ab = self.vals.len();
+            self.vals.push(SVal::Str(_op.0, _op.1));
+            self.vals.push(argument);
+            return Some(${keepFinish('_ab', rule.cstName)});
         }\n        `;
       }
     }
@@ -3875,22 +4085,24 @@ function emitRustPrattMethod(
       let finish: string;
       if (nudSeqSlot.kind === 'custom') {
         const ns = nudSeqSlot as CustomShape;
-        finish = `return Some(${customCall(ns.fn, '_sk', `[${si}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, ns.folds)});`;
+        finish = `return Some(${customCall(ns.fn, '_sk_base', `[${si}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, ns.folds)});`;
       } else if (nudSeqSlot.kind === 'node') {
-        finish = `return Some(${rustShapeNodeObjectExpr(nudSeqSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
+        finish = `return Some(${nodeFinish(rustShapeNodeObjectExpr(nudSeqSlot as NodeShape, '_sk_base', '(0u32, 0u32)', shapeIR.spans, 'save_off', 'self.last_end(save_off)'), '_sk_base')});`;
       } else if (nudSeqSlot.kind === 'inline') {
-        finish = inlineFinishReturn('_sk');
+        finish = inlineFinishReturn('_sk_base');
       } else {
-        finish = `return Some(${keepFinish('_sk', rule.cstName)});`;
+        finish = `return Some(${keepFinish('_sk_base', rule.cstName)});`;
       }
       return `{
             let save = self.pos;
             {
                 let save_off = self.current_off();
-                let mut _sk: Vec<AstValue> = Vec::new();
+                let _sk_base = self.vals.len();
+                let _ap_base = self.ap_stack.len();
                 ${st.ok}
                 if ${st.okVar} {
                     ${finish}
+                    self.ap_stack.truncate(_ap_base);
                 }
             }
             self.pos = save;
@@ -3907,22 +4119,24 @@ function emitRustPrattMethod(
       let finish: string;
       if (nudCappedSlot.kind === 'custom') {
         const nc = nudCappedSlot as CustomShape;
-        finish = `self.capped = true; return Some(${customCall(nc.fn, '_sk', `[${ci}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, nc.folds)});`;
+        finish = `self.capped = true; return Some(${customCall(nc.fn, '_sk_base', `[${ci}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, nc.folds)});`;
       } else if (nudCappedSlot.kind === 'node') {
-        finish = `self.capped = true; return Some(${rustShapeNodeObjectExpr(nudCappedSlot as NodeShape, '_sk', 'String::new()', shapeIR.spans, 'save_off', 'self.last_end(save_off)')});`;
+        finish = `self.capped = true; return Some(${nodeFinish(rustShapeNodeObjectExpr(nudCappedSlot as NodeShape, '_sk_base', '(0u32, 0u32)', shapeIR.spans, 'save_off', 'self.last_end(save_off)'), '_sk_base')});`;
       } else if (nudCappedSlot.kind === 'inline') {
-        finish = `self.capped = true; ${inlineFinishReturn('_sk')}`;
+        finish = `self.capped = true; ${inlineFinishReturn('_sk_base')}`;
       } else {
-        finish = `self.capped = true; return Some(${keepFinish('_sk', rule.cstName)});`;
+        finish = `self.capped = true; return Some(${keepFinish('_sk_base', rule.cstName)});`;
       }
       return `if min_bp < ${c.capBp} {
             let save = self.pos;
             {
                 let save_off = self.current_off();
-                let mut _sk: Vec<AstValue> = Vec::new();
+                let _sk_base = self.vals.len();
+                let _ap_base = self.ap_stack.len();
                 ${st.ok}
                 if ${st.okVar} {
                     ${finish}
+                    self.ap_stack.truncate(_ap_base);
                 }
             }
             self.pos = save;
@@ -3945,14 +4159,16 @@ function emitRustPrattMethod(
             };
             if _lbp <= min_bp { break; }
             let _save = self.pos;
-            let _op = self.current_text().to_owned();
+            let _op = self.current_span();
             self.pos += 1;
             let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
                 Some(v) => v,
                 None => { self.pos = _save; break; }
             };
-            #[allow(unused_mut)] let mut _sk = vec![left, _right];
-            left = ${rustShapeNodeObjectExpr(binarySlot as NodeShape, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', 'self.last_end(_off)')};
+            let _ab = self.vals.len();
+            self.vals.push(left);
+            self.vals.push(_right);
+            left = ${nodeFinish(rustShapeNodeObjectExpr(binarySlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', 'self.last_end(_off)'), '_ab')};
             continue;
         }`;
     } else if (binarySlot.kind === 'custom') {
@@ -3964,13 +4180,13 @@ function emitRustPrattMethod(
             };
             if _lbp <= min_bp { break; }
             let _save = self.pos;
-            let _op = self.current_text().to_owned();
+            let _op = self.current_text();
             self.pos += 1;
             let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
                 Some(v) => v,
                 None => { self.pos = _save; break; }
             };
-            left = ${customCall(bs.fn, 'vec![_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', bs.folds)};
+            left = ${customCall(bs.fn, '&[_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', bs.folds)};
             continue;
         }`;
     } else {
@@ -3981,14 +4197,17 @@ function emitRustPrattMethod(
             };
             if _lbp <= min_bp { break; }
             let _save = self.pos;
-            let _op = self.current_text().to_owned();
+            let _op = self.current_span();
             self.pos += 1;
             let _right = match self.parse_ast_${rule.name}_bp(_rbp) {
                 Some(v) => v,
                 None => { self.pos = _save; break; }
             };
-            #[allow(unused_mut)] let mut _sk = vec![left, AstValue::String(_op), _right];
-            left = ${keepFinish('_sk', rule.cstName)};
+            let _ab = self.vals.len();
+            self.vals.push(left);
+            self.vals.push(SVal::Str(_op.0, _op.1));
+            self.vals.push(_right);
+            left = ${keepFinish('_ab', rule.cstName)};
             continue;
         }`;
     }
@@ -4008,11 +4227,12 @@ function emitRustPrattMethod(
                     _ => -1,
                 };
                 if !tail_closed && post > min_bp {
-                    let _op = self.current_text().to_owned();
+                    let _op = self.current_span();
                     let _end_tok = self.toks[self.pos];
                     self.pos += 1;
-                    #[allow(unused_mut)] let mut _sk = vec![left];
-                    left = ${rustShapeNodeObjectExpr(postfixSlot as NodeShape, '_sk', 'self.customs.bind_op(&_op)', shapeIR.spans, '_off', '_end_tok.end as usize')};
+                    let _ab = self.vals.len();
+                    self.vals.push(left);
+                    left = ${nodeFinish(rustShapeNodeObjectExpr(postfixSlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', '_end_tok.end as usize'), '_ab')};
                     tail_closed = true;
                     continue;
                 }
@@ -4025,9 +4245,9 @@ function emitRustPrattMethod(
                     _ => -1,
                 };
                 if !tail_closed && post > min_bp {
-                    let _op = self.current_text().to_owned();
+                    let _op = self.current_text();
                     self.pos += 1;
-                    left = ${customCall(pfs.fn, 'Vec::new()', '[]', '_off', 'self.last_end(_off)', 'left', '_op', pfs.folds)};
+                    left = ${customCall(pfs.fn, '&[]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', pfs.folds)};
                     tail_closed = true;
                     continue;
                 }
@@ -4039,10 +4259,12 @@ function emitRustPrattMethod(
                     _ => -1,
                 };
                 if !tail_closed && post > min_bp {
-                    let _op = self.current_text().to_owned();
+                    let _op = self.current_span();
                     self.pos += 1;
-                    #[allow(unused_mut)] let mut _sk = vec![left, AstValue::String(_op)];
-                    left = ${keepFinish('_sk', rule.cstName)};
+                    let _ab = self.vals.len();
+                    self.vals.push(left);
+                    self.vals.push(SVal::Str(_op.0, _op.1));
+                    left = ${keepFinish('_ab', rule.cstName)};
                     tail_closed = true;
                     continue;
                 }
@@ -4061,39 +4283,38 @@ function emitRustPrattMethod(
       let finish: string;
       if (postfixTokSlot.kind === 'custom') {
         const pts = postfixTokSlot as CustomShape;
-        finish = `left = ${customCall(pts.fn, 'vec![leaf]', '[]', '_off', 't.end as usize', 'left', 'op_owned', pts.folds)};`;
+        finish = `left = ${customCall(pts.fn, '&[leaf]', '[]', '_off', 't.end as usize', 'left', 'op_owned', pts.folds)};`;
       } else if (postfixTokSlot.kind === 'node') {
         const node = postfixTokSlot as NodeShape;
         const fieldMap = node.fields.map((f: FieldDecl) => {
           if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 0) {
-            return `fields.push((${J(f.name)}, std::mem::replace(&mut left, AstValue::Null)));`;
+            return `self.arena.fields.push((${J(f.name)}, std::mem::replace(&mut left, SVal::Null)));`;
           }
           if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 1) {
-            return `fields.push((${J(f.name)}, std::mem::replace(&mut leaf, AstValue::Null)));`;
+            return `self.arena.fields.push((${J(f.name)}, std::mem::replace(&mut leaf, SVal::Null)));`;
           }
           if (f.bind === 'opText') {
-            return `fields.push((${J(f.name)}, AstValue::String(op_owned.clone())));`;
+            return `self.arena.fields.push((${J(f.name)}, SVal::Str(t.off, t.end - t.off)));`;
           }
-          return `fields.push((${J(f.name)}, std::mem::replace(&mut left, AstValue::Null)));`;
+          return `self.arena.fields.push((${J(f.name)}, std::mem::replace(&mut left, SVal::Null)));`;
         }).join('\n                        ');
         finish = `{
-                        let mut fields: Vec<(&'static str, AstValue)> = Vec::new();
+                        let _fbase = self.arena.fields.len();
                         ${fieldMap}
-                        left = AstValue::Object { typ: ${J(node.type)}, fields };
+                        left = self.customs.finish_obj(&mut self.arena, ${J(node.type)}, _fbase);
                     }`;
       } else {
-        finish = `{ #[allow(unused_mut)] let mut _sk = vec![left, leaf]; left = ${keepFinish('_sk', rule.cstName)}; }`;
+        finish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(leaf); left = ${keepFinish('_ab', rule.cstName)}; }`;
       }
       return `if self.peek_kid() == Some(${g.key}) {
                 if !tail_closed {
                     let t = self.toks[self.pos];
-                    let _text = tok_text(self.src, &t);
-                    let op_owned = _text.to_owned();
-                    let leaf_value = ${rustShapeLeafAstExpr(policy, '_text')};
+                    ${postfixTokSlot.kind === 'custom' ? 'let op_owned = tok_text(self.src, &t);' : ''}
+                    let leaf_value = ${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')};
                     self.pos += 1;
                     #[allow(unused_mut)]
                     let mut leaf = ${tpl && tokName === tpl.token && templateSlot
-        ? templateFinish('vec![leaf_value]', 't.off as usize', 't.end as usize')
+        ? templateFinish('&[leaf_value]', 't.off as usize', 't.end as usize')
         : 'leaf_value'};
                     ${finish}
                     continue;
@@ -4105,28 +4326,28 @@ function emitRustPrattMethod(
       let tplFinish: string;
       if (postfixTokSlot.kind === 'custom') {
         const pts = postfixTokSlot as CustomShape;
-        tplFinish = `left = ${customCall(pts.fn, 'vec![node]', '[]', '_off', 'node_end', 'left', 'op_owned', pts.folds)};`;
+        tplFinish = `left = ${customCall(pts.fn, '&[node]', '[]', '_off', 'node_end', 'left', 'op_owned', pts.folds)};`;
       } else if (postfixTokSlot.kind === 'node') {
         const nodeShape = postfixTokSlot as NodeShape;
         const fieldMap = nodeShape.fields.map((f: FieldDecl) => {
           if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 0) {
-            return `fields.push((${J(f.name)}, std::mem::replace(&mut left, AstValue::Null)));`;
+            return `self.arena.fields.push((${J(f.name)}, std::mem::replace(&mut left, SVal::Null)));`;
           }
           if (isFieldBindObj(f.bind) && 'at' in f.bind && f.bind.at === 1) {
-            return `fields.push((${J(f.name)}, std::mem::replace(&mut node, AstValue::Null)));`;
+            return `self.arena.fields.push((${J(f.name)}, std::mem::replace(&mut node, SVal::Null)));`;
           }
           if (f.bind === 'opText') {
-            return `fields.push((${J(f.name)}, AstValue::String(op_owned.clone())));`;
+            return `self.arena.fields.push((${J(f.name)}, SVal::Str(node_off as u32, (node_end - node_off) as u32)));`;
           }
-          return `fields.push((${J(f.name)}, std::mem::replace(&mut left, AstValue::Null)));`;
+          return `self.arena.fields.push((${J(f.name)}, std::mem::replace(&mut left, SVal::Null)));`;
         }).join('\n                        ');
         tplFinish = `{
-                        let mut fields: Vec<(&'static str, AstValue)> = Vec::new();
+                        let _fbase = self.arena.fields.len();
                         ${fieldMap}
-                        left = AstValue::Object { typ: ${J(nodeShape.type)}, fields };
+                        left = self.arena.mk_obj_raw(${J(nodeShape.type)}, _fbase);
                     }`;
       } else {
-        tplFinish = `{ #[allow(unused_mut)] let mut _sk = vec![left, node]; left = ${keepFinish('_sk', rule.cstName)}; }`;
+        tplFinish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(node); left = ${keepFinish('_ab', rule.cstName)}; }`;
       }
       tplPart = `
             if !tail_closed && self.peek_kid() == Some(${kidOf(ids, '$templateHead')}) {
@@ -4134,8 +4355,8 @@ function emitRustPrattMethod(
                 if let Some((_tm_kids, _tm_save)) = self.match_template_ast_${rule.name}() {
                     let node_end = self.last_end(node_off);
                     #[allow(unused_mut)]
-                    let mut node = ${templateFinish('_tm_kids', 'node_off', 'node_end')};
-                    let op_owned = self.src[node_off..node_end].to_owned();
+                    let mut node = ${templateFinish('&_tm_kids', 'node_off', 'node_end')};
+                    ${postfixTokSlot.kind === 'custom' ? 'let op_owned = &self.src[node_off..node_end];' : ''}
                     ${tplFinish}
                     continue;
                 }
@@ -4158,7 +4379,7 @@ function emitRustPrattMethod(
         if (rule.ledSameLine[i]) parts.push('!t.nl');
         if (rule.ledNotLeftLeaf[i]) {
           const set = rule.ledNotLeftLeaf[i]!;
-          parts.push(`!matches!(Self::shape_head_text(Some(&left)).as_str(), ${set.map((x) => J(x)).join(' | ')})`);
+          parts.push(`{ let _ht = self.shape_head_text(left); !matches!(Self::shape_sval_str(&self.arena, _ht), ${set.map((x) => J(x)).join(' | ')}) }`);
         }
         parts.push(`!self.suppress_cur.as_ref().map_or(false, |v| v.contains(&${lid}))`);
         const guard = parts.join(' && ');
@@ -4166,23 +4387,24 @@ function emitRustPrattMethod(
         let finish: string;
         if (ledSlot.kind === 'custom') {
           const ls = ledSlot as CustomShape;
-          finish = `left = ${customCall(ls.fn, '_sk', `[${i}]`, '_off', 'self.last_end(_off)', 'left', '_op', ls.folds)};`;
+          finish = `left = ${customCall(ls.fn, '_sk_base', `[${i}]`, '_off', 'self.last_end(_off)', 'left', '_op', ls.folds)};`;
         } else if (ledSlot.kind === 'node') {
-          finish = `left = ${rustShapeNodeObjectExpr(ledSlot as NodeShape, '_sk', '_op.clone()', shapeIR.spans, '_off', 'self.last_end(_off)', 'left')};`;
+          finish = `left = ${nodeFinish(rustShapeNodeObjectExpr(ledSlot as NodeShape, '_sk_base', '_op', shapeIR.spans, '_off', 'self.last_end(_off)', 'left'), '_sk_base')};`;
         } else if (ledSlot.kind === 'inline') {
-          finish = `left = if _sk.len() == 1 { _sk.pop().unwrap() } else { AstValue::Array(_sk) };`;
+          finish = `left = self.shape_pack_range(_sk_base);`;
         } else {
-          finish = `{ let mut _kids = vec![left]; _kids.extend(_sk); left = ${keepFinish('_kids', rule.cstName)}; }`;
+          finish = `{ self.vals.insert(_sk_base, left); left = ${keepFinish('_sk_base', rule.cstName)}; }`;
         }
         return `if ${guard} {
                     let led_save = self.pos;
-                    let _op = self.current_text().to_owned();
+                    ${ledSlot.kind === 'node' ? 'let _op = self.current_span();' : ledSlot.kind === 'custom' ? 'let _op = self.current_text();' : ''}
                     let _capped_save = self.capped;
-                    let mut _sk: Vec<AstValue> = Vec::new();
-                    let mut _ap: Vec<usize> = Vec::new();
+                    let _sk_base = self.vals.len();
+                    let _ap_base = self.ap_stack.len();
                     ${st.ok}
                     if ${st.okVar} {
                         ${finish}
+                        self.ap_stack.truncate(_ap_base);
                         continue;
                     }
                     self.pos = led_save;
@@ -4200,7 +4422,11 @@ function emitRustPrattMethod(
   const hasLoop = !!(ledCode || postfixCode || postfixTokCode || binaryBody);
 
   return `${tplHelperCode}    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        let prev = self.suppress_cur.clone();
+        // Fast path: no pending suppress swap — skip the Rc clone + log traffic.
+        if self.suppress_next.is_none() && self.suppress_cur.is_none() {
+            return self.parse_ast_${rule.name}_bp(0);
+        }
+        let prev = self.suppress_cur;
         let _sn = self.take_suppress_next();
         self.set_suppress_cur(_sn);
         let r = self.parse_ast_${rule.name}_bp(0);
@@ -4350,6 +4576,14 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
     );
   }
   _rustShapeRuleFirst = buildRustShapeRuleFirst(ir);
+  const customFns = collectShapeCustomFns(shapeIR);
+  // M15: choice keep-arm names are static strings — assign each an OwnStr slab
+  // index (prefilled once per parse in parse_ast_with; SHAPE_STATIC_STRS is the count).
+  const armNames = [...new Set(shapeIR.rules.flatMap((sir) =>
+    sir.shape.kind === 'choice'
+      ? sir.shape.arms.filter((a) => a.shape.kind === 'keep').map((a) => a.name)
+      : []))];
+  _rustShapeArmNames = new Map(armNames.map((n, i) => [n, i]));
   const methods = shapeIR.rules.map((sir) => {
     const rule = ir.rules.find((r) => r.name === sir.name)!;
     return rule.kind === 'pratt'
@@ -4357,136 +4591,228 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
       : emitRustRdMethod(rule, sir, ids, shapeIR);
   }).join('\n\n');
   _rustShapeRuleFirst = null;
+  _rustShapeArmNames = null;
+  const fnConsts = customFns.length ? customFns.map((fn, i) => `pub const FN_${fn}: u16 = ${i};`).join('\n') + '\n\n' : '';
+  // M15: count of emitter-prefilled static strings — customs prime() literals
+  // are indexed relative to this base.
+  const staticStrsConst = `pub const SHAPE_STATIC_STRS: u32 = ${armNames.length};\n\n`;
+  // M12 per-grammar customs trait: one positional method per custom fn —
+  // the parser calls self.customs.<fn>(...) directly (static dispatch,
+  // inlinable), skipping AstCustomCtx construction and the fn_id match.
+  // Default bodies panic; the generic ast_custom ctx dispatch stays for the
+  // fail-loud harness and cross-handler delegation.
+  const grammarTraitMethods = customFns.map((fn) =>
+    `    fn ${fn}<'c>(&self, ar: &'c mut AstArena<'a>, src: &'a str, kids: &'c [SVal<'a>], alt_path: &'c [usize], off: usize, end: usize, left: Option<SVal<'a>>, op_text: Option<&'a str>, state: Option<Vec<(&'static str, AstFoldCounts)>>) -> SVal<'a> { let _ = (ar, src, kids, alt_path, off, end, left, op_text, state); panic!("shape rust: custom ${fn} not provided — SH3-4") }`,
+  ).join('\n');
+  const grammarTrait = `pub trait GrammarCustoms<'a>: ShapeCustoms<'a> {\n${grammarTraitMethods}\n}\nimpl GrammarCustoms<'_> for DefaultShapeCustoms {}\n\n`;
   return `
 
 ${emitRustShapeTypes(ir, shapeIR)}
 
-// Generic C makes every hook statically dispatched and monomorphized. No trait object,
+${fnConsts}${staticStrsConst}// Generic C makes every hook statically dispatched and monomorphized. No trait object,
 // callback table, or per-node allocation is introduced by the customs boundary.
 #[derive(Debug, Clone, Default)]
 pub struct AstFoldCounts { pub starts: usize, pub appends: usize }
 
-/// Owned snapshot for a custom finish — no &mut borrow of the parser.
-pub struct AstCustomCtx<'a> {
-    pub name: &'a str,
-    pub rule: &'a str,
+/// Borrowed snapshot for a custom finish — kids/alt_path stage into parser
+/// scratches; construction goes through the arena (passed separately so the
+/// ctx itself is passed by reference, not moved).
+pub struct AstCustomCtx<'a, 'c> {
+    pub name: &'static str,
+    pub fn_id: u16,
+    pub rule: &'static str,
     pub src: &'a str,
-    pub kids: Vec<AstValue>,
-    pub alt_path: Vec<usize>,
+    pub kids: &'c [SVal<'a>],
+    pub alt_path: &'c [usize],
     pub off: usize,
     pub end: usize,
-    pub left: Option<AstValue>,
+    pub left: Option<SVal<'a>>,
     pub op_text: Option<&'a str>,
     /// Present only when the parent custom declares folds (start/append counters per tag).
     pub state: Option<Vec<(&'static str, AstFoldCounts)>>,
 }
 
-pub trait ShapeCustoms {
-    #[inline(always)] fn leaf_number(&self, text: &str) -> f64 { text.parse::<f64>().expect("shape number") }
-    #[inline(always)] fn leaf_ident(&self, text: &str) -> String { text.to_owned() }
+pub trait ShapeCustoms<'a> {
+    #[inline(always)]
+    fn leaf_number(&self, text: &str) -> f64 {
+        // Fast path: plain integer literals — a digit loop avoids f64::from_str's
+        // correct-rounding cost (the common case in real code). >19 digits or
+        // any non-digit falls back to the full parser (overflow/hex/float-safe).
+        let b = text.as_bytes();
+        if !b.is_empty() && b.len() <= 19 && b.iter().all(|c| c.is_ascii_digit()) {
+            let mut v: u64 = 0;
+            for &c in b { v = v * 10 + (c - b'0') as u64; }
+            return v as f64;
+        }
+        text.parse::<f64>().expect("shape number")
+    }
+    #[inline(always)] fn leaf_ident<'x>(&self, text: &'x str) -> &'x str { text }
     #[inline(always)] fn leaf_boolean(&self, text: &str) -> bool { text == "true" }
-    #[inline(always)] fn bind_op(&self, text: &str) -> String { text.to_owned() }
-    fn ast_custom(&self, name: &str, ctx: AstCustomCtx<'_>) -> AstValue {
-        let _ = ctx;
-        panic!("shape rust: custom {} not provided — SH3-4", name)
+    #[inline(always)] fn bind_op<'x>(&self, text: &'x str) -> &'x str { text }
+    fn ast_custom<'c>(&self, ctx: &AstCustomCtx<'a, 'c>, arena: &'c mut AstArena<'a>) -> SVal<'a> {
+        let _ = arena;
+        panic!("shape rust: custom {} not provided — SH3-4", ctx.name)
+    }
+    /// JSON writer for typed custom nodes (SVal::TNode) — M2 typed direct-emit.
+    /// Customs that produce TNodes must override; default panics (never hit otherwise).
+    fn write_tnode_json(&self, _ar: &AstArena<'a>, _tag: u16, _idx: u32, _out: &mut String) {
+        panic!("shape rust: write_tnode_json not implemented for this customs")
+    }
+    /// Fold append into a typed node's field (TNode) — M2 typed fold protocol.
+    /// Default panics; customs with fold-capable typed products must override.
+    fn tnode_fold_append(&self, _ar: &mut AstArena<'a>, _tag: u16, _idx: u32, _into: &'static str, _value: SVal<'a>) {
+        panic!("shape rust: tnode_fold_append not implemented for this customs")
+    }
+    /// Reserve hook (M10) — called once per parse with the token count so
+    /// customs-owned arenas can pre-size (the customs value is fresh per parse,
+    /// so its Vecs would otherwise grow from zero with realloc churn).
+    fn reserve(&self, _n: usize) {}
+    /// Static-string prefill hook (M15) — called once per parse right after the
+    /// emitter's own arm-name prefill. Customs push their literal strings here
+    /// and reference them as SVal::OwnStr(SHAPE_STATIC_STRS + i) — one small
+    /// batch of String allocs per parse instead of per-node alloc churn.
+    fn prime(&self, _ar: &mut AstArena<'a>) {}
+    /// Keep-wrapper finish (M14) — default builds the DynObj
+    /// {type: typ, children, headText}; customs may override with typed nodes
+    /// as long as the JSON writer stays byte-identical.
+    fn keep_node(&self, ar: &mut AstArena<'a>, typ: &'static str, children: SVal<'a>, head_text: SVal<'a>) -> SVal<'a> {
+        let _fbase = ar.fields.len();
+        ar.fields.push(("children", children));
+        ar.fields.push(("headText", head_text));
+        ar.mk_obj_raw(typ, _fbase)
+    }
+    /// Head-text of a typed node (M14) — mirrors the DynObj "headText" field
+    /// read that shape_head_text performs on keep-wrapper objects. Default ""
+    /// (the pre-M14 TNode behavior).
+    fn tnode_head_text(&self, _tag: u16, _idx: u32) -> SVal<'a> { SVal::Str(0, 0) }
+    /// Declarative node() finish (M14b) — fields [fbase..] are already pushed;
+    /// default closes them as a DynObj. Customs may override per typ with a
+    /// typed node (reading the pushed fields back, then truncating), keeping
+    /// the JSON writer byte-identical.
+    fn finish_obj(&self, ar: &mut AstArena<'a>, typ: &'static str, fbase: usize) -> SVal<'a> {
+        ar.mk_obj_raw(typ, fbase)
     }
 }
 pub struct DefaultShapeCustoms;
-impl ShapeCustoms for DefaultShapeCustoms {}
+impl ShapeCustoms<'_> for DefaultShapeCustoms {}
 
-// suppress vectors are only ever wholesale-replaced, never mutated in place
-// (≡ TS _suppressNext = new Set(...) / null). Replacements are RARE compared to
-// checkpoint/restore traffic (~4.4M pairs on the 2MB bench), so snapshots keep
-// only a log watermark: every suppress write appends the old value to
-// suppress_log, and restore replays it back. This keeps ShapeCk Copy — no Rc
-// refcount churn per checkpoint (SH3-5 O4).
+${grammarTrait}// suppress connector sets are compile-time literal lists — store them as
+// promoted &'static slices (Copy). Zero allocation, zero refcount traffic;
+// the undo log just records old values (SH3-6 M3).
 #[derive(Clone, Copy)]
 struct ShapeCk {
     pos: usize,
-    kids_len: usize,
-    alt_path_len: usize,
+    vals_len: usize,
+    lists_len: usize,
+    fields_len: usize,
+    nodes_len: usize,
+    partials_len: usize,
+    strings_len: usize,
+    ap_len: usize,
     suppress_log_len: usize,
     capped: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct ShapeTplSnap {
     pos: usize,
-    suppress_next: Option<std::rc::Rc<[u16]>>,
-    suppress_cur: Option<std::rc::Rc<[u16]>>,
+    suppress_next: Option<&'static [u16]>,
+    suppress_cur: Option<&'static [u16]>,
     capped: bool,
 }
 
-struct ShapeParser<'a, C: ShapeCustoms> {
+struct ShapeParser<'a, 'c, C: GrammarCustoms<'a>> {
     src: &'a str,
     toks: Vec<Tok>,
     pos: usize,
-    customs: &'a C,
-    suppress_next: Option<std::rc::Rc<[u16]>>,
-    suppress_cur: Option<std::rc::Rc<[u16]>>,
-    suppress_log: Vec<(u8, Option<std::rc::Rc<[u16]>>)>,
+    customs: &'c C,
+    arena: AstArena<'a>,
+    /// Shape value stack — lives on the parser (not AstArena) so customs can
+    /// borrow &self.vals[base..] as kids while &mut self.arena is passed
+    /// (disjoint field borrows; kills the old kids_scratch drain-copy per call).
+    vals: Vec<SVal<'a>>,
+    /// Global alt_path stack: rule alt index + nested alt-step branch picks.
+    ap_stack: Vec<usize>,
+    suppress_next: Option<&'static [u16]>,
+    suppress_cur: Option<&'static [u16]>,
+    suppress_log: Vec<(u8, Option<&'static [u16]>)>,
     capped: bool,
 }
-impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
+impl<'a, 'c, C: GrammarCustoms<'a>> ShapeParser<'a, 'c, C> {
     #[inline(always)] fn peek_kid(&self) -> Option<u16> { self.toks.get(self.pos).map(|t| t.kid) }
     #[inline(always)] fn peek_lid(&self) -> Option<u16> { self.toks.get(self.pos).map(|t| t.lid) }
     #[inline(always)] fn current_off(&self) -> usize { self.toks.get(self.pos).map(|t| t.off as usize).unwrap_or(self.src.len()) }
     #[inline(always)] fn current_text(&self) -> &'a str { self.toks.get(self.pos).map(|t| tok_text(self.src, t)).unwrap_or("") }
+    /// M15: span of the current token — (off, len); (src.len(), 0) at EOF.
+    #[inline(always)] fn current_span(&self) -> (u32, u32) { self.toks.get(self.pos).map(|t| (t.off, t.end - t.off)).unwrap_or((self.src.len() as u32, 0)) }
     #[inline(always)] fn last_end(&self, fallback: usize) -> usize { if self.pos > 0 { self.toks[self.pos - 1].end as usize } else { fallback } }
     #[inline(always)] fn take_lit(&mut self, lid: u16) -> Option<()> {
         if self.peek_lid() != Some(lid) { return None; }
         self.pos += 1;
         Some(())
     }
-    #[inline(always)] fn take_text(&mut self, kid: u16) -> Option<&'a str> {
+    #[inline(always)] fn take_span(&mut self, kid: u16) -> Option<(u32, u32)> {
         if self.peek_kid() != Some(kid) { return None; }
-        let text = tok_text(self.src, &self.toks[self.pos]);
+        let t = &self.toks[self.pos];
+        let span = (t.off, t.end - t.off);
         self.pos += 1;
-        Some(text)
+        Some(span)
     }
     #[inline(always)]
-    fn set_suppress_next(&mut self, v: Option<std::rc::Rc<[u16]>>) {
+    fn set_suppress_next(&mut self, v: Option<&'static [u16]>) {
         let old = std::mem::replace(&mut self.suppress_next, v);
         self.suppress_log.push((0, old));
     }
     #[inline(always)]
-    fn set_suppress_cur(&mut self, v: Option<std::rc::Rc<[u16]>>) {
+    fn set_suppress_cur(&mut self, v: Option<&'static [u16]>) {
         let old = std::mem::replace(&mut self.suppress_cur, v);
         self.suppress_log.push((1, old));
     }
     #[inline(always)]
-    fn take_suppress_next(&mut self) -> Option<std::rc::Rc<[u16]>> {
+    fn take_suppress_next(&mut self) -> Option<&'static [u16]> {
         let old = std::mem::take(&mut self.suppress_next);
-        self.suppress_log.push((0, old.clone()));
+        self.suppress_log.push((0, old));
         old
     }
     fn shape_tpl_snap(&self) -> ShapeTplSnap {
         ShapeTplSnap {
             pos: self.pos,
-            suppress_next: self.suppress_next.clone(),
-            suppress_cur: self.suppress_cur.clone(),
+            suppress_next: self.suppress_next,
+            suppress_cur: self.suppress_cur,
             capped: self.capped,
         }
     }
     fn shape_tpl_restore(&mut self, snap: &ShapeTplSnap) {
         self.pos = snap.pos;
-        self.suppress_next = snap.suppress_next.clone();
-        self.suppress_cur = snap.suppress_cur.clone();
+        self.suppress_next = snap.suppress_next;
+        self.suppress_cur = snap.suppress_cur;
         self.capped = snap.capped;
     }
     #[inline(always)]
-    fn shape_ck(&self, kids_len: usize, alt_path_len: usize) -> ShapeCk {
+    fn shape_ck(&self) -> ShapeCk {
         ShapeCk {
             pos: self.pos,
-            kids_len, alt_path_len,
+            vals_len: self.vals.len(),
+            lists_len: self.arena.lists.len(),
+            fields_len: self.arena.fields.len(),
+            nodes_len: self.arena.nodes.len(),
+            partials_len: self.arena.partials.len(),
+            strings_len: self.arena.strings.len(),
+            ap_len: self.ap_stack.len(),
             suppress_log_len: self.suppress_log.len(),
             capped: self.capped,
         }
     }
-    fn shape_restore(&mut self, ck: ShapeCk, kids: &mut Vec<AstValue>, alt_path: &mut Vec<usize>) {
+    #[inline(always)]
+    fn shape_restore(&mut self, ck: ShapeCk) {
         self.pos = ck.pos;
-        kids.truncate(ck.kids_len);
-        alt_path.truncate(ck.alt_path_len);
+        self.vals.truncate(ck.vals_len);
+        self.arena.lists.truncate(ck.lists_len);
+        self.arena.fields.truncate(ck.fields_len);
+        self.arena.nodes.truncate(ck.nodes_len);
+        self.arena.partials.truncate(ck.partials_len);
+        self.arena.strings.truncate(ck.strings_len);
+        self.ap_stack.truncate(ck.ap_len);
         while self.suppress_log.len() > ck.suppress_log_len {
             match self.suppress_log.pop() {
                 Some((0, old)) => self.suppress_next = old,
@@ -4496,123 +4822,302 @@ impl<'a, C: ShapeCustoms> ShapeParser<'a, C> {
         }
         self.capped = ck.capped;
     }
-    fn shape_pack(values: Vec<AstValue>) -> AstValue {
-        if values.is_empty() { AstValue::Null }
-        else if values.len() == 1 { values.into_iter().next().unwrap() }
-        else { AstValue::Array(values) }
+    /// Pack the vals stack range [base..] into one value; list storage copies
+    /// into the lists slab via memcpy (SVal is Copy — extend_from_slice
+    /// specializes to ptr::copy_nonoverlapping; alloc-free once warm).
+    #[inline(always)]
+    fn shape_pack_range(&mut self, base: usize) -> SVal<'a> {
+        let n = self.vals.len() - base;
+        match n {
+            0 => SVal::Null,
+            1 => self.vals.pop().unwrap(),
+            _ => {
+                if self.vals[base..].iter().all(|v| matches!(v, SVal::TNode(..))) {
+                    let st = self.arena.node_lists.len() as u32;
+                    for v in &self.vals[base..] { if let SVal::TNode(t, i) = *v { self.arena.node_lists.push((t as u32) << 24 | i); } }
+                    self.vals.truncate(base);
+                    SVal::NodeList(st, n as u32)
+                } else {
+                    let start = self.arena.lists.len() as u32;
+                    self.arena.lists.extend_from_slice(&self.vals[base..]);
+                    self.vals.truncate(base);
+                    SVal::List(start, n as u32)
+                }
+            }
+        }
     }
-    fn shape_inline_finish(values: Vec<AstValue>) -> Option<AstValue> {
-        if values.is_empty() { None }
-        else if values.len() == 1 { values.into_iter().next() }
-        else { Some(AstValue::Array(values)) }
+    /// Close the vals stack range [base..] as a list value (copies it).
+    #[inline(always)] fn shape_list_from(&mut self, base: usize) -> SVal<'a> {
+        let n = self.vals.len() - base;
+        match n {
+            0 => SVal::List(0, 0),
+            1 => {
+                let v = self.vals.pop().unwrap();
+                if matches!(v, SVal::TNode(..)) {
+                    let st = self.arena.node_lists.len() as u32;
+                    if let SVal::TNode(t, i) = v { self.arena.node_lists.push((t as u32) << 24 | i); }
+                    SVal::NodeList(st, 1)
+                } else {
+                    let start = self.arena.lists.len() as u32;
+                    self.arena.lists.push(v);
+                    SVal::List(start, 1)
+                }
+            }
+            _ => {
+                if self.vals[base..].iter().all(|v| matches!(v, SVal::TNode(..))) {
+                    let st = self.arena.node_lists.len() as u32;
+                    for v in &self.vals[base..] { if let SVal::TNode(t, i) = *v { self.arena.node_lists.push((t as u32) << 24 | i); } }
+                    self.vals.truncate(base);
+                    SVal::NodeList(st, n as u32)
+                } else {
+                    let start = self.arena.lists.len() as u32;
+                    self.arena.lists.extend_from_slice(&self.vals[base..]);
+                    self.vals.truncate(base);
+                    SVal::List(start, n as u32)
+                }
+            }
+        }
+    }
+    fn shape_inline_finish(&mut self, base: usize) -> Option<SVal<'a>> {
+        if self.vals.len() - base == 0 { None } else { Some(self.shape_pack_range(base)) }
+    }
+    /// Read an object's field by name (linear scan of its fields range).
+    fn shape_obj_field(&self, obj: SVal<'a>, name: &'static str) -> SVal<'a> {
+        if let SVal::Node(i) = obj {
+            let o = &self.arena.nodes[i as usize];
+            let (fs, fl) = o.fields;
+            for (k, v) in &self.arena.fields[fs as usize..(fs + fl) as usize] {
+                if *k == name { return *v; }
+            }
+        }
+        SVal::Null
     }
     /// Fold child partial markers per parent folds (recursive into list slots). Equals TS _shapeFoldKids.
-    fn shape_fold_kids(kids: Vec<AstValue>, folds: &[(&'static str, &'static str)]) -> (Vec<AstValue>, Option<Vec<(&'static str, AstFoldCounts)>>) {
-        if folds.is_empty() { return (kids, None); }
+    /// Fast path: no folds, no partials ever created this parse (monotonic
+    /// partial_count — M21), or no Partial kids at any depth → borrowed kids,
+    /// zero allocation.
+    fn shape_fold_kids<'x>(ar: &mut AstArena<'a>, customs: &'x C, kids: &'x [SVal<'a>], folds: &[(&'static str, &'static str)]) -> (std::borrow::Cow<'x, [SVal<'a>]>, Option<Vec<(&'static str, AstFoldCounts)>>) {
+        if folds.is_empty() { return (std::borrow::Cow::Borrowed(kids), None); }
+        if ar.partial_count == 0 { return (std::borrow::Cow::Borrowed(kids), None); }
+        fn has_partial<'a>(ar: &AstArena<'a>, list: &[SVal<'a>]) -> bool {
+            list.iter().any(|v| match *v {
+                SVal::Partial(_) => true,
+                SVal::List(_, _) => has_partial(ar, ar.list_of(*v)),
+                _ => false,
+            })
+        }
+        if !has_partial(ar, kids) { return (std::borrow::Cow::Borrowed(kids), None); }
         let mut state: Vec<(&'static str, AstFoldCounts)> = folds.iter().map(|(tag, _)| (*tag, AstFoldCounts::default())).collect();
-        let out = Self::shape_fold_list(kids, folds, &mut state);
-        (out, Some(state))
+        let out = Self::shape_fold_list(ar, customs, kids, folds, &mut state);
+        (std::borrow::Cow::Owned(out), Some(state))
     }
-    fn shape_fold_list(list: Vec<AstValue>, folds: &[(&'static str, &'static str)], state: &mut Vec<(&'static str, AstFoldCounts)>) -> Vec<AstValue> {
+    fn shape_fold_list(ar: &mut AstArena<'a>, customs: &C, list: &[SVal<'a>], folds: &[(&'static str, &'static str)], state: &mut Vec<(&'static str, AstFoldCounts)>) -> Vec<SVal<'a>> {
         let into_of = |tag: &str| -> Option<&'static str> {
             folds.iter().find(|(t, _)| *t == tag).map(|(_, into)| *into)
         };
-        let bump = |state: &mut Vec<(&'static str, AstFoldCounts)>, tag: &str, start: bool| {
-            if let Some((_, c)) = state.iter_mut().find(|(t, _)| *t == tag) {
-                if start { c.starts += 1; } else { c.appends += 1; }
-            }
-        };
-        let mut out: Vec<AstValue> = Vec::new();
+        let mut out: Vec<SVal<'a>> = Vec::new();
         for k in list {
-            match k {
-                AstValue::Partial { tag, mode, value } => {
-                    if let Some(into) = into_of(tag) {
-                        if mode == "start" {
-                            bump(state, tag, true);
-                            out.push(*value);
-                        } else if mode == "append" {
-                            match out.last_mut() {
-                                Some(AstValue::Object { fields, .. }) => {
-                                    if let Some((_, slot)) = fields.iter_mut().find(|(key, _)| *key == into) {
-                                        if let AstValue::Array(arr) = slot {
-                                            arr.push(*value);
-                                        } else {
-                                            *slot = AstValue::Array(vec![*value]);
-                                        }
-                                    } else {
-                                        fields.push((into, AstValue::Array(vec![*value])));
-                                    }
-                                    bump(state, tag, false);
+            match *k {
+                SVal::Partial(pi) => {
+                    let rec = ar.partials[pi as usize];
+                    if let Some(into) = into_of(rec.tag) {
+                        if rec.mode == "start" {
+                            if let Some((_, c)) = state.iter_mut().find(|(t, _)| *t == rec.tag) { c.starts += 1; }
+                            out.push(rec.value);
+                        } else if rec.mode == "append" {
+                            match out.last().copied() {
+                                Some(SVal::Node(ni)) => {
+                                    Self::shape_fold_append(ar, ni, into, rec.value);
+                                    if let Some((_, c)) = state.iter_mut().find(|(t, _)| *t == rec.tag) { c.appends += 1; }
                                 }
-                                _ => panic!("shape: partial append has no preceding start for {}", tag),
+                                Some(SVal::TNode(tag, tidx)) => {
+                                    customs.tnode_fold_append(ar, tag, tidx, into, rec.value);
+                                    if let Some((_, c)) = state.iter_mut().find(|(t, _)| *t == rec.tag) { c.appends += 1; }
+                                }
+                                _ => panic!("shape: partial append has no preceding start for {}", rec.tag),
                             }
                         } else {
-                            out.push(AstValue::Partial { tag, mode, value });
+                            out.push(*k);
                         }
                     } else {
-                        out.push(AstValue::Partial { tag, mode, value });
+                        out.push(*k);
                     }
                 }
-                AstValue::Array(xs) => out.push(AstValue::Array(Self::shape_fold_list(xs, folds, state))),
+                SVal::List(s, l) => {
+                    let inner: Vec<SVal<'a>> = ar.lists[s as usize..(s + l) as usize].to_vec();
+                    let folded = Self::shape_fold_list(ar, customs, &inner, folds, state);
+                    let start = ar.lists.len() as u32;
+                    let flen = folded.len() as u32;
+                    ar.lists.extend_from_slice(&folded);
+                    out.push(SVal::List(start, flen));
+                }
+                // NodeList holds packed TNode u32s — no Partial possible, pass through.
+                SVal::NodeList(..) => out.push(*k),
                 other => out.push(other),
             }
         }
         out
     }
-    fn shape_head_text(v: Option<&AstValue>) -> String {
-        match v {
-            None | Some(AstValue::Null) => String::new(),
-            Some(AstValue::String(s)) => s.clone(),
-            Some(AstValue::Number(n)) => n.to_string(),
-            Some(AstValue::Bool(b)) => b.to_string(),
-            Some(AstValue::Array(xs)) => Self::shape_head_text(xs.first()),
-            Some(AstValue::Partial { value, .. }) => Self::shape_head_text(Some(value)),
-            Some(AstValue::Object { typ: _, fields }) => {
-                if let Some((_, ht)) = fields.iter().find(|(k, _)| *k == "headText") {
-                    if let AstValue::String(s) = ht { if !s.is_empty() { return s.clone(); } }
-                }
-                if let Some((_, op)) = fields.iter().find(|(k, _)| *k == "operator") {
-                    let has_arg = fields.iter().any(|(k, _)| *k == "argument");
-                    let has_left = fields.iter().any(|(k, _)| *k == "left");
-                    let has_right = fields.iter().any(|(k, _)| *k == "right");
-                    if has_arg && !has_left && !has_right {
-                        if let AstValue::String(s) = op { return s.clone(); }
+    /// Append a partial value into an object's into-field (list slot), growing
+    /// the field range at the slab tail when the field is absent.
+    fn shape_fold_append(ar: &mut AstArena<'a>, ni: u32, into: &'static str, value: SVal<'a>) {
+        let (fs, fl) = ar.nodes[ni as usize].fields;
+        let fr = fs as usize..(fs + fl) as usize;
+        let mut slot_idx: Option<usize> = None;
+        for (i, (k, _)) in ar.fields[fr.clone()].iter().enumerate() {
+            if *k == into { slot_idx = Some(fs as usize + i); break; }
+        }
+        if let Some(si) = slot_idx {
+            match ar.fields[si].1 {
+                SVal::List(s, l) => {
+                    if (s + l) as usize == ar.lists.len() {
+                        ar.lists.push(value);
+                        ar.fields[si].1 = SVal::List(s, l + 1);
+                    } else {
+                        let start = ar.lists.len() as u32;
+                        ar.lists.extend_from_within(s as usize..(s + l) as usize);
+                        ar.lists.push(value);
+                        ar.fields[si].1 = SVal::List(start, l + 1);
                     }
                 }
-                if let Some((_, name)) = fields.iter().find(|(k, _)| *k == "name") {
-                    if let AstValue::String(s) = name { return s.clone(); }
+                // Defensive: TS grammar never appends into a NodeList slot, but
+                // unroll packed TNode elements into a generic List if it does.
+                SVal::NodeList(s, l) => {
+                    let start = ar.lists.len() as u32;
+                    for e in &ar.node_lists[s as usize..(s + l) as usize] {
+                        ar.lists.push(SVal::TNode((e >> 24) as u16, e & 0xFFFFFF));
+                    }
+                    ar.lists.push(value);
+                    ar.fields[si].1 = SVal::List(start, l + 1);
                 }
-                if let Some((_, val)) = fields.iter().find(|(k, _)| *k == "value") {
-                    return Self::shape_head_text(Some(val));
+                _ => {
+                    let start = ar.lists.len() as u32;
+                    ar.lists.push(value);
+                    ar.fields[si].1 = SVal::List(start, 1);
                 }
-                if let Some((_, left)) = fields.iter().find(|(k, _)| *k == "left") {
-                    return Self::shape_head_text(Some(left));
-                }
-                if let Some((_, kids)) = fields.iter().find(|(k, _)| *k == "children") {
-                    if let AstValue::Array(xs) = kids { return Self::shape_head_text(xs.first()); }
-                }
-                if let Some((_, arg)) = fields.iter().find(|(k, _)| *k == "argument") {
-                    return Self::shape_head_text(Some(arg));
-                }
-                String::new()
             }
+        } else {
+            // Field absent: move the object's field range to the slab tail with the new field.
+            let old: Vec<(&'static str, SVal<'a>)> = ar.fields[fr].to_vec();
+            let start = ar.fields.len() as u32;
+            ar.fields.extend(old);
+            let vstart = ar.lists.len() as u32;
+            ar.lists.push(value);
+            ar.fields.push((into, SVal::List(vstart, 1)));
+            ar.nodes[ni as usize].fields = (start, fl + 1);
+        }
+    }
+    /// Head text of a value (≡ TS shapeHeadText) — spans where possible.
+    fn shape_head_text(&mut self, v: SVal<'a>) -> SVal<'a> {
+        match v {
+            SVal::Null => SVal::Str(0, 0),
+            SVal::TNode(t, i) => self.customs.tnode_head_text(t, i),
+            SVal::Str(..) | SVal::OwnStr(_) => v,
+            SVal::Number(n) => { let s = n.to_string(); self.arena.mk_own_str(&s) }
+            SVal::Bool(b) => { let s = b.to_string(); self.arena.mk_own_str(&s) }
+            SVal::List(s, l) => {
+                if l == 0 { SVal::Str(0, 0) } else {
+                    let first = self.arena.lists[s as usize];
+                    // M21: keep-wrapper children's first kid is usually a Str
+                    // (identifier/keyword) — resolve it inline instead of a
+                    // recursive call; semantics identical to shape_head_text(first).
+                    match first {
+                        SVal::Str(..) | SVal::OwnStr(_) => first,
+                        _ => self.shape_head_text(first),
+                    }
+                }
+            }
+            // NodeList elements are all TNode — head text resolves via the typed node.
+            SVal::NodeList(s, l) => {
+                if l == 0 { SVal::Str(0, 0) } else {
+                    let e = self.arena.node_lists[s as usize];
+                    self.customs.tnode_head_text((e >> 24) as u16, e & 0xFFFFFF)
+                }
+            }
+            SVal::Partial(pi) => {
+                let rec = self.arena.partials[pi as usize];
+                self.shape_head_text(rec.value)
+            }
+            SVal::Node(_) => {
+                let ht = self.shape_obj_field(v, "headText");
+                if let SVal::Str(_, l) = ht { if l > 0 { return ht; } }
+                if let SVal::OwnStr(_) = ht { return ht; }
+                let op = self.shape_obj_field(v, "operator");
+                let has_arg = !matches!(self.shape_obj_field(v, "argument"), SVal::Null);
+                let has_left = !matches!(self.shape_obj_field(v, "left"), SVal::Null);
+                let has_right = !matches!(self.shape_obj_field(v, "right"), SVal::Null);
+                if has_arg && !has_left && !has_right {
+                    if let SVal::Str(..) | SVal::OwnStr(_) = op { return op; }
+                }
+                let name = self.shape_obj_field(v, "name");
+                if let SVal::Str(..) | SVal::OwnStr(_) = name { return name; }
+                let val = self.shape_obj_field(v, "value");
+                if !matches!(val, SVal::Null) { return self.shape_head_text(val); }
+                let left = self.shape_obj_field(v, "left");
+                if !matches!(left, SVal::Null) { return self.shape_head_text(left); }
+                let kids = self.shape_obj_field(v, "children");
+                if let SVal::List(s, l) = kids {
+                    if l > 0 {
+                        let first = self.arena.lists[s as usize];
+                        return self.shape_head_text(first);
+                    }
+                }
+                if let SVal::NodeList(s, l) = kids {
+                    if l > 0 {
+                        let e = self.arena.node_lists[s as usize];
+                        return self.customs.tnode_head_text((e >> 24) as u16, e & 0xFFFFFF);
+                    }
+                }
+                let arg = self.shape_obj_field(v, "argument");
+                if !matches!(arg, SVal::Null) { return self.shape_head_text(arg); }
+                SVal::Str(0, 0)
+            }
+            SVal::_Marker(_) => SVal::Str(0, 0),
+        }
+    }
+    /// String view of a head-text value (for guard comparisons).
+    fn shape_sval_str<'s>(ar: &'s AstArena<'a>, v: SVal<'a>) -> &'s str {
+        match v {
+            SVal::Str(o, l) => &ar.src[o as usize..(o + l) as usize],
+            SVal::OwnStr(i) => &ar.strings[i as usize],
+            _ => "",
         }
     }
 
 ${methods}
 }
 
-pub fn parse_ast_with<C: ShapeCustoms>(src: &str, customs: &C) -> Option<AstRoot> {
+pub fn parse_ast_with<'a, 'c, C: GrammarCustoms<'a>>(src: &'a str, customs: &'c C) -> Option<AstRoot<'a>> {
     let toks = lex(src);
     let n = toks.len();
+    customs.reserve(n);
+    // Reserve output slabs from the token count — kills the realloc/memmove
+    // growth churn that otherwise dominates allocation time (SH3-6 M3).
     let mut parser = ShapeParser {
         src, toks, pos: 0, customs,
-        suppress_next: None, suppress_cur: None, suppress_log: Vec::new(), capped: false,
+        arena: AstArena {
+            src,
+            lists: Vec::with_capacity(n + 64),
+            node_lists: Vec::with_capacity(n / 8 + 64),
+            fields: Vec::with_capacity(n * 2 + 64),
+            nodes: Vec::with_capacity(n * 3 / 4 + 64),
+            partials: Vec::with_capacity(128),
+            partial_count: 0,
+            strings: Vec::with_capacity(n / 32 + 64),
+        },
+        vals: Vec::with_capacity(1024),
+        ap_stack: Vec::with_capacity(256),
+        suppress_next: None, suppress_cur: None, suppress_log: Vec::with_capacity(64), capped: false,
     };
+    // M15: prefill emitter-owned static strings (choice keep-arm names), then
+    // let customs push their own literals (indexed from SHAPE_STATIC_STRS).
+    ${armNames.length ? `parser.arena.strings.extend([${armNames.map((n) => J(n)).join(', ')}].iter().map(|s| s.to_string()));` : ''}
+    customs.prime(&mut parser.arena);
     let root = parser.parse_ast_${ir.entry}()?;
-    if parser.pos == n { Some(root) } else { None }
+    if parser.pos != n { return None; }
+    Some(AstRoot { root, arena: parser.arena })
 }
-pub fn parse_ast(src: &str) -> Option<AstRoot> {
+pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
     parse_ast_with(src, &DefaultShapeCustoms)
 }
 `;
