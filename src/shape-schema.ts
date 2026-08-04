@@ -38,12 +38,29 @@ export type LeafValueShape = {
  * array. No grammar/rule name is embedded in the mechanism.
  */
 export type ParentFold = { tag: string; into: string };
+/**
+ * M-A1.4-S2: streaming estree type for one arm of a custom node. String = fixed
+ * estree type; the three object forms are runtime/dynamic decisions that the
+ * generated type table resolves at event time:
+ *  - passthrough: type of the first kid (TNode → its node type, Str → Identifier)
+ *  - optionalChain: kids[0] is a list → CallExpression, else MemberExpression
+ *  - parenOrComma: arm 7 → MetaProperty; 1 kid → its type; else SequenceExpression
+ */
+export type StreamType =
+  | string
+  | { passthrough: true }
+  | { optionalChain: true }
+  | { parenOrComma: true };
 export type CustomShape = {
   kind: 'custom';
   fn: string;
   reason: string;
   result?: 'value' | 'partial';
   folds?: ParentFold[];
+  /** M-A1.4-S2: per-arm streaming estree types, index = reachable arm. */
+  types?: StreamType[];
+  /** M-A1.4-S2: op→estree-type table for op-driven customs (binary/prefix). */
+  opMap?: Record<string, string>;
 };
 export type KeepShape = { kind: 'keep' };
 /** Delegate Pratt atom NUD to an RD rule (e.g. Atom choice → Number|Identifier nodes). */

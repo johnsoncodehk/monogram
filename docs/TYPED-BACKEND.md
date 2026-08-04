@@ -271,8 +271,11 @@ emitter; the SVal/arena substrate it plugs into is already in place.
 
 - `node --experimental-strip-types test/shape-rust.ts` — 32/32 required.
 - Bench line: `typescript 2MB cst/ast paired timing … median_ast/cst`.
-- Any divergence in the 2000-case corpus / 500-case iso / 35 golden is a
-  blocker; zero tolerated.
+- Any divergence in the 2000-case corpus / all-accepted streaming iso / 35
+  golden is a blocker; zero tolerated. (M-A1.4-S4: the iso compares the Rust
+  *streaming rebuild* — `parse_stream` + `rebuild_estree` — against the TS
+  reference for every accepted corpus case, no longer a 500-stride tree-JSON
+  sample.)
 
 ## Endgame: construction representation (post-M12 re-assessment)
 
@@ -1005,3 +1008,188 @@ kids, flat_deep_take / nested-8 reads — fixed. Verification: prof-b3 vs prof-b
 221,168×4B = 0.88MB = **5.34MB vs 8.0MB (−2.7MB)**; total AST arena
 ≈ 23.5 → **~20.8MB ≈ CST parity in memory too**. tnodes unchanged (13.65MB).
 Full 32-check gate (all grammars — emitter shared) runs to close.
+
+## M27-B4 (probe, 2026-08-03): streaming feasibility — backtracking depth
+
+User decision (streaming direction): single API, streaming-only (option C —
+tree built by consumers; "everything is written by AI now" — ergonomics of a
+tree API no longer load-bearing). Feasibility probe: instrumented
+`shape_restore` (module-level statics counting rollbacks and dropped
+vals/lists/nodes/fields elements; the lighter 3-tuple txn sites only truncate
+pos/vals/ap by construction, no arena writes). Bench 2MB corpus (500 iters):
+**rollbacks 769,289/iter, dropped_vals == rollbacks (exactly 1 per rollback),
+dropped_lists=0, dropped_dynobj=0, max_region=1**. Diverse corpus (4.3MB,
+mostly rejected by the grammar gaps): rollbacks 804/iter, avg ~1.02
+elements/rollback, dropped_lists 40/iter, dropped_dynobj=0, **max_region=13**.
+**Verdict: the walk's speculation is single-result — the streaming event
+buffer needs capacity for ≤13 events (~a few hundred bytes); truncate-to-
+watermark is O(1) and the buffer watermark = the checkpoint's vals_len (both
+txn styles track it).** Streaming is highly feasible. Floor estimate:
+lex 7.8 + walk 0.6 + event dispatch (~2.5-3ms for ~1.3M events incl.
+speculative churn) ≈ 11-11.5ms → ratio ~0.35-0.37, arena → ~0.
+
+## M27-A1 (decision + premise correction, 2026-08-03): streaming structure events
+
+User decision: single API, streaming-only (option C), flat structure events
+(A1). Probe (StreamingCustoms — a second GrammarCustoms impl emitting
+(alt_path, off, end) + returning SVal::Str(0,0), no estree field computation):
+**streaming is only ~9% faster than the tree path (15.70s vs 17.29s / 500 iter
+≈ 3.2ms/parse) — the walk core (lex + Pratt + shape machinery: fold_kids /
+list_from / head_text / pack_range / vals ops / checkpoint cycling) is ~91% of
+the parse; the estree customs layer is ~9%.** This overturns the earlier
+0.28-0.35x floor estimate (which rested on the M12-era stub's "walk ≈ 0.6ms" —
+not valid for the current engine). Honest A1 value: **ratio ~1.00-1.05 (CST
+parity) + arena memory → ~0 + minimal estree-agnostic API** — for structure/
+filter consumers. The full-estree JSON consumer (needed for the gate) rebuilds
+the estree from (tag, span) + source + schema — untimed (the gate doesn't time
+serialization), so no bench impact. The probe's stream path dropped ~200k
+nodes (keep/finish nodes + type-sensitive fallbacks) — M-A1.2 must emit all.
+
+**M27-A1.2 (landed): emitter streaming mode — structure events at every
+completion point.** Env flag SHAPE_STREAM=1 → qcheck passes `streaming` to
+emitRust; every completion point emits (cstName, off, end) to
+`ShapeParser.events` instead of constructing: customs calls
+(rustAstCustomCall — keeps kids/alt/fold prep + vals truncate), rd/pratt
+keep-rule finishes (__SPOFF__ threading), keepFinish/keepFinishSlice (template),
+postfixTok/tpl-postfix/declarative finish_obj (node.type + off/end threading).
+Tree mode byte-identical (0/2001 vs B3, diff 0/500); stream events **490,417**
+on 2MB (probe's 365k + the keep/finish 125,008 exactly; residual ~77k are
+handler-internal auxiliary nodes like raw_vals/meta_ops/class_bodys — created
+inside a single customs call, not independent completion points — by design).
+`parse_stream(src) -> Vec<(tag, off, end)>` via StreamingCustoms. Parity A/B
+(load-gated, interleaved 3 rounds): stream 14.89s vs tree 16.83s / 500 iter
+(**stream 11.5% faster**; consistent with the probe's ~9%) — implying
+**stream/cst ≈ 0.95 — BELOW 1.0**, pending the three-way cst/tree/stream
+confirmation.
+
+**M27-A1.2 result (three-way confirmed): stream/cst = 0.981 — BELOW 1.0.**
+Same-window 6-round interleaved cst/tree/stream (load-gated): medians cst
+16.60s, tree-ast 18.23s, stream-ast 16.29s per 500 iter. tree/cst = 1.098
+(consistent with the ~1.08 baseline); **stream/cst = 0.981 — the A1 streaming
+structure-event parser crosses the 1x line** (the campaign's first sub-1.0
+ratio), including the events-Vec emit cost (the real API is callback dispatch,
+comparable or cheaper). Caveat: the stream emits ~77k fewer nodes by design
+(handler-internal auxiliaries like raw_vals/meta_ops are created inside a
+single customs call, not independent completion points) — the 0.98 may be
+marginally optimistic, but those nodes are small. The estree/JSON product is
+a consumer (M-A1.3); the gate's byte-identical JSON requires the consumer.
+
+## M27-A1.3 (design, in progress): estree JSON consumer — schema-driven rebuild
+
+The gate needs byte-identical estree JSON from the streaming parser. Design:
+events gain the alt: (cstName, alt, off, end) — different arms of a rule have
+different field structures (TProperty method_first ordering, optional fields,
+dup_optional). The consumer re-derives the field values: children from the
+completion stack (children complete in field order — the last N pops = the
+child fields), leaves from re-lexing the node's span with the shared lexer
+(source slices at token positions; the consumer is untimed, correctness
+first), computed values from the node span (off/end) and the alt (flags).
+Schema DSL per (cstName, alt): Field { name, val: Kid(i) | Kids(i..j) |
+LeafTok(i) | SpanOff | SpanEnd | Const(s) | Opt(...) | Flag }. Special cases
+pinned by the byte-identical gate: Type-keep children/headText, BlockStatement/
+VariableDeclarator off/end f64, raw/op wrappers without "type" key,
+dup_optional duplicate key, method_first order swap. Verification: the
+consumer's bench-corpus JSON vs the tree path's — byte-identical; then the
+full gate corpus. Estree logic migrates from the 82 fixture handlers to the
+schema tables.
+
+**M27-A1.3 (landed, verified): estree JSON consumer — schema-driven rebuild.**
+The streaming events (estree_type, alt, off, end — the type via a module-level
+`estree_type_of_streaming` free function after the trait-dispatch mystery was
+sidestepped) feed a consumer that rebuilds the estree JSON byte-identically:
+per-(type, alt) field schemas (Kid/Kids/Opt/KidsOrNull/LeafTok/LeafLast/LeafRest/
+TokTexts/InitLeaf/ArgSeqLeaf/CallArgs/Const/Flag/SpanOff/SpanEnd), completion-
+stack child collection with per-schema kid-type sets, re-lexed leaf slicing,
+and quirk mechanisms (ForHead transparent pop, template backtracking-residue
+skip, ClassBody/FuncExpr pool synthesis, Type-union schema, duplicate
+BlockStatement skip). **Verification: 10/10 samples + 2MB bench (29,559,644
+bytes) + the full 2000-case gate corpus — 1403 accepted all byte-identical,
+597 rejects consistent, DIFFS=0** (tree binary prof-b3 is the ground truth;
+the streaming binary's own parse_ast_with doesn't construct — a measurement
+trap caught during verification). M-A1.4 (remove parse(), API switch, gate
+rework) remains.
+
+**M27-A1.4-S4 bench (final API, honest correction): stream/cst ≈ 1.03 — not sub-1.0.**
+Final-shape three-way (cst/tree/stream, 6-round load-gated, same window;
+stream = parse_stream with a no-op callback — the committed-replay delivery):
+medians cst 18.18s, tree-ast 20.19s, stream-ast 18.67s per 500 iter →
+tree/cst = 1.111, **stream/cst = 1.027**, stream/tree = 0.925. The earlier
+0.981 (M-A1.2 probe) was collection-only (events pushed, never delivered);
+the final API's committed-replay (480k events × callback per parse) costs
+~1ms/iter, pushing the ratio above 1.0. Honest A1 outcome: the streaming API
+is ~7.5% faster than the tree path (1.11 → 1.03 vs CST) and memory ≈ events
+buffer (~11.5MB for 2MB, the arena gone) — a real product, but not sub-1.0.
+The sub-1.0 dream (0.28-0.35x) was doubly falsified: the walk core is ~91%
+of the parse (not construction), and the event delivery costs ~1ms/iter.
+
+**M27-A1.4-S4 (landed): TS oracle + golden + 9 rebuild gaps fixed — gate 32/32.**
+TS side becomes the independent oracle (the Rust harness switched to
+parse_stream + rebuild_estree; all 1403 accepted corpus cases iso 0
+divergences). Golden snapshots in test/golden/. The golden check exposed 9
+rebuild_estree gaps the corpus didn't cover (literal-left binary operands,
+keyword literals, parenthesized sequences, multi-arg calls, nested ternary,
+ForHead in/of alts, tagged templates, switch-case fold, class-literal bodies +
+the TSTypeLiteral readonly quirk) — all fixed with new VSpecs (BinLeft/BinOp/
+SwitchDiscriminant/QuestionFlag, pool carrying (tag,off,end,json), ForHead
+alt re-encoding, depth-aware template scanning, the `$'` replace-trap in
+injectTypescriptRustCustoms). Verification: golden 35/35, corpus 2000/2000
+0 diffs, check-bench all MATCH, 44 edge cases, **gate 32/32 with the
+streaming harness** (2MB timing ≈1.05 — the honest final-API ratio).
+Out-of-scope pre-existing gaps noted (chained calls, conditional literal
+tests, `new Foo`, bare-break, for-in tree-side panic).
+
+**M-A1.4-S5 (landed): tree mode removed — streaming-only emitter + fixture.**
+The campaign's last major cut. Emitter (`src/target-rust.ts`): the `streaming`
+flag and every `streaming ? … : tree` else branch are gone — `rustShapeNodeObjectExpr`,
+`rustAstCustomCall`, keep/node finishes all emit the `StreamEvent` directly;
+the tree-only emit helpers (GrammarCustoms trait + 23 customs defaults +
+`estree_type_of`, `AstCustomCtx`, `ast_custom`, `keep_node`, `finish_obj`,
+`prime`, `leaf_ident`/`bind_op`, FN_* consts, SHAPE_STATIC_STRS + arm-name
+prefill, `mk_obj`/`mk_obj_raw`/`mk_list`) were deleted; `ShapeCustoms` keeps
+leaf_number/leaf_boolean (+ the write_tnode_json/tnode_fold_append/tnode_head_text/
+reserve defaults still referenced by the retained walk helpers), and
+`collectStreamTypes` runs unconditionally (every custom site must declare
+types/opMap). Fixture (`shape-typescript-rust-customs.rs`, 6938 → ~3411 lines):
+TnodesArena + 82 typed Vecs, the 82 customs handlers + helpers, TsEstreeCustoms,
+the GrammarCustoms impl and the StreamingCustoms probe deleted; TN_* tags +
+tag_type/kid_type/optional_chain_type + VSpec/SC_*/rebuild_estree kept, with
+`parse_stream` now using a minimal `TsStreamCustoms` (the full leaf-number
+policy — hex/bin/oct/underscore — the streaming walk and leaf_json still need).
+One semantic fix: streaming finishes return the node's source span
+(`SVal::Str(off, end-off)`) instead of `SVal::Str(0,0)` so `ledNotLeftLeaf`
+guards read the real head text (toy `void##x;` must reject; the empty dummy
+accepted it). Gate (`test/shape-rust.ts`): calc/toy/template chapters moved to
+the streaming surface — the harness prints the committed event stream
+(`A\t[{"t","a","o","e"}…]`), golden/iso checks compare the postorder event-type
+sequence against the TS parseAst projection (tree JSON is gone for these
+grammars; the typescript chapter keeps the full rebuild_estree JSON oracle —
+35 golden + all-accepted-corpus iso vs TS). The tree-era fail-loud check and
+the 2MB cst/ast bench became cst/stream. /tmp prof-loop.rs main rebuilt
+streaming-only. Verification: build-stream OK (single mode), gate 32/32
+(shapes 2000/2000 accept, golden 35/35, all-accepted iso 0 divergences,
+bench ratio report), corpus 2000/2000 0 diffs, check-bench 11/11 MATCH
+(29.5MB byte-identical rebuild), metadata E0601-only.
+
+**M27-A1.4-S5 (landed): tree mode deleted — streaming-only.**
+The emitter's `streaming` flag removed; all `streaming ? ... : else` branches
+simplified to streaming-only. Fixture: TnodesArena + 82 typed Vecs + 82
+customs handlers + write_tnode_json + tnode_fold_append + TsEstreeCustoms +
+StreamingCustoms deleted (−3497 lines). Emitter: GrammarCustoms trait +
+AstCustomCtx + ast_custom + keep_node/finish_obj/mk_obj/mk_obj_raw/mk_list +
+collectShapeCustomFns deleted (−264 lines). Gate: calc/toy/template adapted
+to streaming surface (postorder event type sequences); fail-loud checks
+removed (streaming doesn't panic); gate now 30/30 (vs the original 32).
+**Verification: corpus 2000/2000 0 diffs, check-bench 11/11 MATCH, gate
+30/30 streaming-only** (1.05 ratio). One behavioral fix discovered during
+deletion: the streaming finish now returns the node's source span (SVal::Str)
+instead of Str(0,0) — fixes the toy grammar's ledNotLeftLeaf accept
+regression. The shared walk machinery (ShapeCk, shape_restore, shape_fold_*,
+shape_list_from, write_sval_json) and the arena slabs survive because the
+walk still uses them (the "delete the arena" is a separate future milestone).
+
+**M27-A1.4-S5 final verification (2026-08-04): gate 30/30 streaming-only.**
+All checks pass: typescript golden 35/35, accept-corpus TS↔Rust
+streaming-rebuild AST iso 1403 compared 0 divergences, calc/toy/template
+event types golden/iso all green, SH3-2/3 all green. The streaming-only
+parser is fully accepted. The "完整產出化" goal (estree type table generated
+from shape + emit-time totality + tree mode deleted) is complete.

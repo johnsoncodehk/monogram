@@ -12,7 +12,10 @@ const _DIR = dirname(fileURLToPath(import.meta.url));
 export const TYPESCRIPT_RUST_CUSTOMS = readFileSync(join(_DIR, 'shape-typescript-rust-customs.rs'), 'utf8');
 
 export function injectTypescriptRustCustoms(emitSrc: string): string {
-  return emitSrc.replace('pub fn parse_ast_with', TYPESCRIPT_RUST_CUSTOMS + '\npub fn parse_ast_with');
+  // Function replacement: a string replacement would interpret `$&`/`$'`/`$``
+  // patterns inside the customs source (e.g. the `b'$'` byte-literal) and splice
+  // the emitted source into the middle of the customs — use a function instead.
+  return emitSrc.replace('pub fn parse_ast_with', () => TYPESCRIPT_RUST_CUSTOMS + '\npub fn parse_ast_with');
 }
 
 /** TypeScript acceptance corpus: curated + seeds + generated expansions ≥2000. */

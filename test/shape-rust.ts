@@ -19,7 +19,7 @@ import typescriptGrammar from '../typescript.ts';
 import { typescriptShape, typescriptEstreeCustoms } from './fixtures/shape-typescript.ts';
 import type { ToyAstCustoms } from './fixtures/shape-toy.ts';
 import {
-  buildTsCorpus, injectTypescriptRustCustoms, TS_GOLDEN, FAIL_LOUD_RD_FNS,
+  buildTsCorpus, injectTypescriptRustCustoms, TS_GOLDEN,
 } from './fixtures/shape-typescript-rust.ts';
 
 type Ast = Record<string, unknown>;
@@ -206,75 +206,38 @@ fn main() {
     let mut raw = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw).unwrap();
     for src in raw.split("\u0000") {
+        // M-A1.4-S5: tree mode removed — accept via the streaming walk, and
+        // print the committed StreamEvent stream (typ, alt, off, end) as JSON.
         let cst_ok = parse(tokenize(src)).is_some();
-        let ast = parse_ast(src);
-        if cst_ok != ast.is_some() {
+        let Some(root) = parse_ast_with(src, &DefaultShapeCustoms) else {
+            if cst_ok {
+                eprintln!("accept divergence: {:?}", src);
+                std::process::exit(2);
+            }
+            println!("R");
+            continue;
+        };
+        if !cst_ok {
             eprintln!("accept divergence: {:?}", src);
             std::process::exit(2);
         }
-        match ast {
-            Some(root) => println!("A\\t{}", root.to_shape_json()),
-            None => println!("R"),
+        let mut out = String::from("A\t[");
+        for (i, e) in root.events.iter().enumerate() {
+            if i > 0 { out.push(','); }
+            out.push_str(&format!("{{\\"t\\":\\"{}\\",\\"a\\":{},\\"o\\":{},\\"e\\":{}}}", e.typ, e.alt, e.off, e.end));
         }
+        out.push(']');
+        println!("{}", out);
     }
 }
 `;
 
-/** SH3-4: argv mode — batch (default) | fail-loud | cst | ast. */
+/** M-A1.4-S5: streaming-only typescript harness — batch (stream + rebuild) |
+ *  cst | ast(stream). The tree-era fail-loud mode (TsEstreeCustoms/ast_custom/
+ *  FN_* consts) was deleted with tree mode. */
 const tsCustomsHarness = `
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "batch".to_owned());
-    if mode == "fail-loud" {
-        let customs = TsEstreeCustoms::default();
-        let names: &[&str] = &["estreeStmt", "estreeDecl", "estreeProp", "estreeParenOrComma"];
-        let mut ok = 0usize;
-        for &name in names {
-            let fid = match name {
-                "estreeStmt" => FN_estreeStmt,
-                "estreeDecl" => FN_estreeDecl,
-                "estreeProp" => FN_estreeProp,
-                _ => FN_estreeParenOrComma,
-            };
-            let mut arena = AstArena::default();
-            let ctx = AstCustomCtx {
-                name,
-                fn_id: fid,
-                rule: "Stmt",
-                src: "",
-                kids: &[],
-                alt_path: &[99],
-                off: 0,
-                end: 0,
-                left: None,
-                op_text: None,
-                state: None,
-            };
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = customs.ast_custom(&ctx, &mut arena);
-            }));
-            match result {
-                Err(payload) => {
-                    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-                        (*s).to_owned()
-                    } else if let Some(s) = payload.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        String::new()
-                    };
-                    let needle = format!("shape custom {}: unhandled altPath=[99]", name);
-                    if msg.contains(&needle) {
-                        ok += 1;
-                        println!("OK\\t{}", name);
-                    } else {
-                        println!("BAD\\t{}\\t{}", name, msg);
-                    }
-                }
-                Ok(_) => println!("NO_PANIC\\t{}", name),
-            }
-        }
-        println!("FAIL_LOUD\\t{}", ok);
-        return;
-    }
     if mode == "cst" || mode == "ast" {
         let mut raw = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw).unwrap();
@@ -286,7 +249,7 @@ fn main() {
                 if is_cst {
                     let _ = parse(tokenize(&raw));
                 } else {
-                    let _ = parse_ast_with(&raw, &TsEstreeCustoms::default());
+                    let _ = parse_stream(&raw, |_| true);
                 }
             })
             .expect("spawn bench thread")
@@ -305,16 +268,17 @@ fn main() {
             for src in raw.split("\u0000") {
                 let src_owned = src.to_owned();
                 let line = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let customs = TsEstreeCustoms::default();
                     let cst_ok = parse(tokenize(&src_owned)).is_some();
-                    let ast = parse_ast_with(&src_owned, &customs);
-                    if cst_ok != ast.is_some() {
+                    let mut evs = Vec::new();
+                    let ok = parse_stream(&src_owned, |e| { evs.push(*e); true });
+                    if cst_ok != ok {
                         eprintln!("accept divergence: {:?}", src_owned);
                         std::process::exit(2);
                     }
-                    match ast {
-                        Some(root) => format!("A\\t{}", root.to_shape_json_with(&customs)),
-                        None => "R".to_owned(),
+                    if ok {
+                        format!("A\\t{}", rebuild_estree(&evs, &src_owned))
+                    } else {
+                        "R".to_owned()
                     }
                 })) {
                     Ok(line) => line,
@@ -409,6 +373,33 @@ function runBatch(bin: string, inputs: string[], timeout = 300_000): string[] {
   }).trimEnd().split('\n');
 }
 
+/** M-A1.4-S5: postorder projection of a shape AST's `type` sequence — matches
+ *  the Rust StreamEvent typ sequence (events complete children before parents,
+ *  i.e. postorder). Leaves (scalars) and CST-residue objects (no `type`) are
+ *  skipped on both sides. */
+function projPostorderTypes(value: unknown, out: string[] = []): string[] {
+  if (value === null || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    for (const x of value) projPostorderTypes(x, out);
+    return out;
+  }
+  const rec = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(rec)) {
+    if (key === 'type') continue;
+    projPostorderTypes(child, out);
+  }
+  if (typeof rec.type === 'string') out.push(rec.type);
+  return out;
+}
+
+/** Rust event-stream line (`A\t[{"t":..,"a":..,"o":..,"e":..},..]`) → postorder
+ *  event typ list; null for a reject ("R") line. */
+function rustEventTypes(line: string): string[] | null {
+  if (!line.startsWith('A\t')) return null;
+  const arr = JSON.parse(line.slice(2)) as { t: string }[];
+  return arr.map((e) => e.t);
+}
+
 async function main(): Promise<void> {
   const noShape = emitRust(calcGrammar);
   const base = emitParser(calcGrammar, rustTarget);
@@ -418,22 +409,25 @@ async function main(): Promise<void> {
 
   const generated = emitRust(calcGrammar, { shape: calcShape });
   check(
-    'generated Rust AST arena runtime',
+    'streaming-only generated shape runtime',
     generated.includes('pub enum SVal') &&
       generated.includes('pub struct AstArena') &&
       generated.includes('struct ShapeCk') &&
-      generated.includes('pub struct AstRoot'),
-  );
-  check(
-    'zero-cost generic customs + bindOp + ShapeCk',
-    generated.includes('pub trait ShapeCustoms') &&
+      generated.includes('pub struct AstRoot') &&
+      generated.includes('pub trait ShapeCustoms') &&
       generated.includes('pub fn parse_ast_with') &&
-      // M15: bind_op/leaf_ident call sites are gone from codegen (identity in
-      // every shipped customs — leaves are source spans); the hook itself
-      // stays on the trait for API compatibility.
-      generated.includes('fn bind_op') &&
       generated.includes('fn shape_ck(') &&
-      generated.includes('fn shape_restore('),
+      generated.includes('fn shape_restore(') &&
+      // M-A1.4-S5: tree mode removed — the surface is the streaming event API,
+      // and the tree-era hooks (bind_op/leaf_ident/ast_custom/keep_node/
+      // finish_obj/prime + GrammarCustoms + FN_* consts) are gone.
+      generated.includes('pub struct StreamEvent') &&
+      generated.includes('fn shape_tpl_restore(') &&
+      !generated.includes('pub trait GrammarCustoms') &&
+      !generated.includes('fn bind_op') &&
+      !generated.includes('fn keep_node') &&
+      !generated.includes('fn finish_obj') &&
+      !generated.includes('pub const FN_'),
   );
 
   const calcBin = compileShape('calc-shape', generated);
@@ -463,19 +457,20 @@ async function main(): Promise<void> {
   let crossBad = 0;
   for (let i = 0; i < GOLDEN.length; i++) {
     const golden = GOLDEN[i]!;
-    if (!goldenLines[i]?.startsWith('A\t')) {
+    const evTypes = rustEventTypes(goldenLines[i]!);
+    if (!evTypes) {
       goldenBad++;
       continue;
     }
-    const rust = JSON.parse(goldenLines[i]!.slice(2)) as Ast;
     const tsAst = ts.parseAst(golden.src);
-    const neutralRust = stripSpans(rust);
-    const neutralTs = stripSpans(tsAst);
-    if (JSON.stringify(neutralRust) !== JSON.stringify(golden.expect)) goldenBad++;
-    if (JSON.stringify(neutralRust) !== JSON.stringify(neutralTs)) crossBad++;
+    // M-A1.4-S5: tree JSON is gone — compare the stream-event type skeleton
+    // (postorder) against the golden and the TS oracle; field values are
+    // covered at scale by the typescript streaming-rebuild iso below.
+    if (JSON.stringify(evTypes) !== JSON.stringify(projPostorderTypes(golden.expect))) goldenBad++;
+    if (JSON.stringify(evTypes) !== JSON.stringify(projPostorderTypes(tsAst))) crossBad++;
   }
-  check('Rust handwritten golden AST', goldenBad === 0, `${GOLDEN.length - goldenBad}/${GOLDEN.length}`);
-  check('TS vs Rust neutral JSON AST isomorphism', crossBad === 0, `${GOLDEN.length - crossBad}/${GOLDEN.length}`);
+  check('Rust streaming event types ≡ golden', goldenBad === 0, `${GOLDEN.length - goldenBad}/${GOLDEN.length}`);
+  check('TS parseAst ≡ Rust streaming event types', crossBad === 0, `${GOLDEN.length - crossBad}/${GOLDEN.length}`);
 
   // ── toy RD full constructs ───────────────────────────────────────────────
   const toySrc = emitRust(toyGrammar, { shape: toyShape });
@@ -496,17 +491,17 @@ async function main(): Promise<void> {
   let toyCrossBad = 0;
   for (let i = 0; i < toyGolden.length; i++) {
     const g = toyGolden[i]!;
-    if (!toyGoldenLines[i]?.startsWith('A\t')) {
+    const evTypes = rustEventTypes(toyGoldenLines[i]!);
+    if (!evTypes) {
       toyGoldenBad++;
       continue;
     }
-    const rust = stripSpans(JSON.parse(toyGoldenLines[i]!.slice(2)));
-    const tsAst = stripSpans(toyTs.parseAst(g.src));
-    if (JSON.stringify(rust) !== JSON.stringify(g.expect)) toyGoldenBad++;
-    if (JSON.stringify(rust) !== JSON.stringify(tsAst)) toyCrossBad++;
+    const tsAst = toyTs.parseAst(g.src);
+    if (JSON.stringify(evTypes) !== JSON.stringify(projPostorderTypes(g.expect))) toyGoldenBad++;
+    if (JSON.stringify(evTypes) !== JSON.stringify(projPostorderTypes(tsAst))) toyCrossBad++;
   }
-  check('toy Rust golden AST', toyGoldenBad === 0, `${toyGolden.length - toyGoldenBad}/${toyGolden.length}`);
-  check('toy TS↔Rust golden isomorphism', toyCrossBad === 0, `${toyGolden.length - toyCrossBad}/${toyGolden.length}`);
+  check('toy Rust streaming event types ≡ golden', toyGoldenBad === 0, `${toyGolden.length - toyGoldenBad}/${toyGolden.length}`);
+  check('toy TS↔Rust event types golden iso', toyCrossBad === 0, `${toyGolden.length - toyCrossBad}/${toyGolden.length}`);
 
   const toyCorpus = buildToyCorpus();
   check('toy corpus size ≥1000', toyCorpus.length >= 1000, `${toyCorpus.length}`);
@@ -525,12 +520,12 @@ async function main(): Promise<void> {
     }
     if (tsCst !== null && rustOk) {
       toyIsoN++;
-      const rust = stripSpans(JSON.parse(toyCorpusLines[i]!.slice(2)));
-      if (JSON.stringify(rust) !== JSON.stringify(stripSpans(tsAst))) toyIsoBad++;
+      const evTypes = rustEventTypes(toyCorpusLines[i]!);
+      if (JSON.stringify(evTypes) !== JSON.stringify(projPostorderTypes(tsAst))) toyIsoBad++;
     }
   }
   check('toy CST≡AST accept equivalence', toyAcceptDiv === 0, `${toyCorpus.length} cases, ${toyAcceptDiv} divergences`);
-  check('toy TS↔Rust AST isomorphism', toyIsoBad === 0, `${toyIsoN} compared, ${toyIsoBad} divergences`);
+  check('toy TS↔Rust event types iso (corpus)', toyIsoBad === 0, `${toyIsoN} compared, ${toyIsoBad} divergences`);
 
   // SH3-1b: suppress is LED-only — prec-binary under exclude('*') must accept + iso
   const sh31bNoplus = [
@@ -545,8 +540,8 @@ async function main(): Promise<void> {
     const tsAst = toyTs.parseAst(src);
     const rustOk = sh31bLines[i]!.startsWith('A\t');
     if (!tsCst || tsAst === null || !rustOk) { sh31bBad++; continue; }
-    const rust = stripSpans(JSON.parse(sh31bLines[i]!.slice(2)));
-    if (JSON.stringify(rust) !== JSON.stringify(stripSpans(tsAst))) sh31bBad++;
+    const evTypes = rustEventTypes(sh31bLines[i]!);
+    if (JSON.stringify(evTypes) !== JSON.stringify(projPostorderTypes(tsAst))) sh31bBad++;
   }
   check('SH3-1b noplus suppress/binary TS↔Rust', sh31bBad === 0, `${sh31bNoplus.length - sh31bBad}/${sh31bNoplus.length}`);
 
@@ -613,8 +608,8 @@ async function main(): Promise<void> {
     const tsAst = toyTs.parseAst(src);
     const rustOk = prattLines[i]!.startsWith('A\t');
     if (!tsCst || tsAst === null || !rustOk) { prattWitBad++; continue; }
-    const rust = stripSpans(JSON.parse(prattLines[i]!.slice(2)));
-    if (JSON.stringify(rust) !== JSON.stringify(stripSpans(tsAst))) prattWitBad++;
+    const evTypes = rustEventTypes(prattLines[i]!);
+    if (JSON.stringify(evTypes) !== JSON.stringify(projPostorderTypes(tsAst))) prattWitBad++;
   }
   check(
     'SH3-2 Pratt handwritten witnesses TS↔Rust iso',
@@ -641,16 +636,17 @@ async function main(): Promise<void> {
         atom: { kind: 'keep' },
         group: { kind: 'inline' },
         binary: binaryNode,
-        postfixTok: { kind: 'custom', fn: 'taggedCustom', reason: 'SH3-3 custom postfixTok emission witness.' },
-        template: { kind: 'custom', fn: 'templateCustom', reason: 'SH3-3 custom template-slot emission witness.' },
+        postfixTok: { kind: 'custom', fn: 'taggedCustom', types: ['TaggedTemplate'], reason: 'SH3-3 custom postfixTok emission witness.' },
+        template: { kind: 'custom', fn: 'templateCustom', types: ['TemplateLiteral'], reason: 'SH3-3 custom template-slot emission witness.' },
       },
     },
   };
   const customTemplateSrc = emitRust(templateMiniGrammar, { shape: customTemplateShape });
   check(
     'SH3-3 template custom/postfixTok custom emit',
-    customTemplateSrc.includes('self.customs.templateCustom(') &&
-      customTemplateSrc.includes('self.customs.taggedCustom('),
+    customTemplateSrc.includes('estree_type_of_streaming') &&
+      customTemplateSrc.includes('"templateCustom"') &&
+      customTemplateSrc.includes('"taggedCustom"'),
   );
   const templateBin = compileShape('template-mini-shape', templateSrc);
   const templateTsFile = `${TMP}/template-mini-shape.ts`;
@@ -690,11 +686,10 @@ async function main(): Promise<void> {
     }
     if (wantOk) {
       templateCompared++;
-      const rust = stripSpans(JSON.parse(templateLines[i]!.slice(2)));
-      const tsNeutral = stripSpans(tsAst);
-      if (JSON.stringify(rust) !== JSON.stringify(tsNeutral)) templateIsoBad++;
+      const evTypes = rustEventTypes(templateLines[i]!);
+      if (JSON.stringify(evTypes) !== JSON.stringify(projPostorderTypes(tsAst))) templateIsoBad++;
       if (witness.kind === 'complex-hole') {
-        dualProductOk = JSON.stringify(rust).includes('"BinaryExpression"');
+        dualProductOk = (evTypes ?? []).includes('BinaryExpression');
       }
     }
   }
@@ -725,7 +720,7 @@ async function main(): Promise<void> {
     `${templateCompared - templateIsoBad}/${templateCompared}, Expr product=${dualProductOk}`,
   );
 
-  // ── SH3-4: typescript shape + ESTree Rust customs ──────────────────────────
+  // ── SH3-4: typescript shape + ESTree Rust customs (streaming-only) ─────────
   let tsEmitError = '';
   let tsEmitSrc = '';
   try {
@@ -747,7 +742,7 @@ async function main(): Promise<void> {
   const tsInjected = injectTypescriptRustCustoms(tsEmitSrc);
   writeFileSync(`${TMP}/typescript-shape-emit.rs`, tsInjected); // keep for debug; do not print
   const tsBin = compileShape('typescript-shape', tsInjected, tsCustomsHarness, 900_000);
-  check('rustc -O typescript shape + TsEstreeCustoms', true);
+  check('rustc -O typescript shape (streaming rebuild)', true);
 
   const tsTsFile = `${TMP}/typescript-shape.ts`;
   writeFileSync(tsTsFile, emitTs(typescriptGrammar, { shape: typescriptShape }));
@@ -790,7 +785,7 @@ async function main(): Promise<void> {
   const rustA = tsCorpusLines.filter((l) => l.startsWith('A\t')).length;
   const rustR = tsCorpusLines.filter((l) => l === 'R').length;
   check(
-    'typescript CST ≡ parse_ast_with(TsEstreeCustoms) accept',
+    'typescript CST ≡ parse_stream accept',
     tsAcceptDiv === 0 &&
       tsCorpusLines.length === tsCorpus.length &&
       rustA + rustR + rustE === tsCorpus.length &&
@@ -820,32 +815,27 @@ async function main(): Promise<void> {
   for (let i = 0; i < tsCorpus.length; i++) {
     if (tsCorpusLines[i]!.startsWith('A\t')) acceptedIdx.push(i);
   }
-  const sampleN = Math.min(500, acceptedIdx.length);
-  let sampleIsoBad = 0;
-  for (let s = 0; s < sampleN; s++) {
-    // Deterministic stride sample across accept surface.
-    const i = acceptedIdx[Math.floor((s * acceptedIdx.length) / sampleN)]!;
+  // M-A1.4-S4: TS is the oracle — compare the Rust STREAMING rebuild (parse_stream
+  // + rebuild_estree, emitted from the same customs) against the TS reference for
+  // EVERY accepted corpus case (previously a 500-stride sample of the tree JSON).
+  let streamIsoBad = 0;
+  for (const i of acceptedIdx) {
     const src = tsCorpus[i]!.src;
     const rust = scrubIso(stripSpans(parseRustShapeJson(tsCorpusLines[i]!)));
     const tsAst = scrubIso(normalizeTsAst(tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms })));
-    if (JSON.stringify(rust) !== JSON.stringify(tsAst)) sampleIsoBad++;
+    if (JSON.stringify(rust) !== JSON.stringify(tsAst)) streamIsoBad++;
   }
   check(
-    'typescript accept-corpus TS↔Rust AST iso ≥500',
-    sampleN >= 500 && sampleIsoBad === 0,
-    `${sampleN} compared, ${sampleIsoBad} divergences (accept=${acceptedIdx.length})`,
+    'typescript accept-corpus TS↔Rust streaming-rebuild AST iso (all accepted)',
+    streamIsoBad === 0,
+    `${acceptedIdx.length} compared, ${streamIsoBad} divergences (accept=${acceptedIdx.length})`,
   );
 
-  const failLoudOut = execFileSync(tsBin, ['fail-loud'], { encoding: 'utf8', timeout: 30_000 }).trimEnd();
-  const failLoudOk = Number(failLoudOut.match(/^FAIL_LOUD\t(\d+)$/m)?.[1] ?? 0);
-  const failLoudNeedles = FAIL_LOUD_RD_FNS.slice(0, 3);
-  check(
-    'typescript fail-loud catch_unwind altPath=[99] ≥3',
-    failLoudOk >= 3 && failLoudNeedles.every((fn) => failLoudOut.includes(`OK\t${fn}`)),
-    `${failLoudOk} ok; ${failLoudOut.split('\n').filter((l) => l.startsWith('OK')).join(', ')}`,
-  );
+  // M-A1.4-S5: the tree-era fail-loud check (TsEstreeCustoms/ast_custom/FN_*
+  // consts) was deleted with tree mode — customs are never invoked by the
+  // streaming walk, so there is no altPath=[99] dispatch to fail loud on.
 
-  // Perf snapshot (not a gate): ≥4 paired cst vs ast on ≥2MB valid TS source.
+  // Perf snapshot (not a gate): ≥4 paired cst vs stream on ≥2MB valid TS source.
   const benchUnit = [
     'const a: number = 1;',
     'function f<T>(x: T): T { return x; }',
@@ -865,21 +855,21 @@ async function main(): Promise<void> {
     const cstMs = Number(execFileSync(tsBin, ['cst'], {
       input: benchSrc, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 120_000,
     }).trim());
-    const astMs = Number(execFileSync(tsBin, ['ast'], {
+    const streamMs = Number(execFileSync(tsBin, ['ast'], {
       input: benchSrc, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 120_000,
     }).trim());
-    const ratio = cstMs > 0 ? astMs / cstMs : NaN;
+    const ratio = cstMs > 0 ? streamMs / cstMs : NaN;
     ratios.push(ratio);
-    pairLines.push(`pair${p + 1} cst=${cstMs.toFixed(2)}ms ast=${astMs.toFixed(2)}ms ratio=${ratio.toFixed(4)}`);
+    pairLines.push(`pair${p + 1} cst=${cstMs.toFixed(2)}ms stream=${streamMs.toFixed(2)}ms ratio=${ratio.toFixed(4)}`);
   }
   const sorted = [...ratios].sort((a, b) => a - b);
   const median = sorted.length % 2
     ? sorted[(sorted.length - 1) >> 1]!
     : (sorted[sorted.length / 2 - 1]! + sorted[sorted.length / 2]!) / 2;
   check(
-    'typescript 2MB cst/ast paired timing (≥4 pairs, report)',
+    'typescript 2MB cst/stream paired timing (≥4 pairs, report)',
     ratios.length >= 4 && ratios.every((r) => Number.isFinite(r)),
-    `${pairLines.join('; ')}; median_ast/cst=${median.toFixed(4)} (${(Buffer.byteLength(benchSrc) / 1e6).toFixed(2)}MB)`,
+    `${pairLines.join('; ')}; median_stream/cst=${median.toFixed(4)} (${(Buffer.byteLength(benchSrc) / 1e6).toFixed(2)}MB)`,
   );
 
   const total = pass + fail;

@@ -9,9 +9,9 @@
  *
  * Keys are cstNames → forks inherit (validator expands to 117 IR rules).
  */
-import type { ShapeSpec, CustomShape } from '../../src/shape-schema.ts';
+import type { ShapeSpec, CustomShape, StreamType } from '../../src/shape-schema.ts';
 
-const custom = (fn: string, reason: string): CustomShape => ({ kind: 'custom', fn, reason });
+const custom = (fn: string, reason: string, extra?: { types?: StreamType[]; opMap?: Record<string, string> }): CustomShape => ({ kind: 'custom', fn, reason, ...extra });
 
 /** Shared leaf policy ≈ demoBuilder DROP_LEAF + payload leafValues. */
 const leaves: ShapeSpec['leaves'] = {
@@ -64,6 +64,13 @@ export const typescriptShape: ShapeSpec = {
     Stmt: {
       kind: 'custom',
       fn: 'estreeStmt',
+      types: [
+        'BlockStatement', 'VariableDeclaration', 'IfStatement', 'ForStatement',
+        'WhileStatement', 'DoWhileStatement', 'SwitchStatement', 'ReturnStatement',
+        'ThrowStatement', 'BreakStatement', 'ContinueStatement', 'TryStatement',
+        'LabeledStatement', 'EmptyStatement', 'DebuggerStatement', 'WithStatement',
+        'VariableDeclaration', { passthrough: true }, 'ExpressionStatement',
+      ],
       folds: [{ tag: 'switch-consequent', into: 'consequent' }],
       reason:
       'Stmt has 19 RD alts (if/for/while/do/switch/return/throw/try/break/continue/' +
@@ -86,7 +93,16 @@ export const typescriptShape: ShapeSpec = {
       'that still cannot derive `async`/`generator`/`declare` boolean flags from dropped ' +
       'keyword leaves (keywords are dropped globally — their presence must be recovered ' +
       'from which alt matched, i.e. builder logic). Primitives lack alt-identity → flag ' +
-      'mapping.'),
+      'mapping.', {
+        types: [
+          'FunctionDeclaration', 'FunctionDeclaration', 'FunctionDeclaration', 'FunctionDeclaration',
+          'TSInterfaceDeclaration', 'TSTypeAliasDeclaration', 'ClassDeclaration',
+          'Declaration', 'Declaration', 'Declaration', 'Declaration', 'Declaration', 'Declaration', 'Declaration',
+          'FunctionDeclaration', 'ExportNamedDeclaration', 'ExportNamedDeclaration', 'ExportNamedDeclaration', 'ExportNamedDeclaration',
+          'ExportAllDeclaration', 'ExportDefaultDeclaration', 'ImportDeclaration', 'TSImportEqualsDeclaration',
+          'TSModuleDeclaration', 'TSModuleDeclaration', 'TSNamespaceExportDeclaration', 'TSEnumDeclaration', 'TSInterfaceDeclaration',
+        ],
+      }),
 
     // ─── Expr (Pratt) — demo BinaryExpression heuristics; real ESTree needs more ─
     Expr: {
@@ -97,14 +113,33 @@ export const typescriptShape: ShapeSpec = {
         'nudBracket "(" steps are `Expr star(, Expr)` — after punct drop the kid list is ' +
         '1..N expressions. Pure inline is only correct for N=1; N>1 must become ' +
         'SequenceExpression. Distinguishing N at shape-spec time needs a runtime arity ' +
-        'branch — custom.'),
+        'branch — custom.', { types: [{ parenOrComma: true }] }),
       prefix: custom('estreeExprPrefix',
         'Prefix ++/-- must be UpdateExpression(prefix:true); other ops stay UnaryExpression. ' +
-        'A single declarative UnaryExpression node cannot branch on opText.'),
+        'A single declarative UnaryExpression node cannot branch on opText.', {
+        opMap: {
+          '!': 'UnaryExpression', '~': 'UnaryExpression', '+': 'UnaryExpression', '-': 'UnaryExpression',
+          'typeof': 'UnaryExpression', 'void': 'UnaryExpression', 'delete': 'UnaryExpression',
+          'await': 'UnaryExpression', 'yield': 'UnaryExpression', '++': 'UpdateExpression', '--': 'UpdateExpression',
+        },
+      }),
       binary: custom('estreeExprBinary',
         'Expr binary covers assignment (= += … ??= ||= &&=), logical (?? || &&), and relational/' +
         'arithmetic ops — three ESTree families (AssignmentExpression / LogicalExpression / ' +
-        'BinaryExpression). Declarative BinaryExpression alone mis-types assignments and logicals.'),
+        'BinaryExpression). Declarative BinaryExpression alone mis-types assignments and logicals.', {
+        opMap: {
+          '=': 'AssignmentExpression', '+=': 'AssignmentExpression', '-=': 'AssignmentExpression', '*=': 'AssignmentExpression',
+          '/=': 'AssignmentExpression', '%=': 'AssignmentExpression', '**=': 'AssignmentExpression', '<<=': 'AssignmentExpression',
+          '>>=': 'AssignmentExpression', '>>>=': 'AssignmentExpression', '&=': 'AssignmentExpression', '|=': 'AssignmentExpression',
+          '^=': 'AssignmentExpression', '??=': 'AssignmentExpression', '||=': 'AssignmentExpression', '&&=': 'AssignmentExpression',
+          '??': 'LogicalExpression', '||': 'LogicalExpression', '&&': 'LogicalExpression',
+          '|': 'BinaryExpression', '^': 'BinaryExpression', '&': 'BinaryExpression', '==': 'BinaryExpression',
+          '!=': 'BinaryExpression', '===': 'BinaryExpression', '!==': 'BinaryExpression', '<': 'BinaryExpression',
+          '>': 'BinaryExpression', '<=': 'BinaryExpression', '>=': 'BinaryExpression', '<<': 'BinaryExpression',
+          '>>': 'BinaryExpression', '>>>': 'BinaryExpression', '+': 'BinaryExpression', '-': 'BinaryExpression',
+          '*': 'BinaryExpression', '/': 'BinaryExpression', '%': 'BinaryExpression', '**': 'BinaryExpression',
+        },
+      }),
       postfix: {
         kind: 'node',
         type: 'UpdateExpression',
@@ -122,23 +157,29 @@ export const typescriptShape: ShapeSpec = {
         'Each LED yields a different ESTree node (CallExpression / MemberExpression / ' +
         'ConditionalExpression / TSAsExpression / TSSatisfiesExpression / BinaryExpression / ' +
         'TSNonNullExpression / TaggedTemplateExpression) with different field layouts. ' +
-        'A single pratt.led node(fields) cannot branch on connector/alt; needs custom.'),
+        'A single pratt.led node(fields) cannot branch on connector/alt; needs custom.', {
+        types: [
+          'CallExpression', 'TSInstantiationExpression', 'CallExpression', 'MemberExpression', { optionalChain: true },
+          'MemberExpression', 'TSNonNullExpression', 'ConditionalExpression', 'TSAsExpression', 'BinaryExpression',
+          'BinaryExpression', 'TSSatisfiesExpression',
+        ],
+      }),
       nudSeq: custom('estreeExprNudSeq',
         'nudSeq covers bare Ident + decorated class expressions — product types Ident vs ' +
         'ClassExpression; class arm has star(Decorator) + many opt type-params/heritage/' +
-        'members. Not a fixed field bind.'),
+        'members. Not a fixed field bind.', { types: [{ passthrough: true }, 'ClassExpression', 'ClassExpression'] }),
       nudCapped: custom('estreeArrow',
         'nudCapped are ArrowFunctionExpression forms (async/params/return-type/body). ' +
         'Params are sep(Param) and body is Block|Expr alt; flag async from leading keyword ' +
-        '(dropped). Requires handwritten assembly.'),
+        '(dropped). Requires handwritten assembly.', { types: ['ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression', 'ArrowFunctionExpression'] }),
       postfixTok: custom('estreeExprPostfixTok',
         'postfixTok Template on Expr is TaggedTemplateExpression (tag=left, quasi=TemplateLiteral); ' +
-        'keep would leave a raw Expr children pair.'),
+        'keep would leave a raw Expr children pair.', { types: ['TaggedTemplateExpression'] }),
       template: custom('estreeTemplateLiteral',
         'Template literal kids are head, expr, optional middle/expr pairs, then tail ' +
         '(or a lone no-subst leaf). ESTree needs TemplateLiteral with quasis and ' +
         'expressions; keep would leave raw $template children. Hole accept follows ' +
-        'portable interpRule (= CST); hole AST uses the enclosing Pratt via dual-parse.'),
+        'portable interpRule (= CST); hole AST uses the enclosing Pratt via dual-parse.', { types: ['TemplateLiteral'] })
     },
 
     // Type system Pratt — no demo coverage; ESTree/TS uses different node set
@@ -149,11 +190,16 @@ export const typescriptShape: ShapeSpec = {
       group: custom('tsTypeLed',
         'Type group identities are heterogeneous; object-type group 7 lowers to TSTypeLiteral, ' +
         'while other groups retain their explicit Type wrapper. C7 dispatches group vs LED ' +
-        'by whether opText is present.'),
+        'by whether opText is present.', {
+        types: ['Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type',
+                'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type'],
+      }),
       led: custom('tsTypeLed',
         'Type LEDs include conditional/indexed/keyof-style continuations with ' +
         'heterogeneous field shapes; keep covers atoms only. LED connector→node ' +
-        'dispatch needs custom (same argument as Expr.led).'),
+        'dispatch needs custom (same argument as Expr.led).', {
+        types: ['Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type'],
+      }),
       nudSeq: { kind: 'keep' },
     },
     TypeofRef: {
@@ -169,7 +215,9 @@ export const typescriptShape: ShapeSpec = {
       led: custom('estreeNewTargetLed',
         'NewTarget LEDs (`.` Ident / `[` Expr `]`) produce MemberExpression vs ' +
         'the `new.target` meta special-case when the left root is the `new` `.` `target` ' +
-        'NUD — detecting that root requires looking at left leaf text, not a fixed field bind.'),
+        'NUD — detecting that root requires looking at left leaf text, not a fixed field bind.', {
+        types: ['MemberExpression', 'MemberExpression'],
+      })
     },
     ClassHeritage: {
       kind: 'pratt',
@@ -222,6 +270,7 @@ export const typescriptShape: ShapeSpec = {
     Binding: {
       kind: 'custom',
       fn: 'estreeVariableDeclarator',
+      types: ['VariableDeclarator'],
       reason:
         'M2 typed direct-emit: VariableDeclarator is a plain typed struct in the customs arena ' +
         '(id, typeAnnotation, init, off, end) — routing via custom lets it bypass DynObj.',
@@ -229,6 +278,7 @@ export const typescriptShape: ShapeSpec = {
     ForBinding: {
       kind: 'custom',
       fn: 'estreeVariableDeclarator',
+      types: ['VariableDeclarator'],
       reason:
         'M2 typed direct-emit: VariableDeclarator is a plain typed struct in the customs arena ' +
         '(id, typeAnnotation, init, off, end) — routing via custom lets it bypass DynObj.',
@@ -261,7 +311,9 @@ export const typescriptShape: ShapeSpec = {
             'ArrayBindingPattern IR is `opt(elem) star(, opt(elem))` — optional elements ' +
             'encode ELISION holes (sparse array pattern). list() would drop holes; node with ' +
             'positional fields cannot represent variable-length with embedded nulls. Needs ' +
-            'a builder that preserves missing opts as null entries.'),
+            'a builder that preserves missing opts as null entries.', {
+            types: ['ArrayPattern'],
+          }),
         },
       ],
     },
@@ -269,7 +321,7 @@ export const typescriptShape: ShapeSpec = {
       '4 alts: key:value, shorthand Ident, computed/literal key, rest `...`. ' +
       'Shorthand vs key:value share leading Ident but differ by presence of `:`; after ' +
       'keyword/punct drop the alt identity is the only way to set `shorthand:true`. ' +
-      'Primitives have no “which alt matched → boolean flag” form.'),
+      'Primitives have no “which alt matched → boolean flag” form.', { types: ['Property', 'Property', 'Property', 'RestElement'] }),
     ArrayBindingElement: {
       kind: 'choice',
       arms: [
@@ -291,13 +343,13 @@ export const typescriptShape: ShapeSpec = {
       '3 alts: `this` annotation, decorated+modifiers+complex, undecorated complex. ' +
       'Modifier keywords are dropped leaves; accessibility/readonly/optional/`...`rest ' +
       'flags must be recovered from alt structure + remaining kids. Excessively branched ' +
-      'for choice+node without a flag-from-alt primitive.'),
+      'for choice+node without a flag-from-alt primitive.', { types: ['Identifier', 'Identifier', 'Identifier'] }),
     ForHead: custom('estreeForHead',
       '4 alts (for-let/const/var/using ; for(;;) ; for-in ; for-of) are three different ' +
       'ESTree parents (ForStatement / ForInStatement / ForOfStatement) assembled at Stmt ' +
       'level — ForHead alone is not a single node. Mapping it to one node type lies; ' +
       'inlining into Stmt is what ESTree does. Shape for the helper rule is therefore custom ' +
-      '(returns a tagged tuple the Stmt builder consumes).'),
+      '(returns a tagged tuple the Stmt builder consumes).', { types: ['ForHead', 'ForHead', 'ForHead', 'ForHead'] }),
     SwitchCase: {
       ...custom('estreeSwitchCase',
       'SwitchCase alts are Case / Default / bare Stmt. Case is `case Expr star(, Expr) :` — ' +
@@ -305,7 +357,7 @@ export const typescriptShape: ShapeSpec = {
       'Stmt alts are consequents that ESTree nests under the PRECEDING case (not a sibling ' +
       'SwitchCase node). inline() for the Stmt arm is correct in isolation but the parent ' +
       'Block/Switch must fold inline stmts into `consequent[]` of the prior case — that ' +
-      'cross-rule accumulation is outside any single-rule primitive. custom.'),
+      'cross-rule accumulation is outside any single-rule primitive. custom.', { types: ['SwitchCase', 'SwitchCase', 'SwitchCase'] }),
       result: 'partial',
     },
 
@@ -347,18 +399,18 @@ export const typescriptShape: ShapeSpec = {
       'left-recursive member/call chain on the decorator expression, not a list field of ' +
       'the Decorator node. list() would mis-type it; node with at:0 ignores the chain. ' +
       'Need a Pratt-like fold over the star — custom (or would need a recursive inline ' +
-      'fold primitive we deliberately do not have).'),
+      'fold primitive we deliberately do not have).', { types: ['Decorator', 'Decorator'] }),
 
     // ─── Class / interface / enum members ──────────────────────────────
     ClassMember: custom('estreeClassMember',
       '6 alts spanning empty/ctor/static-block/decorated-method-field-soup/field. ' +
       'alt[3] alone is a giant nested alt of async/generator/get/set/index/constructor/' +
       'method/field — tens of ESTree ClassBody element types. choice() would need recursive ' +
-      'nested choice (forbidden) or an explosion of arms; custom is the honest escape.'),
+      'nested choice (forbidden) or an explosion of arms; custom is the honest escape.', { types: ['UnknownClassMember', 'MethodDefinition', 'StaticBlock', 'MethodDefinition', 'PropertyDefinition', 'MethodDefinition'] }),
     InterfaceMember: custom('tsInterfaceMember',
       '6 alts (call/construct signature, get/set, mapped type member, readonly prop, ' +
       'method/prop, index signature) — each a different TS-ESTree node. Same argument as ' +
-      'ClassMember: heterogeneous products + dropped modifier keywords.'),
+      'ClassMember: heterogeneous products + dropped modifier keywords.', { types: ['TSCallSignatureDeclaration', 'TSMethodSignature', 'TSMappedType', 'TSPropertySignature', 'TSPropertySignature', 'TSIndexSignature'] }),
     EnumMember: {
       kind: 'node',
       type: 'TSEnumMember',
@@ -370,7 +422,7 @@ export const typescriptShape: ShapeSpec = {
     TypeMember: custom('tsTypeMember',
       '4 alts of object-type members (prop/call/construct/index-like). Heterogeneous ' +
       'TS-ESTree products + optional modifiers; choice would work for naming but field ' +
-      'binds fight optional `?`/`readonly` dropped leaves — custom recovers flags.'),
+      'binds fight optional `?`/`readonly` dropped leaves — custom recovers flags.', { types: ['TSCallSignatureDeclaration', 'TSMethodSignature', 'TSMappedType', 'TSPropertySignature'] }),
     MemberName: {
       kind: 'choice',
       arms: [
@@ -397,7 +449,7 @@ export const typescriptShape: ShapeSpec = {
     Prop: custom('estreeProp',
       '12 alts covering object literal props (key:value, method, get/set, spread, ' +
       'shorthand, computed). Shorthand vs keyed distinguished only by alt; spread is ' +
-      '`...` Expr. Same “alt → flag / product type” gap as BindingProperty.'),
+      '`...` Expr. Same “alt → flag / product type” gap as BindingProperty.', { types: ['Property', 'Property', 'Property', 'Property', 'Property', 'Property', 'Property', 'Property', 'SpreadElement', 'Property', 'Property', 'Property'] }),
   },
 };
 
