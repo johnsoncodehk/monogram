@@ -18,7 +18,7 @@ import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
-  FieldBind, TokenLeafPolicy, CustomShape, ParentFold,
+  FieldBind, TokenLeafPolicy, CustomShape, ParentFold, StreamType, PrattShape, RuleShapeAtom,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 
@@ -4475,7 +4475,7 @@ function collectStreamTypes(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): Map
   const merged = new Map<string, { perArm: (string | StreamTypeObj)[]; opMap?: Record<string, string> }>();
   const fail = (msg: string): never => { throw new Error('stream-type totality: ' + msg); };
   const ensureTypes = (fn: string, types: StreamType[] | undefined, armCount: number) => {
-    if (!types) fail(`${fn} declares no types`);
+    if (!types) { fail(`${fn} declares no types`); return; }
     // A single parenOrComma marker is a site-level decision covering every arm.
     if (types.length === 1 && typeof types[0] === 'object' && types[0] !== null && 'parenOrComma' in (types[0] as object)) return;
     if (types.length !== armCount) fail(`${fn} expects ${armCount} reachable arm(s), got ${types.length} declared`);
@@ -4524,7 +4524,7 @@ function collectStreamTypes(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): Map
       continue;
     }
     const ps = sir.shape as PrattShape;
-    const slot = (name: string, s: RuleShapeAtom | undefined): void => {
+    const slot = (name: string, s: { kind: string } | undefined): void => {
       if (!s || s.kind !== 'custom') return;
       const cs = s as CustomShape;
       let n: number | null = null;
@@ -5083,11 +5083,13 @@ ${methods}
 }
 
 pub fn parse_ast_with<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C) -> Option<AstRoot<'a>> {
+    parse_ast_with_buf(src, customs, &mut None)
+}
+pub fn parse_ast_with_buf<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C, events_buf: &mut Option<Vec<StreamEvent>>) -> Option<AstRoot<'a>> {
     let toks = lex(src);
     let n = toks.len();
     customs.reserve(n);
-    // Reserve output slabs from the token count — kills the realloc/memmove
-    // growth churn that otherwise dominates allocation time (SH3-6 M3).
+    let events_init = events_buf.take().unwrap_or_else(Vec::new);
     let mut parser = ShapeParser {
         src, toks, pos: 0, customs,
         arena: AstArena {
@@ -5103,11 +5105,13 @@ pub fn parse_ast_with<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C)
         vals: Vec::with_capacity(1024),
         ap_stack: Vec::with_capacity(256),
         suppress_next: None, suppress_cur: None, suppress_log: Vec::with_capacity(64), capped: false,
-        events: Vec::new(),
+        events: events_init,
     };
     let root = parser.parse_ast_${ir.entry}()?;
     if parser.pos != n { return None; }
-    Some(AstRoot { root, arena: parser.arena, events: parser.events })
+    *events_buf = Some(parser.events);
+    let ev = events_buf.take().unwrap();
+    Some(AstRoot { root, arena: parser.arena, events: ev })
 }
 pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
     parse_ast_with(src, &DefaultShapeCustoms)

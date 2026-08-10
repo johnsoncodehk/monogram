@@ -839,7 +839,7 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
-    ? `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end, tokStart: node.tokStart, tokEnd: node.tokEnd }; }\n`
+    ? `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end, tokStart: node.tokStart, tokEnd: node.tokEnd }; }\n`
     : '';
   const BIN = `{ ${r.binary.map((b) => `${lidOf(ids, b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ')} }`;
@@ -867,10 +867,16 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
     parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
     return parts.join(' && ');
   };
-  const ledBody = (b: Bracket) => `{
+  // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the
+  // relational operator) must not `break` the Pratt loop when its LED arms
+  // fail — the restore happens, then control falls through to the binary
+  // check below so `<` still parses as a comparison. Lids with no binary
+  // entry keep the `break` (their LED failure must end the expression).
+  const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
+  const ledBody = (b: Bracket, hasBin: boolean) => `{
       const ledSave = pos; const kids: Cst[] = [left];
       if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue ledLoop; }
-      pos = ledSave; break ledLoop;
+      pos = ledSave;${hasBin ? '' : ' break ledLoop;'}
     }`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -878,8 +884,9 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
     return `    switch (t.lid) {
 ${groups.map((g) => {
   const lid = g.key as number;
+  const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }) =>
-    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b)}`);
+    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, hasBin)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -889,7 +896,7 @@ ${groups.map((g) => {
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
     const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
     const tplPart = hasTpl ? `
-    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end, tokStart: left.tokStart, tokEnd: pos }; continue ledLoop; } }` : '';
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end, tokStart: left.tokStart, tokEnd: pos }; continue ledLoop; } }` : '';
     return `    switch (t.kid) {
 ${groups.map((g) => `      case ${g.key}:
         if (!tailClosed) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end, tokStart: left.tokStart, tokEnd: pos }; continue ledLoop; }
@@ -961,7 +968,7 @@ ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${se
 function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const cn = J(r.cstName);
   const tplNud = tpl && r.nudToks.includes(tpl.token)
-    ? `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(); return node === null ? null : wrapUnaryW(${cn}, node); }\n`
+    ? `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(() => parse${r.name}W()); return node === null ? null : wrapUnaryW(${cn}, node); }\n`
     : '';
   const bracketNudBody = (b: Bracket) => `{
       const save = pos; const kids: any[] = []; const spans: BWSpan[] = [];
@@ -986,11 +993,14 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
     parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
     return parts.join(' && ');
   };
-  const ledBody = (b: Bracket) => `{
+  // See prattRule: a lid that is BOTH a LED first-token and a binary op must
+  // fall through to the binary check on LED failure instead of breaking.
+  const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
+  const ledBody = (b: Bracket, hasBin: boolean) => `{
       const ledSave = pos; const kids: any[] = []; const spans: BWSpan[] = [];
       absorbFrame(kids, spans, left);
       if (${b.steps.map((x) => stepCond(x, ids, true)).join(' && ')}) { left = nodeW(${cn}, kids, spans); continue ledLoop; }
-      pos = ledSave; break ledLoop;
+      pos = ledSave;${hasBin ? '' : ' break ledLoop;'}
     }`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -998,8 +1008,9 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
     return `    switch (t.lid) {
 ${groups.map((g) => {
   const lid = g.key as number;
+  const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }) =>
-    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b)}`);
+    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, hasBin)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -1009,7 +1020,7 @@ ${groups.map((g) => {
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
     const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
     const tplPart = hasTpl ? `
-    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(); if (node !== null) { left = joinFramesW(${cn}, left, node); continue ledLoop; } }` : '';
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(() => parse${r.name}W()); if (node !== null) { left = joinFramesW(${cn}, left, node); continue ledLoop; } }` : '';
     return `    switch (t.kid) {
 ${groups.map((g) => `      case ${g.key}:
         if (!tailClosed) { const lf = leafFrameW(tok_kind(t), t); pos++; left = joinFramesW(${cn}, left, lf); continue ledLoop; }
@@ -1095,7 +1106,8 @@ function emitBuilderAddon(ir: ParserIR, ids: LexIdPlan, doc: DocEditParts): stri
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids);
     return rdRuleW(r, ids);
   }).join('\n\n');
-  const matchTemplateW = ir.tpl ? `function matchTemplateW(): Frame | null {
+  const matchTemplateW = ir.tpl ? `// interp: the caller's Pratt rule for each \`\${…}\` hole (CST matchTemplate parity).
+function matchTemplateW(interp: () => Frame | null): Frame | null {
   const t = peek();
   if (t === null || t.kid !== ${kidOf(ids, '$templateHead')}) return null;
   const kids: any[] = []; const spans: BWSpan[] = [];
@@ -1105,7 +1117,7 @@ function emitBuilderAddon(ir: ParserIR, ids: LexIdPlan, doc: DocEditParts): stri
     absorbFrame(kids, spans, lf);
   }
   for (;;) {
-    const expr = parse${ir.tpl.interpRule}W();
+    const expr = interp();
     if (expr === null) { pos = save; return null; }
     absorbFrame(kids, spans, expr);
     const next = peek();
@@ -3065,7 +3077,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     return `_shapeLeafIdent(${tVar})`;
   };
 
-  /** Explicit pratt.template only — omitted means legacy `$template` + interpRule. */
+  /** Explicit pratt.template only — omitted means legacy `$template` (hole = caller rule). */
   const templateSlot = ps.template as CustomShape | KeepShape | undefined;
   const hasTplNud = !!(tpl && r.nudToks.includes(tpl.token));
   const hasTplPostfix = !!(tpl && r.postfixToks.includes(tpl.token));
@@ -3123,23 +3135,21 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   }
 
   // ── template NUD ──────────────────────────────────────────────────────────
-  // Dual hole parse when pratt.template is set: portable interpRule locks accept/
-  // consume end (≡ CST); enclosing Pratt builds the hole AST; ends must match.
+  // Hole accept/consume and hole AST both come from the CALLER's Pratt rule
+  // (≡ CST matchTemplate, mirroring the reference's currentPrattContext ??
+  // EXPR_RULE) — no dual parse needed once CST no longer locks to interpRule.
   let tplNudCode = '';
   if (hasTplNud) {
     if (templateSlot) {
-      const dual = r.name !== tpl!.interpRule;
       tplNudCode = `  if (t.kid === ${kidOf(ids, '$templateHead')}) {
-    const _tm = matchTemplateAstKids(${dual
-      ? `() => parseAst${tpl!.interpRule}(), () => parseAst${r.name}()`
-      : `() => parseAst${r.name}(), null`});
+    const _tm = matchTemplateAstKids(() => parseAst${r.name}(), null);
     if (_tm === null) return null;
     return ${templateFinish('_tm.kids', '_tm.save')} as ${retType};
   }
 `;
     } else {
       tplNudCode = `  if (t.kid === ${kidOf(ids, '$templateHead')}) {
-    const node = matchTemplateAstLegacy();
+    const node = matchTemplateAstLegacy(() => parseAst${r.name}());
     if (node === null) return null;
     return node as ${retType};
   }
@@ -3302,12 +3312,17 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
     return parts.join(' && ');
   };
+  // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the
+  // relational operator) must fall through to the binary check on LED failure
+  // (CST / interpreter parity); lids with no binary entry keep the break.
+  const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
 
   let ledSwitch = '';
   if (ledSlot && r.leds.length > 0) {
     const groups = groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first));
     const cases = groups.map((g) => {
       const lid = g.key as number;
+      const hasBin = binLids.has(lid);
       const arms = g.members.map(({ item: b, index: i }) => {
         const armCtx = newShapeEmitCtx(r.name);
         const inner = txnInner(b.steps, armCtx);
@@ -3338,7 +3353,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         }
         pos = ledSave;
         _capped = _cappedSave;
-        break ledLoop;
+${hasBin ? '' : '        break ledLoop;'}
       }`;
       }).join('\n');
       return `      case ${lid}:\n${arms}\n        break;`;
@@ -3394,14 +3409,11 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     let tplPart = '';
     if (hasTpl) {
       if (templateSlot) {
-        const dual = r.name !== tpl!.interpRule;
         tplPart = `
     if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) {
       const leftTokStart = pos;
       const node_off = t.off;
-      const _tm = matchTemplateAstKids(${dual
-        ? `() => parseAst${tpl!.interpRule}(), () => parseAst${r.name}()`
-        : `() => parseAst${r.name}(), null`});
+      const _tm = matchTemplateAstKids(() => parseAst${r.name}(), null);
       if (_tm !== null) {
         const node = ${templateFinish('_tm.kids', '_tm.save')};
         const node_end = pos > 0 ? toks[pos - 1]!.end : node_off;
@@ -3415,7 +3427,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) {
       const leftTokStart = pos;
       const node_off = t.off;
-      const node = matchTemplateAstLegacy();
+      const node = matchTemplateAstLegacy(() => parseAst${r.name}());
       const node_end = pos > 0 ? toks[pos - 1]!.end : node_off;
       if (node !== null) {
         ${tplFinish}
@@ -3561,9 +3573,11 @@ ${nudSeqCode}
 function emitShapeParseHelpers(ir: ParserIR, ids: LexIdPlan): string {
   const tpl = ir.tpl;
   // Shape template kids helper. CST matchTemplate is untouched (byte-identical).
-  // parseAccept = portable interpRule (locks accept/consume ≡ CST).
-  // parseShape  = enclosing Pratt (builds hole AST); null → accept AST only (legacy).
-  // On shape miss/mismatch, fall back to accept AST so accept-set stays ≡ parse(toks).
+  // Hole accept/AST both use the caller's Pratt rule (≡ CST matchTemplate; the
+  // reference parser's currentPrattContext ?? EXPR_RULE). parseShape is kept for
+  // the dual-hole shape where parseAccept end-locks the consume; callers pass
+  // parseShape=null (single caller-rule parse) today. On shape miss/mismatch,
+  // fall back to accept AST so accept-set stays ≡ parse(toks).
   const tplHelper = tpl ? `function _shapeTplSnap(): { pos: number; capped: boolean; sn: Set<number> | null; sc: Set<number> | null } {
   return { pos, capped: _capped, sn: _suppressNext, sc: _suppressCur };
 }
@@ -3617,8 +3631,8 @@ function matchTemplateAstKids(
   }
   return { kids, save };
 }
-function matchTemplateAstLegacy(): unknown | null {
-  const _tm = matchTemplateAstKids(() => parseAst${tpl.interpRule}(), null);
+function matchTemplateAstLegacy(interp: () => unknown | null): unknown | null {
+  const _tm = matchTemplateAstKids(interp, null);
   if (_tm === null) return null;
   const off = _tm.save < toks.length ? toks[_tm.save]!.off : 0;
   const end = pos > 0 ? toks[pos - 1]!.end : off;
@@ -3841,14 +3855,17 @@ export function tokenize(src: string): RichTok[] {
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids);
       return rdRule(r, ids);
     }).join('\n\n');
-    const matchTemplate = ir.tpl ? `function matchTemplate(): Cst | null {
+    const matchTemplate = ir.tpl ? `// interp: the Pratt rule to parse each \`\${…}\` hole — the CALLER's rule
+// (Expr for expression templates, Type for template literal types), mirroring
+// the reference parser's currentPrattContext ?? EXPR_RULE.
+function matchTemplate(interp: () => Node | null): Cst | null {
   const t = peek();
   if (t === null || t.kid !== ${kidOf(ids, '$templateHead')}) return null;
   const children: Cst[] = [];
   const save = pos;
   children.push({ tokenType: '$templateHead', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++;
   for (;;) {
-    const expr = parse${ir.tpl.interpRule}();
+    const expr = interp();
     if (expr === null) { pos = save; return null; }
     children.push(expr);
     const next = peek();

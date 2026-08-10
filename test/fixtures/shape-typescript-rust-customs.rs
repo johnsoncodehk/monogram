@@ -248,6 +248,18 @@ pub fn parse_stream<'a>(src: &'a str, mut cb: impl FnMut(&StreamEvent) -> bool) 
     }
     true
 }
+pub fn parse_stream_buf<'a>(src: &'a str, buf: &mut Vec<StreamEvent>, mut cb: impl FnMut(&StreamEvent) -> bool) -> bool {
+    let customs = TsStreamCustoms::default();
+    let mut b = Some(std::mem::take(buf));
+    let ok = parse_ast_with_buf(src, &customs, &mut b).is_some();
+    *buf = b.unwrap_or_else(Vec::new);
+    if !ok { return false; }
+    for ev in buf.iter() {
+        if !cb(ev) { break; }
+    }
+    buf.clear();
+    true
+}
 
 // ── M-A1.3: schema-driven estree JSON rebuild from the streaming event stream ──
 // The streaming parser emits (cstName, alt, off, end) at every completion point.

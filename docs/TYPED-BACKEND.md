@@ -1193,3 +1193,19 @@ streaming-rebuild AST iso 1403 compared 0 divergences, calc/toy/template
 event types golden/iso all green, SH3-2/3 all green. The streaming-only
 parser is fully accepted. The "完整產出化" goal (estree type table generated
 from shape + emit-time totality + tree mode deleted) is complete.
+
+**M27 grammar-gap fixes + buffer reuse (2026-08-05).** Grammar gaps that
+previously rejected real-code parsing are fixed: relational `<` (the Pratt
+LED arms for lid 34 broke the loop before the binary while-let — now fall
+through) and template interpolation `${f(1)}` (the interp rule is now
+context-aware — caller-rule; `${f(1)}`/`${b+1}`/`${-b}`/`${b++}` all parse).
+Rebuild_estree edge cases fixed (chained calls, literal tests, `new Foo`,
+bare-break, for-in). Corpus acceptance expanded (60 cases the tree rejected
+now parse correctly). Buffer reuse: `parse_ast_with_buf`/`parse_stream_buf`
+reuse a caller-provided events Vec across iterations (kills the per-parse
+Vec growth realloc memcpy — ~19 reallocs per parse from 0→480k).
+NOTE (2026-08-05): the /tmp measurement toolchain was cleared by the system
+(binaries, corpus, bench scripts) — the gate (test/shape-rust.ts) is the
+durable verification path going forward; the perf ratio is last measured at
+~1.03 (S4, clean window) and the buffer-reuse gain (~0.5-1ms/iter) awaits a
+clean re-measurement.

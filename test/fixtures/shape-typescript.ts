@@ -178,8 +178,8 @@ export const typescriptShape: ShapeSpec = {
       template: custom('estreeTemplateLiteral',
         'Template literal kids are head, expr, optional middle/expr pairs, then tail ' +
         '(or a lone no-subst leaf). ESTree needs TemplateLiteral with quasis and ' +
-        'expressions; keep would leave raw $template children. Hole accept follows ' +
-        'portable interpRule (= CST); hole AST uses the enclosing Pratt via dual-parse.', { types: ['TemplateLiteral'] })
+        'expressions; keep would leave raw $template children. Hole accept/AST both ' +
+        'use the enclosing Pratt (≡ CST; reference currentPrattContext ?? EXPR_RULE).', { types: ['TemplateLiteral'] })
     },
 
     // Type system Pratt — no demo coverage; ESTree/TS uses different node set
@@ -491,6 +491,14 @@ const L = (value: string | number | boolean | bigint) => ({ type: 'Literal', val
 
 function firstKid(kids: readonly unknown[]): unknown {
   return kids.length ? kids[0] : undefined;
+}
+
+/** First expression of an opt product `[expr, commaMany]` (arm-1) or the packed
+ *  nested-alt cTail `[[testOpt,[]],[updateOpt,[]]]` (arm-0) — the test slot.
+ *  Mirrors the Rust streaming schema's pool-last expr pick for classic ForHead. */
+function optFirst(v: unknown): unknown {
+  if (Array.isArray(v) && v.length > 0) return optFirst(v[0]);
+  return v ?? null;
 }
 
 function flatKids(kids: readonly unknown[] | unknown): unknown[] {
@@ -912,14 +920,12 @@ function estreeParam(ctx: TsAstCustomCtx): unknown {
 
 function estreeForHead(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
-  if (arm === 0) return { type: 'ForHead', kind: 'classic', init: kDecl(ctx.kids[0]), test: ctx.kids[1] ?? null, update: ctx.kids[2] ?? null };
-  if (arm === 1) return {
-    type: 'ForHead',
-    kind: 'classic',
-    init: seqExpr(ctx.kids[0], null),
-    test: seqExpr(ctx.kids[1], null),
-    update: seqExpr(ctx.kids[2], null),
-  };
+  // Classic heads (arms 0/1) mirror the Rust streaming SC_FORSTATEMENT schema:
+  // init = declarator kid list (arm 0) or null (arm 1); test = the test
+  // expression (optFirst unwraps the `[expr, commaMany]` / packed-cTail opt
+  // products); update = null (Rust's VSpec::Raw("null")).
+  if (arm === 0) return { type: 'ForHead', kind: 'classic', init: kDecl(ctx.kids[0]), test: optFirst(ctx.kids[1]), update: null };
+  if (arm === 1) return { type: 'ForHead', kind: 'classic', init: null, test: optFirst(ctx.kids[1]), update: null };
   if (arm === 2) return { type: 'ForHead', kind: 'in', left: ctx.kids[0], right: ctx.kids[1] };
   if (arm === 3) return { type: 'ForHead', kind: 'of', left: ctx.kids[0], right: ctx.kids[1], await: ctx.src.slice(ctx.off, ctx.off + 5).includes('await') };
   return unhandledCustom('estreeForHead', ctx);
