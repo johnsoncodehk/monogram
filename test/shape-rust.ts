@@ -209,7 +209,7 @@ fn main() {
         // M-A1.4-S5: tree mode removed — accept via the streaming walk, and
         // print the committed StreamEvent stream (typ, alt, off, end) as JSON.
         let cst_ok = parse(tokenize(src)).is_some();
-        let Some(root) = parse_ast_with(src, &DefaultShapeCustoms) else {
+        let Some(root) = parse_ast_with_buf(src, &DefaultShapeCustoms, &mut None) else {
             if cst_ok {
                 eprintln!("accept divergence: {:?}", src);
                 std::process::exit(2);
@@ -249,7 +249,8 @@ fn main() {
                 if is_cst {
                     let _ = parse(tokenize(&raw));
                 } else {
-                    let _ = parse_stream(&raw, |_| true);
+                    let mut buf = Vec::new();
+                    let _ = parse_stream_buf(&raw, &mut buf, |_| true);
                 }
             })
             .expect("spawn bench thread")
@@ -270,7 +271,8 @@ fn main() {
                 let line = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let cst_ok = parse(tokenize(&src_owned)).is_some();
                     let mut evs = Vec::new();
-                    let ok = parse_stream(&src_owned, |e| { evs.push(*e); true });
+                    let mut scratch = Vec::new();
+                    let ok = parse_stream_buf(&src_owned, &mut scratch, |e| { evs.push(*e); true });
                     if cst_ok != ok {
                         eprintln!("accept divergence: {:?}", src_owned);
                         std::process::exit(2);

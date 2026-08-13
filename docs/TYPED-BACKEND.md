@@ -1209,3 +1209,15 @@ NOTE (2026-08-05): the /tmp measurement toolchain was cleared by the system
 durable verification path going forward; the perf ratio is last measured at
 ~1.03 (S4, clean window) and the buffer-reuse gain (~0.5-1ms/iter) awaits a
 clean re-measurement.
+
+**Real-code ratio (2026-08-13): stream/cst ≈ 0.96 — below 1.0 on real code.**
+Toolchain rebuilt after the /tmp loss (emitRust + injectTypescriptRustCustoms +
+bench main; 6.8MB Rust). Of the six ≥100KB hand-written src/*.ts files, only
+two parse (the grammar gaps fixed earlier unlocked `<`/template but the
+remaining 4 still hit uncovered constructs — see KNOWN-GAPS.md): the
+measurable ones show stream/cst = 0.956 (emit-parser.ts, 210KB) and 0.957
+(target-go.ts, 147KB), 8-round load-gated interleaved medians. The stream is
+~4% faster than CST on real code — MORE favorable than the synthetic 2MB bench
+(1.03): the synthetic corpus (8 statements × 9616) is skewed toward many small
+nodes/Type-keeps, while real code's mix favors the streaming path. Caveats:
+only 2/6 files parse; tiny per-parse times (0.6ms) keep the ratio noisy (±~0.05).

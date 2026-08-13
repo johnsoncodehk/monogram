@@ -311,6 +311,7 @@ pub enum VSpec {
     CtorValue,                  // constructor FunctionExpression{params:[KidList Identifier],body:[Kid Block],static:false}
     AsTok,                      // token after 'as' if present, else null (import local)
     TSIndexParams,              // ["k",[Type,Type,...]] from '[' key ':' types ']'
+    IndexType,                  // T[K] → Type kid, else literal leaf after '[' (Obj["key"])
     TSInterfaceBodyFromPool,    // all remaining pool children → {"type":"TSInterfaceBody","body":[...]}
     TokLeafsNoBrackets,         // TokLeafs minus literal '[' ']' tokens (computed member name)
     DecoratorExpr,              // @dec → {Identifier dec}; @dec(...) → {CallExpression{callee,arguments:[]}}
@@ -1157,7 +1158,7 @@ const SC_TPL0: Schema = Schema {
     kids: &["Type"],
     any_kids: false,
     fields: &[
-        FSpec { name: "children", v: VSpec::Seq(&[SeqPart::LeafTok(0), SeqPart::Kid("Type"), SeqPart::LeafTok(2)]) },
+        FSpec { name: "children", v: VSpec::Seq(&[SeqPart::LeafTok(0), SeqPart::Kid("Type"), SeqPart::LeafLast(0)]) },
         FSpec { name: "headText", v: VSpec::LeafTok(0) },
     ],
 };
@@ -1994,6 +1995,17 @@ const SC_TSINDEXED1: Schema = Schema {
     ],
 };
 
+/// Indexed-access LED `T[K]` (alt 5): objectType = the left operand, indexType = the kid/leaf.
+const SC_TSINDEXED5: Schema = Schema {
+    estree: "TSIndexedAccessType", no_type: false,
+    kids: &["Type"],
+    any_kids: false,
+    fields: &[
+        FSpec { name: "objectType", v: VSpec::Opt("Type") },
+        FSpec { name: "indexType", v: VSpec::IndexType },
+    ],
+};
+
 const SC_TSTYPEREF_AMP: Schema = Schema {
     estree: "TSTypeReference", no_type: false,
     kids: &["Type"],
@@ -2039,7 +2051,7 @@ const SC_TSMAPPEDTYPE2: Schema = Schema {
 
 const SC_TSMETHODSIG1: Schema = Schema {
     estree: "TSIndexSignature", no_type: false,
-    kids: &["Type"],
+    kids: &["Type", "TSIndexedAccessType", "$template"],
     any_kids: false,
     fields: &[
         FSpec { name: "parameters", v: VSpec::TSIndexParams },
@@ -2844,17 +2856,50 @@ fn eval_spec(v: VSpec, pool: &mut Vec<(&'static str, u32, u32, String)>, off: u3
         }
         VSpec::TSIndexParams => {
             let toks = lex(&src[off as usize..end as usize]);
+            let text = &src[off as usize..end as usize];
+            let is_mapped = text.contains("in");
+            // key = first token after the '[' (skip leading +/-/readonly modifiers)
             let mut key = "null".to_string();
-            if toks.len() > 1 {
-                let t = toks[1];
-                key = leaf_json(&src[off as usize + t.off as usize..off as usize + t.end as usize]);
+            let mut bracket = false;
+            for t in &toks {
+                let tt = &src[off as usize + t.off as usize..off as usize + t.end as usize];
+                if tt == "[" { bracket = true; continue; }
+                if bracket { key = leaf_json(tt); break; }
             }
-            let mut items: Vec<String> = pool.iter().filter(|(pt, _, _, _)| *pt == "Type").map(|(_, _, _, j)| j.clone()).collect();
+            // children (constraint / asType / value) in source order
+            let mut items: Vec<String> = pool.iter().map(|(_, _, _, j)| j.clone()).collect();
             items.reverse();
             let mut o2 = String::from("[");
-            for (i2, it) in items.iter().enumerate() { if i2 > 0 { o2.push(','); } o2.push_str(it); }
+            if is_mapped && items.len() >= 2 {
+                // [constraint, asType-or-null, value]
+                let constraint = items[0].clone();
+                let value = items[items.len() - 1].clone();
+                let as_type = if items.len() >= 3 { items[1].clone() } else { "null".to_string() };
+                o2.push_str(&constraint);
+                o2.push(',');
+                o2.push_str(&as_type);
+                o2.push(',');
+                o2.push_str(&value);
+            } else {
+                for (i2, it) in items.iter().enumerate() { if i2 > 0 { o2.push(','); } o2.push_str(it); }
+            }
             o2.push(']');
             format!("[{},{}]", key, o2)
+        }
+        VSpec::IndexType => {
+            if let Some(idx) = pool.iter().rposition(|(pt, _, _, _)| *pt == "Type") {
+                pool.remove(idx).3
+            } else {
+                let toks = lex(&src[off as usize..end as usize]);
+                let mut bracket = false;
+                let mut out = "null".to_string();
+                for t in &toks {
+                    let tt = &src[off as usize + t.off as usize..off as usize + t.end as usize];
+                    if tt == "[" { bracket = true; continue; }
+                    if bracket { out = leaf_json(tt); break; }
+                }
+                out
+            }
         }
         VSpec::TokLeafsNoBrackets => {
             let toks = lex(&src[off as usize..end as usize]);
@@ -3388,6 +3433,7 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
     match (etype, alt) {
         ("Type", 0) => { if text.starts_with('<') || text.starts_with('(') { &SC_TYPE_FN } else if text.contains('<') { &SC_TSTYPEREF_LT } else { schema_for(etype, alt) } }
         ("Type", 2) => { if text.contains("keyof") { &SC_TYPE_KEYOF } else { schema_for(etype, alt) } }
+        ("Type", 5) => { if text.starts_with('(') { &SC_TYPE_PAREN } else { &SC_TSINDEXED5 } }
         ("Type", 6) => { if text.starts_with('[') { &SC_TYPE_TUPLE } else { &SC_TSTYPEREF_DOT } }
         ("Property", 1) => {
             let ts = text.trim_start();

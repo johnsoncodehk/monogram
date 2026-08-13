@@ -750,7 +750,7 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
 // Top-level step: uses `self`; children accumulate on `self.scratch`.
 function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return `self.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'lit': return s.value === '>' ? `self.match_gt(${ttIdOf(ar, s.ttype)})` : `self.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `self.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
     case 'rule': return `self.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `self.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
@@ -769,7 +769,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
 }
 function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return `p.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'lit': return s.value === '>' ? `p.match_gt(${ttIdOf(ar, s.ttype)})` : `p.match_lit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `p.match_tok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
     case 'rule': return `p.call_rule(Parser::parse_${s.name})`;
     case 'ruleBp': return `p.call_rule(|p| p.${s.name}_bp(${s.bp}))`;
@@ -982,13 +982,15 @@ ${g.members.map(({ item: b }) => `                ${bracketNudBody(b)}`).join('\
   // relational operator) must not `break` the Pratt loop when its LED arms
   // fail — the restore happens, then control falls through to the binary
   // while-let below so `<` still parses as a comparison. Lids with no binary
-  // entry keep the `break` (their LED failure must end the expression).
+  // entry still fall through between MULTIPLE arms of the SAME lid (e.g. `[`
+  // is array-type then indexed-access): only the LAST arm of a group emits the
+  // `break` (all arms for that lid failed ⇒ the expression ends).
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, hasBin: boolean) => `{
+  const ledBody = (b: Bracket, hasBin: boolean, isLast: boolean) => `{
                 let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
                 self.scratch.push(left.h);
                 if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); continue; }
-                self.pos = led_save; self.scratch.truncate(sb); self.b.restore(ck);${hasBin ? '' : ' break;'}
+                self.pos = led_save; self.scratch.truncate(sb); self.b.restore(ck);${hasBin ? '' : isLast ? ' break;' : ''}
             }`;
   const ledMatch = (() => {
     if (r.leds.length === 0) return '';
@@ -997,8 +999,8 @@ ${g.members.map(({ item: b }) => `                ${bracketNudBody(b)}`).join('\
 ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
-  const arms = g.members.map(({ item: b, index: i }) =>
-    `                if ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, hasBin)}`);
+  const arms = g.members.map(({ item: b, index: i }, j) =>
+    `                if ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, hasBin, j === g.members.length - 1)}`);
   return `                ${lid} => {\n${arms.join('\n')}\n                }`;
 }).join('\n')}
                 _ => {}
@@ -2247,7 +2249,7 @@ impl Doc<CstBuilder> {
         let n = toks.len();
         let mut p = Parser { toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
-            Some(fr) if p.pos == n && fr.present => Some((p, fr.h)),
+            Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
             _ => None,
         }
     }
@@ -2662,6 +2664,28 @@ impl<'a, B: Builder> Parser<'a, B> {
             _ => false
         }
     }
+    /// Match a single '>' even when the lexer tokenized a longer '>'-led punct
+    /// (>>, >=, >>>, >>=, >>>=): consume the leading '>' and splice the
+    /// remainder back into toks as the next token (mirrors the reference
+    /// emitter matchPuLitGT).
+    #[inline(always)]
+    fn match_gt(&mut self, tt_id: u16) -> bool {
+        match self.peek() {
+            Some(t) if t.lid == ${lidOf(ids, '>')} => { self.push_leaf(tt_id, self.pos as u32, t.off, t.end); self.pos += 1; true }
+            Some(t) => {
+                let n = (t.end - t.off) as usize;
+                if n > 1 && self.src.as_bytes()[t.off as usize] == b'>' {
+                    self.push_leaf(tt_id, self.pos as u32, t.off, t.off + 1);
+                    let rem_lid = lid_of(&self.src[(t.off + 1) as usize..t.end as usize]);
+                    self.toks.insert(self.pos + 1, Tok { off: t.off + 1, end: t.end, kid: 0, lid: rem_lid, nl: t.nl });
+                    self.toks[self.pos] = Tok { off: t.off, end: t.off + 1, kid: 0, lid: ${lidOf(ids, '>')}, nl: t.nl };
+                    self.pos += 1;
+                    true
+                } else { false }
+            }
+            _ => false
+        }
+    }
     #[inline(always)]
     fn match_tok(&mut self, kid: u16, tt_id: u16) -> bool {
         match self.peek() {
@@ -2723,7 +2747,7 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     let owned = std::mem::take(b);
     let mut p = Parser { toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: owned, scratch: Vec::new()${reuseInit} };
     let root = match p.parse_${ir.entry}() {
-        Some(fr) if p.pos == n && fr.present => Some(fr.h),
+        Some(fr) if p.pos == p.toks.len() && fr.present => Some(fr.h),
         _ => None,
     };
     *b = p.b;
@@ -2983,7 +3007,7 @@ function rustStreamFinish(typ: string, offExpr: string, endExpr: string, alt = '
   return `{
             let __so = (${offExpr}) as usize;
             let __se = (${endExpr}) as usize;
-            self.events.push(StreamEvent { id: self.events.len() as u32, typ: ${typ}, alt: ${alt}, off: __so as u32, end: __se as u32 });
+            if self.emit_events { self.events.push(StreamEvent { id: self.events.len() as u32, typ: ${typ}, alt: ${alt}, off: __so as u32, end: __se as u32 }); }
             SVal::Str(__so as u32, (__se - __so) as u32)
         }`;
 }
@@ -3234,7 +3258,8 @@ function emitRustAstRdAltSteps(
       case 'lit': {
         // M15: a consumed literal's text is exactly its token span in src.
         const push = rustLeafDropped(s.ttype, leaves) ? '' : `let _lt = self.toks[self.pos - 1]; self.vals.push(SVal::Str(_lt.off, _lt.end - _lt.off));`;
-        return `if ${okVar} { if self.take_lit(${lidOf(ids, s.value)}).is_none() { ${okVar} = false; } else { ${push} } }`;
+        const take = s.value === '>' ? `self.take_gt()` : `self.take_lit(${lidOf(ids, s.value)})`;
+        return `if ${okVar} { if ${take}.is_none() { ${okVar} = false; } else { ${push} } }`;
       }
       case 'tok': {
         const t = local('tok');
@@ -3488,7 +3513,7 @@ function rustAstCustomCall(
             ${args.kidsPrep}
             ${args.altPrep}
             ${foldPrep}
-            self.events.push(StreamEvent { id: self.events.len() as u32, typ: estree_type_of_streaming(${J(fn)}, ${args.altSlice}, ${args.kidsSlice}, ${args.opExpr ? `Some((${args.opExpr}).as_ref())` : 'None'}, None), alt: (${args.altSlice}).first().copied().unwrap_or(0) as u32, off: __off as u32, end: __end as u32 });
+            if self.emit_events { self.events.push(StreamEvent { id: self.events.len() as u32, typ: estree_type_of_streaming(${J(fn)}, ${args.altSlice}, ${args.kidsSlice}, ${args.opExpr ? `Some((${args.opExpr}).as_ref())` : 'None'}, None), alt: (${args.altSlice}).first().copied().unwrap_or(0) as u32, off: __off as u32, end: __end as u32 }); }
             SVal::Str(__off as u32, (__end - __off) as u32)
         }`;
   return args.kidsSlice === '&self.vals[_sk_base..]'
@@ -4261,13 +4286,15 @@ function emitRustPrattMethod(
     // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the
     // relational operator) must not `break` the Pratt loop when its LED steps
     // fail — the restore happens, then control falls through to the binary
-    // body so `<` still parses as a comparison.
+    // body so `<` still parses as a comparison. Multiple arms sharing a lid
+    // (e.g. `[` array-type then indexed-access) fall through to each other;
+    // only the LAST arm of a group emits `break`.
     const binLids = new Set(rule.binary.map((b) => lidOf(ids, b.op)));
     const groups = groupByPreserveOrder(rule.leds, (b) => lidOf(ids, b.first));
     ledCode = groups.map((g) => {
       const lid = g.key as number;
       const hasBin = binLids.has(lid);
-      const arms = g.members.map(({ item: b, index: i }) => {
+      const arms = g.members.map(({ item: b, index: i }, j) => {
         const parts: string[] = [];
         if (rule.ledAccessTail[i]) parts.push('!tail_closed');
         if (rule.ledLbp[i] !== null && rule.ledLbp[i] !== undefined) parts.push(`${rule.ledLbp[i]} > min_bp`);
@@ -4304,7 +4331,7 @@ function emitRustPrattMethod(
                     }
                     self.pos = led_save;
                     self.capped = _capped_save;
-                    ${hasBin ? '' : 'break;'}
+                    ${hasBin ? '' : (j === g.members.length - 1 ? 'break;' : '')}
                 }`;
       }).join('\n                ');
       return `if self.peek_lid() == Some(${lid}) {
@@ -4724,6 +4751,9 @@ struct ShapeParser<'a, 'c, C: ShapeCustoms<'a>> {
     suppress_cur: Option<&'static [u16]>,
     suppress_log: Vec<(u8, Option<&'static [u16]>)>,
     capped: bool,
+    /// When true, committed node completions also emit StreamEvents (parse_stream_buf
+    /// path); when false the walk is tree-only and skips event/type-tag work.
+    emit_events: bool,
     /// M-A1.2/S5: streaming structure events (typ, alt, off, end) — populated
     /// at every committed node completion (speculative events are rolled back
     /// by checkpoint truncation); parse_stream replays them to the caller.
@@ -4741,6 +4771,20 @@ impl<'a, 'c, C: ShapeCustoms<'a>> ShapeParser<'a, 'c, C> {
         if self.peek_lid() != Some(lid) { return None; }
         self.pos += 1;
         Some(())
+    }
+    /// Streaming twin of Parser::match_gt: consume a single '>' from a longer
+    /// '>'-led punct token, splicing the remainder back as the next token.
+    #[inline(always)] fn take_gt(&mut self) -> Option<()> {
+        let t = *self.toks.get(self.pos)?;
+        if t.lid == ${lidOf(ids, '>')} { self.pos += 1; return Some(()); }
+        let n = (t.end - t.off) as usize;
+        if n > 1 && self.src.as_bytes()[t.off as usize] == b'>' {
+            let rem_lid = lid_of(&self.src[(t.off + 1) as usize..t.end as usize]);
+            self.toks.insert(self.pos + 1, Tok { off: t.off + 1, end: t.end, kid: 0, lid: rem_lid, nl: t.nl });
+            self.toks[self.pos] = Tok { off: t.off, end: t.off + 1, kid: 0, lid: ${lidOf(ids, '>')}, nl: t.nl };
+            self.pos += 1;
+            Some(())
+        } else { None }
     }
     #[inline(always)] fn take_span(&mut self, kid: u16) -> Option<(u32, u32)> {
         if self.peek_kid() != Some(kid) { return None; }
@@ -5083,9 +5127,12 @@ ${methods}
 }
 
 pub fn parse_ast_with<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C) -> Option<AstRoot<'a>> {
-    parse_ast_with_buf(src, customs, &mut None)
+    parse_ast_impl(src, customs, false, &mut None)
 }
 pub fn parse_ast_with_buf<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C, events_buf: &mut Option<Vec<StreamEvent>>) -> Option<AstRoot<'a>> {
+    parse_ast_impl(src, customs, true, events_buf)
+}
+fn parse_ast_impl<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C, emit_events: bool, events_buf: &mut Option<Vec<StreamEvent>>) -> Option<AstRoot<'a>> {
     let toks = lex(src);
     let n = toks.len();
     customs.reserve(n);
@@ -5105,13 +5152,14 @@ pub fn parse_ast_with_buf<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'
         vals: Vec::with_capacity(1024),
         ap_stack: Vec::with_capacity(256),
         suppress_next: None, suppress_cur: None, suppress_log: Vec::with_capacity(64), capped: false,
+        emit_events,
         events: events_init,
     };
     let root = parser.parse_ast_${ir.entry}()?;
-    if parser.pos != n { return None; }
-    *events_buf = Some(parser.events);
-    let ev = events_buf.take().unwrap();
-    Some(AstRoot { root, arena: parser.arena, events: ev })
+    if parser.pos != parser.toks.len() { return None; }
+    let events = parser.events;
+    if emit_events { *events_buf = Some(events.clone()); }
+    Some(AstRoot { root, arena: parser.arena, events })
 }
 pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
     parse_ast_with(src, &DefaultShapeCustoms)
@@ -5227,10 +5275,9 @@ pub struct Tokens<'a> { src: &'a str, toks: Vec<Tok> }
 /// parent, so the uncovered token ranges are exactly the leaves (see parse_stream).
 pub fn tokenize<'a>(src: &'a str) -> Tokens<'a> { Tokens { src, toks: lex(src) } }
 fn parse<'a>(tokens: Tokens<'a>) -> Option<(Parser<'a>, i32)> {
-    let n = tokens.toks.len();
     let mut p = Parser { toks: tokens.toks, pos: 0, max_look: 0, capped: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: tokens.src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
     match p.parse_${ir.entry}() {
-        Some(fr) if p.pos == n && fr.present => Some((p, fr.h)),
+        Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
         _ => None,
     }
 }

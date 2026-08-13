@@ -1,0 +1,12 @@
+[package]
+name = "oxc-parse-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxc_parser = { version = "0.126.0", features = ["regular_expression"] }
+oxc_allocator = "0.126.0"
+oxc_span = "0.126.0"
+
+[profile.release]
+debug = false

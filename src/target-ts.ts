@@ -870,13 +870,14 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
   // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the
   // relational operator) must not `break` the Pratt loop when its LED arms
   // fail — the restore happens, then control falls through to the binary
-  // check below so `<` still parses as a comparison. Lids with no binary
-  // entry keep the `break` (their LED failure must end the expression).
+  // check below so `<` still parses as a comparison. Multiple arms sharing a
+  // lid (e.g. `[` array-type then indexed-access) fall through to each other;
+  // only the LAST arm of a group emits `break ledLoop`.
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, hasBin: boolean) => `{
+  const ledBody = (b: Bracket, hasBin: boolean, isLast: boolean) => `{
       const ledSave = pos; const kids: Cst[] = [left];
       if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue ledLoop; }
-      pos = ledSave;${hasBin ? '' : ' break ledLoop;'}
+      pos = ledSave;${hasBin ? '' : isLast ? ' break ledLoop;' : ''}
     }`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -885,8 +886,8 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
 ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
-  const arms = g.members.map(({ item: b, index: i }) =>
-    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, hasBin)}`);
+  const arms = g.members.map(({ item: b, index: i }, j) =>
+    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, hasBin, j === g.members.length - 1)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -995,12 +996,14 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
   };
   // See prattRule: a lid that is BOTH a LED first-token and a binary op must
   // fall through to the binary check on LED failure instead of breaking.
+  // Multiple arms sharing a lid fall through to each other; only the LAST arm
+  // of a group emits `break ledLoop`.
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, hasBin: boolean) => `{
+  const ledBody = (b: Bracket, hasBin: boolean, isLast: boolean) => `{
       const ledSave = pos; const kids: any[] = []; const spans: BWSpan[] = [];
       absorbFrame(kids, spans, left);
       if (${b.steps.map((x) => stepCond(x, ids, true)).join(' && ')}) { left = nodeW(${cn}, kids, spans); continue ledLoop; }
-      pos = ledSave;${hasBin ? '' : ' break ledLoop;'}
+      pos = ledSave;${hasBin ? '' : isLast ? ' break ledLoop;' : ''}
     }`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -1009,8 +1012,8 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
 ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
-  const arms = g.members.map(({ item: b, index: i }) =>
-    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, hasBin)}`);
+  const arms = g.members.map(({ item: b, index: i }, j) =>
+    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, hasBin, j === g.members.length - 1)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -1192,6 +1195,7 @@ function wrapUnaryW(rule: string, child: Frame): Frame {
 }
 function headLeafTextW(f: Frame): string { return _src.slice(f.headOff, f.headEnd); }
 function matchLitW(lid: number, ttype: string, kids: any[], spans: BWSpan[]): boolean {
+  _splitGt(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   const f = leafFrameW(ttype, t); pos++;
@@ -3314,7 +3318,8 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   };
   // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the
   // relational operator) must fall through to the binary check on LED failure
-  // (CST / interpreter parity); lids with no binary entry keep the break.
+  // (CST / interpreter parity). Multiple arms sharing a lid fall through to
+  // each other; only the LAST arm of a group emits `break ledLoop`.
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
 
   let ledSwitch = '';
@@ -3323,7 +3328,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     const cases = groups.map((g) => {
       const lid = g.key as number;
       const hasBin = binLids.has(lid);
-      const arms = g.members.map(({ item: b, index: i }) => {
+      const arms = g.members.map(({ item: b, index: i }, j) => {
         const armCtx = newShapeEmitCtx(r.name);
         const inner = txnInner(b.steps, armCtx);
         mergeShapeEmitCtx(ctx, armCtx);
@@ -3353,7 +3358,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         }
         pos = ledSave;
         _capped = _cappedSave;
-${hasBin ? '' : '        break ledLoop;'}
+${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
       }`;
       }).join('\n');
       return `      case ${lid}:\n${arms}\n        break;`;
@@ -3641,11 +3646,13 @@ function matchTemplateAstLegacy(interp: () => unknown | null): unknown | null {
 ` : '';
   return `// ─── Shape parse helpers ─────────────────────────────────────────────────────
 function _shapeDropLit(lid: number): boolean {
+  _splitGt(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   pos++; return true;
 }
 function _shapeKeepLit(lid: number, _tt: string): boolean {
+  _splitGt(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   pos++; return true;
@@ -3896,6 +3903,17 @@ let _suppressNext: Set<number> | null = null;
 let _suppressCur: Set<number> | null = null;
 let _src = '';
 function peek(): Tok | null { maxLook = Math.max(maxLook, pos + 1); return pos < toks.length ? toks[pos] : null; }
+// Match a single '>' even when the lexer tokenized a longer '>'-led punct
+// (>>, >=, >>>, >>=, >>>=): split the leading '>' and splice the remainder
+// back as the next token (mirrors Parser::match_gt / matchPuLitGT).
+function _splitGt(lid: number): void {
+  if (lid !== ${lidOf(ids, '>')} || pos >= toks.length) return;
+  const t = toks[pos];
+  if (t.end - t.off <= 1 || _src.charCodeAt(t.off) !== 62) return;
+  const rem = _src.slice(t.off + 1, t.end);
+  toks.splice(pos + 1, 0, mk_tok(t.off + 1, t.end, t.nl, 0, lid_of(rem)));
+  toks[pos] = mk_tok(t.off, t.off + 1, t.nl, 0, ${lidOf(ids, '>')});
+}
 function headLeafText(node: Cst): string {
   let n: Cst = node;
   while ('children' in n && n.children.length > 0) n = n.children[0];
@@ -3912,6 +3930,7 @@ function node(rule: string, kids: Cst[], fallbackOff: number = 0): Node {
   return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff, tokStart, tokEnd: pos };
 }
 function matchLit(lid: number, ttype: string, kids: Cst[]): boolean {
+  _splitGt(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++; return true;
