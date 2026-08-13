@@ -4737,9 +4737,9 @@ struct ShapeCk {
     pos: usize,
     vals_len: usize,
     lists_len: usize,
-    fields_len: usize,
-    nodes_len: usize,
-    partials_len: usize,
+    // fields/nodes/partials are omitted: the streaming-only shape codegen never
+    // mutates those arena slabs (no DynObj/Partial construction), so their len is
+    // constant 0 and snapshotting/truncating them is pure per-alt overhead.
     strings_len: usize,
     ap_len: usize,
     suppress_log_len: usize,
@@ -4852,9 +4852,6 @@ impl<'a, 'c, C: ShapeCustoms<'a>> ShapeParser<'a, 'c, C> {
             pos: self.pos,
             vals_len: self.vals.len(),
             lists_len: self.arena.lists.len(),
-            fields_len: self.arena.fields.len(),
-            nodes_len: self.arena.nodes.len(),
-            partials_len: self.arena.partials.len(),
             strings_len: self.arena.strings.len(),
             ap_len: self.ap_stack.len(),
             suppress_log_len: self.suppress_log.len(),
@@ -4867,9 +4864,6 @@ impl<'a, 'c, C: ShapeCustoms<'a>> ShapeParser<'a, 'c, C> {
         self.pos = ck.pos;
         self.vals.truncate(ck.vals_len);
         self.arena.lists.truncate(ck.lists_len);
-        self.arena.fields.truncate(ck.fields_len);
-        self.arena.nodes.truncate(ck.nodes_len);
-        self.arena.partials.truncate(ck.partials_len);
         self.arena.strings.truncate(ck.strings_len);
         self.ap_stack.truncate(ck.ap_len);
         self.events.truncate(ck.events_len);
