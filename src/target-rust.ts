@@ -28,6 +28,15 @@ const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
   '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `(${lo}..=${hi}).contains(&${v})`)).join(' || ') + ')';
 
+/** `starts_with` on a single ASCII byte collapses to a direct byte compare (no slice/bounds). */
+const startByteEq = (posExpr: string, s: string): string => {
+  if (s.length === 1) {
+    const c = s.charCodeAt(0);
+    if (c < 128) return `b[${posExpr}] == ${c}`;
+  }
+  return `src[${posExpr}..].starts_with(${J(s)})`;
+};
+
 function bailCondRs(v: string, bail: number[], bailNonAscii: boolean): string {
   const parts = bail.map((c) => `${v} == ${c}`);
   if (bailNonAscii) parts.push(`${v} >= 128`);
@@ -165,7 +174,7 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
   const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (gen-lexer.ts).
-  const ext = (v: string) => (identLike.has(name) ? `let ${v} = _lx_ext(b, ${v}); ` : '');
+  const ext = (v: string) => (identLike.has(name) ? `let ${v} = if ${v} < b.len() && b[${v}] >= 0x80 { _lx_ext(b, ${v}) } else { ${v} }; ` : '');
   if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
             while e < n { let cc = b[e] as u32; if !${rangeCond('cc', t.cont)} { break } e += 1; }
@@ -258,17 +267,17 @@ function buildLexCandidates(
 }
 
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
-function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string): string {
+function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
-  let matchArms = '';
+  let matchArms = specialAsciiArms;
   for (const arm of arms) {
     matchArms += `${indent}        ${rustMatchLabels(arm.bytes)} => {\n`;
     matchArms += arm.indices.map((i) => codes[i]).join('\n') + '\n';
     matchArms += `${indent}        }\n`;
   }
   return `${indent}        if c >= 128 {
-${fallback}
+${nonAsciiWsCheck}${fallback}
 ${indent}        } else {
 ${indent}        match b[pos] {
 ${matchArms}${indent}        _ => {}
@@ -393,10 +402,39 @@ function lexer(ir: ParserIR): string {
   const rxOrTpl = !!(rx || tpl) && !rxOnly && !tplOnly && !rxTpl;
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
+  const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
+  // Byte-class dispatch folds whitespace/newline/template-open into the match's jump table so
+  // the hot loop does one load + one match, instead of a chain of pre-checks per byte. Newline-mode
+  // grammars keep the flow-aware pre-check (line_start/flow_depth) and do NOT use the folded arms.
+  const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
+`;
+  const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; continue; }
+        10 | 13 => { ${nlVar} = true; pos += 1; continue; }
+`;
+  const tplOpenByte = tpl && tpl.open.length === 1 && tpl.open.charCodeAt(0) < 128 ? tpl.open.charCodeAt(0) : null;
+  const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length});
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
+            pos = e; continue;
+        }
+` : '';
+  const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length});
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
+            pos = e; continue;
+        }
+` : '';
+  const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
+            st.template_stack.pop();
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length});
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
+            pos = e; continue;
+        }
+${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
-    `        if src[pos..].starts_with(${J(p)}) { ${stateful ? `st.emit(pos, pos + ${p.length}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${p.length}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${p.length}; continue; }`;
+    `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${p.length}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${p.length}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${p.length}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
-  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ');
+  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
   const rxBitTables = rx ? `${rsBoolArr('_DIVT', lidFlagTable(ids, rx.divisionTexts))}
@@ -565,25 +603,8 @@ ${inlAlways}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
     tpl ? 'template_stack: Vec::new()' : '',
     nlRs ? nlRs.init : ''].filter(Boolean).join(', ');
   const open = stateful ? `    let mut st = LexState { ${initFields} };` : `    let mut toks: Vec<Tok> = Vec::new();\n    let mut pending_nl = false;`;
-  const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
-  const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && src[pos..].starts_with(${J(tpl.interpClose)}) && *st.template_stack.last().unwrap() == 0 {
-            st.template_stack.pop();
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
-            pos = e; continue;
-        }
-        if src[pos..].starts_with(${J(tpl.open)}) {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
-            pos = e; continue;
-        }
-` : '';
   const nlBoundary = nlRs ? nlRs.boundary : '';
-  // JS \\s: ASCII {9..13,32} + non-ASCII set (emit-lexer lxNonAsciiWs). Decode UTF-8 for multi-byte.
-  const nlWs = nlRs ? nlRs.ws : `        if c == 32 || c == 9 || c == 11 || c == 12 { pos += 1; continue; }
-        if c == 10 || c == 13 { ${nlVar} = true; pos += 1; continue; }
-        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
-`;
+  const nlWs = nlRs ? nlRs.ws : '';
   const loopBody = `${nlBoundary}        let c = b[pos] as u32;
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentOrPanic}`;
