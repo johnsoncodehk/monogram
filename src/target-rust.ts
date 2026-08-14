@@ -3262,7 +3262,7 @@ function emitRustAstRdAltSteps(
    *  three mutable channels a pure txn can touch (pos, vals, ap_stack — the
    *  alt-branch shell pushes ap_stack inside the guarded region, so the light
    *  restore must rewind it too); anything that can touch the arena, suppress
-   *  state or capped keeps the full 10-field ShapeCk. */
+   *  state or capped keeps the full ShapeCk. */
   const txnCk = (v: string, light: boolean): string =>
     light ? `let ${v} = (self.pos, self.vals.len(), self.ap_stack.len());` : `let ${v} = self.shape_ck();`;
   const txnRestore = (v: string, light: boolean): string =>
@@ -4798,10 +4798,19 @@ struct ShapeCk {
     // fields/nodes/partials are omitted: the streaming-only shape codegen never
     // mutates those arena slabs (no DynObj/Partial construction), so their len is
     // constant 0 and snapshotting/truncating them is pure per-alt overhead.
-    strings_len: usize,
+    //
+    // strings_len is deliberately omitted too: arena.strings only grows via
+    // mk_own_str (Number/Bool shape_head_text), and SVal::OwnStr indices are
+    // monotonic (never reused after rollback) — so skipping the snapshot/truncate
+    // is a benign one-way memory leak (speculative OwnStrs are simply never
+    // reclaimed), not a dangling-ref bug. strings is near-unused in this grammar
+    // (head_text is rare), so the leak is negligible.
     ap_len: usize,
     suppress_log_len: usize,
     capped: bool,
+    // events_len is only meaningful when emit_events (parse_ast_with_buf /
+    // parse_stream_buf). With emit_events=false events never grows, so shape_ck
+    // snapshots 0 and shape_restore skips the truncate (gated below).
     events_len: usize,
 }
 
@@ -4910,11 +4919,13 @@ impl<'a, 'c, C: ShapeCustoms<'a>> ShapeParser<'a, 'c, C> {
             pos: self.pos,
             vals_len: self.vals.len(),
             lists_len: self.arena.lists.len(),
-            strings_len: self.arena.strings.len(),
             ap_len: self.ap_stack.len(),
             suppress_log_len: self.suppress_log.len(),
             capped: self.capped,
-            events_len: self.events.len(),
+            // events_len is structurally 0 when emit_events=false (events never
+            // grows); gating the load here keeps the parse_ast snapshot cheaper
+            // while parse_ast_with_buf still snapshots the real events len.
+            events_len: if self.emit_events { self.events.len() } else { 0 },
         }
     }
     #[inline(always)]
@@ -4922,9 +4933,7 @@ impl<'a, 'c, C: ShapeCustoms<'a>> ShapeParser<'a, 'c, C> {
         self.pos = ck.pos;
         self.vals.truncate(ck.vals_len);
         self.arena.lists.truncate(ck.lists_len);
-        self.arena.strings.truncate(ck.strings_len);
         self.ap_stack.truncate(ck.ap_len);
-        self.events.truncate(ck.events_len);
         while self.suppress_log.len() > ck.suppress_log_len {
             match self.suppress_log.pop() {
                 Some((0, old)) => self.suppress_next = old,
@@ -4933,6 +4942,9 @@ impl<'a, 'c, C: ShapeCustoms<'a>> ShapeParser<'a, 'c, C> {
             }
         }
         self.capped = ck.capped;
+        // Only the emit_events walk (parse_ast_with_buf / parse_stream_buf)
+        // populates self.events, so only that path needs the rollback truncate.
+        if self.emit_events { self.events.truncate(ck.events_len); }
     }
     /// Pack the vals stack range [base..] into one value; list storage copies
     /// into the lists slab via memcpy (SVal is Copy — extend_from_slice
