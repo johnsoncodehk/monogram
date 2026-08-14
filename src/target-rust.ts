@@ -4312,6 +4312,33 @@ function emitRustPrattMethod(
     // only the LAST arm of a group emits `break`.
     const binLids = new Set(rule.binary.map((b) => lidOf(ids, b.op)));
     const groups = groupByPreserveOrder(rule.leds, (b) => lidOf(ids, b.first));
+    // binLid disambiguation (grammar-agnostic): a lid that is BOTH a binary op
+    // and a LED opener (e.g. `<` = relational + type-args) should not blindly
+    // run every LED arm (full checkpoint + speculative parse + restore) before
+    // falling through to binary. When the LED arms close with a `>` (the C-like
+    // type-args shape), peek forward for the matching `>` before a hard
+    // terminator: none ⇒ skip the LED arms and go straight to binary. `>`-found
+    // is NOT proof of type-args (`a < b > c` is comparison), but trying the LED
+    // then is SAFE — it fails and falls through, same as the old code.
+    const stepsCloseWithGt = (steps: Step[]): boolean => {
+      for (const s of steps) {
+        if (s.t === 'lit' && s.value === '>') return true;
+        if (s.t === 'seq' || s.t === 'suppress') { if (stepsCloseWithGt(s.steps)) return true; }
+      }
+      return false;
+    };
+    const gtLid = lidOf(ids, '>');
+    const gt2Lid = lidOf(ids, '>>');
+    const gt3Lid = lidOf(ids, '>>>');
+    const lparenLid = lidOf(ids, '(');
+    const rparenLid = lidOf(ids, ')');
+    const lbrackLid = lidOf(ids, '[');
+    const rbrackLid = lidOf(ids, ']');
+    const lbraceLid = lidOf(ids, '{');
+    const rbraceLid = lidOf(ids, '}');
+    const semiLid = lidOf(ids, ';');
+    const colonLid = lidOf(ids, ':');
+    const eqLid = lidOf(ids, '=');
     ledCode = groups.map((g) => {
       const lid = g.key as number;
       const hasBin = binLids.has(lid);
@@ -4355,9 +4382,40 @@ function emitRustPrattMethod(
                     ${hasBin ? '' : (j === g.members.length - 1 ? 'break;' : '')}
                 }`;
       }).join('\n                ');
-      return `if self.peek_lid() == Some(${lid}) {
+      const doScan = hasBin && g.members.every(({ item }) => stepsCloseWithGt(item.steps));
+      if (!doScan) {
+        return `if self.peek_lid() == Some(${lid}) {
                 let t = self.toks[self.pos];
                 ${arms}
+            }`;
+      }
+      const scan = `let mut _scan_found_gt = false;
+                let mut _scan_nest = 0usize;
+                let mut _scan_i = self.pos + 1;
+                while _scan_i < self.toks.len() {
+                    let _st = self.toks[_scan_i];
+                    let _sl = _st.lid;
+                    if _sl == ${gtLid} || _sl == ${gt2Lid} || _sl == ${gt3Lid} {
+                        _scan_found_gt = true;
+                        break;
+                    }
+                    if _sl == ${semiLid} || _sl == ${eqLid} {
+                        break;
+                    }
+                    if _sl == ${colonLid} || _sl == ${rparenLid} || _sl == ${rbrackLid} || _sl == ${rbraceLid} {
+                        if _scan_nest == 0 { break; }
+                        _scan_nest -= 1;
+                    } else if _sl == ${lparenLid} || _sl == ${lbrackLid} || _sl == ${lbraceLid} {
+                        _scan_nest += 1;
+                    }
+                    _scan_i += 1;
+                }
+                if _scan_found_gt {
+                    ${arms}
+                }`;
+      return `if self.peek_lid() == Some(${lid}) {
+                let t = self.toks[self.pos];
+                ${scan}
             }`;
     }).join('\n            ');
   }
