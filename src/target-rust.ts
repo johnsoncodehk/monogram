@@ -413,8 +413,8 @@ function lexer(ir: ParserIR): string {
 `;
   const tplOpenByte = tpl && tpl.open.length === 1 && tpl.open.charCodeAt(0) < 128 ? tpl.open.charCodeAt(0) : null;
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length});
-            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl!.open.length});
+            if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
 ` : '';
