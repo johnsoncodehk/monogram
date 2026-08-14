@@ -3359,7 +3359,7 @@ function emitRustAstRdAltSteps(
           const ab = local('alt_base');
           const bok = local('br');
           const body = emitSteps(b, bok);
-          const push = visible(s) ? `let _p = self.shape_pack_range(${ab}); self.vals.push(_p);` : '';
+          const push = visible(s) ? `self.shape_pack_push(${ab});` : '';
           // FIRST pre-filter: a branch whose leading set misses the current
           // token is skipped without ck + walk + restore (IR-annotated firsts).
           const fguard = firstGuard(s.firsts?.[i] ?? null, s.branches.length);
@@ -3392,7 +3392,7 @@ function emitRustAstRdAltSteps(
         const sb = local('star_vbase');
         const sok = local('star_ok');
         const body = emitStep(s.step, sok);
-        const add = visible(s.step) ? `let _p = self.shape_pack_range(${sb}); self.vals.push(_p);` : '';
+        const add = visible(s.step) ? `self.shape_pack_push(${sb});` : '';
         const finish = visible(s.step) ? `let _lst = self.shape_list_from(${ob}); self.vals.push(_lst);` : '';
         // FIRST pre-filter: skip the doomed exit walk (ck + failed body + restore).
         const fguard = firstGuard(rustShapeFirstOfSteps([s.step]));
@@ -3423,7 +3423,7 @@ function emitRustAstRdAltSteps(
         const ook = local('opt_ok');
         const body = emitSteps(s.steps, ook);
         const push = s.steps.some(visible)
-          ? `let _p = if ${ook} { self.shape_pack_range(${ob}) } else { SVal::Null }; self.vals.push(_p);`
+          ? `if ${ook} { self.shape_pack_push(${ob}) } else { self.vals.push(SVal::Null) }`
           : '';
         const fguard = firstGuard(rustShapeFirstOfSteps(s.steps));
         const light = s.steps.every(pure);
@@ -3446,7 +3446,7 @@ function emitRustAstRdAltSteps(
         const eok = local('elem_ok');
         const bodyFirst = emitStep(s.elem, fok);
         const bodyElem = emitStep(s.elem, eok);
-        const add = visible(s.elem) ? `let _p = self.shape_pack_range(${eb}); self.vals.push(_p);` : '';
+        const add = visible(s.elem) ? `self.shape_pack_push(${eb});` : '';
         // After first failure: push empty array (zero elems). After success path: move out.
         const finishEmpty = visible(s.elem) ? `self.vals.push(SVal::List(0, 0));` : '';
         const finishMove = visible(s.elem) ? `let _lst = self.shape_list_from(${ob}); self.vals.push(_lst);` : '';
@@ -4898,6 +4898,18 @@ impl<'a, 'c, C: ShapeCustoms<'a>> ShapeParser<'a, 'c, C> {
                     SVal::List(start, n as u32)
                 }
             }
+        }
+    }
+    /// Pack [base..] to one value and leave it on the stack. For the common
+    /// single-value case this is a no-op (the value is already in place),
+    /// eliding the pop+push roundtrip of shape_pack_range + vals.push (the
+    /// alt/star/sep codegen always packs then re-pushes).
+    #[inline(always)] fn shape_pack_push(&mut self, base: usize) {
+        let n = self.vals.len() - base;
+        match n {
+            0 => self.vals.push(SVal::Null),
+            1 => {}
+            _ => { let v = self.shape_pack_range(base); self.vals.push(v); }
         }
     }
     /// Close the vals stack range [base..] as a list value (copies it).
