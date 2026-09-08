@@ -19,6 +19,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },
   { group: 'core', name: 'left-recursion', args: ['test/left-recursion.ts'] },
   { group: 'core', name: 'newline-mode', args: ['test/newline-mode.ts'] },
+  { group: 'core', name: 'diagnostic-labels', args: ['test/diagnostic-labels.ts'] },
   { group: 'core', name: 'interpolation-metadata', args: ['test/interpolation-metadata.ts'] },
   { group: 'core', name: 'refactor-guard', args: ['test/refactor-guard.ts'] },
   { group: 'core', name: 'cst-text-invariant', args: ['test/cst-text-invariant.ts'] },

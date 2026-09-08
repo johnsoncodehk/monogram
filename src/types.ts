@@ -21,6 +21,7 @@ export interface TokenDecl {
   pattern: TokenPattern;
   flags: string[];
   scope?: string;         // @scope(...) override
+  label?: string;         // display name for `expected …` diagnostics only (see api.ts TokenOptions.label)
   escapePattern?: TokenPattern; // @escape pattern — escape sequence pattern (highlight only)
   interpolation?: StringInterpolation[]; // highlight-only interpolation regions inside a string token (e.g. `${…}` / `$(…)`)
   // Highlight-only: this comment-scoped token matches only the INTRODUCER (e.g. a bare `#`)
@@ -553,6 +554,8 @@ export interface RuleDecl {
   // parser keeps the distinct `name` for its memo/adoption rule identity, but reports
   // `canon` as the node's rule name so trees stay byte-identical to the base grammar.
   canon?: string;
+  // Display name for `expected …` diagnostics only (see api.ts RuleOptions.label).
+  label?: string;
 }
 
 export interface CstGrammar {
