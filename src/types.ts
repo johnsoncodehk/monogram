@@ -438,7 +438,19 @@ export interface NewlineConfig {
   token: string;        // token TYPE emitted at each significant line boundary (engine-emitted, like the indent tokens)
   flowOpen?: string[];  // punctuation that SUSPENDS newline significance while open (e.g. ['(', '[', '{'])
   flowClose?: string[]; // matching closers (e.g. [')', ']', '}'])
-  comment?: string;     // line-comment introducer; a comment-only line emits no NEWLINE (e.g. '#')
+  comment?: string;     // line-comment introducer; a comment-only line emits no NEWLINE in 'separator' mode (e.g. '#')
+  // WHAT a NEWLINE token means:
+  //   'separator' (default) — one NEWLINE between two content-bearing lines, placed at the start of
+  //     the later line's content. Blank and comment-only lines collapse into it; nothing is emitted
+  //     before the first content or after the last. The right shape for a statement SEPARATOR.
+  //   'terminator' — one NEWLINE at EVERY line break outside flow delimiters, placed AT the break
+  //     (zero-width, before the `\n` / `\r\n`): blank lines, comment-only lines, leading and
+  //     trailing breaks included; only a final line with no break has none. The right shape for a
+  //     grammar whose AST keeps blank lines and comments as lines (dotenv / env-spec: `File =
+  //     many(Line)`, `Line = [Stmt, opt(NEWLINE)] | [NEWLINE]`), and the shape the derived
+  //     tree-sitter scanner already has (it is stateless: one NEWLINE per break where the grammar
+  //     permits one). Positions are exact per line, so a blank-line node maps to its own line.
+  mode?: 'separator' | 'terminator';
 }
 
 export interface PrecOperator {

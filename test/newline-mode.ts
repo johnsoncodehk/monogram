@@ -14,9 +14,11 @@ import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
-import { token, rule, defineGrammar, many, opt, sep, seq, plus, oneOf, range, star, noneOf, never } from '../src/api.ts';
+import { token, rule, defineGrammar, many, opt, alt, sep, seq, plus, oneOf, range, star, noneOf, never } from '../src/api.ts';
 import { createLexer } from '../src/gen-lexer.ts';
 import { createParser } from '../src/gen-parser.ts';
+import { emitParser, jsTarget } from '../src/emit.ts';
+import { objectify } from './emitted-obj.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateMonarch } from '../src/gen-monarch.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
@@ -165,6 +167,107 @@ if (hasCli()) {
   console.log(`  (artifacts in ${dir})`);
 } else {
   console.log('\ntree-sitter CLI not found — structural validation only (not a failure).');
+}
+
+
+// ── 7. `mode: 'terminator'`: one NEWLINE at EVERY block-context line break, placed at the break ──
+//      (blank / comment-only / leading / trailing breaks included; none inside flow; none at EOF
+//      without a break). The shape a grammar that keeps blank lines and comments as AST lines needs.
+{
+  const LineT = rule(() => [[Stmt, opt(Newline)], [Newline]]);                 // Line = Stmt NEWLINE? | NEWLINE (a blank line)
+  const ProgramT = rule(() => [[many(LineT)]]);
+  const gT = defineGrammar({
+    name: 'envspec-t', scopeName: 'source.envspec-t',
+    tokens: { Comment, Ident, Newline },
+    rules: { Value, Stmt, Line: LineT, Program: ProgramT }, entry: ProgramT,
+    newline: { ...newline, mode: 'terminator' },
+  });
+  const lexT = createLexer(gT).tokenize;
+  const nls = (s: string) => lexT(s).filter(t => t.type === 'Newline').map(t => t.offset);
+  check("terminator: one NEWLINE between two statements, AT the break", JSON.stringify(nls('A=1\nB=2')) === '[3]');
+  check("terminator: every blank line is its own NEWLINE", JSON.stringify(nls('A=1\n\n\nB=2')) === '[3,4,5]');
+  check("terminator: leading breaks are emitted", JSON.stringify(nls('\n\nA=1')) === '[0,1]');
+  check("terminator: a trailing break is emitted", JSON.stringify(nls('A=1\n')) === '[3]');
+  check("terminator: no break, no NEWLINE", JSON.stringify(nls('A=1')) === '[]');
+  check("terminator: a comment-only line still breaks", JSON.stringify(nls('A=1\n# note\nB=2')) === '[3,10]');
+  check("terminator: a whitespace-only line (tabs) is a break", JSON.stringify(nls('A=1\n \t\nB=2')) === '[3,6]');
+  check("terminator: CRLF counts once, at the CR", JSON.stringify(nls('A=1\r\n\r\nB=2')) === '[3,5]');
+  check("terminator: breaks INSIDE flow ( … ) stay suspended", JSON.stringify(nls('A=fn(1,\n2)\nB=3')) === '[10]');
+  check("terminator: still no INDENT/DEDENT", !lexT('A=1\n\nB=2').some(t => t.type === 'Indent' || t.type === 'Dedent'));
+  check("separator (default) is unchanged by the option's existence", countNL('A=1\n\n\nB=2') === 1 && tokenize('\n\nA=1')[0]?.type !== 'Newline');
+
+  const parseT = createParser(gT).parse;
+  const acceptsT = (s: string) => { try { return parseT(s).rule !== undefined; } catch { return false; } };
+  check('terminator: parses statements with blank lines between and a trailing break', acceptsT('A=1\n\nB=2\n'));
+  check('terminator: parses leading blank lines', acceptsT('\n\nA=1'));
+  check('terminator: parses a lone statement without a break', acceptsT('A=1'));
+  check('terminator: parses a flow value spanning lines', acceptsT('A=fn(1,\n2)\nB=3'));
+  check('terminator: still rejects a malformed statement', !acceptsT('A B'));
+  // A blank line is its own Line node, at its own offset (what an editor maps to a line number).
+  const cst = parseT('A=1\n\nB=2') as any;
+  const nlLeaves = JSON.stringify(cst).match(/"tokenType":"Newline","offset":(\d+)/g) ?? [];
+  check('terminator: the blank line and the statement break are distinct leaves at 3 and 4', nlLeaves.length === 2 && nlLeaves[0].endsWith(':3') && nlLeaves[1].endsWith(':4'));
+
+  // The generators do not care which mode is set (the tree-sitter scanner is already per-break).
+  check('terminator: TextMate generates', Object.keys(generateTmLanguage(gT).repository).length > 0);
+  check('terminator: Monarch generates', !!generateMonarch(gT).tokenizer.root);
+  const tsT = generateTreeSitter(gT, 'envspec_t');
+  check('terminator: tree-sitter externals still include newline', tsT.externalTokens.includes('newline'));
+  check('terminator: tree-sitter scanner unchanged (stateless per-break scan_newline)', tsT.scannerC.includes('scan_newline'));
+
+  // ── 8. The emitted engine inherits the mode (createLexer fallback bakes the newline config) ──
+  {
+    const dirE = mkdtempSync(join(tmpdir(), 'monogram-nl-emit-'));
+    const file = join(dirE, 'envspec-t.ts');
+    writeFileSync(file, emitParser(gT, jsTarget));
+    const p = (await import(file + '?v=' + Date.now())).createParser();
+    for (const src of ['A=1\n\nB=2\n', '\n\nA=1', 'A=fn(1,\n2)\nB=3', 'A=1\n# note\nB=2']) {
+      const cst = p.parse(src);
+      const obj = objectify(p.tree, (fns: any) => p.visit(cst, fns));
+      check(`terminator: emitted engine ≡ interpreter for ${JSON.stringify(src)}`, cst.errors.length === 0 && JSON.stringify(obj) === JSON.stringify(parseT(src)));
+    }
+  }
+
+  // ── 9. The derived tree-sitter parser agrees: one newline node per line break, including blank
+  //      lines and the trailing break (the claim that terminator mode is the scanner's native shape). ──
+  //      On a grammar where the statement does not also claim the break: `Line = Stmt NEWLINE? | NEWLINE`
+  //      is LR-ambiguous after a statement (shift the break into the statement, or reduce and start a
+  //      blank Line), which the PEG engine resolves greedily but tree-sitter needs a declared
+  //      conflict/precedence for; that resolution is a generator concern, not this mode's, so the
+  //      scanner claim is checked on `Program = many(NEWLINE | Stmt)`.
+  const gT2 = defineGrammar({
+    name: 'envspec-t2', scopeName: 'source.envspec-t2',
+    tokens: { Comment, Ident, Newline },
+    rules: { Value, Stmt, Program: rule(() => [[many(alt(Newline, Stmt))]]) },
+    newline: { ...newline, mode: 'terminator' },
+  } as any);
+  const tsT2 = generateTreeSitter(gT2, 'envspec_t2');
+  if (hasCli()) {
+    const dirT = mkdtempSync(join(tmpdir(), 'monogram-nl-term-'));
+    mkdirSync(join(dirT, 'src'), { recursive: true });
+    mkdirSync(join(dirT, 'queries'), { recursive: true });
+    writeFileSync(join(dirT, 'grammar.js'), tsT2.grammarJs);
+    writeFileSync(join(dirT, 'src', 'scanner.c'), tsT2.scannerC);
+    writeFileSync(join(dirT, 'queries', 'highlights.scm'), tsT2.highlightsScm);
+    writeFileSync(join(dirT, 'package.json'), JSON.stringify({ name: 'tree-sitter-envspec-t-monogram', version: '0.0.0' }, null, 2));
+    let generatedT = false;
+    try { execFileSync(tsBin, ['generate'], { cwd: dirT, stdio: 'pipe' }); generatedT = true; } catch (e: any) { console.log('  generate (terminator) failed:', ((e.stderr || e.message || '') + '').split('\n').slice(0, 6).join('\n  ')); }
+    check('terminator: tree-sitter generate succeeds (NEWLINE external, no indent scanner state)', generatedT);
+    if (generatedT) {
+      const parseTreeT = (input: string) => {
+        writeFileSync(join(dirT, 'in.env'), input);
+        try { return execFileSync(tsBin, ['parse', 'in.env'], { cwd: dirT, encoding: 'utf8' }); }
+        catch (e: any) { return ((e.stdout || '') + '\n' + (e.stderr || '')); }
+      };
+      const newlines = (t: string) => (t.match(/\(newline /g) ?? []).length;
+      const t1 = parseTreeT('A=1\n\nB=2\n');
+      check('terminator/tree-sitter: blank line and trailing break are newline nodes (3 total, no ERROR)', !t1.includes('ERROR') && newlines(t1) === 3);
+      const t2 = parseTreeT('\n\nA=1');
+      check('terminator/tree-sitter: leading breaks are newline nodes (2, no ERROR)', !t2.includes('ERROR') && newlines(t2) === 2);
+      const t3 = parseTreeT('A=fn(1,\n2)\nB=3');
+      check('terminator/tree-sitter: flow-internal break still suppressed (1 newline, no ERROR)', !t3.includes('ERROR') && newlines(t3) === 1);
+    }
+  }
 }
 
 console.log(fail === 0 ? `\n${ok}/${ok} newline-mode checks pass` : `\n${fail} of ${ok + fail} FAILED`);

@@ -306,6 +306,10 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
   const kVoidNameTok = kOf(markup?.voidNameToken ?? null);
   const tTagOpen = markup ? (puLitOf.get(markup.tagOpen) ?? 0) : 0;
   const kNewlineModeTok = kOf(newline?.token ?? null);
+  // newline-only 'terminator' mode: a NEWLINE at EVERY block-context line break, placed at the break
+  // (see NewlineConfig.mode). The line-start boundary emission below is then skipped; the three
+  // places a break is consumed (a content line's break, a blank line, a tab-blank line) emit instead.
+  const nlTerminators = !indent && newline?.mode === 'terminator';
   const kIndentTok = kOf(indent?.indentToken ?? null), kDedentTok = kOf(indent?.dedentToken ?? null), kIndentNewlineTok = kOf(indent?.newlineToken ?? null);
   const kBlockScalarTok = kOf(indent?.blockScalar?.token ?? null);
   const kRawBlockTok = kOf(indent?.rawBlock?.token ?? null);
@@ -682,6 +686,7 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
         const ch = source[p];
         if (p >= source.length) { pos = p; lineStart = false; continue; }   // EOF — final DEDENTs emitted after the loop
         if (ch === '\n' || ch === '\r') {                                   // blank line — ignored for structure
+          if (nlTerminators) push(mkNamed(newline!.token, '', p, kNewlineModeTok));   // …but a line break all the same
           pos = p + 1; if (ch === '\r' && source[pos] === '\n') pos++;
           continue;                                                         // still at a line start
         }
@@ -696,6 +701,7 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
           let b = p; while (b < source.length && (source[b] === ' ' || source[b] === '\t')) b++;
           const bc = source[b];
           if (b >= source.length || bc === '\n' || bc === '\r') {
+            if (nlTerminators && bc !== undefined) push(mkNamed(newline!.token, '', b, kNewlineModeTok));
             pos = b; if (bc === '\r' && source[pos + 1] === '\n') pos += 2; else if (bc !== undefined) pos++;
             continue;
           }
@@ -728,7 +734,7 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
         // ── newline-only mode: no indent stack — emit ONE NEWLINE at this real line boundary (a
         // leading boundary before any content is suppressed via emittedContent) and move on. ──
         if (!indent) {
-          if (emittedContent) push(mkNamed(newline!.token, '', pos, kNewlineModeTok));
+          if (emittedContent && !nlTerminators) push(mkNamed(newline!.token, '', pos, kNewlineModeTok));
           lineStart = false;
           atLineLead = true;
           continue;
@@ -811,6 +817,7 @@ export function createLexer(grammar: CstGrammar, intern?: LexerIntern) {
           pos++; continue;
         }
         if (c === '\n' || c === '\r') {
+          if (nlTerminators && flowDepth === 0) push(mkNamed(newline!.token, '', pos, kNewlineModeTok));
           pos++; if (c === '\r' && source[pos] === '\n') pos++;
           if (flowDepth === 0) lineStart = true;
           else if (indent) {
