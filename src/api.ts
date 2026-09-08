@@ -1,4 +1,5 @@
 import type { LedPrec, CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern } from './types.ts';
+import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
 import {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy,
   notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
@@ -528,6 +529,12 @@ interface GrammarConfig {
   aliasScopes?: { scope: string; file: string }[];  // extra grammars re-exposing this one under another scopeName (e.g. text.html.derivative)
   canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-tm RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see CstGrammar.canonicalRepoNames)
   manifest?: import('./types.ts').ContributesManifest;  // VS Code `contributes` packaging (emits a pasteable snippet)
+  // A rule never succeeds with an EMPTY match (the longest-match loop keeps an alternative only
+  // when it advanced), so a nullable non-entry rule's empty case is unreachable and a reference
+  // to it FAILS wherever it would have matched nothing. `defineGrammar` rejects such rules; a
+  // grammar that deliberately reaches emptiness through ALTERNATIVES instead (YAML: `key:` with
+  // no node, `{a: }`) sets this to keep the nullable declarations. It changes no parse.
+  allowNullableRules?: boolean;
 }
 
 export function defineGrammar(config: GrammarConfig): CstGrammar & { name: string; scopeName?: string } {
@@ -627,5 +634,25 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     });
     return { token: tokenName, within, scope: entry.scope };
   });
-  return { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
+
+  // Nullable NON-ENTRY rules are a definition error (see GrammarConfig.allowNullableRules): the
+  // engine never returns an empty match for a rule, so such a rule's empty case is unreachable
+  // and references to it fail silently where the author expected an empty match.
+  if (!config.allowNullableRules) {
+    const entryName = config.entry ? names.get(config.entry) : findEntryRule(grammar);   // `entry` may be omitted: the last rule is the entry
+    const nullable = [...computeNullableRules(grammar).nullableRules].filter((n) => n !== entryName);
+    if (nullable.length > 0) {
+      const list = nullable.map((n) => `'${n}'`).join(', ');
+      throw new Error(
+        `Rule${nullable.length > 1 ? 's' : ''} ${list} can match the empty string, but a rule never succeeds with an `
+        + `empty match (an empty alternative cannot win longest-match), so the empty case is unreachable: a `
+        + `reference to it fails wherever it would have matched nothing. Inline the combinator at the use site `
+        + `(e.g. \`many(X)\` in the sequence instead of a \`rule(() => [[many(X)]])\`), or make the rule non-empty `
+        + `and wrap references in \`opt(...)\` where emptiness is intended. If emptiness is deliberately handled by `
+        + `alternatives, set \`allowNullableRules: true\` on the grammar.`,
+      );
+    }
+  }
+  return grammar;
 }

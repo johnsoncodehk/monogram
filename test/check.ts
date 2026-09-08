@@ -18,6 +18,7 @@ interface Gate { group: string; name: string; args: string[] }
 const GATES: Gate[] = [
   { group: 'core', name: 'agnostic', args: ['test/agnostic.ts'] },
   { group: 'core', name: 'left-recursion', args: ['test/left-recursion.ts'] },
+  { group: 'core', name: 'nullable-rules', args: ['test/nullable-rules.ts'] },
   { group: 'core', name: 'newline-mode', args: ['test/newline-mode.ts'] },
   { group: 'core', name: 'interpolation-metadata', args: ['test/interpolation-metadata.ts'] },
   { group: 'core', name: 'refactor-guard', args: ['test/refactor-guard.ts'] },

@@ -672,5 +672,10 @@ export default defineGrammar({
     FlowNode, FlowExplicit, FlowMapEntry, FlowMapping, FlowSeqEntry, FlowSeqKey, FlowSequence, Scalar, BlockKeyScalar, DocFold, InlineDocNode, ExplicitDocBody, AfterDocEnd, NextDoc, Stream,
   },
   entry: Stream,
+  // Node / FlowNode / FlowMapEntry / FlowSeqEntry / AfterDocEnd can derive the empty string. The
+  // engine never returns an empty match for a rule, so their empty cases are unreachable and YAML
+  // reaches emptiness through ALTERNATIVES instead (`key:` with no node, `{a: }`, an empty doc).
+  // Declaring that is what keeps the definition honest without rewriting five rules.
+  allowNullableRules: true,
   indent,
 });

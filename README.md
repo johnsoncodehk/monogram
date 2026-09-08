@@ -369,6 +369,8 @@ A new language is **one grammar file** on the unchanged engine:
 2. **Prove it as a parser** against the language's own official test suite, measured **bidirectionally** (accept what the reference accepts, reject what it rejects).
 3. **Drop in the official TextMate grammar** as the baseline, so highlighter coverage is measured against what you're replacing, not asserted.
 
+One rule the engine enforces at `defineGrammar` time: a rule other than the entry may not be able to match the **empty string**. A rule never succeeds with an empty match (an empty alternative cannot win longest-match), so a nullable rule's empty case is unreachable and a reference to it fails silently wherever it would have matched nothing. Write the repetition inline at the use site (`[many(NL), Stmt]`, not `[Filler, Stmt]` with `Filler = rule(() => [[many(NL)]])`), or make the rule non-empty and wrap references in `opt(...)`. A grammar that reaches emptiness through alternatives on purpose (YAML: `key:` with no node) sets `allowNullableRules: true` to keep the declarations; it changes no parse.
+
 The lexer, CST types, and all three highlighters fall out of step 1; a *dialect* (`.tsx`/`.jsx`, or a markup dialect on [`html.ts`](html.ts)) reuses a base grammar's rules by name in a few lines. The conformance/highlighter harnesses are currently TypeScript-specific (they call `tsc` and read VS Code's grammar) — point them at your own reference compiler.
 
 ## Known differences from the official highlighter
