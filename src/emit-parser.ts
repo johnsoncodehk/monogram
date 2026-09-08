@@ -28,7 +28,7 @@ import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { isKeywordLiteral, collectLiterals } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, type Sec } from './grammar-analysis.ts';
 import { emitSoaLexer } from './emit-lexer.ts';
-import type { Target } from './emit.ts';
+import type { Target, EmitOptions } from './emit.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── Static analysis ──
@@ -1115,7 +1115,7 @@ export function emitJsLexer(grammar: CstGrammar): string | null {
   });
 }
 
-export function emitJsParser(grammar: CstGrammar, lexSrc: string | null): string {
+export function emitJsParser(grammar: CstGrammar, lexSrc: string | null, opts?: EmitOptions): string {
   // [Await]/[Yield] context: name-fork the body-reachable rule closure into $A/$Y/$AY
   // families (see await-yield-fork.ts). No-op for a grammar with no ctx markers. Done
   // HERE (not at grammar export) so the forks exist ONLY in the parser's rule identity
@@ -1154,7 +1154,9 @@ export function emitJsParser(grammar: CstGrammar, lexSrc: string | null): string
   const st = a.symtab;
   e.soa = lexSrc !== null;
   if (!lexSrc) {
-    e.emit(`import { createLexer } from ${J(resolveLexerImport())};`);
+    const rt = opts?.lexerRuntime ?? 'import';
+    if (rt === 'inline') e.emit(inlineLexerRuntime());
+    else e.emit(`import { createLexer } from ${J(typeof rt === 'object' ? rt.import : resolveLexerImport())};`);
     e.emit(``);
     e.emit(`const LEX_GRAMMAR = ${J(lexGrammar)};`);
   }
@@ -1331,8 +1333,36 @@ export function emitJsParser(grammar: CstGrammar, lexSrc: string | null): string
 // (e.g. /tmp). resolveLexerImport returns that absolute specifier.
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve as pathResolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 const __dir = dirname(fileURLToPath(import.meta.url));
 function resolveLexerImport(): string { return pathResolve(__dir, 'gen-lexer.ts'); }
+
+// `lexerRuntime: 'inline'` — the createLexer runtime copied INTO the emitted module so the output is
+// standalone (no import at load time; see EmitOptions). The four sources are concatenated verbatim
+// inside one function scope: their `import` lines go (they only import each other and the types,
+// all of which are now in scope) and their `export` keywords go (nothing leaves the scope but
+// createLexer). Read from THIS repo at emit time — the runtime files stay the single source, so an
+// engine fix reaches inlined consumers on their next emit, exactly like the import path.
+const INLINE_LEXER_SOURCES = ['types.ts', 'grammar-utils.ts', 'token-pattern.ts', 'gen-lexer.ts'];
+function inlineLexerRuntime(): string {
+  const parts = INLINE_LEXER_SOURCES.map((file) => {
+    const src = readFileSync(pathResolve(__dir, file), 'utf8')
+      .split('\n')
+      .filter((line) => !/^import\s.*from\s+'\.\/[^']+\.ts';\s*$/.test(line))   // sibling imports only (single-line by convention here)
+      .map((line) => line.replace(/^export\s+(?=(?:function|const|let|class|interface|type|abstract\s+class)\b)/, ''))
+      .join('\n');
+    if (/^(import|export)\b/m.test(src)) throw new Error(`inlineLexerRuntime: unexpected module syntax left in src/${file} (only sibling imports and declaration exports are inlineable)`);
+    return `// ── src/${file} (verbatim; declarations un-exported) ──\n${src}`;
+  });
+  return [
+    `// ── Inlined lexer runtime (lexerRuntime: 'inline'): ${INLINE_LEXER_SOURCES.map((f) => 'src/' + f).join(', ')} ──`,
+    `// Copied verbatim at emit time so this module needs no import to lex. Nothing but createLexer escapes the scope.`,
+    `const createLexer = (() => {`,
+    ...parts,
+    `return createLexer;`,
+    `})();`,
+  ].join('\n');
+}
 
 // ── Runtime: the generic engine state + control loops, emitted verbatim ──
 // These are copied from gen-parser.ts so their semantics are byte-identical. The

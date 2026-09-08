@@ -12,6 +12,22 @@
 // `tsTarget`/`goTarget`/`rustTarget` (emit-portable.ts + target-*.ts).
 import type { CstGrammar } from './types.ts';
 
+// Per-emit options. Only `jsTarget` reads them today; the portable targets embed their own lexer
+// and have nothing to resolve.
+export interface EmitOptions {
+  // How a createLexer-FALLBACK grammar (indent / newline / markup: the data-driven lexer state
+  // machines are interpreter-only, so `embedLexer` is null) reaches the lexer runtime at load time:
+  //   'import' (default) — `import { createLexer } from "<absolute path to this repo's src/gen-lexer.ts>"`,
+  //                        resolved at emit time; the emitted file runs from anywhere on THIS machine.
+  //   'inline'           — the runtime (src/gen-lexer.ts + the two helpers it uses + the type
+  //                        declarations) is copied verbatim into the module. The output is then
+  //                        STANDALONE: no import, no path, no dependency on monogram at load time.
+  //   { import: spec }   — a caller-supplied specifier (a package entry, a relative path the caller
+  //                        controls). The caller owns making `spec` resolve to gen-lexer's exports.
+  // Self-contained grammars (token-stream languages) embed a specialized lexer and ignore this.
+  lexerRuntime?: 'import' | 'inline' | { import: string };
+}
+
 export interface Target {
   name: string;
   ext: string;                                                  // emitted file extension (no dot)
@@ -22,7 +38,7 @@ export interface Target {
   // null where the lexer is not separable from the parser: jsTarget fuses lexing into its arena
   // pipeline (no token list), so there is no standalone tokenizer to emit.
   emitLexer(grammar: CstGrammar): string | null;
-  emitParser(grammar: CstGrammar, lexerSrc: string | null): string;   // the parser LIBRARY (exports `tokenize` + `parse`; no I/O)
+  emitParser(grammar: CstGrammar, lexerSrc: string | null, opts?: EmitOptions): string;   // the parser LIBRARY (exports `tokenize` + `parse`; no I/O)
   // A standalone CLI harness (stdin → CST JSON) APPENDED to the library to make it executable —
   // needed to run the compiled go/rust (and ts) parsers for verification. Not part of the parser.
   emitRunner?(): string;
@@ -34,8 +50,8 @@ export function emitLexer(grammar: CstGrammar, target: Target): string | null {
   return target.emitLexer(grammar);
 }
 
-export function emitParser(grammar: CstGrammar, target: Target): string {
-  return target.emitParser(grammar, target.embedLexer(grammar));
+export function emitParser(grammar: CstGrammar, target: Target, opts?: EmitOptions): string {
+  return target.emitParser(grammar, target.embedLexer(grammar), opts);
 }
 
 export { jsTarget } from './emit-parser.ts';
