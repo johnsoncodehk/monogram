@@ -2,6 +2,12 @@
   "name": "monogram",
   "version": "0.1.0",
   "type": "module",
+  "exports": {
+    "./api": "./src/api.ts",
+    "./textmate": "./src/gen-tm.ts",
+    "./language-configuration": "./src/gen-vscode-config.ts",
+    "./grammars/html": "./html.ts"
+  },
   "scripts": {
     "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts yaml.ts",
     "test": "node test/check.ts",
