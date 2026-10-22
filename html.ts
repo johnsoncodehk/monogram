@@ -86,7 +86,7 @@ const Document = rule($ => [
   [many(alt(Element, Comment, Text))],
 ]);
 
-// The reusable pieces. Exported so a DIALECT (vue.ts) can build a sibling grammar from
+// The reusable pieces. Exported so a DIALECT (e.g. vuejs/language-tools' vue.monogram.ts) can build a sibling grammar from
 // the SAME tokens/rules/scopes via its OWN `defineGrammar` call — rather than spreading
 // html.ts's already-built grammar (which bypasses the API). Calling `defineGrammar` twice
 // with these shared refs is safe: it only reads them (no mutation).

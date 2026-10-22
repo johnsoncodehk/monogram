@@ -9,7 +9,7 @@ export interface Check { text: string; scope: string; }
 // test/issue-table.ts), but the Monogram-measurement consumers SKIP it — the self-test
 // (test/test-issues.ts) and the accuracy benches (test/scope-gap.ts, test/treesitter-bench.ts)
 // gate Monogram's KNOWN-GOOD corpus, not the full honest comparison universe, so a case Monogram
-// gets wrong must not fail them. Same convention as test/vue-issue-cases.ts.
+// gets wrong must not fail them.
 export interface TestCase { label: string; input: string; checks: Check[]; monoGap?: boolean; }
 export interface MultiLineCheck { line: number; text: string; scope: string; }
 export interface MultiLineTest { label: string; lines: string[]; checks: MultiLineCheck[]; monoGap?: boolean; }

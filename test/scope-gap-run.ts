@@ -1,18 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  scope-gap-run.ts — the UNIFIED, data-driven entry for the scope-gap metric (monogram#25
-//  part 2B). One driver + a per-language config TABLE, replacing the seven thin
-//  scope-gap-{ts,js,jsx,tsx,html,yaml,vue} adapter files: each was mostly the same `run(adapter)`
+//  part 2B). One driver + a per-language config TABLE, replacing the thin
+//  scope-gap-{ts,js,jsx,tsx,html,yaml} adapter files: each was mostly the same `run(adapter)`
 //  literal differing only in corpus path / grammar path / scopeName / oracle / official path.
 //  Those vary as DATA here; the shared core stays scope-gap.ts's `run()`.
 //
 //  Run (bare node):  node test/scope-gap-run.ts <lang> [N|all]
-//                    lang ∈ ts | js | jsx | tsx | html | yaml | vue
+//                    lang ∈ ts | js | jsx | tsx | html | yaml
 //
 //  Per-language entry is preserved as the `<lang>` PARAMETER (the npm scripts pass it). The
 //  thicker html / yaml specifics (multi-file official loader, fullSpan, differential) live in their
-//  TABLE ENTRY, not a separate file. VUE is genuinely different — it is an INJECTION grammar that
-//  needs vuejs/language-tools' own tokenizer (a bare Registry.loadGrammar never fires the directive
-//  / interpolation injections), so it cannot use `run()`; `<lang> vue` DELEGATES to scope-gap-vue.ts.
+//  TABLE ENTRY, not a separate file.
 // ─────────────────────────────────────────────────────────────────────────────
 import ts from 'typescript';
 import { readdirSync, readFileSync } from 'node:fs';

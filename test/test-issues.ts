@@ -34,7 +34,7 @@ import type { TestCase, Check, MultiLineTest, MultiLineCheck } from './issue-cas
 // Gate Monogram's KNOWN-GOOD corpus: skip the honest `monoGap` cases — reported bugs the
 // DERIVED grammar does not solve yet (only-official / both-miss). They still appear in the
 // README cross-language table (issue-table.ts grades them honestly), but asserting Monogram
-// produces the correct scope for them would (correctly) fail. Same convention as vue-issues.ts.
+// produces the correct scope for them would (correctly) fail.
 const tests = allTests.filter((t) => !t.monoGap);
 const multiLineTests = allMultiLineTests.filter((t) => !t.monoGap);
 
