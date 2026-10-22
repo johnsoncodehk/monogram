@@ -8,7 +8,7 @@ All emitted by `node src/cli.ts <grammar>.ts` (e.g. `typescript.ts`). Every high
 |---|---|---|
 | Lexer | `createLexer` → tokens | ✅ |
 | CST parser | `createParser` → CST | ✅ aligned to the official parser — see the **Parser** column (agree · covered) in the README Status table |
-| TextMate | `.tmLanguage.json` | ✅ matches or **beats the official grammar on all 7 measured languages** — see the README **Highlighter** table (the [vscode#203212](https://github.com/microsoft/vscode/issues/203212) comparison) |
+| TextMate | `.tmLanguage.json` | ✅ measured against the official grammar on all 6 languages — see the README **Highlighter** table (the [vscode#203212](https://github.com/microsoft/vscode/issues/203212) comparison) |
 | VS Code language-config | `.language-configuration.json` | ✅ comments / brackets / folding derived from the same tokens |
 | tree-sitter | `grammar.js` + `queries/highlights.scm` + external scanner | ✅ derived highlighter **95.9%** token-family accuracy vs a neutral `tsc` oracle (beats official tree-sitter 92.7%); CI-gated, builds to wasm |
 | Monarch | Monaco tokenizer JSON | 🟡 first pass — bounded by JS-regex limits |

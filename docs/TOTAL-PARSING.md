@@ -219,9 +219,9 @@ first-error agreement 57.5%.
 
 ## The gates that hold all of this exact
 
-- `test/incremental-grammars.ts` — generative inputs × seeded edits × all 7
+- `test/incremental-grammars.ts` — generative inputs × seeded edits × all 6
   grammars: every step's tree+errors byte-equal to fresh, self-consistent
-  spans, no throws (672 steps).
+  spans, no throws (610 steps).
 - `test/incremental-verify.ts`, `test/multi-doc.ts` — real-file edit scripts
   and interleaved documents under the same byte-equality.
 - `test/recovery.ts` — strict-path identity on valid texts, totality and
