@@ -1,17 +1,17 @@
 // Gate: the portable targets split '>'-led punctuators where a type argument list closes.
 //
 // The TypeScript lexer reads `>>`, `>>>`, `>=`, `>>=` as one token; inside nested type arguments
-// the parser must take a single '>' from it and leave the rest as the next token. A fresh parse,
-// an incremental Doc (CST fast path, with and without validation) and a Doc on a consumer builder
-// with Shift must all produce the tsTarget CST, after every edit around split tokens, and the
-// edits must still reuse the old tree.
+// the parser must take a single '>' from it and leave the rest as the next token. In Go and Rust,
+// a fresh parse, an incremental Doc (CST fast path, with and without validation) and, in Go, a
+// Doc on a consumer builder with Shift must all produce the tsTarget CST, after every edit around
+// split tokens, and the edits must still reuse the old tree.
 //
 //   node test/emit-portable-split.ts
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emitParser, goTarget, tsTarget } from '../src/emit.ts';
+import { emitParser, goTarget, rustTarget, tsTarget } from '../src/emit.ts';
 import { asGoMain } from './go-main.ts';
 
 let ok = 0, fail = 0;
@@ -216,9 +216,50 @@ func main() {
 }
 `;
 
-let hasGo = true;
-try { execFileSync('go', ['version'], { stdio: 'pipe' }); } catch { hasGo = false; }
-if (!hasGo) console.log('  go: (toolchain absent — skipped)');
+type Step = { Native: string; Validated: string; Span?: string; Fresh: string; NativeReused: number; SpanReused?: number; TreeEq: boolean };
+type Out = { Doc: string[]; ParseWith: string[]; Span?: string[]; Sessions: Step[][] };
+const verify = (lang: string, out: Out, names: { doc: string; parseWith: string }) => {
+  SAMPLES.forEach((s, i) => {
+    const tag = JSON.stringify(s.slice(0, 34));
+    const want = ref(s);
+    check(`${lang}: tsTarget accepts ${tag}`, want !== '');
+    check(`${lang}: ${names.doc} ≡ tsTarget for ${tag}`, out.Doc[i] === want, out.Doc[i] ? 'CST differs' : 'rejected');
+    check(`${lang}: ${names.parseWith} ≡ tsTarget for ${tag}`, out.ParseWith[i] === want, out.ParseWith[i] ? 'CST differs' : 'rejected');
+    if (out.Span) check(`${lang}: ParseWith(consumer builder) ≡ tsTarget for ${tag}`, out.Span[i] === want, out.Span[i] ? 'CST differs' : 'rejected');
+  });
+  check(`${lang} curated: every edited text parses (tsTarget)`, curated.texts.every((t) => ref(t) !== ''));
+  SESSIONS.forEach((ses, si) => {
+    const steps = out.Sessions[si]!;
+    // The curated texts are compared with tsTarget too; random texts only with a fresh Doc.
+    if (ses.reuse) {
+      const bad = steps.filter((s, i) => s.Fresh !== ref(ses.texts[i]!)).length;
+      check(`${lang} ${ses.name}: a fresh Doc ≡ tsTarget on every text`, bad === 0, `${bad}/${steps.length} differ`);
+    }
+    const variants: [string, (s: Step) => string | undefined, ((s: Step) => number | undefined) | null][] = [
+      ['Doc (CST fast path)', (s) => s.Native, (s) => s.NativeReused],
+      ['Doc (CST, validate)', (s) => s.Validated, null],
+    ];
+    if (out.Span) variants.push(['Doc (consumer builder with Shift)', (s) => s.Span, (s) => s.SpanReused]);
+    for (const [label, get, reusedOf] of variants) {
+      let bad = 0, first = '', reused = 0;
+      steps.forEach((s, i) => {
+        if (get(s) !== s.Fresh) { bad++; if (!first) first = `step ${i}: ${JSON.stringify(ses.texts[i])}`; }
+        if (reusedOf && reusedOf(s)! > 0) reused++;
+      });
+      check(`${lang} ${ses.name}: ${label} ≡ a fresh Doc after every edit`, bad === 0, `${bad}/${steps.length} steps differ, first ${first}`);
+      if (reusedOf && ses.reuse) check(`${lang} ${ses.name}: ${label} reuses the old tree on every edit`, reused === steps.length, `${reused}/${steps.length} steps reused`);
+    }
+    if (!ses.reuse) {
+      const parsed = steps.filter((s) => s.Fresh !== '').length;
+      const reused = steps.filter((s) => s.NativeReused > 0 && (s.SpanReused ?? 1) > 0).length;
+      check(`${lang} ${ses.name}: most texts parse and most edits reuse`, 2 * parsed > steps.length && 2 * reused > steps.length, `${parsed} parse, ${reused} reuse of ${steps.length}`);
+    }
+    check(`${lang} ${ses.name}: validated Doc reports treeEq on every edit`, steps.every((s) => s.TreeEq), `${steps.filter((s) => !s.TreeEq).length} steps not treeEq`);
+  });
+};
+const have = (cmd: string, arg: string) => { try { execFileSync(cmd, [arg], { stdio: 'pipe' }); return true; } catch { return false; } };
+
+if (!have('go', 'version')) console.log('  go: (toolchain absent — skipped)');
 else {
   const gdir = join(dir, 'go');
   mkdirSync(gdir);
@@ -226,45 +267,58 @@ else {
   writeFileSync(join(gdir, 'main.go'), HARNESS);
   writeFileSync(join(gdir, 'go.mod'), 'module p\n\ngo 1.21\n');
   execFileSync('go', ['build', '-o', 'h', '.'], { cwd: gdir, stdio: 'pipe' });
-  type Step = { Native: string; Validated: string; Span: string; Fresh: string; NativeReused: number; SpanReused: number; TreeEq: boolean };
   const out = JSON.parse(execFileSync(join(gdir, 'h'), {
     input: JSON.stringify({ Samples: SAMPLES, Sessions: SESSIONS.map((x) => ({ Init: x.init, Edits: x.edits })) }), maxBuffer: 1 << 28,
-  }).toString()) as { Doc: string[]; ParseWith: string[]; Span: string[]; Sessions: Step[][] };
-  SAMPLES.forEach((s, i) => {
-    const tag = JSON.stringify(s.slice(0, 34));
-    const want = ref(s);
-    check(`go: tsTarget accepts ${tag}`, want !== '');
-    check(`go: NewDoc ≡ tsTarget for ${tag}`, out.Doc[i] === want, out.Doc[i] ? 'CST differs' : 'rejected');
-    check(`go: ParseWith(*CstBuilder) ≡ tsTarget for ${tag}`, out.ParseWith[i] === want, out.ParseWith[i] ? 'CST differs' : 'rejected');
-    check(`go: ParseWith(consumer builder) ≡ tsTarget for ${tag}`, out.Span[i] === want, out.Span[i] ? 'CST differs' : 'rejected');
-  });
-  check('curated: every edited text parses (tsTarget)', curated.texts.every((t) => ref(t) !== ''));
-  SESSIONS.forEach((ses, si) => {
-    const steps = out.Sessions[si]!;
-    // The curated texts are compared with tsTarget too; random texts only with a fresh Go Doc.
-    if (ses.reuse) {
-      const bad = steps.filter((s, i) => s.Fresh !== ref(ses.texts[i]!)).length;
-      check(`go ${ses.name}: a fresh Doc ≡ tsTarget on every text`, bad === 0, `${bad}/${steps.length} differ`);
+  }).toString()) as Out;
+  verify('go', out, { doc: 'NewDoc', parseWith: 'ParseWith(*CstBuilder)' });
+}
+
+// Rust has no JSON reader in std, so the inputs are compiled in (all ASCII, so a JSON string is a
+// Rust string literal and byte offsets are UTF-16 offsets).
+const rlit = (s: string) => { if (!/^[\x20-\x7e\n]*$/.test(s)) throw new Error('non-ASCII input'); return JSON.stringify(s); };
+const RUST_HARNESS = `
+fn q(s: &str) -> String { format!("{:?}", s) }
+fn main() {
+    let samples: &[&str] = &[${SAMPLES.map(rlit).join(', ')}];
+    let sessions: &[(&str, &[(usize, usize, &str)])] = &[${SESSIONS.map((x) => `(${rlit(x.init)}, &[${x.edits.map((e) => `(${e.start}, ${e.end}, ${rlit(e.text)})`).join(', ')}])`).join(', ')}];
+    let mut docs = Vec::new();
+    let mut pws = Vec::new();
+    for s in samples {
+        let d: Doc = Doc::new(s.to_string());
+        docs.push(q(&d.cst_json().unwrap_or_default()));
+        let mut b = CstBuilder::default();
+        pws.push(q(&match parse_with(s, &mut b) { Some(h) => cst_json_with(&b, h), None => String::new() }));
     }
-    for (const [label, get, reusedOf] of [
-      ['Doc (CST fast path)', (s: Step) => s.Native, (s: Step) => s.NativeReused],
-      ['Doc (CST, validate)', (s: Step) => s.Validated, null],
-      ['Doc (consumer builder with Shift)', (s: Step) => s.Span, (s: Step) => s.SpanReused],
-    ] as const) {
-      let bad = 0, first = '', reused = 0;
-      steps.forEach((s, i) => {
-        if (get(s) !== s.Fresh) { bad++; if (!first) first = `step ${i}: ${JSON.stringify(ses.texts[i])}`; }
-        if (reusedOf && reusedOf(s) > 0) reused++;
-      });
-      check(`go ${ses.name}: ${label} ≡ a fresh Doc after every edit`, bad === 0, `${bad}/${steps.length} steps differ, first ${first}`);
-      if (reusedOf && ses.reuse) check(`go ${ses.name}: ${label} reuses the old tree on every edit`, reused === steps.length, `${reused}/${steps.length} steps reused`);
+    let mut ses = Vec::new();
+    for (init, edits) in sessions {
+        let mut nat: Doc = Doc::new(init.to_string());
+        let mut val: Doc = Doc::new(init.to_string());
+        val.set_validate(true);
+        let mut steps = Vec::new();
+        for &(s, e, t) in edits.iter() {
+            let ed = [Edit { start: s, end: e, text: t.to_string() }];
+            nat.edit(&ed);
+            val.edit(&ed);
+            let fresh: Doc = Doc::new(nat.text().to_string());
+            let reused = nat.alignment().map(|a| a.reused).unwrap_or(0);
+            let tree_eq = val.alignment().and_then(|a| a.tree_eq).unwrap_or(false);
+            steps.push(format!("{{\\"Native\\":{},\\"Validated\\":{},\\"Fresh\\":{},\\"NativeReused\\":{},\\"TreeEq\\":{}}}",
+                q(&nat.cst_json().unwrap_or_default()), q(&val.cst_json().unwrap_or_default()), q(&fresh.cst_json().unwrap_or_default()), reused, tree_eq));
+        }
+        ses.push(format!("[{}]", steps.join(",")));
     }
-    if (!ses.reuse) {
-      const parsed = steps.filter((s) => s.Fresh !== '').length, reused = steps.filter((s) => s.NativeReused > 0 && s.SpanReused > 0).length;
-      check(`go ${ses.name}: most texts parse and most edits reuse`, 2 * parsed > steps.length && 2 * reused > steps.length, `${parsed} parse, ${reused} reuse of ${steps.length}`);
-    }
-    check(`go ${ses.name}: validated Doc reports treeEq on every edit`, steps.every((s) => s.TreeEq), `${steps.filter((s) => !s.TreeEq).length} steps not treeEq`);
-  });
+    println!("{{\\"Doc\\":[{}],\\"ParseWith\\":[{}],\\"Sessions\\":[{}]}}", docs.join(","), pws.join(","), ses.join(","));
+}
+`;
+
+if (!have('rustc', '--version')) console.log('  rust: (toolchain absent — skipped)');
+else {
+  const rdir = join(dir, 'rust');
+  mkdirSync(rdir);
+  writeFileSync(join(rdir, 'h.rs'), emitParser(grammar, rustTarget) + RUST_HARNESS);
+  execFileSync('rustc', ['-O', '-A', 'warnings', '--edition', '2021', 'h.rs', '-o', 'h'], { cwd: rdir, stdio: 'pipe' });
+  const out = JSON.parse(execFileSync(join(rdir, 'h'), { maxBuffer: 1 << 28 }).toString()) as Out;
+  verify('rust', out, { doc: 'Doc::new', parseWith: 'parse_with(CstBuilder)' });
 }
 
 console.log(`\n${ok}/${ok + fail} portable-split checks pass${fail ? '' : ' ✓'}`);

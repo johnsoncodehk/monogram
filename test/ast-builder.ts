@@ -542,6 +542,8 @@ impl Builder for MirrorBuilder {
     #[inline(always)] fn note_look(&mut self, h: i32, max_look: u32) { self.inner.note_look(h, max_look) }
     #[inline(always)] fn entry_meta(&mut self, h: i32, max_look: u32, toks: &[Tok]) -> EntryMeta { self.inner.entry_meta(h, max_look, toks) }
     #[inline(always)] fn tok_range(&self, h: i32) -> (u32, u32) { self.inner.tok_range(h) }
+    #[inline(always)] fn toks(&self) -> Option<&Vec<Tok>> { self.inner.toks() }
+    #[inline(always)] fn toks_mut(&mut self) -> Option<&mut Vec<Tok>> { self.inner.toks_mut() }
 }
 fn gate_print_align(a: &Align) {
     match (a.stream_eq, a.tree_eq) {
@@ -564,7 +566,7 @@ fn main() {
                     let t = &toks[ti as usize];
                     println!("LEAF\\t{}\\t{}\\t{}", src, TT_NAMES[tt as usize], t.off);
                 }
-                Some(h) => println!("NODE\\t{}\\t{}", src, slim_json_with(&s, &lex(src), h)),
+                Some(h) => println!("NODE\\t{}\\t{}", src, slim_json_with(&s, h)),
                 None => println!("NULL\\t{}", src),
             }
         }
@@ -611,8 +613,8 @@ fn main() {
             let fh = parse_with(doc.text(), &mut fresh);
             match (doc.root_handle(), fh) {
                 (Some(dr), Some(fr)) => {
-                    let ja = slim_json_with(doc.builder(), &lex(doc.text()), dr);
-                    let jb = slim_json_with(&fresh, &lex(doc.text()), fr);
+                    let ja = slim_json_with(doc.builder(), dr);
+                    let jb = slim_json_with(&fresh, fr);
                     if ja != jb {
                         println!("fail slim≠fresh[{}]\\n{}\\n{}", i, ja, jb);
                         std::process::exit(1);
@@ -636,7 +638,7 @@ fn main() {
         if a.stream_eq != Some(true) { println!("fail streamEq"); std::process::exit(1); }
         if a.tree_eq.is_some() { println!("fail treeEq should be null for MirrorBuilder"); std::process::exit(1); }
         let root = doc.root_handle().expect("root");
-        let got = cst_json_with(&doc.builder().inner, &lex(doc.text()), root);
+        let got = cst_json_with(&doc.builder().inner, root);
         let fresh = parse(doc.text()).expect("fresh");
         let mut want = String::new();
         write_json(&fresh.0, fresh.1, &mut want);
@@ -659,7 +661,7 @@ fn main() {
             (Some((p, r)), Some(rw)) => {
                 let mut ja = String::new();
                 write_json(p, *r, &mut ja);
-                let jb = cst_json_with(&b, &lex(src), rw);
+                let jb = cst_json_with(&b, rw);
                 if ja != jb {
                     bad += 1;
                     if bad <= 3 { eprintln!("mismatch[{}]: {:?}", i, src); }
