@@ -212,6 +212,9 @@ function buildIR(grammar: CstGrammar): ParserIR {
   if (grammar.indent) {
     throw new Error('portable: indent-sensitive grammars are out of scope (use the interpreter path); declare `newline` without `indent` for line-boundary-only mode');
   }
+  if (grammar.markup) {
+    throw new Error('portable: markup-mode grammars are out of scope (use jsTarget or the interpreter path)');
+  }
 
   const a = analyzeGrammar(grammar);
   const tokenNames = a.tokenNames;
