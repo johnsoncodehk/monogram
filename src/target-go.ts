@@ -1250,7 +1250,7 @@ ${adoptSuffix}
 \td.text = curText
 \td.toks = curToks`
     : `\tfor _, e := range edits { d.text = applyEdit(d.text, e) }
-\tnewToks := lexInput(d.text)
+\tnewToks := lex(d.text)
 \td.toks = toMeta(newToks)
 \trelexed = len(d.toks)`;
   const toMetaFn = hasNewline ? `
@@ -1352,7 +1352,7 @@ func checkStreamEq(text string, meta []alignMeta) bool {
 }
 ` : `
 func checkStreamEq(text string, meta []alignMeta) bool {
-\tfresh := toMeta(lexInput(text))
+\tfresh := toMeta(lex(text))
 \tif len(fresh) != len(meta) { return false }
 \tfor i := range fresh {
 \t\tif fresh[i] != meta[i] { return false }
@@ -1361,10 +1361,10 @@ func checkStreamEq(text string, meta []alignMeta) bool {
 \treturn true
 }
 `;
-  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(lexInput(src))';
-  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(d.text)' : 'toMeta(lexInput(d.text))';
-  const parseFreshRetry = `\td.root = parse(toksFromMeta(d.text, d.toks))
-\tif d.root < 0 { d.toks = ${freshMeta}; d.root = parse(toksFromMeta(d.text, d.toks)) }`;
+  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(lex(src))';
+  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(d.text)' : 'toMeta(lex(d.text))';
+  const parseFreshRetry = `\td.root = parse(d.text, toksFromMeta(d.text, d.toks))
+\tif d.root < 0 { d.toks = ${freshMeta}; d.root = parse(d.text, toksFromMeta(d.text, d.toks)) }`;
   const reuseFns = topReuse ? `
 func countLive(id int32) int {
 	if id < 0 { return 0 }
@@ -1744,7 +1744,7 @@ func checkTreeEq(text string, root int32) bool {
 	saveCap, saveSN, saveSC := _capped, _suppressNext, _suppressCur
 	nodes, kids, scratch, segs, entries = nil, nil, nil, nil, nil
 	_capped, _suppressNext, _suppressCur = false, nil, nil
-	fresh := parse(lexInput(text))
+	fresh := parse(text, lex(text))
 	freshOk := fresh >= 0 && pos == len(toks)
 	ok := false
 	if !rootOk || !freshOk {
@@ -1780,7 +1780,7 @@ ${shapeA ? `\tsaveEntries := append([]EntryMeta(nil), entries...)
 	nodes, kids, scratch = nil, nil, nil
 ${shapeA ? `\tentries = nil
 ` : ''}\t_capped, _suppressNext, _suppressCur = false, nil, nil
-	fresh := parse(lexInput(text))
+	fresh := parse(text, lex(text))
 	freshOk := fresh >= 0 && pos == len(toks)
 	ok := false
 	if !rootOk || !freshOk {
@@ -1872,7 +1872,7 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	d.enter()
 	defer d.leave()
 	d.toks = ${initToks}
-	d.root = parse(lexInput(src))
+	d.root = parse(src, lex(src))
 ${topReuse ? '\td.entries = append([]EntryMeta(nil), entries...)\n' : ''}\treturn d
 }
 // CstJSON renders the Doc's current tree ("" when its text does not parse).
@@ -1915,7 +1915,7 @@ func (d *Doc) Edit(edits []Edit) (ret int32) {
 					}
 				}()
 				d.toks = ${freshMeta}
-				d.root = parse(toksFromMeta(d.text, d.toks))
+				d.root = parse(d.text, toksFromMeta(d.text, d.toks))
 				d.align = &Align{OldN: len(oldToks), NewN: len(d.toks), Prefix: 0, Suffix: 0, Relexed: len(d.toks), Reused: 0}
 			}()
 			ret = d.root
@@ -3103,8 +3103,8 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
   const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
   const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
-  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(lexInput(src))';
-  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(d.text)' : 'toMeta(lexInput(d.text))';
+  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(lex(src))';
+  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(d.text)' : 'toMeta(lex(d.text))';
   const editBody = windowLex
     ? `\tcurText := d.text
 \tcurToks := d.toks
@@ -3125,7 +3125,7 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
 \td.text = curText
 \td.toks = curToks`
     : `\tfor _, e := range edits { d.text = applyEdit(d.text, e) }
-\tnewToks := lexInput(d.text)
+\tnewToks := lex(d.text)
 \td.toks = toMeta(newToks)
 \trelexed = len(d.toks)`;
   const entryRule = ir.rules.find((r) => r.name === ir.entry);
@@ -3305,7 +3305,7 @@ ${wMethods}
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
 \tsaveNodes, saveKids := nodes, kids
 \tnodes, kids = b.Nodes[:0], b.Kids[:0]
-\th := parse(lexInput(src))
+\th := parse(src, lex(src))
 \tb.Nodes, b.Kids = nodes, kids
 \tnodes, kids = saveNodes, saveKids
 \tif h < 0 { return 0, false }
@@ -3610,13 +3610,10 @@ func headLeafText(id int32) string {
 }
 func _inW(ws []string, s string) bool { for _, w := range ws { if w == s { return true } }; return false }
 
-// The parser's input: lexes src AND records it as the source head-leaf lookups read. Pass the
-// tokens to parse() (internal — the public CST entries are ParseWith / NewDoc).
-func lexInput(src string) []Tok {
+// parse runs the parser over t, the tokens of src (internal — the public CST entries are
+// ParseWith / NewDoc). src is also the source head-leaf lookups read.
+func parse(src string, t []Tok) int32 {
 \t_src = src
-\treturn lex(src)
-}
-func parse(t []Tok) int32 {
 \ttoks = t
 \tpos = 0
 \tmaxLook = 0
@@ -3658,9 +3655,9 @@ func main() {
 \t// Self-bench: a numeric arg N times the lex+parse loop and prints ms/iteration.
 \tif len(os.Args) > 1 && !editSess {
 \t\tif iters, err := strconv.Atoi(os.Args[1]); err == nil && iters > 0 {
-\t\t\tfor i := 0; i < 3; i++ { parse(lexInput(src)) }
+\t\t\tfor i := 0; i < 3; i++ { parse(src, lex(src)) }
 \t\t\tt0 := time.Now()
-\t\t\tfor i := 0; i < iters; i++ { parse(lexInput(src)) }
+\t\t\tfor i := 0; i < iters; i++ { parse(src, lex(src)) }
 \t\t\tfmt.Printf("%.4f\\n", float64(time.Since(t0).Nanoseconds())/1e6/float64(iters))
 \t\t\treturn
 \t\t}
@@ -3686,7 +3683,7 @@ func main() {
 \t\treturn
 \t}
 \tif len(os.Args) > 1 && os.Args[1] == "tok-spans" {
-\t\troot := parse(lexInput(src))
+\t\troot := parse(src, lex(src))
 \t\tif root < 0 || pos != len(toks) {
 \t\t\tfmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", pos, len(toks))
 \t\t\tos.Exit(1)
@@ -3705,7 +3702,7 @@ func main() {
 \t\tfmt.Printf("total\\t0\\t%d\\n", pos)
 \t\treturn
 \t}
-\troot := parse(lexInput(src))
+\troot := parse(src, lex(src))
 \tif root < 0 || pos != len(toks) {
 \t\tfmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", pos, len(toks))
 \t\tos.Exit(1)

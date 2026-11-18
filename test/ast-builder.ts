@@ -1024,7 +1024,7 @@ func main() {
 	bad := 0
 	useMirror := mode == "eq-mirror"
 	for i, src := range inputs {
-		a := parse(lexInput(src))
+		a := parse(src, lex(src))
 		var rw int32
 		var ok bool
 		var jb string

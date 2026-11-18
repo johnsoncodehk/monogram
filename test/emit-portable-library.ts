@@ -36,6 +36,10 @@ const B = 'let b = c / d\n++e;\n';
 const EDIT = { start: A.indexOf('a + 1'), end: A.indexOf('a + 1') + 5, text: 'a * 2' };
 const EDITED = A.slice(0, EDIT.start) + EDIT.text + A.slice(EDIT.end);
 const BAD_LEX = 'let a = 1 # 2;';
+// `null` cannot head a qualified type (the parser reads that leaf's source text), so NLL is
+// rejected while NLL_OTHER, with the same token offsets, is accepted.
+const NLL = 'let a: null.x = 1;';
+const NLL_OTHER = 'let b: qqqq.x = 1;';
 const badLex = goldenStream('typescript', BAD_LEX);
 const refLexError = badLex !== undefined && 'error' in badLex ? badLex.error : '';
 // ASCII-only samples, so a JSON string literal is also a valid Go and Rust string literal.
@@ -148,6 +152,10 @@ func main() {
 \tisoA := dA.CstJSON() == wantA && dA.Align().Reused > 0
 \tisoBig := dBig.CstJSON() == wantBig && dBig.Align().Reused > 0
 \townB := len(cb.Nodes) > 0 && dC.CstJSON() == parser.NewDoc(${lit(A)}).CstJSON()
+\tdNull := parser.NewDoc(${lit(NLL)})
+\tparser.ParseWith(${lit(NLL_OTHER)}, &parser.CstBuilder{})
+\tdNull.Edit([]parser.Edit{{Start: ${NLL.length}, End: ${NLL.length}, Text: " "}})
+\townSrc := dNull.Root() < 0 && parser.NewDoc(${lit(NLL + ' ')}).Root() < 0 && parser.NewDoc(${lit(NLL_OTHER + ' ')}).Root() >= 0
 \tvar wg sync.WaitGroup
 \tvar badConc atomic.Int32
 \tfor g := 0; g < 8; g++ {
@@ -169,7 +177,7 @@ func main() {
 \t}
 \twg.Wait()
 \tjson.NewEncoder(os.Stdout).Encode(map[string]any{"ok": ok, "unchanged": unchanged, "same": same, "tokensA": tA, "tokensB": t2, "badNil": bad == nil, "lexMsg": lexMsg, "lexOff": lexOff,
-\t\t"isoA": isoA, "isoBig": isoBig, "ownB": ownB, "badConc": badConc.Load()})
+\t\t"isoA": isoA, "isoBig": isoBig, "ownB": ownB, "ownSrc": ownSrc, "badConc": badConc.Load()})
 }
 `);
   try {
@@ -187,6 +195,7 @@ func main() {
     check('go: Tokenize returns a *LexError (nil tokens) on malformed input', out.badNil === true && out.lexMsg === refLexError && out.lexOff === BAD_LEX.indexOf('#'), `${out.lexMsg} @${out.lexOff}`);
     check('go: a Doc edit after other Docs / ParseWith ≡ a fresh Doc, with reuse', out.isoA === true && out.isoBig === true);
     check('go: NewDocWith(*CstBuilder) builds its tree into that builder', out.ownB === true);
+    check('go: a Doc reparsing after a rejected text reads its own source, not the last parsed one', out.ownSrc === true);
     check(`go: Docs on concurrent goroutines ≡ sequential results (race detector ${race ? 'on' : 'unavailable'})`, out.badConc === 0, `${out.badConc} mismatches`);
   } catch (e) {
     check('go: external package builds and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
