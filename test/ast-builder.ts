@@ -903,7 +903,7 @@ func main() {
 				t := toks[ti]
 				fmt.Printf("LEAF\\t%s\\t%s\\t%d\\n", src, TT_NAMES[tt], t.Off)
 			} else {
-				fmt.Printf("NODE\\t%s\\t%s\\n", src, SlimJSONWith(b, toks, h))
+				fmt.Printf("NODE\\t%s\\t%s\\n", src, SlimJSONWith(b, h))
 			}
 		}
 		return
@@ -966,12 +966,12 @@ func main() {
 			freshB := &SlimBuilder{}
 			fh, fok := ParseWith(doc.Text(), freshB)
 			dw := doc.(*DocWith)
-			j1 := SlimJSONWith(dw.b.(*SlimBuilder), lex(doc.Text()), doc.Root())
+			j1 := SlimJSONWith(dw.b.(*SlimBuilder), doc.Root())
 			if !fok {
 				fmt.Printf("fail fresh[%d]\\n", i)
 				os.Exit(1)
 			}
-			j2 := SlimJSONWith(freshB, lex(doc.Text()), fh)
+			j2 := SlimJSONWith(freshB, fh)
 			if j1 != j2 {
 				fmt.Printf("fail slim≠fresh[%d]\\n", i)
 				os.Exit(1)
@@ -1038,7 +1038,7 @@ func main() {
 			b := &CstBuilder{}
 			rw, ok = ParseWith(src, b)
 			if ok && a >= 0 {
-				jb = CstJSONWith(b, lex(src), rw)
+				jb = CstJSONWith(b, rw)
 			}
 		}
 		if (a < 0) != !ok {

@@ -575,7 +575,7 @@ func lex(src string) []Tok {
 
 function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
   switch (s.t) {
-    case 'lit': return `matchLit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'lit': return s.value === '>' ? `matchGt(${ttIdOf(ar, s.ttype)})` : `matchLit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `matchTok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
     case 'rule': return `callRule(parse${s.name})`;
     case 'ruleBp': return `callRule(func() int32 { return bp_${s.name}(${s.bp}) })`;
@@ -1402,6 +1402,64 @@ func shiftSubtree(id int32, byteDelta, tokDelta int) {
 		}
 	}
 }
+// Incremental reuse relates the edit alignment (lexer streams) to a tree's parse stream, where
+// splitGt may have split a lexer token into pieces. lexStarts maps each lexer token of meta, and
+// len(meta), to its first index in the parse stream p; nil when nothing was split.
+func lexStarts(p []Tok, meta []alignMeta) []int {
+	if len(p) == len(meta) { return nil }
+	st := make([]int, len(meta)+1)
+	j := 0
+	for k := range meta {
+		st[k] = j
+		for j < len(p) && p[j].End != uint32(meta[k].End) { j++ }
+		j++
+	}
+	st[len(meta)] = len(p)
+	return st
+}
+func parseIdx(st []int, k int) int { if st == nil { return k }; return st[k] }
+// lexIdx is the lexer index of the parse index j, or -1 when j is not a lexer token's first piece.
+func lexIdx(st []int, j int) int {
+	if st == nil { return j }
+	lo, hi := 0, len(st)
+	for lo < hi { m := (lo + hi) / 2; if st[m] < j { lo = m + 1 } else { hi = m } }
+	if lo < len(st) && st[lo] == j { return lo }
+	return -1
+}
+// reuseToks is the parse stream a reusing parse starts from: the old stream's prefix (with its
+// pieces) and the new lexer tokens after it. The mid parse splits on demand.
+func reuseToks(oldP []Tok, prefixP int, newToks []Tok, prefix int) []Tok {
+	if prefixP == prefix { return newToks }
+	out := make([]Tok, 0, prefixP+len(newToks)-prefix)
+	out = append(out, oldP[:prefixP]...)
+	return append(out, newToks[prefix:]...)
+}
+// tailRel is, per suffix entry, the lexer tokens from its start to the old end (-1: it does not
+// start a lexer token). A suffix entry is adopted at pos when no piece lies at or after pos and
+// the new stream has that many tokens left.
+func tailRel(st []int, oldN int, suffixMeta []EntryMeta) ([]int, int) {
+	rel := make([]int, len(suffixMeta))
+	minRel := -1
+	for i, m := range suffixMeta {
+		rel[i] = -1
+		if k := lexIdx(st, m.TokStart); k >= 0 {
+			rel[i] = oldN - k
+			if minRel < 0 || rel[i] < minRel { minRel = rel[i] }
+		}
+	}
+	return rel, minRel
+}
+// adoptTail puts the old parse stream from s on (its pieces included) at ts[at:].
+func adoptTail(ts []Tok, at int, oldP []Tok, s, byteDelta int) []Tok {
+	if len(ts)-at == len(oldP)-s { return ts }
+	ts = ts[:at]
+	for _, t := range oldP[s:] {
+		t.Off = uint32(int(t.Off) + byteDelta)
+		t.End = uint32(int(t.End) + byteDelta)
+		ts = append(ts, t)
+	}
+	return ts
+}
 func shiftEntryMeta(m *EntryMeta, byteDelta, tokDelta int) {
 	m.TokStart += tokDelta
 	m.TokEnd += tokDelta
@@ -1423,39 +1481,42 @@ ${shapeA ? `func assertEntriesVsNodes(oldEntries []EntryMeta, oldRoot int32) {
 		if e.End != int(nd.End) { panic("end entry " + fmt.Sprintf("%d", i)) }
 	}
 }
-func tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int, validate bool) (int32, int) {
+func tryReuseTop(oldRoot int32, oldEntries []EntryMeta, oldP []Tok, oldMeta []alignMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int, validate bool) (int32, int) {
 	if oldRoot < 0 { return -1, 0 }
 	if validate { assertEntriesVsNodes(oldEntries, oldRoot) }
 	old := nodes[oldRoot]
 	oldKids := make([]int32, old.KidCount)
 	for i := uint32(0); i < old.KidCount; i++ { oldKids[i] = kids[old.KidStart+i] }
+	st := lexStarts(oldP, oldMeta)
+	prefixP, sufP := parseIdx(st, prefix), parseIdx(st, oldN-suffix)
 	prefixLen := 0
 	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix { prefixLen++ } else { break }
+		if oldEntries[prefixLen].Ext <= prefixP { prefixLen++ } else { break }
 	}
 	suffixStart := len(oldEntries)
 	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
+		if oldEntries[i].TokStart >= sufP { suffixStart = i } else { break }
 	}
 	prefixKids := oldKids[:prefixLen]
 	suffixCand := oldKids[suffixStart:]
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	tokDelta := newN - oldN
+	rel, minRel := tailRel(st, oldN, suffixMeta)
 	_src = newText
-	toks = toksFromMeta(newText, newMeta)
+	toks = reuseToks(oldP, prefixP, toksFromMeta(newText, newMeta), prefix)
+	splitEnd = 0
 	if prefixLen > 0 { pos = prefixMeta[prefixLen-1].TokEnd } else { pos = 0 }
 	scratch = scratch[:0]
 	mid := make([]int32, 0)
 	midMeta := make([]EntryMeta, 0)
-	suffixBound := newN - suffix
-	maxCand := -1
-	for _, m := range suffixMeta {
-		c := m.TokStart + tokDelta
-		if c > maxCand { maxCand = c }
-	}
 	finishHit := func(adoptFrom int) (int32, int) {
 		adopted := suffixCand[adoptFrom:]
+		tokDelta := 0
+		if len(adopted) > 0 {
+			s := suffixMeta[adoptFrom].TokStart
+			tokDelta = pos - s
+			toks = adoptTail(toks, pos, oldP, s, byteDelta)
+		}
 		for _, s := range adopted { shiftSubtree(s, byteDelta, tokDelta) }
 		children := make([]int32, 0, len(prefixKids)+len(mid)+len(adopted))
 		children = append(children, prefixKids...)
@@ -1480,25 +1541,26 @@ func tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta 
 		kids = append(kids, children...)
 		nodes = append(nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
 		entries = newEntries
-		pos = newN
+		pos = len(toks)
 		return int32(len(nodes) - 1), len(prefixKids) + len(adopted)
 	}
 	tryHit := func() (int32, int, bool) {
-		if pos < suffixBound { return -1, 0, false }
+		if splitEnd > pos || len(toks)-pos > suffix { return -1, 0, false }
 		if len(suffixCand) == 0 {
-			if pos == newN { r, n := finishHit(0); return r, n, true }
+			if pos == len(toks) { r, n := finishHit(0); return r, n, true }
 			return -1, 0, false
 		}
-		for i, m := range suffixMeta {
-			if m.TokStart+tokDelta == pos { r, n := finishHit(i); return r, n, true }
+		for i := range suffixMeta {
+			if rel[i] == len(toks)-pos { r, n := finishHit(i); return r, n, true }
 		}
 		return -1, 0, false
 	}
+	passed := func() bool { return len(suffixCand) > 0 && minRel >= 0 && splitEnd <= pos && len(toks)-pos < minRel }
 	if r, n, ok := tryHit(); ok { return r, n }
-	if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
+	if passed() { return -1, 0 }
 	for {
 		if pos >= len(toks) {
-			if len(suffixCand) == 0 && pos == newN { return finishHit(0) }
+			if len(suffixCand) == 0 && pos == len(toks) { return finishHit(0) }
 			if r, n, ok := tryHit(); ok { return r, n }
 			return -1, 0
 		}
@@ -1512,7 +1574,7 @@ func tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta 
 		midMeta = append(midMeta, EntryMeta{int(nodes[n].TokStart), int(nodes[n].TokEnd), int(ext), int(nodes[n].Offset), int(nodes[n].End), 0, 1})
 		mid = append(mid, n)
 		if r, rn, ok := tryHit(); ok { return r, rn }
-		if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
+		if passed() { return -1, 0 }
 	}
 }
 ` : ''}${shapeB ? `func assertEntriesVsSegs(oldEntries []EntryMeta, oldSegs []Seg, oldRoot int32) {
@@ -1537,17 +1599,19 @@ func tryReuseTop(oldRoot int32, oldEntries []EntryMeta, newText string, newMeta 
 		}
 	}
 }
-func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int, validate bool) (int32, int) {
+func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, oldP []Tok, oldMeta []alignMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int, validate bool) (int32, int) {
 	if oldRoot < 0 || len(oldSegs) == 0 { return -1, 0 }
 	if validate { assertEntriesVsSegs(oldEntries, oldSegs, oldRoot) }
 	old := nodes[oldRoot]
+	st := lexStarts(oldP, oldMeta)
+	prefixP, sufP := parseIdx(st, prefix), parseIdx(st, oldN-suffix)
 	prefixLen := 0
 	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix { prefixLen++ } else { break }
+		if oldEntries[prefixLen].Ext <= prefixP { prefixLen++ } else { break }
 	}
 	suffixStart := len(oldEntries)
 	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix { suffixStart = i } else { break }
+		if oldEntries[i].TokStart >= sufP { suffixStart = i } else { break }
 	}
 	prefixSegs := oldSegs[:prefixLen]
 	suffixCand := oldSegs[suffixStart:]
@@ -1557,22 +1621,23 @@ func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText s
 	for _, s := range prefixSegs {
 		for i := 0; i < s.KidCount; i++ { prefixKids = append(prefixKids, kids[old.KidStart+uint32(s.KidStart+i)]) }
 	}
-	tokDelta := newN - oldN
+	rel, minRel := tailRel(st, oldN, suffixMeta)
 	_src = newText
-	toks = toksFromMeta(newText, newMeta)
+	toks = reuseToks(oldP, prefixP, toksFromMeta(newText, newMeta), prefix)
+	splitEnd = 0
 	if prefixLen > 0 { pos = prefixMeta[prefixLen-1].TokEnd } else { pos = 0 }
 	scratch = scratch[:0]
 	midKids := make([]int32, 0)
 	midSegs := make([]Seg, 0)
 	midMeta := make([]EntryMeta, 0)
-	suffixBound := newN - suffix
-	maxCand := -1
-	for _, m := range suffixMeta {
-		c := m.TokStart + tokDelta
-		if c > maxCand { maxCand = c }
-	}
 	finishHit := func(adoptFrom int) (int32, int) {
 		adoptedSegs := suffixCand[adoptFrom:]
+		tokDelta := 0
+		if len(adoptedSegs) > 0 {
+			s := suffixMeta[adoptFrom].TokStart
+			tokDelta = pos - s
+			toks = adoptTail(toks, pos, oldP, s, byteDelta)
+		}
 		adoptedKids := make([]int32, 0)
 		for _, s := range adoptedSegs {
 			for i := 0; i < s.KidCount; i++ {
@@ -1628,22 +1693,23 @@ func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText s
 		nodes = append(nodes, Node{RuleId: old.RuleId, KidStart: uint32(kidStart), KidCount: uint32(len(children)), Offset: uint32(off), End: uint32(end), TokStart: uint32(tokStart), TokEnd: uint32(tokEnd)})
 		segs = newSegs
 		entries = newEntries
-		pos = newN
+		pos = len(toks)
 		return int32(len(nodes) - 1), len(prefixSegs) + len(adoptedSegs)
 	}
 	tryHit := func() (int32, int, bool) {
-		if pos < suffixBound { return -1, 0, false }
+		if splitEnd > pos || len(toks)-pos > suffix { return -1, 0, false }
 		if len(suffixCand) == 0 {
-			if pos == newN { r, n := finishHit(0); return r, n, true }
+			if pos == len(toks) { r, n := finishHit(0); return r, n, true }
 			return -1, 0, false
 		}
-		for i, m := range suffixMeta {
-			if m.TokStart+tokDelta == pos { r, n := finishHit(i); return r, n, true }
+		for i := range suffixMeta {
+			if rel[i] == len(toks)-pos { r, n := finishHit(i); return r, n, true }
 		}
 		return -1, 0, false
 	}
+	passed := func() bool { return len(suffixCand) > 0 && minRel >= 0 && splitEnd <= pos && len(toks)-pos < minRel }
 	if r, n, ok := tryHit(); ok { return r, n }
-	if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
+	if passed() { return -1, 0 }
 	${hasHeadB ? `if prefixLen == 0 {
 		sb := len(scratch)
 		if h, m, ok := parseHeadSeg(sb); ok {
@@ -1654,19 +1720,19 @@ func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText s
 			midSegs = append(midSegs, h)
 			midMeta = append(midMeta, m)
 			if r, rn, ok := tryHit(); ok { return r, rn }
-			if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
+			if passed() { return -1, 0 }
 		}
 	}
 	` : ''}for {
 		if pos >= len(toks) {
-			if len(suffixCand) == 0 && pos == newN { return finishHit(0) }
+			if len(suffixCand) == 0 && pos == len(toks) { return finishHit(0) }
 			if r, n, ok := tryHit(); ok { return r, n }
 			return -1, 0
 		}
 		sb := len(scratch)
 		seg, m, ok := parseLoopSeg(sb)
 		if !ok {
-			if len(suffixCand) == 0 && pos == newN { return finishHit(0) }
+			if len(suffixCand) == 0 && pos == len(toks) { return finishHit(0) }
 			if r, n, hit := tryHit(); hit { return r, n }
 			return -1, 0
 		}
@@ -1677,7 +1743,7 @@ func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText s
 		midSegs = append(midSegs, Seg{0, count, seg.TokStart, seg.TokEnd, seg.Ext})
 		midMeta = append(midMeta, m)
 		if r, rn, hit := tryHit(); hit { return r, rn }
-		if len(suffixCand) > 0 && maxCand >= 0 && pos > maxCand { return -1, 0 }
+		if passed() { return -1, 0 }
 	}
 }
 ` : ''}` : '';
@@ -1687,7 +1753,7 @@ func tryReuseSeg(oldRoot int32, oldSegs []Seg, oldEntries []EntryMeta, newText s
 \tforceFresh := d.root < 0 || shouldReclaim(d.root)
 \tif !forceFresh {
 \t\toldEntries := append([]EntryMeta(nil), d.entries...)
-\t\tif got, n := tryReuseTop(d.root, oldEntries, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix, d.validate); got >= 0 {
+\t\tif got, n := tryReuseTop(d.root, oldEntries, d.b.Toks, oldToks, d.text, d.toks, byteDelta, oldN, prefix, suffix, d.validate); got >= 0 {
 \t\t\td.root = got
 \t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = n
@@ -1708,7 +1774,7 @@ ${parseFreshRetry}
 \tif !forceFresh {
 \t\toldSegs := append([]Seg(nil), segs...)
 \t\toldEntries := append([]EntryMeta(nil), d.entries...)
-\t\tif got, n := tryReuseSeg(d.root, oldSegs, oldEntries, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix, d.validate); got >= 0 {
+\t\tif got, n := tryReuseSeg(d.root, oldSegs, oldEntries, d.b.Toks, oldToks, d.text, d.toks, byteDelta, oldN, prefix, suffix, d.validate); got >= 0 {
 \t\t\td.root = got
 \t\t\td.entries = append([]EntryMeta(nil), entries...)
 \t\t\treused = n
@@ -1854,16 +1920,16 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	}
 	return t
 }
-${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}// A Doc owns its tree: the arena lives in its CstBuilder (b) with the arena's compaction
-// baseline, and is swapped into the package registers only for the duration of a call.
+${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}// A Doc owns its tree: the arena and parse stream live in its CstBuilder (b) with the arena's
+// compaction baseline, and are swapped into the package registers only for the duration of a call.
 type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; b *CstBuilder; baseline int${topReuse ? '; entries []EntryMeta' : ''}${shapeB ? '; segs []Seg' : ''} }
 func (d *Doc) enter() {
 	engineMu.Lock()
 	nodes, kids, arenaBaseline = d.b.Nodes, d.b.Kids, d.baseline
 ${shapeB ? '\tsegs = d.segs\n' : ''}}
 func (d *Doc) leave() {
-	d.b.Nodes, d.b.Kids, d.baseline = nodes, kids, arenaBaseline
-	nodes, kids = nil, nil
+	d.b.Nodes, d.b.Kids, d.b.Toks, d.baseline = nodes, kids, toks, arenaBaseline
+	nodes, kids, toks = nil, nil, nil
 ${shapeB ? '\td.segs, segs = segs, nil\n' : ''}	engineMu.Unlock()
 }
 func NewDoc(src string) *Doc { return newDocCst(src, &CstBuilder{}) }
@@ -1881,7 +1947,7 @@ func (d *Doc) CstJSON() string {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 	var buf strings.Builder
-	writeJSONWith(d.b.Nodes, d.b.Kids, toksFromMeta(d.text, d.toks), d.root, &buf)
+	writeJSONWith(d.b.Nodes, d.b.Kids, d.b.Toks, d.root, &buf)
 	return buf.String()
 }
 func (d *Doc) SetValidate(v bool) { d.validate = v }
@@ -1954,7 +2020,7 @@ function arenaRestore(recv: string): string {
 
 function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   switch (s.t) {
-    case 'lit': return `p.matchLitW(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
+    case 'lit': return s.value === '>' ? `p.matchGtW(${ttIdOf(ar, s.ttype)})` : `p.matchLitW(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `p.matchTokW(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
     case 'rule': return `p.callRuleW((*${recv}).parse${s.name}W)`;
     case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${s.name}(${s.bp}) })`;
@@ -2371,6 +2437,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tcapped bool
 \tsuppressNext, suppressCur map[uint16]bool
 \tsrc string
+\tsplitEnd int
 \tb Builder
 \tscratch []int32${entriesField}`;
   return `type ${recv} struct {
@@ -2395,6 +2462,12 @@ func (p *${recv}) matchLitW(lid, ttId uint16) bool {
 \tt := p.peekW()
 \tif t != nil && t.Lid == lid { p.pushLeafW(ttId, uint32(p.pos), t.Off, t.End); p.pos++; return true }
 \treturn false
+}
+func (p *${recv}) matchGtW(ttId uint16) bool {
+\tt := p.peekW()
+\tif t == nil || (t.Lid != ${lidOf(ids, '>')} && !splitGt(&p.toks, p.pos, p.src, &p.splitEnd)) { return false }
+\tt = &p.toks[p.pos]
+\tp.pushLeafW(ttId, uint32(p.pos), t.Off, t.End); p.pos++; return true
 }
 func (p *${recv}) matchTokW(kid, ttId uint16) bool {
 \tt := p.peekW()
@@ -2504,26 +2577,27 @@ func (b *CstBuilder) Shift(h int32, byteDelta, tokDelta int) int32 {
 `;
 
   const parseWithMetaW = `
-${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h int32, entries []EntryMeta, entryHs []int32, ok bool) {
-	toks := toksFromMeta(text, meta)
-	n := len(toks)
-	p := &parserW{toks: toks, src: text, b: b, scratch: nil}
+${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h int32, entries []EntryMeta, entryHs []int32, toks []Tok, ok bool) {
+	p := &parserW{toks: toksFromMeta(text, meta), src: text, b: b, scratch: nil}
 	fr, pok := p.parse${entry}W()
-	if !pok || p.pos != n || !fr.present {
-		return 0, nil, nil, false
+	recordToks(b, p.toks)
+	if !pok || p.pos != len(p.toks) || !fr.present {
+		return 0, nil, nil, p.toks, false
 	}
 ${topReuse
-    ? `\treturn fr.h, append([]EntryMeta(nil), p.entries...), append([]int32(nil), p.entryHs...), true`
-    : `\treturn fr.h, nil, nil, true`}
+    ? `\treturn fr.h, append([]EntryMeta(nil), p.entries...), append([]int32(nil), p.entryHs...), p.toks, true`
+    : `\treturn fr.h, nil, nil, p.toks, true`}
 }
 `;
 
   const tryReuseTopW = shapeA
     ? `
-func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
+func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, oldP []Tok, oldMeta []alignMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newEntries []EntryMeta, newHs []int32, newToks []Tok, reused int, ok bool) {
+	st := lexStarts(oldP, oldMeta)
+	prefixP, sufP := parseIdx(st, prefix), parseIdx(st, oldN-suffix)
 	prefixLen := 0
 	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix {
+		if oldEntries[prefixLen].Ext <= prefixP {
 			prefixLen++
 		} else {
 			break
@@ -2531,7 +2605,7 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 	}
 	suffixStart := len(oldEntries)
 	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix {
+		if oldEntries[i].TokStart >= sufP {
 			suffixStart = i
 		} else {
 			break
@@ -2541,9 +2615,8 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 	suffixCand := append([]int32(nil), oldHs[suffixStart:]...)
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
-	tokDelta := newN - oldN
-	toks := toksFromMeta(newText, newMeta)
-	p := &parserW{toks: toks, src: newText, b: b, scratch: nil}
+	rel, minRel := tailRel(st, oldN, suffixMeta)
+	p := &parserW{toks: reuseToks(oldP, prefixP, toksFromMeta(newText, newMeta), prefix), src: newText, b: b, scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
 	} else {
@@ -2551,15 +2624,13 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 	}
 	mid := make([]int32, 0)
 	midMeta := make([]EntryMeta, 0)
-	suffixBound := newN - suffix
-	maxCand := -1
-	for _, m := range suffixMeta {
-		c := m.TokStart + tokDelta
-		if c > maxCand {
-			maxCand = c
+	finishHit := func(adoptFrom int) (int32, []EntryMeta, []int32, []Tok, int, bool) {
+		tokDelta := 0
+		if adoptFrom < len(suffixMeta) {
+			s := suffixMeta[adoptFrom].TokStart
+			tokDelta = p.pos - s
+			p.toks = adoptTail(p.toks, p.pos, oldP, s, byteDelta)
 		}
-	}
-	finishHit := func(adoptFrom int) (int32, []EntryMeta, []int32, int, bool) {
 		adopted := make([]int32, 0, len(suffixCand)-adoptFrom)
 		for _, s := range suffixCand[adoptFrom:] {
 			adopted = append(adopted, sh.Shift(s, byteDelta, tokDelta))
@@ -2586,49 +2657,50 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
-			return 0, nil, nil, 0, false
+			return 0, nil, nil, nil, 0, false
 		}
-		return scratch[0], outE, children, len(prefixKids) + len(adopted), true
+		recordToks(b, p.toks)
+		return scratch[0], outE, children, p.toks, len(prefixKids) + len(adopted), true
 	}
-	tryHit := func() (int32, []EntryMeta, []int32, int, bool) {
-		if p.pos < suffixBound {
-			return 0, nil, nil, 0, false
+	tryHit := func() (int32, []EntryMeta, []int32, []Tok, int, bool) {
+		if p.splitEnd > p.pos || len(p.toks)-p.pos > suffix {
+			return 0, nil, nil, nil, 0, false
 		}
 		if len(suffixCand) == 0 {
-			if p.pos == newN {
+			if p.pos == len(p.toks) {
 				return finishHit(0)
 			}
-			return 0, nil, nil, 0, false
+			return 0, nil, nil, nil, 0, false
 		}
-		for i, m := range suffixMeta {
-			if m.TokStart+tokDelta == p.pos {
+		for i := range suffixMeta {
+			if rel[i] == len(p.toks)-p.pos {
 				return finishHit(i)
 			}
 		}
-		return 0, nil, nil, 0, false
+		return 0, nil, nil, nil, 0, false
 	}
-	if r, e, hs, n, hit := tryHit(); hit {
-		return r, e, hs, n, true
+	if r, e, hs, ts, n, hit := tryHit(); hit {
+		return r, e, hs, ts, n, true
 	}
-	if len(suffixCand) > 0 && maxCand >= 0 && p.pos > maxCand {
-		return 0, nil, nil, 0, false
+	if len(suffixCand) > 0 && minRel >= 0 && p.splitEnd <= p.pos && len(p.toks)-p.pos < minRel {
+		return 0, nil, nil, nil, 0, false
 	}
 	for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == newN {
+			if len(suffixCand) == 0 && p.pos == len(p.toks) {
 				return finishHit(0)
 			}
-			if r, e, hs, n, hit := tryHit(); hit {
-				return r, e, hs, n, true
+			if r, e, hs, ts, n, hit := tryHit(); hit {
+				return r, e, hs, ts, n, true
 			}
-			return 0, nil, nil, 0, false
+			return 0, nil, nil, nil, 0, false
 		}
 		p.maxLook = 0
 		sp := p.pos
 		fr, pok := p.parseTopOneW()
 		if !pok {
 			p.pos = sp
-			return 0, nil, nil, 0, false
+			return 0, nil, nil, nil, 0, false
 		}
 		tokEnd := p.pos
 		ext := tokEnd
@@ -2642,11 +2714,11 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 		}
 		midMeta = append(midMeta, EntryMeta{int(fr.tokStart), tokEnd, ext, int(fr.off), end, 0, 1})
 		mid = append(mid, fr.h)
-		if r, e, hs, n, hit := tryHit(); hit {
-			return r, e, hs, n, true
+		if r, e, hs, ts, n, hit := tryHit(); hit {
+			return r, e, hs, ts, n, true
 		}
-		if len(suffixCand) > 0 && maxCand >= 0 && p.pos > maxCand {
-			return 0, nil, nil, 0, false
+		if len(suffixCand) > 0 && minRel >= 0 && p.splitEnd <= p.pos && len(p.toks)-p.pos < minRel {
+			return 0, nil, nil, nil, 0, false
 		}
 	}
 }
@@ -2655,13 +2727,15 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 
   const tryReuseSegW = shapeB
     ? `
-func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEntries []EntryMeta, newText string, newMeta []alignMeta, byteDelta, oldN, newN, prefix, suffix int) (root int32, newSegs []Seg, newEntries []EntryMeta, newHs []int32, reused int, ok bool) {
+func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEntries []EntryMeta, oldP []Tok, oldMeta []alignMeta, newText string, newMeta []alignMeta, byteDelta, oldN, prefix, suffix int) (root int32, newSegs []Seg, newEntries []EntryMeta, newHs []int32, newToks []Tok, reused int, ok bool) {
 	if len(oldSegs) == 0 {
-		return 0, nil, nil, nil, 0, false
+		return 0, nil, nil, nil, nil, 0, false
 	}
+	st := lexStarts(oldP, oldMeta)
+	prefixP, sufP := parseIdx(st, prefix), parseIdx(st, oldN-suffix)
 	prefixLen := 0
 	for prefixLen < len(oldEntries) {
-		if oldEntries[prefixLen].Ext <= prefix {
+		if oldEntries[prefixLen].Ext <= prefixP {
 			prefixLen++
 		} else {
 			break
@@ -2669,7 +2743,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 	}
 	suffixStart := len(oldEntries)
 	for i := len(oldEntries) - 1; i >= prefixLen; i-- {
-		if oldEntries[i].TokStart >= oldN-suffix {
+		if oldEntries[i].TokStart >= sufP {
 			suffixStart = i
 		} else {
 			break
@@ -2685,9 +2759,8 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			prefixKids = append(prefixKids, oldRootHs[s.KidStart+i])
 		}
 	}
-	tokDelta := newN - oldN
-	toks := toksFromMeta(newText, newMeta)
-	p := &parserW{toks: toks, src: newText, b: b, scratch: nil}
+	rel, minRel := tailRel(st, oldN, suffixMeta)
+	p := &parserW{toks: reuseToks(oldP, prefixP, toksFromMeta(newText, newMeta), prefix), src: newText, b: b, scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
 	} else {
@@ -2696,16 +2769,14 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 	midKids := make([]int32, 0)
 	midSegs := make([]Seg, 0)
 	midMeta := make([]EntryMeta, 0)
-	suffixBound := newN - suffix
-	maxCand := -1
-	for _, m := range suffixMeta {
-		c := m.TokStart + tokDelta
-		if c > maxCand {
-			maxCand = c
-		}
-	}
-	finishHit := func(adoptFrom int) (int32, []Seg, []EntryMeta, []int32, int, bool) {
+	finishHit := func(adoptFrom int) (int32, []Seg, []EntryMeta, []int32, []Tok, int, bool) {
 		adoptedSegs := suffixCand[adoptFrom:]
+		tokDelta := 0
+		if len(adoptedSegs) > 0 {
+			s := suffixMeta[adoptFrom].TokStart
+			tokDelta = p.pos - s
+			p.toks = adoptTail(p.toks, p.pos, oldP, s, byteDelta)
+		}
 		adoptedKids := make([]int32, 0)
 		for _, s := range adoptedSegs {
 			for i := 0; i < s.KidCount; i++ {
@@ -2752,32 +2823,33 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		scratch := append([]int32(nil), children...)
 		b.Node(&scratch, 0, ${entryRid}, uint32(off), uint32(end), uint32(tokStart), uint32(tokEnd))
 		if len(scratch) != 1 {
-			return 0, nil, nil, nil, 0, false
+			return 0, nil, nil, nil, nil, 0, false
 		}
-		return scratch[0], outSegs, outE, children, len(prefixSegs) + len(adoptedSegs), true
+		recordToks(b, p.toks)
+		return scratch[0], outSegs, outE, children, p.toks, len(prefixSegs) + len(adoptedSegs), true
 	}
-	tryHit := func() (int32, []Seg, []EntryMeta, []int32, int, bool) {
-		if p.pos < suffixBound {
-			return 0, nil, nil, nil, 0, false
+	tryHit := func() (int32, []Seg, []EntryMeta, []int32, []Tok, int, bool) {
+		if p.splitEnd > p.pos || len(p.toks)-p.pos > suffix {
+			return 0, nil, nil, nil, nil, 0, false
 		}
 		if len(suffixCand) == 0 {
-			if p.pos == newN {
+			if p.pos == len(p.toks) {
 				return finishHit(0)
 			}
-			return 0, nil, nil, nil, 0, false
+			return 0, nil, nil, nil, nil, 0, false
 		}
-		for i, m := range suffixMeta {
-			if m.TokStart+tokDelta == p.pos {
+		for i := range suffixMeta {
+			if rel[i] == len(p.toks)-p.pos {
 				return finishHit(i)
 			}
 		}
-		return 0, nil, nil, nil, 0, false
+		return 0, nil, nil, nil, nil, 0, false
 	}
-	if r, sg, e, hs, n, hit := tryHit(); hit {
-		return r, sg, e, hs, n, true
+	if r, sg, e, hs, ts, n, hit := tryHit(); hit {
+		return r, sg, e, hs, ts, n, true
 	}
-	if len(suffixCand) > 0 && maxCand >= 0 && p.pos > maxCand {
-		return 0, nil, nil, nil, 0, false
+	if len(suffixCand) > 0 && minRel >= 0 && p.splitEnd <= p.pos && len(p.toks)-p.pos < minRel {
+		return 0, nil, nil, nil, nil, 0, false
 	}
 	${hasHeadB
     ? `if prefixLen == 0 {
@@ -2790,35 +2862,35 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 			m.KidStart = 0
 			m.KidCount = count
 			midMeta = append(midMeta, m)
-			if r, sg, e, hs, n, hit := tryHit(); hit {
-				return r, sg, e, hs, n, true
+			if r, sg, e, hs, ts, n, hit := tryHit(); hit {
+				return r, sg, e, hs, ts, n, true
 			}
-			if len(suffixCand) > 0 && maxCand >= 0 && p.pos > maxCand {
-				return 0, nil, nil, nil, 0, false
+			if len(suffixCand) > 0 && minRel >= 0 && p.splitEnd <= p.pos && len(p.toks)-p.pos < minRel {
+				return 0, nil, nil, nil, nil, 0, false
 			}
 		}
 	}
 `
     : ''}for {
 		if p.pos >= len(p.toks) {
-			if len(suffixCand) == 0 && p.pos == newN {
+			if len(suffixCand) == 0 && p.pos == len(p.toks) {
 				return finishHit(0)
 			}
-			if r, sg, e, hs, n, hit := tryHit(); hit {
-				return r, sg, e, hs, n, true
+			if r, sg, e, hs, ts, n, hit := tryHit(); hit {
+				return r, sg, e, hs, ts, n, true
 			}
-			return 0, nil, nil, nil, 0, false
+			return 0, nil, nil, nil, nil, 0, false
 		}
 		sb := len(p.scratch)
 		m, pok := p.parseLoopSegW(sb)
 		if !pok {
-			if len(suffixCand) == 0 && p.pos == newN {
+			if len(suffixCand) == 0 && p.pos == len(p.toks) {
 				return finishHit(0)
 			}
-			if r, sg, e, hs, n, hit := tryHit(); hit {
-				return r, sg, e, hs, n, true
+			if r, sg, e, hs, ts, n, hit := tryHit(); hit {
+				return r, sg, e, hs, ts, n, true
 			}
-			return 0, nil, nil, nil, 0, false
+			return 0, nil, nil, nil, nil, 0, false
 		}
 		count := len(p.scratch) - sb
 		midKids = append(midKids, p.scratch[sb:]...)
@@ -2826,11 +2898,11 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		m.KidStart = 0
 		midSegs = append(midSegs, Seg{0, count, m.TokStart, m.TokEnd, m.Ext})
 		midMeta = append(midMeta, m)
-		if r, sg, e, hs, n, hit := tryHit(); hit {
-			return r, sg, e, hs, n, true
+		if r, sg, e, hs, ts, n, hit := tryHit(); hit {
+			return r, sg, e, hs, ts, n, true
 		}
-		if len(suffixCand) > 0 && maxCand >= 0 && p.pos > maxCand {
-			return 0, nil, nil, nil, 0, false
+		if len(suffixCand) > 0 && minRel >= 0 && p.splitEnd <= p.pos && len(p.toks)-p.pos < minRel {
+			return 0, nil, nil, nil, nil, 0, false
 		}
 	}
 }
@@ -2844,19 +2916,19 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \tforceFresh := !hasShift || d.root < 0
 \tif !forceFresh {
 \t\tsh := d.b.(Shifter)
-\t\tif got, ne, nhs, n, hit := tryReuseTopW(d.b, sh, d.entryHs, d.entries, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix); hit {
-\t\t\td.root = got
+\t\tif got, ne, nhs, ts, n, hit := tryReuseTopW(d.b, sh, d.entryHs, d.entries, d.ptoks, oldToks, d.text, d.toks, byteDelta, oldN, prefix, suffix); hit {
+\t\t\td.root, d.ptoks = got, ts
 \t\t\td.entries = ne
 \t\t\td.entryHs = nhs
 \t\t\treused = n
 \t\t} else {
-\t\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
+\t\t\th, ne, nhs, pt, ok := parseWithMetaW(d.text, d.toks, d.b)
 \t\t\tif !ok {
 \t\t\t\td.toks = ${freshMeta}
-\t\t\t\th, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)
+\t\t\t\th, ne, nhs, pt, ok = parseWithMetaW(d.text, d.toks, d.b)
 \t\t\t}
 \t\t\tif ok {
-\t\t\t\td.root = h
+\t\t\t\td.root, d.ptoks = h, pt
 \t\t\t\td.entries = ne
 \t\t\t\td.entryHs = nhs
 \t\t\t} else {
@@ -2867,13 +2939,13 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t\t\treused = 0
 \t\t}
 \t} else {
-\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
+\t\th, ne, nhs, pt, ok := parseWithMetaW(d.text, d.toks, d.b)
 \t\tif !ok {
 \t\t\td.toks = ${freshMeta}
-\t\t\th, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)
+\t\t\th, ne, nhs, pt, ok = parseWithMetaW(d.text, d.toks, d.b)
 \t\t}
 \t\tif ok {
-\t\t\td.root = h
+\t\t\td.root, d.ptoks = h, pt
 \t\t\td.entries = ne
 \t\t\td.entryHs = nhs
 \t\t} else {
@@ -2890,20 +2962,20 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \tforceFresh := !hasShift || d.root < 0 || len(d.segs) == 0
 \tif !forceFresh {
 \t\tsh := d.b.(Shifter)
-\t\tif got, nsg, ne, nhs, n, hit := tryReuseSegW(d.b, sh, d.entryHs, d.segs, d.entries, d.text, d.toks, byteDelta, oldN, newN, prefix, suffix); hit {
-\t\t\td.root = got
+\t\tif got, nsg, ne, nhs, ts, n, hit := tryReuseSegW(d.b, sh, d.entryHs, d.segs, d.entries, d.ptoks, oldToks, d.text, d.toks, byteDelta, oldN, prefix, suffix); hit {
+\t\t\td.root, d.ptoks = got, ts
 \t\t\td.segs = nsg
 \t\t\td.entries = ne
 \t\t\td.entryHs = nhs
 \t\t\treused = n
 \t\t} else {
-\t\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
+\t\t\th, ne, nhs, pt, ok := parseWithMetaW(d.text, d.toks, d.b)
 \t\t\tif !ok {
 \t\t\t\td.toks = ${freshMeta}
-\t\t\t\th, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)
+\t\t\t\th, ne, nhs, pt, ok = parseWithMetaW(d.text, d.toks, d.b)
 \t\t\t}
 \t\t\tif ok {
-\t\t\t\td.root = h
+\t\t\t\td.root, d.ptoks = h, pt
 \t\t\t\td.entries = ne
 \t\t\t\td.entryHs = nhs
 \t\t\t\td.segs = segsFromEntries(ne)
@@ -2916,13 +2988,13 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t\t\treused = 0
 \t\t}
 \t} else {
-\t\th, ne, nhs, ok := parseWithMetaW(d.text, d.toks, d.b)
+\t\th, ne, nhs, pt, ok := parseWithMetaW(d.text, d.toks, d.b)
 \t\tif !ok {
 \t\t\td.toks = ${freshMeta}
-\t\t\th, ne, nhs, ok = parseWithMetaW(d.text, d.toks, d.b)
+\t\t\th, ne, nhs, pt, ok = parseWithMetaW(d.text, d.toks, d.b)
 \t\t}
 \t\tif ok {
-\t\t\td.root = h
+\t\t\td.root, d.ptoks = h, pt
 \t\t\td.entries = ne
 \t\t\td.entryHs = nhs
 \t\t\td.segs = segsFromEntries(ne)
@@ -2935,27 +3007,27 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 \t\treused = 0
 \t}`
     : `\treused := 0
-\th, _, _, ok := parseWithMetaW(d.text, d.toks, d.b)
+\th, _, _, pt, ok := parseWithMetaW(d.text, d.toks, d.b)
 \tif !ok {
 \t\td.toks = ${freshMeta}
-\t\th, _, _, ok = parseWithMetaW(d.text, d.toks, d.b)
+\t\th, _, _, pt, ok = parseWithMetaW(d.text, d.toks, d.b)
 \t}
 \tif ok {
-\t\td.root = h
+\t\td.root, d.ptoks = h, pt
 \t} else {
 \t\td.root = -1
 \t}`;
 
   const recoverAssign = topReuse
     ? (shapeB
-      ? `\t\t\t\td.root = h
+      ? `\t\t\t\td.root, d.ptoks = h, pt
 \t\t\t\td.entries = ne
 \t\t\t\td.entryHs = nhs
 \t\t\t\td.segs = segsFromEntries(ne)`
-      : `\t\t\t\td.root = h
+      : `\t\t\t\td.root, d.ptoks = h, pt
 \t\t\t\td.entries = ne
 \t\t\t\td.entryHs = nhs`)
-    : `\t\t\t\td.root = h`;
+    : `\t\t\t\td.root, d.ptoks = h, pt`;
 
   const recoverClear = topReuse
     ? (shapeB
@@ -2970,14 +3042,14 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 
   const initAssign = topReuse
     ? (shapeB
-      ? `\t\td.root = h
+      ? `\t\td.root, d.ptoks = h, pt
 \t\td.entries = entries
 \t\td.entryHs = entryHs
 \t\td.segs = segsFromEntries(entries)`
-      : `\t\td.root = h
+      : `\t\td.root, d.ptoks = h, pt
 \t\td.entries = entries
 \t\td.entryHs = entryHs`)
-    : `\t\td.root = h`;
+    : `\t\td.root, d.ptoks = h, pt`;
 
   return `${shiftHandleFn}${segsFromEntries}${parseWithMetaW}${tryReuseTopW}${tryReuseSegW}
 // Document is the shared surface of NewDoc (*Doc) and NewDocWith (*DocWith).
@@ -2994,6 +3066,7 @@ type DocWith struct {
 	text     string
 	root     int32
 	toks     []alignMeta
+	ptoks    []Tok
 	align    *Align
 	validate bool
 	b        Builder${entriesFields}
@@ -3013,7 +3086,7 @@ func newDocWith(src string, b Builder) *DocWith {
 	defer engineMu.Unlock()
 	d := &DocWith{text: src, b: b}
 	d.toks = ${initToks}
-	${topReuse ? 'h, entries, entryHs, ok' : 'h, _, _, ok'} := parseWithMetaW(src, d.toks, b)
+	${topReuse ? 'h, entries, entryHs, pt, ok' : 'h, _, _, pt, ok'} := parseWithMetaW(src, d.toks, b)
 	if ok {
 ${initAssign}
 	} else {
@@ -3047,7 +3120,7 @@ ${recoverClear}
 					}
 				}()
 				d.toks = ${freshMeta}
-				${topReuse ? 'h, ne, nhs, ok' : 'h, _, _, ok'} := parseWithMetaW(d.text, d.toks, d.b)
+				${topReuse ? 'h, ne, nhs, pt, ok' : 'h, _, _, pt, ok'} := parseWithMetaW(d.text, d.toks, d.b)
 				if ok {
 ${recoverAssign}
 				} else {
@@ -3186,9 +3259,11 @@ func builderFinishDefault(b Builder, scratch *[]int32, sb int, ruleId uint16, fa
 \treturn h, offset, true
 }
 
+// Leaves index Toks, the parse stream of the builder's last tree (see splitGt).
 type CstBuilder struct {
 \tNodes []Node
 \tKids  []int32
+\tToks  []Tok
 }
 
 func (b *CstBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
@@ -3251,6 +3326,7 @@ func cstKidOffEnd(nodes []Node, toks []Tok, kid int32) (uint32, uint32) {
 type SlimBuilder struct {
 \tNodes []Node
 \tKids  []int32
+\tToks  []Tok
 }
 
 func (b *SlimBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kids) }
@@ -3303,20 +3379,19 @@ ${wMethods}
 // Keeps ParseWith(CstBuilder) within the additive-prefix / byte-equal contract
 // without paying for a second method-instantiation (Go GC-shape stenciling tax).
 func parseWithCst(src string, b *CstBuilder) (int32, bool) {
-\tsaveNodes, saveKids := nodes, kids
+\tsaveNodes, saveKids, saveToks := nodes, kids, toks
 \tnodes, kids = b.Nodes[:0], b.Kids[:0]
 \th := parse(src, lex(src))
-\tb.Nodes, b.Kids = nodes, kids
-\tnodes, kids = saveNodes, saveKids
+\tb.Nodes, b.Kids, b.Toks = nodes, kids, toks
+\tnodes, kids, toks = saveNodes, saveKids, saveToks
 \tif h < 0 { return 0, false }
 \treturn h, true
 }
 func parseWithW(src string, b Builder) (int32, bool) {
-\ttoks := lex(src)
-\tn := len(toks)
-\tp := &parserW{toks: toks, src: src, b: b, scratch: nil}
+\tp := &parserW{toks: lex(src), src: src, b: b, scratch: nil}
 \tfr, ok := p.parse${ir.entry}W()
-\tif !ok || p.pos != n || !fr.present { return 0, false }
+\trecordToks(b, p.toks)
+\tif !ok || p.pos != len(p.toks) || !fr.present { return 0, false }
 \treturn fr.h, true
 }
 
@@ -3352,14 +3427,23 @@ func writeJSONWith(nodes []Node, kids []int32, toks []Tok, id int32, b *strings.
 }
 
 ${docWithBlock}
-func CstJSONWith(b *CstBuilder, toks []Tok, root int32) string {
+// recordToks hands the built-in builders the parse stream their leaves index.
+func recordToks(b Builder, ts []Tok) {
+\tswitch x := b.(type) {
+\tcase *CstBuilder:
+\t\tx.Toks = ts
+\tcase *SlimBuilder:
+\t\tx.Toks = ts
+\t}
+}
+func CstJSONWith(b *CstBuilder, root int32) string {
 \tvar buf strings.Builder
-\twriteJSONWith(b.Nodes, b.Kids, toks, root, &buf)
+\twriteJSONWith(b.Nodes, b.Kids, b.Toks, root, &buf)
 \treturn buf.String()
 }
-func SlimJSONWith(b *SlimBuilder, toks []Tok, root int32) string {
+func SlimJSONWith(b *SlimBuilder, root int32) string {
 \tvar buf strings.Builder
-\twriteJSONWith(b.Nodes, b.Kids, toks, root, &buf)
+\twriteJSONWith(b.Nodes, b.Kids, b.Toks, root, &buf)
 \treturn buf.String()
 }
 `;
@@ -3545,6 +3629,28 @@ func matchTok(kid uint16, ttId uint8) bool {
 \tif pos < len(toks) && toks[pos].Kid == kid { pushLeaf(ttId, uint32(pos)); pos++; return true }
 \treturn false
 }
+// One past the highest index of a remainder splitGt inserted during the current parse (0: none).
+var splitEnd int
+// splitGt splits the '>'-led punctuator at ts[at] (>>, >=, >>>, >>=, >>>=) into a '>' and the
+// rest as the next token. The parse stream thus differs from the lexer's: leaf indices address
+// the parse stream (a tree's Toks).
+func splitGt(ts *[]Tok, at int, src string, end *int) bool {
+\tt := (*ts)[at]
+\tif t.Kid != 0 || t.End-t.Off < 2 || src[t.Off] != '>' { return false }
+\t*ts = append(*ts, Tok{})
+\tcopy((*ts)[at+2:], (*ts)[at+1:])
+\t(*ts)[at] = mkTok(int(t.Off), int(t.Off)+1, t.Nl, 0, ${lidOf(ids, '>')})
+\t(*ts)[at+1] = mkTok(int(t.Off)+1, int(t.End), t.Nl, 0, lidOf(src[t.Off+1:t.End]))
+\tif *end > at+1 { *end++ }
+\tif *end < at+2 { *end = at + 2 }
+\treturn true
+}
+// matchGt matches a single '>', splitting a longer '>'-led punctuator.
+func matchGt(ttId uint8) bool {
+\tif pos+1 > maxLook { maxLook = pos + 1 }
+\tif pos >= len(toks) || (toks[pos].Lid != ${lidOf(ids, '>')} && !splitGt(&toks, pos, _src, &splitEnd)) { return false }
+\tpushLeaf(ttId, uint32(pos)); pos++; return true
+}
 func callRule(fn func() int32) bool {
 \tid := fn()
 \tif id < 0 { return false }
@@ -3617,6 +3723,7 @@ func parse(src string, t []Tok) int32 {
 \ttoks = t
 \tpos = 0
 \tmaxLook = 0
+\tsplitEnd = 0
 \tnodes = nodes[:0]; kids = kids[:0]; scratch = scratch[:0]
 \troot := parse${ir.entry}()
 \tarenaBaseline = len(nodes)

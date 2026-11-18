@@ -35,6 +35,7 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'emit-ts-cst', args: ['test/emit-ts-cst.ts'] },
   { group: 'emit-parity', name: 'emit-standalone', args: ['test/emit-standalone.ts'] },
   { group: 'emit-parity', name: 'emit-portable-library', args: ['test/emit-portable-library.ts'] },
+  { group: 'emit-parity', name: 'emit-portable-split', args: ['test/emit-portable-split.ts'] },
   { group: 'emit-parity', name: 'portable-targets', args: ['test/portable-targets.ts'] },
   { group: 'emit-parity', name: 'unicode-parity', args: ['test/unicode-parity.ts'] },
   { group: 'emit-parity', name: 'ast-builder', args: ['test/ast-builder.ts'] },
