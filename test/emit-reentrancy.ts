@@ -71,7 +71,7 @@ for (const c of CASES) {
   const file = join(dir, `${c.name}.ts`);
   writeFileSync(file, src);
   const m = (await import(file)) as Mod;
-  const label = `${c.name} (${src.includes('createLexer(') ? 'createLexer fallback' : 'specialized lexer'})`;
+  const label = c.name;
   const hasHandleTokenAt = typeof m.createParser().tokenAt === 'function';
   check(`${label}: createParser() exposes tokenAt(handle, i)`, hasHandleTokenAt);
 

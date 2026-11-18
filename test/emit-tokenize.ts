@@ -1,9 +1,9 @@
 // Gate: the emitted jsTarget module's PUBLIC tokenizer and its document ownership.
 //
-// For a specialized-lexer grammar (TypeScript: the lexer writes token columns) and the two
-// createLexer-fallback grammars (YAML: indent, HTML: markup):
-//   1. tokenize(src) ≡ createLexer(grammar, <the module's own intern ids>).tokenize(src):
-//      every field of every token, the exact Token key set, identical lex-error messages;
+// For the three lexing modes (TypeScript: token stream, YAML: indent, HTML: markup):
+//   1. tokenize(src) ≡ the frozen lexer golden: type, span and flags of every token, text =
+//      its source span, k = the module's own TYPE_KIND id, the exact Token key set, identical
+//      lex-error messages;
 //   2. each call returns a fresh array of fresh objects — mutating one result changes nothing;
 //   3. tokenize — succeeding or throwing — never changes what an existing tree, handle or
 //      token view reads, and never disturbs an incremental session: a session with tokenize
@@ -17,9 +17,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emitParser, jsTarget } from '../src/emit.ts';
-import { createLexer, type Token } from '../src/gen-lexer.ts';
+import type { Token } from '../src/emit-lexer.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
-import { internOf } from './emitted-intern.ts';
+import { goldenStream, streamOf } from './golden-lexer.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 let ok = 0, fail = 0;
@@ -85,21 +85,22 @@ for (const c of CASES) {
   const file = join(dir, `${c.name}.ts`);
   writeFileSync(file, src);
   const m = (await import(file)) as Mod;
-  const ref = createLexer(grammar, internOf(src));
-  const specialized = !src.includes('createLexer(');
-  const label = `${c.name} (${specialized ? 'specialized lexer' : 'createLexer fallback'})`;
+  const label = c.name;
+  const typeKind = new Map<string, number>(JSON.parse(src.match(/const TYPE_KIND = new Map<[^>]*>\((.*)\);/)![1]));
 
-  // ── 1. parity with createLexer ──
+  // ── 1. parity with the lexer golden ──
   for (const s of c.samples) {
-    const a = ref.tokenize(s), b = m.tokenize(s);
+    const b = m.tokenize(s), want = goldenStream(c.name, s);
     const keysOk = b.every((t) => json(Object.keys(t).sort()) === json([...FIELDS].sort()));
-    check(`${label}: tokenize ≡ createLexer for ${json(s.slice(0, 24))}`, json(a) === json(b) && keysOk);
+    const spansOk = b.every((t) => t.text === s.slice(t.offset, t.offset + t.text.length) && t.k === typeKind.get(t.type));
+    check(`${label}: tokenize ≡ lexer golden for ${json(s.slice(0, 24))}`, want !== undefined && json(want) === json(streamOf(b)) && keysOk && spansOk,
+      want === undefined ? 'input not in the golden' : '');
   }
   if (c.lexError) {
-    let ea = '', eb = '';
-    try { ref.tokenize(c.lexError); } catch (e) { ea = String(e); }
-    try { m.tokenize(c.lexError); } catch (e) { eb = String(e); }
-    check(`${label}: lex error is identical to createLexer's`, ea !== '' && ea === eb, `ref=${ea} emit=${eb}`);
+    let eb = '';
+    try { m.tokenize(c.lexError); } catch (e) { eb = (e as Error).message; }
+    const want = goldenStream(c.name, c.lexError);
+    check(`${label}: lex error is the golden's`, want !== undefined && 'error' in want && want.error === eb, `golden=${json(want)} emit=${eb}`);
   }
 
   // ── 2. fresh, caller-owned results ──

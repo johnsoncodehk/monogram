@@ -267,7 +267,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   // `source` text at token i equals `lit` (any token type).
   const textIs = (i: string, lit: string) => {
     const parts = [`tkEnd[${i}] - tkOff[${i}] === ${lit.length}`];
-    for (let j = 0; j < lit.length; j++) parts.push(`source.charCodeAt(tkOff[${i}] - srcBase${j ? ` + ${j}` : ''}) === ${lit.charCodeAt(j)}`);
+    for (let j = 0; j < lit.length; j++) parts.push(`source.charCodeAt(tkOff[${i}] - lexSrcBase${j ? ` + ${j}` : ''}) === ${lit.charCodeAt(j)}`);
     return `(${parts.join(' && ')})`;
   };
   // A punctuation token i whose text is one of `lits` (false when none is in the vocabulary).
@@ -709,7 +709,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`    } else if (inTagName) {`);
     if (markup.closeMarker) emit(`      if (${textIs('li', markup.closeMarker)}) sawCloseMarker = true; else {`);
     else emit(`      {`);
-    emit(`        curTag = source.slice(tkOff[li] - srcBase«!», tkEnd[li] - srcBase«!»); inTagName = false;`);
+    emit(`        curTag = source.slice(tkOff[li] - lexSrcBase, tkEnd[li] - lexSrcBase); inTagName = false;`);
     if (markup.voidNameToken) emit(`        if (!sawCloseMarker && LX_VOID_TAGS.has(curTag.toLowerCase())) tkK[li] = ${kOf(markup.voidNameToken)};`);
     emit(`      }`);
     emit(`    }`);
@@ -1086,7 +1086,15 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`        let p = pos + 1;`);
       emit(`        let c = source.charCodeAt(p);`);
       emit(`        while (${ccCond('c', lp.cont)}) { p++; c = source.charCodeAt(p); }`);
-      emit(`        if (${bails.length > 0 ? `!(${bails.join(' || ')})` : 'true'}) {`);
+      if (bails.length === 0) {
+        // nothing stops the loop short: the token is always taken, the rest is unreachable
+        emit(`        tkPush(${m0.k}, ${canBeKw(m0.first) ? 'lexKwT(source, pos, p)' : '0'}, pos, p);`);
+        emit(`        pos = p;`);
+        emit(`        ${CONT}`);
+        emit(`      }`);
+        continue;
+      }
+      emit(`        if (!(${bails.join(' || ')})) {`);
       emit(`          tkPush(${m0.k}, ${canBeKw(m0.first) ? 'lexKwT(source, pos, p)' : '0'}, pos, p);`);
       emit(`          pos = p;`);
       emit(`          ${CONT}`);

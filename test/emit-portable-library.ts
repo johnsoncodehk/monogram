@@ -10,7 +10,7 @@
 //          Doc; a Doc session with tokenize interleaved ≡ a fresh Doc after an edit; malformed
 //          input panics with the lexer message (the crate's documented lexical error mechanism).
 // Every target's token stream (kind/text/off/end/nl) is identical, and identical to the
-// interpreter's createLexer (type/text/offset/newlineBefore). Missing go/rustc → logged + skipped.
+// frozen lexer golden (type/span/newlineBefore). Missing go/rustc → logged + skipped.
 //
 //   node test/emit-portable-library.ts
 import { execFileSync } from 'node:child_process';
@@ -18,7 +18,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
-import { createLexer } from '../src/gen-lexer.ts';
+import { goldenStream } from './golden-lexer.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -33,16 +33,19 @@ const B = 'let b = c / d\n++e;\n';
 const EDIT = { start: A.indexOf('a + 1'), end: A.indexOf('a + 1') + 5, text: 'a * 2' };
 const EDITED = A.slice(0, EDIT.start) + EDIT.text + A.slice(EDIT.end);
 const BAD_LEX = 'let a = 1 # 2;';
-let refLexError = '';
-try { createLexer(grammar).tokenize(BAD_LEX); } catch (e) { refLexError = (e as Error).message; }
+const badLex = goldenStream('typescript', BAD_LEX);
+const refLexError = badLex !== undefined && 'error' in badLex ? badLex.error : '';
 // ASCII-only samples, so a JSON string literal is also a valid Go and Rust string literal.
 const lit = (s: string) => JSON.stringify(s);
 
 type Tok5 = { kind: string; text: string; off: number; end: number; nl: boolean };
 const five = (ts: { kind: string; text: string; off: number; end: number; nl: boolean }[]): Tok5[] =>
   ts.map(({ kind, text, off, end, nl }) => ({ kind, text, off, end, nl }));
-const ref = (s: string): Tok5[] =>
-  createLexer(grammar).tokenize(s).map((t) => ({ kind: t.type, text: t.text, off: t.offset, end: t.offset + t.text.length, nl: t.newlineBefore }));
+const ref = (s: string): Tok5[] => {
+  const g = goldenStream('typescript', s);
+  if (g === undefined || !Array.isArray(g)) throw new Error(`no golden token stream for ${JSON.stringify(s)}`);
+  return g.map(([kind, off, len, fl]) => ({ kind, text: s.slice(off, off + len), off, end: off + len, nl: (fl & 1) !== 0 }));
+};
 const json = (v: unknown) => JSON.stringify(v);
 const dir = mkdtempSync(join(tmpdir(), 'monogram-portable-library-'));
 
@@ -62,7 +65,7 @@ for (const [mode, path] of [['markup', '../html.ts'], ['indent', '../yaml.ts']])
   writeFileSync(file, emitParser(grammar, tsTarget));
   const m = await import(file);
   const tA = m.tokenize(A);
-  check('ts: tokenize ≡ createLexer', json(five(tA)) === json(ref(A)));
+  check('ts: tokenize ≡ lexer golden', json(five(tA)) === json(ref(A)));
   const t1 = m.tokenize(B), t2 = m.tokenize(B);
   check('ts: tokenize returns a fresh array of fresh objects', t1 !== t2 && t1.every((t: object, i: number) => t !== t2[i]));
   let tsErr = '';
@@ -133,7 +136,7 @@ func main() {
     const lower = (ts: { Kind: string; Text: string; Off: number; End: number; Nl: boolean }[]) =>
       ts.map((t) => ({ kind: t.Kind, text: t.Text, off: t.Off, end: t.End, nl: t.Nl }));
     check('go: external package builds against parser.Tokenize / parser.ParseWith', out.ok === true);
-    check('go: Tokenize ≡ createLexer', json(lower(out.tokensA)) === json(ref(A)));
+    check('go: Tokenize ≡ lexer golden', json(lower(out.tokensA)) === json(ref(A)));
     check('go: a mutated Tokenize result does not leak into the next call', json(lower(out.tokensB)) === json(ref(B)));
     check('go: a caller-owned CstBuilder is untouched by Tokenize', out.unchanged === true);
     check('go: ParseWith after Tokenize(other) ≡ ParseWith alone', out.same === true);
@@ -184,7 +187,7 @@ fn main() {
     execFileSync('rustc', ['--edition', '2021', 'main.rs', '--extern', 'parser=libparser.rlib', '-o', 'consumer'], { cwd: rdir, stdio: 'pipe' });
     const out = JSON.parse(execFileSync(join(rdir, 'consumer'), { encoding: 'utf8' }));
     check('rust: external crate links against parser::tokenize / parser::Doc', true);
-    check('rust: tokenize ≡ createLexer', json(out.tokensA) === json(ref(A)));
+    check('rust: tokenize ≡ lexer golden', json(out.tokensA) === json(ref(A)));
     check('rust: tokenize returns an independent Vec', json(out.tokensB) === json(ref(B)));
     check('rust: a Doc is untouched by tokenize', out.unchanged === true);
     check('rust: Doc edit with tokenize interleaved ≡ fresh Doc', out.editEq === true);

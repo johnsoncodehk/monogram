@@ -1,7 +1,7 @@
 // Gate: the generated lexer (emit-lexer.ts — the only lexer implementation) reproduces
 // the frozen behavioural baseline in test/golden/lexer/. Each golden file holds one lexer
 // spec (tokens, literals, markup / indent / newline config) and the token streams — or the
-// exact error message — the former data-driven createLexer produced for every input the
+// exact error message — the former data-driven lexer (createLexer) produced for every input the
 // full test suite fed it (plus the yaml-test-suite inputs and hand-picked inputs for every
 // error kind). Token = [type, offset, length, flags], flags 1 newlineBefore, 2 commentBefore,
 // 4 multilineFlowBefore. Two consumers of the one generator are checked:
@@ -78,7 +78,6 @@ for (const name of ['typescript', 'typescriptreact', 'javascript', 'javascriptre
   const matches = goldens.filter(({ g }) => g.spec.name === name);
   if (matches.length !== 1) { console.log(`✗ ${name}: expected exactly one golden, found ${matches.length}`); bad++; continue; }
   const src = emitParser(grammar, jsTarget);
-  if (/createLexer|LEX_GRAMMAR/.test(src)) { console.log(`✗ ${name}: the emitted module carries a data-driven lexer runtime`); bad++; }
   const path = `/tmp/emit-lexer-verify-${name}.mts`;
   writeFileSync(path, src);
   const m = await import(path + '?v=' + Date.now());

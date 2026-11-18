@@ -20,7 +20,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
-import { createLexer } from '../src/gen-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { asGoMain } from './go-main.ts';
 import type { CstGrammar } from '../src/types.ts';
@@ -298,7 +298,7 @@ function runEditSession(cmd: string, args: string[], json: string): EditOutcome 
 
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
 const oracleToks = (g: CstGrammar, src: string): AlignMeta[] => {
-  const { tokenize } = createLexer(g);
+  const tokenize = compileTokenizer(lexSpecOf(g));
   return tokenize(src).map((t) => ({ kind: t.type, off: t.offset, end: t.offset + t.text.length, nl: t.newlineBefore }));
 };
 const computeAlign = (oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Align => {

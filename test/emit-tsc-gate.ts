@@ -11,14 +11,9 @@
 //     emitted parser by stripping types, and the CST-identity gate (emit-parser-verify)
 //     proves the stripped runtime is byte-for-byte the interpreter.
 //
-// Both emit paths are covered: the soa path (columns + an emitted lexer — the ts/js
-// family) and the fallback path (yaml/html: no specialized lexer, so the parser carries
-// the inlined createLexer runtime, plus the non-soa piece-text layer). Checking
-// every grammar is what forces grammar-specific emission (token width, soa vs piece
-// layer, empty vocab sets, the fallback createLexer contract) to stay type-sound —
-// and it already paid off: the fallback editCore branch referenced cs/ceOld/
-// parenCachePos declared only in the soa branch (unreached at runtime, invisible
-// until this gate), now hoisted/gated correctly.
+// Every lexing mode is covered (token stream — the ts/js family; markup — html; indent —
+// yaml). Checking every grammar is what forces grammar-specific emission (token width,
+// mode-specific lexer code, empty vocab sets) to stay type-sound.
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';

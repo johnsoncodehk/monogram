@@ -43,7 +43,7 @@ function runEdit(cmd: string, args: string[], json: string): Outcome {
   catch { return { ok: false, err: 'bad json' }; }
 }
 
-/** Primary lexer-error text shared with createLexer (gen-lexer.ts). */
+/** Primary lexer-error text shared with the generated lexer (emit-lexer.ts). */
 function primaryLexMsg(err?: string): string | null {
   if (!err) return null;
   const u = err.match(/Unterminated template literal at offset \d+/);

@@ -1,12 +1,12 @@
 // Gate: an emitted jsTarget module is a self-contained deliverable.
 //
-// For the specialized-lexer grammar (TypeScript) and every createLexer-fallback lexing mode
-// the JS target supports (YAML: indent, HTML: markup, envspec: newline) the emitted source
+// For every lexing mode the JS target supports (TypeScript: token stream, YAML: indent,
+// HTML: markup, envspec: newline) the emitted source
 //   1. has no import / require / dynamic import / import.meta and no producer filesystem path;
 //   2. type-checks ALONE under `tsc --strict` from a temp directory outside the repository;
 //   3. runs there under plain `node` (no monogram source reachable) and, per sample, agrees
-//      with the runtime interpreter on accept/reject and the CST, and with createLexer on
-//      the full token stream.
+//      with the runtime interpreter on accept/reject and the CST, and with the frozen lexer
+//      golden on the full token stream (or lex error).
 //
 //   node test/emit-standalone.ts
 import { execFileSync } from 'node:child_process';
@@ -16,8 +16,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { createParser } from '../src/gen-parser.ts';
-import { createLexer } from '../src/gen-lexer.ts';
-import { internOf } from './emitted-intern.ts';
+import { goldenStream, streamOf } from './golden-lexer.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -63,7 +62,7 @@ for (const c of CASES) {
   let grammar: CstGrammar;
   try { grammar = (await import(c.path)).default; } catch { console.log(`  ${c.name}: (grammar not present — skipped)`); continue; }
   const src = emitParser(grammar, jsTarget);
-  const label = `${c.name} (${src.includes('createLexer(') ? 'createLexer fallback' : 'specialized lexer'})`;
+  const label = c.name;
 
   for (const [what, re] of FORBIDDEN) check(`${label}: no ${what}`, !re.test(src));
   check(`${label}: no producer path`, !src.includes(ROOT) && !src.includes(HERE) && !/\/(?:Users|home)\/[^\s'"`]/.test(src));
@@ -92,7 +91,6 @@ for (const c of CASES) {
   } catch (e) { check(`${label}: runs under plain node outside the repository`, false, String(e).slice(0, 600)); continue; }
 
   const oracle = createParser(grammar);
-  const lexer = createLexer(grammar, internOf(src));
   c.samples.forEach((s, i) => {
     const r = results[i];
     let want: unknown = null, wantOk = true;
@@ -100,9 +98,9 @@ for (const c of CASES) {
     const tag = JSON.stringify(s.slice(0, 28));
     check(`${label}: accept/reject ≡ interpreter for ${tag}`, wantOk === (r.err === null), `interp ${wantOk ? 'accept' : 'reject'}, emitted ${r.err ?? 'accept'}`);
     if (wantOk && r.err === null) check(`${label}: CST ≡ interpreter for ${tag}`, JSON.stringify(want) === JSON.stringify(r.cst));
-    let wantToks: unknown;
-    try { wantToks = lexer.tokenize(s); } catch (e) { wantToks = { error: (e as Error).message }; }
-    check(`${label}: tokens ≡ createLexer for ${tag}`, JSON.stringify(wantToks) === JSON.stringify(r.toks));
+    const wantToks = goldenStream(c.name, s);
+    check(`${label}: tokens ≡ lexer golden for ${tag}`, wantToks !== undefined && JSON.stringify(wantToks) === JSON.stringify(streamOf(r.toks as any)),
+      wantToks === undefined ? 'input not in the golden' : '');
   });
 }
 
