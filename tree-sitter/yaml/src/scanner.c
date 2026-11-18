@@ -531,6 +531,10 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
                      h == '}' || h == '#' || h == '&' || h == '*' || h == '!' || h == '|' || h == '>' ||
                      h == '\'' || h == '"' || h == '%' || h == '@' || h == '`';
     if (!indicator) {
+      // A false scan_scalar is only rolled back if this whole call returns false. Once it has advanced
+      // (a lone `:` it declined, a num-shaped run with no num token valid), falling through to the
+      // indent logic would emit a NEWLINE/DEDENT whose span swallows that content, so decline instead.
+      uint32_t scan_col = lexer->get_column(lexer);
       // Compact mapping-KEY (part B): a line-lead indicator's scalar-led inline content, deeper than the
       // stack top. scan_scalar then pushes the nested mapping's INDENT (zero-width, pre-marked here) if
       // the run is a KEY, or emits the leaf scalar otherwise (so `- x` stays a plain item, no push).
@@ -545,6 +549,7 @@ bool tree_sitter_yaml_external_scanner_scan(void *payload, TSLexer *lexer, const
       }
       if (scan_scalar(lexer, valid_symbols[KEY] != 0, valid_symbols[PLAIN] != 0, valid_symbols[NUM] != 0, valid_symbols[BOOL_NULL] != 0, s->flow_depth, s, compact_col, INDENT)) { s->started = true; s->at_line_lead = (lexer->result_symbol == INDENT); return true; }
       if (s->marker_decline) { s->marker_decline = false; return false; } // a true `---`/`...` here → let the internal marker token lex it
+      if (lexer->get_column(lexer) != scan_col) return false;
     }
   }
 

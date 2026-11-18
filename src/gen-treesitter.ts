@@ -2561,7 +2561,11 @@ ${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym
     bool indicator = h == 0 || h == '\\n' || h == '\\r' || h == ',' || h == '[' || h == ']' || h == '{' ||
                      h == '}' || h == '#' || h == '&' || h == '*' || h == '!' || h == '|' || h == '>' ||
                      h == '\\'' || h == '"' || h == '%' || h == '@' || h == '\`';
-    if (!indicator) {${hasCompact ? `
+    if (!indicator) {
+      // A false scan_scalar is only rolled back if this whole call returns false. Once it has advanced
+      // (a lone \`:\` it declined, a num-shaped run with no num token valid), falling through to the
+      // indent logic would emit a NEWLINE/DEDENT whose span swallows that content, so decline instead.
+      uint32_t scan_col = lexer->get_column(lexer);${hasCompact ? `
       // Compact mapping-KEY (part B): a line-lead indicator's scalar-led inline content, deeper than the
       // stack top. scan_scalar then pushes the nested mapping's INDENT (zero-width, pre-marked here) if
       // the run is a KEY, or emits the leaf scalar otherwise (so \`- x\` stays a plain item, no push).
@@ -2578,6 +2582,7 @@ ${flowTokens.map(t => `    if (fc == ${charLit(t.char)} && valid_symbols[${t.sym
       if (s->marker_decline) { s->marker_decline = false; return false; } // a true \`---\`/\`...\` here → let the internal marker token lex it` : ''}` : `
       if (scan_scalar(lexer, ${want(KEY)}, ${want(PLAIN)}, ${want(NUM)}, ${want(BOOLNULL)}${hasFlow ? ', s->flow_depth' : ''}${hasMarkers ? ', s' : ''})) { s->started = true; return true; }${hasMarkers ? `
       if (s->marker_decline) { s->marker_decline = false; return false; }` : ''}`}
+      if (lexer->get_column(lexer) != scan_col) return false;
     }
   }
 ` : ''}
