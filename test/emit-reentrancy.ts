@@ -5,8 +5,8 @@
 // token view must equal the leaf's own span — whatever its callbacks do with OTHER documents:
 // read the module document (tokenAt, tree accessors, nested visit), read or traverse another
 // createParser() handle, parse / edit / tokenize (succeeding or throwing) anywhere else, or
-// traverse the same handle again. Mutating the document being traversed is a contract
-// violation and must fail loudly (the visit throws) instead of continuing over a rewritten arena.
+// traverse the same handle again. Parsing or editing the document being traversed is refused
+// (throws) before it touches the arena; the document stays as it was and is editable afterwards.
 // Handles read their tokens through createParser().tokenAt(handle, i).
 //
 //   node test/emit-reentrancy.ts
@@ -130,17 +130,20 @@ for (const c of CASES) {
     check(`${label}: module visit unchanged by callback — ${name}`, got !== null && got.spanBad === 0 && got.seq.join('\n') === wantM.seq.join('\n'), got ? `span mismatches ${got.spanBad}` : err);
   }
 
-  // Mutating the document under traversal fails loudly; the document stays usable.
+  // Mutating the document under traversal is refused; the document stays as it was and usable.
   {
     let threw = '';
     try { p.visit(h, { enter: () => { p.edit(h, [c.edit]); } }); } catch (e) { threw = (e as Error).message; }
     check(`${label}: editing the visited handle inside its visit throws`, /during visit/.test(threw), threw || 'no error');
+    const sameT = trace(p.tree, handleTok(p, h), (f) => p.visit(h, f), c.A);
+    check(`${label}: the refused edit left the handle ≡ before`, sameT.seq.join('\n') === want.seq.join('\n') && sameT.spanBad === 0);
     const edited = c.A.slice(0, c.edit.start) + c.edit.text + c.A.slice(c.edit.end);
+    p.edit(h, [c.edit]);
     const fresh = m.createParser();
     const fh = fresh.parse(edited);
     const after = trace(p.tree, handleTok(p, h), (f) => p.visit(h, f), edited);
     const freshT = trace(fresh.tree, handleTok(fresh, fh), (f) => fresh.visit(fh, f), edited);
-    check(`${label}: the handle edited mid-visit then reads ≡ a fresh parse`, after.seq.join('\n') === freshT.seq.join('\n') && after.spanBad === 0);
+    check(`${label}: the same edit after the visit ≡ a fresh parse`, after.seq.join('\n') === freshT.seq.join('\n') && after.spanBad === 0);
     let threwM = '';
     const r = m.parse(c.A);
     try { m.visit(r, { enter: () => { m.parse(c.B); } }); } catch (e) { threwM = (e as Error).message; }

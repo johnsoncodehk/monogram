@@ -3411,7 +3411,7 @@ type Doc = {
 ${e.soa ? '  parenCachePos: number; parenCacheStack: boolean[];' : '  tkText: string[]; altText: string[];'}
   altK: typeof tkK | null; altT: typeof tkT | null; altOff: typeof tkOff | null; altEnd: typeof tkEnd | null; altFl: typeof tkFl | null; altDp: typeof tkDp | null; altPd: typeof tkPd | null;
   altCap: number; altN: number;
-  epoch: number;   // bumped by every parse/edit of this document (visit detects reentrant mutation)
+  visiting: number;   // visits of this document in progress; parse/edit refuse while > 0
 };
 type Handle = { d: Doc; gen: number; root: number; errors: Diag[] };
 // rows: the initial arena row capacity (kids get twice that); a lex-only document never
@@ -3438,7 +3438,7 @@ function makeDoc(rows = 8192): Doc {
 ${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : '    tkText: [], altText: [],'}
     altK: null, altT: null, altOff: null, altEnd: null, altFl: null, altDp: null, altPd: null,
     altCap: 0, altN: 0,
-    epoch: 0,
+    visiting: 0,
   };
 }
 function saveDoc(d: Doc) {
@@ -3485,6 +3485,11 @@ function activate(d: Doc) {
   saveDoc(curDoc);
   loadDoc(d);
   curDoc = d;
+}
+// Entry of every public parse/edit of d (paired with finally saveDoc(d)).
+function openWrite(d: Doc) {
+  if (d.visiting !== 0) throw new Error('cannot parse or edit a document during visit of that document');
+  activate(d);
 }
 
 // ── Document-owned reads ──
@@ -3574,30 +3579,30 @@ function treeOf(d: Doc) {
 //   leave(id, charBase, tokBase) — each node after its children
 //   leaf(entry, tok)             — each leaf (tok = its absolute token index)
 // Call with the root only — the bases default from the root's rel fields. A callback that
-// parses or edits the document being traversed ends the visit with an error.
+// parses or edits the document being traversed is refused (throws) and the document stays as it was.
 type _VisitFns = { enter?: (id: number, charBase: number, tokBase: number) => boolean | void; leave?: (id: number, charBase: number, tokBase: number) => void; leaf?: (entry: number, tok: number) => void };
 function visitDoc(d: Doc, entry: number, fns: _VisitFns, charBase?: number, tokBase?: number) {
-  const epoch = d.epoch;
   const rowCount2 = d.rowCount, rowStart2 = d.rowStart, kids2 = d.kids, kidRel2 = d.kidRel, kidTokRel2 = d.kidTokRel, rowLen2 = d.rowLen, rowTokLen2 = d.rowTokLen;
-  const changed = () => { throw new Error('document changed during visit: a callback parsed or edited the document being traversed'); };
+  const enter = fns.enter, leaf = fns.leaf, leave = fns.leave;
   const walk = (id: number, cb: number, tb: number): void => {
-    if (fns.enter) { const r = fns.enter(id, cb, tb); if (d.epoch !== epoch) changed(); if (r === false) return; }
+    if (enter !== undefined && enter(id, cb, tb) === false) return;
     const n = rowCount2[id];
     const cs = rowStart2[id];
-    for (let i = 0; i < n; i++) {
-      const k = kids2[cs + i];
+    for (let i = cs; i < cs + n; i++) {
+      const k = kids2[i];
       if (k < 0) {
-        if (fns.leaf) { fns.leaf(k, tb + ((~k) >>> 2)); if (d.epoch !== epoch) changed(); }
+        if (leaf !== undefined) { leaf(k, tb + ((~k) >>> 2)); }
       } else {
-        const cr = kidRel2[cs + i], tr = kidTokRel2[cs + i];
+        const cr = kidRel2[i], tr = kidTokRel2[i];
         walk(k, cb + (cr < 0 ? cr + rowLen2[id] + 1 : cr), tb + (tr < 0 ? tr + rowTokLen2[id] + 1 : tr));
       }
     }
-    if (fns.leave) { fns.leave(id, cb, tb); if (d.epoch !== epoch) changed(); }
+    if (leave !== undefined) { leave(id, cb, tb); }
   };
   if (charBase === undefined) { charBase = d.rootCharBase; tokBase = d.rootTokBase; }
-  if (entry < 0) { if (fns.leaf) fns.leaf(entry, tokBase! + ((~entry) >>> 2)); return; }
-  walk(entry, charBase, tokBase!);
+  if (entry < 0) { if (leaf !== undefined) leaf(entry, tokBase! + ((~entry) >>> 2)); return; }
+  d.visiting++;
+  try { walk(entry, charBase, tokBase!); } finally { d.visiting--; }
 }
 function swapBuffers() {
   let x: any;
@@ -4088,13 +4093,11 @@ export function tokenize(source: string): Token[] { return lexTokens(source); }`
 // ── Module-level API: the DEFAULT document (one shared session). Every export below
 // reads or writes that document, whatever a createParser() instance did in between. ──
 export function parse(source: string, entryRule?: string) {
-  activate(docDefault);
-  docDefault.epoch++;
+  openWrite(docDefault);
   try { return parseCore(source, entryRule); } finally { saveDoc(docDefault); }
 }
 export function parseEdited(entryRule?: string, edits?: Edit[]) {
-  activate(docDefault);
-  docDefault.epoch++;
+  openWrite(docDefault);
   try { return editCore(entryRule, edits); } finally { saveDoc(docDefault); }
 }
 export const tree = treeOf(docDefault);
@@ -4123,14 +4126,12 @@ export function createParser() {
   const view = treeOf(d);
   return {
     parse(source: string, entryRule?: string) {
-      activate(d);
-      d.epoch++;
+      openWrite(d);
       try { return parseTotal(source, entryRule); } finally { saveDoc(d); }
     },
     edit(cst: Handle, edits?: Edit[]) {
       chk(cst);
-      activate(d);
-      d.epoch++;
+      openWrite(d);
       try {
         cst.root = editCore(entryUsed, edits);
       } catch (e) {
