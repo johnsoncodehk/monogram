@@ -4,7 +4,7 @@ name: README auto-regen
 # SINGLE commit:
 #   - the cross-language bug ledger (<!-- issues:start/end -->), via `npm run bench:issues`
 #     (test/issue-table.ts) — Monogram's DERIVED grammars vs each hand-written OFFICIAL one on
-#     real reported bugs across TS / TSX / HTML / CSS / JS + Vue. Corpus-free: in-repo issue
+#     real reported bugs across TS / TSX / HTML / CSS / JS. Corpus-free: in-repo issue
 #     cases + the official grammars only.
 #   - the per-language alignment table (<!-- coverage:start/end -->), via
 #     `node test/coverage-table.ts --write` — Monogram's parser vs the OFFICIAL parser over a
@@ -14,7 +14,7 @@ name: README auto-regen
 # Both grade against the official grammars, so every one must be present or the run refuses to
 # write (issue-table.ts aborts on a partial table; coverage-table.ts exits non-zero rather than
 # clobber a cell with "—"). A failure in either regen aborts the job before the commit, so the
-# README is never left half-updated. Vue's official grammars are VENDORED at test/fixtures/vue-official/.
+# README is never left half-updated.
 #
 # Determinism: same inputs → same README. The official grammars are pinned at a VS Code tag; the
 # four corpora are pinned to commits (the TS tests/cases count alone swings the parser numbers).
@@ -32,14 +32,11 @@ on:
       - 'src/**'
       # The derived grammars both axes grade.
       - '*.tmLanguage.json'
-      # The ledger grader + per-language issue-case data + the Vue harness/fixtures.
+      # The ledger grader + per-language issue-case data.
       - 'test/issue-table.ts'
       - 'test/issue-cases.ts'
       - 'test/tsx-issue-cases.ts'
       - 'test/html-issue-cases.ts'
-      - 'test/vue-issue-cases.ts'
-      - 'test/vue-grammar-harness.ts'
-      - 'test/fixtures/vue-official/**'
       # The coverage metric harness.
       - 'test/src-coverage*.ts'
       - 'test/scope-gap*.ts'

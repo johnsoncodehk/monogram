@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { token, rule, defineGrammar, many, opt, sep, seq, plus, oneOf, range, star, noneOf, never } from '../src/api.ts';
-import { createLexer } from '../src/gen-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateMonarch } from '../src/gen-monarch.ts';
@@ -53,7 +53,7 @@ try {
 check('defineGrammar rejects declaring BOTH indent and newline', bothRejected);
 
 // ── 1. Lexer: NEWLINE emission, flow suspension, blank/comment lines, NO indent tokens ──
-const { tokenize } = createLexer(g);
+const tokenize = compileTokenizer(lexSpecOf(g));
 const countNL = (s: string) => tokenize(s).filter(t => t.type === 'Newline').length;
 const hasIndentTokens = (s: string) => tokenize(s).some(t => t.type === 'Indent' || t.type === 'Dedent');
 

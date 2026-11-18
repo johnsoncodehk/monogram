@@ -1,0 +1,21 @@
+{"spec":{"name":"sljs","tokens":[{"name":"Ident","pattern":{"type":"seq","items":[{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"},{"type":"range","from":"A","to":"Z"},{"type":"char","value":"_"},{"type":"char","value":"$"}]},{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"},{"type":"range","from":"A","to":"Z"},{"type":"range","from":"0","to":"9"},{"type":"char","value":"_"},{"type":"char","value":"$"}]},"min":0,"greedy":true}]},"flags":[],"scope":"variable","identifier":true},{"name":"Number","pattern":{"type":"seq","items":[{"type":"charClass","negate":false,"items":[{"type":"range","from":"0","to":"9"}]},{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"0","to":"9"}]},"min":0,"greedy":true}]},"flags":[],"scope":"constant.numeric"},{"name":"LineComment","pattern":{"type":"seq","items":["//",{"type":"repeat","body":{"type":"charClass","negate":true,"items":[{"type":"char","value":"\n"}]},"min":0,"greedy":true}]},"flags":["skip"],"scope":"comment.line"},{"name":"BlockComment","pattern":{"type":"seq","items":["/*",{"type":"repeat","body":{"type":"alt","items":[{"type":"charClass","negate":true,"items":[{"type":"char","value":"*"}]},{"type":"seq","items":["*",{"type":"charClass","negate":true,"items":[{"type":"char","value":"/"}]}]}]},"min":0,"greedy":true},"*/"]},"flags":["skip"],"scope":"comment.block"}],"literals":["(",")","return",";","+","-","*","/"],"markup":null,"indent":null,"newline":null},
+"types":["","Ident","Number"],
+"cases":[
+["(a);",[0,0,1,0,1,1,1,0,0,2,1,0,0,3,1,0]],
+["1 + 2;",[2,0,1,0,0,2,1,0,2,4,1,0,0,5,1,0]],
+["return;",[1,0,6,0,0,6,1,0]],
+["return\t1;",[1,0,6,0,2,7,1,0,0,8,1,0]],
+["return\n1;",[1,0,6,0,2,7,1,1,0,8,1,0]],
+["return\nx;",[1,0,6,0,1,7,1,1,0,8,1,0]],
+["return\r1;",[1,0,6,0,2,7,1,1,0,8,1,0]],
+["return 1;",[1,0,6,0,2,7,1,0,0,8,1,0]],
+["return 1;",[1,0,6,0,2,7,1,1,0,8,1,0]],
+["return x;",[1,0,6,0,1,7,1,1,0,8,1,0]],
+["return\r\n1;",[1,0,6,0,2,8,1,1,0,9,1,0]],
+["return (1);",[1,0,6,0,0,7,1,0,2,8,1,0,0,9,1,0,0,10,1,0]],
+["return 1 + 2;",[1,0,6,0,2,7,1,0,0,9,1,0,2,11,1,0,0,12,1,0]],
+["return /*\n*/ 1;",[1,0,6,0,2,13,1,1,0,14,1,0]],
+["return /*\r*/ 1;",[1,0,6,0,2,13,1,1,0,14,1,0]],
+["return // c\n 1;",[1,0,6,0,2,13,1,1,0,14,1,0]],
+["return /* c */ 1;",[1,0,6,0,2,15,1,0,0,16,1,0]]
+]}

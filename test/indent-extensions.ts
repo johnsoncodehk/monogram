@@ -25,14 +25,14 @@
 // field) tokenizes byte-identically, which the yaml gates already enforce.
 import { token, rule, defineGrammar, alt, many, many1, opt, seq, oneOf, noneOf, range, star, plus, never } from '../src/api.ts';
 import type { IndentConfig } from '../src/types.ts';
-import { createLexer } from '../src/gen-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { cond ? ok++ : (fail++, console.log('  ✗', label)); };
 
 type Tok = { type: string; text: string };
 const types = (toks: Tok[]) => toks.map(t => `${t.type || 'punct'}:${t.text}`);
-const lexed = (g: ReturnType<typeof defineGrammar>, src: string): Tok[] => createLexer(g as any).tokenize(src) as any;
+const lexed = (g: ReturnType<typeof defineGrammar>, src: string): Tok[] => compileTokenizer(lexSpecOf(g as any))(src) as any;
 
 // Shared toy tokens
 const lower = range('a', 'z');

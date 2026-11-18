@@ -112,7 +112,7 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
     : `${stateful ? 'emit' : 'push'}(pos, ${endExpr}, ${kid}, lid_of(src.slice(pos, ${endExpr}))); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
-  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (gen-lexer.ts).
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = (v: string) => (identLike.has(name) ? `${v} = lx_ext(src, ${v}); ` : '');
   if (t.kind === 'run') return `    if (${gate}${rangeCond('c', t.first)}) {
       let e = pos + 1;
@@ -219,7 +219,7 @@ function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: 
       while (p < n && src.charCodeAt(p) === 32) p++;
       if (p >= n) { pos = p; lineStart = false; continue; }
       const ch = src.charCodeAt(p);
-      if (ch === 10 || ch === 13) {   // LF/CR only — the interpreter's newline mode rejects LS/PS (gen-lexer.ts blank-line check)
+      if (ch === 10 || ch === 13) {   // LF/CR only — the interpreter's newline mode rejects LS/PS (emit-lexer.ts blank-line check)
         pos = p + 1; if (ch === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
         continue;
       }
@@ -258,8 +258,7 @@ function tsFlagTable(name: string, flags: boolean[]): string {
   return `const ${name}: number[] = [${flags.map((b) => (b ? 1 : 0)).join(', ')}];`;
 }
 
-function lexer(ir: ParserIR): string {
-  const ids = buildLexIdPlan(ir);
+function lexer(ir: ParserIR, ids: LexIdPlan): string {
   const defs: string[] = [];
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
@@ -416,7 +415,7 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
 `
     : '  const push = (off: number, end: number, kid: number, lid: number) => { toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false; };\n';
   const loopBody = `${nlBoundary}    const c = src.charCodeAt(pos);
-    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
+    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (emit-lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
   if (rxOnly) {
@@ -675,8 +674,8 @@ function parse${r.name}W(): Frame | null {
     maxLook = 0;
     const n = parseTopOneW();
     if (n === null) { pos = sp; break; }
-    const ext = Math.max(n.tokEnd, maxLook);
-    localE.push({ tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.off, end: n.end, kidStart: spans.length, kidCount: 1 });
+    const ext = lexIdx(Math.max(n.tokEnd, maxLook));
+    localE.push({ tokStart: lexIdx(n.tokStart), tokEnd: lexIdx(n.tokEnd), ext, off: n.off, end: n.end, kidStart: spans.length, kidCount: 1 });
     absorbFrame(kids, spans, n);
   }
   _entries = localE;
@@ -701,9 +700,9 @@ function parse${r.name}W(): Frame | null {
   if (kids.length === before) return null;
   const sp0 = spans[spanBefore]!;
   const sp1 = spans[spans.length - 1]!;
-  const tokStart = sp0.tokStart;
-  const tokEnd = sp1.tokEnd;
-  const ext = Math.max(tokEnd, maxLook);
+  const tokStart = lexIdx(sp0.tokStart);
+  const tokEnd = lexIdx(sp1.tokEnd);
+  const ext = lexIdx(Math.max(sp1.tokEnd, maxLook));
   const meta: EntryMeta = { tokStart, tokEnd, ext, off: sp0.off, end: sp1.end, kidStart, kidCount: 1 };
   return { seg: { kidStart, kidCount: 1, tokStart, tokEnd, ext }, meta };
 }
@@ -718,12 +717,14 @@ function parse${r.name}W(): Frame | null {
   optW(() => callRuleW(parse${plan.loopRule}W, kids, spans), kids, spans);
   const leafSp = spans[spanStart]!;
   const hasStmt = spans.length > spanStart + 1;
-  const tokEnd = hasStmt ? spans[spanStart + 1]!.tokEnd : leafSp.tokEnd;
+  const rawEnd = hasStmt ? spans[spanStart + 1]!.tokEnd : leafSp.tokEnd;
+  const tokEnd = lexIdx(rawEnd);
+  const tokStart = lexIdx(leafSp.tokStart);
   const end = hasStmt ? spans[spanStart + 1]!.end : leafSp.end;
-  const ext = Math.max(tokEnd, maxLook);
+  const ext = lexIdx(Math.max(rawEnd, maxLook));
   const kidCount = kids.length - kidStart;
-  const meta: EntryMeta = { tokStart: leafSp.tokStart, tokEnd, ext, off: leafSp.off, end, kidStart, kidCount };
-  return { seg: { kidStart, kidCount, tokStart: leafSp.tokStart, tokEnd, ext }, meta };
+  const meta: EntryMeta = { tokStart, tokEnd, ext, off: leafSp.off, end, kidStart, kidCount };
+  return { seg: { kidStart, kidCount, tokStart, tokEnd, ext }, meta };
 }
 function parse${r.name}W(): Frame | null {
   const save = pos;
@@ -744,7 +745,7 @@ ${headBlock}  for (;;) {
 }`;
 }
 
-/** Entry rule that records per-top-kid EntryMeta (+ Node.ext oracle) via parseTopOne (shape A). */
+/** Entry rule that records per-top-kid EntryMeta via parseTopOne (shape A). */
 function rdEntryWithReuseA(r: RdRule, plan: ReusePlanA, _ids: LexIdPlan): string {
   return `type EntryMeta = { tokStart: number; tokEnd: number; ext: number; off: number; end: number; kidStart: number; kidCount: number };
 let _entries: EntryMeta[] = [];
@@ -761,9 +762,7 @@ function parse${r.name}(): Node | null {
     maxLook = 0;
     const n = parseTopOne();
     if (n === null) { pos = sp; break; }
-    const ext = Math.max(n.tokEnd, maxLook);
-    n.ext = ext; // CST oracle for validate assert; reuse decisions read _entries
-    localE.push({ tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.offset, end: n.end, kidStart: kids.length, kidCount: 1 });
+    localE.push({ tokStart: lexIdx(sp), tokEnd: lexIdx(pos), ext: lexIdx(Math.max(pos, maxLook)), off: n.offset, end: n.end, kidStart: kids.length, kidCount: 1 });
     kids.push(n);
   }
   _entries = localE;
@@ -784,14 +783,16 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string 
   const headFn = plan.hasHead && plan.headRule
     ? `function parseHeadSeg(kids: Cst[]): { seg: Seg; meta: EntryMeta } | null {
   maxLook = 0;
+  const sp = pos;
   const kidStart = kids.length;
   const before = kids.length;
   opt(() => callRule(parse${plan.headRule}, kids), kids);
   if (kids.length === before) return null;
   const n = kids[before] as Node;
-  const ext = Math.max(n.tokEnd, maxLook);
-  const meta: EntryMeta = { tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.offset, end: n.end, kidStart, kidCount: 1 };
-  return { seg: { kidStart, kidCount: 1, tokStart: n.tokStart, tokEnd: n.tokEnd, ext }, meta };
+  const ext = lexIdx(Math.max(pos, maxLook));
+  const tokStart = lexIdx(sp), tokEnd = lexIdx(pos);
+  const meta: EntryMeta = { tokStart, tokEnd, ext, off: n.offset, end: n.end, kidStart, kidCount: 1 };
+  return { seg: { kidStart, kidCount: 1, tokStart, tokEnd, ext }, meta };
 }
 `
     : '';
@@ -808,12 +809,12 @@ ${headFn}function parseLoopSeg(kids: Cst[]): { seg: Seg; meta: EntryMeta } | nul
   opt(() => callRule(parse${plan.loopRule}, kids), kids);
   const leaf = kids[kidStart]!;
   const hasStmt = kids.length > kidStart + 1;
-  const tokEnd = hasStmt ? kids[kidStart + 1]!.tokEnd : leaf.tokEnd;
   const end = hasStmt ? kids[kidStart + 1]!.end : leaf.end;
-  const ext = Math.max(tokEnd, maxLook);
+  const ext = lexIdx(Math.max(pos, maxLook));
+  const tokStart = lexIdx(sp), tokEnd = lexIdx(pos);
   const kidCount = kids.length - kidStart;
-  const meta: EntryMeta = { tokStart: leaf.tokStart, tokEnd, ext, off: leaf.offset, end, kidStart, kidCount };
-  return { seg: { kidStart, kidCount, tokStart: leaf.tokStart, tokEnd, ext }, meta };
+  const meta: EntryMeta = { tokStart, tokEnd, ext, off: leaf.offset, end, kidStart, kidCount };
+  return { seg: { kidStart, kidCount, tokStart, tokEnd, ext }, meta };
 }
 function parse${r.name}(): Node | null {
   const save = pos;
@@ -839,7 +840,7 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
-    ? `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end, tokStart: node.tokStart, tokEnd: node.tokEnd }; }\n`
+    ? `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end }; }\n`
     : '';
   const BIN = `{ ${r.binary.map((b) => `${lidOf(ids, b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ')} }`;
@@ -897,10 +898,10 @@ ${groups.map((g) => {
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
     const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
     const tplPart = hasTpl ? `
-    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end, tokStart: left.tokStart, tokEnd: pos }; continue ledLoop; } }` : '';
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end }; continue ledLoop; } }` : '';
     return `    switch (t.kid) {
 ${groups.map((g) => `      case ${g.key}:
-        if (!tailClosed) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end, tokStart: left.tokStart, tokEnd: pos }; continue ledLoop; }
+        if (!tailClosed) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end }; continue ledLoop; }
         break;`).join('\n')}
     }${tplPart}`;
   })();
@@ -926,15 +927,15 @@ function ${r.name}_bp(minBp: number): Node | null {
 ${ledSwitch}
 ${postfixTokSwitch}
     const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp) { const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end, tokStart: left.tokStart, tokEnd: pos }; tailClosed = true; continue; }
+    if (!tailClosed && post !== undefined && post > minBp) { const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; continue; }
     const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
     const ledSave = pos;
-    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 };
+    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
     pos++;
     const rhs = ${r.name}_bp(info.rbp);
     if (rhs === null) { pos = ledSave; break; }
-    left = { rule: ${J(r.cstName)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end, tokStart: left.tokStart, tokEnd: pos };
+    left = { rule: ${J(r.cstName)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end };
   }
   return left;
 }
@@ -946,16 +947,16 @@ ${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const ki
   // Below is non-capped: a sub-parse may leave _capped set (e.g. grouping a capped arrow),
   // so force it false after — only the capped arms above produce a capped node.
   const _r = ((): Node | null => {
-${tplNud}  if (${r.name}_ATOM.has(t.kid)) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }; pos++; return { rule: ${J(r.cstName)}, children: [leaf], offset: t.off, end: t.end, tokStart: leaf.tokStart, tokEnd: pos }; }
+${tplNud}  if (${r.name}_ATOM.has(t.kid)) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end }; pos++; return { rule: ${J(r.cstName)}, children: [leaf], offset: t.off, end: t.end }; }
 ${bracketNudSwitch}
   const pbp = ${r.name}_PRE[t.lid];
   if (pbp !== undefined) {
     const save = pos;
-    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 };
+    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
     pos++;
     const operand = ${r.name}_bp(pbp);
     if (operand === null) { pos = save; return null; }
-    return { rule: ${J(r.cstName)}, children: [opLeaf, operand], offset: t.off, end: operand.end, tokStart: save, tokEnd: pos };
+    return { rule: ${J(r.cstName)}, children: [opLeaf, operand], offset: t.off, end: operand.end };
   }
 ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${seq.length ? seq.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return branch(${J(r.cstName)}, kids, save); pos = save; }`).join('\n')}
   return null;
@@ -1242,15 +1243,14 @@ function altLitW(opts: [number, string][], kids: any[], spans: BWSpan[]): boolea
 }
 ${matchTemplateW}${ruleFnsW}
 
-/** Default CST builder — same object shape as parse(). Uses ambient pos/_bSave for tok spans. */
+/** Default CST builder — same object shape as parse(). */
 export const cstBuilder: Builder<Cst> = {
   leaf(tokenType, _kid, _lid, off, end) {
     if (tokenType === '$punct') return null;
-    return { tokenType, offset: off, end, tokStart: pos, tokEnd: pos + 1 };
+    return { tokenType, offset: off, end };
   },
   node(rule, children, off, end) {
-    // _bSave is set by branchW/nodeW immediately before this callback.
-    return { rule, children, offset: off, end, tokStart: _bSave, tokEnd: pos };
+    return { rule, children, offset: off, end };
   },${reuse ? `
   shift(h, byteDelta, tokDelta) {
     shiftSubtree(h, byteDelta, tokDelta);
@@ -1266,6 +1266,7 @@ export const cstBuilder: Builder<Cst> = {
 export function parseWith<H>(src: string, builder: Builder<H>): H | null {
   _src = src;
   toks = lex(src);
+  _splitRems = [];
   pos = 0;
   maxLook = 0;
   _builder = builder;
@@ -1281,6 +1282,7 @@ export function parseWith<H>(src: string, builder: Builder<H>): H | null {
 function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>): { root: H | null; entries: any[]; entryHs: any[]; segs: any[] } {
   _src = text;
   toks = toksFromMeta(text, meta);
+  _splitRems = [];
   pos = 0;
   maxLook = 0;
   _builder = builder;
@@ -1314,6 +1316,7 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
+  _splitRems = [];
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   _builder = builder;
   const mid: H[] = [];
@@ -1346,35 +1349,35 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     return { root: r as H, entries: newEntries, entryHs: children, reused: prefixKids.length + adopted.length };
   };
   const tryHit = (): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    if (pos < suffixBound) return null;
+    if (lexIdx(pos) < suffixBound) return null;
     if (suffixCand.length === 0) {
-      if (pos === newN) return finish(0);
+      if (lexIdx(pos) === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === lexIdx(pos));
     if (hit >= 0) return finish(hit);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
   }
   for (;;) {
     if (pos >= toks.length) {
-      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
       return tryHit();
     }
     maxLook = 0;
     const sp = pos;
     const fr = parseTopOneW();
     if (fr === null || fr.hs.length !== 1) { pos = sp; return null; }
-    const ext = Math.max(fr.tokEnd, maxLook);
-    midMeta.push({ tokStart: fr.tokStart, tokEnd: fr.tokEnd, ext, off: fr.off, end: fr.end, kidStart: 0, kidCount: 1 });
+    const ext = lexIdx(Math.max(fr.tokEnd, maxLook));
+    midMeta.push({ tokStart: lexIdx(fr.tokStart), tokEnd: lexIdx(fr.tokEnd), ext, off: fr.off, end: fr.end, kidStart: 0, kidCount: 1 });
     mid.push(fr.hs[0] as H);
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
   }
 }
 ` : ''}${shapeB ? `
@@ -1401,6 +1404,7 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
+  _splitRems = [];
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   _builder = builder;
   const midKids: H[] = [];
@@ -1457,19 +1461,19 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     return { root: r as H, segs: newSegs, entries: newEntries, entryHs: children, reused: prefixSegs.length + adoptedSegs.length };
   };
   const tryHit = (): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    if (pos < suffixBound) return null;
+    if (lexIdx(pos) < suffixBound) return null;
     if (suffixCand.length === 0) {
-      if (pos === newN) return finish(0);
+      if (lexIdx(pos) === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === lexIdx(pos));
     if (hit >= 0) return finish(hit);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
   }
   ${hasHeadB ? `if (prefixLen === 0) {
     const spans: BWSpan[] = [];
@@ -1479,26 +1483,26 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       midMeta.push({ ...pair.meta, kidStart: 0 });
       const hit = tryHit();
       if (hit) return hit;
-      if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+      if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
     }
   }
   ` : ''}for (;;) {
     if (pos >= toks.length) {
-      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
       return tryHit();
     }
     const before = midKids.length;
     const spans: BWSpan[] = [];
     const pair = parseLoopSegW(midKids, spans);
     if (pair === null) {
-      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
       return tryHit();
     }
     midSegs.push({ kidStart: before, kidCount: midKids.length - before, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
     midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
   }
 }
 ` : ''}
@@ -1991,11 +1995,11 @@ function checkStreamEq(text: string, meta: AlignMeta[]): boolean {
   const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(text)' : 'toMeta(lex(text))';
   const reuseFns = topReuse ? `
 function cstJSON(n: Cst): string {
-  return JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' || k === 'ext' ? undefined : v));
+  return JSON.stringify(n);
 }
 function checkTreeEq(text: string, root: Node | null): boolean {
   try {
-    const fresh = (_src = text, parse(lex(text)));
+    const fresh = parse(text);
     if (root === null || fresh === null) return root === fresh;
     return cstJSON(root) === cstJSON(fresh as Cst);
   } catch { return root === null; }
@@ -2003,9 +2007,6 @@ function checkTreeEq(text: string, root: Node | null): boolean {
 function shiftSubtree(n: Cst, byteDelta: number, tokDelta: number): void {
   n.offset += byteDelta;
   n.end += byteDelta;
-  n.tokStart += tokDelta;
-  n.tokEnd += tokDelta;
-  if ('ext' in n && typeof (n as Node).ext === 'number') (n as Node).ext! += tokDelta;
   if ('children' in n) for (const c of n.children) shiftSubtree(c, byteDelta, tokDelta);
 }
 function shiftEntryMeta(m: EntryMeta, byteDelta: number, tokDelta: number): void {
@@ -2021,10 +2022,7 @@ ${shapeA ? `function assertEntriesVsNodes(entries: EntryMeta[], oldRoot: Node): 
   for (let i = 0; i < entries.length; i++) {
     const nd = oldKids[i]!;
     const e = entries[i]!;
-    const ndExt = nd.ext ?? nd.tokEnd;
-    if (e.tokStart !== nd.tokStart) throw new Error('tok_start entry ' + i);
-    if (e.tokEnd !== nd.tokEnd) throw new Error('tok_end entry ' + i);
-    if (e.ext !== ndExt) throw new Error('ext entry ' + i);
+    if (e.tokStart > e.tokEnd || e.ext < e.tokEnd || (i > 0 && entries[i - 1]!.tokEnd !== e.tokStart)) throw new Error('tok span entry ' + i);
     if (e.off !== nd.offset) throw new Error('off entry ' + i);
     if (e.end !== nd.end) throw new Error('end entry ' + i);
   }
@@ -2049,6 +2047,7 @@ function tryReuseTop(oldRoot: Node, oldEntries: EntryMeta[], newText: string, ne
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
+  _splitRems = [];
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   const mid: Node[] = [];
   const midMeta: EntryMeta[] = [];
@@ -2070,41 +2069,37 @@ function tryReuseTop(oldRoot: Node, oldEntries: EntryMeta[], newText: string, ne
     }
     const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
     const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
-    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
-    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
-    return { root: { rule: oldRoot.rule, children, offset, end, tokStart, tokEnd }, entries: newEntries, reused: prefixKids.length + adopted.length };
+    return { root: { rule: oldRoot.rule, children, offset, end }, entries: newEntries, reused: prefixKids.length + adopted.length };
   };
   const tryHit = (): { root: Node; entries: EntryMeta[]; reused: number } | null => {
-    if (pos < suffixBound) return null;
+    if (lexIdx(pos) < suffixBound) return null;
     if (suffixCand.length === 0) {
-      if (pos === newN) return finish(0);
+      if (lexIdx(pos) === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === lexIdx(pos));
     if (hit >= 0) return finish(hit);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
   }
   for (;;) {
     if (pos >= toks.length) {
-      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
       return tryHit() ?? null;
     }
     maxLook = 0;
     const sp = pos;
     const n = parseTopOne();
     if (n === null) { pos = sp; return null; }
-    const ext = Math.max(n.tokEnd, maxLook);
-    n.ext = ext;
-    midMeta.push({ tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.offset, end: n.end, kidStart: 0, kidCount: 1 });
+    midMeta.push({ tokStart: lexIdx(sp), tokEnd: lexIdx(pos), ext: lexIdx(Math.max(pos, maxLook)), off: n.offset, end: n.end, kidStart: 0, kidCount: 1 });
     mid.push(n);
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
   }
 }
 ` : ''}${shapeB ? `function assertEntriesVsSegs(entries: EntryMeta[], oldSegs: Seg[], oldRoot: Node): void {
@@ -2149,6 +2144,7 @@ function tryReuseSeg(oldRoot: Node, oldSegs: Seg[], oldEntries: EntryMeta[], new
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
+  _splitRems = [];
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   const midKids: Cst[] = [];
   const midSegs: Seg[] = [];
@@ -2197,24 +2193,22 @@ function tryReuseSeg(oldRoot: Node, oldSegs: Seg[], oldEntries: EntryMeta[], new
     }
     const offset = newEntries.length > 0 ? newEntries[0]!.off : 0;
     const end = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.end : offset;
-    const tokStart = newEntries.length > 0 ? newEntries[0]!.tokStart : 0;
-    const tokEnd = newEntries.length > 0 ? newEntries[newEntries.length - 1]!.tokEnd : 0;
-    return { root: { rule: oldRoot.rule, children, offset, end, tokStart, tokEnd }, segs: newSegs, entries: newEntries, reused: prefixSegs.length + adoptedSegs.length };
+    return { root: { rule: oldRoot.rule, children, offset, end }, segs: newSegs, entries: newEntries, reused: prefixSegs.length + adoptedSegs.length };
   };
   const tryHit = (): { root: Node; segs: Seg[]; entries: EntryMeta[]; reused: number } | null => {
-    if (pos < suffixBound) return null;
+    if (lexIdx(pos) < suffixBound) return null;
     if (suffixCand.length === 0) {
-      if (pos === newN) return finish(0);
+      if (lexIdx(pos) === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === lexIdx(pos));
     if (hit >= 0) return finish(hit);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
   }
   ${hasHeadB ? `if (prefixLen === 0) {
     const pair = parseHeadSeg(midKids);
@@ -2223,34 +2217,34 @@ function tryReuseSeg(oldRoot: Node, oldSegs: Seg[], oldEntries: EntryMeta[], new
       midMeta.push({ ...pair.meta, kidStart: 0 });
       const hit = tryHit();
       if (hit) return hit;
-      if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+      if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
     }
   }
   ` : ''}for (;;) {
     if (pos >= toks.length) {
-      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
       return tryHit() ?? null;
     }
     const before = midKids.length;
     const pair = parseLoopSeg(midKids);
     if (pair === null) {
-      if (suffixCand.length === 0 && pos === newN) return finish(0);
+      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
       return tryHit() ?? null;
     }
     midSegs.push({ kidStart: before, kidCount: midKids.length - before, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
     midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
   }
 }
 ` : ''}` : `
 function cstJSON(n: Cst): string {
-  return JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' || k === 'ext' ? undefined : v));
+  return JSON.stringify(n);
 }
 function checkTreeEq(text: string, root: Node | null): boolean {
   try {
-    const fresh = (_src = text, parse(lex(text)));
+    const fresh = parse(text);
     if (root === null || fresh === null) return root === fresh;
     return cstJSON(root) === cstJSON(fresh as Cst);
   } catch { return root === null; }
@@ -2266,8 +2260,8 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       }
       if (next === null) {
         _src = text;
-        next = parse(toksFromMeta(text, prevToks)) as Node | null;
-        if (next === null) { prevToks = ${freshMeta}; next = parse(toksFromMeta(text, prevToks)) as Node | null; }
+        next = parseTokens(toksFromMeta(text, prevToks)) as Node | null;
+        if (next === null) { prevToks = ${freshMeta}; next = parseTokens(toksFromMeta(text, prevToks)) as Node | null; }
         entries = next !== null ? _entries.slice() : [];
         reused = 0;
       }
@@ -2286,8 +2280,8 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       }
       if (next === null) {
         _src = text;
-        next = parse(toksFromMeta(text, prevToks)) as Node | null;
-        if (next === null) { prevToks = ${freshMeta}; next = parse(toksFromMeta(text, prevToks)) as Node | null; nextSegs = next !== null ? _segs.slice() : []; }
+        next = parseTokens(toksFromMeta(text, prevToks)) as Node | null;
+        if (next === null) { prevToks = ${freshMeta}; next = parseTokens(toksFromMeta(text, prevToks)) as Node | null; nextSegs = next !== null ? _segs.slice() : []; }
         else { nextSegs = _segs.slice(); }
         entries = next !== null ? _entries.slice() : [];
         reused = 0;
@@ -2299,8 +2293,8 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       align = validate ? { ...core, reused, streamEq, treeEq } : { ...core, reused };`
     : `      const reused = 0;
       _src = text;
-      root = parse(toksFromMeta(text, prevToks)) as Node | null;
-      if (root === null) { prevToks = ${freshMeta}; root = parse(toksFromMeta(text, prevToks)) as Node | null; }
+      root = parseTokens(toksFromMeta(text, prevToks)) as Node | null;
+      if (root === null) { prevToks = ${freshMeta}; root = parseTokens(toksFromMeta(text, prevToks)) as Node | null; }
       let streamEq = false, treeEq = false;
       if (validate) { try { streamEq = checkStreamEq(text, prevToks); treeEq = checkTreeEq(text, root); } catch { streamEq = false; treeEq = root === null; } }
       align = validate ? { ...core, reused, streamEq, treeEq } : { ...core, reused };`;
@@ -2313,13 +2307,13 @@ function checkTreeEq(text: string, root: Node | null): boolean {
   let entries: EntryMeta[] = [];`
     : '';
   const docParseInit = shapeB
-    ? `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;
+    ? `  let root: Node | null = parse(src) as Node | null;
   segs = root !== null ? _segs.slice() : [];
   entries = root !== null ? _entries.slice() : [];`
     : shapeA
-    ? `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;
+    ? `  let root: Node | null = parse(src) as Node | null;
   entries = root !== null ? _entries.slice() : [];`
-    : `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;`;
+    : `  let root: Node | null = parse(src) as Node | null;`;
   const code = `export type Edit = { start: number; end: number; text: string };
 // Packed Doc-state token. kind → kid+KIND_STR; text → src.slice(off,end);
 // nl/lc/lb/hd packed in flags; pd/fd/td are narrow depths (paren/flow/template).
@@ -2391,7 +2385,7 @@ ${editParse}
         try {
           prevToks = ${freshMeta};
           _src = text;
-          root = parse(toksFromMeta(text, prevToks)) as Node | null;${shapeA || shapeB ? `
+          root = parseTokens(toksFromMeta(text, prevToks)) as Node | null;${shapeA || shapeB ? `
           entries = root !== null ? _entries.slice() : [];` : ''}${shapeB ? `
           segs = root !== null ? _segs.slice() : [];` : ''}
           align = { oldN: oldToks.length, newN: prevToks.length, prefix: 0, suffix: 0, relexed: prevToks.length, reused: 0 };
@@ -3826,6 +3820,7 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
   _astCustoms = opts?.customs ?? {};
   _src = src;
   toks = lex(src);
+  _splitRems = [];
   pos = 0;
   const root = parseAst${entry}();
   return root !== null && pos === toks.length ? (root as ${rootType}) : null;
@@ -3836,26 +3831,14 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
 export const tsTarget: Target = {
   name: 'typescript',
   ext: 'ts',
-  embedLexer(grammar: CstGrammar): string {
-    return lexer(portableIR(grammar));
-  },
-  emitLexer(grammar: CstGrammar): string {
-    return `// GENERATED by emit-portable.ts (tsTarget) — standalone TOKENIZER for grammar "${grammar.name ?? ''}".
-// import { tokenize } from './this-file'; tokenize(src) → Tok[]. The same lexer is embedded in
-// emitParser's output, so the parser's tokens are identical.
-type Tok = { off: number; end: number; nl: boolean; kid: number; lid: number };
-type RichTok = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
-
-${lexer(portableIR(grammar))}
-
-export function tokenize(src: string): RichTok[] {
-  return lex(src).map((t) => ({ kind: tok_kind(t), text: tok_text(src, t), off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
-}
-`;
-  },
-  emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
+  emitParser(grammar: CstGrammar): string {
     const ir = portableIR(grammar);
-    const ids = buildLexIdPlan(ir);
+    return emitTsLibrary(ir, buildLexIdPlan(ir));
+  },
+  emitRunner,
+};
+
+function emitTsLibrary(ir: ParserIR, ids: LexIdPlan): string {
     const reuse = topReusePlan(ir);
     const ruleFns = ir.rules.map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids);
@@ -3870,30 +3853,33 @@ function matchTemplate(interp: () => Node | null): Cst | null {
   if (t === null || t.kid !== ${kidOf(ids, '$templateHead')}) return null;
   const children: Cst[] = [];
   const save = pos;
-  children.push({ tokenType: '$templateHead', offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++;
+  children.push({ tokenType: '$templateHead', offset: t.off, end: t.end }); pos++;
   for (;;) {
     const expr = interp();
     if (expr === null) { pos = save; return null; }
     children.push(expr);
     const next = peek();
     if (next === null) { pos = save; return null; }
-    if (next.kid === ${kidOf(ids, '$templateMiddle')}) { children.push({ tokenType: '$templateMiddle', offset: next.off, end: next.end, tokStart: pos, tokEnd: pos + 1 }); pos++; continue; }
-    if (next.kid === ${kidOf(ids, '$templateTail')}) { children.push({ tokenType: '$templateTail', offset: next.off, end: next.end, tokStart: pos, tokEnd: pos + 1 }); pos++; break; }
+    if (next.kid === ${kidOf(ids, '$templateMiddle')}) { children.push({ tokenType: '$templateMiddle', offset: next.off, end: next.end }); pos++; continue; }
+    if (next.kid === ${kidOf(ids, '$templateTail')}) { children.push({ tokenType: '$templateTail', offset: next.off, end: next.end }); pos++; break; }
     pos = save; return null;
   }
-  return { rule: '$template', children, offset: children[0].offset, end: children[children.length - 1].end, tokStart: save, tokEnd: pos };
+  return { rule: '$template', children, offset: children[0].offset, end: children[children.length - 1].end };
 }
 ` : '';
-    return `// GENERATED by emit-portable.ts (tsTarget) — parser LIBRARY for grammar "${ir.grammarName}" (exports \`parse\`).
+    return `// GENERATED by emit-portable.ts (tsTarget) — parser LIBRARY for grammar "${ir.grammarName}" (exports \`tokenize\` + \`parse\`).
 // The CLI runner (stdin → CST JSON) is a SEPARATE piece — tsTarget.emitRunner(), appended by the harness.
 
 type Tok = { off: number; end: number; nl: boolean; kid: number; lid: number };
-type RichTok = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
-type Leaf = { tokenType: string; offset: number; end: number; tokStart: number; tokEnd: number };
-type Node = { rule: string; children: Cst[]; offset: number; end: number; tokStart: number; tokEnd: number; ext?: number };
-type Cst = Node | Leaf;
+export type Token = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
+// The CST is spans over the source: a leaf's text is src.slice(offset, end). Token indices are
+// parse bookkeeping (the parser splits '>'-led punctuators, and incremental reuse shifts them),
+// so they are not part of it.
+export type Leaf = { tokenType: string; offset: number; end: number };
+export type Node = { rule: string; children: Cst[]; offset: number; end: number };
+export type Cst = Node | Leaf;
 
-${lexerSrc ?? ''}
+${lexer(ir, ids)}
 
 let toks: Tok[] = [];
 let pos = 0;
@@ -3903,6 +3889,15 @@ let _suppressNext: Set<number> | null = null;
 let _suppressCur: Set<number> | null = null;
 let _src = '';
 function peek(): Tok | null { maxLook = Math.max(maxLook, pos + 1); return pos < toks.length ? toks[pos] : null; }
+// Indices of the '>' remainders _splitGt spliced into toks. Reuse metadata lives in the
+// lexer's index space (the edit alignment's), so parse positions are mapped back through lexIdx.
+let _splitRems: number[] = [];
+function lexIdx(p: number): number {
+  if (_splitRems.length === 0) return p;
+  let n = 0;
+  for (let i = 0; i < _splitRems.length; i++) if (_splitRems[i] < p) n++;
+  return p - n;
+}
 // Match a single '>' even when the lexer tokenized a longer '>'-led punct
 // (>>, >=, >>>, >>=, >>>=): split the leading '>' and splice the remainder
 // back as the next token (mirrors Parser::match_gt / matchPuLitGT).
@@ -3911,6 +3906,8 @@ function _splitGt(lid: number): void {
   const t = toks[pos];
   if (t.end - t.off <= 1 || _src.charCodeAt(t.off) !== 62) return;
   const rem = _src.slice(t.off + 1, t.end);
+  for (let i = 0; i < _splitRems.length; i++) if (_splitRems[i] > pos) _splitRems[i]++;
+  _splitRems.push(pos + 1);
   toks.splice(pos + 1, 0, mk_tok(t.off + 1, t.end, t.nl, 0, lid_of(rem)));
   toks[pos] = mk_tok(t.off, t.off + 1, t.nl, 0, ${lidOf(ids, '>')});
 }
@@ -3922,23 +3919,21 @@ function headLeafText(node: Cst): string {
 function branch(rule: string, kids: Cst[], save: number): Node {
   const offset = kids.length > 0 ? kids[0].offset : (save < toks.length ? toks[save].off : 0);
   const end = kids.length > 0 ? kids[kids.length - 1].end : offset;
-  return { rule, children: kids, offset, end, tokStart: save, tokEnd: pos };
+  return { rule, children: kids, offset, end };
 }
 function node(rule: string, kids: Cst[], fallbackOff: number = 0): Node {
-  // Pratt LED path: tokStart is the leftmost operand's start (not the led trigger pos).
-  const tokStart = kids.length ? kids[0].tokStart : pos;
-  return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff, tokStart, tokEnd: pos };
+  return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff };
 }
 function matchLit(lid: number, ttype: string, kids: Cst[]): boolean {
   _splitGt(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
-  if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++; return true;
+  if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end }); pos++; return true;
 }
 function matchTok(kid: number, name: string, kids: Cst[]): boolean {
   const t = peek();
   if (t === null || t.kid !== kid) return false;
-  kids.push({ tokenType: name, offset: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1 }); pos++; return true;
+  kids.push({ tokenType: name, offset: t.off, end: t.end }); pos++; return true;
 }
 function callRule(fn: () => Node | null, kids: Cst[]): boolean {
   const n = fn();
@@ -3971,16 +3966,20 @@ function altLit(opts: [number, string][], kids: Cst[]): boolean {
 
 ${matchTemplate}${ruleFns}
 
-// Library entry, in two composable phases. tokenize() lexes ONCE; pass its tokens to parse().
-// Want both the token stream and the CST? Lex once: const t = tokenize(src); parse(t) — no
-// re-lexing. Want only the CST? (_src = src, parse(lex(src))). (tokenize also records the source for
-// head-leaf lookups.) No I/O — see emitRunner() for the stdin → JSON wrapper.
-export function tokenize(src: string): RichTok[] {
-  _src = src;
+// Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
+// parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
+// any later call. No I/O — see emitRunner() for the stdin → JSON wrapper.
+export function tokenize(src: string): Token[] {
   return lex(src).map((t) => ({ kind: tok_kind(t), text: tok_text(src, t), off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
 }
-export function parse(tokens: Tok[]): Cst | null {
+export function parse(src: string): Cst | null {
+  _src = src;
+  return parseTokens(lex(src));
+}
+// The entry rule over a token list of the CURRENT _src (also driven by the edit session).
+function parseTokens(tokens: Tok[]): Cst | null {
   toks = tokens;
+  _splitRems = [];
   pos = 0;
   maxLook = 0;
   const root = parse${ir.entry}();
@@ -3989,14 +3988,15 @@ export function parse(tokens: Tok[]): Cst | null {
 
 ${(() => { const doc = docEditBlock(ir); return doc.code + '\n' + emitBuilderAddon(ir, ids, doc.parts); })()}
 `;
-  },
-  emitRunner(): string {
+}
+
+function emitRunner(): string {
     return `// CLI runner (harness only): stdin → CST JSON. Appended to the parser library by the gate;
 // NOT part of the emitted parser. The import is hoisted, so it may follow the library code.
 import { readFileSync } from 'node:fs';
 const _raw = readFileSync(0, 'utf8');
 const _editFast = process.argv.includes('edit-session-fast');
-const _cstJSON = (n: Cst) => JSON.stringify(n, (k, v) => (k === 'tokStart' || k === 'tokEnd' || k === 'ext' ? undefined : v));
+const _cstJSON = (n: Cst) => JSON.stringify(n);
 if (_editFast || process.argv.includes('edit-session')) {
   const { init, batches } = JSON.parse(_raw) as { init: string; batches: [number, number, string][][] };
   const doc = createDoc(init, { validate: !_editFast });
@@ -4007,30 +4007,28 @@ if (_editFast || process.argv.includes('edit-session')) {
   if (root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
   process.stdout.write(_cstJSON(root));
 } else if (process.argv.includes('tok-spans')) {
-  const _root = (_src = _raw, parse(lex(_raw)));
+  // Parse-consumption spans via a builder reading the parser cursor (pos / _bSave).
+  type _Span = { name: string; s: number; e: number; kids: _Span[] };
+  const _root = parseWith<_Span>(_raw, {
+    leaf: (tokenType) => (tokenType === '$punct' ? null : { name: tokenType, s: pos, e: pos + 1, kids: [] }),
+    node: (rule, children) => ({ name: rule, s: _bSave, e: pos, kids: children }),
+  });
   if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
-  const kids = 'children' in _root ? _root.children : [];
-  for (const k of kids) {
-    const name = 'rule' in k ? k.rule : k.tokenType;
-    process.stdout.write(name + '\\t' + k.tokStart + '\\t' + k.tokEnd + '\\n');
-  }
+  for (const k of _root.kids) process.stdout.write(k.name + '\\t' + k.s + '\\t' + k.e + '\\n');
   process.stdout.write('total\\t0\\t' + pos + '\\n');
 } else {
-  const _root = (_src = _raw, parse(lex(_raw)));
+  const _root = parse(_raw);
   if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
   process.stdout.write(_cstJSON(_root));
 }
 `;
-  },
-};
+}
 
-/** Emit TS parser; optional shape appends AST types + specialized parseAst. Without shape, byte-identical to tsTarget.emitParser(grammar, tsTarget.embedLexer(grammar)). */
+/** Emit TS parser; optional shape appends AST types + specialized parseAst. Without shape, byte-identical to tsTarget.emitParser(grammar). */
 export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
-  const lexerSrc = tsTarget.embedLexer(grammar);
-  const base = tsTarget.emitParser(grammar, lexerSrc);
-  if (!opts?.shape) return base;
-  const shapeIR = validateShapeOrThrow(grammar, opts.shape);
   const ir = portableIR(grammar);
   const ids = buildLexIdPlan(ir);
-  return base + emitShapeAstAddon(ir, shapeIR, ids);
+  const base = emitTsLibrary(ir, ids);
+  if (!opts?.shape) return base;
+  return base + emitShapeAstAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
 }

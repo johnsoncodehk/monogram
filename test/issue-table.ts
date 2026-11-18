@@ -5,10 +5,10 @@
 //  bugs only the official solved and which only Monogram solved.
 //
 //  Sources (all side-effect-free DATA modules): issue-cases.ts (TS, microsoft/TypeScript-
-//  TmLanguage), html-issue-cases.ts (textmate/html.tmbundle + VS Code), vue-issue-cases.ts
-//  (vuejs/language-tools). Official grammars: VS Code's installed TS/JS/HTML + the Vue
-//  fixtures (test/fixtures/vue-official). Each language is graded only if its official
-//  grammar is present, else skipped (the table keeps the languages it could grade).
+//  TmLanguage), tsx-issue-cases.ts, html-issue-cases.ts (textmate/html.tmbundle + VS Code),
+//  yaml-issue-cases.ts. Official grammars: VS Code's installed TS/TSX/HTML/CSS/JS + RedCMD's
+//  YAML. Each language is graded only if its official grammar is present, else skipped (the
+//  table keeps the languages it could grade).
 //
 //  Run:  node test/issue-table.ts            (print only)
 //        node test/issue-table.ts --write    (also rewrite the README block)
@@ -94,7 +94,7 @@ async function gradeTs(): Promise<Row[] | null> {
   return [...byId.values()];
 }
 
-// ── TSX: cases are {id, title, src, checks:[{at, want}]} (predicate-based, like Vue). Monogram's
+// ── TSX: cases are {id, title, src, checks:[{at, want}]} (predicate-based). Monogram's
 // typescriptreact (source.tsx) vs the official TypeScriptReact, both self-contained .tsx grammars.
 async function gradeTsx(): Promise<Row[] | null> {
   if (!existsSync(official.tsx)) return null;
@@ -214,7 +214,7 @@ for (const { name, rows } of langs) {
 if (process.argv.includes('--write')) {
   // CLOBBER GUARD: only write a COMPLETE table. The block replaces every language section, so a
   // partial environment (a missing official grammar → that language graded `null`/skipped, e.g. CI
-  // without VS Code or the Vue fixtures) would silently drop those sections and overwrite the full
+  // without VS Code) would silently drop those sections and overwrite the full
   // committed ledger with a subset. Refuse instead — the README must be regenerated where ALL
   // official grammars are present (locally, or the CI job that fetches/commits every one).
   if (skipped.length) { console.log(`\n✗ Refusing to --write a PARTIAL ledger: ${skipped.join(', ')} skipped (no official grammar). Provide every official grammar (set MONOGRAM_OFFICIAL_TM/TSX/HTML/CSS/JS) and retry.`); process.exit(1); }

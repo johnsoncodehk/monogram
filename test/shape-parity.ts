@@ -38,7 +38,7 @@ function stripSpans(v: unknown): unknown {
 type Emitted = {
   parseAst: (src: string, opts?: { customs?: ToyAstCustoms }) => unknown;
   tokenize: (src: string) => { off: number; end: number; nl: boolean; kid: number; lid: number }[];
-  parse: (toks: { off: number; end: number; nl: boolean; kid: number; lid: number }[]) => unknown;
+  parse: (src: string) => unknown;
   parseWith: (src: string, builder: {
     leaf: (tokenType: string, kid: number, lid: number, off: number, end: number) => unknown;
     node: (rule: string, children: unknown[], off: number, end: number) => unknown;
@@ -235,12 +235,7 @@ async function main(): Promise<void> {
     let diverge = 0, cstAcc = 0, astAcc = 0;
     for (const x of corpus) {
       let cst = false, ast = false, cstErr: string | null = null, astErr: string | null = null;
-      try {
-        const toks = mod.tokenize(x.src).map((t) => ({
-          off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid,
-        }));
-        try { cst = mod.parse(toks) !== null; } catch (e) { cstErr = String(e); }
-      } catch (e) { cstErr = String(e); }
+      try { cst = mod.parse(x.src) !== null; } catch (e) { cstErr = String(e); }
       try { ast = mod.parseAst(x.src, customs ? { customs } : undefined) !== null; }
       catch (e) { astErr = String(e); }
       if (cst) cstAcc++;
@@ -276,10 +271,7 @@ async function main(): Promise<void> {
 
   const accepts = (mod: Emitted, src: string, ast: boolean): boolean => {
     if (ast) return mod.parseAst(src) !== null;
-    const toks = mod.tokenize(src).map((t) => ({
-      off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid,
-    }));
-    return mod.parse(toks) !== null;
+    return mod.parse(src) !== null;
   };
   const txnExpect = {
     type: 'Program',
@@ -829,10 +821,7 @@ async function main(): Promise<void> {
           const r = tsMod!.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms });
           if (r !== null) realOk++;
           else {
-            const toks = tsMod!.tokenize(src).map((t) => ({
-              off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid,
-            }));
-            if (tsMod!.parse(toks) === null) realOk++; // both reject
+            if (tsMod!.parse(src) === null) realOk++; // both reject
             else console.error('  real-no-throw null while CST accepts', src.slice(0, 60));
           }
         } catch (e) {

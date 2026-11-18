@@ -1,0 +1,8 @@
+{"spec":{"name":"mini","tokens":[{"name":"Word","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"flags":[],"identifier":true},{"name":"Num","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"0","to":"9"}]},"min":1,"greedy":true},"flags":[]}],"literals":["+"],"markup":null,"indent":null,"newline":null},
+"types":["Word","","Num"],
+"cases":[
+["`x`","Unexpected character at offset 0: '`'"],
+["foo",[0,0,3,0]],
+["Ωmega",[0,0,5,0]],
+["foo + 12 + bar",[0,0,3,0,1,4,1,0,2,6,2,0,1,9,1,0,0,11,3,0]]
+]}

@@ -143,7 +143,7 @@ export type RuleIR = RdRule | PrattRule;
 // Stateful regex-vs-division disambiguation (the JS `/` problem): a `/` starts a regex
 // literal in expression context but is division after a value. The lexer threads the
 // previous token + a control-head paren stack to decide; the predicate sets are baked
-// from the grammar's `regexContext`. Mirrors gen-lexer.ts's prevIsValue exactly.
+// from the grammar's `regexContext`. Mirrors emit-lexer.ts's prevIsValue exactly.
 export type RegexCtx = {
   regexToken: string;          // the token flagged `regex`, gated on expression context
   identToken: string;          // identifier token kind (for the keyword-vs-value test)
@@ -169,7 +169,7 @@ export type TplCfg = {
   interpRule: string;   // the rule that parses each `${…}` hole (the Pratt expression rule)
 };
 
-// Newline-only mode (gen-lexer.ts L236–253, L677–747): engine-emitted NEWLINE tokens at
+// Newline-only mode (emit-lexer.ts): engine-emitted NEWLINE tokens at
 // significant line boundaries; flowOpen/flowClose suspend; comment-only lines are skipped.
 export type NewlineCfg = {
   token: string;
@@ -211,6 +211,9 @@ function isNeverPat(p: TokenPattern): boolean {
 function buildIR(grammar: CstGrammar): ParserIR {
   if (grammar.indent) {
     throw new Error('portable: indent-sensitive grammars are out of scope (use the interpreter path); declare `newline` without `indent` for line-boundary-only mode');
+  }
+  if (grammar.markup) {
+    throw new Error('portable: markup-mode grammars are out of scope (use jsTarget or the interpreter path)');
   }
 
   const a = analyzeGrammar(grammar);

@@ -12,13 +12,13 @@
 //      Monogram doesn't model every official sub-rule; we align where a construct
 //      corresponds, we don't chase keys for constructs Monogram lacks).
 //    • PUBLICLY-#INCLUDE'd subset — the keys some grammar in the corpus actually references
-//      (`<scope>#<key>` grepped from this repo's own *.tmLanguage.json + the official Vue
-//      grammar). A drop-in MUST satisfy these — an unresolved `#include` silently no-ops —
+//      (`<scope>#<key>` grepped from this repo's own *.tmLanguage.json). A drop-in MUST
+//      satisfy these — an unresolved `#include` silently no-ops —
 //      so this subset GATES the exit code.
 //
 //  Pass an optional grammar name to scope the run (`node test/repo-compat.ts javascript`).
 //  Skips gracefully (exit 0) if VS Code's official grammars aren't installed (dev-only,
-//  like the scope-gap benches / vue-dropin). Run: node test/repo-compat.ts
+//  like the scope-gap benches). Run: node test/repo-compat.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 
@@ -37,8 +37,8 @@ const GRAMMARS = [
 const only = process.argv[2];                       // optional: run just one grammar
 const pct = (n: number, d: number) => (d === 0 ? 100 : (100 * n) / d);
 
-// The corpus of `#include` references: this repo's generated grammars + the official Vue grammar
-// (the real external consumer). We scan it once and, per grammar, pick out `<scope>#<key>` refs.
+// The corpus of `#include` references: this repo's generated grammars. We scan it once and,
+// per grammar, pick out `<scope>#<key>` refs.
 const refTexts: string[] = [];
 for (const f of readdirSync(repoRoot)) if (f.endsWith('.tmLanguage.json')) refTexts.push(readFileSync(`${repoRoot}${f}`, 'utf-8'));
 const corpus = refTexts.join('\n');

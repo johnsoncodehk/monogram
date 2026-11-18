@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  html-lexer-spike.ts — proves the gen-lexer markup state machine (the B-lite
+//  html-lexer-spike.ts — proves the lexer's markup state machine (the B-lite
 //  lexer re-architecture) tokenizes markup CORRECTLY, before any parser/generator
 //  work depends on it. The risk it retires: can the lexer handle the things that
 //  block a token-stream lexer on markup —
@@ -15,7 +15,7 @@
 //  Run: node test/html-lexer-spike.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { token, rule, defineGrammar, seq, plus, oneOf, range, anyChar, star, noneOf } from '../src/api.ts';
-import { createLexer } from '../src/gen-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 
 // A minimal markup grammar: just enough tokens + a stub rule (so the `< > / =`
 // punctuation literals are collected) + the declarative markup config. The lexer
@@ -46,7 +46,7 @@ const html = defineGrammar({
   },
 });
 
-const { tokenize } = createLexer(html);
+const tokenize = compileTokenizer(lexSpecOf(html));
 
 type Pair = [string, string]; // [token type ('' = punctuation literal), text]
 interface Case { label: string; input: string; expect: Pair[] }

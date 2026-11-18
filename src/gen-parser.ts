@@ -1,7 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
-import { createLexer, type Token } from './gen-lexer.ts';
+import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── CST output ──
@@ -30,14 +30,21 @@ export function getText(node: { offset: number; end: number }, source: string): 
   return source.slice(node.offset, node.end);
 }
 
+// The lexer is the generated one (emit-lexer.ts), compiled in-process once per grammar.
+const tokenizers = new WeakMap<CstGrammar, (source: string) => Token[]>();
+
 export function createParser(grammar: CstGrammar) {
+  let lex = tokenizers.get(grammar);
+  if (lex === undefined) {
+    lex = compileTokenizer(lexSpecOf(grammar));
+    tokenizers.set(grammar, lex);
+  }
+  const tokenize = lex;
   // [Await]/[Yield] fork — same rule-identity space as the emitted parser (no-op
   // without ctx markers). Keeps the interp ≡ emit equivalence the gates compare.
   grammar = withAwaitYield(grammar);
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
-  // The lexer is a separate stage, built from the same grammar (token defs + lexer hints).
-  const { tokenize } = createLexer(grammar);
 
   // ── Markup optional-end-tag support (HTML omittable end tags; see MarkupConfig.optionalEndTags) ──
   // Pure DATA in the grammar's markup config drives a structural recognition here: the
