@@ -42,6 +42,8 @@ const BAD_LEX = 'let a = 1 # 2;';
 // rejected while NLL_OTHER, with the same token offsets, is accepted.
 const NLL = 'let a: null.x = 1;';
 const NLL_OTHER = 'let b: qqqq.x = 1;';
+// `<` heads both type-argument continuations and the relational operator.
+const LT_ACCEPT = ['a < b;', 'a < b >> c;', 'a < b > c;', 'f(a < b, c > d);', 'x = B<C>;'];
 const badLex = goldenStream('typescript', BAD_LEX);
 const refLexError = badLex !== undefined && 'error' in badLex ? badLex.error : '';
 // ASCII-only samples, so a JSON string literal is also a valid Go and Rust string literal.
@@ -184,7 +186,11 @@ func main() {
 \t\t}(g)
 \t}
 \twg.Wait()
-\tjson.NewEncoder(os.Stdout).Encode(map[string]any{"ok": ok, "unchanged": unchanged, "same": same, "tokensA": tA, "tokensB": t2, "badNil": bad == nil, "lexMsg": lexMsg, "lexOff": lexOff,
+\tvar ltRejected []string
+\tfor _, s := range []string{${LT_ACCEPT.map(lit).join(', ')}} {
+\t\tif _, ok := parser.ParseWith(s, &parser.SlimBuilder{}); !ok { ltRejected = append(ltRejected, s) }
+\t}
+\tjson.NewEncoder(os.Stdout).Encode(map[string]any{"ltRejected": ltRejected, "ok": ok, "unchanged": unchanged, "same": same, "tokensA": tA, "tokensB": t2, "badNil": bad == nil, "lexMsg": lexMsg, "lexOff": lexOff,
 \t\t"isoA": isoA, "isoBig": isoBig, "ownB": ownB, "ownSrc": ownSrc, "badConc": badConc.Load()})
 }
 `);
@@ -196,6 +202,7 @@ func main() {
     const lower = (ts: { Kind: string; Text: string; Off: number; End: number; Nl: boolean }[]) =>
       ts.map((t) => ({ kind: t.Kind, text: t.Text, off: t.Off, end: t.End, nl: t.Nl }));
     check('go: external package builds against parser.Tokenize / parser.ParseWith', out.ok === true);
+    check('go: a Builder parse (parserW) leaves a failed type-argument `<` to the comparison', out.ltRejected === null, json(out.ltRejected));
     check('go: Tokenize ≡ lexer golden', json(lower(out.tokensA)) === json(ref(A)));
     check('go: a mutated Tokenize result does not leak into the next call', json(lower(out.tokensB)) === json(ref(B)));
     check('go: a caller-owned CstBuilder is untouched by Tokenize', out.unchanged === true);

@@ -232,6 +232,9 @@ const CASES: Case[] = [
       'function isStr(x: unknown): x is string { return true; }', 'enum E { A, B, C }',
       'const n = maybe!;', 'let arr: number[];', 'type Fn = (x: number) => string;',
       'class C<in out T> { value!: T; }',
+      // `<` heads both type-argument LEDs and the relational operator: a type-argument arm
+      // that fails must leave `<` to the next arm and to the comparison.
+      'a < b;', 'a < b >> c;', 'a < b > c;', 'f(a < b, c > d);', 'x = B<C>;', 'x = B<C>(1);',
     ],
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;'],
   },

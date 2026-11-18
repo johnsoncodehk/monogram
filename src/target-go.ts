@@ -832,7 +832,7 @@ ${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join(
 \t\t\tledSave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\t\tp.scratch = append(p.scratch, left)
 \t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); continue LedLoop }
-\t\t\tp.pos = ledSave; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; break LedLoop
+\t\t\tp.pos = ledSave; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \t\t}`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
@@ -2169,7 +2169,7 @@ ${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join(
 \t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
 \t\t\tp.scratch = append(p.scratch, left.h)
 \t\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { left = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); continue LedLoop }
-\t\t\tp.pos = ledSave; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; break LedLoop
+\t\t\tp.pos = ledSave; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
 \t\t}`;
   const ledSwitch = (() => {
     if (r.leds.length === 0) return '';
