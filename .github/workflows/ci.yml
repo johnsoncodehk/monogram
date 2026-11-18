@@ -172,9 +172,10 @@ jobs:
           exit $fail
 
       # Build the gated wasms FROM the parser.c just generated (no re-generate) and run the accuracy
-      # benches: ts must beat official (the thesis proof), html vs parse5. The YAML wasm is built to
-      # prove its C indentation scanner compiles + links; its accuracy bench needs the yaml-test-suite
-      # checkout, so it runs in the readme-bench workflow.
+      # benches: ts must beat official (the thesis proof), html vs parse5. The YAML wasm proves its C
+      # indentation scanner compiles + links and runs a corpus-free verdict gate against the
+      # interpreter; its accuracy bench needs the yaml-test-suite checkout, so it runs in the
+      # readme-bench workflow.
       - name: Build wasm + accuracy gate (typescript / html / yaml)
         if: steps.changed.outputs.value == 'true'
         run: |
@@ -183,3 +184,4 @@ jobs:
           ( cd tree-sitter/yaml       && npx tree-sitter build --wasm . )
           node test/treesitter-bench.ts
           node test/html-treesitter.ts
+          node test/yaml-treesitter.ts

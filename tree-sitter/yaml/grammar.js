@@ -130,7 +130,7 @@ module.exports = grammar({
 
     flow_explicit: $ => seq("?", optional($.flow_node)),
 
-    flow_map_entry: $ => seq(choice(seq($.flow_explicit, optional($.flow_node)), $.flow_node, seq(":", optional($.flow_node))), optional(seq(":", optional($.flow_node)))),
+    flow_map_entry: $ => choice(seq(choice(seq($.flow_explicit, optional($.flow_node)), $.flow_node), optional(seq(":", optional($.flow_node)))), seq(":", optional($.flow_node))),
 
     flow_mapping: $ => seq($._flow_lbrace, optional(seq($.flow_map_entry, repeat(seq(",", $.flow_map_entry)))), optional(","), $._flow_rbrace),
 

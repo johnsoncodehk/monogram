@@ -207,6 +207,52 @@ function collectTsSharedRules(grammar: CstGrammar): Map<string, RuleExpr> {
   return out;
 }
 
+// ── Lowering `not(L)` before an optional `L…` continuation ──────────────────
+// A tree-sitter CFG has no lookahead, so `not` renders to `blank()`. One shape is still exactly
+// expressible: an item that ENDS in `not(L)` followed, in the same seq, by an optional item every
+// non-empty match of which STARTS with literal L. After the assertion that item can only match
+// empty, so it is dropped from the asserting branch. When the asserting item is an `alt`, its
+// asserting arms are split into a sibling seq so the continuation stays for the other arms:
+//   seq(alt(A, [':', V, not(':')]), opt(':', W))  →  choice(seq(alt(A), opt(':', W)), seq(':', V))
+// (YAML FlowMapEntry: without this the empty-key arm takes a second `: value`, `{: a : b}`.)
+function notLiteral(e: RuleExpr): string | null {
+  return e.type === 'not' && e.body.type === 'literal' ? e.body.value : null;
+}
+function endsInNot(e: RuleExpr): string | null {
+  if (e.type === 'seq') return e.items.length ? endsInNot(e.items[e.items.length - 1]) : null;
+  return notLiteral(e);
+}
+function startsWithLiteral(e: RuleExpr, lit: string): boolean {
+  if (e.type === 'literal') return e.value === lit;
+  if (e.type === 'seq') return e.items.length > 0 && startsWithLiteral(e.items[0], lit);
+  if (e.type === 'alt') return e.items.length > 0 && e.items.every(i => startsWithLiteral(i, lit));
+  if (e.type === 'group') return startsWithLiteral(e.tsRelaxed ?? e.body, lit);
+  return false;
+}
+function optionalStartingWith(e: RuleExpr, lit: string): boolean {
+  return e.type === 'quantifier' && e.kind !== '+' && startsWithLiteral(e.body, lit);
+}
+function lowerNotBeforeOptional(expr: RuleExpr & { type: 'seq' }): RuleExpr | null {
+  const items = expr.items;
+  for (let i = 0; i + 1 < items.length; i++) {
+    const item = items[i], next = items[i + 1];
+    const direct = notLiteral(item);
+    if (direct !== null && optionalStartingWith(next, direct)) {
+      return { type: 'seq', items: [...items.slice(0, i + 1), ...items.slice(i + 2)] };
+    }
+    if (item.type !== 'alt') continue;
+    const guarded = item.items.filter(a => { const l = endsInNot(a); return l !== null && optionalStartingWith(next, l); });
+    if (guarded.length === 0) continue;
+    const plain = item.items.filter(a => !guarded.includes(a));
+    const pre = items.slice(0, i);
+    const guardedSeq: RuleExpr = { type: 'seq', items: [...pre, guarded.length === 1 ? guarded[0] : { type: 'alt', items: guarded }, ...items.slice(i + 2)] };
+    if (plain.length === 0) return guardedSeq;
+    const plainSeq: RuleExpr = { type: 'seq', items: [...pre, plain.length === 1 ? plain[0] : { type: 'alt', items: plain }, ...items.slice(i + 1)] };
+    return { type: 'alt', items: [plainSeq, guardedSeq] };
+  }
+  return null;
+}
+
 /**
  * Render a non-Pratt RuleExpr to a tree-sitter DSL expression string.
  * Pratt markers (op/prefix/postfix) are handled separately by buildPrattRule,
@@ -237,6 +283,8 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       return ref;
     }
     case 'seq': {
+      const lowered = lowerNotBeforeOptional(expr);
+      if (lowered) return renderExpr(lowered, ctx);
       const parts = expr.items.map(i => renderExpr(i, ctx)).filter(p => p !== 'blank()');
       if (parts.length === 0) return 'blank()';
       if (parts.length === 1) return parts[0];
