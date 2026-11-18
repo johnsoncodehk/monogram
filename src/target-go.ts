@@ -46,7 +46,7 @@ function renderIdTablesGo(ids: LexIdPlan): string {
   const lidsLit = ids.lids.map(J).join(', ');
   const pf = buildLidPrefilter(ids);
   const bitsLit = [...pf.firstByLenBits].join(', ');
-  return `var KIND_STR = []string{${kidsLit}}
+  return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
 var _kidMap = map[string]uint16{}
 var _lidMap = map[string]uint16{}
@@ -54,7 +54,7 @@ const _lidMaxLen = ${pf.maxByteLen}
 var _lidFirstBits = [...]byte{${bitsLit}}
 
 func init() {
-\tfor i, k := range KIND_STR { _kidMap[k] = uint16(i) }
+\tfor i, k := range kindStr { _kidMap[k] = uint16(i) }
 \tfor i, t := range _lids { _lidMap[t] = uint16(i) }
 }
 func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; return 0 }
@@ -69,7 +69,7 @@ func lidOf(text string) uint16 {
 \tif v, ok := _lidMap[text]; ok { return v }
 \treturn 0
 }
-func tokKind(t *Tok) string { return KIND_STR[t.Kid] }
+func tokKind(t *Tok) string { return kindStr[t.Kid] }
 func tokText(src string, t *Tok) string { return src[t.Off:t.End] }
 func mkTok(off, end int, nl bool, kid, lid uint16) Tok { return Tok{Off: uint32(off), End: uint32(end), Kid: kid, Lid: lid, Nl: nl} }
 `;
@@ -286,12 +286,12 @@ ${goBoolArr('_rxT', lidFlagTable(ids, rx.regexTexts))}
 ${goBoolArr('_phK', lidFlagTable(ids, rx.parenHeadKw))}
 ${goBoolArr('_mem', lidFlagTable(ids, rx.memberAccess))}
 ${goBoolArr('_pav', lidFlagTable(ids, rx.postfixAfterValue))}
-const KID_IDENT uint16 = ${kidOf(ids, rx.identToken)}
-const LID_LPAREN uint16 = ${lidOf(ids, '(')}
-const LID_RPAREN uint16 = ${lidOf(ids, ')')}
+const kidIdent uint16 = ${kidOf(ids, rx.identToken)}
+const lidLParen uint16 = ${lidOf(ids, '(')}
+const lidRParen uint16 = ${lidOf(ids, ')')}
 ` : '';
-  const tplLidConsts = tpl ? `const LID_BRACE_OPEN uint16 = ${lidOf(ids, tpl.braceOpen)}
-const LID_INTERP_CLOSE uint16 = ${lidOf(ids, tpl.interpClose)}
+  const tplLidConsts = tpl ? `const lidBraceOpen uint16 = ${lidOf(ids, tpl.braceOpen)}
+const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 ` : '';
   const rxModuleConsts = `${rxBitTables}${tplLidConsts}`;
   const rxState = rx ? `\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
@@ -301,8 +301,8 @@ const LID_INTERP_CLOSE uint16 = ${lidOf(ids, tpl.interpClose)}
 \tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == KID_IDENT && _rxT[prevLid]
-\t\tisParenHead := prevLid == LID_RPAREN && lastClose
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
 ` : '';
@@ -314,19 +314,19 @@ const LID_INTERP_CLOSE uint16 = ${lidOf(ids, tpl.interpClose)}
 \t\t\tif strings.HasPrefix(src[p:], ${J(tpl.open)}) { return false, p + ${tpl.open.length} }
 \t\t\tp++
 \t\t}
-\t\tpanic(fmt.Sprintf("Unterminated template literal at offset %d", p))
+\t\tpanic(&LexError{Off: p, Msg: fmt.Sprintf("Unterminated template literal at offset %d", p)})
 \t}
 \t_ = scanTplSpan
 ` : '';
   const emitHooks = [
-    rx ? `\t\tif lid == LID_LPAREN {
+    rx ? `\t\tif lid == lidLParen {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
-\t\t\tparenHead = append(parenHead, !isMember && prevKid == KID_IDENT && _phK[prevLid])
-\t\t} else if lid == LID_RPAREN {
+\t\t\tparenHead = append(parenHead, !isMember && prevKid == kidIdent && _phK[prevLid])
+\t\t} else if lid == lidRParen {
 \t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
 \t\tif _pav[lid] { lastBang = prevIsValue() }` : '',
-    tpl ? `\t\tif len(templateStack) > 0 { if lid == LID_BRACE_OPEN { templateStack[len(templateStack)-1]++ } else if lid == LID_INTERP_CLOSE { templateStack[len(templateStack)-1]-- } }` : '',
+    tpl ? `\t\tif len(templateStack) > 0 { if lid == lidBraceOpen { templateStack[len(templateStack)-1]++ } else if lid == lidInterpClose { templateStack[len(templateStack)-1]-- } }` : '',
     nl ? newlinePartsGo(nl, 'emit', ids).hooks : '',
   ].filter(Boolean).join('\n');
   const emitTail = rx ? `\n\t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true` : '';
@@ -339,8 +339,8 @@ ${emitHooks}
   const rxStateFrom = rx ? `\tprevIsValue := func() bool {
 \t\tif !hasPrev { return false }
 \t\tif _pav[prevLid] { return lastBang }
-\t\tisExprKw := prevKid == KID_IDENT && _rxT[prevLid]
-\t\tisParenHead := prevLid == LID_RPAREN && lastClose
+\t\tisExprKw := prevKid == kidIdent && _rxT[prevLid]
+\t\tisParenHead := prevLid == lidRParen && lastClose
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
 ` : '';
@@ -351,15 +351,15 @@ ${emitHooks}
 \t\t\tif strings.HasPrefix(src[p:], ${J(tpl.open)}) { return false, p + ${tpl.open.length} }
 \t\t\tp++
 \t\t}
-\t\tpanic(fmt.Sprintf("Unterminated template literal at offset %d", p))
+\t\tpanic(&LexError{Off: p, Msg: fmt.Sprintf("Unterminated template literal at offset %d", p)})
 \t}
 \t_ = scanTplSpan
 ` : '';
   const emitRxOnly = rx ? `\temit := func(off, end int, kid, lid uint16) {
-\t\tif lid == LID_LPAREN {
+\t\tif lid == lidLParen {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
-\t\t\tparenHead = append(parenHead, !isMember && prevKid == KID_IDENT && _phK[prevLid])
-\t\t} else if lid == LID_RPAREN {
+\t\t\tparenHead = append(parenHead, !isMember && prevKid == kidIdent && _phK[prevLid])
+\t\t} else if lid == lidRParen {
 \t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
 \t\tif _pav[lid] { lastBang = prevIsValue() }
@@ -369,20 +369,20 @@ ${emitHooks}
 \t_ = emit
 ` : '';
   const emitTplOnly = tpl ? `\temit := func(off, end int, kid, lid uint16) {
-\t\tif len(templateStack) > 0 { if lid == LID_BRACE_OPEN { templateStack[len(templateStack)-1]++ } else if lid == LID_INTERP_CLOSE { templateStack[len(templateStack)-1]-- } }
+\t\tif len(templateStack) > 0 { if lid == lidBraceOpen { templateStack[len(templateStack)-1]++ } else if lid == lidInterpClose { templateStack[len(templateStack)-1]-- } }
 \t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
 \t}
 \t_ = emit
 ` : '';
   const emitRxTpl = (rx && tpl) ? `\temit := func(off, end int, kid, lid uint16) {
-\t\tif lid == LID_LPAREN {
+\t\tif lid == lidLParen {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
-\t\t\tparenHead = append(parenHead, !isMember && prevKid == KID_IDENT && _phK[prevLid])
-\t\t} else if lid == LID_RPAREN {
+\t\t\tparenHead = append(parenHead, !isMember && prevKid == kidIdent && _phK[prevLid])
+\t\t} else if lid == lidRParen {
 \t\t\tif len(parenHead) > 0 { lastClose = parenHead[len(parenHead)-1]; parenHead = parenHead[:len(parenHead)-1] } else { lastClose = false }
 \t\t}
 \t\tif _pav[lid] { lastBang = prevIsValue() }
-\t\tif len(templateStack) > 0 { if lid == LID_BRACE_OPEN { templateStack[len(templateStack)-1]++ } else if lid == LID_INTERP_CLOSE { templateStack[len(templateStack)-1]-- } }
+\t\tif len(templateStack) > 0 { if lid == lidBraceOpen { templateStack[len(templateStack)-1]++ } else if lid == lidInterpClose { templateStack[len(templateStack)-1]-- } }
 \t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
 \t\tbpLid = prevLid; hasPrev2 = hasPrev; prevKid = kid; prevLid = lid; hasPrev = true
 \t}
@@ -471,7 +471,7 @@ ${pushHooks}\t\ttoks = append(toks, mkTok(off, end, pendingNl, kid, lid)); pendi
 `
     : '';
   const loopPanicGo = `\t\tr, _ := utf8.DecodeRuneInString(src[pos:])
-\t\tpanic(fmt.Sprintf("Unexpected character at offset %d: '%c'", pos, r))`;
+\t\tpanic(&LexError{Off: pos, Msg: fmt.Sprintf("Unexpected character at offset %d: '%c'", pos, r)})`;
   const pushTokAccFn = nl && !stateful
     ? `\tpushTok := func(off, end int, kid, lid uint16) {
 ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false
@@ -578,7 +578,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'lit': return `matchLit(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `matchTok(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
     case 'rule': return `callRule(parse${s.name})`;
-    case 'ruleBp': return `callRule(func() int32 { return ${s.name}bp(${s.bp}) })`;
+    case 'ruleBp': return `callRule(func() int32 { return bp_${s.name}(${s.bp}) })`;
     case 'star': return `star(func() bool { return ${stepCond(s.step, ids, ar)} })`;
     case 'opt': return `opt(func() bool { return ${s.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} })`;
     case 'sep': return `sepBy(func() bool { return ${stepCond(s.elem, ids, ar)} }, ${lidOf(ids, s.delim)})`;
@@ -867,20 +867,20 @@ ${groups.map((g) => `\t\tcase ${g.key}:
 \t\t}${tplPart}`;
   })();
   const post = r.postfix.map((p) => `${lidOf(ids, p.op)}: ${p.lbp}`).join(', ');
-  return `var ${r.name}BIN = map[uint16]bp{${bin}}
-var ${r.name}PRE = map[uint16]int{${pre}}
-var ${r.name}POST = map[uint16]int{${post}}
-var ${r.name}ATOM = map[uint16]bool{${atoms}}
+  return `var bin_${r.name} = map[uint16]bp{${bin}}
+var pre_${r.name} = map[uint16]int{${pre}}
+var post_${r.name} = map[uint16]int{${post}}
+var atom_${r.name} = map[uint16]bool{${atoms}}
 func parse${r.name}() int32 {
 \tprev := _suppressCur
 \t_suppressCur = _suppressNext
 \t_suppressNext = nil
-\tr := ${r.name}bp(0)
+\tr := bp_${r.name}(0)
 \t_suppressCur = prev
 \treturn r
 }
-func ${r.name}bp(minBp int) int32 {
-\tleft := ${r.name}nud(minBp)
+func bp_${r.name}(minBp int) int32 {
+\tleft := nud_${r.name}(minBp)
 \tif left < 0 { return -1 }
 \tif _capped { return left }
 \ttailClosed := false
@@ -889,37 +889,37 @@ ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := ${r.name}POST[t.Lid]; ok && !tailClosed && post > minBp {
+\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(scratch); scratch = append(scratch, left); pushLeaf(${ttIdOf(ar, '$operator')}, uint32(pos)); pos++; tailClosed = true
 \t\t\tleft = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart)); continue
 \t\t}
-\t\tinfo, ok := ${r.name}BIN[t.Lid]
+\t\tinfo, ok := bin_${r.name}[t.Lid]
 \t\tif !ok || info.lbp <= minBp { break }
 \t\tledSave := pos; sb := len(scratch)
 \t\tscratch = append(scratch, left); pushLeaf(${ttIdOf(ar, '$operator')}, uint32(pos))
 \t\tpos++
-\t\trhs := ${r.name}bp(info.rbp)
+\t\trhs := bp_${r.name}(info.rbp)
 \t\tif rhs < 0 { pos = ledSave; scratch = scratch[:sb]; break }
 \t\tscratch = append(scratch, rhs)
 \t\tleft = finish(${ruleIdOf(ar, r.cstName)}, sb, int(nodes[left].Offset), int(nodes[left].TokStart))
 \t}
 \treturn left
 }
-func ${r.name}nud(minBp int) int32 {
+func nud_${r.name}(minBp int) int32 {
 \t_capped = false
 \tt := peek()
 \tif t == nil { return -1 }
 ${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := pos; sb := len(scratch); nb := len(nodes); kb := len(kids); if ${c.steps.length ? c.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { _capped = true; return finish(${ruleIdOf(ar, r.cstName)}, sb, offAt(save), save) }; pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb] }`).join('\n')}
 \t_r := func() int32 {   // non-capped: a sub-parse may leave _capped set; force it false after
-${tplNud}\tif ${r.name}ATOM[t.Kid] {
+${tplNud}\tif atom_${r.name}[t.Kid] {
 \t\tsb := len(scratch); ts := pos; pushLeaf(uint8(t.Kid), uint32(pos)); pos++
 \t\treturn finish(${ruleIdOf(ar, r.cstName)}, sb, int(t.Off), ts)
 \t}
 ${bracketNudSwitch}
-\tif pbp, ok := ${r.name}PRE[t.Lid]; ok {
+\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
 \t\tsave := pos; sb := len(scratch); nb := len(nodes); kb := len(kids)
 \t\tpushLeaf(${ttIdOf(ar, '$operator')}, uint32(pos)); pos++
-\t\toperand := ${r.name}bp(pbp)
+\t\toperand := bp_${r.name}(pbp)
 \t\tif operand < 0 { pos = save; scratch = scratch[:sb]; nodes = nodes[:nb]; kids = kids[:kb]; return -1 }
 \t\tscratch = append(scratch, operand)
 \t\treturn finish(${ruleIdOf(ar, r.cstName)}, sb, int(t.Off), save)
@@ -1085,7 +1085,7 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \t\tif len(scratch) == before { break }
 \t\tt := scratch[len(scratch)-1]
 \t\thd := false
-\t\tif t.Lid == LID_LPAREN && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
+\t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 \t\tout = append(out, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, 0))
 \t\trelexed++
 \t\tif int(t.Off) >= editEnd {
@@ -1140,7 +1140,7 @@ ${tplAnchor}
 \t\tif len(scratch) == before { break }
 \t\tt := scratch[len(scratch)-1]
 \t\thd := false
-\t\tif t.Lid == LID_LPAREN && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
+\t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 \t\tout = append(out, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, uint8(len(templateStack))))
 \t\trelexed++
 \t\tif int(t.Off) >= editEnd {
@@ -1286,7 +1286,7 @@ func scanMeta(src string) []alignMeta {
 \t\tif len(toks) == before { break }
 \t\tt := toks[len(toks)-1]
 \t\thd := false
-\t\tif t.Lid == LID_LPAREN && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
+\t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, 0))
 \t}
 \treturn meta
@@ -1309,7 +1309,7 @@ func scanMeta(src string) []alignMeta {
 \t\tif len(toks) == before { break }
 \t\tt := toks[len(toks)-1]
 \t\thd := false
-\t\tif t.Lid == LID_LPAREN && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
+\t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, uint8(len(templateStack))))
 \t}
 \treturn meta
@@ -1798,7 +1798,7 @@ ${shapeA ? `\tentries = saveEntries
 }
 `;
   return `type Edit struct { Start, End int; Text string }
-// Packed Doc-state token (~16B). kind → Kid+KIND_STR; text → src[Off:End];
+// Packed Doc-state token (~16B). kind → Kid+kindStr; text → src[Off:End];
 // Nl/Lc/Lb/Hd packed in Flags; Pd/Fd/Td are narrow depths (paren/flow/template).
 type alignMeta struct { Off, End int32; Kid, Pd, Fd uint16; Flags, Td uint8 }
 func amNl(m alignMeta) bool { return m.Flags&1 != 0 }
@@ -1932,7 +1932,7 @@ function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     case 'lit': return `p.matchLitW(${lidOf(ids, s.value)}, ${ttIdOf(ar, s.ttype)})`;
     case 'tok': return `p.matchTokW(${kidOf(ids, s.name)}, ${ttIdOf(ar, s.name)})`;
     case 'rule': return `p.callRuleW((*${recv}).parse${s.name}W)`;
-    case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.${s.name}BpW(${s.bp}) })`;
+    case 'ruleBp': return `p.callRuleW(func(q *${recv}) (spanned, bool) { return q.bpW_${s.name}(${s.bp}) })`;
     case 'star': return `p.starW(func() bool { return ${stepCondW(s.step, ids, ar, recv)} })`;
     case 'opt': return `p.optW(func() bool { return ${s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} })`;
     case 'sep': return `p.sepByW(func() bool { return ${stepCondW(s.elem, ids, ar, recv)} }, ${lidOf(ids, s.delim)})`;
@@ -2189,12 +2189,12 @@ ${groups.map((g) => `\t\tcase ${g.key}:
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
 \tp.suppressNext = nil
-\tr, ok := p.${r.name}BpW(0)
+\tr, ok := p.bpW_${r.name}(0)
 \tp.suppressCur = prev
 \treturn r, ok
 }
-func (p *${recv}) ${r.name}BpW(minBp int) (spanned, bool) {
-\tleft, ok := p.${r.name}NudW(minBp)
+func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {
+\tleft, ok := p.nudW_${r.name}(minBp)
 \tif !ok { return spanned{}, false }
 \tif p.capped { return left, true }
 \ttailClosed := false
@@ -2203,37 +2203,37 @@ ${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := ${r.name}POST[t.Lid]; ok && !tailClosed && post > minBp {
+\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post > minBp {
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); continue
 \t\t}
-\t\tinfo, ok := ${r.name}BIN[t.Lid]
+\t\tinfo, ok := bin_${r.name}[t.Lid]
 \t\tif !ok || info.lbp <= minBp { break }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End)
 \t\tp.pos++
-\t\trhs, rok := p.${r.name}BpW(info.rbp)
+\t\trhs, rok := p.bpW_${r.name}(info.rbp)
 \t\tif !rok { p.pos = ledSave; p.scratch = p.scratch[:sb]; break }
 \t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
 \t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart))
 \t}
 \treturn left, true
 }
-func (p *${recv}) ${r.name}NudW(minBp int) (spanned, bool) {
+func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
 \tp.capped = false
 \tt := p.peekW()
 \tif t == nil { return spanned{}, false }
 ${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${c.steps.length ? c.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { p.capped = true; return p.finishW(${rid}, sb, p.offAtW(save), save), true }; p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`).join('\n')}
 \t_r, _ok := func() (spanned, bool) {
-${tplNud}\tif ${r.name}ATOM[t.Kid] {
+${tplNud}\tif atom_${r.name}[t.Kid] {
 \t\tsb := len(p.scratch); ts := p.pos; p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++
 \t\treturn p.finishW(${rid}, sb, int(t.Off), ts), true
 \t}
 ${bracketNudSwitch}
-\tif pbp, ok := ${r.name}PRE[t.Lid]; ok {
+\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
 \t\tsave := p.pos; sb := len(p.scratch)
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
-\t\toperand, ook := p.${r.name}BpW(pbp)
+\t\toperand, ook := p.bpW_${r.name}(pbp)
 \t\tif !ook { p.pos = save; p.scratch = p.scratch[:sb]; return spanned{}, false }
 \t\tif operand.present { p.scratch = append(p.scratch, operand.h) }
 \t\treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
@@ -3381,7 +3381,7 @@ import (
 // grammars still compile.
 var _ = unicode.IsLetter
 
-// Slim hot-path token (kind/text via KIND_STR / src[Off:End]).
+// Slim hot-path token (kind/text via kindStr / src[Off:End]).
 type Tok struct {
 \tOff, End uint32
 \tKid, Lid uint16
@@ -3420,15 +3420,31 @@ type Token struct {
 \tKid, Lid   uint16
 }
 
+// LexError reports input the lexer cannot tokenize. Tokenize returns it; ParseWith and the
+// Doc constructors panic with it.
+type LexError struct {
+\tOff int
+\tMsg string
+}
+
+func (e *LexError) Error() string { return e.Msg }
+
 // Tokenize is the lexer alone: a fresh slice the caller owns. It leaves the parser's state alone.
-func Tokenize(src string) []Token {
+func Tokenize(src string) (toks []Token, err error) {
+\tdefer func() {
+\t\tif r := recover(); r != nil {
+\t\t\tle, ok := r.(*LexError)
+\t\t\tif !ok { panic(r) }
+\t\t\ttoks, err = nil, le
+\t\t}
+\t}()
 \tslim := lex(src)
 \tout := make([]Token, len(slim))
 \tfor i := range slim {
 \t\tt := &slim[i]
 \t\tout[i] = Token{Kind: tokKind(t), Text: tokText(src, t), Off: int(t.Off), End: int(t.End), Nl: t.Nl, Kid: t.Kid, Lid: t.Lid}
 \t}
-\treturn out
+\treturn out, nil
 }
 
 func encodeLeaf(tokIdx uint32, ttId uint8) int32 {

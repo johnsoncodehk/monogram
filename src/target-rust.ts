@@ -5348,6 +5348,12 @@ fn write_json(p: &Parser<'_>, id: i32, out: &mut String) {
 /// A token of the public tokenizer: owned fields plus a text slice borrowed from the source.
 pub struct Token<'a> { pub kind: &'static str, pub text: &'a str, pub off: usize, pub end: usize, pub nl: bool, pub kid: u16, pub lid: u16 }
 /// The lexer alone: a fresh Vec the caller owns (Rust keeps no globals, so nothing else is touched).
+///
+/// # Panics
+///
+/// On input the lexer cannot tokenize, with the lexer's message ("Unexpected character at
+/// offset …", "Unterminated template literal at offset …") — the crate's lexical error
+/// mechanism, shared with \`parse_with\` and \`Doc::new\`.
 pub fn tokenize<'a>(src: &'a str) -> Vec<Token<'a>> {
     lex(src).into_iter().map(|t| Token { kind: tok_kind(&t), text: tok_text(src, &t), off: t.off as usize, end: t.end as usize, nl: t.nl, kid: t.kid, lid: t.lid }).collect()
 }

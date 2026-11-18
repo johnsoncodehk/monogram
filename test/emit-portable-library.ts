@@ -4,9 +4,11 @@
 //   TS   — imported as an ES module: tokenize() returns fresh caller-owned tokens; neither a
 //          CST from parse() nor a createDoc() session notices interleaved tokenize() calls.
 //   Go   — built as `package parser` inside a module and imported by a separate main package:
-//          parser.Tokenize / parser.ParseWith; a caller-owned *CstBuilder is untouched by Tokenize.
+//          parser.Tokenize / parser.ParseWith; a caller-owned *CstBuilder is untouched by Tokenize;
+//          malformed input yields a *LexError; the package exports only its API.
 //   Rust — compiled with --crate-type lib and linked into a separate crate: parser::tokenize /
-//          Doc; a Doc session with tokenize interleaved ≡ a fresh Doc after an edit.
+//          Doc; a Doc session with tokenize interleaved ≡ a fresh Doc after an edit; malformed
+//          input panics with the lexer message (the crate's documented lexical error mechanism).
 // Every target's token stream (kind/text/off/end/nl) is identical, and identical to the
 // interpreter's createLexer (type/text/offset/newlineBefore). Missing go/rustc → logged + skipped.
 //
@@ -30,6 +32,9 @@ const A = 'function foo(a) { return a + 1; }\nfoo(`t${2}`);\nconst r = /x+/g;\n'
 const B = 'let b = c / d\n++e;\n';
 const EDIT = { start: A.indexOf('a + 1'), end: A.indexOf('a + 1') + 5, text: 'a * 2' };
 const EDITED = A.slice(0, EDIT.start) + EDIT.text + A.slice(EDIT.end);
+const BAD_LEX = 'let a = 1 # 2;';
+let refLexError = '';
+try { createLexer(grammar).tokenize(BAD_LEX); } catch (e) { refLexError = (e as Error).message; }
 // ASCII-only samples, so a JSON string literal is also a valid Go and Rust string literal.
 const lit = (s: string) => JSON.stringify(s);
 
@@ -60,6 +65,9 @@ for (const [mode, path] of [['markup', '../html.ts'], ['indent', '../yaml.ts']])
   check('ts: tokenize ≡ createLexer', json(five(tA)) === json(ref(A)));
   const t1 = m.tokenize(B), t2 = m.tokenize(B);
   check('ts: tokenize returns a fresh array of fresh objects', t1 !== t2 && t1.every((t: object, i: number) => t !== t2[i]));
+  let tsErr = '';
+  try { m.tokenize(BAD_LEX); } catch (e) { tsErr = (e as Error).message; }
+  check('ts: tokenize throws the lexer error on malformed input', refLexError !== '' && tsErr === refLexError, `${tsErr} vs ${refLexError}`);
   const cst = m.parse(A);
   const before = json(cst);
   m.tokenize(B);
@@ -78,11 +86,21 @@ else {
   const gdir = join(dir, 'go');
   mkdirSync(join(gdir, 'parser'), { recursive: true });
   writeFileSync(join(gdir, 'go.mod'), 'module consumer\n\ngo 1.21\n');
-  writeFileSync(join(gdir, 'parser', 'parser.go'), emitParser(grammar, goTarget));
+  const goSrc = emitParser(grammar, goTarget);
+  writeFileSync(join(gdir, 'parser', 'parser.go'), goSrc);
+  // The exported surface is the tokenizer, the Doc/builder API and the tables a custom
+  // Builder needs — no generated rule helper or lexer constant.
+  const GO_API = new Set(['Tokenize', 'Token', 'LexError', 'Error', 'Tok', 'Node', 'Edit', 'Align', 'EntryMeta', 'Seg', 'Doc', 'NewDoc', 'DocWith', 'NewDocWith', 'Document',
+    'SetValidate', 'Text', 'Root', 'Builder', 'Shifter', 'CstBuilder', 'SlimBuilder', 'Checkpoint', 'Restore', 'Leaf', 'Finish', 'SpanOf', 'HeadSpan', 'Shift',
+    'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT']);
+  const exported = [...goSrc.matchAll(/^(?:func (?:\([^)]*\) )?|type |var |const )([A-Z]\w*)/gm)].map((x) => x[1]!);
+  const extra = [...new Set(exported.filter((x) => !GO_API.has(x)))];
+  check('go: package parser exports only its API', extra.length === 0, extra.slice(0, 12).join(' '));
   writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
 \t"encoding/json"
+\t"errors"
 \t"os"
 \t"reflect"
 
@@ -94,14 +112,19 @@ func main() {
 \th, ok := parser.ParseWith(${lit(A)}, b)
 \tnodes := append([]parser.Node(nil), b.Nodes...)
 \tkids := append([]int32(nil), b.Kids...)
-\tt1 := parser.Tokenize(${lit(B)})
+\tt1, _ := parser.Tokenize(${lit(B)})
 \tt1[0].Text = "MUTATED"
-\tt2 := parser.Tokenize(${lit(B)})
+\tt2, _ := parser.Tokenize(${lit(B)})
+\tbad, lexErr := parser.Tokenize(${lit(BAD_LEX)})
+\tvar le *parser.LexError
+\tlexMsg, lexOff := "", -1
+\tif errors.As(lexErr, &le) { lexMsg, lexOff = le.Msg, le.Off }
+\ttA, _ := parser.Tokenize(${lit(A)})
 \tunchanged := reflect.DeepEqual(nodes, b.Nodes) && reflect.DeepEqual(kids, b.Kids)
 \tb2 := &parser.CstBuilder{}
 \th2, ok2 := parser.ParseWith(${lit(A)}, b2)
 \tsame := h == h2 && ok2 && reflect.DeepEqual(b.Nodes, b2.Nodes) && reflect.DeepEqual(b.Kids, b2.Kids)
-\tjson.NewEncoder(os.Stdout).Encode(map[string]any{"ok": ok, "unchanged": unchanged, "same": same, "tokensA": parser.Tokenize(${lit(A)}), "tokensB": t2})
+\tjson.NewEncoder(os.Stdout).Encode(map[string]any{"ok": ok, "unchanged": unchanged, "same": same, "tokensA": tA, "tokensB": t2, "badNil": bad == nil, "lexMsg": lexMsg, "lexOff": lexOff})
 }
 `);
   try {
@@ -114,6 +137,7 @@ func main() {
     check('go: a mutated Tokenize result does not leak into the next call', json(lower(out.tokensB)) === json(ref(B)));
     check('go: a caller-owned CstBuilder is untouched by Tokenize', out.unchanged === true);
     check('go: ParseWith after Tokenize(other) ≡ ParseWith alone', out.same === true);
+    check('go: Tokenize returns a *LexError (nil tokens) on malformed input', out.badNil === true && out.lexMsg === refLexError && out.lexOff === BAD_LEX.indexOf('#'), `${out.lexMsg} @${out.lexOff}`);
   } catch (e) {
     check('go: external package builds and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
   }
@@ -145,7 +169,14 @@ fn main() {
     let _ = tokenize(b);
     let fresh: Doc = Doc::new(${lit(EDITED)}.to_string());
     let edit_eq = d.cst_json().is_some() && d.cst_json() == fresh.cst_json();
-    println!("{{\\"unchanged\\":{},\\"editEq\\":{},\\"tokensA\\":{},\\"tokensB\\":{}}}", unchanged, edit_eq, toks_json(&tokenize(a)), toks_json(&t2));
+    std::panic::set_hook(Box::new(|_| {}));
+    let lex_msg = match std::panic::catch_unwind(|| tokenize(${lit(BAD_LEX)}).len()) {
+        Ok(_) => String::new(),
+        Err(p) => p.downcast_ref::<String>().cloned().unwrap_or_default(),
+    };
+    let _ = std::panic::take_hook();
+    let after_panic = toks_json(&tokenize(b));
+    println!("{{\\"unchanged\\":{},\\"editEq\\":{},\\"tokensA\\":{},\\"tokensB\\":{},\\"lexMsg\\":{:?},\\"afterPanic\\":{}}}", unchanged, edit_eq, toks_json(&tokenize(a)), toks_json(&t2), lex_msg, after_panic);
 }
 `);
   try {
@@ -157,6 +188,8 @@ fn main() {
     check('rust: tokenize returns an independent Vec', json(out.tokensB) === json(ref(B)));
     check('rust: a Doc is untouched by tokenize', out.unchanged === true);
     check('rust: Doc edit with tokenize interleaved ≡ fresh Doc', out.editEq === true);
+    check('rust: tokenize panics with the lexer message on malformed input (documented)', out.lexMsg === refLexError, out.lexMsg);
+    check('rust: tokenize works after a caught lexer panic', json(out.afterPanic) === json(ref(B)));
   } catch (e) {
     check('rust: library crate builds, links and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
   }
