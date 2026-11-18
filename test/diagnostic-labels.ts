@@ -82,6 +82,26 @@ check("labelled: unlabelled token keeps the quoted grammar name", msgs(pl, 'a = 
 
 const tree = (p: typeof pp, src: string) => { const c = p.parse(src); return JSON.stringify(objectify(p.tree, (fns: any) => p.visit(c, fns))); };
 
+const ruleTrees: string[] = [];
+// A labelled RULE missing, declared through the public `rule(fn, { label })`. Item is
+// left-recursive because only memoized rules (Pratt, left-recursive, spine) synthesize a
+// missing rule row; a plain rule's failure is absorbed by its caller.
+for (const labelledRule of [false, true]) {
+  const WS = token(plus(oneOf(' ', '\t')), { skip: true });
+  const NUM = token(plus(oneOf(range('0', '9'))), {});
+  const Item = rule(() => [[Item, '+', NUM], [NUM]], labelledRule ? { label: 'an item' } : {});
+  const Pair = rule(() => [[NUM, ',', Item]]);
+  const Top = rule(() => [[many(Pair)]]);
+  const g = defineGrammar({ name: 'labels3', tokens: { WS, NUM }, rules: { Item, Pair, Top }, entry: Top });
+  const p = await load(g, `rule-${labelledRule}`);
+  if (labelledRule) {
+    check('public rule label: missing rule → expected an item', msgs(p, '1,').includes('expected an item'));
+    check('public rule label: the raw rule name is gone', !msgs(p, '1,').includes('expected Item'));
+  } else check('public rule, unlabelled: missing rule → expected Item', msgs(p, '1,').includes('expected Item'));
+  ruleTrees.push(tree(p, '1, 2 + 3 1,'));
+}
+check('public rule label: tree byte-identical with and without the label', ruleTrees.length === 2 && ruleTrees[0] === ruleTrees[1]);
+
 // ── 2b. A real grammar: label TypeScript's Expr rule and read `const a = ;` ──
 {
   const ts = (await import('../typescript.ts')).default;
