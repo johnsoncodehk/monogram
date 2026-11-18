@@ -5,7 +5,10 @@
 //          CST from parse() nor a createDoc() session notices interleaved tokenize() calls.
 //   Go   — built as `package parser` inside a module and imported by a separate main package:
 //          parser.Tokenize / parser.ParseWith; a caller-owned *CstBuilder is untouched by Tokenize;
-//          malformed input yields a *LexError; the package exports only its API.
+//          malformed input yields a *LexError; the package exports only its API. Each Doc owns
+//          its tree: interleaved Docs / ParseWith calls never disturb another Doc's incremental
+//          edit (≡ a fresh Doc, with reuse), and Docs used from concurrent goroutines (built
+//          with the race detector when available) match the sequential results.
 //   Rust — compiled with --crate-type lib and linked into a separate crate: parser::tokenize /
 //          Doc; a Doc session with tokenize interleaved ≡ a fresh Doc after an edit; malformed
 //          input panics with the lexer message (the crate's documented lexical error mechanism).
@@ -95,7 +98,7 @@ else {
   // Builder needs — no generated rule helper or lexer constant.
   const GO_API = new Set(['Tokenize', 'Token', 'LexError', 'Error', 'Tok', 'Node', 'Edit', 'Align', 'EntryMeta', 'Seg', 'Doc', 'NewDoc', 'DocWith', 'NewDocWith', 'Document',
     'SetValidate', 'Text', 'Root', 'Builder', 'Shifter', 'CstBuilder', 'SlimBuilder', 'Checkpoint', 'Restore', 'Leaf', 'Finish', 'SpanOf', 'HeadSpan', 'Shift',
-    'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT']);
+    'ParseWith', 'CstJSONWith', 'SlimJSONWith', 'CstJSON', 'TT_NAMES', 'RULE_NAMES', 'TT_SKIP_PUNCT']);
   const exported = [...goSrc.matchAll(/^(?:func (?:\([^)]*\) )?|type |var |const )([A-Z]\w*)/gm)].map((x) => x[1]!);
   const extra = [...new Set(exported.filter((x) => !GO_API.has(x)))];
   check('go: package parser exports only its API', extra.length === 0, extra.slice(0, 12).join(' '));
@@ -106,6 +109,9 @@ import (
 \t"errors"
 \t"os"
 \t"reflect"
+\t"strings"
+\t"sync"
+\t"sync/atomic"
 
 \t"consumer/parser"
 )
@@ -127,11 +133,49 @@ func main() {
 \tb2 := &parser.CstBuilder{}
 \th2, ok2 := parser.ParseWith(${lit(A)}, b2)
 \tsame := h == h2 && ok2 && reflect.DeepEqual(b.Nodes, b2.Nodes) && reflect.DeepEqual(b.Kids, b2.Kids)
-\tjson.NewEncoder(os.Stdout).Encode(map[string]any{"ok": ok, "unchanged": unchanged, "same": same, "tokensA": tA, "tokensB": t2, "badNil": bad == nil, "lexMsg": lexMsg, "lexOff": lexOff})
+\tbig := strings.Repeat("let q = [1, 2, 3];\\n", 40)
+\tbigEdit := []parser.Edit{{Start: len(big), End: len(big), Text: "let w = 2;\\n"}}
+\taEdit := []parser.Edit{{Start: ${EDIT.start}, End: ${EDIT.end}, Text: ${lit(EDIT.text)}}}
+\tdA := parser.NewDoc(${lit(A)})
+\tdBig := parser.NewDoc(big)
+\tparser.ParseWith(${lit(B)}, &parser.CstBuilder{})
+\tcb := &parser.CstBuilder{}
+\tdC := parser.NewDocWith(${lit(A)}, cb).(*parser.Doc)
+\tdA.Edit(aEdit)
+\tdBig.Edit(bigEdit)
+\twantA := parser.NewDoc(${lit(EDITED)}).CstJSON()
+\twantBig := parser.NewDoc(big + "let w = 2;\\n").CstJSON()
+\tisoA := dA.CstJSON() == wantA && dA.Align().Reused > 0
+\tisoBig := dBig.CstJSON() == wantBig && dBig.Align().Reused > 0
+\townB := len(cb.Nodes) > 0 && dC.CstJSON() == parser.NewDoc(${lit(A)}).CstJSON()
+\tvar wg sync.WaitGroup
+\tvar badConc atomic.Int32
+\tfor g := 0; g < 8; g++ {
+\t\twg.Add(1)
+\t\tgo func(g int) {
+\t\t\tdefer wg.Done()
+\t\t\tfor i := 0; i < 25; i++ {
+\t\t\t\tif (g+i)%2 == 0 {
+\t\t\t\t\td := parser.NewDoc(${lit(A)}); d.Edit(aEdit)
+\t\t\t\t\tif d.CstJSON() != wantA { badConc.Add(1) }
+\t\t\t\t} else {
+\t\t\t\t\td := parser.NewDoc(big); d.Edit(bigEdit)
+\t\t\t\t\tif d.CstJSON() != wantBig { badConc.Add(1) }
+\t\t\t\t}
+\t\t\t\tparser.Tokenize(${lit(B)})
+\t\t\t\tparser.ParseWith(${lit(B)}, &parser.CstBuilder{})
+\t\t\t}
+\t\t}(g)
+\t}
+\twg.Wait()
+\tjson.NewEncoder(os.Stdout).Encode(map[string]any{"ok": ok, "unchanged": unchanged, "same": same, "tokensA": tA, "tokensB": t2, "badNil": bad == nil, "lexMsg": lexMsg, "lexOff": lexOff,
+\t\t"isoA": isoA, "isoBig": isoBig, "ownB": ownB, "badConc": badConc.Load()})
 }
 `);
   try {
-    execFileSync('go', ['build', '-o', 'consumer', '.'], { cwd: gdir, stdio: 'pipe' });
+    let race = true;
+    try { execFileSync('go', ['build', '-race', '-o', 'consumer', '.'], { cwd: gdir, stdio: 'pipe' }); }
+    catch { race = false; execFileSync('go', ['build', '-o', 'consumer', '.'], { cwd: gdir, stdio: 'pipe' }); }
     const out = JSON.parse(execFileSync(join(gdir, 'consumer'), { encoding: 'utf8' }));
     const lower = (ts: { Kind: string; Text: string; Off: number; End: number; Nl: boolean }[]) =>
       ts.map((t) => ({ kind: t.Kind, text: t.Text, off: t.Off, end: t.End, nl: t.Nl }));
@@ -141,6 +185,9 @@ func main() {
     check('go: a caller-owned CstBuilder is untouched by Tokenize', out.unchanged === true);
     check('go: ParseWith after Tokenize(other) ≡ ParseWith alone', out.same === true);
     check('go: Tokenize returns a *LexError (nil tokens) on malformed input', out.badNil === true && out.lexMsg === refLexError && out.lexOff === BAD_LEX.indexOf('#'), `${out.lexMsg} @${out.lexOff}`);
+    check('go: a Doc edit after other Docs / ParseWith ≡ a fresh Doc, with reuse', out.isoA === true && out.isoBig === true);
+    check('go: NewDocWith(*CstBuilder) builds its tree into that builder', out.ownB === true);
+    check(`go: Docs on concurrent goroutines ≡ sequential results (race detector ${race ? 'on' : 'unavailable'})`, out.badConc === 0, `${out.badConc} mismatches`);
   } catch (e) {
     check('go: external package builds and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
   }

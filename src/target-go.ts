@@ -1854,12 +1854,35 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	}
 	return t
 }
-${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool${topReuse ? '; entries []EntryMeta' : ''} }
-func NewDoc(src string) *Doc {
-	d := &Doc{text: src}
+${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}// A Doc owns its tree: the arena lives in its CstBuilder (b) with the arena's compaction
+// baseline, and is swapped into the package registers only for the duration of a call.
+type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; b *CstBuilder; baseline int${topReuse ? '; entries []EntryMeta' : ''}${shapeB ? '; segs []Seg' : ''} }
+func (d *Doc) enter() {
+	engineMu.Lock()
+	nodes, kids, arenaBaseline = d.b.Nodes, d.b.Kids, d.baseline
+${shapeB ? '\tsegs = d.segs\n' : ''}}
+func (d *Doc) leave() {
+	d.b.Nodes, d.b.Kids, d.baseline = nodes, kids, arenaBaseline
+	nodes, kids = nil, nil
+${shapeB ? '\td.segs, segs = segs, nil\n' : ''}	engineMu.Unlock()
+}
+func NewDoc(src string) *Doc { return newDocCst(src, &CstBuilder{}) }
+func newDocCst(src string, b *CstBuilder) *Doc {
+	d := &Doc{text: src, b: b}
+	d.enter()
+	defer d.leave()
 	d.toks = ${initToks}
 	d.root = parse(lexInput(src))
 ${topReuse ? '\td.entries = append([]EntryMeta(nil), entries...)\n' : ''}\treturn d
+}
+// CstJSON renders the Doc's current tree ("" when its text does not parse).
+func (d *Doc) CstJSON() string {
+	if d.root < 0 { return "" }
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	var buf strings.Builder
+	writeJSONWith(d.b.Nodes, d.b.Kids, toksFromMeta(d.text, d.toks), d.root, &buf)
+	return buf.String()
 }
 func (d *Doc) SetValidate(v bool) { d.validate = v }
 func (d *Doc) Text() string { return d.text }
@@ -1875,6 +1898,8 @@ func applyEdit(text string, e Edit) string {
 	return text[:start] + e.Text + text[end:]
 }
 func (d *Doc) Edit(edits []Edit) (ret int32) {
+	d.enter()
+	defer d.leave()
 	oldText, oldToks := d.text, d.toks
 	relexed := 0
 	defer func() {
@@ -2974,15 +2999,18 @@ type DocWith struct {
 	b        Builder${entriesFields}
 }
 
-// NewDocWith: *CstBuilder → NewDoc (CST fast path, S3). Other builders → DocWith (parserW).
+// NewDocWith: *CstBuilder → a Doc whose tree lives in that builder (CST fast path, S3). Other
+// builders → DocWith (parserW).
 func NewDocWith(src string, b Builder) Document {
-	if _, is := b.(*CstBuilder); is {
-		return NewDoc(src)
+	if cb, is := b.(*CstBuilder); is {
+		return newDocCst(src, cb)
 	}
 	return newDocWith(src, b)
 }
 
 func newDocWith(src string, b Builder) *DocWith {
+	engineMu.Lock()
+	defer engineMu.Unlock()
 	d := &DocWith{text: src, b: b}
 	d.toks = ${initToks}
 	${topReuse ? 'h, entries, entryHs, ok' : 'h, _, _, ok'} := parseWithMetaW(src, d.toks, b)
@@ -3000,6 +3028,8 @@ func (d *DocWith) Root() int32        { return d.root }
 func (d *DocWith) Align() *Align      { return d.align }
 
 func (d *DocWith) Edit(edits []Edit) (ret int32) {
+	engineMu.Lock()
+	defer engineMu.Unlock()
 	oldText, oldToks := d.text, d.toks
 	relexed := 0
 	defer func() {
@@ -3294,6 +3324,8 @@ func parseWithW(src string, b Builder) (int32, bool) {
 // (native parse + arena swap); other Builders (e.g. *SlimBuilder) use interface parserW.
 // ok=false is reject (distinct from a leaf handle, which may also be negative).
 func ParseWith(src string, b Builder) (h int32, ok bool) {
+\tengineMu.Lock()
+\tdefer engineMu.Unlock()
 \tif cb, is := b.(*CstBuilder); is {
 \t\treturn parseWithCst(src, cb)
 \t}
@@ -3373,6 +3405,7 @@ package parser
 import (
 \t"fmt"
 \t"strings"
+\t"sync"
 \t"unicode"
 \t"unicode/utf8"
 )
@@ -3408,6 +3441,12 @@ var scratch []int32
 var arenaBaseline int
 const arenaCompactK = 4
 
+// The parser and lexer run on the package-level registers above, so every public entry point
+// holds engineMu for its whole call, and a Doc swaps ITS arena in (enter) and back out (leave).
+// Different Docs, ParseWith and Tokenize are therefore safe from concurrent goroutines; a
+// single Doc is not safe for concurrent use.
+var engineMu sync.Mutex
+
 ${renderArenaTablesGo(ar)}
 
 ${lexer(ir, ids)}
@@ -3431,6 +3470,8 @@ func (e *LexError) Error() string { return e.Msg }
 
 // Tokenize is the lexer alone: a fresh slice the caller owns. It leaves the parser's state alone.
 func Tokenize(src string) (toks []Token, err error) {
+\tengineMu.Lock()
+\tdefer engineMu.Unlock()
 \tdefer func() {
 \t\tif r := recover(); r != nil {
 \t\t\tle, ok := r.(*LexError)
@@ -3640,11 +3681,8 @@ func main() {
 \t\t\td.Edit(edits)
 \t\t}
 \t\tif a := d.Align(); a != nil { b, _ := json.Marshal(a); os.Stderr.Write(append(b, '\\n')) }
-\t\troot := d.Root()
-\t\tif root < 0 || pos != len(toks) { fmt.Fprintf(os.Stderr, "parse error (pos %d/%d)\\n", pos, len(toks)); os.Exit(1) }
-\t\tvar b strings.Builder
-\t\twriteJSON(root, &b)
-\t\tos.Stdout.WriteString(b.String())
+\t\tif d.Root() < 0 { fmt.Fprintln(os.Stderr, "parse error"); os.Exit(1) }
+\t\tos.Stdout.WriteString(d.CstJSON())
 \t\treturn
 \t}
 \tif len(os.Args) > 1 && os.Args[1] == "tok-spans" {
