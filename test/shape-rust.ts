@@ -208,7 +208,7 @@ fn main() {
     for src in raw.split("\u0000") {
         // M-A1.4-S5: tree mode removed — accept via the streaming walk, and
         // print the committed StreamEvent stream (typ, alt, off, end) as JSON.
-        let cst_ok = parse(tokenize(src)).is_some();
+        let cst_ok = parse(src).is_some();
         let Some(root) = parse_ast_with_buf(src, &DefaultShapeCustoms, &mut None) else {
             if cst_ok {
                 eprintln!("accept divergence: {:?}", src);
@@ -247,7 +247,7 @@ fn main() {
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
                 if is_cst {
-                    let _ = parse(tokenize(&raw));
+                    let _ = parse(&raw);
                 } else {
                     let mut buf = Vec::new();
                     let _ = parse_stream_buf(&raw, &mut buf, |_| true);
@@ -269,7 +269,7 @@ fn main() {
             for src in raw.split("\u0000") {
                 let src_owned = src.to_owned();
                 let line = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let cst_ok = parse(tokenize(&src_owned)).is_some();
+                    let cst_ok = parse(&src_owned).is_some();
                     let mut evs = Vec::new();
                     let mut scratch = Vec::new();
                     let ok = parse_stream_buf(&src_owned, &mut scratch, |e| { evs.push(*e); true });
@@ -442,12 +442,12 @@ async function main(): Promise<void> {
   writeFileSync(tsFile, emitTs(calcGrammar, { shape: calcShape }));
   const ts = await import(tsFile + `?t=${Date.now()}`) as {
     parseAst: (src: string) => Ast | null;
-    parse: (tokens: unknown[]) => unknown;
+    parse: (src: string) => unknown;
     tokenize: (src: string) => unknown[];
   };
   let parityBad = 0;
   for (let i = 0; i < CORPUS.length; i++) {
-    const tsCst = ts.parse(ts.tokenize(CORPUS[i]!));
+    const tsCst = ts.parse(CORPUS[i]!);
     const tsAst = ts.parseAst(CORPUS[i]!);
     const rustAccepted = rustLines[i]!.startsWith('A\t');
     if ((tsCst !== null) !== rustAccepted || (tsAst !== null) !== rustAccepted) parityBad++;
@@ -484,7 +484,7 @@ async function main(): Promise<void> {
   writeFileSync(toyTsFile, emitTs(toyGrammar, { shape: toyShape }));
   const toyTs = await import(pathToFileURL(toyTsFile).href + `?t=${Date.now()}`) as {
     parseAst: (src: string) => unknown;
-    parse: (tokens: unknown[]) => unknown;
+    parse: (src: string) => unknown;
     tokenize: (src: string) => unknown[];
   };
 
@@ -513,7 +513,7 @@ async function main(): Promise<void> {
   let toyIsoN = 0;
   for (let i = 0; i < toyCorpus.length; i++) {
     const src = toyCorpus[i]!.src;
-    const tsCst = toyTs.parse(toyTs.tokenize(src));
+    const tsCst = toyTs.parse(src);
     const tsAst = toyTs.parseAst(src);
     const rustOk = toyCorpusLines[i]!.startsWith('A\t');
     if ((tsCst !== null) !== rustOk || (tsAst !== null) !== rustOk) {
@@ -538,7 +538,7 @@ async function main(): Promise<void> {
   let sh31bBad = 0;
   for (let i = 0; i < sh31bNoplus.length; i++) {
     const src = sh31bNoplus[i]!;
-    const tsCst = toyTs.parse(toyTs.tokenize(src)) !== null;
+    const tsCst = toyTs.parse(src) !== null;
     const tsAst = toyTs.parseAst(src);
     const rustOk = sh31bLines[i]!.startsWith('A\t');
     if (!tsCst || tsAst === null || !rustOk) { sh31bBad++; continue; }
@@ -579,7 +579,7 @@ async function main(): Promise<void> {
   let cstFixBad = 0;
   for (let i = 0; i < cstFixSepAltWitnesses.length; i++) {
     const { src, want } = cstFixSepAltWitnesses[i]!;
-    const tsCst = toyTs.parse(toyTs.tokenize(src)) !== null;
+    const tsCst = toyTs.parse(src) !== null;
     const tsAst = toyTs.parseAst(src) !== null;
     const rustOk = cstFixLines[i]!.startsWith('A	');
     const ok = want === 'accept' ? tsCst && tsAst && rustOk : !tsCst && !tsAst && !rustOk;
@@ -606,7 +606,7 @@ async function main(): Promise<void> {
   let prattWitBad = 0;
   for (let i = 0; i < toyPrattWitnesses.length; i++) {
     const src = prattSrcs[i]!;
-    const tsCst = toyTs.parse(toyTs.tokenize(src)) !== null;
+    const tsCst = toyTs.parse(src) !== null;
     const tsAst = toyTs.parseAst(src);
     const rustOk = prattLines[i]!.startsWith('A\t');
     if (!tsCst || tsAst === null || !rustOk) { prattWitBad++; continue; }
@@ -655,7 +655,7 @@ async function main(): Promise<void> {
   writeFileSync(templateTsFile, emitTs(templateMiniGrammar, { shape: templateMiniShape }));
   const templateTs = await import(pathToFileURL(templateTsFile).href + `?t=${Date.now()}`) as {
     parseAst: (src: string) => unknown;
-    parse: (tokens: unknown[]) => unknown;
+    parse: (src: string) => unknown;
     tokenize: (src: string) => unknown[];
   };
   const templateWitnesses: { kind: string; src: string; want: 'accept' | 'reject' }[] = [
@@ -678,7 +678,7 @@ async function main(): Promise<void> {
   let dualProductOk = false;
   for (let i = 0; i < templateWitnesses.length; i++) {
     const witness = templateWitnesses[i]!;
-    const tsCst = templateTs.parse(templateTs.tokenize(witness.src)) !== null;
+    const tsCst = templateTs.parse(witness.src) !== null;
     const tsAst = templateTs.parseAst(witness.src);
     const rustOk = templateLines[i]!.startsWith('A\t');
     const wantOk = witness.want === 'accept';
@@ -750,7 +750,7 @@ async function main(): Promise<void> {
   writeFileSync(tsTsFile, emitTs(typescriptGrammar, { shape: typescriptShape }));
   const tsMod = await import(pathToFileURL(tsTsFile).href + `?t=${Date.now()}`) as {
     parseAst: (src: string, opts?: { customs?: ToyAstCustoms }) => unknown;
-    parse: (tokens: unknown[]) => unknown;
+    parse: (src: string) => unknown;
     tokenize: (src: string) => unknown[];
   };
 
@@ -766,7 +766,7 @@ async function main(): Promise<void> {
     let astOk = false;
     let cstErr = false;
     let astErr = false;
-    try { cstOk = tsMod.parse(tsMod.tokenize(src)) !== null; } catch { cstErr = true; }
+    try { cstOk = tsMod.parse(src) !== null; } catch { cstErr = true; }
     try { astOk = tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }) !== null; } catch { astErr = true; }
     const rustLine = tsCorpusLines[i]!;
     // Rust harness already enforces CST≡parse_ast_with internally (exit 2 on diverge).

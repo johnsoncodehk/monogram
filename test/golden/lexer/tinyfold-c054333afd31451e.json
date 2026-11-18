@@ -1,0 +1,5 @@
+{"spec":{"name":"tinyfold","tokens":[{"name":"Indent","pattern":{"type":"never"},"flags":[]},{"name":"Dedent","pattern":{"type":"never"},"flags":[]},{"name":"Newline","pattern":{"type":"never"},"flags":[]},{"name":"Scalar","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"blockPattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"flags":[],"scope":"scalar"}],"literals":[],"markup":null,"indent":{"indentToken":"Indent","dedentToken":"Dedent","newlineToken":"Newline"},"newline":null},
+"types":[],
+"cases":[
+["aaa\n  - bbb","Unexpected character at offset 6: '-'"]
+]}

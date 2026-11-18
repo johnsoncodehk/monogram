@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { emitParser, goTarget, rustTarget, tsTarget } from '../src/emit.ts';
+import { asGoMain } from './go-main.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; seeds: string[] };
@@ -162,8 +163,8 @@ type Doc<H> = {
   edit(edits: { start: number; end: number; text: string }[]): H | null;
 };
 type Mod = {
-  tokenize: (src: string) => { off: number; end: number; nl: boolean; kid: number; lid: number }[];
-  parse: (toks: Tok[]) => unknown;
+  tokenize: (src: string) => { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number }[];
+  parse: (src: string) => unknown;
   parseWith: <H>(src: string, b: Builder<H>) => H | null;
   cstBuilder: Builder<unknown>;
   createDoc: <H = unknown>(src: string, opts?: { validate?: boolean; builder?: Builder<H> }) => Doc<H>;
@@ -190,8 +191,7 @@ function cstCanon(v: unknown): string {
 
 function parseJson(mod: Mod, src: string): string {
   try {
-    const toks = mod.tokenize(src).map((t) => ({ off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
-    return cstCanon(mod.parse(toks));
+    return cstCanon(mod.parse(src));
   } catch {
     return '__THROW__';
   }
@@ -637,7 +637,7 @@ fn main() {
         if a.tree_eq.is_some() { println!("fail treeEq should be null for MirrorBuilder"); std::process::exit(1); }
         let root = doc.root_handle().expect("root");
         let got = cst_json_with(&doc.builder().inner, &lex(doc.text()), root);
-        let fresh = parse(tokenize(doc.text())).expect("fresh");
+        let fresh = parse(doc.text()).expect("fresh");
         let mut want = String::new();
         write_json(&fresh.0, fresh.1, &mut want);
         if got != want {
@@ -648,11 +648,11 @@ fn main() {
         return;
     }
     let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw).unwrap();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw).unwrap();
     let inputs = parse_json_str_array(&raw).expect("json string array");
     let mut bad = 0usize;
     for (i, src) in inputs.iter().enumerate() {
-        let a = parse(tokenize(src));
+        let a = parse(src);
         let mut b = CstBuilder::new();
         let root = parse_with(src, &mut b);
         match (a.as_ref(), root) {
@@ -1024,7 +1024,7 @@ func main() {
 	bad := 0
 	useMirror := mode == "eq-mirror"
 	for i, src := range inputs {
-		a := parse(tokenize(src))
+		a := parse(lexInput(src))
 		var rw int32
 		var ok bool
 		var jb string
@@ -1090,7 +1090,7 @@ if (!haveGo()) {
     const gfile = `${GO_TMP}/${c.grammar}.go`;
     const hfile = `${GO_TMP}/${c.grammar}_harness.go`;
     const bin = `${GO_TMP}/${c.grammar}`;
-    writeFileSync(gfile, emitParser(grammar, goTarget));
+    writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(hfile, goHarness);
     try {
       execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 180_000 });
@@ -1115,7 +1115,7 @@ if (!haveGo()) {
     const gfile = `${GO_TMP}/javascript-slim.go`;
     const hfile = `${GO_TMP}/javascript-slim_harness.go`;
     const bin = `${GO_TMP}/javascript-slim`;
-    writeFileSync(gfile, emitParser(grammar, goTarget));
+    writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(hfile, goHarness);
     execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 180_000 });
     const slimOut = execFileSync(bin, ['slim-demo'], { encoding: 'utf8' }).trim().split('\n');
@@ -1142,7 +1142,7 @@ if (!haveGo()) {
     const gfile = `${GO_TMP}/typescript-2mb.go`;
     const hfile = `${GO_TMP}/typescript-2mb_harness.go`;
     const bin = `${GO_TMP}/typescript-2mb`;
-    writeFileSync(gfile, emitParser(grammar, goTarget));
+    writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(hfile, goHarness);
     execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 600_000 });
     const out = execFileSync(bin, ['eq-batch'], {
@@ -1162,7 +1162,7 @@ if (!haveGo()) {
     const gfile = `${GO_TMP}/calc-doc.go`;
     const hfile = `${GO_TMP}/calc-doc_harness.go`;
     const bin = `${GO_TMP}/calc-doc`;
-    writeFileSync(gfile, emitParser(grammar, goTarget));
+    writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(hfile, goHarness);
     execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 120_000 });
 

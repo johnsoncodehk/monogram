@@ -1,0 +1,5 @@
+{"spec":{"name":"inlined","tokens":[{"name":"WS","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"char","value":" "},{"type":"char","value":"\t"}]},"min":1,"greedy":true},"flags":["skip"]},{"name":"IDENT","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"flags":[],"identifier":true},{"name":"NL","pattern":";","flags":[]}],"literals":[","],"markup":null,"indent":null,"newline":null},
+"types":["NL","IDENT",""],
+"cases":[
+[";;a,b;c",[0,0,1,0,0,1,1,0,1,2,1,0,2,3,1,0,1,4,1,0,0,5,1,0,1,6,1,0]]
+]}

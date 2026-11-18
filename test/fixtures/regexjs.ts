@@ -1,8 +1,8 @@
 // minijs + REGEX literals — exercises the portable lexer's STATEFUL regex-vs-division
 // disambiguation (stage 3). A `/` is a regex in expression context but division after a
 // value; `if (x) /re/` is a regex (control-head paren), `obj.for(x) / y` is division
-// (member name, not a head). The regexContext config + paren-head/bang state are ported
-// from createLexer; the gate checks the emitted CST is byte-identical on inputs that mix
+// (member name, not a head). The regexContext config + paren-head/bang state match the
+// generated JS lexer's; the gate checks the emitted CST is byte-identical on inputs that mix
 // regex literals and division.
 import {
   token, rule, defineGrammar, left, right, op, prefix, alt,

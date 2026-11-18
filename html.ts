@@ -37,7 +37,7 @@ const AttrValue = token(altPattern(seq('"', star(noneOf('"')), '"'), seq("'", st
 // lexer makes this token's own pattern a backstop (it is no longer subject to the Name-first race).
 const UnquotedValue = token(plus(noneOf(whitespace, '"', "'", '<', '>', '=', '`')), { scope: 'string.unquoted.html' });
 // Markup-mode content tokens — emitted by the lexer state machine, not matched by
-// these patterns (the patterns are placeholders; see gen-lexer markupTokenNames).
+// these patterns (the patterns are placeholders; see emit-lexer markupTokenNames).
 const Text = token(plus(noneOf('<')), { scope: 'text.html' });
 const RawText = token(plus(noneOf('<')), { scope: 'source.embedded' });
 const Comment = token(seq('<!--', star(seq(notFollowedBy('-->'), anyChar()), { greedy: false }), '-->'), { scope: 'comment.block.html' });

@@ -1,0 +1,12 @@
+{"spec":{"name":"tinyraw","tokens":[{"name":"Indent","pattern":{"type":"never"},"flags":[]},{"name":"Dedent","pattern":{"type":"never"},"flags":[]},{"name":"Newline","pattern":{"type":"never"},"flags":[]},{"name":"RawBody","pattern":{"type":"never"},"flags":[]},{"name":"Word","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"flags":[],"identifier":true},{"name":"Str","pattern":{"type":"seq","items":["\"",{"type":"repeat","body":{"type":"charClass","negate":true,"items":[{"type":"char","value":"\""}]},"min":0,"greedy":true},"\""]},"flags":[],"string":true}],"literals":["(",")"],"markup":null,"indent":{"indentToken":"Indent","dedentToken":"Dedent","newlineToken":"Newline","flowOpen":["("],"flowClose":[")"],"rawBlock":{"token":"RawBody"}},"newline":null},
+"types":["RawBody","Word","Newline","","Str"],
+"cases":[
+[":md\n  body",[0,0,10,0]],
+["thing(aa:\n  bb)","Unexpected character at offset 8: ':'"],
+["thing:md\n  body",[1,0,5,0,0,5,10,0]],
+["label size:\n  child","Unexpected character at offset 10: ':'"],
+["thing:\n  one\n\n  two\nnext",[1,0,5,0,0,5,15,0,2,20,0,0,1,20,4,0]],
+["thing(aa \"b b\" cc):\n  body",[1,0,5,0,3,5,1,0,1,6,2,0,4,9,5,0,1,15,2,0,3,17,1,0,0,18,8,0]],
+["thing: not a block\n  child","Unexpected character at offset 5: ':'"],
+["thing:\n  raw one\n  raw two\nnext",[1,0,5,0,0,5,22,0,2,27,0,0,1,27,4,0]]
+]}

@@ -1,6 +1,6 @@
 // Gate: INCREMENTAL ≡ FRESH for EVERY GRAMMAR — the incremental/recovery gates
 // were TypeScript-only while all grammars share the same emitted runtime, so the
-// non-TS incremental behavior (markup lexer modes, the fallback-lexer path, other
+// non-TS incremental behavior (markup / indent / newline lexer modes, other
 // token algebras) was ungated. Grammar-agnostic by construction:
 //
 //   inputs come from the generative walker (grammar-gen), edit scripts are seeded
@@ -10,6 +10,9 @@
 //        spans (the engine-internal invariant an external compare can miss when
 //        both sides share a corruption)
 //     3. totality: no step may throw
+//     4. when the edited text lexes cleanly, the session's token columns ≡ tokenize(text)
+//        (markup / indent / newline lexers re-lex from the file head and adopt the shared
+//        token suffix — this pins that splice)
 //
 //   node test/incremental-grammars.ts
 import { writeFileSync } from 'node:fs';
@@ -21,9 +24,10 @@ type Edit = { start: number; end: number; text: string };
 type Diag = { offset: number; end: number; message: string };
 type Cst = { root: number; errors: Diag[] };
 type Parser = { parse(s: string): Cst; edit(cst: Cst, edits: Edit[]): void; visit(cst: Cst, fns: object): void; tree: import('./emitted-obj.ts').TreeView & { lenOf(id: number): number; leafOffsetOf(e: number, tb: number): number; leafEndOf(e: number, tb: number): number } };
-type Em = { createParser(): Parser };
+type Tok = { type: string; text: string; offset: number; newlineBefore: boolean; commentBefore: boolean; multilineFlowBefore: boolean };
+type Em = { createParser(): Parser & { tokenAt(cst: Cst, i: number): Tok }; tokenize(s: string): Tok[] };
 
-const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
+const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html', 'test/fixtures/envspec'];
 
 let seedState = 0x5EED1E55;
 const rand = () => ((seedState = (seedState * 48271) % 0x7fffffff) / 0x7fffffff);
@@ -84,7 +88,7 @@ let fails = 0;
 const failures: string[] = [];
 for (const name of GRAMMARS) {
   const grammar = (await import(`../${name}.ts`)).default;
-  const emPath = `/tmp/emitted-incr-${name}.mts`;
+  const emPath = `/tmp/emitted-incr-${name.replace(/\//g, '_')}.mts`;
   writeFileSync(emPath, emitParser(grammar, jsTarget));
   const em = (await import(emPath + '?v=' + process.pid)) as Em;
   const session = em.createParser();
@@ -137,6 +141,17 @@ for (const name of GRAMMARS) {
           failures.push(`${name} doc${docs} step${k}: edit ≠ fresh @${i} edit=${JSON.stringify(edit).slice(0, 60)}\n      fresh: …${a.slice(Math.max(0, i - 40), i + 60)}…\n      inc:   …${b.slice(Math.max(0, i - 40), i + 60)}…`);
         }
         break;
+      }
+      let want: Tok[] | null = null;
+      try { want = em.tokenize(next); } catch { /* recovered lex: the tree compare covers it */ }
+      if (want !== null) {
+        const got = want.map((_, i) => session.tokenAt(cst, i));
+        if (JSON.stringify(got) !== JSON.stringify(want)) {
+          fails++;
+          const i = want.findIndex((t, j) => JSON.stringify(t) !== JSON.stringify(got[j]));
+          if (failures.length < 10) failures.push(`${name} doc${docs} step${k}: token ${i} ≠ tokenize: ${JSON.stringify(got[i])} vs ${JSON.stringify(want[i])}`);
+          break;
+        }
       }
       const sc = selfConsistent(session, cst);
       if (sc !== null) {

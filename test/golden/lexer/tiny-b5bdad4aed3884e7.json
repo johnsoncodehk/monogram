@@ -1,0 +1,9 @@
+{"spec":{"name":"tiny","tokens":[{"name":"Indent","pattern":{"type":"never"},"flags":[]},{"name":"Dedent","pattern":{"type":"never"},"flags":[]},{"name":"Newline","pattern":{"type":"never"},"flags":[]},{"name":"DocNote","pattern":{"type":"seq","items":["--!",{"type":"repeat","body":{"type":"charClass","negate":true,"items":[{"type":"char","value":"\n"}]},"min":0,"greedy":true}]},"flags":[]},{"name":"Strip","pattern":{"type":"seq","items":["--",{"type":"repeat","body":{"type":"charClass","negate":true,"items":[{"type":"char","value":"\n"}]},"min":0,"greedy":true}]},"flags":["skip"]},{"name":"Word","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"flags":[],"identifier":true}],"literals":[],"markup":null,"indent":{"indentToken":"Indent","dedentToken":"Dedent","newlineToken":"Newline","comment":"--","commentExcept":"!"},"newline":null},
+"types":["Word","Newline","DocNote"],
+"cases":[
+["aaa\nbbb",[0,0,3,0,1,4,0,0,0,4,3,0]],
+["aaa\n-- note\nbbb",[0,0,3,0,1,12,0,2,0,12,3,0]],
+["aaa\n--! ship me\nbbb",[0,0,3,0,1,4,0,0,2,4,11,0,1,16,0,0,0,16,3,0]],
+["aaa\n    -- deep note\nbbb",[0,0,3,0,1,21,0,2,0,21,3,0]],
+["aaa\n-- ! still a comment\nbbb",[0,0,3,0,1,25,0,2,0,25,3,0]]
+]}

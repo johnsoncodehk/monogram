@@ -6,7 +6,7 @@ All emitted by `node src/cli.ts <grammar>.ts` (e.g. `typescript.ts`). Every high
 
 | Target | Artifact | Status |
 |---|---|---|
-| Lexer | `createLexer` → tokens | ✅ |
+| Lexer | generated lexer (`emit-lexer.ts`) → tokens | ✅ |
 | CST parser | `createParser` → CST | ✅ aligned to the official parser — see the **Parser** column (agree · covered) in the README Status table |
 | TextMate | `.tmLanguage.json` | ✅ measured against the official grammar on all 6 languages — see the README **Highlighter** table (the [vscode#203212](https://github.com/microsoft/vscode/issues/203212) comparison) |
 | VS Code language-config | `.language-configuration.json` | ✅ comments / brackets / folding derived from the same tokens |
@@ -30,5 +30,6 @@ Three parser-grounded layers (in `test/`), each comparing against the language's
   - **`[Await]`/`[Yield]` parameter contexts** (31 files): `await`/`yield` must be reserved *inside* async/generator bodies and parameter lists, identifiers elsewhere. Needs a context-threading mechanism in the engine — the same shape as `exclude('in', …)` for the no-`in` context, but suppressing identifier *texts* over a subtree. Designed direction, not yet built.
   - **Per-shape strictness** (77 files, each class small and named): declaration-modifier ordering (`public @dec method`), private names outside classes (`const #foo`), strict-mode octal literals (`001`), member declarations with `var` (`class C { var x }`), paren-less `new` arguments (`new C0 32`), reserved words in dotted namespace tails, template-literal module names, `extends void`, `super<T>` tagged templates. Each wants the same treatment that landed for `case`/`class`/statement keywords: fix, then prove FN=0 with the accept/reject flip-scan against the corpus.
 - **More vscode#203212 bundles** — low-effort first (ini, diff, git config, xml); the large ones (ruby, perl, c/c++, groovy) each need an instrumentable official parser (WASM / native-coverage) + a corpus.
+- **Incremental lex for stateful grammars** — token-stream grammars already re-lex only a local window around an edit, but indent / markup / newline grammars still re-lex from the file head on every edit, because their lexer carries cross-line state (indent stack, flow depth, markup mode) that no token records. Planned: incremental lex for those modes too.
 - **Field labels** in the grammar DSL → richer named-field AST types.
 - **Highlighter long tail** — the few remaining per-language divergences are documented (in the PR) as either the shared TextMate-vs-parser ceiling or proven architectural floors; where a construct provably exceeds the TextMate model, the derived **tree-sitter** target (a real whole-tree parser) resolves it.

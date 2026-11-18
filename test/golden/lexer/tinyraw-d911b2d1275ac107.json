@@ -1,0 +1,5 @@
+{"spec":{"name":"tinyraw","tokens":[{"name":"Indent","pattern":{"type":"never"},"flags":[]},{"name":"Dedent","pattern":{"type":"never"},"flags":[]},{"name":"Newline","pattern":{"type":"never"},"flags":[]},{"name":"RawBody","pattern":{"type":"never"},"flags":[]},{"name":"Word","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"flags":[],"identifier":true},{"name":"Str","pattern":{"type":"seq","items":["\"",{"type":"repeat","body":{"type":"charClass","negate":true,"items":[{"type":"char","value":"\""}]},"min":0,"greedy":true},"\""]},"flags":[],"string":true}],"literals":["(",")"],"markup":null,"indent":{"indentToken":"Indent","dedentToken":"Dedent","newlineToken":"Newline","flowOpen":["("],"flowClose":[")"],"rawBlock":{"token":"RawBody","introChar":"=","signature":"=(?:[a-z]+)?[ \\t]*(?:\\r?\\n|$)"}},"newline":null},
+"types":["Word","RawBody"],
+"cases":[
+["thing=md\n  body",[0,0,5,0,1,5,10,0]]
+]}

@@ -1,0 +1,8 @@
+{"spec":{"name":null,"tokens":[{"name":"Comment","pattern":{"type":"seq","items":["#",{"type":"repeat","body":{"type":"charClass","negate":true,"items":[{"type":"char","value":"\n"}]},"min":0,"greedy":true}]},"flags":["skip"]},{"name":"Ident","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"},{"type":"range","from":"A","to":"Z"},{"type":"range","from":"0","to":"9"},{"type":"char","value":"_"}]},"min":1,"greedy":true},"flags":[],"identifier":true},{"name":"Newline","pattern":{"type":"never"},"flags":[]}],"literals":["(",",",")","="],"markup":null,"indent":null,"newline":{"token":"Newline","flowOpen":["("],"flowClose":[")"],"comment":"#"}},
+"types":["Ident","","Newline"],
+"cases":[
+["A=1\nB=2\n",[0,0,1,0,1,1,1,0,0,2,1,0,2,4,0,0,0,4,1,0,1,5,1,0,0,6,1,0]],
+["A=1\n\n\nB=2",[0,0,1,0,1,1,1,0,0,2,1,0,2,6,0,0,0,6,1,0,1,7,1,0,0,8,1,0]],
+["A=1\n# c\nB=2",[0,0,1,0,1,1,1,0,0,2,1,0,2,8,0,2,0,8,1,0,1,9,1,0,0,10,1,0]],
+["A=fn(1,\n2)\nB=3\n",[0,0,1,0,1,1,1,0,0,2,2,0,1,4,1,0,0,5,1,0,1,6,1,0,0,8,1,0,1,9,1,0,2,11,0,0,0,11,1,0,1,12,1,0,0,13,1,0]]
+]}
