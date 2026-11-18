@@ -1342,6 +1342,8 @@ function applyChange(start: number, end: number, text: string) {
   if (text.length > 0) repl.push(text);
   if (tail.length > 0) repl.push(tail);
   docPieces!.splice(ks, (end > start ? ke : ks) - ks + 1, ...repl);
+  // an emptied document keeps one (empty) piece: docLocate needs a piece to land on
+  if (docPieces!.length === 0) docPieces!.push('');
   // consolidate when fragmenting (amortized: a join every ≥256 edits)
   if (docPieces!.length > 256) {
     docPieces = [docPieces!.join('')];
