@@ -8,9 +8,9 @@
 // loads on the token's interned k/t.
 //
 // Scope: grammars WITHOUT markup / indent / newline modes (those state machines stay
-// interpreter-only for now) — emitLexer returns null for them and the caller falls back
-// to importing createLexer. The emitted token stream is REQUIRED to be identical to
-// createLexer's (same fields, same errors); test/emit-lexer-verify.ts gates it.
+// interpreter-only for now) — emitSoaLexer returns null for them and the emitted parser
+// inlines the createLexer runtime instead. The emitted token stream is REQUIRED to be
+// identical to createLexer's (same fields, same errors); test/emit-lexer-verify.ts gates it.
 import type { CstGrammar, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
 import {
@@ -256,7 +256,8 @@ export function emitSoaLexer(grammar: CstGrammar, st: LexerSymtab): string | nul
   // — no per-token object, no text slice: text is materialized from the source span only
   // when a CST leaf is built. Flag bits: 1 = newlineBefore (the only stamp this emitted
   // lexer ever sets; comment/multilineFlow stamps belong to fallback-only grammars).
-  emit(`function tokenize(source: string) {`);
+  // Fills the ACTIVE document's columns: the public tokenize() runs it inside a private doc.
+  emit(`function lexFull(source: string) {`);
   emit(`  docPieces = [source]; docPieceOff = [0]; docLen = source.length;`);
   emit(`  docFlat = source; docCur = 0;`);
   emit(`  tokN = 0;`);

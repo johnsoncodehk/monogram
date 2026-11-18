@@ -4,64 +4,74 @@
 // the conformance corpus. This is the lexer counterpart of emit-parser-verify (which
 // compares CSTs and is therefore blind to equal-on-both-sides lexer bugs only when the
 // lexers are SHARED; with an emitted lexer the streams must be compared directly).
+// Two views of the one emitted lexer are compared: the public tokenize() array, and the
+// parse path's token columns (tokenAt after a successful parse).
 // HARD gate = the in-repo corpus (test/emit-corpus.ts); the optional /tmp/ts-repo corpus
 // is also swept when present. Corpus-free, so it runs in `npm run check` everywhere.
 //   node test/emit-lexer-verify.ts            # in-repo corpus (+ /tmp/ts-repo if present)
 import { readFileSync, writeFileSync } from 'node:fs';
-import { createLexer } from '../src/gen-lexer.ts';
+import { createLexer, type Token } from '../src/gen-lexer.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
+import { internOf } from './emitted-intern.ts';
 
 const grammar = (await import('../typescript.ts')).default;
 
-// The reference: createLexer with the SAME intern config the emitted parser bakes.
 const EMITTED = '/tmp/emit-lexer-verify-parser.mts';
 writeFileSync(EMITTED, emitParser(grammar, jsTarget));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 const src = readFileSync(EMITTED, 'utf-8');
 if (src.includes('createLexer(')) {
-  console.error('✗ the emitted parser still imports createLexer for this grammar — emit-lexer fell back');
+  console.error('✗ the emitted parser carries the createLexer runtime for this grammar — emit-lexer fell back');
   process.exit(1);
 }
-// Rebuild the intern config from the emitted tables' source of truth: re-emit via the
-// analyzer is private, so read the reference lexer through a tiny probe grammar parse —
-// simplest faithful route: intern maps are exactly the emitted TYPE_KIND/LIT_KW/LIT_PU.
-const tk = new Map<string, number>(JSON.parse(src.match(/const TYPE_KIND = new Map(?:<[^>]*>)?\((.*)\);/)![1]));
-const kw = new Map<string, number>(JSON.parse(src.match(/const LIT_KW = new Map(?:<[^>]*>)?\((.*)\);/)![1]));
-const pu = new Map<string, number>(JSON.parse(src.match(/const LIT_PU = new Map(?:<[^>]*>)?\((.*)\);/)![1]));
-const kPunct = Number(src.match(/const K_PUNCT = (\d+);/)![1]);
-const kFallback = Number(src.match(/const K_NAMED_FALLBACK = (\d+);/)![1]);
-const ref = createLexer(grammar, { typeKind: tk, kwLit: kw, puLit: pu, punctKind: kPunct, namedFallback: kFallback });
+// The reference: createLexer with the SAME intern config the emitted parser bakes.
+const ref = createLexer(grammar, internOf(src));
+
+const FIELDS = ['type', 'text', 'offset', 'k', 't', 'newlineBefore', 'commentBefore', 'multilineFlowBefore'] as const;
+const tokDiff = (x: Token, y: Token) =>
+  Object.keys(y).length !== FIELDS.length || FIELDS.some((f) => x[f] !== y[f]);
 
 function sweep(label: string, samples: { name: string; code: string }[]) {
-  let same = 0, diff = 0, bothThrow = 0, throwMismatch = 0;
+  let same = 0, diff = 0, bothThrow = 0, throwMismatch = 0, parsed = 0;
   for (const { name, code } of samples) {
-    // The emitted tokenize fills struct-of-arrays columns and returns the count;
-    // tokenAt(i) reconstructs the per-token object view for the comparison.
-    let a: any[] | null = null, bn: number | null = null, ea: string | null = null, eb: string | null = null;
+    let a: Token[] | null = null, b: Token[] | null = null, ea: string | null = null, eb: string | null = null;
     try { a = ref.tokenize(code); } catch (e) { ea = String(e); }
-    try { bn = emitted.tokenize(code); } catch (e) { eb = String(e); }
+    try { b = emitted.tokenize(code); } catch (e) { eb = String(e); }
     if (ea !== null || eb !== null) {
       if (ea !== null && ea === eb) { bothThrow++; continue; }
       throwMismatch++;
       console.log('THROW MISMATCH', name, '\n  ref :', ea, '\n  emit:', eb);
       continue;
     }
-    if (a!.length !== bn!) { diff++; console.log('LEN DIFF', name, a!.length, bn); continue; }
+    if (a!.length !== b!.length) { diff++; console.log('LEN DIFF', name, a!.length, b!.length); continue; }
     let ok = true;
-    for (let i = 0; i < a!.length; i++) {
-      const x = a![i], y = emitted.tokenAt(i);
-      if (x.type !== y.type || x.text !== y.text || x.offset !== y.offset || x.k !== y.k || x.t !== y.t
-          || x.newlineBefore !== y.newlineBefore || x.commentBefore !== y.commentBefore
-          || x.multilineFlowBefore !== y.multilineFlowBefore) {
-        ok = false;
-        console.log('TOK DIFF', name, 'at', i, JSON.stringify(x), JSON.stringify(y));
-        break;
+    for (let i = 0; i < a!.length && ok; i++) {
+      if (tokDiff(a![i], b![i])) { ok = false; console.log('TOK DIFF', name, 'at', i, JSON.stringify(a![i]), JSON.stringify(b![i])); }
+    }
+    let parseOk = false;
+    try { emitted.parse(code); parseOk = true; } catch { /* reject: the columns are compared on accepted inputs */ }
+    if (parseOk) {
+      parsed++;
+      // The parser splits a `>`-led punctuator (`>>`, `>=`, …) where a type-argument list
+      // closes, so the columns equal the stream except for such runs of split pieces.
+      for (let j = 0, i = 0; j < a!.length && ok; j++, i++) {
+        const x = a![j], y = emitted.tokenAt(i) as Token;
+        if (!tokDiff(x, y)) continue;
+        let text = y.text;
+        const head = y.offset === x.offset && y.text === '>' && x.text.startsWith('>') && x.text.length > 1
+          && y.k === x.k && y.newlineBefore === x.newlineBefore && y.commentBefore === x.commentBefore;
+        while (head && text.length < x.text.length) {
+          const z = emitted.tokenAt(++i) as Token;
+          if (z.offset !== x.offset + text.length || z.k !== x.k) break;
+          text += z.text;
+        }
+        if (!head || text !== x.text) { ok = false; console.log('COLUMN DIFF', name, 'at', j, JSON.stringify(x), JSON.stringify(y)); }
       }
     }
     ok ? same++ : diff++;
   }
-  console.log(`${label}: samples=${samples.length} same=${same} bothThrow(sameMsg)=${bothThrow} diff=${diff} throwMismatch=${throwMismatch}`);
+  console.log(`${label}: samples=${samples.length} same=${same} (parse-path columns checked on ${parsed}) bothThrow(sameMsg)=${bothThrow} diff=${diff} throwMismatch=${throwMismatch}`);
   return diff + throwMismatch;
 }
 

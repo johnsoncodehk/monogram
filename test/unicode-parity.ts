@@ -6,6 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { asGoMain } from './go-main.ts';
 import type { CstGrammar } from '../src/types.ts';
 import g from '../javascript.ts';
 
@@ -186,7 +187,7 @@ runners.push({ label: 'typescript', run: (src) => runProc('node', [`${TMP}/p.ts`
 
 if (HAS_GO) {
   const gdir = `${TMP}/go`; mkdirSync(gdir, { recursive: true });
-  writeFileSync(`${gdir}/parser.go`, emitParser(grammar, goTarget));
+  writeFileSync(`${gdir}/parser.go`, asGoMain(emitParser(grammar, goTarget)));
   writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
   writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
   execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });

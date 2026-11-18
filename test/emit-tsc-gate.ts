@@ -11,9 +11,9 @@
 //     emitted parser by stripping types, and the CST-identity gate (emit-parser-verify)
 //     proves the stripped runtime is byte-for-byte the interpreter.
 //
-// Both emit paths are covered: the self-contained path (soa columns + an emitted
-// lexer — the ts/js family) and the fallback path (yaml/html: emitLexer returns null
-// so the parser imports createLexer, plus the non-soa piece-text layer). Checking
+// Both emit paths are covered: the soa path (columns + an emitted lexer — the ts/js
+// family) and the fallback path (yaml/html: no specialized lexer, so the parser carries
+// the inlined createLexer runtime, plus the non-soa piece-text layer). Checking
 // every grammar is what forces grammar-specific emission (token width, soa vs piece
 // layer, empty vocab sets, the fallback createLexer contract) to stay type-sound —
 // and it already paid off: the fallback editCore branch referenced cs/ceOld/
@@ -33,12 +33,10 @@ const GRAMMARS: Array<[string, string]> = [
   ['html', '../html.ts'],
 ];
 
-// --allowImportingTsExtensions: the fallback-lexer grammars import createLexer from
-// '…/src/gen-lexer.ts' (an absolute path baked at emit time); harmless for the
-// self-contained grammars, which import nothing.
+// No --allowImportingTsExtensions: every emitted module is standalone (imports nothing).
 const TSC_FLAGS = [
   '--strict', '--noEmit', '--target', 'ES2022', '--module', 'ES2022',
-  '--moduleResolution', 'Bundler', '--skipLibCheck', '--allowImportingTsExtensions',
+  '--moduleResolution', 'Bundler', '--skipLibCheck',
 ];
 
 let failures = 0;

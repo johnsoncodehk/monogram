@@ -22,6 +22,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
 import { createLexer } from '../src/gen-lexer.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { asGoMain } from './go-main.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
@@ -480,7 +481,7 @@ for (const c of CASES) {
 
   if (HAS_GO && !c.tsOnly) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
-    writeFileSync(`${gdir}/parser.go`, emitParser(grammar, goTarget));
+    writeFileSync(`${gdir}/parser.go`, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
     execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });

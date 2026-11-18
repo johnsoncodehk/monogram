@@ -258,8 +258,7 @@ function tsFlagTable(name: string, flags: boolean[]): string {
   return `const ${name}: number[] = [${flags.map((b) => (b ? 1 : 0)).join(', ')}];`;
 }
 
-function lexer(ir: ParserIR): string {
-  const ids = buildLexIdPlan(ir);
+function lexer(ir: ParserIR, ids: LexIdPlan): string {
   const defs: string[] = [];
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
@@ -1995,7 +1994,7 @@ function cstJSON(n: Cst): string {
 }
 function checkTreeEq(text: string, root: Node | null): boolean {
   try {
-    const fresh = (_src = text, parse(lex(text)));
+    const fresh = parse(text);
     if (root === null || fresh === null) return root === fresh;
     return cstJSON(root) === cstJSON(fresh as Cst);
   } catch { return root === null; }
@@ -2250,7 +2249,7 @@ function cstJSON(n: Cst): string {
 }
 function checkTreeEq(text: string, root: Node | null): boolean {
   try {
-    const fresh = (_src = text, parse(lex(text)));
+    const fresh = parse(text);
     if (root === null || fresh === null) return root === fresh;
     return cstJSON(root) === cstJSON(fresh as Cst);
   } catch { return root === null; }
@@ -2266,8 +2265,8 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       }
       if (next === null) {
         _src = text;
-        next = parse(toksFromMeta(text, prevToks)) as Node | null;
-        if (next === null) { prevToks = ${freshMeta}; next = parse(toksFromMeta(text, prevToks)) as Node | null; }
+        next = parseTokens(toksFromMeta(text, prevToks)) as Node | null;
+        if (next === null) { prevToks = ${freshMeta}; next = parseTokens(toksFromMeta(text, prevToks)) as Node | null; }
         entries = next !== null ? _entries.slice() : [];
         reused = 0;
       }
@@ -2286,8 +2285,8 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       }
       if (next === null) {
         _src = text;
-        next = parse(toksFromMeta(text, prevToks)) as Node | null;
-        if (next === null) { prevToks = ${freshMeta}; next = parse(toksFromMeta(text, prevToks)) as Node | null; nextSegs = next !== null ? _segs.slice() : []; }
+        next = parseTokens(toksFromMeta(text, prevToks)) as Node | null;
+        if (next === null) { prevToks = ${freshMeta}; next = parseTokens(toksFromMeta(text, prevToks)) as Node | null; nextSegs = next !== null ? _segs.slice() : []; }
         else { nextSegs = _segs.slice(); }
         entries = next !== null ? _entries.slice() : [];
         reused = 0;
@@ -2299,8 +2298,8 @@ function checkTreeEq(text: string, root: Node | null): boolean {
       align = validate ? { ...core, reused, streamEq, treeEq } : { ...core, reused };`
     : `      const reused = 0;
       _src = text;
-      root = parse(toksFromMeta(text, prevToks)) as Node | null;
-      if (root === null) { prevToks = ${freshMeta}; root = parse(toksFromMeta(text, prevToks)) as Node | null; }
+      root = parseTokens(toksFromMeta(text, prevToks)) as Node | null;
+      if (root === null) { prevToks = ${freshMeta}; root = parseTokens(toksFromMeta(text, prevToks)) as Node | null; }
       let streamEq = false, treeEq = false;
       if (validate) { try { streamEq = checkStreamEq(text, prevToks); treeEq = checkTreeEq(text, root); } catch { streamEq = false; treeEq = root === null; } }
       align = validate ? { ...core, reused, streamEq, treeEq } : { ...core, reused };`;
@@ -2313,13 +2312,13 @@ function checkTreeEq(text: string, root: Node | null): boolean {
   let entries: EntryMeta[] = [];`
     : '';
   const docParseInit = shapeB
-    ? `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;
+    ? `  let root: Node | null = parse(src) as Node | null;
   segs = root !== null ? _segs.slice() : [];
   entries = root !== null ? _entries.slice() : [];`
     : shapeA
-    ? `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;
+    ? `  let root: Node | null = parse(src) as Node | null;
   entries = root !== null ? _entries.slice() : [];`
-    : `  let root: Node | null = (_src = src, parse(lex(src))) as Node | null;`;
+    : `  let root: Node | null = parse(src) as Node | null;`;
   const code = `export type Edit = { start: number; end: number; text: string };
 // Packed Doc-state token. kind → kid+KIND_STR; text → src.slice(off,end);
 // nl/lc/lb/hd packed in flags; pd/fd/td are narrow depths (paren/flow/template).
@@ -2391,7 +2390,7 @@ ${editParse}
         try {
           prevToks = ${freshMeta};
           _src = text;
-          root = parse(toksFromMeta(text, prevToks)) as Node | null;${shapeA || shapeB ? `
+          root = parseTokens(toksFromMeta(text, prevToks)) as Node | null;${shapeA || shapeB ? `
           entries = root !== null ? _entries.slice() : [];` : ''}${shapeB ? `
           segs = root !== null ? _segs.slice() : [];` : ''}
           align = { oldN: oldToks.length, newN: prevToks.length, prefix: 0, suffix: 0, relexed: prevToks.length, reused: 0 };
@@ -3836,26 +3835,14 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
 export const tsTarget: Target = {
   name: 'typescript',
   ext: 'ts',
-  embedLexer(grammar: CstGrammar): string {
-    return lexer(portableIR(grammar));
-  },
-  emitLexer(grammar: CstGrammar): string {
-    return `// GENERATED by emit-portable.ts (tsTarget) — standalone TOKENIZER for grammar "${grammar.name ?? ''}".
-// import { tokenize } from './this-file'; tokenize(src) → Tok[]. The same lexer is embedded in
-// emitParser's output, so the parser's tokens are identical.
-type Tok = { off: number; end: number; nl: boolean; kid: number; lid: number };
-type RichTok = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
-
-${lexer(portableIR(grammar))}
-
-export function tokenize(src: string): RichTok[] {
-  return lex(src).map((t) => ({ kind: tok_kind(t), text: tok_text(src, t), off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
-}
-`;
-  },
-  emitParser(grammar: CstGrammar, lexerSrc: string | null): string {
+  emitParser(grammar: CstGrammar): string {
     const ir = portableIR(grammar);
-    const ids = buildLexIdPlan(ir);
+    return emitTsLibrary(ir, buildLexIdPlan(ir));
+  },
+  emitRunner,
+};
+
+function emitTsLibrary(ir: ParserIR, ids: LexIdPlan): string {
     const reuse = topReusePlan(ir);
     const ruleFns = ir.rules.map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids);
@@ -3884,16 +3871,16 @@ function matchTemplate(interp: () => Node | null): Cst | null {
   return { rule: '$template', children, offset: children[0].offset, end: children[children.length - 1].end, tokStart: save, tokEnd: pos };
 }
 ` : '';
-    return `// GENERATED by emit-portable.ts (tsTarget) — parser LIBRARY for grammar "${ir.grammarName}" (exports \`parse\`).
+    return `// GENERATED by emit-portable.ts (tsTarget) — parser LIBRARY for grammar "${ir.grammarName}" (exports \`tokenize\` + \`parse\`).
 // The CLI runner (stdin → CST JSON) is a SEPARATE piece — tsTarget.emitRunner(), appended by the harness.
 
 type Tok = { off: number; end: number; nl: boolean; kid: number; lid: number };
-type RichTok = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
-type Leaf = { tokenType: string; offset: number; end: number; tokStart: number; tokEnd: number };
-type Node = { rule: string; children: Cst[]; offset: number; end: number; tokStart: number; tokEnd: number; ext?: number };
-type Cst = Node | Leaf;
+export type Token = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
+export type Leaf = { tokenType: string; offset: number; end: number; tokStart: number; tokEnd: number };
+export type Node = { rule: string; children: Cst[]; offset: number; end: number; tokStart: number; tokEnd: number; ext?: number };
+export type Cst = Node | Leaf;
 
-${lexerSrc ?? ''}
+${lexer(ir, ids)}
 
 let toks: Tok[] = [];
 let pos = 0;
@@ -3971,15 +3958,18 @@ function altLit(opts: [number, string][], kids: Cst[]): boolean {
 
 ${matchTemplate}${ruleFns}
 
-// Library entry, in two composable phases. tokenize() lexes ONCE; pass its tokens to parse().
-// Want both the token stream and the CST? Lex once: const t = tokenize(src); parse(t) — no
-// re-lexing. Want only the CST? (_src = src, parse(lex(src))). (tokenize also records the source for
-// head-leaf lookups.) No I/O — see emitRunner() for the stdin → JSON wrapper.
-export function tokenize(src: string): RichTok[] {
-  _src = src;
+// Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
+// parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
+// any later call. No I/O — see emitRunner() for the stdin → JSON wrapper.
+export function tokenize(src: string): Token[] {
   return lex(src).map((t) => ({ kind: tok_kind(t), text: tok_text(src, t), off: t.off, end: t.end, nl: t.nl, kid: t.kid, lid: t.lid }));
 }
-export function parse(tokens: Tok[]): Cst | null {
+export function parse(src: string): Cst | null {
+  _src = src;
+  return parseTokens(lex(src));
+}
+// The entry rule over a token list of the CURRENT _src (also driven by the edit session).
+function parseTokens(tokens: Tok[]): Cst | null {
   toks = tokens;
   pos = 0;
   maxLook = 0;
@@ -3989,8 +3979,9 @@ export function parse(tokens: Tok[]): Cst | null {
 
 ${(() => { const doc = docEditBlock(ir); return doc.code + '\n' + emitBuilderAddon(ir, ids, doc.parts); })()}
 `;
-  },
-  emitRunner(): string {
+}
+
+function emitRunner(): string {
     return `// CLI runner (harness only): stdin → CST JSON. Appended to the parser library by the gate;
 // NOT part of the emitted parser. The import is hoisted, so it may follow the library code.
 import { readFileSync } from 'node:fs';
@@ -4007,7 +3998,7 @@ if (_editFast || process.argv.includes('edit-session')) {
   if (root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
   process.stdout.write(_cstJSON(root));
 } else if (process.argv.includes('tok-spans')) {
-  const _root = (_src = _raw, parse(lex(_raw)));
+  const _root = parse(_raw);
   if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
   const kids = 'children' in _root ? _root.children : [];
   for (const k of kids) {
@@ -4016,21 +4007,18 @@ if (_editFast || process.argv.includes('edit-session')) {
   }
   process.stdout.write('total\\t0\\t' + pos + '\\n');
 } else {
-  const _root = (_src = _raw, parse(lex(_raw)));
+  const _root = parse(_raw);
   if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
   process.stdout.write(_cstJSON(_root));
 }
 `;
-  },
-};
+}
 
-/** Emit TS parser; optional shape appends AST types + specialized parseAst. Without shape, byte-identical to tsTarget.emitParser(grammar, tsTarget.embedLexer(grammar)). */
+/** Emit TS parser; optional shape appends AST types + specialized parseAst. Without shape, byte-identical to tsTarget.emitParser(grammar). */
 export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
-  const lexerSrc = tsTarget.embedLexer(grammar);
-  const base = tsTarget.emitParser(grammar, lexerSrc);
-  if (!opts?.shape) return base;
-  const shapeIR = validateShapeOrThrow(grammar, opts.shape);
   const ir = portableIR(grammar);
   const ids = buildLexIdPlan(ir);
-  return base + emitShapeAstAddon(ir, shapeIR, ids);
+  const base = emitTsLibrary(ir, ids);
+  if (!opts?.shape) return base;
+  return base + emitShapeAstAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
 }
