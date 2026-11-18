@@ -54,7 +54,7 @@ export function findEntryRule(grammar: CstGrammar): string {
  * rule's empty case is unreachable: a reference to it FAILS wherever it would have matched
  * nothing, which silently drops whole parses (`[Filler, Stmt]` with a `Filler = rule(() =>
  * [[many(NL)]])` rejects every `Stmt`). The entry rule is exempt (an empty document is handled
- * by the driver). See `allowNullableRules` on the grammar config for the deliberate case.
+ * by the driver).
  */
 export function computeNullableRules(grammar: CstGrammar): { nullableRules: Set<string>; exprNullable: (e: RuleExpr) => boolean } {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));

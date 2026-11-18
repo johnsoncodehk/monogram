@@ -5,8 +5,8 @@
 // string has an unreachable empty case, and a reference to it FAILS wherever it would have
 // matched nothing. Written as a "filler" rule that is exactly the silent failure mode:
 // `Stmt = [Filler, Ident]` with `Filler = rule(() => [[many(NL)]])` rejects a plain `a`.
-// `defineGrammar` now names the rule and the fix; `allowNullableRules: true` keeps the
-// declaration for a grammar that reaches emptiness through alternatives (YAML).
+// `defineGrammar` now names the rule and the fix. There is no opt-out: YAML, the one grammar
+// that used to declare nullable rules, reaches its empty nodes through `opt(...)` at use sites.
 //
 // Run with: node test/nullable-rules.ts
 import { writeFileSync } from 'node:fs';
@@ -16,6 +16,7 @@ import { createParser } from '../src/gen-parser.ts';
 import { computeNullableRules } from '../src/grammar-analysis.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { token, rule, defineGrammar, many, opt, plus, oneOf, range } from '../src/api.ts';
+import type { RuleExpr } from '../src/types.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };
@@ -24,11 +25,11 @@ const WS = token(plus(oneOf(' ', '\t')), { skip: true });
 const IDENT = token(plus(oneOf(range('a', 'z'))), { identifier: true });
 const NL = token(';', {});   // stands in for a line terminator (a real `\n` is skipped as whitespace here)
 
-function filler(allow: boolean) {
+function filler(extra: object = {}) {
   const Filler = rule(() => [[many(NL)]]);                       // NULLABLE: zero or more terminators
   const Stmt = rule(() => [[Filler, IDENT, opt(',', IDENT)]]);
   const Program = rule(() => [[many(Stmt)]]);                     // the entry may be nullable
-  return defineGrammar({ name: 'filler', tokens: { WS, IDENT, NL }, rules: { Filler, Stmt, Program }, entry: Program, ...(allow ? { allowNullableRules: true } : {}) });
+  return defineGrammar({ name: 'filler', tokens: { WS, IDENT, NL }, rules: { Filler, Stmt, Program }, entry: Program, ...extra });
 }
 function inlined() {
   const Stmt = rule(() => [[many(NL), IDENT, opt(',', IDENT)]]);  // the same language, filler inlined
@@ -38,12 +39,13 @@ function inlined() {
 
 // ── 1. defineGrammar rejects the nullable non-entry rule, by name, with the fix ──
 let msg = '';
-try { filler(false); } catch (e) { msg = (e as Error).message; }
+try { filler(); } catch (e) { msg = (e as Error).message; }
 check('a nullable non-entry rule is rejected', msg !== '');
 check('the message names the rule', msg.includes("'Filler'"));
 check('the message explains the unreachable empty match', /empty match/.test(msg) && /unreachable/.test(msg));
 check('the message points at the inline fix', msg.includes('many(X)'));
-check('the message points at the opt-out', msg.includes('allowNullableRules'));
+check('the message points at the opt() fix', msg.includes('opt(...)'));
+check('the message offers no opt-out', !msg.includes('allowNullableRules'));
 
 // ── 2. A nullable ENTRY rule is fine (an empty document is handled by the driver) ──
 let entryOk = true;
@@ -70,30 +72,57 @@ check('the inlined form parses what the filler form silently rejected', (() => {
   check('with `entry` omitted, a nullable non-last rule is still rejected', implicitBad);
 }
 
-// ── 3. The opt-out keeps the declaration and changes no parse (the empty case stays unreachable) ──
-const gf = filler(true);
-check('allowNullableRules keeps the grammar buildable', gf.rules.some(r => r.name === 'Filler'));
-check('computeNullableRules still reports it', computeNullableRules(gf).nullableRules.has('Filler'));
-const interp = createParser(gf);
-const rejects = (s: string) => { try { interp.parse(s); return false; } catch { return true; } };
-check('documented behaviour: the filler grammar rejects a plain statement (empty Filler never matches)', rejects('a'));
-check('documented behaviour: the same grammar ACCEPTS `;a` (Filler matched non-empty), which is the inconsistency the check exists to surface', !rejects(';a'));
-{
-  const file = join(tmpdir(), `monogram-nullable-${process.pid}.ts`);
-  writeFileSync(file, emitParser(gf, jsTarget));
-  const p = (await import(file + '?v=' + Date.now())).createParser();
-  check('the emitted engine agrees (total parse reports the statement as unexpected)', p.parse('a').errors.length > 0);
-}
+// ── 3. There is no opt-out: the former `allowNullableRules` key is not honoured ──
+let optOutRejected = false;
+try { filler({ allowNullableRules: true }); } catch { optOutRejected = true; }
+check('a stray `allowNullableRules: true` does not exempt a nullable rule', optOutRejected);
 
-// ── 4. The shipped grammars: YAML opts out explicitly; the rest have no nullable non-entry rule ──
+// ── 4. The shipped grammars have no nullable non-entry rule ──
+let yaml: any = null;
 for (const [name, entry] of [['typescript', 'Program'], ['javascript', 'Program'], ['html', 'Document'], ['yaml', 'Stream']] as const) {
   let g: any; let loaded = true;
   try { g = (await import(`../${name}.ts`)).default; } catch { loaded = false; }
   check(`${name}.ts still defines`, loaded);
   if (!loaded) continue;
+  if (name === 'yaml') yaml = g;
   const nonEntry = [...computeNullableRules(g).nullableRules].filter(n => n !== entry);
-  if (name === 'yaml') check('yaml declares its nullable rules deliberately (Node, FlowNode, …)', nonEntry.includes('Node') && nonEntry.includes('FlowNode'));
-  else check(`${name} has no nullable non-entry rule`, nonEntry.length === 0);
+  check(`${name} has no nullable non-entry rule`, nonEntry.length === 0);
+}
+
+// ── 5. YAML: the rules that used to be nullable keep every empty / property-only form ──
+// Node, FlowNode and FlowMapEntry were rewritten to require content (FlowSeqEntry and AfterDocEnd
+// followed); emptiness now comes from `opt(...)` at the use sites. Interpreter and emitted parser
+// must both keep these accept/reject verdicts.
+if (yaml) {
+  const nullableNow = computeNullableRules(yaml).nullableRules;
+  for (const r of ['Node', 'FlowNode', 'FlowMapEntry', 'FlowSeqEntry', 'AfterDocEnd']) check(`yaml ${r} is non-nullable`, !nullableNow.has(r));
+
+  const accept = [
+    '&a', '!!str', '!!str &a', '&a !!str', '&a\nfoo', '&s\n- a\n- b', 'a:\n  &x\nb: c', 'key: &anchor\nb: c', '- &x\n- 1', '--- &a\n...',
+    '{a:}', '{a:,}', '{a: &x}', '{&x : v}', '[&x]', '[&x, !!str]', '[!!map {a: b}, &q [1]]',
+    '{}', '{a: b,}', '{a, b}', '{? a : b, ? c, ?}', '{? foo :,}', '{: v}', '{:}', '{foo\n: bar}',
+    '[a: b]', '[]', '[a,]', '...', '...\n--- b', 'key:', '- ', '',
+  ];
+  const reject = ['&a - x', '!!t &a - x', '&a &b x', '[a,,b]', '[,a]', '{a,,b}', '{: a : b}'];
+  const interp = createParser(yaml);
+  const iOk = (s: string) => { try { interp.parse(s); return true; } catch { return false; } };
+  const file = join(tmpdir(), `monogram-nullable-yaml-${process.pid}.ts`);
+  writeFileSync(file, emitParser(yaml, jsTarget));
+  const em = (await import(file + '?v=' + Date.now())).createParser();
+  const eOk = (s: string) => { try { return em.parse(s).errors.length === 0; } catch { return false; } };
+  for (const s of accept) check(`yaml accepts ${JSON.stringify(s)} (interpreter + emitted)`, iOk(s) && eOk(s));
+  for (const s of reject) check(`yaml rejects ${JSON.stringify(s)} (interpreter + emitted)`, !iOk(s) && !eOk(s));
+
+  // gen-tm's flow detector reads FlowMapEntry's TOP-LEVEL literals (it does not descend into an
+  // alt or a ref) for the key/value separator, so the rewrite must keep a top-level `:`.
+  const topLits = (e: RuleExpr, out: string[]): string[] => {
+    if (e.type === 'literal') out.push(e.value);
+    else if (e.type === 'seq') e.items.forEach(x => topLits(x, out));
+    else if (e.type === 'quantifier' || e.type === 'group') topLits(e.body, out);
+    return out;
+  };
+  const fme = yaml.rules.find((r: any) => r.name === 'FlowMapEntry');
+  check('yaml FlowMapEntry keeps `:` as its first top-level literal (gen-tm flow separator)', topLits(fme.body, [])[0] === ':');
 }
 
 console.log(`\n${ok}/${ok + fail} nullable-rule checks pass${fail ? '' : ' ✓'}`);

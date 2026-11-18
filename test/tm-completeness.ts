@@ -104,14 +104,14 @@ function checkRuleExprClosure(): void {
   const Refs = rule(($: any) => [[A, B, Leaf]]);                       // ref (token + rule)
   const Quant = rule(() => [[opt('x'), many('y'), many1('z')]]);       // quantifier ?,*,+
   const Alt = rule(() => [alt(['p'], ['q', 'r'])]);                    // alt + seq
-  const Sep = rule(($: any) => [[sep(A, ',')]]);                       // sep
+  const Sep = rule(($: any) => [[sep(A, ','), ';']]);                       // sep
   const Group = rule(($: any) => [[                                    // group (4 flavours)
     exclude('in', A),                                                  //   group.suppress
     awaitCtx(A), yieldCtx(A), asyncGenCtx(A), resetCtx(A),             //   group.ctxMode
     tsRelax(A, B),                                                     //   group.tsRelaxed
     capExpr('||', A),                                                  //   group.capBelow
   ]]);
-  const Nots = rule(($: any) => [[not(A), reservableNot(['kw'])]]);    // not (+ reservable)
+  const Nots = rule(($: any) => [[not(A), reservableNot(['kw']), B]]);    // not (+ reservable)
   const Markers = rule(($: any) => [[                                  // zero-width markers
     sameLine, noCommentBefore, noMultilineFlowBefore, notLeftLeaf('void', 'null'), A,
   ]]);
@@ -123,9 +123,6 @@ function checkRuleExprClosure(): void {
     g = defineGrammar({
       name: 'closure', tokens: { A, B },
       rules: { Leaf, Refs, Quant, Alt, Sep, Group, Nots, Markers, Pratt, Entry }, entry: Entry,
-      // Sep and Nots can derive the empty string by construction (this grammar exists to reach every
-      // combinator, not to parse); the nullable-rule definition check is not the subject of this lemma.
-      allowNullableRules: true,
     });
   } catch (e) { threw = true; g = null as any; }
   check('Lemma A1: toRuleExpr is total (no throw lowering every combinator)', !threw, threw ? 'defineGrammar threw' : '');
