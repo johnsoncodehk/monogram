@@ -3472,6 +3472,7 @@ function trySurgery(dmgA: number, dmgB: number, tokD: number, chrD: number) {
 // The spare token-column buffer set (parseEdited ping-pongs between the live set and
 // this one, so steady-state edits never allocate columns).
 let altK: typeof tkK | null = null, altT: typeof tkT | null = null, altOff: typeof tkOff | null = null, altEnd: typeof tkEnd | null = null, altFl: typeof tkFl | null = null, altDp: typeof tkDp | null = null, altPd: typeof tkPd | null = null;
+${e.soa ? '' : 'let altText: string[] = [];'}
 let altCap = 0;
 let altN = 0;   // old-stream token count while a window lex runs (lexCore's resync bound)
 
@@ -3496,7 +3497,7 @@ type Doc = {
   docDiags: Diag[]; docLex: LexDiag[]; docPar: Diag[];
   docPieces: string[] | null; docPieceOff: number[] | null; docLen: number; docFlat: string | null; docCur: number;
   rootCharBase: number; rootTokBase: number; lastRoot: number; lastRootTok: number; lastBars: number[] | null; docEmptyPops: number[];
-${e.soa ? '  parenCachePos: number; parenCacheStack: boolean[];' : ''}
+${e.soa ? '  parenCachePos: number; parenCacheStack: boolean[];' : '  tkText: string[]; altText: string[];'}
   altK: typeof tkK | null; altT: typeof tkT | null; altOff: typeof tkOff | null; altEnd: typeof tkEnd | null; altFl: typeof tkFl | null; altDp: typeof tkDp | null; altPd: typeof tkPd | null;
   altCap: number; altN: number;
 };
@@ -3522,7 +3523,7 @@ function makeDoc(rows = 8192): Doc {
     docDiags: [], docLex: [], docPar: [],
     docPieces: null, docPieceOff: null, docLen: 0, docFlat: null, docCur: 0,
     rootCharBase: 0, rootTokBase: 0, lastRoot: -1, lastRootTok: 0, lastBars: null, docEmptyPops: [],
-${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : ''}
+${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : '    tkText: [], altText: [],'}
     altK: null, altT: null, altOff: null, altEnd: null, altFl: null, altDp: null, altPd: null,
     altCap: 0, altN: 0,
   };
@@ -3541,7 +3542,7 @@ function saveDoc(d: Doc) {
   d.docPieces = docPieces; d.docPieceOff = docPieceOff; d.docLen = docLen; d.docFlat = docFlat; d.docCur = docCur;
   d.rootCharBase = rootCharBase; d.rootTokBase = rootTokBase;
   d.lastRoot = lastRoot; d.lastRootTok = lastRootTok; d.lastBars = lastBars; d.docEmptyPops = docEmptyPops;
-${e.soa ? '  d.parenCachePos = parenCachePos; d.parenCacheStack = parenCacheStack;' : ''}
+${e.soa ? '  d.parenCachePos = parenCachePos; d.parenCacheStack = parenCacheStack;' : '  d.tkText = tkText; d.altText = altText;'}
   d.altK = altK; d.altT = altT; d.altOff = altOff; d.altEnd = altEnd; d.altFl = altFl;
   d.altDp = altDp; d.altPd = altPd; d.altCap = altCap; d.altN = altN;
 }
@@ -3559,7 +3560,7 @@ function loadDoc(d: Doc) {
   docPieces = d.docPieces; docPieceOff = d.docPieceOff; docLen = d.docLen; docFlat = d.docFlat; docCur = d.docCur;
   rootCharBase = d.rootCharBase; rootTokBase = d.rootTokBase;
   lastRoot = d.lastRoot; lastRootTok = d.lastRootTok; lastBars = d.lastBars; docEmptyPops = d.docEmptyPops;
-${e.soa ? '  parenCachePos = d.parenCachePos; parenCacheStack = d.parenCacheStack;' : ''}
+${e.soa ? '  parenCachePos = d.parenCachePos; parenCacheStack = d.parenCacheStack;' : '  tkText = d.tkText; altText = d.altText;'}
   altK = d.altK; altT = d.altT; altOff = d.altOff; altEnd = d.altEnd; altFl = d.altFl;
   altDp = d.altDp; altPd = d.altPd; altCap = d.altCap; altN = d.altN;
 }
@@ -3583,8 +3584,6 @@ function swapBuffers() {
   x = tkPd; tkPd = altPd!; altPd = x;
   x = tkCap; tkCap = altCap; altCap = x;
 }
-${e.soa ? '' : 'let altText: string[] = [];'}
-
 function parseCore(source: string, entryRule?: string) {
   adoptRoot = -1;
   adoptRunPos = -1;
