@@ -8,7 +8,9 @@
 //          malformed input yields a *LexError; the package exports only its API. Each Doc owns
 //          its tree: interleaved Docs / ParseWith calls never disturb another Doc's incremental
 //          edit (≡ a fresh Doc, with reuse), and Docs used from concurrent goroutines (built
-//          with the race detector when available) match the sequential results.
+//          with the race detector when available) match the sequential results. Parser/lexer
+//          state is per call / per Doc: no package-level mutable var, no lock, and every public
+//          entry is reentrant from inside a consumer Builder's callback.
 //   Rust — compiled with --crate-type lib and linked into a separate crate: parser::tokenize /
 //          Doc; a Doc session with tokenize interleaved ≡ a fresh Doc after an edit; malformed
 //          input panics with the lexer message (the crate's documented lexical error mechanism).
@@ -106,6 +108,12 @@ else {
   const exported = [...goSrc.matchAll(/^(?:func (?:\([^)]*\) )?|type |var |const )([A-Z]\w*)/gm)].map((x) => x[1]!);
   const extra = [...new Set(exported.filter((x) => !GO_API.has(x)))];
   check('go: package parser exports only its API', extra.length === 0, extra.slice(0, 12).join(' '));
+  // Parser/lexer state lives on a per-call engine (a Doc owns its own): the only package-level
+  // vars are read-only tables, and nothing is serialized behind a lock.
+  const GO_TABLE = /^(?:_|RULE_NAMES|TT_NAMES|kindStr|_lids|_kidMap|_lidMap|_lidFirstBits|_divT|_divK|_rxT|_phK|_mem|_pav|_rb[FC]_\w+|(?:atom|bin|pre|post)_\w+)$/;
+  const pkgVars = [...goSrc.matchAll(/^var (\w+)/gm)].map((x) => x[1]!).filter((x) => !GO_TABLE.test(x));
+  check('go: no package-level mutable parser/lexer state', pkgVars.length === 0 && !/^var \($/m.test(goSrc), pkgVars.slice(0, 12).join(' '));
+  check('go: package parser does not import sync', !/^\s*"sync"$/m.test(goSrc));
   writeFileSync(join(gdir, 'main.go'), `package main
 
 import (
@@ -199,6 +207,84 @@ func main() {
     check(`go: Docs on concurrent goroutines ≡ sequential results (race detector ${race ? 'on' : 'unavailable'})`, out.badConc === 0, `${out.badConc} mismatches`);
   } catch (e) {
     check('go: external package builds and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
+  }
+  // A consumer Builder that calls back into the package from Leaf, under ParseWith and under a
+  // DocWith edit: every public entry must run independently of the parse in progress, and the
+  // outer tree must equal the same builder's tree without the nested calls.
+  const rdir = join(dir, 'go-reenter');
+  mkdirSync(join(rdir, 'parser'), { recursive: true });
+  writeFileSync(join(rdir, 'go.mod'), 'module consumer\n\ngo 1.21\n');
+  writeFileSync(join(rdir, 'parser', 'parser.go'), goSrc);
+  writeFileSync(join(rdir, 'main.go'), `package main
+
+import (
+\t"encoding/json"
+\t"os"
+\t"reflect"
+
+\t"consumer/parser"
+)
+
+var (
+\twantTok  []parser.Token
+\twantA0   string
+\twantA    string
+\taEdit    = []parser.Edit{{Start: ${EDIT.start}, End: ${EDIT.end}, Text: ${lit(EDIT.text)}}}
+\tnested   int
+\tbadNest  int
+)
+
+type reBuilder struct{ *parser.CstBuilder }
+
+func (r reBuilder) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool {
+\tif nested < 6 {
+\t\tnested++
+\t\tif t, _ := parser.Tokenize(${lit(B)}); !reflect.DeepEqual(t, wantTok) { badNest++ }
+\t\tcb := &parser.CstBuilder{}
+\t\tif h, ok := parser.ParseWith(${lit(A)}, cb); !ok || parser.CstJSONWith(cb, h) != wantA0 { badNest++ }
+\t\td := parser.NewDoc(${lit(A)}); d.Edit(aEdit)
+\t\tif d.CstJSON() != wantA { badNest++ }
+\t}
+\treturn r.CstBuilder.Leaf(scratch, ttId, tokIdx, off, end)
+}
+
+func main() {
+\twantTok, _ = parser.Tokenize(${lit(B)})
+\tcb := &parser.CstBuilder{}
+\th, _ := parser.ParseWith(${lit(A)}, cb)
+\twantA0 = parser.CstJSONWith(cb, h)
+\twantA = parser.NewDoc(${lit(EDITED)}).CstJSON()
+\tnested = 6
+\tref := reBuilder{&parser.CstBuilder{}}
+\thRef, okRef := parser.ParseWith(${lit(A)}, ref)
+\tnested = 0
+\trb := reBuilder{&parser.CstBuilder{}}
+\th1, ok1 := parser.ParseWith(${lit(A)}, rb)
+\touter := ok1 && okRef && h1 == hRef && reflect.DeepEqual(rb.Nodes, ref.Nodes) && reflect.DeepEqual(rb.Kids, ref.Kids)
+\tnParse := nested
+\tnested = 6
+\trefB := reBuilder{&parser.CstBuilder{}}
+\trefD := parser.NewDocWith(${lit(A)}, refB)
+\trefD.Edit(aEdit)
+\tnested = 0
+\tdwB := reBuilder{&parser.CstBuilder{}}
+\tdw := parser.NewDocWith(${lit(A)}, dwB)
+\tnested = 0
+\tdw.Edit(aEdit)
+\tdocOk := dw.Root() >= 0 && dw.Root() == refD.Root() && dw.Align().Reused > 0 && reflect.DeepEqual(dwB.Nodes, refB.Nodes) && reflect.DeepEqual(dwB.Kids, refB.Kids)
+\tjson.NewEncoder(os.Stdout).Encode(map[string]any{"outer": outer, "docOk": docOk, "nParse": nParse, "nEdit": nested, "bad": badNest})
+}
+`);
+  try {
+    let race = true;
+    try { execFileSync('go', ['build', '-race', '-o', 'consumer', '.'], { cwd: rdir, stdio: 'pipe' }); }
+    catch { race = false; execFileSync('go', ['build', '-o', 'consumer', '.'], { cwd: rdir, stdio: 'pipe' }); }
+    const out = JSON.parse(execFileSync(join(rdir, 'consumer'), { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }));
+    check(`go: Tokenize / ParseWith / NewDoc+Edit from inside a Builder callback ≡ standalone (race detector ${race ? 'on' : 'unavailable'})`,
+      out.outer === true && out.docOk === true && out.nParse > 0 && out.nEdit > 0 && out.bad === 0, json(out));
+  } catch (e) {
+    const err = e as { stderr?: Buffer; signal?: string };
+    check('go: public entries are reentrant from a Builder callback', false, (err.signal ? `killed by ${err.signal}; ` : '') + String(err.stderr ?? e).slice(0, 400));
   }
 }
 

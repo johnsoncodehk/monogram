@@ -1026,7 +1026,8 @@ func main() {
 	bad := 0
 	useMirror := mode == "eq-mirror"
 	for i, src := range inputs {
-		a := parse(src, lex(src))
+		e := &engine{}
+		a := e.parse(src, lex(src))
 		var rw int32
 		var ok bool
 		var jb string
@@ -1054,7 +1055,7 @@ func main() {
 			continue
 		}
 		var ja strings.Builder
-		writeJSON(a, &ja)
+		e.writeJSON(a, &ja)
 		if ja.String() != jb {
 			bad++
 			if bad <= 3 {
