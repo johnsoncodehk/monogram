@@ -255,9 +255,12 @@ const ContentNode = rule(() => [alt(BlockSequence, ExplicitMapping, EmptyKeyMapp
 //
 // The anchor/tag prefix is written INLINE as `opt(Anchor), opt(Tag)` (with a second tag-first
 // `[Tag, Anchor]` branch for `!!t &a`) rather than via the `Property` rule, and the content is an
-// INLINE `opt(alt(…))`: gen-tm's explicit-key prefix detector recognises a node prefix as an
+// INLINE `alt(…)`: gen-tm's explicit-key prefix detector recognises a node prefix as an
 // `opt(token)` standing before an `alt` in the SAME sequence, which it cannot see through a rule
 // ref. Keeping the inline shape here lets `? &a key` / `? !!t key` keep highlighting the key.
+// A rule may not derive the empty string (defineGrammar rejects it), so the first branch REQUIRES
+// content and the property-only nodes (`key: &a`, `- !!str`) get their own branches; the empty
+// node itself is reached through `opt(Node)` / `opt(Value)` at the use sites.
 const nodeContentAlts = () => [
   [Indent, Node, Dedent], [Newline, Node],
   // MappingFromFlow precedes the bare FlowMapping/FlowSequence: this is a NESTED alt (first-match,
@@ -272,8 +275,10 @@ const nodeContentAlts = () => [
 // guard fires only when a property is present, so the BARE inline block sequence (`- a`, no
 // property) is matched by its own dedicated last branch below. yaml-test-suite SY6V.
 const Node = rule(() => [
-  [opt(Anchor), opt(Tag), not('-'), opt(alt(...nodeContentAlts()))],
+  [opt(Anchor), opt(Tag), not('-'), alt(...nodeContentAlts())],
   [Tag, Anchor, not('-'), opt(alt(...nodeContentAlts()))],
+  [Anchor, opt(Tag), not('-')],
+  [Tag, not('-')],
   BlockSequence,
 ]);
 
@@ -486,24 +491,28 @@ const SeqItem = rule(() => [['-', opt(Value)]]);
 
 // Flow collections — indentation is SUSPENDED inside (lexer flowDepth), so newlines are
 // insignificant and no INDENT/DEDENT/NEWLINE is emitted between `[`/`{` and the matching close.
-// A flow NODE: an optional anchor/tag property then an optional flow value — so a flow entry can
-// carry a property (`[ &i a, b ]`, `{ &e e: f }`, `&g { g: h }`; yaml-test-suite CN3R / X38W) and
-// a property-only / empty value is allowed (`{? foo :,}` trailing-empty; FRK4 / DFF7).
-const FlowNode = rule(() => [[opt(Property), opt(alt(FlowMapping, FlowSequence, Alias, Scalar))]]);
+// A flow NODE: an optional anchor/tag property then a flow value, or a property alone — so a flow
+// entry can carry a property (`[ &i a, b ]`, `{ &e e: f }`, `&g { g: h }`; yaml-test-suite CN3R /
+// X38W) and a property-only value is allowed (`{a: &x}`). FlowNode is never empty: an EMPTY value
+// (`{? foo :,}` trailing-empty; FRK4 / DFF7) is `opt(FlowNode)` at the use site.
+const FlowNode = rule(() => [[opt(Property), alt(FlowMapping, FlowSequence, Alias, Scalar)], Property]);
 // The EXPLICIT-key half of a flow entry (`? key`). Factored into its own rule so the `?` literal is
 // NOT a top-level literal of FlowMapEntry — gen-tm's flow detector takes the FIRST single-char
 // punctuation in the entry rule as the key/value separator, and a top-level `?` would be picked
 // ahead of the real `:` and mis-derive every flow `:`-based pattern. Behind a ref, the `?` is
 // hidden and the detector correctly sees `:`.
 const FlowExplicit = rule(() => [['?', opt(FlowNode)]]);
-// An entry of a flow MAPPING `{…}`: an optional `? key` explicit half, an optional key node, and
-// an optional `: value`. One flat sequence covers `k: v`, `k` (null value), `? k : v`, `? k`, and
-// `: v` (empty key). Inside a flow MAPPING the implicit key need NOT be single-line (`{foo\n: bar}`
-// / `{ key\n : value }` are valid — every `{…}` member is a pair, so a multi-line key is
-// unambiguous; yaml-test-suite 4MUZ / VJP3), so the `:` may sit on the next line. Kept a single SEQ
-// (not an alt of forms) so its top-level `:` literal stays visible to the gen-tm flow detector.
+// An entry of a flow MAPPING `{…}`: a non-empty head — `? key` (explicit half plus optional key
+// node), a key node, or an empty-key `: value` — then an optional `: value`. This covers `k: v`,
+// `k` (null value), `? k : v`, `? k`, `: v` and `:`, and never matches the empty string (an empty
+// entry between commas, `{a,,b}`, stays a reject). Inside a flow MAPPING the implicit key need NOT be
+// single-line (`{foo\n: bar}` / `{ key\n : value }` are valid — every `{…}` member is a pair, so a
+// multi-line key is unambiguous; yaml-test-suite 4MUZ / VJP3), so the `:` may sit on the next line.
+// Kept a single SEQ whose trailing `opt(':', …)` is a TOP-LEVEL literal so the gen-tm flow
+// detector still sees `:` as the separator. The empty-key arm ends in `not(':')`: without it the
+// trailing `opt(':', …)` would take a SECOND value and accept `{: a : b}`.
 const FlowMapEntry = rule(() => [
-  [opt(FlowExplicit), opt(FlowNode), opt(':', opt(FlowNode))],
+  [alt([FlowExplicit, opt(FlowNode)], FlowNode, [':', opt(FlowNode), not(':')]), opt(':', opt(FlowNode))],
 ]);
 const FlowMapping = rule(() => [['{', opt(FlowMapEntry, many(',', FlowMapEntry)), opt(','), '}']]);
 // An entry of a flow SEQUENCE `[…]`: a bare flow node, OR a single-pair `key: value` mapping

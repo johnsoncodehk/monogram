@@ -24,6 +24,7 @@
     "gate:left-recursion": "node test/left-recursion.ts",
     "gate:html-lexer": "node test/html-lexer-spike.ts",
     "gate:treesitter": "(cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/treesitter-bench.ts",
+    "gate:treesitter-yaml": "(cd tree-sitter/yaml && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/yaml-treesitter.ts",
     "metric:scope-gap:ts": "node test/scope-gap-run.ts ts",
     "metric:scope-gap:js": "node test/scope-gap-run.ts js",
     "metric:scope-gap:jsx": "node test/scope-gap-run.ts jsx",

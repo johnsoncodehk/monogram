@@ -1,4 +1,5 @@
 import type { LedPrec, CstGrammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern } from './types.ts';
+import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
 import {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy,
   notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
@@ -627,5 +628,22 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     });
     return { token: tokenName, within, scope: entry.scope };
   });
-  return { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, rules, scopeOverrides, contextualScopes, markup: config.markup, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest };
+
+  // Nullable NON-ENTRY rules are a definition error: the engine never returns an empty match for a
+  // rule, so such a rule's empty case is unreachable and references to it fail silently where the
+  // author expected an empty match.
+  const entryName = config.entry ? names.get(config.entry) : findEntryRule(grammar);   // `entry` may be omitted: the last rule is the entry
+  const nullable = [...computeNullableRules(grammar).nullableRules].filter((n) => n !== entryName);
+  if (nullable.length > 0) {
+    const list = nullable.map((n) => `'${n}'`).join(', ');
+    throw new Error(
+      `Rule${nullable.length > 1 ? 's' : ''} ${list} can match the empty string, but a rule never succeeds with an `
+      + `empty match (an empty alternative cannot win longest-match), so the empty case is unreachable: a `
+      + `reference to it fails wherever it would have matched nothing. Inline the combinator at the use site `
+      + `(e.g. \`many(X)\` in the sequence instead of a \`rule(() => [[many(X)]])\`), or make the rule non-empty `
+      + `and wrap references in \`opt(...)\` where emptiness is intended.`,
+    );
+  }
+  return grammar;
 }
