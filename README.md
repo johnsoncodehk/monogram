@@ -236,7 +236,7 @@ Monogram beats tsc on every phase (valid typing ~100×, while-broken ~50×) and 
 
 From one grammar definition (a small TypeScript combinator API), five outputs are **fully functional**:
 
-- **A lexer** — tokenizes source straight from the grammar's token definitions; usable on its own (`createLexer(grammar).tokenize`).
+- **A lexer** — tokenizes source straight from the grammar's token definitions; generated as specialized code; usable on its own (the emitted parser module's `tokenize`).
 - **A CST parser** — recursive descent + Pratt precedence on top of the lexer, producing a **CST** (concrete syntax tree): every token is a node, including punctuation and keywords — roughly 2× an AST's nodes, by design, which is exactly what the highlighter and lossless source reconstruction need. A CST is *pre-semantic* (it models the productions, not static semantics — see [Correctness](#correctness-the-productions-not-tsc)).
 - **A TextMate grammar** — a `.tmLanguage.json` for VS Code / Sublime syntax highlighting, derived from the same rules, including derived **JSDoc-body** and **regex-internal** sub-grammars. (TextMate *scopes* are the dot-separated labels — `entity.name.function`, `keyword.control` — that a theme maps to colors.)
 - **A VS Code language configuration** — `language-configuration.json` (comments, bracket pairs, auto-close/surround, folding) derived from the same tokens.
@@ -399,7 +399,7 @@ Matching the official grammar *exactly* would, in cases like `transform`, make t
 ```
 typescript.ts                one grammar (TypeScript combinator API)
         │
-        ├─ src/gen-lexer.ts  ───────▶ lexer → tokens        (standalone: createLexer)
+        ├─ src/emit-lexer.ts ───────▶ lexer → tokens        (generated code; the only lexer)
         │        ▲ composed by
         ├─ src/gen-parser.ts ───────▶ CST parser   (recursive descent + Pratt + packrat memoization;
         │                             run against the conformance suite = the grammar's proof)

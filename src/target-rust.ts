@@ -173,7 +173,7 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
       : `toks.push(mk_tok(pos, ${endE}, pending_nl, ${kid}, lid_of(&src[pos..${endE}]))); pending_nl = false; `);
   const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
-  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (gen-lexer.ts).
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = (v: string) => (identLike.has(name) ? `let ${v} = if ${v} < b.len() && b[${v}] >= 0x80 { _lx_ext(b, ${v}) } else { ${v} }; ` : '');
   if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
             let mut e = pos + 1;
@@ -451,7 +451,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 ` : '';
   const identName = ir.identToken;
   const identKid = identName ? kidOf(ids, identName) : 0;
-  // Unicode ID_Start fallback (mirrors gen-lexer uniIdentReY) before unmatched-byte panic.
+  // Unicode ID_Start fallback (mirrors emit-lexer uniIdentReY) before unmatched-byte panic.
   const uniIdentEmit = stateful
     ? `st.emit(pos, e, ${identKid}, lid_of(&src[pos..e]));`
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, lid_of(&src[pos..e]))); pending_nl = false;`;
@@ -490,7 +490,7 @@ fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
     Some(e)
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
-// ID_Continue char (caf|é → café), mirroring gen-lexer's uniIdentContReY extension.
+// ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
 fn _lx_ext(b: &[u8], e: usize) -> usize {
     if e >= b.len() || b[e] < 0x80 { return e; }
     let mut ee = e;

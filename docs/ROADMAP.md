@@ -6,7 +6,7 @@ All emitted by `node src/cli.ts <grammar>.ts` (e.g. `typescript.ts`). Every high
 
 | Target | Artifact | Status |
 |---|---|---|
-| Lexer | `createLexer` → tokens | ✅ |
+| Lexer | generated lexer (`emit-lexer.ts`) → tokens | ✅ |
 | CST parser | `createParser` → CST | ✅ aligned to the official parser — see the **Parser** column (agree · covered) in the README Status table |
 | TextMate | `.tmLanguage.json` | ✅ measured against the official grammar on all 6 languages — see the README **Highlighter** table (the [vscode#203212](https://github.com/microsoft/vscode/issues/203212) comparison) |
 | VS Code language-config | `.language-configuration.json` | ✅ comments / brackets / folding derived from the same tokens |

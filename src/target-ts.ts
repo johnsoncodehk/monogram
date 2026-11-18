@@ -112,7 +112,7 @@ function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, r
     : `${stateful ? 'emit' : 'push'}(pos, ${endExpr}, ${kid}, lid_of(src.slice(pos, ${endExpr}))); `);
   const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
-  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (gen-lexer.ts).
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = (v: string) => (identLike.has(name) ? `${v} = lx_ext(src, ${v}); ` : '');
   if (t.kind === 'run') return `    if (${gate}${rangeCond('c', t.first)}) {
       let e = pos + 1;
@@ -219,7 +219,7 @@ function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: 
       while (p < n && src.charCodeAt(p) === 32) p++;
       if (p >= n) { pos = p; lineStart = false; continue; }
       const ch = src.charCodeAt(p);
-      if (ch === 10 || ch === 13) {   // LF/CR only — the interpreter's newline mode rejects LS/PS (gen-lexer.ts blank-line check)
+      if (ch === 10 || ch === 13) {   // LF/CR only — the interpreter's newline mode rejects LS/PS (emit-lexer.ts blank-line check)
         pos = p + 1; if (ch === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
         continue;
       }
@@ -415,7 +415,7 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
 `
     : '  const push = (off: number, end: number, kid: number, lid: number) => { toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false; };\n';
   const loopBody = `${nlBoundary}    const c = src.charCodeAt(pos);
-    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (gen-lexer.ts).
+    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (emit-lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
   if (rxOnly) {

@@ -4052,7 +4052,7 @@ export function createParser() {
       } catch (e) {
         // total parse: the strict pass rejected — iterate recovery under the bar
         // discipline (see recoverBars); the iteration cap degrades to free-fire,
-        // and a recovery-blind layer (fallback lexers) degrades to the zero-width
+        // and an error no layer recovers from (a mode-specific lexer error) degrades to the zero-width
         // $error root. Never a crash.
         recovering = true;
         const bars = [];

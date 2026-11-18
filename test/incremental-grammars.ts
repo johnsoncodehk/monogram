@@ -1,6 +1,6 @@
 // Gate: INCREMENTAL ≡ FRESH for EVERY GRAMMAR — the incremental/recovery gates
 // were TypeScript-only while all grammars share the same emitted runtime, so the
-// non-TS incremental behavior (markup lexer modes, the fallback-lexer path, other
+// non-TS incremental behavior (markup / indent / newline lexer modes, other
 // token algebras) was ungated. Grammar-agnostic by construction:
 //
 //   inputs come from the generative walker (grammar-gen), edit scripts are seeded
