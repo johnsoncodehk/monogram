@@ -1113,6 +1113,8 @@ function emitJsParser(grammar: CstGrammar): string {
   // Every token is BORN with tok.k (type kind) + tok.t (literal kind) and the stamp
   // flags — one monomorphic shape, one allocation, no post-pass.
   e.emit(`const TYPE_KIND = new Map<string, number>(${J([...st.typeKind])});`);
+  // Token diagnostic labels (TokenDecl.label): name → display string, for "expected …" only.
+  e.emit(`const TOKEN_LABELS = new Map<string, string>(${J(grammar.tokens.filter(t => t.label !== undefined).map(t => [t.name, t.label!]))});`);
   e.emit(`const LIT_KW = new Map<string, number>(${J([...st.kwLitKind])});`);
   e.emit(`const LIT_PU = new Map<string, number>(${J([...st.puLitKind])});`);
   e.emit(`const K_PUNCT = ${st.KIND_PUNCT};`);
@@ -1232,6 +1234,10 @@ function emitJsParser(grammar: CstGrammar): string {
   // node's rule name so trees stay byte-identical to the base grammar. Identical to
   // RULE_NAMES when no rule is forked (the common case).
   e.emit(`const RULE_DISPLAY = ${J([...grammar.rules.map(r => r.canon ?? r.name), '$template', '$error', '$missing'])};`);
+  // Diagnostic LABELS: what a `$missing` row's "expected …" names for a missing required RULE.
+  // `RuleDecl.label` substitutes a display string there and nowhere else (RULE_DISPLAY stays the
+  // node's reported rule name), so a grammar that adds labels parses byte-identically.
+  e.emit(`const RULE_LABELS = ${J([...grammar.rules.map(r => r.label ?? r.canon ?? r.name), '$template', '$error', '$missing'])};`);
   e.emit(`const RID_TEMPLATE = ${grammar.rules.length};`);
   e.emit(`const RID_ERROR = ${grammar.rules.length + 1};`);
   e.emit(`const RID_MISSING = ${grammar.rules.length + 2};`);
@@ -2427,6 +2433,10 @@ function tokTextAt(i: number) {
 // The k → type-name inverse, for reconstructing a token object (tokenAt / tokenize).
 const K_NAMES: string[] = [];
 for (const [n, k] of TYPE_KIND) K_NAMES[k] = n;
+// The k → diagnostic-label inverse: a labelled token renders bare (expected a number), an
+// unlabelled one keeps the quoted grammar name (expected 'NUM').
+const K_LABELS: string[] = [];
+for (const [n, k] of TYPE_KIND) K_LABELS[k] = TOKEN_LABELS.get(n) ?? "'" + n + "'";
 
 // Parse to the ARENA: returns the root node id.
 function lexInto(source: string) {
@@ -2728,9 +2738,9 @@ function missLit(v: number) {
 function missEntry(v: number, kb: number): Diag {
   let message;
   if (v >= 1 << 21) message = 'expected ' + VSETS[v >>> 21];
-  else if (v >= RULE_MISS_BASE) message = 'expected ' + RULE_DISPLAY[v - RULE_MISS_BASE];
+  else if (v >= RULE_MISS_BASE) message = 'expected ' + RULE_LABELS[v - RULE_MISS_BASE];
   else if (v > 0) message = "expected '" + LIT_NAMES[v] + "'";
-  else message = "expected '" + (K_NAMES[-v] ?? '?') + "'";
+  else message = 'expected ' + (K_LABELS[-v] ?? "'?'");
   return { offset: kb, end: kb, message };
 }
 function collectErrRows(id: number, charBase: number, tokBase: number) {

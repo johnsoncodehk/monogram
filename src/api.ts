@@ -15,6 +15,10 @@ export {
 
 interface TokenOptions {
   skip?: boolean;
+  // Display name for `expected …` diagnostics (the emitted engine's $missing rows): a token
+  // `NUM` reads as `expected 'NUM'` by default; `label: 'a number'` renders `expected a number`.
+  // Messages ONLY: leaf tokenTypes, scopes, and every derived artifact keep the grammar name.
+  label?: string;
   scope?: string;
   escape?: TokenPattern;
   // Highlight-only interpolation regions for ordinary string tokens (e.g. env-spec `${…}` / `$(…)`).
@@ -78,6 +82,10 @@ export function token(pattern: TokenPattern, opts?: TokenOptions): TokenRef {
 
 interface RuleOptions {
   type?: boolean;
+  // Display name for `expected …` diagnostics (a missing required rule): `expected Value` by
+  // default, `expected a value` with `label: 'a value'`. Messages only; `ruleNameOf`, the CST,
+  // and every derived artifact keep the rule name.
+  label?: string;
 }
 
 type Element = string | TokenRef | RuleRef | Marker | Combinator;
@@ -556,6 +564,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
       blockOnly: tok.opts.blockOnly,
       flags,
       scope: tok.opts.scope,
+      label: tok.opts.label,
       escapePattern: tok.opts.escape,
       interpolation: tok.opts.interpolation
         ? (Array.isArray(tok.opts.interpolation) ? tok.opts.interpolation : [tok.opts.interpolation]).map((i) => ({ ...i }))
@@ -600,6 +609,7 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
       name,
       body: convertAlternatives(alts, names),
       flags: r.opts.type ? ['type'] : [],
+      label: r.opts.label,
     };
   });
 

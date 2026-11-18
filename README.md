@@ -281,6 +281,8 @@ export default defineGrammar({
 });
 ```
 
+**Diagnostic labels.** The total parser's `expected …` messages name the missing token or rule by its grammar name (`expected 'Number'`, `expected Expr`). When a grammar name is an internal identifier rather than a word an end user should read, give it a display label: `token(pattern, { label: 'a number' })` / `rule(fn, { label: 'an expression' })` render `expected a number` / `expected an expression`. Labels change message text only: leaf `tokenType`s, `ruleNameOf`, the CST, and every derived artifact keep the grammar name, so adding labels parses byte-identically (`test/diagnostic-labels.ts`).
+
 Token patterns are **combinators, not regular expressions** — `seq` / `oneOf` / `range` / `noneOf` / `plus` / `star` / `altPattern` / `optPattern` / … assemble a structured pattern IR (regex is a *derived* backend, not the source of truth). A bare `RegExp` is not a valid token pattern: `token(/…/)` is a `TS2345` type error. Coming from regex:
 
 | RegExp | Combinator |
