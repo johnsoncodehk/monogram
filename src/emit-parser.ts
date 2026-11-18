@@ -2509,102 +2509,13 @@ function parseRuleEntry(idx: number, rid: number, name: string, core: (minBp: nu
   return false;
 }
 
-// Token text at an arbitrary index (cold paths: errors, the tokenAt debug view).
+// Token text at an arbitrary index of the ACTIVE document (cold paths: error messages).
 function tokTextAt(i: number) {
   return ${e.soa ? 'docText(toff(i), tend(i))' : 'tkText[i]'};
 }
-// The k → type-name inverse, for reconstructing a token object (tokenAt).
+// The k → type-name inverse, for reconstructing a token object (tokenAt / tokenize).
 const K_NAMES: string[] = [];
 for (const [n, k] of TYPE_KIND) K_NAMES[k] = n;
-// A per-token object view over the ACTIVE document's columns (the parser never builds these).
-function tokenView(i: number): Token {
-  return {
-    type: K_NAMES[tkK[i]] ?? '',
-    text: tokTextAt(i),
-    offset: toff(i),
-    k: tkK[i],
-    t: tkT[i],
-    newlineBefore: (tkFl[i] & 1) !== 0,
-    commentBefore: (tkFl[i] & 2) !== 0,
-    multilineFlowBefore: (tkFl[i] & 4) !== 0,
-  };
-}
-
-// The CST is span-only: a node's text is derived from the source it was parsed from.
-// ── Arena tree access ──
-// The arena IS the tree: parse() returns the root node id and consumers traverse
-// via visit()/the accessors — nothing is materialized on the parse path. All views
-// are valid until the NEXT parse (the columns are reused).
-function leafTokenType(entry: number, tokBase: number) {
-  const tok = tokBase + ((~entry) >>> 2);
-  const kind = (~entry) & 3;
-  return kind === 1 ? '$keyword'
-    : kind === 2 ? '$operator'
-    : tkK[tok] === K_PUNCT ? '$punct'
-    : (K_NAMES[tkK[tok]] ?? '');
-}
-// Raw arena accessors. An ENTRY is a node id (>= 0) or a leaf (< 0, token-encoded);
-// offsetOf/endOf/textOf accept either.
-// GREEN accessors: positions are RELATIVE — a node knows (rel, len) against its
-// parent and (tokRel, tokLen) in tokens; consumers descend with (charBase, tokBase)
-// — the node's own absolute start coordinates. Leaf spans come from the token
-// columns at tokBase + the entry's node-relative token index. These read the ACTIVE
-// document; the public views (module tree, createParser().tree) bind one document each.
-const rawTree = {
-  ruleNameOf: (id: number) => RULE_DISPLAY[rowRule[id]],
-  ruleIdOf: (id: number) => rowRule[id],
-  lenOf: (id: number) => rowLen[id],
-  tokLenOf: (id: number) => rowTokLen[id],
-  // a node CHILD's relative coordinates live on the parent edge (kids-parallel)
-  childRelAt: (id: number, i: number) => kcr(id, rowStart[id] + i),
-  childTokRelAt: (id: number, i: number) => ktr(id, rowStart[id] + i),
-  // base-threaded spans: nodes from their bases, leaves from the token columns
-  offsetOf: (entry: number, charBase: number, tokBase: number) => entry >= 0 ? charBase : toff(tokBase + ((~entry) >>> 2)),
-  endOf: (entry: number, charBase: number, tokBase: number) => entry >= 0 ? charBase + rowLen[entry] : tend(tokBase + ((~entry) >>> 2)),
-  childCount: (id: number) => rowCount[id],
-  childAt: (id: number, i: number) => kids[rowStart[id] + i],
-  // Bulk child load into a caller-owned array; returns the count. One call per node
-  // instead of childCount+childAt-per-probe (the generated matchers' hot path).
-  childrenInto: (id: number, out2: number[]) => {
-    const n2 = rowCount[id];
-    const cs2 = rowStart[id];
-    for (let i2 = 0; i2 < n2; i2++) out2[i2] = kids[cs2 + i2];
-    return n2;
-  },
-  isLeaf: (entry: number) => entry < 0,
-  leafToken: (entry: number, tokBase: number) => tokBase + ((~entry) >>> 2),
-  leafTokenType,
-  // Int-world leaf accessors (the match-path encoding): kind bits — 0 type-derived,
-  // 1 '$keyword', 2 '$operator' — and the token's TYPE kind int (1 = punctuation).
-  leafKindOf: (entry: number) => (~entry) & 3,
-  leafTokKindOf: (entry: number, tokBase: number) => tkK[tokBase + ((~entry) >>> 2)],
-  leafOffsetOf: (entry: number, tokBase: number) => toff(tokBase + ((~entry) >>> 2)),
-  leafEndOf: (entry: number, tokBase: number) => tend(tokBase + ((~entry) >>> 2)),
-  textOf: (entry: number, source: string, charBase: number, tokBase: number) => entry >= 0
-    ? source.slice(charBase, charBase + rowLen[entry])
-    : source.slice(toff(tokBase + ((~entry) >>> 2)), tend(tokBase + ((~entry) >>> 2))),
-};
-// Depth-first traversal from a node id or leaf entry:
-//   enter(id)         — each NODE before its children; return false to skip its subtree
-//   leave(id)         — each node after its children
-//   leaf(entry, tok)  — each leaf (tok = its token index)
-// Depth-first traversal threading the RED coordinates: enter/leave receive the
-// node's absolute (charBase, tokBase); leaf receives its absolute token index.
-// Call with the root only — the bases default from the root's rel fields.
-type _VisitFns = { enter?: (id: number, charBase: number, tokBase: number) => boolean | void; leave?: (id: number, charBase: number, tokBase: number) => void; leaf?: (entry: number, tok: number) => void };
-function visitCore(entry: number, fns: _VisitFns, charBase?: number, tokBase?: number) {
-  if (charBase === undefined) { charBase = rootCharBase; tokBase = rootTokBase; }
-  if (entry < 0) { if (fns.leaf) fns.leaf(entry, tokBase! + ((~entry) >>> 2)); return; }
-  if (fns.enter && fns.enter(entry, charBase, tokBase!) === false) return;
-  const n = rowCount[entry];
-  const cs = rowStart[entry];
-  for (let i = 0; i < n; i++) {
-    const e = kids[cs + i];
-    if (e < 0) { if (fns.leaf) fns.leaf(e, tokBase! + ((~e) >>> 2)); }
-    else visitCore(e, fns, charBase + kcr(entry, cs + i), tokBase! + ktr(entry, cs + i));
-  }
-  if (fns.leave) fns.leave(entry, charBase, tokBase!);
-}
 
 // Parse to the ARENA: returns the root node id.
 function lexInto(source: string) {
@@ -3500,6 +3411,7 @@ type Doc = {
 ${e.soa ? '  parenCachePos: number; parenCacheStack: boolean[];' : '  tkText: string[]; altText: string[];'}
   altK: typeof tkK | null; altT: typeof tkT | null; altOff: typeof tkOff | null; altEnd: typeof tkEnd | null; altFl: typeof tkFl | null; altDp: typeof tkDp | null; altPd: typeof tkPd | null;
   altCap: number; altN: number;
+  epoch: number;   // bumped by every parse/edit of this document (visit detects reentrant mutation)
 };
 type Handle = { d: Doc; gen: number; root: number; errors: Diag[] };
 // rows: the initial arena row capacity (kids get twice that); a lex-only document never
@@ -3526,6 +3438,7 @@ function makeDoc(rows = 8192): Doc {
 ${e.soa ? '    parenCachePos: -1, parenCacheStack: [],' : '    tkText: [], altText: [],'}
     altK: null, altT: null, altOff: null, altEnd: null, altFl: null, altDp: null, altPd: null,
     altCap: 0, altN: 0,
+    epoch: 0,
   };
 }
 function saveDoc(d: Doc) {
@@ -3572,6 +3485,119 @@ function activate(d: Doc) {
   saveDoc(curDoc);
   loadDoc(d);
   curDoc = d;
+}
+
+// ── Document-owned reads ──
+// Every public parse/edit runs as activate(d) … finally saveDoc(d), so outside those calls
+// each Doc object holds its document's current columns. The read paths below (tree views,
+// visit, tokenAt) read one Doc's fields directly and never switch the active document: a
+// callback may parse, edit, tokenize or traverse any other document without disturbing the
+// traversal it runs inside. Arena views stay valid until that document's next parse/edit.
+function dOff(d: Doc, i: number) { const v = d.tkOff[i]; return v < 0 ? v + d.srcLenP1 : v; }
+function dEnd(d: Doc, i: number) { const v = d.tkEnd[i]; return v < 0 ? v + d.srcLenP1 : v; }
+${e.soa ? `function dText(d: Doc, a: number, b: number) {
+  let f = d.docFlat;
+  if (f === null) {
+    if (d.docPieces === null) return '';
+    f = d.docPieces.join('');
+    d.docFlat = f;
+    if (d === curDoc) docFlat = f;
+  }
+  return f.slice(a, b);
+}
+` : ''}// Token i of document d as an object (the parser never builds these).
+function tokenOf(d: Doc, i: number): Token {
+  const k = d.tkK[i], fl = d.tkFl[i], off = dOff(d, i);
+  return {
+    type: K_NAMES[k] ?? '',
+    text: ${e.soa ? 'dText(d, off, dEnd(d, i))' : 'd.tkText[i]'},
+    offset: off,
+    k,
+    t: d.tkT[i],
+    newlineBefore: (fl & 1) !== 0,
+    commentBefore: (fl & 2) !== 0,
+    multilineFlowBefore: (fl & 4) !== 0,
+  };
+}
+// ── Arena tree access ──
+// The arena IS the tree: parse() returns the root node id and consumers traverse via
+// visit() / the accessors — nothing is materialized on the parse path. An ENTRY is a node id
+// (>= 0) or a leaf (< 0, token-encoded); offsetOf/endOf/textOf accept either. Positions are
+// RELATIVE: a node knows (rel, len) against its parent and (tokRel, tokLen) in tokens, so
+// consumers descend with (charBase, tokBase) — the node's own absolute start coordinates.
+// Leaf spans come from the token columns at tokBase + the entry's node-relative token index.
+function treeOf(d: Doc) {
+  const kcrD = (p: number, k: number) => { const v = d.kidRel[k]; return v < 0 ? v + d.rowLen[p] + 1 : v; };
+  const ktrD = (p: number, k: number) => { const v = d.kidTokRel[k]; return v < 0 ? v + d.rowTokLen[p] + 1 : v; };
+  return {
+    ruleNameOf: (id: number) => RULE_DISPLAY[d.rowRule[id]],
+    ruleIdOf: (id: number) => d.rowRule[id],
+    lenOf: (id: number) => d.rowLen[id],
+    tokLenOf: (id: number) => d.rowTokLen[id],
+    // a node CHILD's relative coordinates live on the parent edge (kids-parallel)
+    childRelAt: (id: number, i: number) => kcrD(id, d.rowStart[id] + i),
+    childTokRelAt: (id: number, i: number) => ktrD(id, d.rowStart[id] + i),
+    // base-threaded spans: nodes from their bases, leaves from the token columns
+    offsetOf: (entry: number, charBase: number, tokBase: number) => entry >= 0 ? charBase : dOff(d, tokBase + ((~entry) >>> 2)),
+    endOf: (entry: number, charBase: number, tokBase: number) => entry >= 0 ? charBase + d.rowLen[entry] : dEnd(d, tokBase + ((~entry) >>> 2)),
+    childCount: (id: number) => d.rowCount[id],
+    childAt: (id: number, i: number) => d.kids[d.rowStart[id] + i],
+    // Bulk child load into a caller-owned array; returns the count. One call per node
+    // instead of childCount+childAt-per-probe (the generated matchers' hot path).
+    childrenInto: (id: number, out2: number[]) => {
+      const kids2 = d.kids;
+      const n2 = d.rowCount[id];
+      const cs2 = d.rowStart[id];
+      for (let i2 = 0; i2 < n2; i2++) out2[i2] = kids2[cs2 + i2];
+      return n2;
+    },
+    isLeaf: (entry: number) => entry < 0,
+    leafToken: (entry: number, tokBase: number) => tokBase + ((~entry) >>> 2),
+    leafTokenType: (entry: number, tokBase: number) => {
+      const k = d.tkK[tokBase + ((~entry) >>> 2)];
+      const kind = (~entry) & 3;
+      return kind === 1 ? '$keyword' : kind === 2 ? '$operator' : k === K_PUNCT ? '$punct' : (K_NAMES[k] ?? '');
+    },
+    // Int-world leaf accessors (the match-path encoding): kind bits — 0 type-derived,
+    // 1 '$keyword', 2 '$operator' — and the token's TYPE kind int (1 = punctuation).
+    leafKindOf: (entry: number) => (~entry) & 3,
+    leafTokKindOf: (entry: number, tokBase: number) => d.tkK[tokBase + ((~entry) >>> 2)],
+    leafOffsetOf: (entry: number, tokBase: number) => dOff(d, tokBase + ((~entry) >>> 2)),
+    leafEndOf: (entry: number, tokBase: number) => dEnd(d, tokBase + ((~entry) >>> 2)),
+    textOf: (entry: number, source: string, charBase: number, tokBase: number) => entry >= 0
+      ? source.slice(charBase, charBase + d.rowLen[entry])
+      : source.slice(dOff(d, tokBase + ((~entry) >>> 2)), dEnd(d, tokBase + ((~entry) >>> 2))),
+  };
+}
+// Depth-first traversal threading the RED coordinates:
+//   enter(id, charBase, tokBase) — each NODE before its children; return false to skip its subtree
+//   leave(id, charBase, tokBase) — each node after its children
+//   leaf(entry, tok)             — each leaf (tok = its absolute token index)
+// Call with the root only — the bases default from the root's rel fields. A callback that
+// parses or edits the document being traversed ends the visit with an error.
+type _VisitFns = { enter?: (id: number, charBase: number, tokBase: number) => boolean | void; leave?: (id: number, charBase: number, tokBase: number) => void; leaf?: (entry: number, tok: number) => void };
+function visitDoc(d: Doc, entry: number, fns: _VisitFns, charBase?: number, tokBase?: number) {
+  const epoch = d.epoch;
+  const rowCount2 = d.rowCount, rowStart2 = d.rowStart, kids2 = d.kids, kidRel2 = d.kidRel, kidTokRel2 = d.kidTokRel, rowLen2 = d.rowLen, rowTokLen2 = d.rowTokLen;
+  const changed = () => { throw new Error('document changed during visit: a callback parsed or edited the document being traversed'); };
+  const walk = (id: number, cb: number, tb: number): void => {
+    if (fns.enter) { const r = fns.enter(id, cb, tb); if (d.epoch !== epoch) changed(); if (r === false) return; }
+    const n = rowCount2[id];
+    const cs = rowStart2[id];
+    for (let i = 0; i < n; i++) {
+      const k = kids2[cs + i];
+      if (k < 0) {
+        if (fns.leaf) { fns.leaf(k, tb + ((~k) >>> 2)); if (d.epoch !== epoch) changed(); }
+      } else {
+        const cr = kidRel2[cs + i], tr = kidTokRel2[cs + i];
+        walk(k, cb + (cr < 0 ? cr + rowLen2[id] + 1 : cr), tb + (tr < 0 ? tr + rowTokLen2[id] + 1 : tr));
+      }
+    }
+    if (fns.leave) { fns.leave(id, cb, tb); if (d.epoch !== epoch) changed(); }
+  };
+  if (charBase === undefined) { charBase = d.rootCharBase; tokBase = d.rootTokBase; }
+  if (entry < 0) { if (fns.leaf) fns.leaf(entry, tokBase! + ((~entry) >>> 2)); return; }
+  walk(entry, charBase, tokBase!);
 }
 function swapBuffers() {
   let x: any;
@@ -4040,42 +4066,45 @@ ${e.soa ? String.raw`  // ── M1: WINDOWED re-lex ──
 
 
 // The tokenizer alone: a fresh Token[] the caller owns.${e.soa ? ` The specialized lexer writes
-// columns, so it runs in a private lex-only document and the active one is restored even when
-// lexing throws — no tree, handle or earlier result can observe the call.
+// columns, so it runs in a private lex-only document (kept across calls; every result is
+// copied out) and the active one is restored even when lexing throws — no tree, handle or
+// earlier result can observe the call.
+let lexDoc: Doc | null = null;
 export function tokenize(source: string): Token[] {
   const prev = curDoc;
-  activate(makeDoc(16));
+  const ld = lexDoc ??= makeDoc(16);
+  activate(ld);
   try {
     lexFull(source);
-    const out: Token[] = [];
-    for (let i = 0; i < tokN; i++) out.push(tokenView(i));
+    saveDoc(ld);
+    const out: Token[] = new Array(tokN);
+    for (let i = 0; i < tokN; i++) out[i] = tokenOf(ld, i);
     return out;
   } finally {
     activate(prev);
   }
 }` : ` createLexer keeps no state between calls.
 export function tokenize(source: string): Token[] { return lexTokens(source); }`}
-// A view of rawTree bound to ONE document: every accessor activates it first.
-function bindTree(d: Doc): typeof rawTree {
-  const view: any = {};
-  for (const k of Object.keys(rawTree)) {
-    const f = (rawTree as any)[k];
-    view[k] = (a: any, b: any, c: any, x: any) => { activate(d); return f(a, b, c, x); };
-  }
-  return view;
-}
 // ── Module-level API: the DEFAULT document (one shared session). Every export below
 // reads or writes that document, whatever a createParser() instance did in between. ──
-export function parse(source: string, entryRule?: string) { activate(docDefault); return parseCore(source, entryRule); }
-export function parseEdited(entryRule?: string, edits?: Edit[]) { activate(docDefault); return editCore(entryRule, edits); }
-export const tree = bindTree(docDefault);
-export function tokenAt(i: number) { activate(docDefault); return tokenView(i); }
+export function parse(source: string, entryRule?: string) {
+  activate(docDefault);
+  docDefault.epoch++;
+  try { return parseCore(source, entryRule); } finally { saveDoc(docDefault); }
+}
+export function parseEdited(entryRule?: string, edits?: Edit[]) {
+  activate(docDefault);
+  docDefault.epoch++;
+  try { return editCore(entryRule, edits); } finally { saveDoc(docDefault); }
+}
+export const tree = treeOf(docDefault);
+export function tokenAt(i: number): Token { return tokenOf(docDefault, i); }
 // Arena reclamation introspection + budget override — TEST HOOKS (issue #45 C1). __arenaStats
 // reports the live arena, the compacted-size baseline, and how many edits re-parsed to reclaim;
 // __setArenaBudget lowers the factor/min so a gate can force compaction deterministically.
-export function __arenaStats() { activate(docDefault); return { nodeN, kidN, baseline: arenaLiveBaseline, compactions: arenaCompactions, inPlaceShrink: arenaInPlaceShrink }; }
+export function __arenaStats() { return { nodeN: docDefault.nodeN, kidN: docDefault.kidN, baseline: arenaLiveBaseline, compactions: arenaCompactions, inPlaceShrink: arenaInPlaceShrink }; }
 export function __setArenaBudget(factor: number, min: number) { arenaCompactFactor = factor; arenaCompactMin = min; }
-export function visit(entry: number, fns: _VisitFns, charBase?: number, tokBase?: number) { activate(docDefault); return visitCore(entry, fns, charBase, tokBase); }
+export function visit(entry: number, fns: _VisitFns, charBase?: number, tokBase?: number) { return visitDoc(docDefault, entry, fns, charBase, tokBase); }
 // ── Handle API: explicit trees over per-instance documents ──
 // const p = createParser(); const cst = p.parse(text); p.edit(cst, next[, edits]);
 // The handle is the STABLE IDENTITY of this document's tree: edit() mutates it in
@@ -4091,10 +4120,31 @@ export function createParser() {
     if (cst === null || cst === undefined || cst.d !== d) throw new Error('foreign tree handle: it belongs to another parser instance');
     if (cst.gen !== gen) throw new Error('stale tree handle: parse() re-opened this document - use the handle from the latest parse()');
   };
-  const view = bindTree(d);
+  const view = treeOf(d);
   return {
     parse(source: string, entryRule?: string) {
       activate(d);
+      d.epoch++;
+      try { return parseTotal(source, entryRule); } finally { saveDoc(d); }
+    },
+    edit(cst: Handle, edits?: Edit[]) {
+      chk(cst);
+      activate(d);
+      d.epoch++;
+      try {
+        cst.root = editCore(entryUsed, edits);
+      } catch (e) {
+        if (e instanceof RangeError || (e && (e as any).apiMisuse)) throw e;
+        cst.root = totalNet(e);
+      } finally {
+        saveDoc(d);
+      }
+    },
+    visit(cst: Handle, fns: _VisitFns) { chk(cst); return visitDoc(d, cst.root, fns); },
+    tokenAt(cst: Handle, i: number): Token { chk(cst); return tokenOf(d, i); },
+    tree: view,
+  };
+  function parseTotal(source: string, entryRule?: string): Handle {
       entryUsed = entryRule;
       gen++;   // re-opening resets the arena: old handles die regardless of outcome
       docDiags.length = 0;
@@ -4150,20 +4200,7 @@ export function createParser() {
         settleDiags();
       }
       return { d, gen, root, errors: docDiags };
-    },
-    edit(cst: Handle, edits?: Edit[]) {
-      chk(cst);
-      activate(d);
-      try {
-        cst.root = editCore(entryUsed, edits);
-      } catch (e) {
-        if (e instanceof RangeError || (e && (e as any).apiMisuse)) throw e;
-        cst.root = totalNet(e);
-      }
-    },
-    visit(cst: Handle, fns: _VisitFns) { chk(cst); activate(d); return visitCore(cst.root, fns); },
-    tree: view,
-  };
+  }
 }
 `);
 }
