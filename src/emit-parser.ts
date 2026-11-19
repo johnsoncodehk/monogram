@@ -2141,6 +2141,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`    }`);
   e.emit(`    if (!matched) { pos = ledSaved; scn = ledMark; break; }`);
   e.emit(`  }`);
+  // A sub-parse (a parenthesized or argument arrow) may have left the flag set; only the
+  // capped returns above make THIS node capped.
+  if (anyCapped) e.emit(`  _prattCapped = false;`);
   e.emit(`  return lhs;`);
   e.emit(`}`);
 

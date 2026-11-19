@@ -866,6 +866,9 @@ export function createParser(grammar: CstGrammar) {
         if (!matched) { pos = ledSaved; break; }
       }
 
+      // A sub-parse (a parenthesized or argument arrow) may have left the flag set; only the
+      // capped returns above make THIS node capped.
+      _prattCapped = false;
       return lhs;
     }
 

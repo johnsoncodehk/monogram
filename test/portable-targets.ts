@@ -245,6 +245,8 @@ const CASES: Case[] = [
       // A typed call / instantiation is a LeftHandSideExpression: its `<` is not an operator.
       'f<T>() = 1;', 'x = B<C> = 1;', 'x = B<C> += 1;', 'f<T>`x` = 1;', 'f<T>()++;', 'f<T>().x = 1;',
       '++(-x);', '++x.y;', '++f<T>();',
+      // A parenthesized / argument arrow does not cap the operator chain around it.
+      'a + f(() => 1) + c;', 'a && (() => 1) && c;', 'x = (a = () => 1) || y;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',

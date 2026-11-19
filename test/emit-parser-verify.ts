@@ -86,6 +86,10 @@ for (const d of r1.divergences.slice(0, 15)) {
   console.log(`  [${d.verdict}] ${d.name}`);
   if (d.detail) console.log(`     ${d.detail}`);
 }
+// Parity alone passes when both parsers reject: every curated-valid snippet and every repo
+// source (valid TypeScript — the repo type-checks) must also be ACCEPTED by the oracle.
+const validRejected = inRepo.filter((s) => !s.name.startsWith('invalid#') && !run(oracle.parse, s.code).ok).map((s) => s.name);
+console.log(`  valid samples rejected:   ${validRejected.length}${validRejected.length ? ' — ' + validRejected.join(', ') : ''}`);
 
 // ── 2) Optional breadth: the external /tmp/ts-repo corpus when present ──
 const arg = process.argv[2];
@@ -113,6 +117,6 @@ if (extAll.length) {
   console.log('\n=== external corpus (/tmp/ts-repo) absent — in-repo gate only ===');
 }
 
-const failed = r1.divergences.length + extDiv;
+const failed = r1.divergences.length + validRejected.length + extDiv;
 if (failed) { console.error(`\n✗ emit ≢ interpreter (${failed} divergence${failed === 1 ? '' : 's'})`); process.exit(1); }
 console.log('\n✓ emitted parser ≡ interpreter (CST byte-identical)');
