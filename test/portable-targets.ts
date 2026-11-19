@@ -235,8 +235,11 @@ const CASES: Case[] = [
       // `<` heads both type-argument LEDs and the relational operator: a type-argument arm
       // that fails must leave `<` to the next arm and to the comparison.
       'a < b;', 'a < b >> c;', 'a < b > c;', 'f(a < b, c > d);', 'x = B<C>;', 'x = B<C>(1);',
+      'x = y = 1;', '(a + b) = 1;', 'a.b = 1;', 'x++;', '++x;', '(-x) ** 2;', '++x ** 2;',
     ],
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;'],
+    // Operators that require an assignment target or forbid a unary left operand.
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
+      'a + b = 1;', '-x = 1;', 'x++ = 1;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;'],
   },
 ];
 

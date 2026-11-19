@@ -842,7 +842,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const tplNud = tpl && r.nudToks.includes(tpl.token)
     ? `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); return node === null ? null : { rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end }; }\n`
     : '';
-  const BIN = `{ ${r.binary.map((b) => `${lidOf(ids, b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp} }`).join(', ')} }`;
+  const BIN = `{ ${r.binary.map((b) => `${lidOf(ids, b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.requireTarget}, noUnary: ${b.noUnaryLhs} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ')} }`;
   const atom = `new Set([${r.nudToks.map((k) => kidOf(ids, k)).join(', ')}])`;
   const bracketNudBody = (b: Bracket) => `{
@@ -875,9 +875,9 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
   // lid (e.g. `[` array-type then indexed-access) fall through to each other;
   // only the LAST arm of a group emits `break ledLoop`.
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, hasBin: boolean, isLast: boolean) => `{
+  const ledBody = (b: Bracket, form: number, hasBin: boolean, isLast: boolean) => `{
       const ledSave = pos; const kids: Cst[] = [left];
-      if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.cstName)}, kids); continue ledLoop; }
+      if (${b.steps.map((x) => stepCond(x, ids)).join(' && ')}) { left = node(${J(r.cstName)}, kids); form = ${form}; continue ledLoop; }
       pos = ledSave;${hasBin ? '' : isLast ? ' break ledLoop;' : ''}
     }`;
   const ledSwitch = (() => {
@@ -888,7 +888,7 @@ ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }, j) =>
-    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, hasBin, j === g.members.length - 1)}`);
+    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, r.ledForm[i]!, hasBin, j === g.members.length - 1)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -898,17 +898,20 @@ ${groups.map((g) => {
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
     const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
     const tplPart = hasTpl ? `
-    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end }; continue ledLoop; } }` : '';
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(() => parse${r.name}()); if (node !== null) { left = { rule: ${J(r.cstName)}, children: [left, node], offset: left.offset, end: node.end }; form = 0; continue ledLoop; } }` : '';
     return `    switch (t.kid) {
 ${groups.map((g) => `      case ${g.key}:
-        if (!tailClosed) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end }; continue ledLoop; }
+        if (!tailClosed) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, leaf], offset: left.offset, end: leaf.end }; form = 0; continue ledLoop; }
         break;`).join('\n')}
     }${tplPart}`;
   })();
   const POST = `{ ${r.postfix.map((p) => `${lidOf(ids, p.op)}: ${p.lbp}`).join(', ')} }`;
-  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number }> = ${BIN};
+  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean }> = ${BIN};
 const ${r.name}_PRE: Record<number, number> = ${PRE};
+const ${r.name}_PRE_FORM: Record<number, number> = { ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.form}`).join(', ')} };
+const ${r.name}_PRE_TGT = new Set<number>([${r.prefix.filter((p) => p.requireTarget).map((p) => lidOf(ids, p.op)).join(', ')}]);
 const ${r.name}_POST: Record<number, number> = ${POST};
+const ${r.name}_POST_TGT = new Set<number>([${r.postfix.filter((p) => p.requireTarget).map((p) => lidOf(ids, p.op)).join(', ')}]);
 const ${r.name}_ATOM = ${atom};
 function parse${r.name}(): Node | null {
   const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = null;
@@ -919,6 +922,7 @@ function parse${r.name}(): Node | null {
 function ${r.name}_bp(minBp: number): Node | null {
   let left = ${r.name}_nud(minBp);
   if (left === null) return null;
+  let form = _form;
   if (_capped) return left;   // an assignment-level arrow admits no led
   let tailClosed = false;
   ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'ledLoop: ' : ''}for (;;) {
@@ -927,25 +931,32 @@ function ${r.name}_bp(minBp: number): Node | null {
 ${ledSwitch}
 ${postfixTokSwitch}
     const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp) { const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; continue; }
+    if (!tailClosed && post !== undefined && post > minBp) {
+      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
+      const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; form = 1; continue;
+    }
     const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
+    if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
     const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
     pos++;
     const rhs = ${r.name}_bp(info.rbp);
     if (rhs === null) { pos = ledSave; break; }
     left = { rule: ${J(r.cstName)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end };
+    form = 1;
   }
+  _form = form;
   return left;
 }
 function ${r.name}_nud(minBp: number): Node | null {
   _capped = false;
   const t = peek();
   if (t === null) return null;
-${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: Cst[] = []; if (${c.steps.length ? c.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) { _capped = true; return branch(${J(r.cstName)}, kids, save); } pos = save; }`).join('\n')}
+${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: Cst[] = []; if (${c.steps.length ? c.steps.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) { _capped = true; _form = 0; return branch(${J(r.cstName)}, kids, save); } pos = save; }`).join('\n')}
   // Below is non-capped: a sub-parse may leave _capped set (e.g. grouping a capped arrow),
   // so force it false after — only the capped arms above produce a capped node.
+  let pf = 0;
   const _r = ((): Node | null => {
 ${tplNud}  if (${r.name}_ATOM.has(t.kid)) { const leaf: Leaf = { tokenType: tok_kind(t), offset: t.off, end: t.end }; pos++; return { rule: ${J(r.cstName)}, children: [leaf], offset: t.off, end: t.end }; }
 ${bracketNudSwitch}
@@ -955,13 +966,15 @@ ${bracketNudSwitch}
     const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
     pos++;
     const operand = ${r.name}_bp(pbp);
-    if (operand === null) { pos = save; return null; }
+    if (operand === null || _form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { pos = save; return null; }
+    pf = ${r.name}_PRE_FORM[t.lid]!;
     return { rule: ${J(r.cstName)}, children: [opLeaf, operand], offset: t.off, end: operand.end };
   }
 ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: Cst[] = []; if (${seq.length ? seq.map((x) => stepCond(x, ids)).join(' && ') : 'true'}) return branch(${J(r.cstName)}, kids, save); pos = save; }`).join('\n')}
   return null;
   })();
   _capped = false;
+  _form = pf;
   return _r;
 }`;
 }
@@ -1000,10 +1013,10 @@ ${g.members.map(({ item: b }) => `      ${bracketNudBody(b)}`).join('\n')}
   // Multiple arms sharing a lid fall through to each other; only the LAST arm
   // of a group emits `break ledLoop`.
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, hasBin: boolean, isLast: boolean) => `{
+  const ledBody = (b: Bracket, form: number, hasBin: boolean, isLast: boolean) => `{
       const ledSave = pos; const kids: any[] = []; const spans: BWSpan[] = [];
       absorbFrame(kids, spans, left);
-      if (${b.steps.map((x) => stepCond(x, ids, true)).join(' && ')}) { left = nodeW(${cn}, kids, spans); continue ledLoop; }
+      if (${b.steps.map((x) => stepCond(x, ids, true)).join(' && ')}) { left = nodeW(${cn}, kids, spans); form = ${form}; continue ledLoop; }
       pos = ledSave;${hasBin ? '' : isLast ? ' break ledLoop;' : ''}
     }`;
   const ledSwitch = (() => {
@@ -1014,7 +1027,7 @@ ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }, j) =>
-    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, hasBin, j === g.members.length - 1)}`);
+    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, r.ledForm[i]!, hasBin, j === g.members.length - 1)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -1024,10 +1037,10 @@ ${groups.map((g) => {
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
     const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
     const tplPart = hasTpl ? `
-    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(() => parse${r.name}W()); if (node !== null) { left = joinFramesW(${cn}, left, node); continue ledLoop; } }` : '';
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(() => parse${r.name}W()); if (node !== null) { left = joinFramesW(${cn}, left, node); form = 0; continue ledLoop; } }` : '';
     return `    switch (t.kid) {
 ${groups.map((g) => `      case ${g.key}:
-        if (!tailClosed) { const lf = leafFrameW(tok_kind(t), t); pos++; left = joinFramesW(${cn}, left, lf); continue ledLoop; }
+        if (!tailClosed) { const lf = leafFrameW(tok_kind(t), t); pos++; left = joinFramesW(${cn}, left, lf); form = 0; continue ledLoop; }
         break;`).join('\n')}
     }${tplPart}`;
   })();
@@ -1040,6 +1053,7 @@ ${groups.map((g) => `      case ${g.key}:
 function ${r.name}_bpW(minBp: number): Frame | null {
   let left = ${r.name}_nudW(minBp);
   if (left === null) return null;
+  let form = _form;
   if (_capped) return left;   // an assignment-level arrow admits no led
   let tailClosed = false;
   ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'ledLoop: ' : ''}for (;;) {
@@ -1048,25 +1062,32 @@ function ${r.name}_bpW(minBp: number): Frame | null {
 ${ledSwitch}
 ${postfixTokSwitch}
     const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp) { const lf = leafFrameW('$operator', t); pos++; left = joinFramesW(${cn}, left, lf); tailClosed = true; continue; }
+    if (!tailClosed && post !== undefined && post > minBp) {
+      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
+      const lf = leafFrameW('$operator', t); pos++; left = joinFramesW(${cn}, left, lf); tailClosed = true; form = 1; continue;
+    }
     const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
+    if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
     const lf = leafFrameW('$operator', t);
     pos++;
     const rhs = ${r.name}_bpW(info.rbp);
     if (rhs === null) { pos = ledSave; break; }
     left = joinFramesW(${cn}, left, lf, rhs);
+    form = 1;
   }
+  _form = form;
   return left;
 }
 function ${r.name}_nudW(minBp: number): Frame | null {
   _capped = false;
   const t = peek();
   if (t === null) return null;
-${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: any[] = []; const spans: BWSpan[] = []; if (${c.steps.length ? c.steps.map((x) => stepCond(x, ids, true)).join(' && ') : 'true'}) { _capped = true; return branchW(${cn}, kids, spans, save); } pos = save; }`).join('\n')}
+${r.nudCapped.map((c) => `  if (minBp < ${c.capBp}) { const save = pos; const kids: any[] = []; const spans: BWSpan[] = []; if (${c.steps.length ? c.steps.map((x) => stepCond(x, ids, true)).join(' && ') : 'true'}) { _capped = true; _form = 0; return branchW(${cn}, kids, spans, save); } pos = save; }`).join('\n')}
   // Below is non-capped: a sub-parse may leave _capped set (e.g. grouping a capped arrow),
   // so force it false after — only the capped arms above produce a capped node.
+  let pf = 0;
   const _r = ((): Frame | null => {
 ${tplNud}  if (${r.name}_ATOM.has(t.kid)) { const lf = leafFrameW(tok_kind(t), t); pos++; return wrapUnaryW(${cn}, lf); }
 ${bracketNudSwitch}
@@ -1076,13 +1097,15 @@ ${bracketNudSwitch}
     const lf = leafFrameW('$operator', t);
     pos++;
     const operand = ${r.name}_bpW(pbp);
-    if (operand === null) { pos = save; return null; }
+    if (operand === null || _form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { pos = save; return null; }
+    pf = ${r.name}_PRE_FORM[t.lid]!;
     return joinFramesW(${cn}, lf, operand);
   }
 ${r.nudSeqs.map((seq) => `  { const save = pos; const kids: any[] = []; const spans: BWSpan[] = []; if (${seq.length ? seq.map((x) => stepCond(x, ids, true)).join(' && ') : 'true'}) return branchW(${cn}, kids, spans, save); pos = save; }`).join('\n')}
   return null;
   })();
   _capped = false;
+  _form = pf;
   return _r;
 }`;
 }
@@ -3205,7 +3228,8 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     const opText = _src.slice(t.off, t.end);
     pos++;
     const argument = parseAst${r.name}_bp(pbp);
-    if (argument === null) { pos = save; return null; }
+    if (argument === null || _form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { pos = save; return null; }
+    pf = ${r.name}_PRE_FORM[t.lid]!;
     const spOff = save < toks.length ? toks[save]!.off : 0;
     const end = pos > 0 ? toks[pos - 1]!.end : spOff;
     const _sk: unknown[] = [argument];
@@ -3218,7 +3242,8 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     const opText = _src.slice(t.off, t.end);
     pos++;
     const argument = parseAst${r.name}_bp(pbp);
-    if (argument === null) { pos = save; return null; }
+    if (argument === null || _form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { pos = save; return null; }
+    pf = ${r.name}_PRE_FORM[t.lid]!;
     return ${customFinish((prefixSlot as CustomShape).fn, '[argument]', 'save', '[]', undefined, 'opText')} as ${retType};
   }`;
     } else if (prefixSlot.kind === 'inline') {
@@ -3227,7 +3252,8 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     const save = pos;
     pos++;
     const argument = parseAst${r.name}_bp(pbp);
-    if (argument === null) { pos = save; return null; }
+    if (argument === null || _form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { pos = save; return null; }
+    pf = ${r.name}_PRE_FORM[t.lid]!;
     return argument;
   }`;
     } else {
@@ -3237,7 +3263,8 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     const opText = _src.slice(t.off, t.end);
     pos++;
     const argument = parseAst${r.name}_bp(pbp);
-    if (argument === null) { pos = save; return null; }
+    if (argument === null || _form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { pos = save; return null; }
+    pf = ${r.name}_PRE_FORM[t.lid]!;
     return ${keepFinish('[opText, argument]', 'save')} as ${retType};
   }`;
     }
@@ -3287,7 +3314,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
       } else {
         finish = `return ${keepFinish('_sk', 'save')} as ${retType};`;
       }
-      return `  if (minBp < ${c.capBp}) { const save = pos; const _sk: unknown[] = []; const _ap: number[] = []; if (_shapeTxn(_sk, _ap, () => ${inner})) { _capped = true; ${finish} } pos = save; }`;
+      return `  if (minBp < ${c.capBp}) { const save = pos; const _sk: unknown[] = []; const _ap: number[] = []; if (_shapeTxn(_sk, _ap, () => ${inner})) { _capped = true; _form = 0; ${finish} } pos = save; }`;
     }).join('\n');
   }
 
@@ -3348,6 +3375,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         const _ap: number[] = [];
         if (_shapeTxn(_sk, _ap, () => ${inner})) {
           ${finish}
+          form = ${r.ledForm[i]!};
           continue ledLoop;
         }
         pos = ledSave;
@@ -3387,6 +3415,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
         if (!tailClosed) {
           ${leafInit}
           ${finish}
+          form = 0;
           continue ledLoop;
         }
         break;`;
@@ -3418,6 +3447,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
         const node_end = pos > 0 ? toks[pos - 1]!.end : node_off;
         ${tplFinish}
         leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
+        form = 0;
         continue ledLoop;
       }
     }`;
@@ -3431,6 +3461,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
       if (node !== null) {
         ${tplFinish}
         leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
+        form = 0;
         continue ledLoop;
       }
     }`;
@@ -3445,6 +3476,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
       const node = postfixSlot as NodeShape;
       postfixCode = `    const post = ${r.name}_POST[t.lid];
     if (!tailClosed && post !== undefined && post > minBp) {
+      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const opText = _src.slice(t.off, t.end);
       pos++;
       const spOff = leftOff;
@@ -3452,26 +3484,28 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
       const _sk: unknown[] = [left];
       left = ${emitAstNodeCtor(node, spans, nodeFieldsFromSk(node), 'spOff', 'end')} as ${retType};
       leftOff = spOff; leftEnd = end;
-      tailClosed = true; continue;
+      tailClosed = true; form = 1; continue;
     }`;
     } else if (postfixSlot.kind === 'custom') {
       postfixCode = `    const post = ${r.name}_POST[t.lid];
     if (!tailClosed && post !== undefined && post > minBp) {
+      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const opText = _src.slice(t.off, t.end);
       const save = pos; pos++;
       left = ${customFinish((postfixSlot as CustomShape).fn, '[]', 'save', '[]', 'left', 'opText')} as ${retType};
       leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;
-      tailClosed = true; continue;
+      tailClosed = true; form = 1; continue;
     }`;
     } else {
       postfixCode = `    const post = ${r.name}_POST[t.lid];
     if (!tailClosed && post !== undefined && post > minBp) {
+      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const opText = _src.slice(t.off, t.end);
       const save = pos; pos++;
       const _kids = [left, opText];
       left = ${keepFinish('_kids', 'save')} as ${retType};
       leftEnd = t.end;
-      tailClosed = true; continue;
+      tailClosed = true; form = 1; continue;
     }`;
     }
   }
@@ -3484,6 +3518,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
       const binaryNode = binarySlot as NodeShape;
       binaryCode = `    const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
+    if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
     const opText = _src.slice(t.off, t.end);
     pos++;
@@ -3498,6 +3533,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     } else if (binarySlot.kind === 'custom') {
       binaryCode = `    const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
+    if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
     const opText = _src.slice(t.off, t.end);
     pos++;
@@ -3508,6 +3544,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     } else {
       binaryCode = `    const info = ${r.name}_BIN[t.lid];
     if (info === undefined || info.lbp <= minBp) break;
+    if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
     const opText = _src.slice(t.off, t.end);
     pos++;
@@ -3534,6 +3571,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
 function parseAst${r.name}_bp(minBp: number): ${retType} | null {
   let left = parseAst${r.name}_nud(minBp);
   if (left === null) return null;
+  let form = _form;
   if (_capped) return left;
   let leftOff = (typeof left === 'object' && left !== null && 'off' in left && typeof (left as { off?: number }).off === 'number')
     ? (left as { off: number }).off
@@ -3548,8 +3586,9 @@ function parseAst${r.name}_bp(minBp: number): ${retType} | null {
 ${ledSwitch}
 ${postfixTokSwitch}
 ${postfixCode}
-${binaryCode}
+${binaryCode}${binarySlot ? '\n    form = 1;' : ''}
   }
+  _form = form;
   return left;
 }
 function parseAst${r.name}_nud(minBp: number): ${retType} | null {
@@ -3557,6 +3596,7 @@ function parseAst${r.name}_nud(minBp: number): ${retType} | null {
   const t = peek();
   if (t === null) return null;
 ${nudCappedCode}
+  let pf = 0;
   const _r = ((): ${retType} | null => {
 ${tplNudCode}${atomCode}
 ${groupCode}
@@ -3565,6 +3605,7 @@ ${nudSeqCode}
   return null;
   })();
   _capped = false;
+  _form = pf;
   return _r;
 }`);
 }
@@ -3885,6 +3926,7 @@ let toks: Tok[] = [];
 let pos = 0;
 let maxLook = 0;
 let _capped = false;
+let _form = 0;   // assignment-target form of the node the last _nud/_bp call returned
 let _suppressNext: Set<number> | null = null;
 let _suppressCur: Set<number> | null = null;
 let _src = '';

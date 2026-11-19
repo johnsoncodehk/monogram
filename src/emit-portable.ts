@@ -128,16 +128,24 @@ export type PrattRule = {
   nudSeqPredictive: boolean;                          // all nudSeqs non-null & pairwise disjoint → render a switch
   nudCapped: Array<{ steps: Step[]; capBp: number }>; // NUD: an assignment-level capped sequence (arrow function) — parsed only when minBp < capBp, admits no led
   nudCappedFirst: FirstSig[];                         // parallel to nudCapped: each capped seq's FIRST signature
-  prefix: Array<{ op: string; rbp: number }>;         // NUD: prefix op then operand at rbp
-  binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
+  // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
+  // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
+  prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
+  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledAccessTail: boolean[];                           // parallel to leds: a "closed punct-connector" tail (member/call/index) — disabled once a postfix binds
   ledLbp: Array<number | null>;                       // parallel to leds: precedence gate (ternary/in/instanceof) — bind only when lbp > minBp; null = bind maximally tight
   ledSameLine: boolean[];                             // parallel to leds: a leading `sameLine` guard (TS type tails) — the connector must be on the operand's line
   ledNotLeftLeaf: Array<string[] | null>;             // parallel to leds: skip this led when the left node's head-leaf text is in this set (`void.x` etc.)
+  ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
-  postfix: Array<{ op: string; lbp: number }>;        // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
+  postfix: Array<{ op: string; lbp: number; requireTarget: boolean }>;  // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
 };
+// The assignment-target form of a Pratt node (the interpreter's notAssignTarget), decided by the
+// construct that builds it: an operator node is not a target, a prefix-unary one (`-x`, not
+// `++x`) is also refused as a noUnaryLhs left operand; every other node is a target.
+export const FORM_TARGET = 0, FORM_NOT_TARGET = 1, FORM_UNARY = 2;
+export type AssignForm = typeof FORM_TARGET | typeof FORM_NOT_TARGET | typeof FORM_UNARY;
 export type RuleIR = RdRule | PrattRule;
 
 // Stateful regex-vs-division disambiguation (the JS `/` problem): a `/` starts a regex
@@ -586,14 +594,17 @@ function buildPratt(
     if (e.type === 'literal') return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
     return stepOf(e);
   }
-  const prefix = sawPrefix ? [...a.prefixOps.entries()].map(([op, info]) => ({ op, rbp: info.rbp })) : [];
+  const prefix = sawPrefix
+    ? [...a.prefixOps.entries()].map(([op, info]) => ({ op, rbp: info.rbp, requireTarget: !!info.requireTarget, form: (a.postfixOpValues.has(op) ? FORM_NOT_TARGET : FORM_UNARY) as AssignForm }))
+    : [];
   const binary = sawBinary
-    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp }))
+    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp, requireTarget: !!info.requireTarget, noUnaryLhs: a.noUnaryLhsOps.has(op) }))
     : [];
   const postfix = sawPostfix
-    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp }))
+    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp, requireTarget: !!info.requireTarget }))
     : [];
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, postfixToks, postfix };
+  const ledForm = leds.map((l): AssignForm => a.binaryConnectors.has(l.first) ? FORM_NOT_TARGET : FORM_TARGET);
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, postfixToks, postfix };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──

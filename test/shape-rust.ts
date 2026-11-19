@@ -795,6 +795,17 @@ async function main(): Promise<void> {
     `${tsCorpus.length} cases, shapeDiv=${tsAcceptDiv}, A=${rustA} R=${rustR} E=${rustE} (baselineLexPanic=${baselineLexPanic}, E∧TS-throw=${baselineLexMatchedThrow})`,
   );
 
+  // Operators that require an assignment target or forbid a unary left operand reject on
+  // the shape parsers too, not only on the CST parser.
+  const assignRejects = ['a + b = 1;', '-x = 1;', 'x++ = 1;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;'];
+  const assignRejectLines = runBatch(tsBin, assignRejects, 600_000);
+  const assignAccepted = assignRejects.filter((src, i) =>
+    assignRejectLines[i] !== 'R'
+    || tsMod.parse(src) !== null
+    || tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }) !== null);
+  check('typescript assignment-target violations reject on CST, TS shape and Rust shape',
+    assignAccepted.length === 0, JSON.stringify(assignAccepted));
+
   check('TS_GOLDEN size === 35', TS_GOLDEN.length === 35, `${TS_GOLDEN.length}`);
   const tsGoldenLines = runBatch(tsBin, TS_GOLDEN.map((g) => g.src), 600_000);
   let tsGoldenBad = 0;
