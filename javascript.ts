@@ -260,12 +260,10 @@ export const ecmaPrec = [
   right(noUnaryLhs('**')),   // `-x ** y` is a syntax error: a unary-prefix expr can't be a `**` LHS
   right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', 'await', 'yield')),
   // prefix `++`/`--` (update prefixes): the spec operand is a UnaryExpression
-  // (`UpdateExpression : ++ UnaryExpression`), so `++-x`, `++ ++x`, `++await x`, `++delete a.b`
-  // are all PRODUCTION-DERIVABLE — the CST producer accepts them and emits the concrete tree.
-  // "operand is not a simple assignment target" is a Static-Semantics early error (the same
-  // class as `(a+b)=c`), which is identified downstream when an AST `UpdateExpression`
-  // (operand: SimpleAssignmentTarget) fails to lower — NOT here. So this stays a plain prefix.
-  right(prefix('++', '--')),
+  // (`UpdateExpression : ++ UnaryExpression`) whose AssignmentTargetType must be simple — an
+  // early error, like `a + b = c`, enforced by the same target check: `++-x`, `++x++`,
+  // `++ ++x` reject (tsc reads the operand as a LeftHandSideExpression).
+  right(prefixTarget('++', '--')),
   // postfix `++`/`--` operand IS a LeftHandSideExpression in the grammar
   // (`UpdateExpression : LeftHandSideExpression [no LT] ++`), so `++x++`, `x++ ++` are genuine
   // PRODUCTION-violations (operand `++x`/`x++` is an UpdateExpression, not a LHS) — no parse
