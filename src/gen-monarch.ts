@@ -195,6 +195,8 @@ function expandAlts(expr: RuleExpr): RuleExpr[][] {
       const present = expandAlts(expr.body);
       return expr.kind === '+' ? present : [[], ...present];
     }
+    case 'not':
+      return [[]];   // a negative lookahead consumes nothing: adjacency sees through it
     default:
       return [[expr]];
   }
