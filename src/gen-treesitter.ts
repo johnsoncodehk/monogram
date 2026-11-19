@@ -2777,7 +2777,10 @@ function buildScannerC(
     L.push('// boundaries, blank lines); inside flow delimiters the rules never reference NEWLINE, so');
     L.push('// valid_symbols[NEWLINE] is false there and the line break falls through to');
     L.push('// `extras` as ordinary whitespace. Stateless: one line break (\\n / \\r / \\r\\n) per token.');
+    L.push('// Spaces and tabs before the break are skipped here, as the lexer skips them inline; left to');
+    L.push('// `extras`, they would carry the break away with them.');
     L.push('static bool scan_newline(TSLexer *lexer) {');
+    L.push('  while (lexer->lookahead == \' \' || lexer->lookahead == \'\\t\') skip(lexer);');
     L.push('  if (lexer->lookahead == \'\\r\') { advance(lexer); if (lexer->lookahead == \'\\n\') advance(lexer); }');
     L.push('  else if (lexer->lookahead == \'\\n\') advance(lexer);');
     L.push('  else return false;');
@@ -2942,10 +2945,8 @@ function buildScannerC(
   L.push('');
   if (grammar.newline) {
     const nlSym = ctx.scannerTokenFor.get(grammar.newline.token)!.toUpperCase();
-    L.push('  // Newline first: a significant line boundary outranks every other external token.');
-    L.push(`  if (valid_symbols[${nlSym}] && (lexer->lookahead == '\\n' || lexer->lookahead == '\\r')) {`);
-    L.push('    if (scan_newline(lexer)) return true;');
-    L.push('  }');
+    L.push('  // Newline first: a line break outranks every other external token.');
+    L.push(`  if (valid_symbols[${nlSym}] && scan_newline(lexer)) return true;`);
     L.push('');
   }
   if (tp && regexTok) {

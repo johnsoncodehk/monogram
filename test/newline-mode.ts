@@ -178,6 +178,9 @@ if (hasCli()) {
     // the only two newline nodes are the A→B separator and the trailing line break.
     check('parse: flow-internal newline suppressed (no ERROR; newlines only at statement boundaries)',
       !t2.includes('ERROR') && (t2.match(/\(newline /g) ?? []).length === 2);
+    const t3 = parseTree('A=1 \t\nB=2  \n');
+    check('parse: spaces/tabs before a break do not swallow it (two newline nodes, no ERROR)',
+      !t3.includes('ERROR') && (t3.match(/\(newline /g) ?? []).length === 2);
   }
   console.log(`  (artifacts in ${dir})`);
 } else {
