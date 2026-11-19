@@ -11,7 +11,8 @@
 // for a grammar that declares them, in the same main loop.
 //
 // Tokens land in struct-of-arrays columns (tkK/tkT/tkOff/tkEnd/tkFl/tkDp/tkPd + tokN) with
-// no text: a token's text is always its source span (engine-emitted tokens are zero-width).
+// no text: a token's text is always its source span (indent-mode engine tokens are zero-width;
+// a newline-mode NEWLINE spans its line break).
 // Flag bits: 1 newlineBefore, 2 commentBefore, 4 multilineFlowBefore, 8 '(' heads a control
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
 import type { CstGrammar, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl } from './types.ts';
@@ -246,7 +247,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     ...(indent?.blockScalar ? [indent.blockScalar.token] : []), ...(indent?.rawBlock ? [indent.rawBlock.token] : [])]);
   const flowOpen = (indent ?? newline)?.flowOpen ?? [];
   const flowClose = (indent ?? newline)?.flowClose ?? [];
-  const lineComment = (indent ?? newline)?.comment;
+  const lineComment = indent?.comment;
   const keyValueSep = indent?.keyValueSeparator ?? ':';
   const foldTokens = indent?.foldTokens ?? [];
   const plainContName = foldTokens.length ? foldTokens[foldTokens.length - 1] : null;
@@ -362,8 +363,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   typeTable(`LX_DIVK`, [...(regexCtx?.divisionAfterTypes ?? []), '$templateTail']);
   litTable(`LX_PARENKW`, regexCtx?.regexAfterParenKeywords ?? []);
   litTable(`LX_MEMBER`, regexCtx?.memberAccessTexts ?? []);
+  if (indent) typeTable(`LX_STRUCT`, structTokenNames);
   if (lineSensitive) {
-    typeTable(`LX_STRUCT`, structTokenNames);
     litTable(`LX_FLOWOPEN`, flowOpen);
     litTable(`LX_FLOWCLOSE`, flowClose);
   }
@@ -527,13 +528,13 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`  let dmgMinOld = wndOldMin0, dmgMinNew = -1;`);
   }
   emit(`  lexEmptyPops.length = 0;`);
-  if (lineSensitive) {
+  if (lineSensitive) emit(`  let flowDepth = 0;               // >0 inside flow delimiters: line structure suspended`);
+  if (indent) {
     emit(`  // line-boundary state: a comment was skipped / the outermost flow spanned >1 line /`);
     emit(`  // a multi-line flow just closed (stamped on the next token as flag bits 2 / 4)`);
     emit(`  let pendingComment = false;`);
     emit(`  let pendingMultilineFlow = false;`);
     emit(`  let flowSawNewline = false;`);
-    emit(`  let flowDepth = 0;               // >0 inside flow delimiters: line structure suspended`);
     emit(`  let lineStart = true;            // at a block-context line boundary (file start counts)`);
     emit(`  let emittedContent = false;      // a content token was emitted (suppresses a leading NEWLINE)`);
     emit(`  let atLineLead = false;          // the next content token is the first of its line`);
@@ -561,7 +562,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    off += srcBase«!»; end += srcBase«!»;`);
   emit(`    if (tokN === tkCap) growTok();`);
   emit(`    tkK[tokN] = k; tkT[tokN] = t; tkOff[tokN] = off; tkEnd[tokN] = end;`);
-  if (lineSensitive) {
+  if (indent) {
     emit(`    tkFl[tokN] = (pendingNl ? 1 : 0) | (pendingComment ? 2 : 0) | (pendingMultilineFlow ? 4 : 0) | extraFl;`);
     emit(`    pendingComment = false; pendingMultilineFlow = false;`);
   } else {
@@ -574,7 +575,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    pvK = k; pvT = t;`);
   emit(`    tokN++;`);
   if (lineSensitive) {
-    emit(`    if (LX_STRUCT[k] === 0) { emittedContent = true; atLineLead = false; }`);
+    if (indent) emit(`    if (LX_STRUCT[k] === 0) { emittedContent = true; atLineLead = false; }`);
     emit(`    if (k === K_PUNCT) {`);
     emit(`      if (LX_FLOWOPEN[t] !== 0) {`);
     if (indent) {
@@ -766,7 +767,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`    }`);
     }
   }
-  if (lineSensitive) emitLineStart(emit, indent, newline, lineComment, kOf, plainContName);
+  if (indent) emitLineStart(emit, indent, lineComment, kOf, plainContName);
   // ── whitespace ──
   if (lineSensitive) {
     emit(`    // inline spaces/tabs are skipped; a newline is a block-context line boundary (flow: insignificant)`);
@@ -785,9 +786,16 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     emit(`      pos++; continue;`);
     emit(`    }`);
     emit(`    if (cc === 10 || cc === 13) {`);
-    emit(`      pos++; if (cc === 13 && source.charCodeAt(pos) === 10) pos++;`);
-    emit(`      if (flowDepth === 0) lineStart = true;`);
-    if (indent) {
+    if (!indent) {
+      emit(`      const s = pos;`);
+      emit(`      pos++; if (cc === 13 && source.charCodeAt(pos) === 10) pos++;`);
+      emit(`      if (flowDepth === 0) tkPush(${kOf(newline!.token)}, 0, s, pos);`);
+      emit(`      pendingNl = true;`);
+      emit(`      continue;`);
+      emit(`    }`);
+    } else {
+      emit(`      pos++; if (cc === 13 && source.charCodeAt(pos) === 10) pos++;`);
+      emit(`      if (flowDepth === 0) lineStart = true;`);
       emit(`      else {`);
       emit(`        flowSawNewline = true;`);
       emit(`        // §7.4: inside a value/item-position flow a CONTENT line must be indented more`);
@@ -804,9 +812,9 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
       emit(`          }`);
       emit(`        }`);
       emit(`      }`);
+      emit(`      continue;`);
+      emit(`    }`);
     }
-    emit(`      continue;`);
-    emit(`    }`);
   } else {
     emit(`    // whitespace: ASCII \\s run by char loop; a non-ASCII candidate falls back to the regex`);
     emit(`    if (cc === 32 || (cc >= 9 && cc <= 13)) {`);
@@ -1352,10 +1360,10 @@ function emitIndentHelpers(emit: (s?: string) => void, indent: IndentConfig, kv:
   void indent;
 }
 
-// The block-context line start: blank / comment lines are skipped; the content line's
-// leading-space column drives NEWLINE (newline mode) or INDENT / DEDENT / NEWLINE plus the
-// plain-scalar continuation fold (indent mode).
-function emitLineStart(emit: (s?: string) => void, indent: IndentConfig | undefined, newline: NewlineConfig | undefined,
+// The indent-mode block-context line start: blank / comment lines are skipped; the content
+// line's leading-space column drives INDENT / DEDENT / NEWLINE plus the plain-scalar
+// continuation fold.
+function emitLineStart(emit: (s?: string) => void, indent: IndentConfig,
   lineComment: string | undefined, kOf: (n: string) => number, plainContName: string | null) {
   emit(`    if (flowDepth === 0 && lineStart) {`);
   emit(`      let p = pos, col = 0;`);
@@ -1387,14 +1395,6 @@ function emitLineStart(emit: (s?: string) => void, indent: IndentConfig | undefi
     emit(`      }`);
   }
   emit(`      pos = p;`);
-  if (!indent) {
-    emit(`      if (emittedContent) tkPush(${kOf(newline!.token)}, 0, pos, pos);`);
-    emit(`      lineStart = false;`);
-    emit(`      atLineLead = true;`);
-    emit(`      continue;`);
-    emit(`    }`);
-    return;
-  }
   const kIndent = kOf(indent.indentToken);
   emit(`      currentLineCol = col;`);
   emit(`      const top = indentStack[indentStack.length - 1];`);

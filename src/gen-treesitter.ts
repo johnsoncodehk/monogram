@@ -2772,9 +2772,9 @@ function buildScannerC(
   if (nl) {
     const nlSym = ctx.scannerTokenFor.get(nl.token)!.toUpperCase();
     L.push('// ── Newline scan ────────────────────────────────────────────────');
-    L.push('// A newline-sensitive grammar emits one NEWLINE token at each significant line');
-    L.push('// boundary. tree-sitter only asks for it where the grammar permits it (statement');
-    L.push('// boundaries); inside flow delimiters the rules never reference NEWLINE, so');
+    L.push('// A newline-sensitive grammar emits one NEWLINE token per line break outside flow.');
+    L.push('// tree-sitter only asks for it where the grammar permits it (statement');
+    L.push('// boundaries, blank lines); inside flow delimiters the rules never reference NEWLINE, so');
     L.push('// valid_symbols[NEWLINE] is false there and the line break falls through to');
     L.push('// `extras` as ordinary whitespace. Stateless: one line break (\\n / \\r / \\r\\n) per token.');
     L.push('static bool scan_newline(TSLexer *lexer) {');

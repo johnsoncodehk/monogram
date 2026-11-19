@@ -545,6 +545,11 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
   if (config.indent && config.newline) {
     throw new Error('A grammar may declare `indent` OR `newline`, not both — `indent` already implies newline-significant line boundaries.');
   }
+  for (const k of Object.keys(config.newline ?? {})) {
+    if (k !== 'token' && k !== 'flowOpen' && k !== 'flowClose') {
+      throw new Error(`newline.${k} is not a newline option (token, flowOpen, flowClose): newline mode emits a NEWLINE at every line break outside flow delimiters, and the grammar decides which breaks it skips (blank lines, comment-only lines)`);
+    }
+  }
   const names = new Map<object, string>();
   for (const [name, tok] of Object.entries(config.tokens)) {
     names.set(tok, name);

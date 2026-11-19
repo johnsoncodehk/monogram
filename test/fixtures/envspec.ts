@@ -14,7 +14,7 @@ const Value   = rule(($: any) => [Ident, [Ident, '(', sep($, ','), ')']]);
 const Stmt    = rule(() => [[Ident, '=', Value]]);
 const Program = rule(() => [[opt(Stmt), many(Newline, opt(Stmt))]]);
 
-const newline: NewlineConfig = { token: 'Newline', flowOpen: ['('], flowClose: [')'], comment: '#' };
+const newline: NewlineConfig = { token: 'Newline', flowOpen: ['('], flowClose: [')'] };
 
 export default defineGrammar({
   name: 'envspec',

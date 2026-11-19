@@ -183,13 +183,12 @@ export type TplCfg = {
   interpRule: string;   // the rule that parses each `${…}` hole (the Pratt expression rule)
 };
 
-// Newline-only mode (emit-lexer.ts): engine-emitted NEWLINE tokens at
-// significant line boundaries; flowOpen/flowClose suspend; comment-only lines are skipped.
+// Newline-only mode (emit-lexer.ts): an engine-emitted NEWLINE token spanning every line break
+// outside flowOpen/flowClose.
 export type NewlineCfg = {
   token: string;
   flowOpen: string[];
   flowClose: string[];
-  comment: string | null;
 };
 
 export type ParserIR = {
@@ -439,7 +438,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
       token: nc.token,
       flowOpen: [...(nc.flowOpen ?? [])],
       flowClose: [...(nc.flowClose ?? [])],
-      comment: nc.comment ?? null,
     };
     // Prefix-ambiguous rd alts (e.g. Ident vs Ident '(' … ')') are ordered longest-first so
     // first-match backtracking agrees with the interpreter's longest-match rd parse (gen-parser.ts).

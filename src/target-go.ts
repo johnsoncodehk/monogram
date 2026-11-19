@@ -206,46 +206,22 @@ ${switchArms}${indent}\t}
 ${indent}}`;
 }
 
-function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; boundary: string; ws: string; hooks: string } {
-  const commentSkip = nl.comment
-    ? `\t\tif strings.HasPrefix(src[p:], ${J(nl.comment)}) { e := p; for e < n && src[e] != 10 { e++ }; pos = e; continue }\n`
-    : '';
+// Newline mode: every line break outside flow delimiters is a NEWLINE token spanning the break.
+function newlinePartsGo(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; ws: string; hooks: string } {
   const kidNl = kidOf(ids, nl.token);
+  const flowSets = `\t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
+\t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
+`;
   return {
-    state: `\tlineStart, emittedContent, flowDepth := true, false, 0
-\t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
-\t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
-`,
-    stateFrom: `\t_flowOpen := map[string]bool{${nl.flowOpen.map((x) => `${J(x)}: true`).join(', ')}}
-\t_flowClose := map[string]bool{${nl.flowClose.map((x) => `${J(x)}: true`).join(', ')}}
-`,
-    boundary: `\t\tif flowDepth == 0 && lineStart {
-\t\t\tp := pos
-\t\t\tfor p < n && src[p] == 32 { p++ }
-\t\t\tif p >= n { pos = p; lineStart = false; continue }
-\t\t\tch := int(src[p])
-\t\t\tif ch == 10 || ch == 13 {
-\t\t\t\tpos = p + 1; if ch == 13 && pos < n && src[pos] == 10 { pos++ }; continue
-\t\t\t}
-\t\t\tif ch == 9 {
-\t\t\t\tb := p
-\t\t\t\tfor b < n && (src[b] == 32 || src[b] == 9) { b++ }
-\t\t\t\tif b >= n { pos = b; continue }
-\t\t\t\tbc := int(src[b])
-\t\t\t\tif bc == 10 || bc == 13 {
-\t\t\t\t\tpos = b + 1; if bc == 13 && pos < n && src[pos] == 10 { pos++ }; continue
-\t\t\t\t}
-\t\t\t}
-${commentSkip}\t\t\tpos = p
-\t\t\tif emittedContent { ${pushFn}(pos, pos, ${kidNl}, 0) }
-\t\t\tlineStart = false
-\t\t\tcontinue
-\t\t}
-`,
+    state: `\tflowDepth := 0
+${flowSets}`,
+    stateFrom: flowSets,
     ws: `\t\tif c == 32 || c == 9 || c == 11 || c == 12 { pos++; continue }
 \t\tif c == 10 || c == 13 {
+\t\t\ts := pos
 \t\t\tpos++; if c == 13 && pos < n && src[pos] == 10 { pos++ }
-\t\t\tif flowDepth == 0 { lineStart = true }
+\t\t\tif flowDepth == 0 { ${pushFn}(s, pos, ${kidNl}, 0) }
+\t\t\tpendingNl = true
 \t\t\tcontinue
 \t\t}
 \t\tif c >= 0x80 {
@@ -254,8 +230,7 @@ ${commentSkip}\t\t\tpos = p
 \t\t\tif isJsWs(r) && r != 0x2028 && r != 0x2029 { pos += w; continue }
 \t\t}
 `,
-    hooks: `\t\tif kid != ${kidNl} { emittedContent = true }
-\t\tif kid == 0 && _flowOpen[_lids[lid]] { flowDepth++ } else if kid == 0 && _flowClose[_lids[lid]] { if flowDepth > 0 { flowDepth-- } }
+    hooks: `\t\tif kid == 0 && _flowOpen[_lids[lid]] { flowDepth++ } else if kid == 0 && _flowClose[_lids[lid]] { if flowDepth > 0 { flowDepth-- } }
 `,
   };
 }
@@ -445,7 +420,6 @@ func lxExt(src string, e int) int {
 `;
   const nlState = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).state : '';
   const nlStateFrom = nl ? newlinePartsGo(nl, 'pushTok', ids).stateFrom : '';
-  const nlBoundary = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).boundary : '';
   const nlWs = nl ? newlinePartsGo(nl, stateful ? 'emit' : 'pushTok', ids).ws : `\t\tif c == 32 || c == 9 || c == 11 || c == 12 { pos++; continue }
 \t\tif c == 10 || c == 13 { pendingNl = true; pos++; continue }
 \t\tif c >= 0x80 {
@@ -481,7 +455,7 @@ ${pushHooks}\t\t*acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendi
     : `\tpushTok := func(off, end int, kid, lid uint16) { *acc = append(*acc, mkTok(off, end, pendingNl, kid, lid)); pendingNl = false }
 \t_ = pushTok
 `;
-  const loopBody = `${nlBoundary}\t\tc := int(src[pos])
+  const loopBody = `\t\tc := int(src[pos])
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackGo}${loopPanicGo}`;
   const idTables = renderIdTablesGo(ids);
@@ -544,17 +518,17 @@ ${loopBody}
 }`;
   }
   if (newlineOnly) {
-    return `${idTables}${lexGoHelpers}${defs.length ? defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, lineStart bool, emittedContent bool, flowDepth int, acc *[]Tok, limit int) (int, bool, bool, bool, int) {
+    return `${idTables}${lexGoHelpers}${defs.length ? defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int) {
 \tn := len(src)
 ${nlStateFrom}${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
 ${loopBody}
 \t}
-\treturn pos, pendingNl, lineStart, emittedContent, flowDepth
+\treturn pos, pendingNl, flowDepth
 }
 func lex(src string) []Tok {
 \tvar out []Tok
-\tlexFrom(src, 0, false, true, false, 0, &out, 0)
+\tlexFrom(src, 0, false, 0, &out, 0)
 \treturn out
 }`;
   }
@@ -1075,18 +1049,14 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start,
 \tvar out []alignMeta
 \tif rb >= 0 { out = append(out, oldToks[:rb+1]...) }
 \tvar scanOff int
-\tvar pendingNl, lineStart, emittedContent bool
+\tpendingNl := false
 \tvar flowDepth int
-\tif rb >= 0 {
-\t\tscanOff = int(oldToks[rb].End); pendingNl = false; lineStart = false; emittedContent = true; flowDepth = int(oldToks[rb].Fd)
-\t} else {
-\t\tscanOff = 0; pendingNl = false; lineStart = true; emittedContent = false; flowDepth = 0
-\t}
+\tif rb >= 0 { scanOff = int(oldToks[rb].End); flowDepth = int(oldToks[rb].Fd); pendingNl = oldToks[rb].Kid == ${kidOf(buildLexIdPlan(ir), ir.newlineCfg!.token)} }
 \tvar scratch []Tok
 \trelexed := 0
 \tfor scanOff < len(newText) {
 \t\tbefore := len(scratch)
-\t\tscanOff, pendingNl, lineStart, emittedContent, flowDepth = lexFrom(newText, scanOff, pendingNl, lineStart, emittedContent, flowDepth, &scratch, 1)
+\t\tscanOff, pendingNl, flowDepth = lexFrom(newText, scanOff, pendingNl, flowDepth, &scratch, 1)
 \t\tif len(scratch) == before { break }
 \t\tt := scratch[len(scratch)-1]
 \t\tout = append(out, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, uint16(flowDepth), 0, false, false, false, 0))
@@ -1317,11 +1287,11 @@ func scanMeta(src string) []alignMeta {
 \tvar toks []Tok
 \tvar meta []alignMeta
 \tpos := 0
-\tpendingNl, lineStart, emittedContent := false, true, false
+\tpendingNl := false
 \tflowDepth := 0
 \tfor pos < len(src) {
 \t\tbefore := len(toks)
-\t\tpos, pendingNl, lineStart, emittedContent, flowDepth = lexFrom(src, pos, pendingNl, lineStart, emittedContent, flowDepth, &toks, 1)
+\t\tpos, pendingNl, flowDepth = lexFrom(src, pos, pendingNl, flowDepth, &toks, 1)
 \t\tif len(toks) == before { break }
 \t\tt := toks[len(toks)-1]
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, uint16(flowDepth), 0, false, false, false, 0))
