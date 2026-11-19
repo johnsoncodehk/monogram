@@ -225,12 +225,11 @@ const gT = defineGrammar({
   }
 }
 
-// ── 9. tree-sitter on the same grammar. The derived scanner already emits one newline per break
-//      (section 6), but `Line = Stmt NEWLINE? | NEWLINE` is LR-ambiguous after a statement: shift
-//      the break into the statement's Line, or reduce and start a blank Line. The PEG engine's
-//      `opt` is greedy (shift); gen-treesitter does not yet derive that resolution, so `tree-sitter
-//      generate` reports the conflict. This check pins the gap: it fails once the generator emits
-//      the resolution, and should then become a parse check (one newline node per break). ──
+// ── 9. tree-sitter on the same grammar. `Line = Stmt NEWLINE? | NEWLINE` is ambiguous as a CFG after
+//      a statement (the break joins the statement's Line, or starts a blank Line); the PEG `opt` is
+//      greedy and gen-treesitter renders that as a right-associative production, so the derived
+//      parser must generate and produce the interpreter's lines: same Line per row, same newline
+//      spans, no ERROR. ──
 if (hasCli()) {
   const tsT = generateTreeSitter(gT, 'envspec_lines');
   const dirT = mkdtempSync(join(tmpdir(), 'monogram-nl-lines-'));
@@ -240,10 +239,62 @@ if (hasCli()) {
   writeFileSync(join(dirT, 'src', 'scanner.c'), tsT.scannerC);
   writeFileSync(join(dirT, 'queries', 'highlights.scm'), tsT.highlightsScm);
   writeFileSync(join(dirT, 'package.json'), JSON.stringify({ name: 'tree-sitter-envspec-lines-monogram', version: '0.0.0' }, null, 2));
-  let err = '';
-  try { execFileSync(tsBin, ['generate'], { cwd: dirT, stdio: 'pipe' }); } catch (e: any) { err = String(e.stderr ?? e.message); }
-  check('lines/tree-sitter: generate reports the greedy-opt conflict on `line` (known generator gap)',
-    /Unresolved conflict/.test(err) && /\(line\s+stmt\s+•\s+newline\)/.test(err));
+  let generated = false;
+  try { execFileSync(tsBin, ['generate'], { cwd: dirT, stdio: 'pipe' }); generated = true; }
+  catch (e: any) { console.log('  generate failed:', String(e.stderr ?? e.message).split('\n').slice(0, 12).join('\n  ')); }
+  check('lines/tree-sitter: generate succeeds on File = many(Line), Line = Stmt NEWLINE? | NEWLINE', generated);
+  if (generated) {
+    type SNode = { name: string; start: [number, number]; end: [number, number]; kids: SNode[] };
+    const parseSexp = (out: string): SNode | null => {
+      const re = /\(([\w]+) \[(\d+), (\d+)\] - \[(\d+), (\d+)\]|\)/g;
+      const stack: SNode[] = [];
+      let root: SNode | null = null;
+      for (const m of out.matchAll(re)) {
+        if (m[0] === ')') { const n = stack.pop()!; if (stack.length) stack[stack.length - 1].kids.push(n); else root = n; continue; }
+        stack.push({ name: m[1], start: [+m[2], +m[3]], end: [+m[4], +m[5]], kids: [] });
+      }
+      return root;
+    };
+    const point = (src: string, off: number): [number, number] => {
+      const before = src.slice(0, off), nl = before.lastIndexOf('\n');
+      return [before.split('\n').length - 1, off - (nl + 1)];
+    };
+    const parseT = createParser(gT).parse;
+    const samples: [string, string][] = [
+      ['statements with a trailing break', 'A=1\nB=2\n'],
+      ['no final break', 'A=1\nB=2'],
+      ['blank lines', 'A=1\n\n\nB=2'],
+      ['leading breaks', '\n\nA=1'],
+      ['comment-only line', 'A=1\n# note\nB=2'],
+      ['comment after a statement', 'A=1 # note\nB=2\n'],
+      ['whitespace-only line', 'A=1\n \t\nB=2'],
+      ['trailing spaces after a statement', 'A=1 \t\nB=2  \n'],
+      ['CRLF', 'A=1\r\n\r\nB=2\r\n'],
+      ['lone CR', 'A=1\rB=2'],
+      ['flow value spanning lines', 'A=fn(1,\n2)\nB=3\n'],
+      ['only breaks', '\n\n'],
+    ];
+    for (const [label, src] of samples) {
+      writeFileSync(join(dirT, 'in.env'), src);
+      let out: string;
+      try { out = execFileSync(tsBin, ['parse', 'in.env'], { cwd: dirT, encoding: 'utf8' }); }
+      catch (e: any) { out = (e.stdout || '') + '\n' + (e.stderr || ''); }
+      const tree = parseSexp(out);
+      const tsLines = (tree?.kids ?? []).filter(k => k.name === 'line').map(l => {
+        const nl = l.kids.find(k => k.name === 'newline');
+        return { stmt: l.kids.some(k => k.name === 'stmt'), nl: nl ? [nl.start, nl.end] : null };
+      });
+      const cst = parseT(src) as any;
+      const ipLines = (cst.children ?? []).map((l: any) => {
+        const nl = l.children.find((c: any) => c.tokenType === 'Newline');
+        return { stmt: l.children.some((c: any) => c.tokenType !== 'Newline'), nl: nl ? [point(src, nl.offset), point(src, nl.end)] : null };
+      });
+      const same = !/ERROR|MISSING/.test(out) && JSON.stringify(tsLines) === JSON.stringify(ipLines);
+      if (!same) console.log(`  ${label}: tree-sitter ${JSON.stringify(tsLines)}\n  ${' '.repeat(label.length)}  interpreter ${JSON.stringify(ipLines)}`);
+      check(`lines/tree-sitter ≡ interpreter (${label}): one Line per row, newline spans, no ERROR`, same);
+    }
+  }
+  console.log(`  (artifacts in ${dirT})`);
 }
 
 console.log(fail === 0 ? `\n${ok}/${ok} newline-mode checks pass` : `\n${fail} of ${ok + fail} FAILED`);

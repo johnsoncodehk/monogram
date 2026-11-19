@@ -151,6 +151,11 @@ interface GrammarJsContext {
    *  bodies are made non-empty and every reference to them is wrapped in optional() (ε-elimination,
    *  see makeNonEmpty / wrapNullableRefs). Empty for grammars with no nullable non-start rules. */
   nullableNonStart: Set<string>;
+  /** FIRST/FOLLOW terminal sets of the tree-sitter view of the grammar (see greedyTail). */
+  terminalSets: TerminalSets;
+  /** Rules declared as a conflict of their own (`[$.rule]`): GLR keeps every parse of their
+   *  productions, so no static resolution is added to them. Set when conflicts are emitted. */
+  glrRules: Set<string>;
   /**
    * If the grammar declares an interpolated-template token, the plan for turning it
    * into a `template` RULE (delimiters + the `${ … }` hole) backed by an external
@@ -555,11 +560,121 @@ function makeNonEmpty(e: RuleExpr, nn: Set<string>): RuleExpr | null {
 function buildRuleBody(rule: RuleDecl, ctx: GrammarJsContext): string {
   if (ctx.prattRules.has(rule.name)) return buildPrattRule(rule, ctx);
   const nn = ctx.nullableNonStart;
-  if (nn.size > 0) {
-    const body = nn.has(rule.name) ? (makeNonEmpty(rule.body, nn) ?? rule.body) : wrapNullableRefs(rule.body, nn);
-    return renderExpr(body, ctx);
+  const body = nn.size === 0 ? rule.body
+    : nn.has(rule.name) ? (makeNonEmpty(rule.body, nn) ?? rule.body) : wrapNullableRefs(rule.body, nn);
+  const follow = ctx.terminalSets.follow.get(rule.name)!;
+  const glr = ctx.glrRules.has(ctx.ruleSnake.get(rule.name)!);
+  const greedy = (alt: RuleExpr) => !glr && greedyTail(alt, follow, ctx.terminalSets.firstOf);
+  if (body.type === 'alt' && body.items.some(greedy)) {
+    return `choice(${body.items.map(a => greedy(a) ? `prec.right(${renderExpr(a, ctx)})` : renderExpr(a, ctx)).join(', ')})`;
   }
-  return renderExpr(rule.body, ctx);
+  return greedy(body) ? `prec.right(${renderExpr(body, ctx)})` : renderExpr(body, ctx);
+}
+
+// ── greedy repetition tails ──────────────────────────────────────────────────
+//
+// A PEG quantifier is greedy: `[Stmt, opt(Newline)]` takes the newline whenever one follows, even
+// where the rule's context could also begin with it (`many(Line)` with `Line = … | Newline`). The
+// CFG tree-sitter derives from the same rule is ambiguous there — shift the newline into this
+// production or reduce and let the context take it — and `tree-sitter generate` stops on the
+// unresolved conflict. `prec.right` on the production says what the PEG does: prefer the shift.
+// It is emitted only where the conflict can arise, i.e. where the trailing quantifier's FIRST set
+// meets the rule's FOLLOW set, and only on a rule not declared as its own conflict: there GLR
+// already keeps both parses, and a static preference would override it (the PEG's preference holds
+// within one alternative, but its outer ordered choices can still backtrack past it, which GLR
+// models and a fixed shift does not).
+
+type TerminalSets = { follow: Map<string, Set<string>>; firstOf: (e: RuleExpr) => Set<string> };
+
+const EOF_TERMINAL = '$eof';
+
+function tsView(e: RuleExpr): RuleExpr {
+  return e.type === 'group' ? tsView(e.tsRelaxed ?? e.body) : e;
+}
+
+function computeTerminalSets(grammar: CstGrammar, tokenNames: Set<string>): TerminalSets {
+  const ops = { op: new Set<string>(), prefix: new Set<string>(), postfix: new Set<string>() };
+  for (const lvl of grammar.precs) for (const o of lvl.operators) ops[o.position === 'prefix' ? 'prefix' : o.position === 'postfix' ? 'postfix' : 'op'].add(`'${o.value}`);
+  const first = new Map<string, Set<string>>(grammar.rules.map(r => [r.name, new Set<string>()]));
+  const nullable = new Set<string>();
+  const follow = new Map<string, Set<string>>(grammar.rules.map(r => [r.name, new Set<string>()]));
+  const nul = (e: RuleExpr): boolean => {
+    e = tsView(e);
+    switch (e.type) {
+      case 'literal': return false;
+      case 'ref': return !tokenNames.has(e.name) && nullable.has(e.name);
+      case 'seq': return e.items.every(nul);
+      case 'alt': return e.items.some(nul);
+      case 'quantifier': return e.kind !== '+' || nul(e.body);
+      case 'op': case 'prefix': case 'postfix': return false;
+      default: return true;
+    }
+  };
+  const fst = (e: RuleExpr, out: Set<string>): Set<string> => {
+    e = tsView(e);
+    switch (e.type) {
+      case 'literal': out.add(`'${e.value}`); break;
+      case 'ref': if (tokenNames.has(e.name)) out.add(e.name); else for (const t of first.get(e.name) ?? []) out.add(t); break;
+      case 'seq': for (const i of e.items) { fst(i, out); if (!nul(i)) break; } break;
+      case 'alt': for (const i of e.items) fst(i, out); break;
+      case 'quantifier': fst(e.body, out); break;
+      case 'sep': fst(e.element, out); break;
+      case 'op': case 'prefix': case 'postfix': for (const t of ops[e.type]) out.add(t); break;
+    }
+    return out;
+  };
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const r of grammar.rules) {
+      if (!nullable.has(r.name) && nul(r.body)) { nullable.add(r.name); changed = true; }
+      const f = first.get(r.name)!, n = f.size;
+      fst(r.body, f);
+      if (f.size !== n) changed = true;
+    }
+  }
+  const union = (a: Set<string>, b: Set<string>) => { const s = new Set(a); for (const x of b) s.add(x); return s; };
+  let grew = false;
+  const walk = (e: RuleExpr, after: Set<string>): void => {
+    e = tsView(e);
+    switch (e.type) {
+      case 'ref': {
+        const f = follow.get(e.name);
+        if (f) for (const t of after) if (!f.has(t)) { f.add(t); grew = true; }
+        break;
+      }
+      case 'seq': {
+        let cur = after;
+        for (let i = e.items.length - 1; i >= 0; i--) {
+          walk(e.items[i], cur);
+          cur = nul(e.items[i]) ? union(fst(e.items[i], new Set()), cur) : fst(e.items[i], new Set());
+        }
+        break;
+      }
+      case 'alt': for (const i of e.items) walk(i, after); break;
+      case 'quantifier': walk(e.body, e.kind === '?' ? after : union(fst(e.body, new Set()), after)); break;
+      case 'sep': walk(e.element, union(new Set([`'${e.delimiter}`]), after)); break;
+    }
+  };
+  follow.get(grammar.rules[grammar.rules.length - 1].name)!.add(EOF_TERMINAL);
+  do {
+    grew = false;
+    for (const r of grammar.rules) walk(r.body, follow.get(r.name)!);
+  } while (grew);
+  return { follow, firstOf: (e) => fst(e, new Set()) };
+}
+
+/** The alternative ends in a greedy quantifier (after some consumed prefix) whose FIRST set meets
+ *  the rule's FOLLOW set. */
+function greedyTail(alt: RuleExpr, follow: Set<string>, firstOf: TerminalSets['firstOf']): boolean {
+  alt = tsView(alt);
+  if (alt.type !== 'seq') return false;
+  const consuming = alt.items.filter(i => { const v = tsView(i); return !(v.type === 'not' || v.type === 'sameLine' || v.type === 'noCommentBefore' || v.type === 'noMultilineFlowBefore' || v.type === 'notLeftLeaf'); });
+  if (consuming.length < 2) return false;
+  const tail = tsView(consuming[consuming.length - 1]);
+  const starts = tail.type === 'quantifier' ? firstOf(tail.body)
+    : tail.type === 'sep' ? firstOf(tail).add(`'${tail.delimiter}`)   // sep may end in an optional delimiter
+    : null;
+  return !!starts && [...starts].some(t => follow.has(t));
 }
 
 // ── Token rules ──────────────────────────────────────────────────────────────
@@ -1153,6 +1268,8 @@ export function generateTreeSitter(grammar: CstGrammar, langName?: string): Tree
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor,
     flowLiteralTokens,
     nullableNonStart,
+    terminalSets: computeTerminalSets(grammar, tokenNames),
+    glrRules: new Set(),
     templatePlan,
     interpolationPlans,
     nameFieldNodes: nameFields.nodes,
@@ -1215,6 +1332,7 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
 
   // ── conflicts ──
   const conflicts = deriveConflicts(ctx);
+  for (const c of conflicts) if (c.length === 1) ctx.glrRules.add(c[0]);
   if (conflicts.length > 0) {
     lines.push('  conflicts: $ => [');
     for (const c of conflicts) {
