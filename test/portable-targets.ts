@@ -238,12 +238,17 @@ const CASES: Case[] = [
       'a < b;', 'a < b >> c;', 'a < b > c;', 'f(a < b, c > d);', 'x = B<C>;', 'x = B<C>(1);',
       'x = y = 1;', '(a + b) = 1;', 'a.b = 1;', 'x++;', '++x;', '(-x) ** 2;', '++x ** 2;',
       'x ? a : b.c;', 'x as T.y;', 'x = B<C>\n++y;',
+      // A bare instantiation `B<C>` ends where tsc's canFollowTypeArgumentsInExpression lets it.
+      'x = B<C> as T;', 'x = B<C> satisfies T;', 'x = B<C> instanceof D;', 'x = B<C> <= 1;', 'x = B<C>\ny;',
+      // tsc rescans the closing token of expression type arguments: `>>`/`>=`/… never close them.
+      'f<A>>(x);', 'x = a<b>>>c;', 'new A<B>>(c);', 'f<A<B>>(x);',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'a + b = 1;', '-x = 1;', 'x++ = 1;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
       // Only an access tail extends an access tail.
-      'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;'],
+      'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;',
+      'x = B<C> < 1;', 'x = B<C> >= 1;', 'x = B<C>!;', 'x = B<C> /re/;'],
   },
 ];
 
