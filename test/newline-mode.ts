@@ -2,10 +2,10 @@
 //
 // A tiny dotenv / env-spec-flavoured grammar (KEY=value statements, one per line; a
 // value is a scalar or a function call whose args may span lines INSIDE `( … )`; `#`
-// line comments) exercises the LAYERED newline machinery: the lexer emits a single
-// NEWLINE token at each significant line boundary, with NO indent stack and NO
-// INDENT/DEDENT tokens, and all four backends (parser / TextMate / Monarch /
-// tree-sitter) stay coherent. The grammar is defined INLINE (like test/agnostic.ts) —
+// line comments) exercises the LAYERED newline machinery: the lexer emits one NEWLINE
+// token spanning EVERY line break outside flow delimiters, with NO indent stack and NO
+// INDENT/DEDENT tokens; which breaks matter is the grammar's to say. All four backends
+// (parser / TextMate / Monarch / tree-sitter) stay coherent. The grammar is defined INLINE (like test/agnostic.ts) —
 // no new language file is added to the repo.
 //
 // Run with: node test/newline-mode.ts
@@ -28,7 +28,7 @@ let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };
 
 // ── A minimal newline-aware, NON-indent grammar (env-spec flavour) ──
-const Newline = token(never(), {});                 // engine-emitted at each significant line boundary
+const Newline = token(never(), {});                 // engine-emitted at every line break outside flow
 const Ident   = token(plus(oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'), '_')), { identifier: true });
 const Comment = token(seq('#', star(noneOf('\n'))), { skip: true });
 
@@ -36,7 +36,7 @@ const Value   = rule(($: any) => [Ident, [Ident, '(', sep($, ','), ')']]);  // s
 const Stmt    = rule(() => [[Ident, '=', Value]]);
 const Program = rule(() => [[opt(Stmt), many(Newline, opt(Stmt))]]);
 
-const newline: NewlineConfig = { token: 'Newline', flowOpen: ['('], flowClose: [')'], comment: '#' };
+const newline: NewlineConfig = { token: 'Newline', flowOpen: ['('], flowClose: [')'] };
 const g = defineGrammar({
   name: 'envspec', scopeName: 'source.envspec',
   tokens: { Comment, Ident, Newline },
@@ -53,19 +53,32 @@ try {
   });
 } catch { bothRejected = true; }
 check('defineGrammar rejects declaring BOTH indent and newline', bothRejected);
+// newline mode has one shape; the removed separator-era options fail loudly instead of being ignored
+for (const extra of [{ comment: '#' }, { mode: 'terminator' }, { mode: 'separator' }]) {
+  let msg = '';
+  try { defineGrammar({ name: 'bad', tokens: { Ident, Newline }, rules: { Stmt, Program }, entry: Program, newline: { ...newline, ...extra } as NewlineConfig }); }
+  catch (e: any) { msg = e.message; }
+  check(`defineGrammar rejects newline.${Object.keys(extra)[0]}`, msg.startsWith(`newline.${Object.keys(extra)[0]} is not a newline option`));
+}
 
-// ── 1. Lexer: NEWLINE emission, flow suspension, blank/comment lines, NO indent tokens ──
+// ── 1. Lexer: a NEWLINE spanning every line break outside flow, NO indent tokens ──
 const tokenize = compileTokenizer(lexSpecOf(g));
-const countNL = (s: string) => tokenize(s).filter(t => t.type === 'Newline').length;
+const nls = (s: string) => JSON.stringify(tokenize(s).filter(t => t.type === 'Newline').map(t => [t.offset, t.text]));
 const hasIndentTokens = (s: string) => tokenize(s).some(t => t.type === 'Indent' || t.type === 'Dedent');
 
-check('two statements separated by exactly one NEWLINE', countNL('A=1\nB=2') === 1);
+check('a break between two statements is one NEWLINE spanning it', nls('A=1\nB=2') === '[[3,"\\n"]]');
 check('never emits INDENT/DEDENT (newline ≠ indent)', !hasIndentTokens('A=1\nB=2\nC=3'));
-check('blank lines collapse to a single NEWLINE', countNL('A=1\n\n\nB=2') === 1);
-check('comment-only line is not a separator', countNL('A=1\n# note\nB=2') === 1);
-check('newline INSIDE flow ( … ) is suspended', countNL('A=fn(1,\n2)') === 0);
+check('every blank line is its own NEWLINE', nls('A=1\n\n\nB=2') === '[[3,"\\n"],[4,"\\n"],[5,"\\n"]]');
+check('a comment-only line still breaks', nls('A=1\n# note\nB=2') === '[[3,"\\n"],[10,"\\n"]]');
+check('a whitespace-only line (spaces, tabs) breaks', nls('A=1\n \t\nB=2') === '[[3,"\\n"],[6,"\\n"]]');
+check('leading breaks are emitted', nls('\n\nA=1') === '[[0,"\\n"],[1,"\\n"]]');
+check('a trailing break is emitted', nls('A=1\n') === '[[3,"\\n"]]');
+check('no break, no NEWLINE', nls('A=1') === '[]');
+check('CRLF is one NEWLINE spanning both characters', nls('A=1\r\n\r\nB=2') === '[[3,"\\r\\n"],[5,"\\r\\n"]]');
+check('a lone CR is a break', nls('A=1\rB=2') === '[[3,"\\r"]]');
+check('breaks INSIDE flow ( … ) are suspended', nls('A=fn(1,\n2)\nB=3') === '[[10,"\\n"]]');
 check('flow value still produces no indent tokens', !hasIndentTokens('A=fn(1,\n2)'));
-check('leading boundary suppressed (no NEWLINE before first content)', tokenize('\n\nA=1')[0]?.type !== 'Newline');
+check('the token after a break (block or flow) has newlineBefore', JSON.stringify(tokenize('A=fn(1,\n2)\nB=3').filter(t => t.newlineBefore).map(t => t.offset)) === '[8,11]');
 
 // ── 2. Parser: accepts line-delimited / flow-spanning input, rejects malformed ──
 const { parse } = createParser(g);
@@ -74,6 +87,8 @@ check('accepts a single statement', accepts('A=1'));
 check('accepts newline-separated statements', accepts('A=1\nB=2'));
 check('accepts a trailing newline', accepts('A=1\n'));
 check('accepts a comment line between statements', accepts('A=1\n# c\nB=2'));
+check('accepts blank lines between statements (the grammar absorbs them)', accepts('A=1\n\n\nB=2'));
+check('accepts leading blank lines', accepts('\n\nA=1'));
 check('accepts a function-call value spanning lines in ( … )', accepts('A=fn(1,\n2)\nB=3'));
 check('rejects a statement with no `=`', !accepts('A B'));
 check('rejects a statement with no value', !accepts('A='));
@@ -170,104 +185,62 @@ if (hasCli()) {
 }
 
 
-// ── 7. `mode: 'terminator'`: one NEWLINE at EVERY block-context line break, placed at the break ──
-//      (blank / comment-only / leading / trailing breaks included; none inside flow; none at EOF
-//      without a break). The shape a grammar that keeps blank lines and comments as AST lines needs.
+// ── 7. A grammar that keeps blank lines as lines (env-spec: `File = many(Line)`,
+//      `Line = Stmt NEWLINE? | NEWLINE`): every line, blank ones included, is its own node at its
+//      own offset — what an editor maps to a line number. ──
+const LineT = rule(() => [[Stmt, opt(Newline)], [Newline]]);
+const FileT = rule(() => [[many(LineT)]]);
+const gT = defineGrammar({
+  name: 'envspec-lines', scopeName: 'source.envspec-lines',
+  tokens: { Comment, Ident, Newline },
+  rules: { Value, Stmt, Line: LineT, File: FileT }, entry: FileT,
+  newline,
+});
 {
-  const LineT = rule(() => [[Stmt, opt(Newline)], [Newline]]);                 // Line = Stmt NEWLINE? | NEWLINE (a blank line)
-  const ProgramT = rule(() => [[many(LineT)]]);
-  const gT = defineGrammar({
-    name: 'envspec-t', scopeName: 'source.envspec-t',
-    tokens: { Comment, Ident, Newline },
-    rules: { Value, Stmt, Line: LineT, Program: ProgramT }, entry: ProgramT,
-    newline: { ...newline, mode: 'terminator' },
-  });
-  const lexT = compileTokenizer(lexSpecOf(gT));
-  const nls = (s: string) => lexT(s).filter(t => t.type === 'Newline').map(t => t.offset);
-  check("terminator: one NEWLINE between two statements, AT the break", JSON.stringify(nls('A=1\nB=2')) === '[3]');
-  check("terminator: every blank line is its own NEWLINE", JSON.stringify(nls('A=1\n\n\nB=2')) === '[3,4,5]');
-  check("terminator: leading breaks are emitted", JSON.stringify(nls('\n\nA=1')) === '[0,1]');
-  check("terminator: a trailing break is emitted", JSON.stringify(nls('A=1\n')) === '[3]');
-  check("terminator: no break, no NEWLINE", JSON.stringify(nls('A=1')) === '[]');
-  check("terminator: a comment-only line still breaks", JSON.stringify(nls('A=1\n# note\nB=2')) === '[3,10]');
-  check("terminator: a whitespace-only line (tabs) is a break", JSON.stringify(nls('A=1\n \t\nB=2')) === '[3,6]');
-  check("terminator: CRLF counts once, at the CR", JSON.stringify(nls('A=1\r\n\r\nB=2')) === '[3,5]');
-  check("terminator: breaks INSIDE flow ( … ) stay suspended", JSON.stringify(nls('A=fn(1,\n2)\nB=3')) === '[10]');
-  check("terminator: still no INDENT/DEDENT", !lexT('A=1\n\nB=2').some(t => t.type === 'Indent' || t.type === 'Dedent'));
-  check("separator (default) is unchanged by the option's existence", countNL('A=1\n\n\nB=2') === 1 && tokenize('\n\nA=1')[0]?.type !== 'Newline');
-
   const parseT = createParser(gT).parse;
   const acceptsT = (s: string) => { try { return parseT(s).rule !== undefined; } catch { return false; } };
-  check('terminator: parses statements with blank lines between and a trailing break', acceptsT('A=1\n\nB=2\n'));
-  check('terminator: parses leading blank lines', acceptsT('\n\nA=1'));
-  check('terminator: parses a lone statement without a break', acceptsT('A=1'));
-  check('terminator: parses a flow value spanning lines', acceptsT('A=fn(1,\n2)\nB=3'));
-  check('terminator: still rejects a malformed statement', !acceptsT('A B'));
-  // A blank line is its own Line node, at its own offset (what an editor maps to a line number).
-  const cst = parseT('A=1\n\nB=2') as any;
-  const nlLeaves = JSON.stringify(cst).match(/"tokenType":"Newline","offset":(\d+)/g) ?? [];
-  check('terminator: the blank line and the statement break are distinct leaves at 3 and 4', nlLeaves.length === 2 && nlLeaves[0].endsWith(':3') && nlLeaves[1].endsWith(':4'));
+  check('lines: parses statements with blank lines between and a trailing break', acceptsT('A=1\n\nB=2\n'));
+  check('lines: parses leading blank lines', acceptsT('\n\nA=1'));
+  check('lines: parses a lone statement without a break', acceptsT('A=1'));
+  check('lines: parses a flow value spanning lines', acceptsT('A=fn(1,\n2)\nB=3'));
+  check('lines: parses comment-only and whitespace-only lines', acceptsT('A=1\n# c\n \t\nB=2'));
+  check('lines: still rejects a malformed statement', !acceptsT('A B'));
+  const lines = (s: string) => (parseT(s) as any).children.map((l: any) => [l.children.length, JSON.stringify(l).match(/"tokenType":"Newline","offset":(\d+),"end":(\d+)/)?.slice(1).join('-') ?? null]);
+  check('lines: a statement line owns its break, a blank line is its own Line at its own span',
+    JSON.stringify(lines('A=1\n\nB=2')) === '[[2,"3-4"],[1,"4-5"],[1,null]]');
+  check('lines: CRLF spans are kept per line', JSON.stringify(lines('A=1\r\n\r\n')) === '[[2,"3-5"],[1,"5-7"]]');
 
-  // The generators do not care which mode is set (the tree-sitter scanner is already per-break).
-  check('terminator: TextMate generates', Object.keys(generateTmLanguage(gT).repository).length > 0);
-  check('terminator: Monarch generates', !!generateMonarch(gT).tokenizer.root);
-  const tsT = generateTreeSitter(gT, 'envspec_t');
-  check('terminator: tree-sitter externals still include newline', tsT.externalTokens.includes('newline'));
-  check('terminator: tree-sitter scanner unchanged (stateless per-break scan_newline)', tsT.scannerC.includes('scan_newline'));
-
-  // ── 8. The emitted engine inherits the mode (its lexer is generated from the same spec) ──
-  {
-    const dirE = mkdtempSync(join(tmpdir(), 'monogram-nl-emit-'));
-    const file = join(dirE, 'envspec-t.ts');
-    writeFileSync(file, emitParser(gT, jsTarget));
-    const p = (await import(file + '?v=' + Date.now())).createParser();
-    for (const src of ['A=1\n\nB=2\n', '\n\nA=1', 'A=fn(1,\n2)\nB=3', 'A=1\n# note\nB=2']) {
-      const cst = p.parse(src);
-      const obj = objectify(p.tree, (fns: any) => p.visit(cst, fns));
-      check(`terminator: emitted engine ≡ interpreter for ${JSON.stringify(src)}`, cst.errors.length === 0 && JSON.stringify(obj) === JSON.stringify(parseT(src)));
-    }
+  // ── 8. The emitted engine parses identically (its lexer is generated from the same spec) ──
+  const dirE = mkdtempSync(join(tmpdir(), 'monogram-nl-emit-'));
+  const file = join(dirE, 'envspec-lines.ts');
+  writeFileSync(file, emitParser(gT, jsTarget));
+  const p = (await import(file + '?v=' + Date.now())).createParser();
+  for (const src of ['A=1\n\nB=2\n', '\n\nA=1', 'A=fn(1,\n2)\nB=3', 'A=1\n# note\nB=2', 'A=1\r\n\r\nB=2']) {
+    const cst = p.parse(src);
+    const obj = objectify(p.tree, (fns: any) => p.visit(cst, fns));
+    check(`lines: emitted engine ≡ interpreter for ${JSON.stringify(src)}`, cst.errors.length === 0 && JSON.stringify(obj) === JSON.stringify(parseT(src)));
   }
+}
 
-  // ── 9. The derived tree-sitter parser agrees: one newline node per line break, including blank
-  //      lines and the trailing break (the claim that terminator mode is the scanner's native shape). ──
-  //      On a grammar where the statement does not also claim the break: `Line = Stmt NEWLINE? | NEWLINE`
-  //      is LR-ambiguous after a statement (shift the break into the statement, or reduce and start a
-  //      blank Line), which the PEG engine resolves greedily but tree-sitter needs a declared
-  //      conflict/precedence for; that resolution is a generator concern, not this mode's, so the
-  //      scanner claim is checked on `Program = many(NEWLINE | Stmt)`.
-  const gT2 = defineGrammar({
-    name: 'envspec-t2', scopeName: 'source.envspec-t2',
-    tokens: { Comment, Ident, Newline },
-    rules: { Value, Stmt, Program: rule(() => [[many(alt(Newline, Stmt))]]) },
-    newline: { ...newline, mode: 'terminator' },
-  } as any);
-  const tsT2 = generateTreeSitter(gT2, 'envspec_t2');
-  if (hasCli()) {
-    const dirT = mkdtempSync(join(tmpdir(), 'monogram-nl-term-'));
-    mkdirSync(join(dirT, 'src'), { recursive: true });
-    mkdirSync(join(dirT, 'queries'), { recursive: true });
-    writeFileSync(join(dirT, 'grammar.js'), tsT2.grammarJs);
-    writeFileSync(join(dirT, 'src', 'scanner.c'), tsT2.scannerC);
-    writeFileSync(join(dirT, 'queries', 'highlights.scm'), tsT2.highlightsScm);
-    writeFileSync(join(dirT, 'package.json'), JSON.stringify({ name: 'tree-sitter-envspec-t-monogram', version: '0.0.0' }, null, 2));
-    let generatedT = false;
-    try { execFileSync(tsBin, ['generate'], { cwd: dirT, stdio: 'pipe' }); generatedT = true; } catch (e: any) { console.log('  generate (terminator) failed:', ((e.stderr || e.message || '') + '').split('\n').slice(0, 6).join('\n  ')); }
-    check('terminator: tree-sitter generate succeeds (NEWLINE external, no indent scanner state)', generatedT);
-    if (generatedT) {
-      const parseTreeT = (input: string) => {
-        writeFileSync(join(dirT, 'in.env'), input);
-        try { return execFileSync(tsBin, ['parse', 'in.env'], { cwd: dirT, encoding: 'utf8' }); }
-        catch (e: any) { return ((e.stdout || '') + '\n' + (e.stderr || '')); }
-      };
-      const newlines = (t: string) => (t.match(/\(newline /g) ?? []).length;
-      const t1 = parseTreeT('A=1\n\nB=2\n');
-      check('terminator/tree-sitter: blank line and trailing break are newline nodes (3 total, no ERROR)', !t1.includes('ERROR') && newlines(t1) === 3);
-      const t2 = parseTreeT('\n\nA=1');
-      check('terminator/tree-sitter: leading breaks are newline nodes (2, no ERROR)', !t2.includes('ERROR') && newlines(t2) === 2);
-      const t3 = parseTreeT('A=fn(1,\n2)\nB=3');
-      check('terminator/tree-sitter: flow-internal break still suppressed (1 newline, no ERROR)', !t3.includes('ERROR') && newlines(t3) === 1);
-    }
-  }
+// ── 9. tree-sitter on the same grammar. The derived scanner already emits one newline per break
+//      (section 6), but `Line = Stmt NEWLINE? | NEWLINE` is LR-ambiguous after a statement: shift
+//      the break into the statement's Line, or reduce and start a blank Line. The PEG engine's
+//      `opt` is greedy (shift); gen-treesitter does not yet derive that resolution, so `tree-sitter
+//      generate` reports the conflict. This check pins the gap: it fails once the generator emits
+//      the resolution, and should then become a parse check (one newline node per break). ──
+if (hasCli()) {
+  const tsT = generateTreeSitter(gT, 'envspec_lines');
+  const dirT = mkdtempSync(join(tmpdir(), 'monogram-nl-lines-'));
+  mkdirSync(join(dirT, 'src'), { recursive: true });
+  mkdirSync(join(dirT, 'queries'), { recursive: true });
+  writeFileSync(join(dirT, 'grammar.js'), tsT.grammarJs);
+  writeFileSync(join(dirT, 'src', 'scanner.c'), tsT.scannerC);
+  writeFileSync(join(dirT, 'queries', 'highlights.scm'), tsT.highlightsScm);
+  writeFileSync(join(dirT, 'package.json'), JSON.stringify({ name: 'tree-sitter-envspec-lines-monogram', version: '0.0.0' }, null, 2));
+  let err = '';
+  try { execFileSync(tsBin, ['generate'], { cwd: dirT, stdio: 'pipe' }); } catch (e: any) { err = String(e.stderr ?? e.message); }
+  check('lines/tree-sitter: generate reports the greedy-opt conflict on `line` (known generator gap)',
+    /Unresolved conflict/.test(err) && /\(line\s+stmt\s+•\s+newline\)/.test(err));
 }
 
 console.log(fail === 0 ? `\n${ok}/${ok} newline-mode checks pass` : `\n${fail} of ${ok + fail} FAILED`);

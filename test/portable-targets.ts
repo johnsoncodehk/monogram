@@ -94,11 +94,12 @@ const CASES: Case[] = [
     reject: ['var x = `${ }`;', 'var y = `${a`;', '`${a} ${}`;'],
   },
   {
-    // Newline-only mode (engine-emitted NEWLINE at significant line boundaries; flow suspension).
+    // Newline-only mode (engine-emitted NEWLINE spanning every line break outside flow ( … )).
     grammar: 'envspec', path: './fixtures/envspec.ts',
     accept: [
       'A=1', 'A=1\nB=2', 'A=1\n', 'A=1\n# c\nB=2', 'A=fn(1,\n2)\nB=3',
       'A=1\n\n\nB=2', '\n\nA=1', 'A=fn(1,\n2)',
+      '', '\n', 'A=1\n\n', 'A=1\n \t\nB=2', 'A=1\r\n\r\nB=2\r\n', 'A=1\rB=2', 'A=fn(1,\r\n2)\r\nB=3',
     ],
     reject: ['A B', 'A=', 'A=1 B=2', 'A=fn(1,'],
   },
@@ -456,6 +457,8 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'A=fn(1,\n2)\nB=3', batches: [[[4, 4, '(']]], reused: 0 },
     { init: 'A=1\n# note\nB=2', batches: [[[7, 7, 'x']]], minReused: 1 },
     { init: 'A=1\n\n\nB=2', batches: [[[4, 4, '\n']]], minReused: 1 },
+    { init: 'A=1\nB=2\nC=3', batches: [[[3, 4, '\r\n\r\n']]] },
+    { init: 'A=1\r\nB=2', batches: [[[4, 5, '']]] },
     { init: envspecLargeInit, batches: [[[envspecLargeInit.length, envspecLargeInit.length, 'Z=9']]], large: true, maxRelexed: 10, minReused: 200 },
     { init: 'A=fn(1,\n2)\nB=3', batches: [[[0, 0, 'X']], [[7, 7, '0']]], minReused: 1 },
     // S8 segment-reuse scenes
@@ -520,7 +523,7 @@ for (const c of CASES) {
   // tok-spans: top-level kids record parse-consumption [tokStart, tokEnd); cross-target
   // identity + contiguous partition of the consumed token stream. Empty accept inputs are
   // still run (identity), but contiguous checks skip when there are no kids.
-  // envspec: Newline tokens are zero-width in the byte sense but still occupy a token index;
+  // envspec: a Newline token spans its line break and occupies a token index like any other;
   // if contiguous ever fails here, partition by grammar with evidence rather than relaxing.
   {
     const spanRunners: Array<{ label: string; cmd: string; args: string[] }> = [

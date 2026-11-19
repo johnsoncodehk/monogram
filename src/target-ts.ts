@@ -200,54 +200,25 @@ ${switchArms}${indent}  }
 ${indent}}`;
 }
 
-function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; boundary: string; ws: string; hooks: string } {
-  const commentSkip = nl.comment
-    ? `      if (src.startsWith(${J(nl.comment)}, p)) { let e = p; while (e < n && src.charCodeAt(e) !== 10) e++; pos = e; continue; }\n`
-    : '';
+// Newline mode: every line break outside flow delimiters is a NEWLINE token spanning the break.
+function newlineParts(nl: NewlineCfg, pushFn: string, ids: LexIdPlan): { state: string; stateFrom: string; ws: string; hooks: string } {
+  const flowSets = `  const _flowOpen = new Set([${nl.flowOpen.map(J).join(', ')}]);
+  const _flowClose = new Set([${nl.flowClose.map(J).join(', ')}]);
+`;
   return {
-    state: `  let lineStart = true, emittedContent = false, flowDepth = 0;
-  const _flowOpen = new Set([${nl.flowOpen.map(J).join(', ')}]);
-  const _flowClose = new Set([${nl.flowClose.map(J).join(', ')}]);
-  const _kidNl = ${kidOf(ids, nl.token)};
-`,
-    stateFrom: `  const _flowOpen = new Set([${nl.flowOpen.map(J).join(', ')}]);
-  const _flowClose = new Set([${nl.flowClose.map(J).join(', ')}]);
-  const _kidNl = ${kidOf(ids, nl.token)};
-`,
-    boundary: `    if (flowDepth === 0 && lineStart) {
-      let p = pos;
-      while (p < n && src.charCodeAt(p) === 32) p++;
-      if (p >= n) { pos = p; lineStart = false; continue; }
-      const ch = src.charCodeAt(p);
-      if (ch === 10 || ch === 13) {   // LF/CR only — the interpreter's newline mode rejects LS/PS (emit-lexer.ts blank-line check)
-        pos = p + 1; if (ch === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
-        continue;
-      }
-      if (ch === 9) {
-        let b = p;
-        while (b < n && (src.charCodeAt(b) === 32 || src.charCodeAt(b) === 9)) b++;
-        if (b >= n) { pos = b; continue; }
-        const bc = src.charCodeAt(b);
-        if (bc === 10 || bc === 13) {
-          pos = b + 1; if (bc === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
-          continue;
-        }
-      }
-${commentSkip}      pos = p;
-      if (emittedContent) ${pushFn}(pos, pos, ${kidOf(ids, nl.token)}, 0);
-      lineStart = false;
-      continue;
-    }
-`,
+    state: `  let flowDepth = 0;
+${flowSets}`,
+    stateFrom: flowSets,
     ws: `    if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
     if (c === 10 || c === 13) {   // LF/CR only — LS/PS fall through to the unexpected-character throw, matching the interpreter
+      const s = pos;
       pos++; if (c === 13 && pos < n && src.charCodeAt(pos) === 10) pos++;
-      if (flowDepth === 0) lineStart = true;
+      if (flowDepth === 0) ${pushFn}(s, pos, ${kidOf(ids, nl.token)}, 0);
+      pendingNl = true;
       continue;
     }
 `,
-    hooks: `    if (kid !== _kidNl) emittedContent = true;
-    if (kid === 0 && _flowOpen.has(_LIDS[lid]!)) flowDepth++;
+    hooks: `    if (kid === 0 && _flowOpen.has(_LIDS[lid]!)) flowDepth++;
     else if (kid === 0 && _flowClose.has(_LIDS[lid]!)) flowDepth = Math.max(0, flowDepth - 1);
 `,
   };
@@ -403,7 +374,6 @@ function lx_ext(src: string, e: number): number {
     : '';
   const nlState = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).state : '';
   const nlStateFrom = nl ? newlineParts(nl, 'push', ids).stateFrom : '';
-  const nlBoundary = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).boundary : '';
   const nlWs = nl ? newlineParts(nl, stateful ? 'emit' : 'push', ids).ws : `    if (c === 10 || c === 13 || c === 8232 || c === 8233) { pendingNl = true; pos++; continue; }
     if (c === 32 || c === 9 || c === 11 || c === 12 || c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8239 || c === 8287 || c === 12288 || c === 65279) { pos++; continue; }
 `;
@@ -414,7 +384,7 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
   };
 `
     : '  const push = (off: number, end: number, kid: number, lid: number) => { toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false; };\n';
-  const loopBody = `${nlBoundary}    const c = src.charCodeAt(pos);
+  const loopBody = `    const c = src.charCodeAt(pos);
     // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (emit-lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
@@ -476,17 +446,17 @@ ${loopBody}
 }`;
   }
   if (newlineOnly) {
-    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, lineStart: boolean, emittedContent: boolean, flowDepth: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; lineStart: boolean; emittedContent: boolean; flowDepth: number } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, flowDepth: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; flowDepth: number } {
   const n = src.length;
   const base = toks.length;
 ${defs.length ? '  _s = src;\n' : ''}${nlStateFrom}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
-  return { pos, pendingNl, lineStart, emittedContent, flowDepth };
+  return { pos, pendingNl, flowDepth };
 }
 function lex(src: string): Tok[] {
   const toks: Tok[] = [];
-  lexFrom(src, 0, false, true, false, 0, toks);
+  lexFrom(src, 0, false, 0, toks);
   return toks;
 }`;
   }
@@ -1636,6 +1606,7 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
 function docEditBlock(ir: ParserIR): { code: string; parts: DocEditParts } {
   const windowLex = (!ir.regexCtx && !ir.tpl) || !ir.newlineCfg;
   const hasNewline = !!(ir.newlineCfg && !ir.regexCtx && !ir.tpl);
+  const kidNl = hasNewline ? kidOf(buildLexIdPlan(ir), ir.newlineCfg!.token) : -1;
   const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
   const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
   const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
@@ -1715,17 +1686,17 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
   }
   const rb = maxIdx >= 0 ? maxIdx - 1 : -1;
   const out: AlignMeta[] = rb >= 0 ? oldToks.slice(0, rb + 1) : [];
-  let scanOff: number, pendingNl: boolean, lineStart: boolean, emittedContent: boolean, flowDepth: number;
+  let scanOff: number, pendingNl = false, flowDepth: number;
   if (rb >= 0) {
-    scanOff = oldToks[rb].end; pendingNl = false; lineStart = false; emittedContent = true; flowDepth = oldToks[rb].fd;
+    scanOff = oldToks[rb].end; flowDepth = oldToks[rb].fd; pendingNl = oldToks[rb].kid === ${kidNl};
   } else {
-    scanOff = 0; pendingNl = false; lineStart = true; emittedContent = false; flowDepth = 0;
+    scanOff = 0; flowDepth = 0;
   }
   const scratch: Tok[] = [];
   let relexed = 0;
   while (scanOff < newText.length) {
     const before = scratch.length;
-    ({ pos: scanOff, pendingNl, lineStart, emittedContent, flowDepth } = lexFrom(newText, scanOff, pendingNl, lineStart, emittedContent, flowDepth, scratch, 1));
+    ({ pos: scanOff, pendingNl, flowDepth } = lexFrom(newText, scanOff, pendingNl, flowDepth, scratch, 1));
     if (scratch.length === before) break;
     const t = scratch[scratch.length - 1];
     out.push(mk_align(t.off, t.end, t.kid, t.nl, flowDepth, 0, false, false, false, 0));
@@ -1929,10 +1900,10 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
 function scanMeta(src: string): AlignMeta[] {
   const toks: Tok[] = [];
   const meta: AlignMeta[] = [];
-  let pos = 0, pendingNl = false, lineStart = true, emittedContent = false, flowDepth = 0;
+  let pos = 0, pendingNl = false, flowDepth = 0;
   while (pos < src.length) {
     const before = toks.length;
-    ({ pos, pendingNl, lineStart, emittedContent, flowDepth } = lexFrom(src, pos, pendingNl, lineStart, emittedContent, flowDepth, toks, 1));
+    ({ pos, pendingNl, flowDepth } = lexFrom(src, pos, pendingNl, flowDepth, toks, 1));
     if (toks.length === before) break;
     const t = toks[toks.length - 1];
     meta.push(mk_align(t.off, t.end, t.kid, t.nl, flowDepth, 0, false, false, false, 0));
