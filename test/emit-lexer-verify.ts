@@ -7,11 +7,15 @@
 // 4 multilineFlowBefore. Two consumers of the one generator are checked:
 //   1. compileTokenizer(spec) — the tokenizer the interpreter (createParser) runs, per golden;
 //   2. the emitted parser module's public tokenize() and its parse-path token columns, for
-//      every shipped grammar (token-stream, markup and indentation modes alike).
+//      every shipped grammar (token-stream, markup and indentation modes alike). An emitted
+//      lexer scans every '>' alone where its grammar composes '>'-led operators in the parser
+//      (gtComposites), so a golden token holding such an operator is expected as one single-
+//      character punctuation token per character, the first carrying the golden flags.
 //   node test/emit-lexer-verify.ts
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { compileTokenizer, type LexSpec, type Token } from '../src/emit-lexer.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
+import { gtComposites } from '../src/grammar-utils.ts';
 
 type Golden = { spec: LexSpec & { name: string | null }; types: string[]; cases: [string, number[] | string][] };
 const DIR = new URL('./golden/lexer/', import.meta.url);
@@ -21,7 +25,7 @@ const goldens = readdirSync(DIR).filter((f) => f.endsWith('.json')).sort()
 const FLAGS = (t: Token) => (t.newlineBefore ? 1 : 0) | (t.commentBefore ? 2 : 0) | (t.multilineFlowBefore ? 4 : 0);
 
 // Compare one tokenizer against one golden; returns the number of mismatching cases.
-function check(label: string, g: Golden, tokenize: (s: string) => Token[], parse?: { parse: (s: string) => unknown; tokenAt: (i: number) => Token }) {
+function check(label: string, g: Golden, tokenize: (s: string) => Token[], parse?: { parse: (s: string) => unknown; tokenAt: (i: number) => Token }, composed: string[] = []) {
   let bad = 0, errs = 0, cols = 0;
   for (const [src, want] of g.cases) {
     let got: Token[] | null = null, err: string | null = null;
@@ -32,32 +36,29 @@ function check(label: string, g: Golden, tokenize: (s: string) => Token[], parse
       continue;
     }
     if (err !== null) { bad++; if (bad <= 5) console.log(`  ${label} THREW ${JSON.stringify(src.slice(0, 60))}: ${err}`); continue; }
-    let diff = got!.length * 4 !== want.length ? `length ${got!.length} vs ${want.length / 4}` : '';
+    const exp: [string, number, number, number][] = [];
+    for (let i = 0; i < want.length; i += 4) {
+      const [type, off, len, flags] = [g.types[want[i]]!, want[i + 1]!, want[i + 2]!, want[i + 3]!];
+      if (type === '' && composed.includes(src.slice(off, off + len))) for (let c = 0; c < len; c++) exp.push(['', off + c, 1, c === 0 ? flags : 0]);
+      else exp.push([type, off, len, flags]);
+    }
+    let diff = got!.length !== exp.length ? `length ${got!.length} vs ${exp.length}` : '';
     for (let i = 0; !diff && i < got!.length; i++) {
       const t = got![i];
       if (t.text !== src.slice(t.offset, t.offset + t.text.length)) diff = `token ${i} text is not its source span`;
-      else if (t.type !== g.types[want[i * 4]] || t.offset !== want[i * 4 + 1] || t.text.length !== want[i * 4 + 2] || FLAGS(t) !== want[i * 4 + 3]) {
-        diff = `token ${i}: got ${JSON.stringify([t.type, t.offset, t.text.length, FLAGS(t)])} want ${JSON.stringify([g.types[want[i * 4]], want[i * 4 + 1], want[i * 4 + 2], want[i * 4 + 3]])}`;
+      else if (JSON.stringify([t.type, t.offset, t.text.length, FLAGS(t)]) !== JSON.stringify(exp[i])) {
+        diff = `token ${i}: got ${JSON.stringify([t.type, t.offset, t.text.length, FLAGS(t)])} want ${JSON.stringify(exp[i])}`;
       }
     }
-    // The parse path's token columns (after an accepted parse) must hold the same stream,
-    // except where the parser split a `>`-led punctuator at a type-argument close.
+    // The parse path's token columns (after an accepted parse) hold the same stream.
     if (!diff && parse) {
       let ok = false;
       try { parse.parse(src); ok = true; } catch { /* columns are compared on accepted inputs */ }
       if (ok) {
         cols++;
-        for (let j = 0, i = 0; j < got!.length && !diff; j++, i++) {
-          const x = got![j], y = parse.tokenAt(i);
-          if (x.type === y.type && x.offset === y.offset && x.text === y.text && x.k === y.k && x.t === y.t && FLAGS(x) === FLAGS(y)) continue;
-          let text = y.text;
-          const head = y.offset === x.offset && y.text === '>' && x.text.startsWith('>') && x.text.length > 1 && y.k === x.k && FLAGS(y) === FLAGS(x);
-          while (head && text.length < x.text.length) {
-            const z = parse.tokenAt(++i);
-            if (z.offset !== x.offset + text.length || z.k !== x.k) break;
-            text += z.text;
-          }
-          if (!head || text !== x.text) diff = `parse column ${i}: ${JSON.stringify(y)} vs tokenize ${JSON.stringify(x)}`;
+        for (let i = 0; i < got!.length && !diff; i++) {
+          const x = got![i], y = parse.tokenAt(i);
+          if (!(x.type === y.type && x.offset === y.offset && x.text === y.text && x.k === y.k && x.t === y.t && FLAGS(x) === FLAGS(y))) diff = `parse column ${i}: ${JSON.stringify(y)} vs tokenize ${JSON.stringify(x)}`;
         }
       }
     }
@@ -81,7 +82,7 @@ for (const name of ['typescript', 'typescriptreact', 'javascript', 'javascriptre
   const path = `/tmp/emit-lexer-verify-${name}.mts`;
   writeFileSync(path, src);
   const m = await import(path + '?v=' + Date.now());
-  bad += check(`emitted ${name}`, matches[0].g, m.tokenize, m);
+  bad += check(`emitted ${name}`, matches[0].g, m.tokenize, m, gtComposites(grammar));
 }
 
 if (bad > 0) process.exit(1);

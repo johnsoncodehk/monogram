@@ -1,10 +1,11 @@
-// Gate: the portable targets split '>'-led punctuators where a type argument list closes.
+// Gate: the portable targets compose '>'-led operators from single '>' tokens.
 //
-// The TypeScript lexer reads `>>`, `>>>`, `>=`, `>>=` as one token; inside nested type arguments
-// the parser must take a single '>' from it and leave the rest as the next token. In Go and Rust,
-// a fresh parse, an incremental Doc (CST fast path, with and without validation) and a Doc on a
-// consumer builder with Shift (which keeps no parse stream of its own) must all produce the
-// tsTarget CST, after every edit around split tokens, and the edits must still reuse the old tree.
+// The TypeScript lexer scans every '>' alone, so `>>` closing nested type arguments is two tokens;
+// at an operator site the parser composes `>>`, `>>>`, `>=`, `>>=` from adjacent tokens. In Go and
+// Rust, a fresh parse, an incremental Doc (CST fast path, with and without validation) and a Doc on
+// a consumer builder with Shift (which keeps no parse stream of its own) must all produce the
+// tsTarget CST, after every edit around composed operators, and the edits must still reuse the old
+// tree.
 //
 //   node test/emit-portable-split.ts
 import { execFileSync } from 'node:child_process';
@@ -43,7 +44,7 @@ const session = (name: string, init: string, reuse: boolean): Session & { push(e
   }, text: () => ses.texts.at(-1) ?? init };
   return ses;
 };
-// Edits at statement boundaries and on the split tokens themselves; every text parses, so every
+// Edits at statement boundaries and on the '>' tokens themselves; every text parses, so every
 // edit can reuse.
 const curated = session('curated edits', SPLIT, true);
 for (let i = 0; i < 18; i++) {
@@ -79,6 +80,18 @@ for (let i = 0; i < 200; i++) {
 }
 const SESSIONS = [curated, random];
 
+// Dense '>' text: a fresh parse of DENSE_LINE × 4N lines costs about 4× that of N lines, not 16×.
+const DENSE_LINE = 'let v: A<B<C>> = f<D<E>>(x);\n';
+const DENSE_N = 2000;
+const denseCheck = (lang: string, small: number, big: number) =>
+  check(`${lang}: parse cost is linear in dense '>' text (4× the lines: ${(big / small).toFixed(1)}× the time)`, big < 8 * small, `${small.toFixed(2)} ms → ${big.toFixed(2)} ms`);
+{
+  const best = (src: string) => { let m = 1e18; for (let k = 0; k < 5; k++) { const t0 = performance.now(); ts.parse(src); m = Math.min(m, performance.now() - t0); } return m; };
+  const small = DENSE_LINE.repeat(DENSE_N), big = DENSE_LINE.repeat(4 * DENSE_N);
+  check('ts: tsTarget accepts the dense text', ref(small) !== '');
+  denseCheck('ts', best(small), best(big));
+}
+
 const HARNESS = `package main
 
 import (
@@ -87,6 +100,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 type lf struct{ tt uint16; off, end uint32 }
@@ -172,6 +186,8 @@ func main() {
 	raw, _ := io.ReadAll(os.Stdin)
 	var in struct {
 		Samples  []string
+		Dense    string
+		DenseN   int
 		Sessions []struct {
 			Init  string
 			Edits []Edit
@@ -181,6 +197,17 @@ func main() {
 	var out struct {
 		Doc, ParseWith, Span []string
 		Sessions             [][]step
+		DenseMs              []float64
+	}
+	for _, n := range []int{in.DenseN, 4 * in.DenseN} {
+		src := strings.Repeat(in.Dense, n)
+		m := 1e18
+		for k := 0; k < 5; k++ {
+			t := time.Now()
+			if _, ok := ParseWith(src, &CstBuilder{}); !ok { os.Exit(3) }
+			if d := float64(time.Since(t).Nanoseconds()) / 1e6; d < m { m = d }
+		}
+		out.DenseMs = append(out.DenseMs, m)
 	}
 	for _, s := range in.Samples {
 		out.Doc = append(out.Doc, NewDoc(s).CstJSON())
@@ -217,7 +244,7 @@ func main() {
 `;
 
 type Step = { Native: string; Validated: string; Span?: string; Fresh: string; NativeReused: number; SpanReused?: number; TreeEq: boolean };
-type Out = { Doc: string[]; ParseWith: string[]; Span?: string[]; Sessions: Step[][] };
+type Out = { Doc: string[]; ParseWith: string[]; Span?: string[]; Sessions: Step[][]; DenseMs: number[] };
 const verify = (lang: string, out: Out, names: { doc: string; parseWith: string }) => {
   SAMPLES.forEach((s, i) => {
     const tag = JSON.stringify(s.slice(0, 34));
@@ -256,6 +283,7 @@ const verify = (lang: string, out: Out, names: { doc: string; parseWith: string 
     }
     check(`${lang} ${ses.name}: validated Doc reports treeEq on every edit`, steps.every((s) => s.TreeEq), `${steps.filter((s) => !s.TreeEq).length} steps not treeEq`);
   });
+  denseCheck(lang, out.DenseMs[0]!, out.DenseMs[1]!);
 };
 const have = (cmd: string, arg: string) => { try { execFileSync(cmd, [arg], { stdio: 'pipe' }); return true; } catch { return false; } };
 
@@ -268,7 +296,7 @@ else {
   writeFileSync(join(gdir, 'go.mod'), 'module p\n\ngo 1.21\n');
   execFileSync('go', ['build', '-o', 'h', '.'], { cwd: gdir, stdio: 'pipe' });
   const out = JSON.parse(execFileSync(join(gdir, 'h'), {
-    input: JSON.stringify({ Samples: SAMPLES, Sessions: SESSIONS.map((x) => ({ Init: x.init, Edits: x.edits })) }), maxBuffer: 1 << 28,
+    input: JSON.stringify({ Samples: SAMPLES, Dense: DENSE_LINE, DenseN: DENSE_N, Sessions: SESSIONS.map((x) => ({ Init: x.init, Edits: x.edits })) }), maxBuffer: 1 << 28,
   }).toString()) as Out;
   verify('go', out, { doc: 'NewDoc', parseWith: 'ParseWith(*CstBuilder)' });
 }
@@ -356,7 +384,19 @@ fn main() {
         }
         ses.push(format!("[{}]", steps.join(",")));
     }
-    println!("{{\\"Doc\\":[{}],\\"ParseWith\\":[{}],\\"Span\\":[{}],\\"Sessions\\":[{}]}}", docs.join(","), pws.join(","), spans.join(","), ses.join(","));
+    let mut dense = Vec::new();
+    for n in [${DENSE_N}, ${4 * DENSE_N}] {
+        let src = ${rlit(DENSE_LINE)}.repeat(n);
+        let mut m = f64::MAX;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let mut b = CstBuilder::default();
+            if parse_with(&src, &mut b).is_none() { std::process::exit(3); }
+            m = m.min(t.elapsed().as_secs_f64() * 1e3);
+        }
+        dense.push(format!("{}", m));
+    }
+    println!("{{\\"Doc\\":[{}],\\"ParseWith\\":[{}],\\"Span\\":[{}],\\"Sessions\\":[{}],\\"DenseMs\\":[{}]}}", docs.join(","), pws.join(","), spans.join(","), ses.join(","), dense.join(","));
 }
 `;
 

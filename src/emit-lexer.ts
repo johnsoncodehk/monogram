@@ -15,7 +15,7 @@
 // Flag bits: 1 newlineBefore, 2 commentBefore, 4 multilineFlowBefore, 8 '(' heads a control
 // group. test/emit-lexer-verify.ts gates the output against the golden token streams.
 import type { CstGrammar, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl } from './types.ts';
-import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import {
   tokenBlockPatternFirstCharSet, tokenBlockPatternSource, tokenEscapeValidPatternSource, tokenPatternCharLoop,
   tokenPatternFirstCharSet, tokenPatternHasStartAnchor, tokenPatternSource,
@@ -40,6 +40,8 @@ export interface Token {
 export interface LexSpec {
   tokens: TokenDecl[];
   literals: string[];
+  // Literals the lexer never forms (they keep their ids): the parser composes them (gtComposites).
+  composed?: string[];
   markup?: MarkupConfig | null;
   indent?: IndentConfig | null;
   newline?: NewlineConfig | null;
@@ -49,7 +51,7 @@ export function lexSpecOf(grammar: CstGrammar): LexSpec {
   const lits = new Set<string>();
   for (const rule of grammar.rules) for (const l of collectLiterals(rule.body)) lits.add(l);
   for (const level of grammar.precs) for (const op of level.operators) lits.add(op.value);
-  return { tokens: grammar.tokens, literals: [...lits], markup: grammar.markup, indent: grammar.indent, newline: grammar.newline };
+  return { tokens: grammar.tokens, literals: [...lits], composed: gtComposites(grammar), markup: grammar.markup, indent: grammar.indent, newline: grammar.newline };
 }
 
 export interface LexerSymtab {
@@ -195,7 +197,8 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   const out: string[] = [];
   const emit = (s = '') => out.push(s);
 
-  const punctLiterals = [...new Set(spec.literals)].filter(l => !isKeywordLiteral(l)).sort((a, b) => b.length - a.length);
+  const composed = new Set(spec.composed ?? []);
+  const punctLiterals = [...new Set(spec.literals)].filter(l => !isKeywordLiteral(l) && !composed.has(l)).sort((a, b) => b.length - a.length);
   const punctByFirstCc = new Map<number, string[]>();
   for (const lit of punctLiterals) {
     const cc = lit.charCodeAt(0);

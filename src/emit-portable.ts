@@ -24,7 +24,7 @@
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
-import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import {
   tokenPatternCharLoop, tokenPatternQuoteDelimAndEscape,
   tokenPatternBlockDelimiters, tokenPatternLiteralPrefix,
@@ -196,7 +196,10 @@ export type ParserIR = {
   grammarName: string;
   entry: string;
   tokens: LexTok[];      // for the char scanner, tried in declaration order
-  puncts: string[];      // punctuation literals, longest-first (maximal munch)
+  puncts: string[];      // punctuation literals the lexer scans, longest-first (maximal munch)
+  /** `>`-led operators composed from single-character tokens where an operator or lookahead
+   *  literal is read (gtComposites), longest first; never lexed, so absent from `puncts`. */
+  gtComps: string[];
   rules: RuleIR[];
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -239,7 +242,8 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const lits = new Set<string>();
   for (const r of grammar.rules) for (const l of collectLiterals(r.body)) lits.add(l);
   for (const lv of grammar.precs) for (const o of lv.operators) lits.add(o.value);
-  const puncts = [...lits].filter((l) => !isKeywordLiteral(l)).sort((x, y) => y.length - x.length);
+  const gtComps = gtComposites(grammar);
+  const puncts = [...lits].filter((l) => !isKeywordLiteral(l) && !gtComps.includes(l)).sort((x, y) => y.length - x.length);
 
   const litTtype = (v: string): '$keyword' | '$punct' => (isKeywordLiteral(v) ? '$keyword' : '$punct');
 
@@ -263,7 +267,9 @@ function buildIR(grammar: CstGrammar): ParserIR {
         if (e.kind === '+') return { t: 'seq', steps: [stepOf(e.body), { t: 'star', step: stepOf(e.body) }] };   // x+ = x x*
         break;
       case 'alt': {
-        if (e.items.every((it) => it.type === 'literal')) {   // fast path: all-literal alternation
+        // Fast path: an all-literal alternation of single tokens (a composed '>' operator spans
+        // several, so it takes the general path through its 'lit' step).
+        if (e.items.every((it) => it.type === 'literal' && !gtComps.includes(it.value))) {
           return { t: 'altlit', opts: e.items.map((it) => ({ value: (it as { value: string }).value, ttype: litTtype((it as { value: string }).value) })) };
         }
         return { t: 'alt', branches: e.items.map(altSteps) };   // general: backtracking over sub-sequences
@@ -298,7 +304,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     if (steps.length === 0) return null;
     const s = steps[0];
     switch (s.t) {
-      case 'lit': return { lits: [s.value], toks: [] };
+      case 'lit': return { lits: [gtComps.includes(s.value) ? '>' : s.value], toks: [] };   // a composed operator begins at a '>' token
       case 'tok': return { lits: [], toks: [s.name] };
       case 'altlit': return { lits: s.opts.map((o) => o.value), toks: [] };
       case 'rule': case 'ruleBp': { const f = ruleLead.get(s.name); return f === undefined ? null : f; }
@@ -451,7 +457,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...(identToken ? [identToken] : []),
     ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
   ];
-  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, rules, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,
@@ -626,6 +632,7 @@ function buildPratt(
 export type LexIdPlan = {
   kids: string[];   // kids[0]='' reserved for punct (kind=""); then tokens in decl order + engine-emitted (NEWLINE, $template*)
   lids: string[];   // lids[0]='' = "not any literal"; then puncts (longest-first), then remaining texts lexicographically
+  gtComps: string[];   // ir.gtComps: lids composed from single-character tokens, never lexed
 };
 
 /** Collect every literal text that appears in the Step IR (match_lit / altlit / sep / suppress / FIRST / Pratt). */
@@ -701,7 +708,7 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
   const punctSet = new Set(ir.puncts);
   const rest = [...litTexts].filter((t) => !punctSet.has(t)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const lids: string[] = ['', ...ir.puncts, ...rest];
-  return { kids, lids };
+  return { kids, lids, gtComps: ir.gtComps };
 }
 
 /** Resolve lid for a known text; 0 if not in the plan (matches runtime lid_of). */

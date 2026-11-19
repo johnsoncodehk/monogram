@@ -1,5 +1,5 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
-import { isKeywordLiteral } from './grammar-utils.ts';
+import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
@@ -113,6 +113,7 @@ export function createParser(grammar: CstGrammar) {
   } = analyzeGrammar(grammar);
 
   const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)
+  const gtComps = new Set(gtComposites(grammar));
 
 
   // Per-LED binding-power lookup (object-keyed like ledFirst): a led whose first
@@ -167,7 +168,7 @@ export function createParser(grammar: CstGrammar) {
     if (isKeywordLiteral(key)) {
       return tok.type !== '' && tok.text === key;       // keyword → ident token
     }
-    return tok.type === '' && (tok.text === key || tok.text.startsWith(key));  // punctuation (startsWith covers split `>>`)
+    return tok.type === '' && tok.text === key;       // punctuation
   }
   // Conservative: return true unless the alternative provably cannot start here.
   function canStart(first: FirstTok | undefined, tok: Token | null): boolean {
@@ -372,8 +373,7 @@ export function createParser(grammar: CstGrammar) {
     // Packrat memo for pratt/left-recursive rules (Expr, Type, …): cache the
     // parse result + end position by start position, so backtracking doesn't
     // re-parse the same rule at the same spot. Sound because those rules reset
-    // currentPrattContext (result is context-independent). Cleared on a `>>`
-    // token splice (matchLiteral), which shifts later positions.
+    // currentPrattContext (result is context-independent).
     const memo = new Map<string, Map<number, { node: CstNode | null; end: number }>>();
 
     // Bounded-parse cap (token index). When >= 0, no token at index >= parseLimit
@@ -387,6 +387,24 @@ export function createParser(grammar: CstGrammar) {
     function peek(): Token | null {
       if (parseLimit >= 0 && pos >= parseLimit) return null;
       return tokens[pos] ?? null;
+    }
+
+    // The punctuator read at token i where an operator or a composite literal is read: a lone
+    // `>` extends over each adjacent single-character token after it while the text stays a
+    // composite (gtComposites; one token per character); any other token reads as itself. Not
+    // bounded by parseLimit: an operator leaf's extent is a function of the token stream alone.
+    // A composite read counts its tokens as reached (maxPos), like the emitted engine's watermark.
+    function opText(i: number): string {
+      const t = tokens[i];
+      if (gtComps.size === 0 || t.type !== '' || t.text !== '>') return t.text;
+      let text = '>';
+      for (let j = i + 1; j < tokens.length; j++) {
+        const u = tokens[j];
+        if (u.type !== '' || u.text.length !== 1 || u.offset !== t.offset + (j - i) || !gtComps.has(text + u.text)) break;
+        text += u.text;
+      }
+      if (text.length > 1 && i + text.length - 1 > maxPos) maxPos = i + text.length - 1;
+      return text;
     }
 
     function offset(): number {
@@ -411,16 +429,10 @@ export function createParser(grammar: CstGrammar) {
         if (++pos > maxPos) maxPos = pos;
         return { tokenType: '$punct', offset: tok.offset, end: tok.offset + tok.text.length };
       }
-      // Split multi-`>` tokens: `>>`, `>>>`, `>>=`, `>>>=` can yield a single `>`
-      if (value === '>' && tok.type === '' && tok.text.length > 1 && tok.text[0] === '>') {
-        const rest = tok.text.slice(1);
-        tokens.splice(pos, 1,
-          { type: '', text: '>', offset: tok.offset, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
-          { type: '', text: rest, offset: tok.offset + 1, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
-        );
-        memo.clear();   // splice shifts later token indices → memo entries are stale
-        if (++pos > maxPos) maxPos = pos;
-        return { tokenType: '$punct', offset: tok.offset, end: tok.offset + 1 };
+      if (gtComps.has(value) && opText(pos) === value) {
+        pos += value.length;
+        if (pos > maxPos) maxPos = pos;
+        return { tokenType: '$punct', offset: tok.offset, end: tok.offset + value.length };
       }
       return null;
     }
@@ -810,7 +822,7 @@ export function createParser(grammar: CstGrammar) {
         if (matched) continue;
 
         // Then check $ op $ pattern
-        const tokKey = tok.text;
+        const tokKey = opText(pos);
         const info = opTable.get(tokKey);
         if (info && info.lbp > minBp) {
           if (info.position === 'postfix') {
@@ -818,8 +830,9 @@ export function createParser(grammar: CstGrammar) {
               // A target-requiring postfix (`++`/`--`) operand must be a LeftHandSideExpression
               // (`++x++`, `x++ ++` are syntax errors). Fail hard like noUnaryLhs.
               if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
-              if (++pos > maxPos) maxPos = pos;
-              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+              pos += tokKey === tok.text ? 1 : tokKey.length;
+              if (pos > maxPos) maxPos = pos;
+              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tokKey.length };
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
               tailClosed = true;
               matched = true;
@@ -842,8 +855,9 @@ export function createParser(grammar: CstGrammar) {
                 return null;
               }
             }
-            if (++pos > maxPos) maxPos = pos;
-            const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+            pos += tokKey === tok.text ? 1 : tokKey.length;
+            if (pos > maxPos) maxPos = pos;
+            const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tokKey.length };
             const rhs = parsePratt(rule, info.rbp);
             // CAP PROPAGATION: an operator whose RHS is a capped assignment-level expression
             // (an ArrowFunction) is itself capped — it admits no further led, so a trailing

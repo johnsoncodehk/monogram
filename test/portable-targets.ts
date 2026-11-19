@@ -241,7 +241,9 @@ const CASES: Case[] = [
       // A bare instantiation `B<C>` ends where tsc's canFollowTypeArgumentsInExpression lets it.
       'x = B<C> as T;', 'x = B<C> satisfies T;', 'x = B<C> instanceof D;', 'x = B<C> <= 1;', 'x = B<C>\ny;',
       // tsc rescans the closing token of expression type arguments: `>>`/`>=`/… never close them.
-      'f<A>>(x);', 'x = a<b>>>c;', 'new A<B>>(c);', 'f<A<B>>(x);',
+      'f<A>>(x);', 'x = a<b>>>c;', 'new A<B>>(c);', 'f<A<B>>(x);', 'a < B<C>> c;',
+      // Every '>' is its own token; operators compose from adjacent ones.
+      'x = a >>>= b >>= c >= d >> e >>> f;', 'let t: A<B<C<D<E>>>> = a >>> b;',
       // A typed call / instantiation is a LeftHandSideExpression: its `<` is not an operator.
       'f<T>() = 1;', 'x = B<C> = 1;', 'x = B<C> += 1;', 'f<T>`x` = 1;', 'f<T>()++;', 'f<T>().x = 1;',
       '++(-x);', '++x.y;', '++f<T>();',
@@ -253,7 +255,8 @@ const CASES: Case[] = [
       'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
       // Only an access tail extends an access tail.
       'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;',
-      'x = B<C> < 1;', 'x = B<C> >= 1;', 'x = B<C>!;', 'x = B<C> /re/;'],
+      'x = B<C> < 1;', 'x = B<C> >= 1;', 'x = B<C>!;', 'x = B<C> /re/;',
+      'a > > b;', 'a >> = b;', 'a >\n= b;', 'a >>>>= b;'],
   },
 ];
 

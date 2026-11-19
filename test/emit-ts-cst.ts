@@ -1,12 +1,12 @@
 // Gate: the tsTarget CST contract.
 //
 // The CST is source spans: nodes { rule, children, offset, end }, leaves { tokenType, offset, end }.
-// The parser's token stream is not the lexer's (it splits '>'-led punctuators where a type
-// argument list closes), so token indices are not part of the CST — no node or leaf, from
-// parse(), parseWith(cstBuilder) or a createDoc() session, carries one. Every leaf span lies
-// inside one tokenize() token (equal to it unless the parser split that token).
+// Token indices are not part of the CST — no node or leaf, from parse(), parseWith(cstBuilder)
+// or a createDoc() session, carries one. The lexer scans every '>' alone; an operator leaf at a
+// '>' spans the adjacent tokens composing a '>'-led operator (`>>`, `>>>=`, ...), every other leaf
+// is exactly one tokenize() token.
 // Incremental sessions — the CST fast path and a consumer builder — equal a fresh parse after
-// every edit, including edits around split tokens.
+// every edit, including edits around composed '>' operators.
 //
 //   node test/emit-ts-cst.ts
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -56,11 +56,20 @@ for (const s of [SPLIT, 'let a = b >> c; let d: A<B<C<D>>> = e >>> f;\n', 'funct
   check(`parseWith(cstBuilder) CST has only span fields for ${tag}`, shapeErrors(m.parseWith<Cst>(s, m.cstBuilder)) === 0);
   check(`createDoc().root() has only span fields for ${tag}`, shapeErrors(m.createDoc(s).root()) === 0);
   const toks = m.tokenize(s);
-  const outside = leavesOf(cst!).filter((l) => !toks.some((t) => t.off <= l.offset && l.end <= t.end && (t.off === l.offset && t.end === l.end || t.text[0] === '>')));
-  check(`every leaf lies in one tokenize() token for ${tag}`, outside.length === 0, JSON.stringify(outside.slice(0, 3)));
+  check(`tokenize() never composes '>' for ${tag}`, toks.every((t) => t.text[0] !== '>' || t.text === '>'));
+  const runOk = (l: Cst & { tokenType: string }) => {
+    const i = toks.findIndex((t) => t.off === l.offset), j = toks.findIndex((t) => t.end === l.end);
+    if (i < 0 || j < i) return false;
+    if (i === j) return true;
+    return l.tokenType === '$operator' && toks[i]!.text === '>' && toks.slice(i + 1, j + 1).every((t, k) => t.off === toks[i + k]!.end && t.text.length === 1);
+  };
+  const bad = leavesOf(cst!).filter((l) => !runOk(l as Cst & { tokenType: string }));
+  check(`every leaf is one tokenize() token or a composed '>' operator for ${tag}`, bad.length === 0, JSON.stringify(bad.slice(0, 3)));
+  const composed = leavesOf(cst!).filter((l) => l.end - l.offset > 1 && s[l.offset] === '>').map((l) => s.slice(l.offset, l.end));
+  check(`composed operator leaves for ${tag}`, JSON.stringify(composed) === JSON.stringify([...s.matchAll(/ (>>>?=?|>=) /g)].map((x) => x[1])), JSON.stringify(composed));
 }
 
-// Incremental sessions around split tokens.
+// Incremental sessions around composed '>' operators.
 const edits: Edit[] = [];
 {
   let t = SPLIT;
@@ -92,7 +101,7 @@ for (const [label, mk, fresh] of [
     try { d.edit([e]); got = JSON.stringify(d.root()); } catch (err) { got = 'threw ' + (err as Error).message; }
     if (got !== JSON.stringify(fresh(text))) { bad++; if (!first) first = JSON.stringify(text); }
   }
-  check(`${label} ≡ fresh parse after every edit around split '>>'`, bad === 0, `${bad}/${edits.length} steps differ, first on ${first}`);
+  check(`${label} ≡ fresh parse after every edit around '>' composites`, bad === 0, `${bad}/${edits.length} steps differ, first on ${first}`);
 }
 
 console.log(`\n${ok}/${ok + fail} ts-cst checks pass${fail ? '' : ' ✓'}`);

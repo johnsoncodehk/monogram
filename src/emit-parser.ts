@@ -24,7 +24,7 @@
 // parser must reproduce its CST byte-for-byte.
 
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
-import { isKeywordLiteral } from './grammar-utils.ts';
+import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, type Sec } from './grammar-analysis.ts';
 import { emitLexer, emitTokenColumns, lexSpecOf } from './emit-lexer.ts';
 import type { Target } from './emit.ts';
@@ -399,6 +399,7 @@ class Emitter {
   // Re-lexing restarts from the file head (the grammar's lexer has mode state — markup /
   // line structure — that no token records), so an edit lexes the whole document.
   statefulLexer = false;
+  gtComps = new Set<string>();
   private id() { return `_t${this.tmp++}`; }
 
   emit(line = '') { this.buf.push(line); }
@@ -849,12 +850,7 @@ class Emitter {
   // Register (deduped) a FIRST-set's membership test as a module-level fn over two
   // byte tables and return the fn's NAME. Test: `!tok || (KT[tok.k] | TT[tok.t])` —
   // faithful to the old per-desc loop because the kw int range and the punct int range
-  // are DISJOINT (so the loop's k!==K_PUNCT / k===K_PUNCT guards were redundant), and
-  // a punct desc's text.startsWith(v) arm is enumerated over the closed punct
-  // vocabulary at emit time. The one narrowing: a K_PUNCT token whose text is OUTSIDE
-  // the vocabulary (t=0) can't startsWith-match here — such a token is unreachable
-  // (the lexer scans only vocabulary puncts; `>`-split rests stay in-vocabulary),
-  // and the full-corpus byte-identical gate covers it empirically.
+  // are DISJOINT (so the loop's k!==K_PUNCT / k===K_PUNCT guards were redundant).
   membershipFn(fs: Set<string>): string {
     const { kArr, tArr } = this.membershipTables(fs);
     const fnKey = `${kArr}|${tArr}`;
@@ -900,7 +896,7 @@ class Emitter {
         tOnes.add(d.t);
       } else {
         if (d.t === 0) throw new Error(`emit: FIRST key ${J(key)} missing from the literal vocabulary`);
-        for (const [text, id] of st.puLitKind) if (text.startsWith(d.v)) tOnes.add(id);
+        tOnes.add(d.t);
       }
     }
     return { kOnes, tOnes };
@@ -962,8 +958,6 @@ class Emitter {
     // be its second token and it can't end after one. An alt with unknown/len1/nullable
     // SECOND keeps its bit everywhere (and in the EOF-after-one mask `alw2`). Sound:
     // a pruned arm needs a second token it provably can't accept — it would fail.
-    // (The '>'-split is covered: a '>' SECOND key sets every '>'-led punct bit via
-    // firstSetOnes' startsWith expansion, so post-splice second tokens stay admitted.)
     const k2Mask = Array.from({ length: words }, () => new Array<number>(this.kSize()).fill(0));
     const t2Mask = Array.from({ length: words }, () => new Array<number>(this.tSize()).fill(0));
     const alw2 = new Array<number>(words).fill(0);
@@ -1068,7 +1062,7 @@ class Emitter {
     const d = this.a.symtab.classifyKey(value);
     const va = vs > 0 ? `, ${vs}` : '';
     if (d.kind === 'kw') return `matchKwLit(${d.t}${va})`;
-    if (d.kind === 'punct') return value === '>' ? `matchPuLitGT(${d.t}${va})` : `matchPuLit(${d.t}${va})`;
+    if (d.kind === 'punct') return this.gtComps.has(value) ? `matchPuComp(${d.t}${va})` : `matchPuLit(${d.t}${va})`;
     // A literal key that classifies as a token-name (a token name used as a literal):
     // unreachable for real grammars, but stay safe via the generic matchLiteral.
     return `matchLiteral(${J(value)})`;
@@ -1118,6 +1112,48 @@ function emitJsParser(grammar: CstGrammar): string {
   e.emit(`const TOKEN_LABELS = new Map<string, string>(${J(grammar.tokens.filter(t => t.label !== undefined).map(t => [t.name, t.label!]))});`);
   e.emit(`const LIT_KW = new Map<string, number>(${J([...st.kwLitKind])});`);
   e.emit(`const LIT_PU = new Map<string, number>(${J([...st.puLitKind])});`);
+  // '>'-led composite operators (gtComposites): the lexer scans every '>' alone, and an
+  // operator or composite literal is read off the adjacent single-character tokens after it.
+  const gtComps = gtComposites(grammar);
+  e.gtComps = new Set(gtComps);
+  if (gtComps.length > 0) {
+    e.emit(`const PU_GT = ${st.puLitKind.get('>')};`);
+    e.emit(`const GT_COMP = new Map<string, number>(${J(gtComps.map(c => [c, st.puLitKind.get(c)]))});`);
+    e.emit(`const GT_LEN = new Map<number, number>(${J(gtComps.map(c => [st.puLitKind.get(c), c.length]))});`);
+    e.emit(`// The literal id read at token i where an operator or composite literal is read: a lone`);
+    e.emit(`// '>' extends over each adjacent single-character token after it while the text stays a`);
+    e.emit(`// composite. A composite read counts its tokens as reached, so the memo/adoption watermark`);
+    e.emit(`// (which admits two tokens of lookahead past frameMax) covers every token it inspected.`);
+    e.emit(`function gtT(i: number): number {`);
+    e.emit(`  if (tkT[i] !== PU_GT) return tkT[i];`);
+    e.emit(`  const o = toff(i);`);
+    e.emit(`  let n = 1, t = PU_GT;`);
+    e.emit(`  while (i + n < tokN && tkK[i + n] === K_PUNCT && toff(i + n) === o + n && tend(i + n) === o + n + 1) {`);
+    e.emit(`    const c = GT_COMP.get(docText(o, o + n + 1));`);
+    e.emit(`    if (c === undefined) break;`);
+    e.emit(`    t = c; n++;`);
+    e.emit(`  }`);
+    e.emit(`  if (n > 1) { const r = i + n - 1; if (r > frameMax) { frameMax = r; if (r > maxPos) maxPos = r; } }`);
+    e.emit(`  return t;`);
+    e.emit(`}`);
+    e.emit(`function matchPuComp(pu: number, vs?: number) {`);
+    e.emit(`  if (pos >= cap || tkT[pos] !== PU_GT || gtT(pos) !== pu) return recovering ? missTok(pu, vs) : false;`);
+    e.emit(`  scPush(~(pos << 2));`);
+    e.emit(`  pos += GT_LEN.get(pu)!;`);
+    e.emit(`  if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
+    e.emit(`  return true;`);
+    e.emit(`}`);
+    e.emit(`// An operator leaf at a '>' token spans the composite read there (gtT, over document d).`);
+    e.emit(`function dLeafEnd(d: Doc, entry: number, i: number): number {`);
+    e.emit(`  if (((~entry) & 3) !== 2 || d.tkT[i] !== PU_GT) return dEnd(d, i);`);
+    e.emit(`  const o = dOff(d, i);`);
+    e.emit(`  let n = 1;`);
+    e.emit(`  while (i + n < d.tokN && d.tkK[i + n] === K_PUNCT && dOff(d, i + n) === o + n && dEnd(d, i + n) === o + n + 1 && GT_COMP.has(dText(d, o, o + n + 1))) n++;`);
+    e.emit(`  return o + n;`);
+    e.emit(`}`);
+  } else {
+    e.emit(`function dLeafEnd(d: Doc, entry: number, i: number): number { return dEnd(d, i); }`);
+  }
   e.emit(`const K_PUNCT = ${st.KIND_PUNCT};`);
   e.emit(`const K_TEMPLATE_HEAD = ${st.KIND_TEMPLATE_HEAD};`);
   e.emit(`const K_TEMPLATE_MIDDLE = ${st.KIND_TEMPLATE_HEAD + 1};`);
@@ -1616,7 +1652,7 @@ let memoGen: Int32Array[] = [];
 let memoGenCur = 0;
 let parseLimit = -1;
 // cap = the exclusive lookahead bound: min(parseLimit-or-∞, tokN), maintained at the
-// parseLimit set/restore sites and the one token-stream mutation (the '>' splice).
+// parseLimit set/restore sites.
 let cap = 0;
 let currentPrattContext: string | null = null;
 let suppressNext: Set<string> | null = null;
@@ -1642,81 +1678,20 @@ function matchKwLit(kw: number, vs?: number) {
   if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
   return true;
 }
-// Punct literal: tok.type === '' && tok.text === value, with the gt-splice fallback.
-// tok.t === PU(value) is the exact-text fast path; the splice handles a longer
-// gt-led token matching the gt key. value/pu are baked by the caller.
+// Punct literal: tok.type === '' && tok.text === value — tok.t === PU(value), baked by the caller.
 function matchPuLit(pu: number, vs?: number) {
   // A pu-range t can only come from a punct token, so the old k === K_PUNCT guard was
-  // redundant — one int compare. The '>'-split lives only in matchPuLitGT ('>' sites).
+  // redundant — one int compare.
   if (pos >= cap || tkT[pos] !== pu) return recovering ? missTok(pu, vs) : false;
   scPush(~(pos << 2));
   if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
   return true;
-}
-function matchPuLitGT(pu: number, vs?: number) {
-  if (pos >= cap) return false;
-  const off = toff(pos);
-  if (tkT[pos] === pu) {
-    scPush(~(pos << 2));
-    if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
-    return true;
-  }
-  // Split multi-'>' tokens: '>>', '>>>', '>>=', '>>>=' can yield a single '>': shift the
-  // columns up one slot and write the '>' + rest pair in place (both born flag-less,
-  // matching the old mkPunct pair).
-  if (tkK[pos] === K_PUNCT && tend(pos) - off > 1 && docChar(off) === 62) {
-    const end0 = tend(pos);
-    
-    if (tokN === tkCap) growTok();
-    parenCachePos = -1;   // invalidate the paren-stack cache (soa emitted lexer only)
-    // token indices shift past this point: the OLD-TREE adoption mapping
-    // (adoptDmg*/adoptDelta, frozen at edit start) is no longer valid — turn
-    // adoption off for the remainder of this parse (the '>' split is rare; the
-    // memo generation bump below already isolates the memo)
-    adoptRoot = -1;
-    adoptRunPos = -1;
-    tkK.copyWithin(pos + 1, pos, tokN);
-    tkT.copyWithin(pos + 1, pos, tokN);
-    tkOff.copyWithin(pos + 1, pos, tokN);
-    tkEnd.copyWithin(pos + 1, pos, tokN);
-    tkDp.copyWithin(pos + 1, pos, tokN);
-    tkPd.copyWithin(pos + 1, pos, tokN);
-    tkFl.copyWithin(pos + 1, pos, tokN);
-    
-    // Keep the EOF-relative zone invariant: a split at/past negFrom writes the new
-    // pair EOF-relative (a positive value there would not ride later srcLenP1
-    // shifts); below it, the boundary index moves up one slot with the suffix.
-    if (pos < negFrom) {
-      negFrom++;
-      tkT[pos] = pu; tkEnd[pos] = off + 1; tkFl[pos] = 0;
-      tkOff[pos + 1] = off + 1; tkFl[pos + 1] = 0;
-    } else {
-      tkT[pos] = pu; tkEnd[pos] = off + 1 - srcLenP1; tkFl[pos] = 0;
-      tkOff[pos + 1] = off + 1 - srcLenP1; tkFl[pos + 1] = 0;
-    }
-    tkT[pos + 1] = LIT_PU.get(docText(off + 1, end0)) ?? 0;
-    tokN++;
-    if (parseLimit < 0) cap = tokN;
-    // Token indices shifted: drop the per-rule memo arrays (recreated lazily at the new size).
-    memoGenCur++;   // positions shifted mid-parse: every stamped entry is stale
-    memoRecFloor = 0x7fffffff;   // including across attempts: pre-split positions
-                                 // can never be revalidated against the new stream
-    for (let _ep = docEmptyPops.length - 1; _ep >= 0 && docEmptyPops[_ep] >= pos; _ep--) docEmptyPops[_ep]++;
-    // GREEN tree: no kids/scratch fixup — every completed row and scratch entry lies
-    // wholly BEFORE the splice point (token pos is being consumed right now), and the
-    // carried memo was just cleared, so nothing reachable references shifted indices.
-    scPush(~(pos << 2));
-    if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
-    return true;
-  }
-  return recovering ? missTok(pu, vs) : false;
 }
 // Generic matchLiteral kept for any unspecialized site: classify value via the baked
 // tables (no per-call isKeywordLiteral / string compares) and delegate.
 function matchLiteral(value: string) {
   const kw = LIT_KW.get(value);
   if (kw !== undefined) return matchKwLit(kw);
-  if (value === '>') return matchPuLitGT(LIT_PU.get(value) ?? 0);
   return matchPuLit(LIT_PU.get(value) ?? 0);
 }
 
@@ -2100,14 +2075,15 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // Operator LED ($ op $ / postfix), copied verbatim. The no-unary-LHS check is a byte
   // table over t (a token's text equals an op value iff its t-int matches — vocabulary).
   // The lhs head probe reads the arena row instead of an object's children array.
-  e.emit(`    const info = OP_BY_T[tkT[pos]];`);
+  e.emit(e.gtComps.size > 0 ? `    const opT = gtT(pos);` : `    const opT = tkT[pos];`);
+  e.emit(`    const info = OP_BY_T[opT];`);
   e.emit(`    if (info && info.lbp > minBp) {`);
   e.emit(`      if (info.position === 'postfix') {`);
   e.emit(`        if (!tailClosed) {`);
   // A target-requiring postfix (`++`/`--`) may not apply to a unary/update operand
   // (`++x++`, `x++ ++`): its operand must be a LeftHandSideExpression. Fail hard (like
   // noUnaryLhs), so the expression can't reparse some other way.
-  e.emit(`          if (REQTGT_T[tkT[pos]] !== 0 && _notTarget(lhs)) return -1;`);
+  e.emit(`          if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) return -1;`);
   e.emit(`          scPush(~((pos << 2) | 2));`);
   e.emit(`          if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
   e.emit(`          lhs = finishWrap(${rid}, lhs, ledMark);`);
@@ -2116,8 +2092,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`      } else {`);
   // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
   // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Like noUnaryLhs, fail hard.
-  e.emit(`        if (REQTGT_T[tkT[pos]] !== 0 && _notTarget(lhs)) return -1;`);
-  e.emit(`        if (NOUNARY_T[tkT[pos]] !== 0 && rowCount[lhs] > 0) {`);
+  e.emit(`        if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) return -1;`);
+  e.emit(`        if (NOUNARY_T[opT] !== 0 && rowCount[lhs] > 0) {`);
   e.emit(`          const _h = kids[rowStart[lhs]];`);
   e.emit(`          if (_h < 0 && ((~_h) & 3) === 2) {`);
   e.emit(`            const _ht = absTok[lhs] + ((~_h) >>> 2);`);
@@ -2126,7 +2102,12 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`          }`);
   e.emit(`        }`);
   e.emit(`        scPush(~((pos << 2) | 2));`);
-  e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
+  if (e.gtComps.size > 0) {
+    e.emit(`        pos += opT === tkT[pos] ? 1 : GT_LEN.get(opT)!;`);
+    e.emit(`        if (pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
+  } else {
+    e.emit(`        if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
+  }
   e.emit(`        let rhs = ${ruleFn}_pratt(info.rbp);`);
   e.emit(`        if (rhs < 0 && recovering) rhs = missRule(${rid});`);
   // CAP PROPAGATION: an operator whose RHS is a capped assignment-level expression (an
@@ -2262,9 +2243,6 @@ function parseRuleEntry(idx: number, rid: number, name: string, core: (minBp: nu
   suppressNext = null;
   const capped = parseLimit >= 0;
   const start = pos;
-  // Capture the arrays together: a '>'-splice inside core() detaches them via
-  // fill(undefined), and the store below must then write into the DETACHED arrays
-  // (i.e. be discarded), exactly like the old per-rule Map did.
   let me = memoEnd[idx];
   let mn = memoNode[idx];
   let mx = memoExt[idx];
@@ -3461,7 +3439,7 @@ function treeOf(d: Doc) {
     childTokRelAt: (id: number, i: number) => ktrD(id, d.rowStart[id] + i),
     // base-threaded spans: nodes from their bases, leaves from the token columns
     offsetOf: (entry: number, charBase: number, tokBase: number) => entry >= 0 ? charBase : dOff(d, tokBase + ((~entry) >>> 2)),
-    endOf: (entry: number, charBase: number, tokBase: number) => entry >= 0 ? charBase + d.rowLen[entry] : dEnd(d, tokBase + ((~entry) >>> 2)),
+    endOf: (entry: number, charBase: number, tokBase: number) => entry >= 0 ? charBase + d.rowLen[entry] : dLeafEnd(d, entry, tokBase + ((~entry) >>> 2)),
     childCount: (id: number) => d.rowCount[id],
     childAt: (id: number, i: number) => d.kids[d.rowStart[id] + i],
     // Bulk child load into a caller-owned array; returns the count. One call per node
@@ -3485,10 +3463,10 @@ function treeOf(d: Doc) {
     leafKindOf: (entry: number) => (~entry) & 3,
     leafTokKindOf: (entry: number, tokBase: number) => d.tkK[tokBase + ((~entry) >>> 2)],
     leafOffsetOf: (entry: number, tokBase: number) => dOff(d, tokBase + ((~entry) >>> 2)),
-    leafEndOf: (entry: number, tokBase: number) => dEnd(d, tokBase + ((~entry) >>> 2)),
+    leafEndOf: (entry: number, tokBase: number) => dLeafEnd(d, entry, tokBase + ((~entry) >>> 2)),
     textOf: (entry: number, source: string, charBase: number, tokBase: number) => entry >= 0
       ? source.slice(charBase, charBase + d.rowLen[entry])
-      : source.slice(dOff(d, tokBase + ((~entry) >>> 2)), dEnd(d, tokBase + ((~entry) >>> 2))),
+      : source.slice(dOff(d, tokBase + ((~entry) >>> 2)), dLeafEnd(d, entry, tokBase + ((~entry) >>> 2))),
   };
 }
 // Depth-first traversal threading the RED coordinates:

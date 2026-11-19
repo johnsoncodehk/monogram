@@ -674,8 +674,8 @@ function parse${r.name}W(): Frame | null {
     maxLook = 0;
     const n = parseTopOneW();
     if (n === null) { pos = sp; break; }
-    const ext = lexIdx(Math.max(n.tokEnd, maxLook));
-    localE.push({ tokStart: lexIdx(n.tokStart), tokEnd: lexIdx(n.tokEnd), ext, off: n.off, end: n.end, kidStart: spans.length, kidCount: 1 });
+    const ext = Math.max(n.tokEnd, maxLook);
+    localE.push({ tokStart: n.tokStart, tokEnd: n.tokEnd, ext, off: n.off, end: n.end, kidStart: spans.length, kidCount: 1 });
     absorbFrame(kids, spans, n);
   }
   _entries = localE;
@@ -700,9 +700,9 @@ function parse${r.name}W(): Frame | null {
   if (kids.length === before) return null;
   const sp0 = spans[spanBefore]!;
   const sp1 = spans[spans.length - 1]!;
-  const tokStart = lexIdx(sp0.tokStart);
-  const tokEnd = lexIdx(sp1.tokEnd);
-  const ext = lexIdx(Math.max(sp1.tokEnd, maxLook));
+  const tokStart = sp0.tokStart;
+  const tokEnd = sp1.tokEnd;
+  const ext = Math.max(sp1.tokEnd, maxLook);
   const meta: EntryMeta = { tokStart, tokEnd, ext, off: sp0.off, end: sp1.end, kidStart, kidCount: 1 };
   return { seg: { kidStart, kidCount: 1, tokStart, tokEnd, ext }, meta };
 }
@@ -718,10 +718,10 @@ function parse${r.name}W(): Frame | null {
   const leafSp = spans[spanStart]!;
   const hasStmt = spans.length > spanStart + 1;
   const rawEnd = hasStmt ? spans[spanStart + 1]!.tokEnd : leafSp.tokEnd;
-  const tokEnd = lexIdx(rawEnd);
-  const tokStart = lexIdx(leafSp.tokStart);
+  const tokEnd = rawEnd;
+  const tokStart = leafSp.tokStart;
   const end = hasStmt ? spans[spanStart + 1]!.end : leafSp.end;
-  const ext = lexIdx(Math.max(rawEnd, maxLook));
+  const ext = Math.max(rawEnd, maxLook);
   const kidCount = kids.length - kidStart;
   const meta: EntryMeta = { tokStart, tokEnd, ext, off: leafSp.off, end, kidStart, kidCount };
   return { seg: { kidStart, kidCount, tokStart, tokEnd, ext }, meta };
@@ -762,7 +762,7 @@ function parse${r.name}(): Node | null {
     maxLook = 0;
     const n = parseTopOne();
     if (n === null) { pos = sp; break; }
-    localE.push({ tokStart: lexIdx(sp), tokEnd: lexIdx(pos), ext: lexIdx(Math.max(pos, maxLook)), off: n.offset, end: n.end, kidStart: kids.length, kidCount: 1 });
+    localE.push({ tokStart: sp, tokEnd: pos, ext: Math.max(pos, maxLook), off: n.offset, end: n.end, kidStart: kids.length, kidCount: 1 });
     kids.push(n);
   }
   _entries = localE;
@@ -789,8 +789,8 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan): string 
   opt(() => callRule(parse${plan.headRule}, kids), kids);
   if (kids.length === before) return null;
   const n = kids[before] as Node;
-  const ext = lexIdx(Math.max(pos, maxLook));
-  const tokStart = lexIdx(sp), tokEnd = lexIdx(pos);
+  const ext = Math.max(pos, maxLook);
+  const tokStart = sp, tokEnd = pos;
   const meta: EntryMeta = { tokStart, tokEnd, ext, off: n.offset, end: n.end, kidStart, kidCount: 1 };
   return { seg: { kidStart, kidCount: 1, tokStart, tokEnd, ext }, meta };
 }
@@ -810,8 +810,8 @@ ${headFn}function parseLoopSeg(kids: Cst[]): { seg: Seg; meta: EntryMeta } | nul
   const leaf = kids[kidStart]!;
   const hasStmt = kids.length > kidStart + 1;
   const end = hasStmt ? kids[kidStart + 1]!.end : leaf.end;
-  const ext = lexIdx(Math.max(pos, maxLook));
-  const tokStart = lexIdx(sp), tokEnd = lexIdx(pos);
+  const ext = Math.max(pos, maxLook);
+  const tokStart = sp, tokEnd = pos;
   const kidCount = kids.length - kidStart;
   const meta: EntryMeta = { tokStart, tokEnd, ext, off: leaf.offset, end, kidStart, kidCount };
   return { seg: { kidStart, kidCount, tokStart, tokEnd, ext }, meta };
@@ -935,12 +935,12 @@ ${postfixTokSwitch}
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; form = 1; continue;
     }
-    const info = ${r.name}_BIN[t.lid];
+    const info = ${r.name}_BIN[_opLid(t)];
     if (info === undefined || info.lbp <= minBp) break;
     if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
-    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end };
-    pos++;
+    const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: _opEnd };
+    pos += _opN;
     const rhs = ${r.name}_bp(info.rbp);
     if (rhs === null) { pos = ledSave; break; }
     left = { rule: ${J(r.cstName)}, children: [left, opLeaf, rhs], offset: left.offset, end: rhs.end };
@@ -1067,12 +1067,13 @@ ${postfixTokSwitch}
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const lf = leafFrameW('$operator', t); pos++; left = joinFramesW(${cn}, left, lf); tailClosed = true; form = 1; continue;
     }
-    const info = ${r.name}_BIN[t.lid];
+    const opLid = _opLid(t);
+    const info = ${r.name}_BIN[opLid];
     if (info === undefined || info.lbp <= minBp) break;
     if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
-    const lf = leafFrameW('$operator', t);
-    pos++;
+    const lf = opFrameW(t, opLid);
+    pos += _opN;
     const rhs = ${r.name}_bpW(info.rbp);
     if (rhs === null) { pos = ledSave; break; }
     left = joinFramesW(${cn}, left, lf, rhs);
@@ -1188,6 +1189,11 @@ function leafFrameW(ttype: string, t: Tok): Frame {
   const h = _builder.leaf(ttype, t.kid, t.lid, t.off, t.end);
   return { hs: h === null ? [] : [h], off: t.off, end: t.end, tokStart: pos, tokEnd: pos + 1, headOff: t.off, headEnd: t.end };
 }
+// A binary operator leaf: the composite _opLid just read (lid, _opN tokens, ending at _opEnd).
+function opFrameW(t: Tok, lid: number): Frame {
+  const h = _builder.leaf('$operator', t.kid, lid, t.off, _opEnd);
+  return { hs: h === null ? [] : [h], off: t.off, end: _opEnd, tokStart: pos, tokEnd: pos + _opN, headOff: t.off, headEnd: _opEnd };
+}
 function finishNodeW(rule: string, kids: any[], spans: BWSpan[], save: number): Frame {
   const off = spans.length > 0 ? spans[0]!.off : (save < toks.length ? toks[save]!.off : 0);
   const end = spans.length > 0 ? spans[spans.length - 1]!.end : off;
@@ -1221,7 +1227,7 @@ function wrapUnaryW(rule: string, child: Frame): Frame {
 }
 function headLeafTextW(f: Frame): string { return _src.slice(f.headOff, f.headEnd); }
 function matchLitW(lid: number, ttype: string, kids: any[], spans: BWSpan[]): boolean {
-  _splitGt(lid);
+  if (_GT_LIT[lid] !== 0) return _matchComp(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   const f = leafFrameW(ttype, t); pos++;
@@ -1291,7 +1297,6 @@ export const cstBuilder: Builder<Cst> = {
 export function parseWith<H>(src: string, builder: Builder<H>): H | null {
   _src = src;
   toks = lex(src);
-  _splitRems = [];
   pos = 0;
   maxLook = 0;
   _builder = builder;
@@ -1307,7 +1312,6 @@ export function parseWith<H>(src: string, builder: Builder<H>): H | null {
 function parseWithMeta<H>(text: string, meta: AlignMeta[], builder: Builder<H>): { root: H | null; entries: any[]; entryHs: any[]; segs: any[] } {
   _src = text;
   toks = toksFromMeta(text, meta);
-  _splitRems = [];
   pos = 0;
   maxLook = 0;
   _builder = builder;
@@ -1341,7 +1345,6 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
-  _splitRems = [];
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   _builder = builder;
   const mid: H[] = [];
@@ -1374,35 +1377,35 @@ function tryReuseTopW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     return { root: r as H, entries: newEntries, entryHs: children, reused: prefixKids.length + adopted.length };
   };
   const tryHit = (): { root: H; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    if (lexIdx(pos) < suffixBound) return null;
+    if (pos < suffixBound) return null;
     if (suffixCand.length === 0) {
-      if (lexIdx(pos) === newN) return finish(0);
+      if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === lexIdx(pos));
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
     if (hit >= 0) return finish(hit);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
   for (;;) {
     if (pos >= toks.length) {
-      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
       return tryHit();
     }
     maxLook = 0;
     const sp = pos;
     const fr = parseTopOneW();
     if (fr === null || fr.hs.length !== 1) { pos = sp; return null; }
-    const ext = lexIdx(Math.max(fr.tokEnd, maxLook));
-    midMeta.push({ tokStart: lexIdx(fr.tokStart), tokEnd: lexIdx(fr.tokEnd), ext, off: fr.off, end: fr.end, kidStart: 0, kidCount: 1 });
+    const ext = Math.max(fr.tokEnd, maxLook);
+    midMeta.push({ tokStart: fr.tokStart, tokEnd: fr.tokEnd, ext, off: fr.off, end: fr.end, kidStart: 0, kidCount: 1 });
     mid.push(fr.hs[0] as H);
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
 }
 ` : ''}${shapeB ? `
@@ -1429,7 +1432,6 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
-  _splitRems = [];
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   _builder = builder;
   const midKids: H[] = [];
@@ -1486,19 +1488,19 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
     return { root: r as H, segs: newSegs, entries: newEntries, entryHs: children, reused: prefixSegs.length + adoptedSegs.length };
   };
   const tryHit = (): { root: H; segs: Seg[]; entries: EntryMeta[]; entryHs: H[]; reused: number } | null => {
-    if (lexIdx(pos) < suffixBound) return null;
+    if (pos < suffixBound) return null;
     if (suffixCand.length === 0) {
-      if (lexIdx(pos) === newN) return finish(0);
+      if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === lexIdx(pos));
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
     if (hit >= 0) return finish(hit);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
   ${hasHeadB ? `if (prefixLen === 0) {
     const spans: BWSpan[] = [];
@@ -1508,26 +1510,26 @@ function tryReuseSegW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: numb
       midMeta.push({ ...pair.meta, kidStart: 0 });
       const hit = tryHit();
       if (hit) return hit;
-      if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+      if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
     }
   }
   ` : ''}for (;;) {
     if (pos >= toks.length) {
-      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
       return tryHit();
     }
     const before = midKids.length;
     const spans: BWSpan[] = [];
     const pair = parseLoopSegW(midKids, spans);
     if (pair === null) {
-      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
       return tryHit();
     }
     midSegs.push({ kidStart: before, kidCount: midKids.length - before, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
     midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
 }
 ` : ''}
@@ -2072,7 +2074,6 @@ function tryReuseTop(oldRoot: Node, oldEntries: EntryMeta[], newText: string, ne
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
-  _splitRems = [];
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   const mid: Node[] = [];
   const midMeta: EntryMeta[] = [];
@@ -2097,34 +2098,34 @@ function tryReuseTop(oldRoot: Node, oldEntries: EntryMeta[], newText: string, ne
     return { root: { rule: oldRoot.rule, children, offset, end }, entries: newEntries, reused: prefixKids.length + adopted.length };
   };
   const tryHit = (): { root: Node; entries: EntryMeta[]; reused: number } | null => {
-    if (lexIdx(pos) < suffixBound) return null;
+    if (pos < suffixBound) return null;
     if (suffixCand.length === 0) {
-      if (lexIdx(pos) === newN) return finish(0);
+      if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === lexIdx(pos));
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
     if (hit >= 0) return finish(hit);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
   for (;;) {
     if (pos >= toks.length) {
-      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
       return tryHit() ?? null;
     }
     maxLook = 0;
     const sp = pos;
     const n = parseTopOne();
     if (n === null) { pos = sp; return null; }
-    midMeta.push({ tokStart: lexIdx(sp), tokEnd: lexIdx(pos), ext: lexIdx(Math.max(pos, maxLook)), off: n.offset, end: n.end, kidStart: 0, kidCount: 1 });
+    midMeta.push({ tokStart: sp, tokEnd: pos, ext: Math.max(pos, maxLook), off: n.offset, end: n.end, kidStart: 0, kidCount: 1 });
     mid.push(n);
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
 }
 ` : ''}${shapeB ? `function assertEntriesVsSegs(entries: EntryMeta[], oldSegs: Seg[], oldRoot: Node): void {
@@ -2169,7 +2170,6 @@ function tryReuseSeg(oldRoot: Node, oldSegs: Seg[], oldEntries: EntryMeta[], new
   const tokDelta = newN - oldN;
   _src = newText;
   toks = toksFromMeta(newText, newMeta);
-  _splitRems = [];
   pos = prefixLen > 0 ? prefixMeta[prefixLen - 1]!.tokEnd : 0;
   const midKids: Cst[] = [];
   const midSegs: Seg[] = [];
@@ -2221,19 +2221,19 @@ function tryReuseSeg(oldRoot: Node, oldSegs: Seg[], oldEntries: EntryMeta[], new
     return { root: { rule: oldRoot.rule, children, offset, end }, segs: newSegs, entries: newEntries, reused: prefixSegs.length + adoptedSegs.length };
   };
   const tryHit = (): { root: Node; segs: Seg[]; entries: EntryMeta[]; reused: number } | null => {
-    if (lexIdx(pos) < suffixBound) return null;
+    if (pos < suffixBound) return null;
     if (suffixCand.length === 0) {
-      if (lexIdx(pos) === newN) return finish(0);
+      if (pos === newN) return finish(0);
       return null;
     }
-    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === lexIdx(pos));
+    const hit = suffixMeta.findIndex((m) => m.tokStart + tokDelta === pos);
     if (hit >= 0) return finish(hit);
     return null;
   };
   {
     const early = tryHit();
     if (early) return early;
-    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
   ${hasHeadB ? `if (prefixLen === 0) {
     const pair = parseHeadSeg(midKids);
@@ -2242,25 +2242,25 @@ function tryReuseSeg(oldRoot: Node, oldSegs: Seg[], oldEntries: EntryMeta[], new
       midMeta.push({ ...pair.meta, kidStart: 0 });
       const hit = tryHit();
       if (hit) return hit;
-      if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+      if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
     }
   }
   ` : ''}for (;;) {
     if (pos >= toks.length) {
-      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
       return tryHit() ?? null;
     }
     const before = midKids.length;
     const pair = parseLoopSeg(midKids);
     if (pair === null) {
-      if (suffixCand.length === 0 && lexIdx(pos) === newN) return finish(0);
+      if (suffixCand.length === 0 && pos === newN) return finish(0);
       return tryHit() ?? null;
     }
     midSegs.push({ kidStart: before, kidCount: midKids.length - before, tokStart: pair.seg.tokStart, tokEnd: pair.seg.tokEnd, ext: pair.seg.ext });
     midMeta.push({ tokStart: pair.meta.tokStart, tokEnd: pair.meta.tokEnd, ext: pair.meta.ext, off: pair.meta.off, end: pair.meta.end, kidStart: 0, kidCount: midKids.length - before });
     const hit = tryHit();
     if (hit) return hit;
-    if (suffixCand.length > 0 && maxCand >= 0 && lexIdx(pos) > maxCand) return null;
+    if (suffixCand.length > 0 && maxCand >= 0 && pos > maxCand) return null;
   }
 }
 ` : ''}` : `
@@ -3518,12 +3518,12 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
   if (binarySlot) {
     if (binarySlot.kind === 'node') {
       const binaryNode = binarySlot as NodeShape;
-      binaryCode = `    const info = ${r.name}_BIN[t.lid];
+      binaryCode = `    const info = ${r.name}_BIN[_opLid(t)];
     if (info === undefined || info.lbp <= minBp) break;
     if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
-    const opText = _src.slice(t.off, t.end);
-    pos++;
+    const opText = _src.slice(t.off, _opEnd);
+    pos += _opN;
     const right = parseAst${r.name}_bp(info.rbp);
     if (right === null) { pos = ledSave; break; }
     const spOff = leftOff;
@@ -3533,23 +3533,23 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     leftOff = spOff;
     leftEnd = end;`;
     } else if (binarySlot.kind === 'custom') {
-      binaryCode = `    const info = ${r.name}_BIN[t.lid];
+      binaryCode = `    const info = ${r.name}_BIN[_opLid(t)];
     if (info === undefined || info.lbp <= minBp) break;
     if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
-    const opText = _src.slice(t.off, t.end);
-    pos++;
+    const opText = _src.slice(t.off, _opEnd);
+    pos += _opN;
     const right = parseAst${r.name}_bp(info.rbp);
     if (right === null) { pos = ledSave; break; }
     left = ${customFinish((binarySlot as CustomShape).fn, '[right]', 'ledSave', '[]', 'left', 'opText')} as ${retType};
     leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;`;
     } else {
-      binaryCode = `    const info = ${r.name}_BIN[t.lid];
+      binaryCode = `    const info = ${r.name}_BIN[_opLid(t)];
     if (info === undefined || info.lbp <= minBp) break;
     if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
     const ledSave = pos;
-    const opText = _src.slice(t.off, t.end);
-    pos++;
+    const opText = _src.slice(t.off, _opEnd);
+    pos += _opN;
     const right = parseAst${r.name}_bp(info.rbp);
     if (right === null) { pos = ledSave; break; }
     const _kids = [left, opText, right];
@@ -3684,13 +3684,13 @@ function matchTemplateAstLegacy(interp: () => unknown | null): unknown | null {
 ` : '';
   return `// ─── Shape parse helpers ─────────────────────────────────────────────────────
 function _shapeDropLit(lid: number): boolean {
-  _splitGt(lid);
+  if (_GT_LIT[lid] !== 0) return _matchComp(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   pos++; return true;
 }
 function _shapeKeepLit(lid: number, _tt: string): boolean {
-  _splitGt(lid);
+  if (_GT_LIT[lid] !== 0) return _matchComp(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   pos++; return true;
@@ -3864,7 +3864,6 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
   _astCustoms = opts?.customs ?? {};
   _src = src;
   toks = lex(src);
-  _splitRems = [];
   pos = 0;
   const root = parseAst${entry}();
   return root !== null && pos === toks.length ? (root as ${rootType}) : null;
@@ -3881,6 +3880,43 @@ export const tsTarget: Target = {
   },
   emitRunner,
 };
+
+// '>'-led composite operators (ir.gtComps): the lexer scans every '>' alone. Where an operator or a
+// composite literal is read, a lone '>' extends over each adjacent single-character punct token
+// after it while the text stays a composite. _opLid returns the lid read at token pos (peeked as
+// t), its token count in _opN and its end offset in _opEnd; the reads count toward maxLook.
+function gtRuntime(ir: ParserIR, ids: LexIdPlan): string {
+  const lits = new Array<number>(ids.lids.length).fill(0);
+  for (const c of ir.gtComps) lits[lidOf(ids, c)] = 1;
+  const head = `const _GT_LIT = Uint8Array.from([${lits.join(',')}]);
+let _opN = 1, _opEnd = 0;`;
+  if (ir.gtComps.length === 0) {
+    return `${head}
+function _opLid(t: Tok): number { _opN = 1; _opEnd = t.end; return t.lid; }
+function _matchComp(_lid: number): boolean { return false; }`;
+  }
+  return `${head}
+const _GT_COMP: Record<string, number> = { ${ir.gtComps.map((c) => `${J(c)}: ${lidOf(ids, c)}`).join(', ')} };
+function _opLid(t: Tok): number {
+  _opN = 1; _opEnd = t.end;
+  if (t.lid !== ${lidOf(ids, '>')}) return t.lid;
+  let lid = t.lid;
+  for (let j = pos + 1; j < toks.length; j++) {
+    const u = toks[j];
+    if (u.kid !== 0 || u.off !== _opEnd || u.end !== u.off + 1) break;
+    const c = _GT_COMP[_src.slice(t.off, u.end)];
+    if (c === undefined) break;
+    lid = c; _opN++; _opEnd = u.end;
+  }
+  maxLook = Math.max(maxLook, pos + _opN + 1);
+  return lid;
+}
+function _matchComp(lid: number): boolean {
+  const t = peek();
+  if (t === null || _opLid(t) !== lid) return false;
+  pos += _opN; return true;
+}`;
+}
 
 function emitTsLibrary(ir: ParserIR, ids: LexIdPlan): string {
     const reuse = topReusePlan(ir);
@@ -3917,8 +3953,8 @@ function matchTemplate(interp: () => Node | null): Cst | null {
 type Tok = { off: number; end: number; nl: boolean; kid: number; lid: number };
 export type Token = { kind: string; text: string; off: number; end: number; nl: boolean; kid: number; lid: number };
 // The CST is spans over the source: a leaf's text is src.slice(offset, end). Token indices are
-// parse bookkeeping (the parser splits '>'-led punctuators, and incremental reuse shifts them),
-// so they are not part of it.
+// parse bookkeeping (a composed '>'-led operator spans several tokens, and incremental reuse
+// shifts them), so they are not part of it.
 export type Leaf = { tokenType: string; offset: number; end: number };
 export type Node = { rule: string; children: Cst[]; offset: number; end: number };
 export type Cst = Node | Leaf;
@@ -3935,28 +3971,7 @@ let _suppressNext: Set<number> | null = null;
 let _suppressCur: Set<number> | null = null;
 let _src = '';
 function peek(): Tok | null { maxLook = Math.max(maxLook, pos + 1); return pos < toks.length ? toks[pos] : null; }
-// Indices of the '>' remainders _splitGt spliced into toks. Reuse metadata lives in the
-// lexer's index space (the edit alignment's), so parse positions are mapped back through lexIdx.
-let _splitRems: number[] = [];
-function lexIdx(p: number): number {
-  if (_splitRems.length === 0) return p;
-  let n = 0;
-  for (let i = 0; i < _splitRems.length; i++) if (_splitRems[i] < p) n++;
-  return p - n;
-}
-// Match a single '>' even when the lexer tokenized a longer '>'-led punct
-// (>>, >=, >>>, >>=, >>>=): split the leading '>' and splice the remainder
-// back as the next token (mirrors Parser::match_gt / matchPuLitGT).
-function _splitGt(lid: number): void {
-  if (lid !== ${lidOf(ids, '>')} || pos >= toks.length) return;
-  const t = toks[pos];
-  if (t.end - t.off <= 1 || _src.charCodeAt(t.off) !== 62) return;
-  const rem = _src.slice(t.off + 1, t.end);
-  for (let i = 0; i < _splitRems.length; i++) if (_splitRems[i] > pos) _splitRems[i]++;
-  _splitRems.push(pos + 1);
-  toks.splice(pos + 1, 0, mk_tok(t.off + 1, t.end, t.nl, 0, lid_of(rem)));
-  toks[pos] = mk_tok(t.off, t.off + 1, t.nl, 0, ${lidOf(ids, '>')});
-}
+${gtRuntime(ir, ids)}
 function headLeafText(node: Cst): string {
   let n: Cst = node;
   while ('children' in n && n.children.length > 0) n = n.children[0];
@@ -3971,7 +3986,7 @@ function node(rule: string, kids: Cst[], fallbackOff: number = 0): Node {
   return { rule, children: kids, offset: kids.length ? kids[0].offset : fallbackOff, end: kids.length ? kids[kids.length - 1].end : fallbackOff };
 }
 function matchLit(lid: number, ttype: string, kids: Cst[]): boolean {
-  _splitGt(lid);
+  if (_GT_LIT[lid] !== 0) return _matchComp(lid);
   const t = peek();
   if (t === null || t.lid !== lid) return false;
   if (ttype !== '$punct') kids.push({ tokenType: ttype, offset: t.off, end: t.end }); pos++; return true;
@@ -4025,7 +4040,6 @@ export function parse(src: string): Cst | null {
 // The entry rule over a token list of the CURRENT _src (also driven by the edit session).
 function parseTokens(tokens: Tok[]): Cst | null {
   toks = tokens;
-  _splitRems = [];
   pos = 0;
   maxLook = 0;
   const root = parse${ir.entry}();
