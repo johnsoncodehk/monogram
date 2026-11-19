@@ -242,10 +242,12 @@ const CASES: Case[] = [
       'x = B<C> as T;', 'x = B<C> satisfies T;', 'x = B<C> instanceof D;', 'x = B<C> <= 1;', 'x = B<C>\ny;',
       // tsc rescans the closing token of expression type arguments: `>>`/`>=`/… never close them.
       'f<A>>(x);', 'x = a<b>>>c;', 'new A<B>>(c);', 'f<A<B>>(x);',
+      // A typed call / instantiation is a LeftHandSideExpression: its `<` is not an operator.
+      'f<T>() = 1;', 'x = B<C> = 1;', 'x = B<C> += 1;', 'f<T>`x` = 1;', 'f<T>()++;', 'f<T>().x = 1;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
-      'a + b = 1;', '-x = 1;', 'x++ = 1;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
+      'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
       // Only an access tail extends an access tail.
       'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;',
       'x = B<C> < 1;', 'x = B<C> >= 1;', 'x = B<C>!;', 'x = B<C> /re/;'],

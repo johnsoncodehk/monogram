@@ -807,6 +807,14 @@ async function main(): Promise<void> {
     || tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }) !== null);
   check('typescript assignment-target and closed-tail violations reject on CST, TS shape and Rust shape',
     assignAccepted.length === 0, JSON.stringify(assignAccepted));
+  // The Rust ESTree customs have no typed-call / instantiation schema, so the Rust side of these
+  // is covered by the native Rust target in portable-targets.
+  const assignAccepts = ['f<T>() = 1;', 'x = B<C> = 1;', 'x = B<C> += 1;', 'f<T>`x` = 1;', 'f<T>()++;'];
+  const assignRejected = assignAccepts.filter((src) =>
+    tsMod.parse(src) === null
+    || tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }) === null);
+  check('typescript typed calls and instantiations are assignment targets on CST and TS shape',
+    assignRejected.length === 0, JSON.stringify(assignRejected));
 
   check('TS_GOLDEN size === 35', TS_GOLDEN.length === 35, `${TS_GOLDEN.length}`);
   const tsGoldenLines = runBatch(tsBin, TS_GOLDEN.map((g) => g.src), 600_000);

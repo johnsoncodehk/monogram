@@ -650,9 +650,13 @@ export function createParser(grammar: CstGrammar) {
       if (tail && 'tokenType' in tail && tail.tokenType === '$operator'
           && postfixOpValues.has(source.slice(tail.offset, tail.end))) return true;
       // a binary / relational / conditional expression (`a + b`, `a in b`, `a as T`) is not a
-      // LeftHandSideExpression: its MIDDLE child is a binary-connector leaf. Member `a.b` /
-      // element `a[b]` have a `$punct` leaf there, a paren cover has a NODE child → those pass.
-      if (cs.length >= 3) { const m = cs[1]; if (m && 'tokenType' in m && binaryConnectors.has(source.slice(m.offset, m.end))) return true; }
+      // LeftHandSideExpression: its MIDDLE child is an `$operator` leaf or a binary-connector
+      // leaf. Member `a.b` / element `a[b]` / typed call `f<T>()` have a `$punct` leaf there, a
+      // paren cover has a NODE child → those pass.
+      if (cs.length >= 3) {
+        const m = cs[1];
+        if (m && 'tokenType' in m && (m.tokenType === '$operator' || binaryConnectors.has(source.slice(m.offset, m.end)))) return true;
+      }
       return false;
     };
 

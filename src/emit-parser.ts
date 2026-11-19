@@ -1202,10 +1202,11 @@ function emitJsParser(grammar: CstGrammar): string {
   e.emit(`    if (postfixOpValues.has(docText(toff(_tt), tend(_tt)))) return true;`);
   e.emit(`  }`);
   // a binary / relational / conditional expression (`a + b`, `a in b`, `a as T`, …) is not a
-  // LeftHandSideExpression: its MIDDLE child is a binary connector leaf. (Member `a.b` /
-  // element `a[b]` have a PUNCT leaf there, a parenthesized cover has a NODE child, so those
-  // pass — `(a + b) = c` via the cover is correctly accepted, like tsc.)
-  e.emit(`  if (n >= 3) { const _m = kids[cs + 1]; if (_m < 0) { const _mt = absTok[lhs] + ((~_m) >>> 2); if (binaryConnectors.has(docText(toff(_mt), tend(_mt)))) return true; } }`);
+  // LeftHandSideExpression: its MIDDLE child is an operator-tag leaf or a binary connector leaf.
+  // (Member `a.b` / element `a[b]` / typed call `f<T>()` have a PUNCT leaf there, a
+  // parenthesized cover has a NODE child, so those pass — `(a + b) = c` via the cover is
+  // correctly accepted, like tsc.)
+  e.emit(`  if (n >= 3) { const _m = kids[cs + 1]; if (_m < 0) { if (((~_m) & 3) === 2) return true; const _mt = absTok[lhs] + ((~_m) >>> 2); if (binaryConnectors.has(docText(toff(_mt), tend(_mt)))) return true; } }`);
   e.emit(`  return false;`);
   e.emit(`}`);
   // Head-leaf TEXT of a node: descend the LEFTMOST-child spine to the OUTERMOST leaf and return its

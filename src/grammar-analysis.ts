@@ -127,12 +127,11 @@ export function analyzeGrammar(grammar: CstGrammar) {
     ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
   }
 
-  // Binary / relational / conditional connectors (the MIDDLE child of a `$ op $` LED) — a node
-  // with one at child[1] is not a LeftHandSideExpression, so not an assignment target
-  // (`a + b = c`, `a in b = c`). Ladder INFIX ops + alternative-form binary LEDs.
-  const binaryConnectors = new Set<string>();
-  for (const [v, info] of opTable) if (info.position === 'infix') binaryConnectors.add(v);
-  for (const k of ledPrecByConnector.keys()) binaryConnectors.add(k);
+  // Alternative-form binary connectors (`?`, `in`, `as`, …: the MIDDLE child of a ledPrec LED) —
+  // a node with one at child[1] is not a LeftHandSideExpression, so not an assignment target
+  // (`a in b = c`). Ladder INFIX ops are recognized by their operator-tagged leaf instead: the
+  // same text as a LED literal (`<` of `f<T>()`) is punctuation and keeps the call a target.
+  const binaryConnectors = new Set<string>(ledPrecByConnector.keys());
 
   // A `cap`-group NUD (an ArrowFunction — the lowest-precedence AssignmentExpression) parses
   // only when minBp is LOOSER than the named connector's binding power; the value resolves
