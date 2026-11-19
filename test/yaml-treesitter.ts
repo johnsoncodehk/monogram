@@ -60,6 +60,24 @@ for (const s of reject) {
   while (stack.length) { const n = stack.pop(); types.push(n.type); stack.push(...n.children); }
   check('the NKF9 line-lead `:` is an empty_key_mapping (not folded into a NEWLINE)', types.includes('empty_key_mapping'));
 }
+// Where each empty key lands, document by document. A static `prec.right` on a rule whose repetition
+// tail is a declared GLR self-conflict (e.g. `map_entry`, `flow_mapping`) commits the tail early and
+// makes these unreachable, so pin the shapes, not just the accept verdict.
+{
+  const src = '---\nkey: value\n: empty key\n---\n{\n key: value, : empty key\n}\n---\n# empty key and value\n:\n---\n# empty key and value\n{ : }\n';
+  const docs = parser.parse(src)!.rootNode.children.filter((n: any) => n.type === 'next_doc')
+    .map((d: any) => d.children.find((n: any) => n.type === 'explicit_doc_body')?.namedChildren.find((n: any) => n.type === 'node')?.toString());
+  const value = '(map_value_scalar (map_value_node_scalar (map_inline_scalar (scalar (plain)))))';
+  const expected = [
+    `(node (mapping_or_scalar (block_key_scalar (key)) ${value} (newline) (map_entry ${value})))`,
+    '(node (flow_mapping (flow_map_entry (flow_node (scalar (key))) (flow_node (scalar (plain)))) (flow_map_entry (flow_node (scalar (plain))))))',
+    '(node (empty_key_mapping))',
+    '(node (flow_mapping (flow_map_entry)))',
+  ];
+  check(`the empty-key stream has ${expected.length} documents (got ${docs.length})`, docs.length === expected.length);
+  const what = ['block `: v` entry after `k: v`', 'flow `, : v` entry', 'line-lead `:`', 'flow `{ : }`'];
+  expected.forEach((e, i) => check(`empty key, ${what[i]}: ${docs[i]}`, docs[i] === e));
+}
 
 console.log(`\n${ok}/${ok + fail} yaml tree-sitter checks pass${fail ? '' : ' ✓'}`);
 if (fail) process.exit(1);
