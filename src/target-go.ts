@@ -1283,7 +1283,8 @@ ${adoptSuffix}
 \td.toks = toMeta(newToks)
 \trelexed = len(d.toks)`;
   const toMetaFn = hasNewline ? `
-func scanMeta(src string) []alignMeta {
+func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
+func scanMetaToks(src string) ([]alignMeta, []Tok) {
 \tvar toks []Tok
 \tvar meta []alignMeta
 \tpos := 0
@@ -1296,11 +1297,12 @@ func scanMeta(src string) []alignMeta {
 \t\tt := toks[len(toks)-1]
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, uint16(flowDepth), 0, false, false, false, 0))
 \t}
-\treturn meta
+\treturn meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for newline") }
 ` : rxOnly ? `
-func scanMeta(src string) []alignMeta {
+func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
+func scanMetaToks(src string) ([]alignMeta, []Tok) {
 \tvar toks []Tok
 \tvar meta []alignMeta
 \tpos := 0
@@ -1318,11 +1320,12 @@ func scanMeta(src string) []alignMeta {
 \t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, 0))
 \t}
-\treturn meta
+\treturn meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for regex") }
 ` : rxTpl ? `
-func scanMeta(src string) []alignMeta {
+func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
+func scanMetaToks(src string) ([]alignMeta, []Tok) {
 \tvar toks []Tok
 \tvar meta []alignMeta
 \tpos := 0
@@ -1341,11 +1344,12 @@ func scanMeta(src string) []alignMeta {
 \t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, uint8(len(templateStack))))
 \t}
-\treturn meta
+\treturn meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for rx+tpl") }
 ` : tplOnly ? `
-func scanMeta(src string) []alignMeta {
+func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
+func scanMetaToks(src string) ([]alignMeta, []Tok) {
 \tvar toks []Tok
 \tvar meta []alignMeta
 \tpos := 0
@@ -1358,7 +1362,7 @@ func scanMeta(src string) []alignMeta {
 \t\tt := toks[len(toks)-1]
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, 0, false, false, false, uint8(len(templateStack))))
 \t}
-\treturn meta
+\treturn meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for tpl") }
 ` : `
@@ -1366,7 +1370,8 @@ func toMeta(toks []Tok) []alignMeta {
 \tout := make([]alignMeta, len(toks))
 \tfor i, t := range toks { out[i] = mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, 0, false, false, false, 0) }
 \treturn out
-}`;
+}
+func scanMetaToks(src string) ([]alignMeta, []Tok) { t := lex(src); return toMeta(t), t }`;
   // Packed AlignMeta: full-field equality covers prior mode-specific checks
   // (unused state fields are always zeroed by scanMeta / toMeta / windowRelex).
   const checkStreamEqFn = (hasNewline || rxOnly || rxTpl || tplOnly) ? `
@@ -1390,7 +1395,6 @@ func checkStreamEq(text string, meta []alignMeta) bool {
 \treturn true
 }
 `;
-  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(lex(src))';
   const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(d.text)' : 'toMeta(lex(d.text))';
   const parseFreshRetry = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))
 \tif d.root < 0 { d.toks = ${freshMeta}; d.root = p.parse(d.text, toksFromMeta(d.text, d.toks)) }`;
@@ -1843,10 +1847,16 @@ func (d *Doc) publish() { d.b.Nodes, d.b.Kids, d.b.Toks = d.e.nodes, d.e.kids, d
 func NewDoc(src string) *Doc { return newDocCst(src, &CstBuilder{}) }
 func newDocCst(src string, b *CstBuilder) *Doc {
 	d := &Doc{text: src, b: b}
-	d.e.nodes, d.e.kids = b.Nodes[:0], b.Kids[:0]
 	defer d.publish()
-	d.toks = ${initToks}
-	d.root = d.e.parse(src, lex(src))
+	var toks []Tok
+	d.toks, toks = scanMetaToks(src)
+	// A Doc owns its arena, so a new one starts empty; size it from the token count instead of
+	// growing it by repeated append copies (node and kid counts track the token count).
+	n := len(toks)
+	if cap(b.Nodes) < n/2 { b.Nodes = make([]Node, 0, n/2) }
+	if cap(b.Kids) < n { b.Kids = make([]int32, 0, n) }
+	d.e.nodes, d.e.kids = b.Nodes[:0], b.Kids[:0]
+	d.root = d.e.parse(src, toks)
 ${topReuse ? '\td.entries = append([]EntryMeta(nil), d.e.entries...)\n' : ''}\treturn d
 }
 // CstJSON renders the Doc's current tree ("" when its text does not parse).
