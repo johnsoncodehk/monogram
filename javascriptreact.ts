@@ -151,6 +151,13 @@ export function withJsx(base: CstGrammar, opts: { name: string; scopeName: strin
   return {
     ...base, name: opts.name, scopeName: opts.scopeName, rules, tokens,
     canonicalRepoNames: { ...base.canonicalRepoNames, ...JSX_CANONICAL },
+    // The JSX layer's own tree-sitter GLR conflicts: `{` after a tag is a JSX expression container
+    // or an expression, and over a type base `<T` may open a type parameter list or a JSX tag.
+    treeSitterConflicts: [
+      ...base.treeSitterConflicts ?? [],
+      ['expr', 'jsxcontainer'],
+      ...hasTypes ? [['type_param', 'jsxtag_name']] : [],
+    ],
   };
 }
 

@@ -607,6 +607,13 @@ export interface CstGrammar {
   // (look up + substitute), so the engine stays language-agnostic — a grammar declaring none is
   // unaffected. REPLACES `repoAliases` (which left a redundant 2nd entry); this leaves none.
   canonicalRepoNames?: Record<string, string | string[]>;
+  // The tree-sitter `conflicts` tuples this grammar's GLR parse needs, as tree-sitter symbol names
+  // (snake rule names, token names, or shared hidden tsRelax rule names). The minimal set is an
+  // LR(1)-table property, so it is tree-sitter's own analysis of THIS grammar (collected with
+  // test/collect-conflicts.ts), declared as data beside the rules it is about. gen-treesitter emits
+  // exactly these (plus its structural heuristics) and rejects a name the grammar does not define;
+  // nothing is inferred from rule names, so another grammar that happens to reuse a name gets none.
+  treeSitterConflicts?: string[][];
   // VS Code extension `contributes` data — packaging info a consumer needs to wire the
   // generated grammars into an editor (and to make Monogram's Vue a true drop-in for
   // vuejs/language-tools' files). All DATA the grammar declares; gen emits a pasteable

@@ -193,7 +193,7 @@ function hasMarker(expr: RuleExpr): boolean {
 
 /** Pre-scan every rule body for named tsRelax groups (`tsRuleName`), collecting name → relaxed
  *  body. Done before conflicts/rules are emitted so the shared rule names are known to
- *  deriveConflicts (a closure tuple may name one) and the bodies can be emitted as shared rules. */
+ *  deriveConflicts (a declared tuple may name one) and the bodies can be emitted as shared rules. */
 function collectTsSharedRules(grammar: CstGrammar): Map<string, RuleExpr> {
   const out = new Map<string, RuleExpr>();
   const walk = (e: RuleExpr): void => {
@@ -708,103 +708,15 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
 // ── conflicts ────────────────────────────────────────────────────────────────
 
 /**
- * The LR(1) conflict CLOSURE for a highly-ambiguous grammar like this one.
+ * Derive `conflicts` entries: the purely-structural heuristics (generics-vs-comparison,
+ * arrow-vs-paren), plus the tuples the grammar itself declares in `treeSitterConflicts`.
  *
- * Computing the exact, minimal set of N-way conflict tuples tree-sitter needs is
- * an LR(1)-table property — pairwise structural over-approximation is NOT enough
- * (some states genuinely need a specific 3- or 4-rule tuple, e.g. `block`/`expr`/
- * `decl` for `export { } <`). The standard tree-sitter authoring workflow is to
- * run `tree-sitter generate`, read the "Add a conflict for these rules: …"
- * suggestion, add it, and repeat to a fixpoint.
- *
- * `test/collect-conflicts.ts` automates exactly that loop across every derived grammar
- * and prints the tuples to add here. The closure is therefore DERIVED FROM THE GRAMMAR
- * (by tree-sitter's own analysis of it), keyed on snake rule names. Each tuple is applied
- * DEFENSIVELY below — only when every rule in it exists in the grammar — so the table is
- * inert for any other language and degrades to the purely-structural heuristics.
- *
- * After a grammar change, run `node test/collect-conflicts.ts`, paste any printed tuples
- * here, and re-run `npm run gen`. (CI only builds the typescript + html tree-sitters, so
- * this is the only check that catches a new conflict in the tsx/js/jsx grammars.)
- */
-const LR_CONFLICT_CLOSURE: string[][] = [
-  ['expr'], ['stmt'], ['stmt', 'decl'], ['expr', 'decl'], ['program', 'stmt'],
-  ['new_target'],   // nested `new new Foo()` — NewTarget's recursive leading-`new` arm self-conflicts
-  ['type', 'type_param'], ['type_param'], ['expr', 'param'], ['expr', 'new_target'],
-  ['expr', 'block'], ['expr', 'member_name'], ['expr', 'prop'], ['member_name', 'stmt'],
-  ['decl'], ['binding'], ['type'], ['type', 'typeof_ref'], ['type', 'param'],
-  ['type_member'], ['expr', 'binding_pattern'], ['expr', 'binding_element'],
-  ['prop', 'binding_property'], ['member_name', 'binding_property'],
-  ['expr', 'block', 'decl'], ['expr', 'prop', 'import_specifier'],
-  ['expr', 'import_specifier'], ['type', 'expr'], ['type', 'binding_pattern'],
-  ['type', 'binding_element'], ['type_member', 'binding_property'], ['type_member', 'expr'],
-  ['expr', 'array_binding_element'], ['expr', 'binding_property'], ['prop', 'member_name'],
-  ['type_member', 'class_member'], ['type_member', 'member_name'], ['type', 'binding'],
-  ['interface_member'], ['type', 'decl'], ['typeof_ref', 'expr'], ['type', 'expr', 'param'],
-  ['type_member', 'prop'], ['type', 'array_binding_element'], ['type', 'type_member'],
-  ['prop', 'member_name', 'binding_property'], ['type', 'class_member'],
-  ['type', 'expr', 'decl'], ['stmt', 'param'], ['expr', 'interface_member'],
-  ['type', 'expr', 'binding_pattern'], ['type', 'expr', 'binding_element'],
-  ['type_member', 'prop', 'binding_property'], ['type_member', 'member_name', 'binding_property'],
-  ['type', 'interface_member'], ['type_member', 'interface_member'],
-  ['type_member', 'expr', 'interface_member'], ['type', 'expr', 'array_binding_element'],
-  ['type_member', 'prop', 'member_name'], ['type', 'expr', 'block'],
-  ['type_member', 'expr', 'member_name'], ['type_member', 'expr', 'prop'],
-  ['type_member', 'member_name', 'stmt'],
-  ['type_member', 'prop', 'member_name', 'binding_property'],
-  ['type', 'type_member', 'interface_member'], ['type_member', 'param'],
-  ['type', 'type_member', 'class_member'],
-  // class-expression heritage base (`extends class {}`) overlaps an object-type `{}`
-  // after `extends`/`implements`; the two jsx tuples are latent tsx/jsx gaps surfaced
-  // while completing the closure (CI builds only the typescript + html tree-sitters, so
-  // tsx/jsx generate was never exercised). Each is inert for languages lacking the rule.
-  ['type', 'class_heritage'], ['type_param', 'jsxtag_name'], ['expr', 'jsxcontainer'],
-  // FN=0 round (tsc parse-surface widening): repeatable heritage clauses + `;` class
-  // elements (class_member), the object-literal modifier soup + `?`/`!` name marks
-  // (prop tuples), string export specifiers (export_specifier), `@new x` decorators
-  // (decorator_expr/new_target), rest-binding `...r: n` (binding_element), and the
-  // JSDoc `function(...)` type (type_member 4-way).
-  ['class_member'],
-  ['expr', 'prop', 'export_specifier'],
-  ['expr', 'export_specifier'],
-  ['prop'],
-  ['prop', 'decl'],
-  ['expr', 'prop', 'member_name'],
-  ['decorator_expr', 'new_target'],
-  ['binding_element'],
-  ['type_member', 'expr', 'prop', 'member_name'],
-  // issue #46: the type-only fn/method/index param (`type_fn_param`, a shared tsRelax rule)
-  // decouples the type sub-grammar from `expr` — a function-TYPE param can no longer reach a
-  // default-value expression — which collapses ~2.2k GLR states. These are the residual
-  // conflicts at the `(` boundary where a param could still be value-context.
-  ['type_fn_param', 'type'],
-  ['type_fn_param', 'type', 'expr', 'param'],
-  ['type_fn_param', 'expr', 'param'],
-  ['type_fn_param', 'expr'],
-  ['type_fn_param', 'param'],
-  // YAML (issue #3): an indentation grammar is massively ambiguous — a newline may continue a node or
-  // start the next document, a `:` may open a value or be an empty-key map, a scalar may be a key or a
-  // leaf, a flow collection may be a value or an implicit block key. tree-sitter's GLR absorbs all of
-  // this once the states are declared. These 37 tuples are the fixpoint of its own analysis (collected
-  // via test/collect-conflicts.ts); every name is YAML-specific, so each is inert for the other
-  // languages (verified: zero rule-name overlap with the TS/JS/TSX/JSX grammars).
-  ['stream', 'node'], ['empty_key_mapping'], ['explicit_entry'], ['next_doc'], ['stream', 'next_doc'],
-  ['node'], ['key', 'plain'], ['scalar', 'doc_fold'], ['explicit_mapping'], ['block_sequence'],
-  ['map_value_scalar', 'map_value_node_scalar'], ['scalar', 'block_key_scalar'],
-  ['map_value', 'map_value_node'], ['flow_explicit'], ['flow_mapping'], ['flow_sequence'],
-  ['explicit_doc_body'], ['inline_doc_node'], ['alias_or_keyed'], ['doc_fold'], ['mapping_from_flow'],
-  ['mapping_or_scalar'], ['property', 'node'], ['seq_item'], ['property'], ['flow_node'],
-  ['node', 'explicit_doc_body'], ['node', 'after_doc_end'], ['after_doc_end'], ['map_entry'],
-  ['stream', 'explicit_doc_body'], ['map_entry_no_empty'], ['seq_value_node'],
-  ['mapping_or_scalar', 'doc_fold'], ['map_value_scalar', 'map_inline_scalar'],
-  ['content_node', 'mapping_from_flow'], ['mapping_or_scalar', 'map_value'],
-];
-
-/**
- * Derive `conflicts` entries from the grammar's structural ambiguities, plus the
- * LR(1) closure above. The purely-structural heuristics (generics-vs-comparison,
- * arrow-vs-paren) document the *why*; the closure makes tree-sitter actually
- * generate. Both are keyed on grammar rule names — no language token list.
+ * The exact, minimal set of N-way tuples is an LR(1)-table property — pairwise structural
+ * over-approximation is NOT enough (some states need a specific 3- or 4-rule tuple, e.g.
+ * `block`/`expr`/`decl` for `export { } <`), and reproducing it here would mean re-deriving
+ * tree-sitter's own table construction. So the grammar declares tree-sitter's analysis of it as
+ * data (`node test/collect-conflicts.ts` runs the generate→"add a conflict" loop to a fixpoint and
+ * prints the tuples), and this emits exactly those — no name-keyed table shared across languages.
  */
 function deriveConflicts(ctx: GrammarJsContext): string[][] {
   const conflicts: string[][] = [];
@@ -849,15 +761,15 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
     }
   }
 
-  // 3. The LR(1) closure tree-sitter's own analysis reports for this grammar.
-  //    Applied only for tuples whose symbols ALL exist here (inert otherwise). A conflict symbol may
-  //    be a RULE or a TOKEN (e.g. YAML's `key`/`plain` are tokens that conflict on a trailing `:`), so
-  //    both name sets count — `$.key` is a valid conflict symbol whether key is a rule or a token.
+  // 3. The tuples the grammar declares. A symbol may be a RULE, a TOKEN (YAML's `key`/`plain` are
+  //    tokens that conflict on a trailing `:`), or a shared hidden tsRelax rule (`type_fn_param`);
+  //    all three are valid `$.<name>` conflict symbols. A name the grammar does not define is a
+  //    declaration error, not a tuple to skip.
   const tokenSnakes = new Set(ctx.tokenSnake.values());
-  for (const tuple of LR_CONFLICT_CLOSURE) {
-    // A tuple symbol may be a rule, a token, or a shared hidden tsRelax rule (e.g. the
-    // type-only fn-param `_type_fn_param`); all three are valid `$.<name>` conflict symbols.
-    if (tuple.every(r => ruleSnakes.has(r) || tokenSnakes.has(r) || ctx.tsSharedRules.has(r))) push(tuple);
+  for (const tuple of g.treeSitterConflicts ?? []) {
+    const unknown = tuple.filter(r => !ruleSnakes.has(r) && !tokenSnakes.has(r) && !ctx.tsSharedRules.has(r));
+    if (unknown.length) throw new Error(`${g.name ?? 'grammar'}: treeSitterConflicts [${tuple.join(', ')}] names undefined symbol(s): ${unknown.join(', ')}`);
+    push(tuple);
   }
 
   return conflicts;

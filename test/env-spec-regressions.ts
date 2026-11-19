@@ -272,6 +272,25 @@ const has = (scopes: string[], frag: string) => scopes.some((sc) => sc.includes(
   check('spec: contextual captures come last (highlight resolution is last-wins)', ts.highlightsScm.lastIndexOf('(arg_kv (key) @attribute)') > ts.highlightsScm.lastIndexOf('] @'));
 }
 
+// ── tree-sitter conflicts come only from the grammar's own declaration ──
+// Rule names shared with the ECMAScript grammars (`stmt`, `program`, `expr`, `decl`) used to pick up
+// their conflict tuples by name; a grammar now gets exactly the tuples it declares.
+{
+  const Ident = token(plus(range('a', 'z')));
+  const make = (treeSitterConflicts?: string[][]) => {
+    const Expr = rule(() => [[Ident]]);
+    const Decl = rule(() => [['let', Ident]]);
+    const Stmt = rule(() => [[Decl], [Expr, ';']]);
+    const Program = rule(() => [[many(Stmt)]]);
+    return defineGrammar({ name: 'conflict-decl', scopeName: 'source.conflict-decl', tokens: { Ident }, rules: { Expr, Decl, Stmt, Program }, entry: Program, treeSitterConflicts });
+  };
+  check('conflicts: an undeclared grammar emits none, even with ECMAScript rule names', !generateTreeSitter(make(), 'conflict-decl').grammarJs.includes('conflicts:'));
+  check('conflicts: a declared tuple is emitted', generateTreeSitter(make([['stmt', 'decl']]), 'conflict-decl').grammarJs.includes('[$.stmt, $.decl]'));
+  let err = '';
+  try { generateTreeSitter(make([['stmt', 'type']]), 'conflict-decl'); } catch (e) { err = (e as Error).message; }
+  check(`conflicts: a tuple naming an undefined symbol is rejected (${err})`, /undefined symbol\(s\): type$/.test(err));
+}
+
 console.log(
   fail === 0
     ? `\n${ok}/${ok} env-spec regression checks pass`

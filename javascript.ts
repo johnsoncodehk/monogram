@@ -753,6 +753,21 @@ export default defineGrammar({
   prec: ecmaPrec,
   ledPrec: jsLedPrecs,
 
+  // tree-sitter GLR conflicts: the fixpoint of `tree-sitter generate`'s own LR(1) analysis of this
+  // grammar (`node test/collect-conflicts.ts`), minus the tuples it reports as unnecessary. ECMAScript
+  // genuinely needs them: `(a, b)` is a parenthesised expression or arrow params until `=>`, `{` opens a
+  // block, object literal or destructuring pattern, and nested `new new Foo()` self-conflicts on
+  // NewTarget's leading `new`.
+  treeSitterConflicts: [
+    ['expr'], ['stmt'], ['stmt', 'decl'], ['expr', 'decl'], ['program', 'stmt'], ['expr', 'param'],
+    ['expr', 'new_target'], ['expr', 'block'], ['expr', 'member_name'], ['expr', 'prop'],
+    ['member_name', 'stmt'], ['decl'], ['expr', 'binding_pattern'], ['expr', 'binding_element'],
+    ['prop', 'binding_property'], ['member_name', 'binding_property'], ['expr', 'block', 'decl'],
+    ['expr', 'array_binding_element'], ['expr', 'binding_property'], ['prop', 'member_name'],
+    ['prop', 'member_name', 'binding_property'], ['stmt', 'param'], ['class_member'],
+    ['expr', 'prop', 'export_specifier'], ['expr', 'export_specifier'],
+  ],
+
   rules: {
     DecoratorExpr,
     Expr, Prop, MemberName, NewTarget, ClassHeritage,

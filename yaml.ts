@@ -672,6 +672,25 @@ export default defineGrammar({
   // value tokens (a numeric- or quoted-looking key is still a key); the typed value tokens
   // (Num, BoolNull) precede the generic Plain so a number / boolean resolves to its own scope.
   tokens: { DocStart, DocEnd, YamlDirective, Directive, Comment, DQuoteKey, SQuoteKey, DQuote, SQuote, Anchor, Alias, Tag, BlockScalar, Key, Num, BoolNull, Plain, Indent, Dedent, Newline },
+  // tree-sitter GLR conflicts (issue #3): an indentation grammar is massively ambiguous — a newline may
+  // continue a node or start the next document, a `:` may open a value or be an empty-key map, a
+  // scalar may be a key or a leaf, a flow collection may be a value or an implicit block key. GLR
+  // absorbs this once the states are declared; these are the fixpoint of `tree-sitter generate`'s
+  // analysis (`node test/collect-conflicts.ts`) minus the tuples it reports as unnecessary. The
+  // singleton self-conflicts also keep their repetition tails out of static `prec.right` (an empty-key
+  // `:` line or `{ : }` must stay reachable — test/yaml-treesitter.ts).
+  treeSitterConflicts: [
+    ['stream', 'node'], ['empty_key_mapping'], ['explicit_entry'], ['next_doc'],
+    ['stream', 'next_doc'], ['node'], ['scalar', 'doc_fold'], ['explicit_mapping'],
+    ['block_sequence'], ['map_value_scalar', 'map_value_node_scalar'],
+    ['scalar', 'block_key_scalar'], ['map_value', 'map_value_node'], ['flow_explicit'],
+    ['explicit_doc_body'], ['inline_doc_node'], ['alias_or_keyed'], ['doc_fold'],
+    ['mapping_from_flow'], ['mapping_or_scalar'], ['property', 'node'], ['seq_item'], ['property'],
+    ['flow_node'], ['node', 'explicit_doc_body'], ['node', 'after_doc_end'], ['after_doc_end'],
+    ['map_entry'], ['stream', 'explicit_doc_body'], ['map_entry_no_empty'], ['seq_value_node'],
+    ['mapping_or_scalar', 'doc_fold'], ['map_value_scalar', 'map_inline_scalar'],
+    ['content_node', 'mapping_from_flow'], ['mapping_or_scalar', 'map_value'],
+  ],
   // NOTE: the parser's entry rule is the LAST rule declared here (findEntryRule = rules[last]),
   // so `Stream` must come last.
   rules: {

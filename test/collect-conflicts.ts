@@ -1,24 +1,27 @@
-// Regenerates the LR(1) conflict closure that `src/gen-treesitter.ts` feeds tree-sitter.
+// Collects the tree-sitter `conflicts` tuples each grammar declares in `treeSitterConflicts`.
 //
 // This grammar is highly ambiguous, so tree-sitter needs an explicit `conflicts` entry
 // for every LR(1) state it can't resolve alone. The standard authoring loop is: run
 // `tree-sitter generate`, read its "Add a conflict for these rules: …" suggestion, add
 // it, repeat to a fixpoint. This script automates that loop for EVERY derived grammar
 // (CI only builds the typescript + html tree-sitters, so tsx/js/jsx conflicts would
-// otherwise go unnoticed) and prints the tuples to add to LR_CONFLICT_CLOSURE.
+// otherwise go unnoticed) and prints, per grammar, the tuples to add to its
+// `treeSitterConflicts` and the declared tuples tree-sitter reports as unnecessary.
 //
 // Run after a grammar change that makes `npm run gate:treesitter` fail to generate:
 //   node test/collect-conflicts.ts
-// then paste any printed tuples into LR_CONFLICT_CLOSURE and re-run `npm run gen`.
+// then update the named grammar's `treeSitterConflicts` (a JSX-only tuple belongs to the
+// JSX layer in javascriptreact.ts) and re-run `npm run gen`.
 // It restores each grammar.js afterwards, so it never leaves the tree dirty.
 
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 
 const root = new URL('..', import.meta.url).pathname;
 const tsDir = `${root}tree-sitter`;
 const langs = readdirSync(tsDir).filter(l => existsSync(`${tsDir}/${l}/grammar.js`));
-const union = new Map<string, string[]>(); // canonical key -> tuple
+const missing = new Map<string, string[][]>();
+const unnecessary = new Map<string, string[][]>();
 
 for (const lang of langs) {
   const dir = `${tsDir}/${lang}`;
@@ -27,12 +30,22 @@ for (const lang of langs) {
   const found: string[][] = [];
   try {
     for (let i = 0; i < 80; i++) {
-      let out = '';
-      try {
-        execSync('npx tree-sitter generate', { cwd: dir, stdio: 'pipe' });
-        break; // generates cleanly — no (more) missing conflicts
-      } catch (e) {
-        out = `${(e as any).stdout || ''}\n${(e as any).stderr || ''}`;
+      const r = spawnSync('npx', ['tree-sitter', 'generate'], { cwd: dir, encoding: 'utf8' });
+      const out = `${r.stdout}\n${r.stderr}`;
+      if (r.status === 0) {
+        // Generates cleanly — no (more) missing conflicts. Any "unnecessary conflicts" warning lists
+        // one tuple per line, so the declaration can be trimmed to what the table actually uses.
+        const block = out.split(/unnecessary conflicts:/)[1];
+        if (block) {
+          const tuples: string[][] = [];
+          for (const line of block.split('\n').slice(1)) {
+            const names = [...line.matchAll(/`([a-z0-9_]+)`/g)].map(x => x[1]);
+            if (!names.length) break;
+            tuples.push(names);
+          }
+          unnecessary.set(lang, tuples);
+        }
+        break;
       }
       const m = out.match(/Add a conflict for these rules:\s*([^\n]+)/);
       if (!m) {
@@ -55,13 +68,19 @@ for (const lang of langs) {
   } finally {
     writeFileSync(gj, backup); // discovery must not dirty the tree
   }
-  for (const t of found) union.set([...t].sort().join('|'), t);
+  if (found.length) missing.set(lang, found);
   console.error(`[${lang}] ${found.length} missing conflict tuple(s)`);
 }
 
-if (union.size === 0) {
-  console.log('\n✓ every derived tree-sitter grammar already generates — closure is complete.');
-} else {
-  console.log('\n// add these to LR_CONFLICT_CLOSURE in src/gen-treesitter.ts:');
-  for (const t of union.values()) console.log(`  [${t.map(r => `'${r}'`).join(', ')}],`);
+const fmt = (t: string[]) => `[${t.map(r => `'${r}'`).join(', ')}],`;
+if (missing.size === 0 && unnecessary.size === 0) {
+  console.log('\n✓ every derived tree-sitter grammar generates, and declares no unnecessary conflict.');
+}
+for (const [lang, ts] of missing) {
+  console.log(`\n// ${lang}: add to treeSitterConflicts`);
+  for (const t of ts) console.log(`  ${fmt(t)}`);
+}
+for (const [lang, ts] of unnecessary) {
+  console.log(`\n// ${lang}: tree-sitter reports these declared tuples as unnecessary`);
+  for (const t of ts) console.log(`  ${fmt(t)}`);
 }

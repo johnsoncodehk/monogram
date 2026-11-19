@@ -889,6 +889,42 @@ export default defineGrammar({
   // participate in the binary-operator chain at relational precedence).
   ledPrec: [...jsLedPrecs, { connector: 'as', sameAs: '<' }, { connector: 'satisfies', sameAs: '<' }],
 
+  // tree-sitter GLR conflicts: the fixpoint of `tree-sitter generate`'s own LR(1) analysis of this
+  // grammar (`node test/collect-conflicts.ts`), minus the tuples it reports as unnecessary. ECMAScript
+  // genuinely needs them: `(a, b)` is a parenthesised expression or arrow params until `=>`, `{` opens a
+  // block, object literal or destructuring pattern, `<` is a comparison or type arguments, and nested
+  // `new new Foo()` self-conflicts on NewTarget's leading `new`. The generator derives `[expr, type]`
+  // structurally when a type rule exists; these are the rest.
+  // The `type_fn_param` tuples (issue #46) are the residual `(` boundary where a param could still be
+  // value-context after the type-only fn param decoupled types from `expr`.
+  treeSitterConflicts: [
+    ['expr'], ['stmt'], ['stmt', 'decl'], ['expr', 'decl'], ['program', 'stmt'], ['new_target'],
+    ['type', 'type_param'], ['type_param'], ['expr', 'param'], ['expr', 'new_target'],
+    ['expr', 'block'], ['expr', 'member_name'], ['expr', 'prop'], ['member_name', 'stmt'], ['decl'],
+    ['binding'], ['type'], ['type', 'typeof_ref'], ['type', 'param'], ['type_member'],
+    ['expr', 'binding_pattern'], ['expr', 'binding_element'], ['prop', 'binding_property'],
+    ['member_name', 'binding_property'], ['expr', 'block', 'decl'], ['type', 'binding_pattern'],
+    ['type', 'binding_element'], ['type_member', 'binding_property'], ['type_member', 'expr'],
+    ['expr', 'array_binding_element'], ['expr', 'binding_property'], ['prop', 'member_name'],
+    ['type_member', 'class_member'], ['type_member', 'member_name'], ['type', 'binding'],
+    ['interface_member'], ['type', 'decl'], ['typeof_ref', 'expr'], ['type', 'expr', 'param'],
+    ['type_member', 'prop'], ['type', 'array_binding_element'], ['type', 'type_member'],
+    ['prop', 'member_name', 'binding_property'], ['type', 'class_member'], ['stmt', 'param'],
+    ['expr', 'interface_member'], ['type', 'expr', 'binding_pattern'],
+    ['type', 'expr', 'binding_element'], ['type_member', 'prop', 'binding_property'],
+    ['type_member', 'member_name', 'binding_property'], ['type', 'interface_member'],
+    ['type', 'expr', 'array_binding_element'], ['type_member', 'prop', 'member_name'],
+    ['type', 'expr', 'block'], ['type_member', 'expr', 'member_name'],
+    ['type_member', 'expr', 'prop'], ['type_member', 'member_name', 'stmt'],
+    ['type_member', 'prop', 'member_name', 'binding_property'],
+    ['type', 'type_member', 'class_member'], ['type', 'class_heritage'], ['class_member'],
+    ['expr', 'prop', 'export_specifier'], ['expr', 'export_specifier'], ['prop', 'decl'],
+    ['expr', 'prop', 'member_name'], ['decorator_expr', 'new_target'], ['binding_element'],
+    ['type_member', 'expr', 'prop', 'member_name'], ['type_fn_param', 'type'],
+    ['type_fn_param', 'type', 'expr', 'param'], ['type_fn_param', 'expr', 'param'],
+    ['type_fn_param', 'expr'], ['type_fn_param', 'param'],
+  ],
+
   rules: {
     Type, TypeMember, DecoratorExpr, TypeofRef,
     Expr, Prop, MemberName, NewTarget, ClassHeritage,
