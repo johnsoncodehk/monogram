@@ -2,9 +2,9 @@
 //
 // The TypeScript lexer reads `>>`, `>>>`, `>=`, `>>=` as one token; inside nested type arguments
 // the parser must take a single '>' from it and leave the rest as the next token. In Go and Rust,
-// a fresh parse, an incremental Doc (CST fast path, with and without validation) and, in Go, a
-// Doc on a consumer builder with Shift must all produce the tsTarget CST, after every edit around
-// split tokens, and the edits must still reuse the old tree.
+// a fresh parse, an incremental Doc (CST fast path, with and without validation) and a Doc on a
+// consumer builder with Shift (which keeps no parse stream of its own) must all produce the
+// tsTarget CST, after every edit around split tokens, and the edits must still reuse the old tree.
 //
 //   node test/emit-portable-split.ts
 import { execFileSync } from 'node:child_process';
@@ -278,36 +278,85 @@ else {
 const rlit = (s: string) => { if (!/^[\x20-\x7e\n]*$/.test(s)) throw new Error('non-ASCII input'); return JSON.stringify(s); };
 const RUST_HARNESS = `
 fn q(s: &str) -> String { format!("{:?}", s) }
+// A consumer builder (not CstBuilder: it keeps no parse stream, so its Doc keeps one itself) whose
+// leaves keep their source spans.
+#[derive(Default)]
+struct SpanB { n: Vec<(u16, u32, u32, u32, u32, u32, u32)>, k: Vec<i32>, l: Vec<(u16, u32, u32, u32)> }
+impl SpanB {
+    fn json(&self, h: i32, out: &mut String) {
+        if h < 0 { let (tt, _, off, end) = self.l[!h as usize]; out.push_str(&format!("{{\\"tokenType\\":\\"{}\\",\\"offset\\":{},\\"end\\":{}}}", TT_NAMES[tt as usize], off, end)); return; }
+        let (rule, ks, kc, off, end, _, _) = self.n[h as usize];
+        out.push_str(&format!("{{\\"rule\\":\\"{}\\",\\"children\\":[", RULE_NAMES[rule as usize]));
+        for i in 0..kc { if i > 0 { out.push(','); } self.json(self.k[(ks + i) as usize], out); }
+        out.push_str(&format!("],\\"offset\\":{},\\"end\\":{}}}", off, end));
+    }
+    fn to_json(&self, root: Option<i32>) -> String { match root { Some(h) => { let mut s = String::new(); self.json(h, &mut s); s } None => String::new() } }
+}
+impl Builder for SpanB {
+    type H = i32;
+    const SUPPORTS_SHIFT: bool = true;
+    fn dummy_h() -> i32 { 0 }
+    fn shift(&mut self, h: i32, bd: isize, td: isize) -> i32 {
+        if h < 0 { let l = &mut self.l[!h as usize]; l.1 = (l.1 as isize + td) as u32; l.2 = (l.2 as isize + bd) as u32; l.3 = (l.3 as isize + bd) as u32; return h; }
+        let (ks, kc) = { let nd = &mut self.n[h as usize]; nd.3 = (nd.3 as isize + bd) as u32; nd.4 = (nd.4 as isize + bd) as u32; nd.5 = (nd.5 as isize + td) as u32; nd.6 = (nd.6 as isize + td) as u32; (nd.1, nd.2) };
+        for i in 0..kc { let kid = self.k[(ks + i) as usize]; self.shift(kid, bd, td); }
+        h
+    }
+    fn root_kids(&self, root: i32) -> Vec<i32> { let (_, ks, kc, ..) = self.n[root as usize]; (0..kc).map(|i| self.k[(ks + i) as usize]).collect() }
+    fn root_kid_at(&self, root: i32, idx: usize) -> i32 { self.k[self.n[root as usize].1 as usize + idx] }
+    fn rule_id_of(&self, h: i32) -> u16 { self.n[h as usize].0 }
+    fn checkpoint(&self) -> (usize, usize) { (self.n.len(), self.k.len()) }
+    fn restore(&mut self, ck: (usize, usize)) { self.n.truncate(ck.0); self.k.truncate(ck.1); }
+    fn leaf(&mut self, scratch: &mut Vec<i32>, tt_id: u16, tok_idx: u32, off: u32, end: u32) -> bool {
+        if tt_id == 255 { return false; }
+        self.l.push((tt_id, tok_idx, off, end)); scratch.push(!((self.l.len() - 1) as i32)); true
+    }
+    fn node(&mut self, scratch: &mut Vec<i32>, sb: usize, rule_id: u16, off: u32, end: u32, tok_start: u32, tok_end: u32) {
+        let ks = self.k.len() as u32; let kc = (scratch.len() - sb) as u32;
+        self.k.extend(scratch[sb..].iter().copied()); scratch.truncate(sb);
+        self.n.push((rule_id, ks, kc, off, end, tok_start, tok_end)); scratch.push((self.n.len() - 1) as i32);
+    }
+    fn span_of(&self, h: i32, _toks: &[Tok]) -> (u32, u32) { if h < 0 { let l = self.l[!h as usize]; (l.2, l.3) } else { let nd = self.n[h as usize]; (nd.3, nd.4) } }
+    fn head_span(&self, h: i32, toks: &[Tok]) -> (u32, u32) { let mut h = h; while h >= 0 && self.n[h as usize].2 > 0 { h = self.k[self.n[h as usize].1 as usize]; } self.span_of(h, toks) }
+    fn tok_range(&self, h: i32) -> (u32, u32) { if h < 0 { let t = self.l[!h as usize].1; (t, t + 1) } else { let nd = self.n[h as usize]; (nd.5, nd.6) } }
+}
 fn main() {
     let samples: &[&str] = &[${SAMPLES.map(rlit).join(', ')}];
     let sessions: &[(&str, &[(usize, usize, &str)])] = &[${SESSIONS.map((x) => `(${rlit(x.init)}, &[${x.edits.map((e) => `(${e.start}, ${e.end}, ${rlit(e.text)})`).join(', ')}])`).join(', ')}];
     let mut docs = Vec::new();
     let mut pws = Vec::new();
+    let mut spans = Vec::new();
     for s in samples {
         let d: Doc = Doc::new(s.to_string());
         docs.push(q(&d.cst_json().unwrap_or_default()));
         let mut b = CstBuilder::default();
         pws.push(q(&match parse_with(s, &mut b) { Some(h) => cst_json_with(&b, h), None => String::new() }));
+        let mut sb = SpanB::default();
+        let r = parse_with(s, &mut sb);
+        spans.push(q(&sb.to_json(r)));
     }
     let mut ses = Vec::new();
     for (init, edits) in sessions {
         let mut nat: Doc = Doc::new(init.to_string());
         let mut val: Doc = Doc::new(init.to_string());
         val.set_validate(true);
+        let mut span: Doc<SpanB> = Doc::new(init.to_string());
         let mut steps = Vec::new();
         for &(s, e, t) in edits.iter() {
             let ed = [Edit { start: s, end: e, text: t.to_string() }];
             nat.edit(&ed);
             val.edit(&ed);
+            span.edit(&ed);
             let fresh: Doc = Doc::new(nat.text().to_string());
             let reused = nat.alignment().map(|a| a.reused).unwrap_or(0);
+            let span_reused = span.alignment().map(|a| a.reused).unwrap_or(0);
             let tree_eq = val.alignment().and_then(|a| a.tree_eq).unwrap_or(false);
-            steps.push(format!("{{\\"Native\\":{},\\"Validated\\":{},\\"Fresh\\":{},\\"NativeReused\\":{},\\"TreeEq\\":{}}}",
-                q(&nat.cst_json().unwrap_or_default()), q(&val.cst_json().unwrap_or_default()), q(&fresh.cst_json().unwrap_or_default()), reused, tree_eq));
+            steps.push(format!("{{\\"Native\\":{},\\"Validated\\":{},\\"Span\\":{},\\"Fresh\\":{},\\"NativeReused\\":{},\\"SpanReused\\":{},\\"TreeEq\\":{}}}",
+                q(&nat.cst_json().unwrap_or_default()), q(&val.cst_json().unwrap_or_default()), q(&span.builder().to_json(span.root_handle())), q(&fresh.cst_json().unwrap_or_default()), reused, span_reused, tree_eq));
         }
         ses.push(format!("[{}]", steps.join(",")));
     }
-    println!("{{\\"Doc\\":[{}],\\"ParseWith\\":[{}],\\"Sessions\\":[{}]}}", docs.join(","), pws.join(","), ses.join(","));
+    println!("{{\\"Doc\\":[{}],\\"ParseWith\\":[{}],\\"Span\\":[{}],\\"Sessions\\":[{}]}}", docs.join(","), pws.join(","), spans.join(","), ses.join(","));
 }
 `;
 
