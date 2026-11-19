@@ -89,7 +89,8 @@ function analyze(grammar: CstGrammar) {
         const lastIsOperand = selfRefName(last, ruleName);
         const wordConnector = it[0].type === 'literal' && /^[A-Za-z]/.test(it[0].value);
         if (!lastIsOperand && !wordConnector) isAccessTail = true;
-        if (last.type === 'not') isTailClosing = true;
+        // Only an access tail extends an access tail; a lookahead-ended LED closes it too.
+        if (!isAccessTail || last.type === 'not') isTailClosing = true;
       }
       accessTail.push(isAccessTail);
       tailClosing.push(isTailClosing);
@@ -1995,7 +1996,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   });
   e.emit(`function ${ruleFn}_pratt(minBp: number) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
-  e.emit(`  let lhs = -1; let bestNudPos = saved;`);
+  e.emit(`  let lhs = -1; let bestNudPos = saved; let nudClosed = false;`);
   // `capped` becomes true iff the winning NUD is a capped (assignment-level) expression —
   // an ArrowFunction. Such a NUD admits no led, so the led loop is skipped entirely.
   if (anyCapped) e.emit(`  let capped = false; _prattCapped = false;`);
@@ -2025,13 +2026,15 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       // noUnaryLhs. A recovery-synthesized $missing operand has no children, so
       // _notTarget returns false → recovery is not falsely rejected.
       e.emit(`        if (rhs >= 0 && info.requireTarget && _notTarget(rhs)) return -1;`);
-      e.emit(`        if (rhs >= 0 && pos > bestNudPos) { scPush(rhs); lhs = finishNode(${rid}, mark); bestNudPos = pos; }`);
+      e.emit(`        if (rhs >= 0 && pos > bestNudPos) { scPush(rhs); lhs = finishNode(${rid}, mark); bestNudPos = pos; nudClosed = true; }`);
       e.emit(`      }`);
       e.emit(`    }`);
     } else {
       e.emit(`    if (nud_${sn}_${i}() && pos > bestNudPos) {`);
       e.emit(`      lhs = finishNode(${rid}, mark);`);
       e.emit(`      bestNudPos = pos;`);
+      // A NUD ending in a fresh operand of this rule (`... $`) closes the access tail.
+      e.emit(`      nudClosed = ${items[items.length - 1]?.type === 'ref' && (items[items.length - 1] as { name: string }).name === rule.name};`);
       // The LONGEST match wins; record whether THAT winner is capped.
       if (anyCapped) e.emit(`      capped = ${capBp !== null ? 'true' : 'false'};`);
       e.emit(`    }`);
@@ -2044,7 +2047,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // A capped NUD (assignment-level arrow) admits no led: return it as-is so a trailing
   // tighter operator stays unconsumed and the enclosing parse rejects (`() => {} || a`).
   if (anyCapped) e.emit(`  if (capped) { _prattCapped = true; return lhs; }`);
-  e.emit(`  let tailClosed = false;`);
+  e.emit(`  let tailClosed = nudClosed;`);
   e.emit(`  while (true) {`);
   e.emit(`    if (pos >= cap) break;`);
   e.emit(`    const ledSaved = pos; const ledMark = scn;`);
@@ -2130,7 +2133,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // `|| x` / `? :` stays unconsumed and the parse rejects (`a = () => {} || x`). `return lhs`
   // keeps `_prattCapped` true so an enclosing operator refuses it too (`b = a = arrow`).
   if (anyCapped) e.emit(`        if (rhs >= 0 && _prattCapped) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); return lhs; }`);
-  e.emit(`        if (rhs >= 0) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); matched = true; }`);
+  e.emit(`        if (rhs >= 0) { scPush(rhs); lhs = finishWrap(${rid}, lhs, ledMark); tailClosed = true; matched = true; }`);
   e.emit(`        else { pos = ledSaved; scn = ledMark; }`);
   e.emit(`      }`);
   e.emit(`      if (matched) continue;`);

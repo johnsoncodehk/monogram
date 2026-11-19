@@ -126,13 +126,14 @@ const CASES: Case[] = [
   {
     // Postfix-operator LED (`x++`/`x--`) + the access-tail closure: once a postfix binds, the
     // operand is an update expression, so a further postfix or an access tail (`.`/`[`/`(`)
-    // can't attach (`a++--`, `a++.b` are ill-formed; `(a++).b` is fine).
+    // can't attach (`a++--`, `a++.b` are ill-formed; `(a++).b` is fine). Closure belongs to
+    // the node: an enclosing binary or prefix node is no access-tail base either.
     grammar: 'postjs', path: './fixtures/postjs.ts',
     accept: [
       'x++;', 'x--;', 'a + b++;', '++x;', 'x++ + y;', 'a.b++;', '(x)++;', '--a.b;',
-      'x++ * 2;', '(a++).b;', 'x.y.z++;',
+      'x++ * 2;', '(a++).b;', 'x.y.z++;', '(a + b).c;', '-a.b;', 'a + b.c;',
     ],
-    reject: ['a++--;', 'a++.b;', 'a++ ++;', '++;'],
+    reject: ['a++--;', 'a++.b;', 'a++ ++;', '++;', 'a + b++.c;', '-a++.b;'],
   },
   {
     // A grouped sub-sequence `seq` step: comma lists as `star([',', $])` (e.g. `many(',', $)`),
@@ -236,10 +237,13 @@ const CASES: Case[] = [
       // that fails must leave `<` to the next arm and to the comparison.
       'a < b;', 'a < b >> c;', 'a < b > c;', 'f(a < b, c > d);', 'x = B<C>;', 'x = B<C>(1);',
       'x = y = 1;', '(a + b) = 1;', 'a.b = 1;', 'x++;', '++x;', '(-x) ** 2;', '++x ** 2;',
+      'x ? a : b.c;', 'x as T.y;', 'x = B<C>\n++y;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
-      'a + b = 1;', '-x = 1;', 'x++ = 1;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;'],
+      'a + b = 1;', '-x = 1;', 'x++ = 1;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
+      // Only an access tail extends an access tail.
+      'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;'],
   },
 ];
 

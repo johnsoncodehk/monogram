@@ -242,14 +242,15 @@ export function createParser(grammar: CstGrammar) {
   // binary/ternary `… in $` / `? $ : $`) AND whose connector is a punctuator, not a
   // word-operator — so `as`/`satisfies`/`in`/`instanceof`/`?:` still bind after `a++`.
   const accessTailLeds = new Set<object>();
-  // ── Tail-closing LEDs (a LED that itself closes the access tail) ──
-  // A LED ending in a zero-width *negative lookahead* (`… not($)`) asserts that
-  // nothing may follow it, so its result cannot be the base of any further
-  // member/element/call access — once it binds, the access tail is closed (no `.x`,
-  // `[i]`, `(…)`, `<T>`, tagged template). Language-agnostic / structural: keyed on
-  // the LED ending in a `not` assertion, with no knowledge of what it guards. (E.g.
-  // a bare type-argument instantiation `Foo<T>` — written `… '>' not($)` — which TS
-  // forbids from being followed by property access, TS1477.)
+  // ── Tail-closing LEDs (a LED whose result is no access-tail base) ──
+  // Only an access tail extends an access tail. Every other LED — a binary/ternary
+  // form (`… in $`, `? $ : $`) or a word connector (`as T`) — builds a node that
+  // member/element/call access can't attach to (`x as T (1)` is ill-formed). So does
+  // a LED ending in a zero-width *negative lookahead* (`… not($)`): it asserts that
+  // nothing may follow it (e.g. a bare type-argument instantiation `Foo<T>`, which TS
+  // forbids from being followed by property access, TS1477). Closure is a property of
+  // the node, so it is decided when the node is built — never by the frame that tries
+  // the next tail, which would let an outer frame attach `.x` to `a = b++`.
   const tailClosingLeds = new Set<object>();
   for (const [ruleName, { leds }] of prattClassified.entries()) {
     for (const led of leds) {
@@ -260,7 +261,7 @@ export function createParser(grammar: CstGrammar) {
       const lastIsOperand = selfRefName(last, ruleName);                // open binary/ternary operand
       const wordConnector = it[0].type === 'literal' && /^[A-Za-z]/.test(it[0].value);
       if (!lastIsOperand && !wordConnector) accessTailLeds.add(led);
-      if (last.type === 'not') tailClosingLeds.add(led);
+      if (lastIsOperand || wordConnector || last.type === 'not') tailClosingLeds.add(led);
     }
   }
 
@@ -676,6 +677,9 @@ export function createParser(grammar: CstGrammar) {
       // NUD: parse atom or prefix (longest match)
       let lhs: CstNode | null = null;
       let bestNudPos = saved;
+      // True iff the winning NUD ends in a fresh operand of this rule (a prefix op, `... $`):
+      // its node closes the access tail like a binary node.
+      let nudClosed = false;
       // True iff the winning NUD is a capped (assignment-level) expression — an
       // ArrowFunction. Such a NUD admits no led; the led loop is skipped entirely.
       let capped = false;
@@ -707,6 +711,7 @@ export function createParser(grammar: CstGrammar) {
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 bestNudPos = pos;
+                nudClosed = true;
                 capped = false;   // a prefix NUD is never capped
               }
             }
@@ -720,6 +725,7 @@ export function createParser(grammar: CstGrammar) {
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestNudPos = pos;
+          nudClosed = selfRefName(items[items.length - 1], rule.name);
           capped = capBp !== null;   // the LONGEST match wins; record whether it is capped
         }
       }
@@ -732,8 +738,9 @@ export function createParser(grammar: CstGrammar) {
       if (capped) { _prattCapped = true; return lhs; }
 
       // Once a postfix operator binds (`a++`), the operand is an update expression
-      // that access tails (`[…]`, `.x`, `(…)`, `<T>`, tagged template) can't extend.
-      let tailClosed = false;
+      // that access tails (`[…]`, `.x`, `(…)`, `<T>`, tagged template) can't extend;
+      // likewise once any non-tail form (prefix, binary, tail-closing LED) is built.
+      let tailClosed = nudClosed;
 
       // LED loop
       while (true) {
@@ -790,8 +797,6 @@ export function createParser(grammar: CstGrammar) {
               offset: lhs.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end,
             };
-            // A LED ending in a negative lookahead (e.g. a bare instantiation
-            // `Foo<T>`) closes the access tail: nothing may chain off it.
             if (tailClosingLeds.has(led)) tailClosed = true;
             matched = true;
             break;
@@ -845,6 +850,7 @@ export function createParser(grammar: CstGrammar) {
             }
             if (rhs) {
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              tailClosed = true;
               matched = true;
             } else {
               pos = ledSaved;

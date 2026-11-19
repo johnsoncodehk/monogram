@@ -806,9 +806,9 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const bin = r.binary.map((b) => `${lidOf(ids, b.op)}: {${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}}`).join(', ');
   const pre = r.prefix.map((p) => `${lidOf(ids, p.op)}: {${p.rbp}, ${p.requireTarget}, ${p.form}}`).join(', ');
   const atoms = r.nudToks.map((k) => `${kidOf(ids, k)}: true`).join(', ');
-  const bracketNudBody = (b: Bracket) => `{
+  const bracketNudBody = (b: Bracket, closes: boolean) => `{
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(t.Off), save) }
+\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { ${closes ? 'pt = true; ' : ''}return p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(t.Off), save) }
 \t\tp.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \t}`;
   const bracketNudSwitch = (() => {
@@ -816,7 +816,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
     const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
     return `\tswitch t.Lid {
 ${groups.map((g) => `\tcase ${g.key}:
-${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join('\n')}
+${g.members.map(({ item: b, index: bi }) => `\t\t${bracketNudBody(b, r.nudBracketClosesTail[bi]!)}`).join('\n')}`).join('\n')}
 \t}`;
   })();
   const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
@@ -828,10 +828,10 @@ ${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join(
     parts.push(`!p.suppressCur[${lid}]`);
     return parts.join(' && ');
   };
-  const ledBody = (b: Bracket, form: number) => `{
+  const ledBody = (b: Bracket, form: number, closes: boolean) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\t\tp.scratch = append(p.scratch, left)
-\t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = ${form}; continue LedLoop }
+\t\t\tif ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.pos = ledSave; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]
 \t\t}`;
   const ledSwitch = (() => {
@@ -841,7 +841,7 @@ ${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join(
 ${groups.map((g) => {
   const lid = g.key as number;
   const arms = g.members.map(({ item: b, index: i }) =>
-    `\t\t\tif ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, r.ledForm[i]!)}`);
+    `\t\t\tif ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!)}`);
   return `\t\tcase ${lid}:\n${arms.join('\n')}`;
 }).join('\n')}
 \t\t}`;
@@ -881,7 +881,7 @@ func (p *engine) bp_${r.name}(minBp int) int32 {
 \tif left < 0 { return -1 }
 \tform := p.form
 \tif p.capped { return left }
-\ttailClosed := false
+\ttailClosed := p.tail
 ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }
@@ -902,7 +902,7 @@ ${postfixTokSwitch}
 \t\tif rhs < 0 { p.pos = ledSave; p.scratch = p.scratch[:sb]; break }
 \t\tp.scratch = append(p.scratch, rhs)
 \t\tleft = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))
-\t\tform = 1
+\t\tform = 1; tailClosed = true
 \t}
 \tp.form = form
 \treturn left
@@ -912,7 +912,7 @@ func (p *engine) nud_${r.name}(minBp int) int32 {
 \tt := p.peek()
 \tif t == nil { return -1 }
 ${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if ${c.steps.length ? c.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { p.capped = true; p.form = 0; return p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save) }; p.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }`).join('\n')}
-\tpf := uint8(0)
+\tpf, pt := uint8(0), false
 \t_r := func() int32 {   // non-capped: a sub-parse may leave p.capped set; force it false after
 ${tplNud}\tif atom_${r.name}[t.Kid] {
 \t\tsb := len(p.scratch); ts := p.pos; p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++
@@ -925,14 +925,15 @@ ${bracketNudSwitch}
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand < 0 || pbp.tgt && p.form != 0 { p.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return -1 }
 \t\tp.scratch = append(p.scratch, operand)
-\t\tpf = pbp.form
+\t\tpf, pt = pbp.form, true
 \t\treturn p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(t.Off), save)
 \t}
-${r.nudSeqs.map((seq) => `\t{ save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if ${seq.length ? seq.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save) }; p.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }`).join('\n')}
+${r.nudSeqs.map((seq, si) => `\t{ save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); if ${seq.length ? seq.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { ${r.nudSeqClosesTail[si] ? 'pt = true; ' : ''}return p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save) }; p.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }`).join('\n')}
 \treturn -1
 \t}()
 \tp.capped = false
 \tp.form = pf
+\tp.tail = pt
 \treturn _r
 }`;
 }
@@ -2151,9 +2152,9 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
 \t\treturn p.finishW(${rid}, sb, int(n.off), int(n.tokStart)), true
 \t}\n`
     : '';
-  const bracketNudBody = (b: Bracket) => `{
+  const bracketNudBody = (b: Bracket, closes: boolean) => `{
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { return p.finishW(${rid}, sb, p.offAtW(save), save), true }
+\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { ${closes ? 'pt = true; ' : ''}return p.finishW(${rid}, sb, p.offAtW(save), save), true }
 \t\tp.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
 \t}`;
   const bracketNudSwitch = (() => {
@@ -2161,7 +2162,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
     const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
     return `\tswitch t.Lid {
 ${groups.map((g) => `\tcase ${g.key}:
-${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join('\n')}
+${g.members.map(({ item: b, index: bi }) => `\t\t${bracketNudBody(b, r.nudBracketClosesTail[bi]!)}`).join('\n')}`).join('\n')}
 \t}`;
   })();
   const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
@@ -2173,10 +2174,10 @@ ${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join(
     parts.push(`!p.suppressCur[${lid}]`);
     return parts.join(' && ');
   };
-  const ledBody = (b: Bracket, form: number) => `{
+  const ledBody = (b: Bracket, form: number, closes: boolean) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
 \t\t\tp.scratch = append(p.scratch, left.h)
-\t\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { left = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = ${form}; continue LedLoop }
+\t\t\tif ${b.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')} { left = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = ${form};${closes ? ' tailClosed = true;' : ''} continue LedLoop }
 \t\t\tp.pos = ledSave; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}
 \t\t}`;
   const ledSwitch = (() => {
@@ -2186,7 +2187,7 @@ ${g.members.map(({ item: b }) => `\t\t${bracketNudBody(b)}`).join('\n')}`).join(
 ${groups.map((g) => {
   const lid = g.key as number;
   const arms = g.members.map(({ item: b, index: i }) =>
-    `\t\t\tif ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, r.ledForm[i]!)}`);
+    `\t\t\tif ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!)}`);
   return `\t\tcase ${lid}:\n${arms.join('\n')}`;
 }).join('\n')}
 \t\t}`;
@@ -2226,7 +2227,7 @@ func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {
 \tif !ok { return spanned{}, false }
 \tform := p.form
 \tif p.capped { return left, true }
-\ttailClosed := false
+\ttailClosed := p.tail
 ${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peekW()
 \t\tif t == nil { break }
@@ -2247,7 +2248,7 @@ ${postfixTokSwitch}
 \t\tif !rok { p.pos = ledSave; p.scratch = p.scratch[:sb]; break }
 \t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
 \t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart))
-\t\tform = 1
+\t\tform = 1; tailClosed = true
 \t}
 \tp.form = form
 \treturn left, true
@@ -2257,7 +2258,7 @@ func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
 \tt := p.peekW()
 \tif t == nil { return spanned{}, false }
 ${r.nudCapped.map((c) => `\tif minBp < ${c.capBp} { save := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${c.steps.length ? c.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { p.capped = true; p.form = 0; return p.finishW(${rid}, sb, p.offAtW(save), save), true }; p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`).join('\n')}
-\tpf := uint8(0)
+\tpf, pt := uint8(0), false
 \t_r, _ok := func() (spanned, bool) {
 ${tplNud}\tif atom_${r.name}[t.Kid] {
 \t\tsb := len(p.scratch); ts := p.pos; p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++
@@ -2270,14 +2271,15 @@ ${bracketNudSwitch}
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif !ook || pbp.tgt && p.form != 0 { p.pos = save; p.scratch = p.scratch[:sb]; return spanned{}, false }
 \t\tif operand.present { p.scratch = append(p.scratch, operand.h) }
-\t\tpf = pbp.form
+\t\tpf, pt = pbp.form, true
 \t\treturn p.finishW(${rid}, sb, p.offAtW(save), save), true
 \t}
-${r.nudSeqs.map((seq) => `\t{ save := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${seq.length ? seq.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { return p.finishW(${rid}, sb, p.offAtW(save), save), true }; p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`).join('\n')}
+${r.nudSeqs.map((seq, si) => `\t{ save := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; if ${seq.length ? seq.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'} { ${r.nudSeqClosesTail[si] ? 'pt = true; ' : ''}return p.finishW(${rid}, sb, p.offAtW(save), save), true }; p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }`).join('\n')}
 \treturn spanned{}, false
 \t}()
 \tp.capped = false
 \tp.form = pf
+\tp.tail = pt
 \treturn _r, _ok
 }`;
 }
@@ -2373,6 +2375,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tpos, maxLook int
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
+\ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsuppressNext, suppressCur map[uint16]bool
 \tsrc string
 \tNodes []Node
@@ -2382,6 +2385,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tpos, maxLook int
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
+\ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsuppressNext, suppressCur map[uint16]bool
 \tsrc string
 \tsplitEnd int
@@ -3462,6 +3466,7 @@ type engine struct {
 \tpos, maxLook int
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
+\ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsrc string
 \tsuppressNext, suppressCur map[uint16]bool
 \tnodes []Node

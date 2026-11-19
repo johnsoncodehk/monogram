@@ -974,9 +974,9 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
             return Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize));
         }\n`
     : '';
-  const bracketNudBody = (b: Bracket) => `{
+  const bracketNudBody = (b: Bracket, closes: boolean) => `{
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
+            if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { ${closes ? '*pt = true; ' : ''}return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
             self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);
         }`;
   const bracketNudMatch = (() => {
@@ -984,7 +984,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
     const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
     return `        match t.lid {
 ${groups.map((g) => `            ${g.key} => {
-${g.members.map(({ item: b }) => `                ${bracketNudBody(b)}`).join('\n')}
+${g.members.map(({ item: b, index: bi }) => `                ${bracketNudBody(b, r.nudBracketClosesTail[bi]!)}`).join('\n')}
             }`).join('\n')}
             _ => {}
         }`;
@@ -1006,10 +1006,10 @@ ${g.members.map(({ item: b }) => `                ${bracketNudBody(b)}`).join('\
   // is array-type then indexed-access): only the LAST arm of a group emits the
   // `break` (all arms for that lid failed ⇒ the expression ends).
   const binLids = new Set(r.binary.map((b) => lidOf(ids, b.op)));
-  const ledBody = (b: Bracket, form: number, hasBin: boolean, isLast: boolean) => `{
+  const ledBody = (b: Bracket, form: number, closes: boolean, hasBin: boolean, isLast: boolean) => `{
                 let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
                 self.scratch.push(left.h);
-                if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = ${form}; continue; }
+                if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
                 self.pos = led_save; self.scratch.truncate(sb); self.b.restore(ck);${hasBin ? '' : isLast ? ' break;' : ''}
             }`;
   const ledMatch = (() => {
@@ -1020,7 +1020,7 @@ ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }, j) =>
-    `                if ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, r.ledForm[i]!, hasBin, j === g.members.length - 1)}`);
+    `                if ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
   return `                ${lid} => {\n${arms.join('\n')}\n                }`;
 }).join('\n')}
                 _ => {}
@@ -1052,7 +1052,7 @@ ${groups.map((g) => `                ${g.key} => { if !tail_closed { let sb = se
         let mut left = self.${r.name}_nud(min_bp)?;
         let mut form = self.form;
         if self.capped { return Some(left); }
-        let mut tail_closed = false;
+        let mut tail_closed = self.tail;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };
 ${ledMatch}
@@ -1068,7 +1068,7 @@ ${postfixTokMatch}
             let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.pos = led_save; self.scratch.truncate(sb); break; } };
             if rhs.present { self.scratch.push(rhs.h); }
             left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize);
-            form = 1;
+            form = 1; tail_closed = true;
         }
         self.form = form;
         Some(left)
@@ -1077,13 +1077,14 @@ ${postfixTokMatch}
         self.capped = false;
         let t = self.peek()?;
 ${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint(); if ${c.steps.length ? c.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { self.capped = true; self.form = 0; return Some(self.finish(${rid}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); }`).join('\n')}
-        let mut pf = 0u8;
-        let r = self.${r.name}_nud_rest(t, &mut pf);
+        let (mut pf, mut pt) = (0u8, false);
+        let r = self.${r.name}_nud_rest(t, &mut pf, &mut pt);
         self.capped = false;
         self.form = pf;
+        self.tail = pt;
         r
     }
-    fn ${r.name}_nud_rest(&mut self, t: Tok, pf: &mut u8) -> Option<Spanned<B::H>> {
+    fn ${r.name}_nud_rest(&mut self, t: Tok, pf: &mut u8, pt: &mut bool) -> Option<Spanned<B::H>> {
 ${tplNud}        if Self::${r.name}_atom(t.kid) {
             let sb = self.scratch.len(); let ts = self.pos;
             self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1;
@@ -1094,11 +1095,11 @@ ${bracketNudMatch}
             let save = self.pos; let sb = self.scratch.len(); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && self.form != 0 => { self.pos = save; self.scratch.truncate(sb); return None; }
-                Some(operand) => { *pf = pform; if operand.present { self.scratch.push(operand.h); } return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
+                Some(operand) => { *pf = pform; *pt = true; if operand.present { self.scratch.push(operand.h); } return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
                 None => { self.pos = save; self.scratch.truncate(sb); return None; }
             }
         }
-${r.nudSeqs.map((seq) => `        { let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint(); if ${seq.length ? seq.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); }`).join('\n')}
+${r.nudSeqs.map((seq, si) => `        { let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint(); if ${seq.length ? seq.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { ${r.nudSeqClosesTail[si] ? '*pt = true; ' : ''}return Some(self.finish(${rid}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); }`).join('\n')}
         None
     }`;
 }
@@ -1578,7 +1579,7 @@ fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
             let text = self.text.clone();
             let meta = self.toks.clone();
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+            let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -2039,7 +2040,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             let scratch = std::mem::take(&mut self.scratch);
             let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.take().unwrap();
-            let mut p = Parser { toks: Vec::new(), pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch, entries: Vec::new() };
+            let mut p = Parser { toks: Vec::new(), pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch, entries: Vec::new() };
             if let Some((root, n)) = p.try_reuse_top(old_root, &old_entries, &old_p, &old_toks, toks_from_meta(&text, &meta), byte_delta, old_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
@@ -2047,7 +2048,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
                 self.b = p.b; self.scratch = p.scratch; self.set_ptoks(p.toks); self.entries = p.entries;
             } else {
                 let ntoks = toks_from_meta(&text, &meta);
-                let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
+                let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
                 match p.parse_${ir.entry}() {
                     Some(fr) if p.pos == p.toks.len() && fr.present => {
                         self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -2061,7 +2062,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             }
         } else {
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
+            let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -2095,7 +2096,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             let old_segs = std::mem::take(&mut self.segs);
             let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.take().unwrap();
-            let mut p = Parser { toks: Vec::new(), pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch, entries: Vec::new(), segs: Vec::new() };
+            let mut p = Parser { toks: Vec::new(), pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch, entries: Vec::new(), segs: Vec::new() };
             if let Some((root, n)) = p.try_reuse_seg(old_root, &old_segs, &old_entries, &old_p, &old_toks, toks_from_meta(&text, &meta), byte_delta, old_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
@@ -2103,7 +2104,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
                 self.b = p.b; self.scratch = p.scratch; self.set_ptoks(p.toks); self.segs = p.segs; self.entries = p.entries;
             } else {
                 let ntoks = toks_from_meta(&text, &meta);
-                let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
+                let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
                 match p.parse_${ir.entry}() {
                     Some(fr) if p.pos == p.toks.len() && fr.present => {
                         self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -2117,7 +2118,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             }
         } else {
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
+            let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -2146,7 +2147,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
     : `        let text = self.text.clone();
         let meta = self.toks.clone();
         let ntoks = toks_from_meta(&text, &meta);
-        let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => {
                 self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -2245,7 +2246,7 @@ impl<B: Builder + Default> Doc<B> {
         let meta = self.toks.clone();
         let ntoks = toks_from_meta(&text, &meta);
         let b = std::mem::take(&mut self.b);
-        let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => {
                 self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -2297,7 +2298,7 @@ ${editParse.replace(/self\./g, 'd.')}
                     let text = self.text.clone();
                     let meta = self.toks.clone();
                     let ntoks = toks_from_meta(&text, &meta);
-                    let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+                    let mut p = Parser { toks: ntoks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
                     match p.parse_${ir.entry}() {
                         Some(fr) if p.pos == p.toks.len() && fr.present => {
                             self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -2332,7 +2333,7 @@ impl Doc<CstBuilder> {
         // Fresh independent parse (does not touch Doc arena) — used by non-edit callers.
         let toks = toks_from_meta(&self.text, &self.toks);
         let n = toks.len();
-        let mut p = Parser { toks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
             _ => None,
@@ -2727,6 +2728,8 @@ struct Parser<'a, B: Builder = CstBuilder> {
     capped: bool,
     /// Assignment-target form of the node the last nud/bp call returned.
     form: u8,
+    /// Whether the node the last nud call returned closes the access tail.
+    tail: bool,
     suppress_next: Vec<u16>,
     suppress_cur: Vec<u16>,
     src: &'a str,
@@ -2854,7 +2857,7 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     let toks = lex(src);
     let n = toks.len();
     let owned = std::mem::take(b);
-    let mut p = Parser { toks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: owned, scratch: Vec::new()${reuseInit} };
+    let mut p = Parser { toks, pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: owned, scratch: Vec::new()${reuseInit} };
     let root = match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() && fr.present => Some(fr.h),
         _ => None,
@@ -4057,7 +4060,7 @@ function emitRustPrattMethod(
             let _ap_base = self.ap_stack.len();
             ${st.ok}
             if ${st.okVar} {
-                ${finish}
+                ${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${finish}
                 self.ap_stack.truncate(_ap_base);
             }
             self.pos = save;
@@ -4085,7 +4088,7 @@ function emitRustPrattMethod(
                 Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
                 _ => { self.pos = save; return None; }
             };
-            *pf = ${prefix.form};
+            *pf = ${prefix.form}; *pt = true;
             let _ab = self.vals.len();
             self.vals.push(_argument);
             return Some(${nodeFinish(rustShapeNodeObjectExpr(prefixSlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', 'self.last_end(_off)', undefined), '_ab')});
@@ -4101,7 +4104,7 @@ function emitRustPrattMethod(
                 Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
                 _ => { self.pos = save; return None; }
             };
-            *pf = ${prefix.form};
+            *pf = ${prefix.form}; *pt = true;
             return Some(${customCall(psCustom.fn, '&[argument]', '[]', '_off', 'self.last_end(_off)', undefined, '_op', psCustom.folds)});
         }\n        `;
       } else if (prefixSlot.kind === 'inline') {
@@ -4109,7 +4112,7 @@ function emitRustPrattMethod(
             let save = self.pos;
             self.pos += 1;
             match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => { *pf = ${prefix.form}; return Some(v); }
+                Some(v) if !${prefix.requireTarget} || self.form == 0 => { *pf = ${prefix.form}; *pt = true; return Some(v); }
                 _ => { self.pos = save; return None; }
             }
         }\n        `;
@@ -4122,7 +4125,7 @@ function emitRustPrattMethod(
                 Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
                 _ => { self.pos = save; return None; }
             };
-            *pf = ${prefix.form};
+            *pf = ${prefix.form}; *pt = true;
             let _ab = self.vals.len();
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(argument);
@@ -4157,7 +4160,7 @@ function emitRustPrattMethod(
                 let _ap_base = self.ap_stack.len();
                 ${st.ok}
                 if ${st.okVar} {
-                    ${finish}
+                    ${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${finish}
                     self.ap_stack.truncate(_ap_base);
                 }
             }
@@ -4226,7 +4229,7 @@ function emitRustPrattMethod(
             self.vals.push(left);
             self.vals.push(_right);
             left = ${nodeFinish(rustShapeNodeObjectExpr(binarySlot as NodeShape, '_ab', '_op', shapeIR.spans, '_off', 'self.last_end(_off)', undefined), '_ab')};
-            form = 1;
+            form = 1; tail_closed = true;
             continue;
         }`;
     } else if (binarySlot.kind === 'custom') {
@@ -4246,7 +4249,7 @@ function emitRustPrattMethod(
                 None => { self.pos = _save; break; }
             };
             left = ${customCall(bs.fn, '&[_right]', '[]', '_off', 'self.last_end(_off)', 'left', '_op', bs.folds)};
-            form = 1;
+            form = 1; tail_closed = true;
             continue;
         }`;
     } else {
@@ -4269,7 +4272,7 @@ function emitRustPrattMethod(
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(_right);
             left = ${keepFinish('_ab', rule.cstName, '_off')};
-            form = 1;
+            form = 1; tail_closed = true;
             continue;
         }`;
     }
@@ -4481,7 +4484,7 @@ function emitRustPrattMethod(
                     if ${st.okVar} {
                         ${finish}
                         self.ap_stack.truncate(_ap_base);
-                        form = ${rule.ledForm[i]!};
+                        form = ${rule.ledForm[i]!};${rule.ledClosesTail[i] ? ' tail_closed = true;' : ''}
                         continue;
                     }
                     self.pos = led_save;
@@ -4547,7 +4550,7 @@ function emitRustPrattMethod(
         #[allow(unused_mut, unused_variables)]
         let mut form = self.form;
         if self.capped { return Some(left); }
-        let mut tail_closed = false;
+        let mut tail_closed = self.tail;
         ${hasLoop ? 'loop {' : ''}
             ${ledCode}
             ${postfixTokCode}
@@ -4562,14 +4565,15 @@ function emitRustPrattMethod(
         ${nudCappedCode}
         // Non-capped path in nud_rest; clear capped afterwards so a nested arrow
         // inside grouping does not suppress the enclosing LED/binary loop (≡ TS/CST).
-        let mut pf = 0u8;
-        let _r = self.parse_ast_${rule.name}_nud_rest(min_bp, &mut pf);
+        let (mut pf, mut pt) = (0u8, false);
+        let _r = self.parse_ast_${rule.name}_nud_rest(min_bp, &mut pf, &mut pt);
         self.capped = false;
         self.form = pf;
+        self.tail = pt;
         _r
     }
-    fn parse_ast_${rule.name}_nud_rest(&mut self, min_bp: i64, pf: &mut u8) -> Option<${ret}> {
-        let _ = (min_bp, &pf);
+    fn parse_ast_${rule.name}_nud_rest(&mut self, min_bp: i64, pf: &mut u8, pt: &mut bool) -> Option<${ret}> {
+        let _ = (min_bp, &pf, &pt);
         ${tplNudCode}
         ${atomCode}
         ${groupCode}
@@ -4953,6 +4957,8 @@ struct ShapeParser<'a, 'c, C: ShapeCustoms<'a>> {
     capped: bool,
     /// Assignment-target form of the node the last nud/bp call returned.
     form: u8,
+    /// Whether the node the last nud call returned closes the access tail.
+    tail: bool,
     /// When true, committed node completions also emit StreamEvents (parse_stream_buf
     /// path); when false the walk is tree-only and skips event/type-tag work.
     emit_events: bool,
@@ -5362,7 +5368,7 @@ fn parse_ast_impl<'a, 'c, C: ShapeCustoms<'a>>(src: &'a str, customs: &'c C, emi
         },
         vals: Vec::with_capacity(1024),
         ap_stack: Vec::with_capacity(256),
-        suppress_next: None, suppress_cur: None, suppress_log: Vec::with_capacity(64), capped: false, form: 0,
+        suppress_next: None, suppress_cur: None, suppress_log: Vec::with_capacity(64), capped: false, form: 0, tail: false,
         emit_events,
         events: events_init,
     };
@@ -5475,7 +5481,7 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Token<'a>> {
 // The CST over a fresh arena that lives in the returned Parser (serialize with write_json).
 // Library callers use parse_with / Doc.
 fn parse<'a>(src: &'a str) -> Option<(Parser<'a>, i32)> {
-    let mut p = Parser { toks: lex(src), pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
+    let mut p = Parser { toks: lex(src), pos: 0, split_end: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
     match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
         _ => None,
