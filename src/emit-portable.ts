@@ -24,7 +24,7 @@
 import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
-import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import {
   tokenPatternCharLoop, tokenPatternQuoteDelimAndEscape,
   tokenPatternBlockDelimiters, tokenPatternLiteralPrefix,
@@ -125,25 +125,39 @@ export type PrattRule = {
   nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
   nudSeqs: Step[][];                                  // NUD: a general sequence (guarded ident, class expr), tried with backtracking
   nudSeqFirst: FirstSig[];                            // parallel to nudSeqs: each seq's FIRST signature (null = unpredictable)
+  // Tail closure is decided by the construct that builds a node: only a NUD that does not end in
+  // a fresh operand, or an access-tail LED, leaves a node that access tails (and postfix ops) may
+  // extend. Prefix and binary nodes always close the tail.
+  nudBracketClosesTail: boolean[];                    // parallel to nudBrackets: ends in a fresh operand (`... $`)
+  nudSeqClosesTail: boolean[];                        // parallel to nudSeqs: ends in a fresh operand
   nudSeqPredictive: boolean;                          // all nudSeqs non-null & pairwise disjoint → render a switch
   nudCapped: Array<{ steps: Step[]; capBp: number }>; // NUD: an assignment-level capped sequence (arrow function) — parsed only when minBp < capBp, admits no led
   nudCappedFirst: FirstSig[];                         // parallel to nudCapped: each capped seq's FIRST signature
-  prefix: Array<{ op: string; rbp: number }>;         // NUD: prefix op then operand at rbp
-  binary: Array<{ op: string; lbp: number; rbp: number }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
+  // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
+  // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
+  prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
+  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean }>;  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledAccessTail: boolean[];                           // parallel to leds: a "closed punct-connector" tail (member/call/index) — disabled once a postfix binds
   ledLbp: Array<number | null>;                       // parallel to leds: precedence gate (ternary/in/instanceof) — bind only when lbp > minBp; null = bind maximally tight
   ledSameLine: boolean[];                             // parallel to leds: a leading `sameLine` guard (TS type tails) — the connector must be on the operand's line
   ledNotLeftLeaf: Array<string[] | null>;             // parallel to leds: skip this led when the left node's head-leaf text is in this set (`void.x` etc.)
+  ledForm: AssignForm[];                              // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target)
+  ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
-  postfix: Array<{ op: string; lbp: number }>;        // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
+  postfix: Array<{ op: string; lbp: number; requireTarget: boolean }>;  // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
 };
+// The assignment-target form of a Pratt node (the interpreter's notAssignTarget), decided by the
+// construct that builds it: an operator node is not a target, a prefix-unary one (`-x`, not
+// `++x`) is also refused as a noUnaryLhs left operand; every other node is a target.
+export const FORM_TARGET = 0, FORM_NOT_TARGET = 1, FORM_UNARY = 2;
+export type AssignForm = typeof FORM_TARGET | typeof FORM_NOT_TARGET | typeof FORM_UNARY;
 export type RuleIR = RdRule | PrattRule;
 
 // Stateful regex-vs-division disambiguation (the JS `/` problem): a `/` starts a regex
 // literal in expression context but is division after a value. The lexer threads the
 // previous token + a control-head paren stack to decide; the predicate sets are baked
-// from the grammar's `regexContext`. Mirrors gen-lexer.ts's prevIsValue exactly.
+// from the grammar's `regexContext`. Mirrors emit-lexer.ts's prevIsValue exactly.
 export type RegexCtx = {
   regexToken: string;          // the token flagged `regex`, gated on expression context
   identToken: string;          // identifier token kind (for the keyword-vs-value test)
@@ -169,7 +183,7 @@ export type TplCfg = {
   interpRule: string;   // the rule that parses each `${…}` hole (the Pratt expression rule)
 };
 
-// Newline-only mode (gen-lexer.ts L236–253, L677–747): engine-emitted NEWLINE tokens at
+// Newline-only mode (emit-lexer.ts): engine-emitted NEWLINE tokens at
 // significant line boundaries; flowOpen/flowClose suspend; comment-only lines are skipped.
 export type NewlineCfg = {
   token: string;
@@ -182,7 +196,10 @@ export type ParserIR = {
   grammarName: string;
   entry: string;
   tokens: LexTok[];      // for the char scanner, tried in declaration order
-  puncts: string[];      // punctuation literals, longest-first (maximal munch)
+  puncts: string[];      // punctuation literals the lexer scans, longest-first (maximal munch)
+  /** `>`-led operators composed from single-character tokens where an operator or lookahead
+   *  literal is read (gtComposites), longest first; never lexed, so absent from `puncts`. */
+  gtComps: string[];
   rules: RuleIR[];
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -212,6 +229,9 @@ function buildIR(grammar: CstGrammar): ParserIR {
   if (grammar.indent) {
     throw new Error('portable: indent-sensitive grammars are out of scope (use the interpreter path); declare `newline` without `indent` for line-boundary-only mode');
   }
+  if (grammar.markup) {
+    throw new Error('portable: markup-mode grammars are out of scope (use jsTarget or the interpreter path)');
+  }
 
   const a = analyzeGrammar(grammar);
   const tokenNames = a.tokenNames;
@@ -222,7 +242,8 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const lits = new Set<string>();
   for (const r of grammar.rules) for (const l of collectLiterals(r.body)) lits.add(l);
   for (const lv of grammar.precs) for (const o of lv.operators) lits.add(o.value);
-  const puncts = [...lits].filter((l) => !isKeywordLiteral(l)).sort((x, y) => y.length - x.length);
+  const gtComps = gtComposites(grammar);
+  const puncts = [...lits].filter((l) => !isKeywordLiteral(l) && !gtComps.includes(l)).sort((x, y) => y.length - x.length);
 
   const litTtype = (v: string): '$keyword' | '$punct' => (isKeywordLiteral(v) ? '$keyword' : '$punct');
 
@@ -246,7 +267,9 @@ function buildIR(grammar: CstGrammar): ParserIR {
         if (e.kind === '+') return { t: 'seq', steps: [stepOf(e.body), { t: 'star', step: stepOf(e.body) }] };   // x+ = x x*
         break;
       case 'alt': {
-        if (e.items.every((it) => it.type === 'literal')) {   // fast path: all-literal alternation
+        // Fast path: an all-literal alternation of single tokens (a composed '>' operator spans
+        // several, so it takes the general path through its 'lit' step).
+        if (e.items.every((it) => it.type === 'literal' && !gtComps.includes(it.value))) {
           return { t: 'altlit', opts: e.items.map((it) => ({ value: (it as { value: string }).value, ttype: litTtype((it as { value: string }).value) })) };
         }
         return { t: 'alt', branches: e.items.map(altSteps) };   // general: backtracking over sub-sequences
@@ -281,7 +304,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     if (steps.length === 0) return null;
     const s = steps[0];
     switch (s.t) {
-      case 'lit': return { lits: [s.value], toks: [] };
+      case 'lit': return { lits: [gtComps.includes(s.value) ? '>' : s.value], toks: [] };   // a composed operator begins at a '>' token
       case 'tok': return { lits: [], toks: [s.name] };
       case 'altlit': return { lits: s.opts.map((o) => o.value), toks: [] };
       case 'rule': case 'ruleBp': { const f = ruleLead.get(s.name); return f === undefined ? null : f; }
@@ -434,7 +457,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...(identToken ? [identToken] : []),
     ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
   ];
-  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, rules, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,
@@ -583,14 +606,21 @@ function buildPratt(
     if (e.type === 'literal') return { t: 'lit', value: e.value, ttype: litTtype(e.value) };
     return stepOf(e);
   }
-  const prefix = sawPrefix ? [...a.prefixOps.entries()].map(([op, info]) => ({ op, rbp: info.rbp })) : [];
+  const prefix = sawPrefix
+    ? [...a.prefixOps.entries()].map(([op, info]) => ({ op, rbp: info.rbp, requireTarget: !!info.requireTarget, form: (a.postfixOpValues.has(op) ? FORM_NOT_TARGET : FORM_UNARY) as AssignForm }))
+    : [];
   const binary = sawBinary
-    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp }))
+    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp, requireTarget: !!info.requireTarget, noUnaryLhs: a.noUnaryLhsOps.has(op) }))
     : [];
   const postfix = sawPostfix
-    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp }))
+    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp, requireTarget: !!info.requireTarget }))
     : [];
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, postfixToks, postfix };
+  const ledForm = leds.map((l): AssignForm => a.binaryConnectors.has(l.first) ? FORM_NOT_TARGET : FORM_TARGET);
+  const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
+  const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
+  const nudSeqClosesTail = nudSeqs.map(endsInOperand);
+  const ledClosesTail = leds.map((l, i) => !ledAccessTail[i] || l.steps[l.steps.length - 1]?.t === 'not');
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──
@@ -602,6 +632,7 @@ function buildPratt(
 export type LexIdPlan = {
   kids: string[];   // kids[0]='' reserved for punct (kind=""); then tokens in decl order + engine-emitted (NEWLINE, $template*)
   lids: string[];   // lids[0]='' = "not any literal"; then puncts (longest-first), then remaining texts lexicographically
+  gtComps: string[];   // ir.gtComps: lids composed from single-character tokens, never lexed
 };
 
 /** Collect every literal text that appears in the Step IR (match_lit / altlit / sep / suppress / FIRST / Pratt). */
@@ -677,7 +708,7 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
   const punctSet = new Set(ir.puncts);
   const rest = [...litTexts].filter((t) => !punctSet.has(t)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const lids: string[] = ['', ...ir.puncts, ...rest];
-  return { kids, lids };
+  return { kids, lids, gtComps: ir.gtComps };
 }
 
 /** Resolve lid for a known text; 0 if not in the plan (matches runtime lid_of). */

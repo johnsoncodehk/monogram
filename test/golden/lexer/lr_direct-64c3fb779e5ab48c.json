@@ -1,0 +1,5 @@
+{"spec":{"name":"lr_direct","tokens":[{"name":"W","pattern":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"flags":[],"identifier":true}],"literals":[],"markup":null,"indent":null,"newline":null},
+"types":["W"],
+"cases":[
+["ab",[0,0,1,0,0,1,1,0]]
+]}

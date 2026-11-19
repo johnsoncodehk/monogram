@@ -1,7 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
-import { isKeywordLiteral } from './grammar-utils.ts';
+import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
-import { createLexer, type Token } from './gen-lexer.ts';
+import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── CST output ──
@@ -30,14 +30,21 @@ export function getText(node: { offset: number; end: number }, source: string): 
   return source.slice(node.offset, node.end);
 }
 
+// The lexer is the generated one (emit-lexer.ts), compiled in-process once per grammar.
+const tokenizers = new WeakMap<CstGrammar, (source: string) => Token[]>();
+
 export function createParser(grammar: CstGrammar) {
+  let lex = tokenizers.get(grammar);
+  if (lex === undefined) {
+    lex = compileTokenizer(lexSpecOf(grammar));
+    tokenizers.set(grammar, lex);
+  }
+  const tokenize = lex;
   // [Await]/[Yield] fork — same rule-identity space as the emitted parser (no-op
   // without ctx markers). Keeps the interp ≡ emit equivalence the gates compare.
   grammar = withAwaitYield(grammar);
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
-  // The lexer is a separate stage, built from the same grammar (token defs + lexer hints).
-  const { tokenize } = createLexer(grammar);
 
   // ── Markup optional-end-tag support (HTML omittable end tags; see MarkupConfig.optionalEndTags) ──
   // Pure DATA in the grammar's markup config drives a structural recognition here: the
@@ -106,6 +113,7 @@ export function createParser(grammar: CstGrammar) {
   } = analyzeGrammar(grammar);
 
   const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)
+  const gtComps = new Set(gtComposites(grammar));
 
 
   // Per-LED binding-power lookup (object-keyed like ledFirst): a led whose first
@@ -160,7 +168,7 @@ export function createParser(grammar: CstGrammar) {
     if (isKeywordLiteral(key)) {
       return tok.type !== '' && tok.text === key;       // keyword → ident token
     }
-    return tok.type === '' && (tok.text === key || tok.text.startsWith(key));  // punctuation (startsWith covers split `>>`)
+    return tok.type === '' && tok.text === key;       // punctuation
   }
   // Conservative: return true unless the alternative provably cannot start here.
   function canStart(first: FirstTok | undefined, tok: Token | null): boolean {
@@ -235,14 +243,15 @@ export function createParser(grammar: CstGrammar) {
   // binary/ternary `… in $` / `? $ : $`) AND whose connector is a punctuator, not a
   // word-operator — so `as`/`satisfies`/`in`/`instanceof`/`?:` still bind after `a++`.
   const accessTailLeds = new Set<object>();
-  // ── Tail-closing LEDs (a LED that itself closes the access tail) ──
-  // A LED ending in a zero-width *negative lookahead* (`… not($)`) asserts that
-  // nothing may follow it, so its result cannot be the base of any further
-  // member/element/call access — once it binds, the access tail is closed (no `.x`,
-  // `[i]`, `(…)`, `<T>`, tagged template). Language-agnostic / structural: keyed on
-  // the LED ending in a `not` assertion, with no knowledge of what it guards. (E.g.
-  // a bare type-argument instantiation `Foo<T>` — written `… '>' not($)` — which TS
-  // forbids from being followed by property access, TS1477.)
+  // ── Tail-closing LEDs (a LED whose result is no access-tail base) ──
+  // Only an access tail extends an access tail. Every other LED — a binary/ternary
+  // form (`… in $`, `? $ : $`) or a word connector (`as T`) — builds a node that
+  // member/element/call access can't attach to (`x as T (1)` is ill-formed). So does
+  // a LED ending in a zero-width *negative lookahead* (`… not($)`): it asserts that
+  // nothing may follow it (e.g. a bare type-argument instantiation `Foo<T>`, which TS
+  // forbids from being followed by property access, TS1477). Closure is a property of
+  // the node, so it is decided when the node is built — never by the frame that tries
+  // the next tail, which would let an outer frame attach `.x` to `a = b++`.
   const tailClosingLeds = new Set<object>();
   for (const [ruleName, { leds }] of prattClassified.entries()) {
     for (const led of leds) {
@@ -253,7 +262,7 @@ export function createParser(grammar: CstGrammar) {
       const lastIsOperand = selfRefName(last, ruleName);                // open binary/ternary operand
       const wordConnector = it[0].type === 'literal' && /^[A-Za-z]/.test(it[0].value);
       if (!lastIsOperand && !wordConnector) accessTailLeds.add(led);
-      if (last.type === 'not') tailClosingLeds.add(led);
+      if (lastIsOperand || wordConnector || last.type === 'not') tailClosingLeds.add(led);
     }
   }
 
@@ -364,8 +373,7 @@ export function createParser(grammar: CstGrammar) {
     // Packrat memo for pratt/left-recursive rules (Expr, Type, …): cache the
     // parse result + end position by start position, so backtracking doesn't
     // re-parse the same rule at the same spot. Sound because those rules reset
-    // currentPrattContext (result is context-independent). Cleared on a `>>`
-    // token splice (matchLiteral), which shifts later positions.
+    // currentPrattContext (result is context-independent).
     const memo = new Map<string, Map<number, { node: CstNode | null; end: number }>>();
 
     // Bounded-parse cap (token index). When >= 0, no token at index >= parseLimit
@@ -379,6 +387,24 @@ export function createParser(grammar: CstGrammar) {
     function peek(): Token | null {
       if (parseLimit >= 0 && pos >= parseLimit) return null;
       return tokens[pos] ?? null;
+    }
+
+    // The punctuator read at token i where an operator or a composite literal is read: a lone
+    // `>` extends over each adjacent single-character token after it while the text stays a
+    // composite (gtComposites; one token per character); any other token reads as itself. Not
+    // bounded by parseLimit: an operator leaf's extent is a function of the token stream alone.
+    // A composite read counts its tokens as reached (maxPos), like the emitted engine's watermark.
+    function opText(i: number): string {
+      const t = tokens[i];
+      if (gtComps.size === 0 || t.type !== '' || t.text !== '>') return t.text;
+      let text = '>';
+      for (let j = i + 1; j < tokens.length; j++) {
+        const u = tokens[j];
+        if (u.type !== '' || u.text.length !== 1 || u.offset !== t.offset + (j - i) || !gtComps.has(text + u.text)) break;
+        text += u.text;
+      }
+      if (text.length > 1 && i + text.length - 1 > maxPos) maxPos = i + text.length - 1;
+      return text;
     }
 
     function offset(): number {
@@ -403,16 +429,10 @@ export function createParser(grammar: CstGrammar) {
         if (++pos > maxPos) maxPos = pos;
         return { tokenType: '$punct', offset: tok.offset, end: tok.offset + tok.text.length };
       }
-      // Split multi-`>` tokens: `>>`, `>>>`, `>>=`, `>>>=` can yield a single `>`
-      if (value === '>' && tok.type === '' && tok.text.length > 1 && tok.text[0] === '>') {
-        const rest = tok.text.slice(1);
-        tokens.splice(pos, 1,
-          { type: '', text: '>', offset: tok.offset, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
-          { type: '', text: rest, offset: tok.offset + 1, k: 0, t: 0, newlineBefore: false, commentBefore: false, multilineFlowBefore: false },
-        );
-        memo.clear();   // splice shifts later token indices → memo entries are stale
-        if (++pos > maxPos) maxPos = pos;
-        return { tokenType: '$punct', offset: tok.offset, end: tok.offset + 1 };
+      if (gtComps.has(value) && opText(pos) === value) {
+        pos += value.length;
+        if (pos > maxPos) maxPos = pos;
+        return { tokenType: '$punct', offset: tok.offset, end: tok.offset + value.length };
       }
       return null;
     }
@@ -642,9 +662,13 @@ export function createParser(grammar: CstGrammar) {
       if (tail && 'tokenType' in tail && tail.tokenType === '$operator'
           && postfixOpValues.has(source.slice(tail.offset, tail.end))) return true;
       // a binary / relational / conditional expression (`a + b`, `a in b`, `a as T`) is not a
-      // LeftHandSideExpression: its MIDDLE child is a binary-connector leaf. Member `a.b` /
-      // element `a[b]` have a `$punct` leaf there, a paren cover has a NODE child → those pass.
-      if (cs.length >= 3) { const m = cs[1]; if (m && 'tokenType' in m && binaryConnectors.has(source.slice(m.offset, m.end))) return true; }
+      // LeftHandSideExpression: its MIDDLE child is an `$operator` leaf or a binary-connector
+      // leaf. Member `a.b` / element `a[b]` / typed call `f<T>()` have a `$punct` leaf there, a
+      // paren cover has a NODE child → those pass.
+      if (cs.length >= 3) {
+        const m = cs[1];
+        if (m && 'tokenType' in m && (m.tokenType === '$operator' || binaryConnectors.has(source.slice(m.offset, m.end)))) return true;
+      }
       return false;
     };
 
@@ -669,6 +693,9 @@ export function createParser(grammar: CstGrammar) {
       // NUD: parse atom or prefix (longest match)
       let lhs: CstNode | null = null;
       let bestNudPos = saved;
+      // True iff the winning NUD ends in a fresh operand of this rule (a prefix op, `... $`):
+      // its node closes the access tail like a binary node.
+      let nudClosed = false;
       // True iff the winning NUD is a capped (assignment-level) expression — an
       // ArrowFunction. Such a NUD admits no led; the led loop is skipped entirely.
       let capped = false;
@@ -700,6 +727,7 @@ export function createParser(grammar: CstGrammar) {
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 bestNudPos = pos;
+                nudClosed = true;
                 capped = false;   // a prefix NUD is never capped
               }
             }
@@ -713,6 +741,7 @@ export function createParser(grammar: CstGrammar) {
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestNudPos = pos;
+          nudClosed = selfRefName(items[items.length - 1], rule.name);
           capped = capBp !== null;   // the LONGEST match wins; record whether it is capped
         }
       }
@@ -725,8 +754,9 @@ export function createParser(grammar: CstGrammar) {
       if (capped) { _prattCapped = true; return lhs; }
 
       // Once a postfix operator binds (`a++`), the operand is an update expression
-      // that access tails (`[…]`, `.x`, `(…)`, `<T>`, tagged template) can't extend.
-      let tailClosed = false;
+      // that access tails (`[…]`, `.x`, `(…)`, `<T>`, tagged template) can't extend;
+      // likewise once any non-tail form (prefix, binary, tail-closing LED) is built.
+      let tailClosed = nudClosed;
 
       // LED loop
       while (true) {
@@ -783,8 +813,6 @@ export function createParser(grammar: CstGrammar) {
               offset: lhs.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end,
             };
-            // A LED ending in a negative lookahead (e.g. a bare instantiation
-            // `Foo<T>`) closes the access tail: nothing may chain off it.
             if (tailClosingLeds.has(led)) tailClosed = true;
             matched = true;
             break;
@@ -794,7 +822,7 @@ export function createParser(grammar: CstGrammar) {
         if (matched) continue;
 
         // Then check $ op $ pattern
-        const tokKey = tok.text;
+        const tokKey = opText(pos);
         const info = opTable.get(tokKey);
         if (info && info.lbp > minBp) {
           if (info.position === 'postfix') {
@@ -802,8 +830,9 @@ export function createParser(grammar: CstGrammar) {
               // A target-requiring postfix (`++`/`--`) operand must be a LeftHandSideExpression
               // (`++x++`, `x++ ++` are syntax errors). Fail hard like noUnaryLhs.
               if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
-              if (++pos > maxPos) maxPos = pos;
-              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+              pos += tokKey === tok.text ? 1 : tokKey.length;
+              if (pos > maxPos) maxPos = pos;
+              const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tokKey.length };
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
               tailClosed = true;
               matched = true;
@@ -826,8 +855,9 @@ export function createParser(grammar: CstGrammar) {
                 return null;
               }
             }
-            if (++pos > maxPos) maxPos = pos;
-            const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tok.text.length };
+            pos += tokKey === tok.text ? 1 : tokKey.length;
+            if (pos > maxPos) maxPos = pos;
+            const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tokKey.length };
             const rhs = parsePratt(rule, info.rbp);
             // CAP PROPAGATION: an operator whose RHS is a capped assignment-level expression
             // (an ArrowFunction) is itself capped — it admits no further led, so a trailing
@@ -838,6 +868,7 @@ export function createParser(grammar: CstGrammar) {
             }
             if (rhs) {
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              tailClosed = true;
               matched = true;
             } else {
               pos = ledSaved;
@@ -849,6 +880,9 @@ export function createParser(grammar: CstGrammar) {
         if (!matched) { pos = ledSaved; break; }
       }
 
+      // A sub-parse (a parenthesized or argument arrow) may have left the flag set; only the
+      // capped returns above make THIS node capped.
+      _prattCapped = false;
       return lhs;
     }
 

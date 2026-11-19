@@ -1,0 +1,6 @@
+{"spec":{"name":"tinykv","tokens":[{"name":"Indent","pattern":{"type":"never"},"flags":[]},{"name":"Dedent","pattern":{"type":"never"},"flags":[]},{"name":"Newline","pattern":{"type":"never"},"flags":[]},{"name":"Key","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"blockPattern":{"type":"seq","items":[{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"="]},"flags":[],"scope":"key"},{"name":"Val","pattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"blockPattern":{"type":"repeat","body":{"type":"charClass","negate":false,"items":[{"type":"range","from":"a","to":"z"}]},"min":1,"greedy":true},"flags":[],"scope":"val"},{"name":"Sep","pattern":"=","flags":[]}],"literals":[],"markup":null,"indent":{"indentToken":"Indent","dedentToken":"Dedent","newlineToken":"Newline","keyValueSeparator":"=","foldTokens":["Key","Val"]},"newline":null},
+"types":["Val","Indent","Dedent","Key"],
+"cases":[
+["a\n  b c",[0,0,1,0,1,4,0,0,0,4,3,0,2,7,0,0]],
+["a\n  b= c",[0,0,1,0,1,4,0,0,3,4,2,0,0,7,1,0,2,8,0,0]]
+]}

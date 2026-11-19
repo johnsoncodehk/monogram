@@ -101,6 +101,17 @@ const cases: Case[] = [
   { label: '#3 tsx JSX element is a tag, not arrow params', scope: 'source.tsx',
     lines: ['const e = <div>{x}</div>'],
     checks: [{ line: 0, text: 'div', scope: 'entity.name.tag' }] },
+
+  // ── Zero-width guards in the grammar (the `>>`/`>=` rescan between the type arguments and
+  // their `>`, `not(…)` inside a `not(…)`) must not hide the generic call or make a contextual
+  // keyword look reserved.
+  { label: 'generic call type arguments', scope: 'source.ts', lines: ['f<T>(x)'],
+    checks: [{ line: 0, text: '<', scope: 'punctuation.definition.typeparameters.begin' },
+             { line: 0, text: 'T', scope: 'entity.name.type' }] },
+  { label: 'tsx generic call type arguments', scope: 'source.tsx', lines: ['f<T>(x)'],
+    checks: [{ line: 0, text: '<', scope: 'punctuation.definition.typeparameters.begin' }] },
+  { label: 'satisfies is contextual', scope: 'source.ts', lines: ['const satisfies = 1'],
+    checks: [{ line: 0, text: 'satisfies', scope: 'keyword.operator', absent: true }] },
 ];
 
 let passed = 0;

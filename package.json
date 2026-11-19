@@ -2,6 +2,13 @@
   "name": "monogram",
   "version": "0.1.0",
   "type": "module",
+  "exports": {
+    "./api": "./src/api.ts",
+    "./emit": "./src/emit.ts",
+    "./textmate": "./src/gen-tm.ts",
+    "./language-configuration": "./src/gen-vscode-config.ts",
+    "./grammars/html": "./html.ts"
+  },
   "scripts": {
     "gen": "node src/cli.ts typescript.ts && node src/cli.ts javascript.ts && node src/cli.ts typescriptreact.ts && node src/cli.ts javascriptreact.ts && node src/cli.ts html.ts && node src/cli.ts yaml.ts",
     "test": "node test/check.ts",
@@ -18,6 +25,7 @@
     "gate:left-recursion": "node test/left-recursion.ts",
     "gate:html-lexer": "node test/html-lexer-spike.ts",
     "gate:treesitter": "(cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/treesitter-bench.ts",
+    "gate:treesitter-yaml": "(cd tree-sitter/yaml && npx tree-sitter generate && npx tree-sitter build --wasm .) && node test/yaml-treesitter.ts",
     "metric:scope-gap:ts": "node test/scope-gap-run.ts ts",
     "metric:scope-gap:js": "node test/scope-gap-run.ts js",
     "metric:scope-gap:jsx": "node test/scope-gap-run.ts jsx",

@@ -20,8 +20,9 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
-import { createLexer } from '../src/gen-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { asGoMain } from './go-main.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
@@ -125,13 +126,14 @@ const CASES: Case[] = [
   {
     // Postfix-operator LED (`x++`/`x--`) + the access-tail closure: once a postfix binds, the
     // operand is an update expression, so a further postfix or an access tail (`.`/`[`/`(`)
-    // can't attach (`a++--`, `a++.b` are ill-formed; `(a++).b` is fine).
+    // can't attach (`a++--`, `a++.b` are ill-formed; `(a++).b` is fine). Closure belongs to
+    // the node: an enclosing binary or prefix node is no access-tail base either.
     grammar: 'postjs', path: './fixtures/postjs.ts',
     accept: [
       'x++;', 'x--;', 'a + b++;', '++x;', 'x++ + y;', 'a.b++;', '(x)++;', '--a.b;',
-      'x++ * 2;', '(a++).b;', 'x.y.z++;',
+      'x++ * 2;', '(a++).b;', 'x.y.z++;', '(a + b).c;', '-a.b;', 'a + b.c;',
     ],
-    reject: ['a++--;', 'a++.b;', 'a++ ++;', '++;'],
+    reject: ['a++--;', 'a++.b;', 'a++ ++;', '++;', 'a + b++.c;', '-a++.b;'],
   },
   {
     // A grouped sub-sequence `seq` step: comma lists as `star([',', $])` (e.g. `many(',', $)`),
@@ -231,8 +233,30 @@ const CASES: Case[] = [
       'function isStr(x: unknown): x is string { return true; }', 'enum E { A, B, C }',
       'const n = maybe!;', 'let arr: number[];', 'type Fn = (x: number) => string;',
       'class C<in out T> { value!: T; }',
+      // `<` heads both type-argument LEDs and the relational operator: a type-argument arm
+      // that fails must leave `<` to the next arm and to the comparison.
+      'a < b;', 'a < b >> c;', 'a < b > c;', 'f(a < b, c > d);', 'x = B<C>;', 'x = B<C>(1);',
+      'x = y = 1;', '(a + b) = 1;', 'a.b = 1;', 'x++;', '++x;', '(-x) ** 2;', '++x ** 2;',
+      'x ? a : b.c;', 'x as T.y;', 'x = B<C>\n++y;',
+      // A bare instantiation `B<C>` ends where tsc's canFollowTypeArgumentsInExpression lets it.
+      'x = B<C> as T;', 'x = B<C> satisfies T;', 'x = B<C> instanceof D;', 'x = B<C> <= 1;', 'x = B<C>\ny;',
+      // tsc rescans the closing token of expression type arguments: `>>`/`>=`/… never close them.
+      'f<A>>(x);', 'x = a<b>>>c;', 'new A<B>>(c);', 'f<A<B>>(x);', 'a < B<C>> c;',
+      // Every '>' is its own token; operators compose from adjacent ones.
+      'x = a >>>= b >>= c >= d >> e >>> f;', 'let t: A<B<C<D<E>>>> = a >>> b;',
+      // A typed call / instantiation is a LeftHandSideExpression: its `<` is not an operator.
+      'f<T>() = 1;', 'x = B<C> = 1;', 'x = B<C> += 1;', 'f<T>`x` = 1;', 'f<T>()++;', 'f<T>().x = 1;',
+      '++(-x);', '++x.y;', '++f<T>();',
+      // A parenthesized / argument arrow does not cap the operator chain around it.
+      'a + f(() => 1) + c;', 'a && (() => 1) && c;', 'x = (a = () => 1) || y;',
     ],
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;'],
+    // Operators that require an assignment target or forbid a unary left operand.
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
+      'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
+      // Only an access tail extends an access tail.
+      'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;',
+      'x = B<C> < 1;', 'x = B<C> >= 1;', 'x = B<C>!;', 'x = B<C> /re/;',
+      'a > > b;', 'a >> = b;', 'a >\n= b;', 'a >>>>= b;'],
   },
 ];
 
@@ -297,7 +321,7 @@ function runEditSession(cmd: string, args: string[], json: string): EditOutcome 
 
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
 const oracleToks = (g: CstGrammar, src: string): AlignMeta[] => {
-  const { tokenize } = createLexer(g);
+  const tokenize = compileTokenizer(lexSpecOf(g));
   return tokenize(src).map((t) => ({ kind: t.type, off: t.offset, end: t.offset + t.text.length, nl: t.newlineBefore }));
 };
 const computeAlign = (oldText: string, oldToks: AlignMeta[], newText: string, newToks: AlignMeta[]): Align => {
@@ -480,7 +504,7 @@ for (const c of CASES) {
 
   if (HAS_GO && !c.tsOnly) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
-    writeFileSync(`${gdir}/parser.go`, emitParser(grammar, goTarget));
+    writeFileSync(`${gdir}/parser.go`, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
     execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });

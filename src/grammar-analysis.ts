@@ -45,6 +45,42 @@ export function findEntryRule(grammar: CstGrammar): string {
  * Derive the full STRUCTURAL analysis, returned as plain data + live closures. Both engines
  * call this once and destructure; their downstream code keeps its own local names.
  */
+/**
+ * The rules that can derive the EMPTY string (fixpoint over the rule bodies), plus the expression
+ * predicate behind it. Single-sourced here because two consumers need the same answer: the
+ * analysis below (left-corner edges, alt dispatch) and `defineGrammar`, which REJECTS a nullable
+ * non-entry rule at definition time. The engine never lets a rule succeed with an empty match
+ * (`parseNonRec` keeps an alternative only when it advanced, `pos > bestPos`), so a nullable
+ * rule's empty case is unreachable: a reference to it FAILS wherever it would have matched
+ * nothing, which silently drops whole parses (`[Filler, Stmt]` with a `Filler = rule(() =>
+ * [[many(NL)]])` rejects every `Stmt`). The entry rule is exempt (an empty document is handled
+ * by the driver).
+ */
+export function computeNullableRules(grammar: CstGrammar): { nullableRules: Set<string>; exprNullable: (e: RuleExpr) => boolean } {
+  const tokenNames = new Set(grammar.tokens.map(t => t.name));
+  const nullableRules = new Set<string>();
+  function exprNullable(e: RuleExpr): boolean {
+    switch (e.type) {
+      case 'literal': return false;
+      case 'ref': return tokenNames.has(e.name) ? false : nullableRules.has(e.name);
+      case 'seq': return e.items.every(exprNullable);
+      case 'alt': return e.items.some(exprNullable);
+      case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true;
+      case 'group': return exprNullable(e.body);
+      case 'not': return true;                                   // zero-width assertion: consumes nothing
+      case 'sep': return true;                                   // sep matches zero elements
+      default: return true;                                      // op/prefix/postfix markers don't consume
+    }
+  }
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const rule of grammar.rules) {
+      if (!nullableRules.has(rule.name) && exprNullable(rule.body)) { nullableRules.add(rule.name); changed = true; }
+    }
+  }
+  return { nullableRules, exprNullable };
+}
+
 export function analyzeGrammar(grammar: CstGrammar) {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
@@ -91,12 +127,11 @@ export function analyzeGrammar(grammar: CstGrammar) {
     ledPrecByConnector.set(lp.connector, { lbp, rhsBp: lp.chainRhs ? lbp : null });
   }
 
-  // Binary / relational / conditional connectors (the MIDDLE child of a `$ op $` LED) — a node
-  // with one at child[1] is not a LeftHandSideExpression, so not an assignment target
-  // (`a + b = c`, `a in b = c`). Ladder INFIX ops + alternative-form binary LEDs.
-  const binaryConnectors = new Set<string>();
-  for (const [v, info] of opTable) if (info.position === 'infix') binaryConnectors.add(v);
-  for (const k of ledPrecByConnector.keys()) binaryConnectors.add(k);
+  // Alternative-form binary connectors (`?`, `in`, `as`, …: the MIDDLE child of a ledPrec LED) —
+  // a node with one at child[1] is not a LeftHandSideExpression, so not an assignment target
+  // (`a in b = c`). Ladder INFIX ops are recognized by their operator-tagged leaf instead: the
+  // same text as a LED literal (`<` of `f<T>()`) is punctuation and keeps the call a target.
+  const binaryConnectors = new Set<string>(ledPrecByConnector.keys());
 
   // A `cap`-group NUD (an ArrowFunction — the lowest-precedence AssignmentExpression) parses
   // only when minBp is LOOSER than the named connector's binding power; the value resolves
@@ -164,26 +199,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
   //
   // Nullability feeds the left-corner edges (a nullable leftmost element passes through to the
   // next), so compute it first. op/prefix/postfix consume an operator token → left-edge BARRIERS.
-  const nullableRules = new Set<string>();
-  function exprNullable(e: RuleExpr): boolean {
-    switch (e.type) {
-      case 'literal': return false;
-      case 'ref': return tokenNames.has(e.name) ? false : nullableRules.has(e.name);
-      case 'seq': return e.items.every(exprNullable);
-      case 'alt': return e.items.some(exprNullable);
-      case 'quantifier': return e.kind === '+' ? exprNullable(e.body) : true;
-      case 'group': return exprNullable(e.body);
-      case 'not': return true;                                   // zero-width assertion: consumes nothing
-      case 'sep': return true;                                   // sep matches zero elements
-      default: return true;                                      // op/prefix/postfix markers don't consume
-    }
-  }
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const rule of grammar.rules) {
-      if (!nullableRules.has(rule.name) && exprNullable(rule.body)) { nullableRules.add(rule.name); changed = true; }
-    }
-  }
+  const { nullableRules, exprNullable } = computeNullableRules(grammar);
 
   // The set of rules reachable at the LEFT CORNER of an expression: every rule ref that could be
   // the leftmost symbol, looking through nullable prefixes and stopping at the first non-nullable

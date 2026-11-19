@@ -262,6 +262,8 @@ function expandAlts(expr: RuleExpr): RuleExpr[][] {
       const present = expandAlts(expr.body);
       return expr.kind === '+' ? present : [[], ...present];
     }
+    case 'not':
+      return [[]];   // a negative lookahead consumes nothing: adjacency sees through it
     default:
       return [[expr]];   // literal, ref, sep, op, prefix, postfix
   }
@@ -715,19 +717,15 @@ function findTypeKeywordPatterns(
  */
 function collectReservedWords(grammar: CstGrammar): Set<string> {
   const reserved = new Set<string>();
-  function collectLits(e: RuleExpr, out: Set<string>): void {
-    if (e.type === 'literal') { if (isKeywordLiteral(e.value)) out.add(e.value); return; }
-    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(i => collectLits(i, out));
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') collectLits(e.body, out);
-    else if (e.type === 'sep') collectLits(e.element, out);
+  // Only a literal under an ODD number of guards is forbidden: `not(… not(w) …)` requires `w`.
+  function walk(e: RuleExpr, forbidden: boolean): void {
+    if (e.type === 'literal') { if (forbidden && isKeywordLiteral(e.value)) reserved.add(e.value); return; }
+    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(i => walk(i, forbidden));
+    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body, forbidden);
+    else if (e.type === 'not') walk(e.body, !forbidden);
+    else if (e.type === 'sep') walk(e.element, forbidden);
   }
-  function walk(e: RuleExpr): void {
-    if (e.type === 'not') collectLits(e.body, reserved);
-    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(walk);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
-    else if (e.type === 'sep') walk(e.element);
-  }
-  for (const rule of grammar.rules) walk(rule.body);
+  for (const rule of grammar.rules) walk(rule.body, false);
   return reserved;
 }
 

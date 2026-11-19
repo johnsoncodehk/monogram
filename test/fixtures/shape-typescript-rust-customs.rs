@@ -2194,9 +2194,18 @@ fn sep_after(src: &str, off: u32, end: u32, sep: &str) -> Option<u32> {
     None
 }
 
-/// Absolute (off, end) token pairs of a node span.
+/// Absolute (off, end) token pairs of a node span, each '>' composed with the tokens after it into
+/// the operator the parser reads there (gt_op). Callers only look these up at operator sites.
 fn tok_pairs(src: &str, off: u32, end: u32) -> Vec<(u32, u32)> {
-    lex(&src[off as usize..end as usize]).iter().map(|t| (off + t.off as u32, off + t.end as u32)).collect()
+    let ts = lex(&src[off as usize..end as usize]);
+    let mut out = Vec::with_capacity(ts.len());
+    let mut i = 0;
+    while i < ts.len() {
+        let (_, n, e) = gt_op(&ts, i);
+        out.push((off + ts[i].off, off + e));
+        i += n;
+    }
+    out
 }
 /// Last token ending at or before `at`.
 fn token_ending_at(toks: &[(u32, u32)], at: u32) -> Option<(u32, u32)> {

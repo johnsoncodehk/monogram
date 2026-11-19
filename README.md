@@ -220,7 +220,7 @@ The **only-Monogram** wins above are all disambiguations that are *TextMate-expr
 The handle API (`createParser()`) is **total**: every text yields a tree plus `cst.errors`, with tsc-grade diagnostics (`expected ',' or ']'` where every listed token is *provably* still accepted at that position, `to match this '('` related info, zero-width `$missing` nodes that keep a call's shape when its `)` is missing). Two structural guarantees back it:
 
 - **The valid path is byte-identical to the strict parser** — recovery runs only after a strict pass has rejected, so error tolerance costs valid input nothing, by construction.
-- **Every edited re-parse is byte-identical to a fresh parse** of the same text — tree *and* errors, broken states included, held exact by generative edit scripts across all seven grammars in CI (`test/incremental-grammars.ts`).
+- **Every edited re-parse is byte-identical to a fresh parse** of the same text — tree *and* errors, broken states included, held exact by generative edit scripts across all six grammars in CI (`test/incremental-grammars.ts`).
 
 One 9 MB TypeScript document, identical single-character edit scripts (`test/head-to-head.ts`, node v24, Apple silicon; ✎ = per keystroke, median):
 
@@ -236,7 +236,7 @@ Monogram beats tsc on every phase (valid typing ~100×, while-broken ~50×) and 
 
 From one grammar definition (a small TypeScript combinator API), five outputs are **fully functional**:
 
-- **A lexer** — tokenizes source straight from the grammar's token definitions; usable on its own (`createLexer(grammar).tokenize`).
+- **A lexer** — tokenizes source straight from the grammar's token definitions; generated as specialized code; usable on its own (the emitted parser module's `tokenize`).
 - **A CST parser** — recursive descent + Pratt precedence on top of the lexer, producing a **CST** (concrete syntax tree): every token is a node, including punctuation and keywords — roughly 2× an AST's nodes, by design, which is exactly what the highlighter and lossless source reconstruction need. A CST is *pre-semantic* (it models the productions, not static semantics — see [Correctness](#correctness-the-productions-not-tsc)).
 - **A TextMate grammar** — a `.tmLanguage.json` for VS Code / Sublime syntax highlighting, derived from the same rules, including derived **JSDoc-body** and **regex-internal** sub-grammars. (TextMate *scopes* are the dot-separated labels — `entity.name.function`, `keyword.control` — that a theme maps to colors.)
 - **A VS Code language configuration** — `language-configuration.json` (comments, bracket pairs, auto-close/surround, folding) derived from the same tokens.
@@ -280,6 +280,8 @@ export default defineGrammar({
   entry: Expr,
 });
 ```
+
+**Diagnostic labels.** The total parser's `expected …` messages name the missing token or rule by its grammar name (`expected 'Number'`, `expected Expr`). When a grammar name is an internal identifier rather than a word an end user should read, give it a display label: `token(pattern, { label: 'a number' })` / `rule(fn, { label: 'an expression' })` render `expected a number` / `expected an expression`. Labels change message text only: leaf `tokenType`s, `ruleNameOf`, the CST, and every derived artifact keep the grammar name, so adding labels parses byte-identically (`test/diagnostic-labels.ts`).
 
 Token patterns are **combinators, not regular expressions** — `seq` / `oneOf` / `range` / `noneOf` / `plus` / `star` / `altPattern` / `optPattern` / … assemble a structured pattern IR (regex is a *derived* backend, not the source of truth). A bare `RegExp` is not a valid token pattern: `token(/…/)` is a `TS2345` type error. Coming from regex:
 
@@ -340,20 +342,27 @@ const Regex = token(seq(
 
 ### The emitted parser need not be JS — Go, Rust, native
 
-The grammar also derives a **parser library in another language**. [`emitParser(grammar, target)`](src/emit.ts) runs one analysis into one language-agnostic IR, and each `Target` renders it — including its own regex-free lexer, so the output has no dependency on the JS runtime and compiles offline. What it emits is a **library** — no I/O — exposing two composable phases, `tokenize(src)` then `parse(tokens)`, so the lexer is reused at runtime (lex once, use the tokens *and* the CST):
+The grammar also derives a **parser library in another language**. [`emitParser(grammar, target)`](src/emit.ts) is the single emitter: it returns **one self-contained source file** — no imports of monogram or anything on the producer's disk, no I/O — so the output can be copied anywhere and compiled offline. Every target embeds its own lexer and exposes it publicly next to the parser:
 
 ```ts
-import { emitParser, emitLexer, tsTarget, goTarget, rustTarget } from './src/emit.ts';
-writeFileSync('parser.mts', emitParser(grammar, tsTarget));   // + goTarget / rustTarget
+import { emitParser, jsTarget, tsTarget, goTarget, rustTarget } from 'monogram/emit';
+writeFileSync('parser.ts', emitParser(grammar, tsTarget));   // + jsTarget / goTarget / rustTarget
 
-// in the emitted parser:
-const tokens = tokenize(src);   // lex once
-const cst    = parse(tokens);   // same tokens → CST — no re-lexing
+// in the emitted module:
+const tokens = tokenize(src);   // the lexer alone: a fresh array the caller owns
+const cst    = parse(src);      // lex + parse
 ```
 
-`emitLexer(grammar, target)` is the second public emitter: a **standalone tokenizer module** (the same lexer `emitParser` embeds, alone). Go and Rust expose the same `tokenize`/`parse` pair (Rust's `tokenize` returns a token struct that carries the source slice, as it keeps no globals). The CLI shape `test/portable-targets.ts` runs (stdin → CST JSON) is a *harness* wrapper — `target.emitRunner()`, appended by the gate to make the library executable — not part of the parser.
+`tokenize` never touches parser state: its result is independent of every tree, handle and earlier result, and a parse is unaffected by any tokenize call before or after it. Per target:
 
-`jsTarget` (the optimized JS path) has a different emitted shape by design: a zero-materialization arena parser — `parse(source)` returns an arena node handle (traverse with `visit`/`tree`, read tokens via `tokenAt`) and adds incremental `parseEdited`. Its lexer is fused into the arena pipeline, so it has no standalone tokenizer (`emitLexer(grammar, jsTarget)` is `null`).
+| target | output | tokenizer | parser |
+| --- | --- | --- | --- |
+| `jsTarget` | one `.ts` module | `tokenize(src): Token[]` (`type, text, offset, k, t, newlineBefore, commentBefore, multilineFlowBefore`) | arena parser: `parse(src)` → node handle (`visit` / `tree` / `tokenAt`), incremental `parseEdited`, isolated documents via `createParser()` (`parse` / `edit` / `visit` / `tree` / `tokenAt(handle, i)`) |
+| `tsTarget` | one `.ts` module | `tokenize(src): Token[]` | `parse(src)` → plain-object CST of spans (`Leaf { tokenType, offset, end }`, `Node { rule, children, offset, end }`), `parseWith`, `createDoc` (incremental) |
+| `goTarget` | `package parser` | `Tokenize(src) ([]Token, error)` — a `*LexError` on malformed input | `ParseWith`, `NewDoc` (incremental; each `Doc` owns its tree, read via `CstJSON`; different `Doc`s may be used from concurrent goroutines) |
+| `rustTarget` | one library crate file | `tokenize(src) -> Vec<Token>` — panics on malformed input (documented `# Panics`) | `parse_with`, `Doc` (incremental) |
+
+`jsTarget` is the optimized JS path: grammars it can specialize get a lexer fused into the arena's token columns; grammars that need the general lexing machinery (indent, newline and markup modes) carry the interpreter's lexer inlined into the module. The portable targets (`tsTarget` / `goTarget` / `rustTarget`) implement the token-stream and newline modes; they refuse indent and markup grammars rather than emit a lexer that would mis-tokenize them. The module-level `tree` / `visit` / `tokenAt` always read the module's default document, never a `createParser()` instance's; an instance reads its own through its methods. Reads never switch documents, so a `visit` callback may read, traverse, parse, edit or tokenize any *other* document (or the module one) without disturbing the traversal; parsing or editing the document being visited throws and leaves it unchanged. Lexical errors follow each language's mechanism: the JS/TS lexers throw, Go's `Tokenize` returns the error (`ParseWith` and the `Doc` constructors panic with the same `*LexError`), Rust panics. The `tsTarget` CST carries spans only: a leaf is located by its `offset`/`end`. Lexers scan every `>` alone (so `>>` closing two type-argument lists is two tokens); at an operator site the parser composes `>>`, `>>>`, `>=`, `>>=`, `>>>=` from adjacent `>`, `>` and `=` tokens, so an operator leaf at a `>` spans that run of `tokenize(src)` tokens and every other leaf is exactly one. Go and Rust CST leaves index the token stream, which a `CstBuilder` keeps (Go `Toks`; Rust's `cst_json_with` / `slim_json_with` read it from the builder). The CLI shape `test/portable-targets.ts` runs (stdin → CST JSON) is a *harness* wrapper — `target.emitRunner()`, written next to the library by the gate — not part of the parser.
 
 The proof is the full languages: the real [`javascript.ts`](javascript.ts) and [`typescript.ts`](typescript.ts) grammars — including the `[Await]/[Yield]` fork, left recursion, the regex/division and template state machines, arrow functions, and the TS type grammar — emit to **TypeScript, Go, and Rust**, and every emitted parser agrees with the reference interpreter on accept/reject outcomes (plus a rule-skeleton guard on tiny inputs). [`test/portable-targets.ts`](test/portable-targets.ts) compiles and runs all three for sixteen grammars (the two real languages plus focused fixtures) on every CI run. The Rust output reaches [oxc](https://github.com/oxc-project/oxc) throughput and the Go output beats [tsgo](https://github.com/microsoft/typescript-go) on the same corpus (an arena keeps both near zero-allocation). Byte-based Go/Rust use UTF-8 offsets — identical to the JS interpreter's for ASCII; non-ASCII offset units differ inherently.
 
@@ -368,6 +377,8 @@ A new language is **one grammar file** on the unchanged engine:
 1. **Write the grammar** with the combinator API ([`src/api.ts`](src/api.ts)) — tokens, operator precedence, rules. Everything language-specific lives here.
 2. **Prove it as a parser** against the language's own official test suite, measured **bidirectionally** (accept what the reference accepts, reject what it rejects).
 3. **Drop in the official TextMate grammar** as the baseline, so highlighter coverage is measured against what you're replacing, not asserted.
+
+One rule the engine enforces at `defineGrammar` time: a rule other than the entry may not be able to match the **empty string**. A rule never succeeds with an empty match (an empty alternative cannot win longest-match), so a nullable rule's empty case is unreachable and a reference to it fails silently wherever it would have matched nothing. Write the repetition inline at the use site (`[many(NL), Stmt]`, not `[Filler, Stmt]` with `Filler = rule(() => [[many(NL)]])`), or make the rule non-empty and wrap references in `opt(...)` (YAML's empty node in `key:` is `opt(Node)` at the use site, not a nullable `Node`).
 
 The lexer, CST types, and all three highlighters fall out of step 1; a *dialect* (`.tsx`/`.jsx`, or a markup dialect on [`html.ts`](html.ts)) reuses a base grammar's rules by name in a few lines. The conformance/highlighter harnesses are currently TypeScript-specific (they call `tsc` and read VS Code's grammar) — point them at your own reference compiler.
 
@@ -390,7 +401,7 @@ Matching the official grammar *exactly* would, in cases like `transform`, make t
 ```
 typescript.ts                one grammar (TypeScript combinator API)
         │
-        ├─ src/gen-lexer.ts  ───────▶ lexer → tokens        (standalone: createLexer)
+        ├─ src/emit-lexer.ts ───────▶ lexer → tokens        (generated code; the only lexer)
         │        ▲ composed by
         ├─ src/gen-parser.ts ───────▶ CST parser   (recursive descent + Pratt + packrat memoization;
         │                             run against the conformance suite = the grammar's proof)

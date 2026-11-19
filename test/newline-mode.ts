@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { token, rule, defineGrammar, many, opt, alt, sep, seq, plus, oneOf, range, star, noneOf, never } from '../src/api.ts';
-import { createLexer } from '../src/gen-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { objectify } from './emitted-obj.ts';
@@ -55,7 +55,7 @@ try {
 check('defineGrammar rejects declaring BOTH indent and newline', bothRejected);
 
 // ── 1. Lexer: NEWLINE emission, flow suspension, blank/comment lines, NO indent tokens ──
-const { tokenize } = createLexer(g);
+const tokenize = compileTokenizer(lexSpecOf(g));
 const countNL = (s: string) => tokenize(s).filter(t => t.type === 'Newline').length;
 const hasIndentTokens = (s: string) => tokenize(s).some(t => t.type === 'Indent' || t.type === 'Dedent');
 
@@ -182,7 +182,7 @@ if (hasCli()) {
     rules: { Value, Stmt, Line: LineT, Program: ProgramT }, entry: ProgramT,
     newline: { ...newline, mode: 'terminator' },
   });
-  const lexT = createLexer(gT).tokenize;
+  const lexT = compileTokenizer(lexSpecOf(gT));
   const nls = (s: string) => lexT(s).filter(t => t.type === 'Newline').map(t => t.offset);
   check("terminator: one NEWLINE between two statements, AT the break", JSON.stringify(nls('A=1\nB=2')) === '[3]');
   check("terminator: every blank line is its own NEWLINE", JSON.stringify(nls('A=1\n\n\nB=2')) === '[3,4,5]');
@@ -215,7 +215,7 @@ if (hasCli()) {
   check('terminator: tree-sitter externals still include newline', tsT.externalTokens.includes('newline'));
   check('terminator: tree-sitter scanner unchanged (stateless per-break scan_newline)', tsT.scannerC.includes('scan_newline'));
 
-  // ── 8. The emitted engine inherits the mode (createLexer fallback bakes the newline config) ──
+  // ── 8. The emitted engine inherits the mode (its lexer is generated from the same spec) ──
   {
     const dirE = mkdtempSync(join(tmpdir(), 'monogram-nl-emit-'));
     const file = join(dirE, 'envspec-t.ts');

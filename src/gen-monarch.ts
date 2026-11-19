@@ -30,7 +30,7 @@ import {
 //
 // Everything is derived from the grammar: nothing hardcodes a language's tokens
 // (no literal "typeof"/"`"/"/"). Identifier / template / regex behaviour all come
-// from the per-token lexer hints, exactly like gen-lexer.ts.
+// from the per-token lexer hints, exactly like emit-lexer.ts.
 //
 // Where this BEATS Monaco's hand-written TS Monarch:
 //   • regex-vs-division by PRECEDING context — two base states `root`
@@ -195,6 +195,8 @@ function expandAlts(expr: RuleExpr): RuleExpr[][] {
       const present = expandAlts(expr.body);
       return expr.kind === '+' ? present : [[], ...present];
     }
+    case 'not':
+      return [[]];   // a negative lookahead consumes nothing: adjacency sees through it
     default:
       return [[expr]];
   }

@@ -31,7 +31,7 @@ const COV = [
 ];
 // The 4 TS-family scope-gap entries all read ONE shared env var (MONOGRAM_OFFICIAL_TM) for the
 // official grammar, so each needs its OWN grammar mapped in (CI sets MONOGRAM_OFFICIAL_TS/TSX/JS/JSX).
-// html/yaml read their own var (MONOGRAM_OFFICIAL_HTML/_YAML), inherited as-is; vue is vendored.
+// html/yaml read their own var (MONOGRAM_OFFICIAL_HTML/_YAML), inherited as-is.
 // Absent (local, no env) → the driver's VS Code-install fallback path.
 const GAP = [
   { lang: 'TypeScript', script: 'test/scope-gap-run.ts', args: ['ts', '800'], officialEnv: 'MONOGRAM_OFFICIAL_TS' },

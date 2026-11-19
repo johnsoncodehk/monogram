@@ -60,7 +60,7 @@ const TypeofRef = rule($ => [
 const DecoratorExpr = rule($ => [
   [Decorator, many(alt(
     ['(', sep(Expr, ','), ')'],                          // call: (args)
-    ['<', sep(Type, ','), '>', '(', sep(Expr, ','), ')'], // typed call: <T>(args)
+    [...typeArgsInExpr(), '(', sep(Expr, ','), ')'],     // typed call: <T>(args)
     '!',                                                  // non-null assertion
     ['.', alt(Ident, PrivateField)],                      // member access
     // optional chain: ?.y | ?.#y | ?.(args) | ?.[i] — unlike plain element access,
@@ -292,11 +292,31 @@ const NewTarget = rule($ => [
   Ident,
   // a `new` expression is itself a valid new-target (NewExpression : `new` NewExpression),
   // so `new new Foo()()` / `new new f` chain — mirrors the Expr `new` arm but recurses here.
-  ['new', not('<'), $, opt(alt(['<', sep(Type, ','), '>', opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')']))],
+  ['new', not('<'), $, opt(alt([...typeArgsInExpr(), opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')']))],
   [$, '.', Ident],
   [$, '[', Expr, ']'],
   ['(', Expr, ')'],
 ]);
+
+// Expression type arguments `<T, U>` (tsc's parseTypeArgumentsInExpression): tsc rescans the
+// closing token, so a `>>`/`>=`/`>>=`/`>>>`/`>>>=` there is not a closing `>` — `a < b >> c` is a
+// shift inside a comparison. Only a type's own nested `>` takes the first `>` of such a token.
+const typeArgsInExpr = () => ['<', sep(Type, ','), not(alt('>>', '>=', '>>=', '>>>', '>>>=')), '>'];
+
+// tsc's canFollowTypeArgumentsInExpression, read at the token after a bare instantiation's
+// `>`: `<`, any `>`-led token (tsc scans `>` alone), `+`, `-`, `(` and a template never end
+// it; otherwise it ends unless the next token is on the same line, starts an expression and
+// is not a binary operator. tsc scans a `/` there as division (a binary operator), so a regex
+// literal does not count as starting an expression.
+const startsExprNotBinary = alt(
+  [not(alt('as', 'satisfies', 'in', 'instanceof')), Ident],
+  Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, PrivateField, Decorator,
+  '[', '{', '!', '~', '++', '--',
+);
+const instantiationEnd = not(alt(
+  '<', '>', '>=', '>>', '>>=', '>>>', '>>>=', '+', '-', '(', Template,
+  [sameLine, startsExprNotBinary],
+));
 
 const Expr = rule($ => [
   // A standalone identifier expression, but never a reserved word that has no expression
@@ -330,16 +350,14 @@ const Expr = rule($ => [
   ['...', $],
   // typed call / tagged template: f<T>(…) | f<T>`…` — a call/tag may itself be
   // continued by member access (`f<T>().x`), so this is an ordinary access tail.
-  [$, '<', sep(Type, ','), '>', alt(['(', sep($, ','), ')'], Template)],
-  // bare instantiation `f<T>` (no call/tag): allowed only when the next token
-  // can't start an expression — otherwise `<`/`>` were comparisons (`f < a, b > 7`),
-  // the disambiguation TS makes via canFollowTypeArgumentsInExpression. Ending in a
-  // negative lookahead, this LED closes the access tail (it asserts nothing follows),
-  // so a `.`/`?.` property access can't chain off it: `Foo<T>.Bar` is rejected
-  // (TS1477 — a bare instantiation is not a valid base for property access). A `[`,
-  // `(`, or `` ` `` continuation still reparses the `<…>` as comparisons (those start
-  // an expression, so `not($)` fails the bare arm), matching TS.
-  [$, '<', sep(Type, ','), '>', not(Expr)],
+  [$, ...typeArgsInExpr(), alt(['(', sep($, ','), ')'], Template)],
+  // bare instantiation `f<T>` (no call/tag): allowed only where tsc's
+  // canFollowTypeArgumentsInExpression allows it (`instantiationEnd`) — otherwise `<`/`>`
+  // were comparisons (`f < a, b > 7`). Ending in a negative lookahead, this LED closes the
+  // access tail (it asserts nothing follows), so a `.`/`?.` property access can't chain off
+  // it: `Foo<T>.Bar` is rejected (TS1477 — a bare instantiation is not a valid base for
+  // property access).
+  [$, ...typeArgsInExpr(), instantiationEnd],
   [$, '(', sep($, ','), ')'],
   [$, '.', alt(Ident, PrivateField)],
   // optional chaining: ?.x | ?.#x | ?.(args) | ?.[i] | ?.`…` | ?.<T>(args). A private member
@@ -347,7 +365,7 @@ const Expr = rule($ => [
   // being removed in TS#60263), so PrivateField stays — the CST producer models the syntax, not
   // a tsc-only restriction. Any "no private in optional chain" rule, were it real, would be a
   // Static-Semantics check in a CST consumer, never a parse-level exclusion here.
-  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, ['<', sep(Type, ','), '>', '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
+  [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, [...typeArgsInExpr(), '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
   [$, '[', $, ']'],
   [$, sameLine, '!'],   // TS non-null assertion — RESTRICTED (no line break before `!`, like postfix ++/--); a LHS-chain tail (access can follow: `x!.y`, `x!()`)
   [$, '?', $, ':', $],
@@ -368,7 +386,7 @@ const Expr = rule($ => [
   // `not('?.')` guards exactly the no-call exits; `new a()?.b` (Arguments consumed) chains via
   // the outer `?.` LED unchanged.
   ['new', NewTarget, alt(
-    ['<', sep(Type, ','), '>', alt(['(', sep($, ','), ')'], not('?.'))],
+    [...typeArgsInExpr(), alt(['(', sep($, ','), ')'], not('?.'))],
     ['(', sep($, ','), ')'],
     not('?.'),
   )],
@@ -396,7 +414,7 @@ const Expr = rule($ => [
   ['yield', alt(['*', $], [opt($)])],   // yield e | yield* e (delegate) | yield
   ['(', $, many(',', $), ')'],
   [$, 'satisfies', Type],
-  ['import', alt(['(', $, ')'], ['.', 'meta'], ['<', sep(Type, ','), '>', opt('(', sep($, ','), ')')])],   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)
+  ['import', alt(['(', $, ')'], ['.', 'meta'], [...typeArgsInExpr(), opt('(', sep($, ','), ')')])],   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
   ...tsFnArms([opt(notReserved, Ident)], Block),
