@@ -3450,10 +3450,7 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
         }
         ("MethodDefinition", 3) => {
             let ts = text.trim_start();
-            if ts.starts_with("abstract") || ts.starts_with("protected") || ts.starts_with("private") || ts.starts_with("async") || ts.starts_with("accessor") { &SC_METHODDEF_MOD }
-            else if ts.starts_with("static") {
-                if text.contains('=') { schema_for(etype, alt) } else { &SC_METHODDEF_MOD }
-            }
+            if ts.starts_with("abstract") || ts.starts_with("protected") || ts.starts_with("private") || ts.starts_with("async") || ts.starts_with("accessor") || ts.starts_with("static") { &SC_METHODDEF_MOD }
             else if ts.starts_with("get") || ts.starts_with("set") { &SC_METHODDEF_GETSET }
             else { schema_for(etype, alt) }
         }

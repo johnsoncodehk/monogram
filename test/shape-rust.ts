@@ -836,16 +836,27 @@ async function main(): Promise<void> {
   // + rebuild_estree, emitted from the same customs) against the TS reference for
   // EVERY accepted corpus case (previously a 500-stride sample of the tree JSON).
   let streamIsoBad = 0;
+  const streamIsoWitness: string[] = [];
   for (const i of acceptedIdx) {
     const src = tsCorpus[i]!.src;
     const rust = scrubIso(stripSpans(parseRustShapeJson(tsCorpusLines[i]!)));
     const tsAst = scrubIso(normalizeTsAst(tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms })));
-    if (JSON.stringify(rust) !== JSON.stringify(tsAst)) streamIsoBad++;
+    const rustJson = JSON.stringify(rust), tsJson = JSON.stringify(tsAst);
+    if (rustJson === tsJson) continue;
+    streamIsoBad++;
+    // A count alone does not say where: keep the first few inputs, each with both
+    // trees from just before the first differing character.
+    if (streamIsoWitness.length < 3) {
+      let d = 0;
+      while (d < rustJson.length && d < tsJson.length && rustJson[d] === tsJson[d]) d++;
+      const from = Math.max(0, d - 80);
+      streamIsoWitness.push(`\n    ${JSON.stringify(src)}\n      ts   …${tsJson.slice(from, d + 200)}\n      rust …${rustJson.slice(from, d + 200)}`);
+    }
   }
   check(
     'typescript accept-corpus TS↔Rust streaming-rebuild AST iso (all accepted)',
     streamIsoBad === 0,
-    `${acceptedIdx.length} compared, ${streamIsoBad} divergences (accept=${acceptedIdx.length})`,
+    `${acceptedIdx.length} compared, ${streamIsoBad} divergences (accept=${acceptedIdx.length})${streamIsoWitness.join('')}`,
   );
 
   // M-A1.4-S5: the tree-era fail-loud check (TsEstreeCustoms/ast_custom/FN_*
