@@ -20,20 +20,19 @@
 //
 //  Run: node test/html-conformance.ts
 // ─────────────────────────────────────────────────────────────────────────────
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { parseFragment } from 'parse5';
+import { scratchDir } from './scratch.ts';
 
 const grammar = (await import('../html.ts')).default;
 const { parse } = createParser(grammar);
 
 // The emitted parser for the same grammar, in a directory of this run's own.
-const TMP = mkdtempSync(join(tmpdir(), 'monogram-html-conformance-'));
-process.on('exit', () => rmSync(TMP, { recursive: true, force: true }));
+const TMP = scratchDir('html-conformance');
 writeFileSync(join(TMP, 'html.mts'), emitParser(grammar, jsTarget));
 const emitted = ((await import(join(TMP, 'html.mts'))) as {
   createParser(): { parse(s: string): { root: number; errors: unknown[] }; visit(c: object, fns: object): void; tree: TreeView };

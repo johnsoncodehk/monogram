@@ -10,8 +10,7 @@
 //
 // Run with: node test/newline-mode.ts
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { token, rule, defineGrammar, many, opt, alt, sep, seq, plus, oneOf, range, star, noneOf, never } from '../src/api.ts';
@@ -23,6 +22,7 @@ import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateMonarch } from '../src/gen-monarch.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
 import type { NewlineConfig } from '../src/types.ts';
+import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };
@@ -148,7 +148,7 @@ function hasCli(): boolean {
 }
 if (hasCli()) {
   console.log('\ntree-sitter CLI found — generating + parsing to validate scanner.c…');
-  const dir = mkdtempSync(join(tmpdir(), 'monogram-nl-'));
+  const dir = scratchDir('nl');
   mkdirSync(join(dir, 'src'), { recursive: true });
   mkdirSync(join(dir, 'queries'), { recursive: true });
   writeFileSync(join(dir, 'grammar.js'), grammarJs);
@@ -214,7 +214,7 @@ const gT = defineGrammar({
   check('lines: CRLF spans are kept per line', JSON.stringify(lines('A=1\r\n\r\n')) === '[[2,"3-5"],[1,"5-7"]]');
 
   // ── 8. The emitted engine parses identically (its lexer is generated from the same spec) ──
-  const dirE = mkdtempSync(join(tmpdir(), 'monogram-nl-emit-'));
+  const dirE = scratchDir('nl-emit');
   const file = join(dirE, 'envspec-lines.ts');
   writeFileSync(file, emitParser(gT, jsTarget));
   const p = (await import(file + '?v=' + Date.now())).createParser();
@@ -232,7 +232,7 @@ const gT = defineGrammar({
 //      spans, no ERROR. ──
 if (hasCli()) {
   const tsT = generateTreeSitter(gT, 'envspec_lines');
-  const dirT = mkdtempSync(join(tmpdir(), 'monogram-nl-lines-'));
+  const dirT = scratchDir('nl-lines');
   mkdirSync(join(dirT, 'src'), { recursive: true });
   mkdirSync(join(dirT, 'queries'), { recursive: true });
   writeFileSync(join(dirT, 'grammar.js'), tsT.grammarJs);

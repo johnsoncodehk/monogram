@@ -19,11 +19,11 @@
 //
 //   node test/emit-portable-library.ts
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { goldenStream } from './golden-lexer.ts';
+import { goBuild, scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -58,7 +58,7 @@ const ref = (s: string): Tok5[] => {
   return g.map(([kind, off, len, fl]) => ({ kind, text: s.slice(off, off + len), off, end: off + len, nl: (fl & 1) !== 0 }));
 };
 const json = (v: unknown) => JSON.stringify(v);
-const dir = mkdtempSync(join(tmpdir(), 'monogram-portable-library-'));
+const dir = scratchDir('portable-library');
 
 // Lexing modes the portable lexers do not implement must be refused, not mis-lexed.
 for (const [mode, path] of [['markup', '../html.ts'], ['indent', '../yaml.ts']]) {
@@ -196,8 +196,8 @@ func main() {
 `);
   try {
     let race = true;
-    try { execFileSync('go', ['build', '-race', '-o', 'consumer', '.'], { cwd: gdir, stdio: 'pipe' }); }
-    catch { race = false; execFileSync('go', ['build', '-o', 'consumer', '.'], { cwd: gdir, stdio: 'pipe' }); }
+    try { goBuild(['-race', '-o', 'consumer', '.'], { cwd: gdir }); }
+    catch { race = false; goBuild(['-o', 'consumer', '.'], { cwd: gdir }); }
     const out = JSON.parse(execFileSync(join(gdir, 'consumer'), { encoding: 'utf8' }));
     const lower = (ts: { Kind: string; Text: string; Off: number; End: number; Nl: boolean }[]) =>
       ts.map((t) => ({ kind: t.Kind, text: t.Text, off: t.Off, end: t.End, nl: t.Nl }));
@@ -281,8 +281,8 @@ func main() {
 `);
   try {
     let race = true;
-    try { execFileSync('go', ['build', '-race', '-o', 'reenter-consumer', './reenter'], { cwd: gdir, stdio: 'pipe' }); }
-    catch { race = false; execFileSync('go', ['build', '-o', 'reenter-consumer', './reenter'], { cwd: gdir, stdio: 'pipe' }); }
+    try { goBuild(['-race', '-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
+    catch { race = false; goBuild(['-o', 'reenter-consumer', './reenter'], { cwd: gdir }); }
     const out = JSON.parse(execFileSync(join(gdir, 'reenter-consumer'), { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }));
     check(`go: Tokenize / ParseWith / NewDoc+Edit from inside a Builder callback ≡ standalone (race detector ${race ? 'on' : 'unavailable'})`,
       out.outer === true && out.docOk === true && out.nParse > 0 && out.nEdit > 0 && out.bad === 0, json(out));

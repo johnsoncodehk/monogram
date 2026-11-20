@@ -15,14 +15,14 @@
 //      (a loop return that does not end the loop, a missing after-loop guard), fails a case.
 //
 //   node test/lex-family.ts
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { token, rule, defineGrammar, many, seq, plus, star, oneOf, noneOf, range, altPattern, anyChar, notFollowedBy } from '../src/api.ts';
 import { portableIR, type ParserIR } from '../src/emit-portable.ts';
 import { tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import type { CstGrammar } from '../src/types.ts';
+import { scratchDir } from './scratch.ts';
 
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
@@ -136,7 +136,7 @@ const CASES: Case[] = [
   ['Float', '1.5', -1, -1],
 ];
 
-const dir = mkdtempSync(join(tmpdir(), 'lex-family-'));
+const dir = scratchDir('lex-family');
 const printed = tsTarget.shared.lexScan(ir);
 const names = ir.tokens.map((t) => tsTarget.shared.scanner(t.name));
 // Each scanner spliced into a wrapper fn `inline<scanner>(src, pos)`, as a dispatch site gets it.
@@ -160,7 +160,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   }
   return bad;
 }
-try {
+{
   for (const b of run(await load(printed))) fail(`lexkinds: ${b}`);
   console.log(`  lexkinds: ${CASES.length} scanner cases through the printed family`);
   for (const b of run(await load(`${printed}\n${spliced}`), 'inline')) fail(`lexkinds/spliced: ${b}`);
@@ -192,8 +192,6 @@ try {
     if (!bad.length) fail(`splice mutant "${what}" survives every case`);
     else console.log(`  splice mutant "${what}": caught (${bad.length} case(s))`);
   }
-} finally {
-  rmSync(dir, { recursive: true, force: true });
 }
 
 if (failures > 0) {

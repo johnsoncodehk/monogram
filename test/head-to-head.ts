@@ -18,6 +18,9 @@ import { createRequire } from 'node:module';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { writeFileSync } from 'node:fs';
 import ts from 'typescript';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('head-to-head');
 
 const require = createRequire(import.meta.url);
 const TS_BENCH = process.env.TSBENCH_DIR ?? '/tmp/tsbench';
@@ -26,7 +29,7 @@ const TreeSitter = require(TS_BENCH + '/node_modules/tree-sitter');
 const TSLang = require(TS_BENCH + '/node_modules/tree-sitter-typescript').typescript;
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-h2h.mts';
+const emPath = `${TMP}/emitted.mts`;
 writeFileSync(emPath, emitParser(grammar, jsTarget));
 const { createParser } = await import(emPath + '?v=' + process.pid);
 

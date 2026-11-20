@@ -1,6 +1,6 @@
 // Gate: SH2-2 shape CST↔parseAst parity — calc+toy ≥2800, golden ≥22,
 // typescript+SH0 full emit + ≥2000 accept-parity (blocking).
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { emitTs } from '../src/target-ts.ts';
@@ -15,9 +15,9 @@ import typescriptGrammar from '../typescript.ts';
 import javascriptGrammar from '../javascript.ts';
 import { typescriptShape, typescriptEstreeCustoms } from './fixtures/shape-typescript.ts';
 import { CURATED_TS, CURATED_TS_INVALID } from './emit-corpus.ts';
+import { scratchDir } from './scratch.ts';
 
-const OUT = '/tmp/shape-parity';
-mkdirSync(OUT, { recursive: true });
+const OUT = scratchDir('shape-parity');
 
 function deepEq(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);

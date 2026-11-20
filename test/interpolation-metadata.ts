@@ -10,9 +10,9 @@ import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateMonarch } from '../src/gen-monarch.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { scratchDir } from './scratch.ts';
 
 let ok = 0;
 let fail = 0;
@@ -94,7 +94,7 @@ check('treesitter: highlights capture interpolation punctuation for $(', ts.high
 const tsBin = join(process.cwd(), 'node_modules', '.bin', 'tree-sitter');
 if (existsSync(tsBin)) {
   console.log('\ntree-sitter CLI found — generating + parsing an interpolated string…');
-  const dir = mkdtempSync(join(tmpdir(), 'monogram-interp-'));
+  const dir = scratchDir('interp');
   mkdirSync(join(dir, 'src'), { recursive: true });
   mkdirSync(join(dir, 'queries'), { recursive: true });
   writeFileSync(join(dir, 'grammar.js'), ts.grammarJs);

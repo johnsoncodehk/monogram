@@ -89,7 +89,8 @@ interface Result { gate: Gate; ok: boolean; ms: number; summary: string; output:
 
 // Each gate is an independent subprocess (it re-emits its own parser and reads its own
 // corpus), so they run CONCURRENTLY across a worker pool — the gates share no mutable
-// state and write DISTINCT /tmp/emitted-*.mjs files, so parallelism is safe and turns the
+// state and write only into their own per-run scratch dirs (test/scratch.ts), so parallelism
+// is safe — within one invocation and across concurrent ones — and turns the
 // wall-clock from sum-of-gates into ~max(sum/pool, slowest-gate). Results stream as each
 // finishes (completion order); the final summary is printed in gate order.
 function run(gate: Gate): Promise<Result> {

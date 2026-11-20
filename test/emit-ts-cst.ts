@@ -9,10 +9,10 @@
 // every edit, including edits around composed '>' operators.
 //
 //   node test/emit-ts-cst.ts
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emitParser, tsTarget } from '../src/emit.ts';
+import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -31,7 +31,7 @@ type Mod = {
 };
 
 const grammar = (await import('../typescript.ts')).default;
-const dir = mkdtempSync(join(tmpdir(), 'monogram-ts-cst-'));
+const dir = scratchDir('ts-cst');
 const file = join(dir, 'parser.ts');
 writeFileSync(file, emitParser(grammar, tsTarget));
 const m = (await import(file)) as Mod;

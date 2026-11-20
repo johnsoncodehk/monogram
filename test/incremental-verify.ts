@@ -9,9 +9,12 @@
 import { objectify } from './emitted-obj.ts';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { emitParser, jsTarget } from '../src/emit.ts';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('incremental-verify');
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-incremental.mts';
+const emPath = `${TMP}/emitted.mts`;
 writeFileSync(emPath, emitParser(grammar, jsTarget));
 type Edit = { start: number; end: number; text: string };
 type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };

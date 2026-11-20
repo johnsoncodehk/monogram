@@ -10,7 +10,6 @@
 //
 // Run with: node test/diagnostic-labels.ts
 import { writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { createParser } from '../src/gen-parser.ts';
@@ -19,6 +18,7 @@ import { token, rule, defineGrammar, many, opt, plus, oneOf, range } from '../sr
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
 import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
+import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };
@@ -48,7 +48,7 @@ check('an unlabelled token has no label', plain.tokens.find(t => t.name === 'NUM
 check('an unlabelled rule has no label', plain.rules.find(r => r.name === 'Value')?.label === undefined);
 
 // ── 2. The emitted engine renders labels in `expected …` messages ──
-const dir = tmpdir();
+const dir = scratchDir('diagnostic-labels');
 async function load(g: ReturnType<typeof build>, tag: string) {
   const file = join(dir, `monogram-labels-${tag}-${process.pid}.ts`);
   writeFileSync(file, emitParser(g, jsTarget));

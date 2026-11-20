@@ -24,13 +24,13 @@
 //  Run (bare node):  node test/gap-ledger-selftest.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { buildRoleMap, anchoredScopes, leafRoles, collectViolations, isGated } from './generative-detect.ts';
 import { loadTm, tmTokenize, reproStillDiverges, sig, minimize, LANGS, type Probe } from './gap-ledger.ts';
+import { scratchDir } from './scratch.ts';
 
 let failures = 0;
 const ok = (cond: boolean, msg: string) => { console.log(`${cond ? '  ✓' : '  ✗ FAIL:'} ${msg}`); if (!cond) failures++; };
@@ -66,7 +66,7 @@ const perturbedProbe: Probe = await (async () => {
     }
   }
   if (!rolled) throw new Error('perturbed-probe: could not find the value-context `end` to roll back (grammar shape changed?)');
-  const dir = mkdtempSync(join(tmpdir(), 'gap-ledger-selftest-'));
+  const dir = scratchDir('gap-ledger-selftest');
   const file = join(dir, 'html-perturbed.tmLanguage.json');
   writeFileSync(file, JSON.stringify(raw));
   // Load with the perturbed file under the host scope AND redirect every embed entry that pointed

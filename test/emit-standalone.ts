@@ -10,14 +10,14 @@
 //
 //   node test/emit-standalone.ts
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { goldenStream, streamOf } from './golden-lexer.ts';
 import type { CstGrammar } from '../src/types.ts';
+import { scratchDir } from './scratch.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -67,7 +67,7 @@ for (const c of CASES) {
   for (const [what, re] of FORBIDDEN) check(`${label}: no ${what}`, !re.test(src));
   check(`${label}: no producer path`, !src.includes(ROOT) && !src.includes(HERE) && !/\/(?:Users|home)\/[^\s'"`]/.test(src));
 
-  const dir = mkdtempSync(join(tmpdir(), `monogram-standalone-${c.name}-`));
+  const dir = scratchDir(`standalone-${c.name}`);
   check(`${label}: temp dir is outside the repository`, !resolve(dir).startsWith(ROOT));
   writeFileSync(join(dir, 'parser.ts'), src);
   writeFileSync(join(dir, 'obj.ts'), readFileSync(join(HERE, 'emitted-obj.ts'), 'utf8'));

@@ -2,7 +2,7 @@
 // TS≡Rust neutral AST, no-shape byte identity, SH3-4 typescript customs (unsupported=0).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { emitParser, rustTarget } from '../src/emit.ts';
 import { emitRust } from '../src/target-rust.ts';
@@ -21,10 +21,10 @@ import type { ToyAstCustoms } from './fixtures/shape-toy.ts';
 import {
   buildTsCorpus, injectTypescriptRustCustoms, TS_GOLDEN,
 } from './fixtures/shape-typescript-rust.ts';
+import { scratchDir } from './scratch.ts';
 
 type Ast = Record<string, unknown>;
-const TMP = '/tmp/shape-rust-gate';
-mkdirSync(TMP, { recursive: true });
+const TMP = scratchDir('shape-rust');
 
 // SH3-3 mini grammar: Type deliberately precedes Expr, and each rule's template declares its own
 // hole rule (Type's holes are Types, Expr's are the grammar's expression rule), so a hole's

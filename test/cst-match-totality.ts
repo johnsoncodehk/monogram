@@ -15,6 +15,9 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from '
 import { join } from 'node:path';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { generateInputs } from './grammar-gen.ts';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('cst-match-totality');
 
 const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
 
@@ -51,7 +54,7 @@ function checkTree(em: Emitted, root: number, src: string, matchers: Record<stri
 for (const name of GRAMMARS) {
   const grammar = (await import(`../${name}.ts`)).default;
   const matchers = (await import(`../${name}.cst-match.ts`)).MATCHERS;
-  const emPath = `/tmp/emitted-totality-${name}.mts`;
+  const emPath = `${TMP}/${name}.mts`;
   writeFileSync(emPath, emitParser(grammar, jsTarget));
   const em = (await import(emPath + '?v=' + process.pid)) as Emitted;
   let parsed = 0;

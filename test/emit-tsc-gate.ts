@@ -18,6 +18,9 @@ import { emitParser, jsTarget } from '../src/emit.ts';
 import { writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import type { CstGrammar } from '../src/types.ts';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('emit-tsc-gate');
 
 const GRAMMARS: Array<[string, string]> = [
   ['typescript', '../typescript.ts'],
@@ -43,7 +46,7 @@ for (const [name, path] of GRAMMARS) {
     console.log(`  ${name}: (grammar not present — skipped)`);
     continue;
   }
-  const out = `/tmp/emit-tsc-gate-${name}.ts`;
+  const out = `${TMP}/${name}.ts`;
   writeFileSync(out, emitParser(grammar, jsTarget));
   try {
     execFileSync('npx', ['tsc', ...TSC_FLAGS, out], { stdio: 'pipe' });

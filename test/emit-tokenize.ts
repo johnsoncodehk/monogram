@@ -13,14 +13,14 @@
 //      module-level parses.
 //
 //   node test/emit-tokenize.ts
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import type { Token } from '../src/emit-lexer.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { goldenStream, streamOf } from './golden-lexer.ts';
 import type { CstGrammar } from '../src/types.ts';
+import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -74,7 +74,7 @@ const CASES: Case[] = [
   },
 ];
 
-const dir = mkdtempSync(join(tmpdir(), 'monogram-emit-tokenize-'));
+const dir = scratchDir('emit-tokenize');
 const json = (v: unknown) => JSON.stringify(v);
 const FIELDS = ['type', 'text', 'offset', 'k', 't', 'newlineBefore', 'commentBefore', 'multilineFlowBefore'];
 

@@ -17,8 +17,7 @@
 // each run through every engine; plus a stride sample of the real-world TS conformance corpus
 // when present (skipped silently otherwise — check.ts gates must not require an external corpus).
 //   node test/cst-text-invariant.ts
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
@@ -26,11 +25,11 @@ import { emitParser, jsTarget } from '../src/emit.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import type { CstGrammar } from '../src/types.ts';
+import { scratchDir } from './scratch.ts';
 
 const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
 // A directory of this run's own: two runs at once must not read each other's emitted module.
-const TMP = mkdtempSync(join(tmpdir(), 'monogram-cst-text-invariant-'));
-process.on('exit', () => rmSync(TMP, { recursive: true, force: true }));
+const TMP = scratchDir('cst-text-invariant');
 
 let leaves = 0;
 let bad = 0;
