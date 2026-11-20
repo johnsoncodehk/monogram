@@ -123,7 +123,26 @@ export type Alt = Step[];
 // distinct set appears once in ParserIR.tokenSets.
 export type TokenSet = { lits: string[]; toks: string[] };
 
+// ── How a rule chooses among its alternatives: LONGEST MATCH ──
+// A rule's alternatives (an rd rule's `alts`, a Pratt rule's NUD arms) are all candidates at a
+// position: the one that advances FARTHEST wins, the EARLIEST-declared one on a tie, and an
+// alternative that advances nothing cannot win (README "Adding a language"; gen-parser.ts
+// parseNonRec / the NUD loop of prattCore). So the IR hands every target the alternatives in
+// the grammar's DECLARATION order — `RdRule.alts`, `PrattRule.nudOrder` — and a target tries
+// them in that order, keeping an alternative only when it ends strictly past the best so far
+// (or tries them in another order and compares the declaration index on a tie: the winner is
+// the same). A target never stops at the first alternative that matches; the one exception is
+// a list flagged `predictive`, where the FIRST signatures prove that at most one alternative
+// can match at any token, so dispatching to it IS the longest match.
+// (An inline `alt` step is the other construct: ordered choice, the first branch that matches.)
 export type RdRule = { kind: 'rd'; name: string; cstName: string; alts: Alt[]; altFirst: FirstSig[]; predictive: boolean };
+// One NUD arm of a Pratt rule, by the bucket that holds its plan and its index there.
+export type NudRef =
+  | { kind: 'tok'; index: number }       // nudToks[index]
+  | { kind: 'bracket'; index: number }   // nudBrackets[index]
+  | { kind: 'seq'; index: number }       // nudSeqs[index]
+  | { kind: 'capped'; index: number }    // nudCapped[index] — a candidate only when minBp < capBp
+  | { kind: 'prefix' };                  // the prefix-operator arm (`prefix $`), every op of `prefix`
 export type Bracket = { first: string; steps: Step[] };          // a literal-led sequence (grouping/array; LED call/index)
 export type PrattRule = {
   kind: 'pratt';
@@ -132,7 +151,7 @@ export type PrattRule = {
   nudToks: string[];                                  // NUD: a bare token wrapped in a node
   nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
   nudSeqs: Step[][];                                  // NUD: a general sequence (guarded ident, class expr), tried with backtracking
-  nudSeqFirst: FirstSig[];                            // parallel to nudSeqs: each seq's FIRST signature (null = unpredictable)
+  nudSeqFirst: FirstSig[];                            // parallel to nudSeqs: each seq's FIRST signature (null = not knowable: always tried)
   // Tail closure is decided by the construct that builds a node: only a NUD that does not end in
   // a fresh operand, or an access-tail LED, leaves a node that access tails (and postfix ops) may
   // extend. Prefix and binary nodes always close the tail.
@@ -140,6 +159,7 @@ export type PrattRule = {
   nudSeqClosesTail: boolean[];                        // parallel to nudSeqs: ends in a fresh operand
   nudSeqPredictive: boolean;                          // all nudSeqs non-null & pairwise disjoint → render a switch
   nudCapped: Array<{ steps: Step[]; capBp: number }>; // NUD: an assignment-level capped sequence (arrow function) — parsed only when minBp < capBp, admits no led
+  nudOrder: NudRef[];                                 // every NUD arm above and the prefix arm, in declaration order: the longest-match candidates, in the order a target tries them
   nudCappedFirst: FirstSig[];                         // parallel to nudCapped: each capped seq's FIRST signature
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
@@ -348,14 +368,39 @@ function buildIR(grammar: CstGrammar): ParserIR {
     return [stepOf(e)];
   }
 
+  // The FIRST signature of a rule alternative, from the grammar's own FIRST sets
+  // (grammar-analysis.ts exprFirst — the set the interpreter prunes its longest-match candidates
+  // with, which sees through a leading guard, an optional prefix and a rule reference): the
+  // tokens a NON-EMPTY match of the alternative can begin with. An alternative that can only
+  // match nothing at a token cannot win a longest match, so skipping it there changes no parse.
+  // `null` = not knowable (a Pratt rule leads) — always tried.
+  const templateTokens = new Set(grammar.tokens.filter((t) => t.template).map((t) => t.name));
+  const altFirstSig = (e: RuleExpr): FirstSig => {
+    const f = a.exprFirst(e);
+    if (f === null || f.size === 0) return null;
+    const ls = new Set<string>(), ts = new Set<string>();
+    for (const k of f) {
+      if (tokenNames.has(k)) { ts.add(k); if (templateTokens.has(k)) ts.add('$templateHead'); }   // an interpolated template opens with its head
+      else ls.add(gtComps.includes(k) ? '>' : k);                                                // a composed operator begins at a '>' token
+    }
+    return { lits: [...ls], toks: [...ts] };
+  };
+
   const rules: RuleIR[] = grammar.rules.map((r) => {
     const cstName = (r as { canon?: string }).canon ?? r.name;   // a forked $A/$Y rule labels its CST node with the base name
     // Pratt rules AND left-recursive non-Pratt rules (e.g. NewTarget, TS Type) both parse as
     // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
     // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
-    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, notOf, litTtype);
+    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, notOf, litTtype, altFirstSig);
     return { kind: 'rd', name: r.name, cstName, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)], altFirst: [], predictive: false };
   });
+  // Longest match never picks an alternative that advances nothing, and only the entry rule
+  // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
+  const entryDecl = grammar.rules.find((r) => r.name === findEntryRule(grammar));
+  if (entryDecl && entryDecl.body.type === 'alt' && entryDecl.body.items.length > 1 && a.exprNullable(entryDecl.body)
+    && !a.prattRules.has(entryDecl.name) && !a.leftRecSet.has(entryDecl.name)) {
+    throw new Error(`portable: entry rule ${entryDecl.name} has several alternatives and can match the empty input — not in scope (give it one alternative)`);
+  }
 
   // ── FIRST signatures + predictive flags ──
   // Per-branch FIRST (literal texts + token kinds the branch can begin with, or null =
@@ -429,11 +474,14 @@ function buildIR(grammar: CstGrammar): ParserIR {
     if (r.kind === 'rd') {
       r.altFirst = r.alts.map((alt) => seqFirst(alt));
       r.predictive = allDisjoint(r.altFirst);
+      // Not predictive: every alternative is a longest-match candidate, guarded by its FIRST.
+      if (!r.predictive) {
+        const body = grammar.rules[rules.indexOf(r)].body;
+        r.altFirst = (body.type === 'alt' ? body.items : [body]).map(altFirstSig);
+      }
       r.alts.forEach(annotateSteps);
     } else {
-      r.nudSeqFirst = r.nudSeqs.map((seq) => seqFirst(seq));
-      r.nudSeqPredictive = allDisjoint(r.nudSeqFirst);
-      r.nudCappedFirst = r.nudCapped.map((c) => seqFirst(c.steps));
+      r.nudSeqPredictive = allDisjoint(r.nudSeqs.map((seq) => seqFirst(seq)));
       r.nudSeqs.forEach(annotateSteps);
       r.nudCapped.forEach((c) => annotateSteps(c.steps));
       r.nudBrackets.forEach((b) => annotateSteps(b.steps));
@@ -503,15 +551,6 @@ function buildIR(grammar: CstGrammar): ParserIR {
       flowOpen: [...(nc.flowOpen ?? [])],
       flowClose: [...(nc.flowClose ?? [])],
     };
-    // Prefix-ambiguous rd alts (e.g. Ident vs Ident '(' … ')') are ordered longest-first so
-    // first-match backtracking agrees with the interpreter's longest-match rd parse (gen-parser.ts).
-    for (const r of rules) {
-      if (r.kind !== 'rd' || r.alts.length < 2) continue;
-      const order = r.alts.map((_, i) => i).sort((a, b) => r.alts[b].length - r.alts[a].length);
-      if (order.every((v, i) => v === i)) continue;
-      r.alts = order.map((i) => r.alts[i]);
-      r.altFirst = order.map((i) => r.altFirst[i]);
-    }
   }
 
   const identToken = grammar.tokens.find((t) => t.identifier)?.name ?? null;
@@ -592,12 +631,16 @@ function buildPratt(
   name: string, cstName: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
   stepOf: (e: RuleExpr) => Step, notOf: (steps: Step[]) => Step,
   litTtype: (v: string) => '$keyword' | '$punct',
+  altFirstSig: (e: RuleExpr) => FirstSig,
 ): PrattRule {
   const alts = body.type === 'alt' ? body.items : [body];
   const nudToks: string[] = [];
   const nudBrackets: Bracket[] = [];
   const nudSeqs: Step[][] = [];
   const nudCapped: Array<{ steps: Step[]; capBp: number }> = [];
+  const nudSeqFirst: FirstSig[] = [];
+  const nudCappedFirst: FirstSig[] = [];
+  const nudOrder: NudRef[] = [];
   let sawPrefix = false, sawBinary = false, sawPostfix = false, postfixSameLine = false;
   const leds: Bracket[] = [];
   const ledAccessTail: boolean[] = [];
@@ -625,26 +668,31 @@ function buildPratt(
     if (!startsSelf) {
       // NUD
       if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) {
+        nudOrder.push({ kind: 'tok', index: nudToks.length });
         nudToks.push(items[0].name);
         if (items[0].hole !== undefined) nudTplHole = oneHole('NUD', nudTplHole, items[0].hole);
         continue;
       }
-      if (items[0].type === 'prefix') { sawPrefix = true; continue; }
+      if (items[0].type === 'prefix') { if (!sawPrefix) nudOrder.push({ kind: 'prefix' }); sawPrefix = true; continue; }
       // A capExpr (arrow function): an assignment-level group{capBelow}. ctxMode in its body
       // is treated as transparent (the await/yield fork is not modelled in the portable parser).
       if (items.length === 1 && items[0].type === 'group' && items[0].capBelow !== undefined) {
         const capBp = a.nudCapOf(items[0]);
         if (capBp === null) throw new Error(`portable: capBelow connector '${items[0].capBelow}' has no binding power (rule ${name})`);
         const b = items[0].body;
+        nudOrder.push({ kind: 'capped', index: nudCapped.length });
+        nudCappedFirst.push(altFirstSig(alt));
         nudCapped.push({ steps: (b.type === 'seq' ? b.items : [b]).map((it) => stepOfPratt(it)), capBp });
         continue;
       }
-      if (items[0].type === 'literal') { nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); continue; }
+      if (items[0].type === 'literal') { nudOrder.push({ kind: 'bracket', index: nudBrackets.length }); nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); continue; }
       // A single transparent (non-suppress) group unwraps to its body (an explicit grouping).
       let nudItems = items;
       if (items.length === 1 && items[0].type === 'group' && !items[0].suppress) {
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
       }
+      nudOrder.push({ kind: 'seq', index: nudSeqs.length });
+      nudSeqFirst.push(altFirstSig(alt));
       nudSeqs.push(nudItems.map((it) => stepOfPratt(it)));   // general NUD sequence (guarded ident, class expr)
       continue;
     }
@@ -709,7 +757,7 @@ function buildPratt(
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
   const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'not' || last === 'ahead'; });
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst, nudOrder, prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──

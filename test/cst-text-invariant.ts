@@ -12,15 +12,10 @@
 //    and the emitted parser's RECOVERED tree for a rejected input (recovery keeps the tokens it
 //    cannot place in $error nodes, so that tree holds every token too).
 //
-// Inputs, per grammar:
-//   • the generative corpus (grammar-gen, deterministic) — legal by construction;
-//   • MUTANTS of it — one token deleted or doubled. A legal corpus cannot show a parser
-//     accepting what it should reject, and that is where a dropped token hides: the mutants are
-//     near-miss inputs, most of them invalid, each run through every engine;
-//   • for the ECMAScript grammars, expressions the operator checks refuse (`++ ++y`, `x++ ++`,
-//     `-x = 1`, `-x ** 2`), in every position where an expression is optional or repeated;
-//   • a stride sample of the real-world TS conformance corpus when present (skipped silently
-//     otherwise — check.ts gates must not require an external corpus).
+// Inputs, per grammar: the parity corpus (test/parity-corpus.ts — generated inputs, one-token
+// mutants of them, and for the ECMAScript grammars the expressions an operator check refuses),
+// each run through every engine; plus a stride sample of the real-world TS conformance corpus
+// when present (skipped silently otherwise — check.ts gates must not require an external corpus).
 //   node test/cst-text-invariant.ts
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,7 +24,7 @@ import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
-import { generateInputs } from './grammar-gen.ts';
+import { parityInputs, type Tok } from './parity-corpus.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 const GRAMMARS = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'yaml', 'html'];
@@ -63,7 +58,6 @@ function check(n: AnyCst, src: string, tag: string): void {
 }
 
 // ── TEXT: every token of the source is inside a leaf, leaves in source order ──
-type Tok = { offset: number; text: string };
 let trees = 0;
 let textBad = 0;
 const textSamples: string[] = [];
@@ -97,32 +91,6 @@ function checkText(tree: AnyCst, toks: Tok[], src: string, tag: string): void {
   if (textSamples.length < 12) textSamples.push(`${tag}: ${why} — ${JSON.stringify(src.length > 90 ? src.slice(0, 90) + '…' : src)}`);
 }
 
-// One token deleted / one token doubled, at up to MUT_SITES evenly spread tokens of an input.
-const MUT_SITES = 6;
-function mutants(src: string, toks: Tok[]): string[] {
-  const real = toks.filter((t) => t.text.length > 0);
-  if (real.length === 0 || real.length > 60) return [];
-  const out: string[] = [];
-  const step = Math.max(1, Math.floor(real.length / MUT_SITES));
-  for (let i = 0; i < real.length; i += step) {
-    const s = real[i].offset, e = s + real[i].text.length;
-    out.push(src.slice(0, s) + src.slice(e));
-    out.push(src.slice(0, e) + ' ' + real[i].text + src.slice(e));
-  }
-  return out;
-}
-
-// Expressions an operator check refuses, in each position where an expression is optional or
-// repeated — and in the plain positions beside them.
-const REFUSED = ['++ ++y', '++-x', '++x++', 'x++ ++', 'x++ --', '-x = 1', 'a + b = 1', 'x++ = 1', '-x ** 2', 'typeof x ** 2', '= b'];
-const HOLES = [
-  '[@]', '[1, @]', '[@, 1]', 'f(@)', 'f(a, @)', 'new A(@)', 'a = [@]', 'x = { a: @ }', 'x = { ...@ }', 'class C { p = @ }',
-  'for (@;;) {}', 'for (;@;) {}', 'for (;;@) {}', 'function f() { return @ }', 'function* g() { yield @ }', 'yield @', 'var z = @',
-  'var z = 1, w = @', '`${@}`', 'a ? @ : b', 'a ? b : @', 'x => @', '(@)', 'a[@]', '- @', '[- @]', 'a + @', '[a + @]', 'f(a + @)', 'a = @', '[a = @]',
-  'if (@) {}', 'while (@) {}', 'switch (@) {}', 'throw @', 'do {} while (@)', 'a?.[@]', 'a?.(@)', 'async () => { await @ }',
-];
-const curated = (): string[] => HOLES.flatMap((h) => REFUSED.map((r) => h.replace('@', r)));
-
 type Emitted = {
   createParser(): {
     parse(s: string): { root: number; errors: unknown[] };
@@ -141,9 +109,7 @@ for (const name of GRAMMARS) {
 
   // Every engine on one input; `legal` inputs also feed the shape check and the mutants.
   let parsed = 0, recovered = 0;
-  const run = (src: string, tag: string): Tok[] | null => {
-    let toks: Tok[];
-    try { toks = tokenize(src); } catch { return null; }   // not lexable: no token stream to hold
+  const run = (src: string, tag: string, toks: Tok[]): void => {
     let cst: AnyCst | null = null;
     try { cst = parser.parse(src) as AnyCst; } catch { /* rejected */ }
     if (cst !== null) { check(cst, src, name); checkText(cst, toks, src, `${tag} interpreter`); parsed++; }
@@ -159,17 +125,15 @@ for (const name of GRAMMARS) {
     }
     if (c.errors.length === 0) checkText(emTree, toks, src, `${tag} emitted`);
     else { checkText(emTree, toks, src, `${tag} emitted (recovered)`); recovered++; }
-    return toks;
   };
 
-  let nMut = 0;
-  for (const input of generateInputs(grammar, { depth: 5, nestDepth: 5, cap: 7, fuzzRounds: 250, maxInputs: 1500, seed: 5 })) {
-    const toks = run(input.text, name);
-    if (toks === null) continue;
-    for (const m of mutants(input.text, toks)) { run(m, `${name} mutant`); nMut++; }
+  let nMut = 0, nCur = 0;
+  const TAG = { generated: name, mutant: `${name} mutant`, 'refused-operand': `${name} refused-operand` };
+  for (const { src, kind, toks } of parityInputs(grammar, tokenize, { refusedOperands: name !== 'yaml' && name !== 'html' })) {
+    if (kind === 'mutant') nMut++;
+    if (kind === 'refused-operand') nCur++;
+    if (toks !== null) run(src, TAG[kind], toks);   // not lexable: no token stream to hold
   }
-  let nCur = 0;
-  if (name !== 'yaml' && name !== 'html') for (const src of curated()) { run(src, `${name} refused-operand`); nCur++; }
   console.log(`${name.padEnd(18)} accepted: ${parsed}  recovered: ${recovered}  (mutants tried: ${nMut}, refused-operand inputs: ${nCur})`);
 }
 

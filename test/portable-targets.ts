@@ -10,6 +10,13 @@
 // with the oracle on what parses and what fails. A small CST-shape snapshot on tiny inputs
 // guards against accidental semantic drift within a single target run.
 //
+// Each grammar is checked twice: on its hand-written accept/reject lists below, and on the
+// PARITY CORPUS (test/parity-corpus.ts — the generated inputs, their one-token mutants and the
+// refused-operand matrix that cst-text-invariant.ts runs the interpreter and the emitted parser
+// on). A hand-written list holds the inputs someone thought of; the corpus holds the ones the
+// grammar derives, and every engine must give each of them the oracle's verdict and, when it
+// accepts, the oracle's rule skeleton.
+//
 //   - calc:   operator precedence/associativity, prefix unary, nested grouping.
 //   - minijs: a real JavaScript SUBSET — a string/comment lexer, the full operator ladder,
 //             call/member/index chains, arrays, and statement forms (the grammar the Go/Rust
@@ -26,6 +33,7 @@ import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { asGoMain } from './go-main.ts';
+import { parityInputs, type Tok } from './parity-corpus.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
@@ -204,6 +212,21 @@ const CASES: Case[] = [
     reject: ['for (x y) z;', 'for x in y;', 'for (in y) z;', 'for (x in) z;'],
   },
   {
+    // Longest match among a rule's alternatives, the earliest-declared on a tie
+    // (fixtures/longestjs.ts): each pair declares the shorter alternative first, and a prefix
+    // operator shares its word with a literal-led NUD. `this is 1;`, `let * a;` and
+    // `export default 1;` need the LATER alternative; `yield x++ ++;` is refused because the
+    // prefix arm wins the tie on `yield x++` and its node closes the tail.
+    grammar: 'longestjs', path: './fixtures/longestjs.ts',
+    accept: [
+      'this;', 'this is 1;', 'this is this is x;', 'yield;', 'yield x;', 'yield x++;', 'yield a + b;',
+      'yield * a;', '(yield x)++;', 'x => x + 1;', 'x => y => 1;', 'let a, b;', 'let;', 'let * a;',
+      'let = 1;', 'export let a;', 'export x;', 'export default 1;', 'export default 1 + 2;',
+      'export default x => x;', 'export default;',
+    ],
+    reject: ['yield x++ ++;', 'yield -x++ ++;', 'this is;', 'x =>;', 'export;', 'x++ ++;', 'export default 1'],
+  },
+  {
     // The REAL javascript.ts grammar (89 rules after the [Await]/[Yield] fork) — the proof
     // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
     // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's
@@ -240,10 +263,18 @@ const CASES: Case[] = [
       'new tag`x${1 + 1}`();', 'new a.b`x${y}`(1);', 'new a`x`.b`y`(1);', 'new a[0]`x`();',
       'new (a)`x`();', 'new a`x${new b`y${0}`}`();', 'new a`x`()`y`;', 'new a`x`().b;', 'new a`x`()?.b;',
       'async function f() { new a`x${await b}`(); }',
+      // The longest alternative wins, wherever it is declared: `export default …` over
+      // `export <statement>`, an expression statement over a `let` with no binding, the
+      // `yield` form over the prefix operator when it reaches farther.
+      'export default function () {}', 'export default function f() {}', 'export default class {}',
+      'export default 1 + 2;', 'let * aa;', 'let => aa;', 'function* g() { yield a + b; yield; yield* o; yield x++; }',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       // A `new` with no Arguments is not an optional-chain base, template callee or not.
       'new a`x`?.b;', 'new `x`?.b;', 'new a?.`x`;', 'new `a${}b`;', 'async function f() { new a`x${await}`(); }',
+      // … and on a tie the earliest-declared: `yield x++` is the prefix operator's node, which no
+      // postfix or `**` may take as its operand.
+      'function* g() { yield x++ ++; }', 'function* g() { yield x++ --; }', 'function* g() { yield -x ** 2; }',
       '1 + () => 2;', 'a++.b;', 'f(a, b,',
       // … so nothing after a line break is a postfix operator: `x\n++\n++\ny` is `x; ++ ++y`,
       // `x\n++` is `x; ++`, and `(x\n++)` leaves `++` with no operand.
@@ -387,6 +418,25 @@ function runTokSpans(cmd: string, args: string[], src: string): string | null {
   if (r.status !== 0) return null;
   return r.stdout;
 }
+// A native runner's `batch` mode: NUL-separated inputs in, one line per input out — the CST
+// JSON, "-" for a rejected input, "!" and the message for a lexer error. An input holding a NUL
+// cannot travel that way and runs alone.
+function runBatch(cmd: string, srcs: string[]): Outcome[] {
+  const sent = srcs.filter((s) => !s.includes('\0'));
+  const r = spawnSync(cmd, ['batch'], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
+  const lines = (r.stdout ?? '').split('\n');
+  if (r.status !== 0 || lines.length !== sent.length + 1) {
+    throw new Error(`${cmd} batch: exit ${r.status}, ${lines.length - 1} lines for ${sent.length} inputs\n${(r.stderr ?? '').slice(0, 2000)}`);
+  }
+  let li = 0;
+  return srcs.map((src): Outcome => {
+    if (src.includes('\0')) return runProc(cmd, [], src);
+    const line = lines[li++];
+    if (line === '-') return { ok: false };
+    if (line.startsWith('!')) return { ok: false, err: line.slice(1) };
+    return { ok: true, cst: canon(JSON.parse(line)) };
+  });
+}
 type Align = { oldN: number; newN: number; prefix: number; suffix: number; relexed?: number; reused?: number; streamEq?: boolean; treeEq?: boolean };
 type EditOutcome = Outcome & { align?: Align };
 function parseAlignStderr(stderr: string): Align | undefined {
@@ -436,6 +486,8 @@ function tsEditSession(lib: TsLib, json: string, fast: boolean): EditOutcome {
 type Runner = {
   label: string;
   run: (src: string) => Outcome;
+  /** `run` over a whole corpus: one outcome per input, in order. */
+  batch: (srcs: string[]) => Outcome[];
   edit: (json: string, fast: boolean) => EditOutcome;
   spans: { cmd: string; args: string[] };
   /** Doc.edit offsets are UTF-8 bytes (go/rust), not UTF-16 units (ts). */
@@ -813,6 +865,15 @@ function unicodeParity(r: Runner, oracleOut: (src: string) => Outcome): void {
   console.log(`  javascript/unicode/${r.label}: ${editOk}/${UNICODE_EDITS.length} edit-sessions ≡ fresh`);
 }
 
+// The grammars the refused-operand matrix is written for.
+const ECMASCRIPT = new Set(['javascript', 'typescript']);
+// EXPECTED-FAIL on the parity corpus, still run and counted: inputs on which the portable
+// parsers are known to disagree with the oracle, by cause. Each entry is owed as its own fix;
+// when none of an entry's inputs disagrees any more the gate fails until the entry is removed.
+// A disagreement on any input not listed here fails the gate.
+const CORPUS_EXPECTED_FAIL: { grammar: string; reason: string; inputs: string[] }[] = [];
+let corpusMs = 0, corpusInputs = 0;
+
 let failures = 0;
 for (const c of CASES) {
   const grammar: CstGrammar = (await import(c.path)).default;
@@ -837,7 +898,7 @@ for (const c of CASES) {
   writeFileSync(`${dir}/lib.ts`, tsLibSrc);
   const tsLib = await import(`${dir}/lib.ts`) as TsLib;
   runners.push({
-    label: 'typescript', run: (src) => tsRun(tsLib, src), edit: (json, fast) => tsEditSession(tsLib, json, fast),
+    label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), edit: (json, fast) => tsEditSession(tsLib, json, fast),
     spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false,
   });
 
@@ -849,7 +910,7 @@ for (const c of CASES) {
     execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });
     const bin = `${gdir}/p`;
     runners.push({
-      label: 'go', run: (src) => runProc(bin, [], src), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+      label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
     });
   }
@@ -859,7 +920,7 @@ for (const c of CASES) {
     writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
     execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe' });
     runners.push({
-      label: 'rust', run: (src) => runProc(bin, [], src), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+      label: 'rust', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
     });
   }
@@ -1089,6 +1150,67 @@ for (const c of CASES) {
     }
     if (c.grammar === 'javascript') unicodeParity(r, oracleOut);
   }
+
+  // ── Parity corpus: every runner ≡ the oracle on verdict, and on the rule skeleton when both accept ──
+  {
+    const t0 = Date.now();
+    const tokenize = compileTokenizer(lexSpecOf(grammar)) as (s: string) => Tok[];
+    const inputs = [...parityInputs(grammar, tokenize, { refusedOperands: ECMASCRIPT.has(c.grammar) })];
+    const want = inputs.map((i) => oracleOut(i.src));
+    const known = CORPUS_EXPECTED_FAIL.filter((e) => e.grammar === c.grammar);
+    for (const r of runners) {
+      const got = r.batch(inputs.map((i) => i.src));
+      const by = new Map<string, number>();
+      const samples: string[] = [];
+      const knownHits = known.map(() => 0);
+      let bad = 0;
+      inputs.forEach((input, i) => {
+        const w = want[i], g = got[i];
+        let what = '';
+        if (w.ok !== g.ok) what = `oracle ${w.ok ? 'accepts' : 'rejects'}, ${r.label} ${g.ok ? 'accepts' : 'rejects'}`;
+        else if (w.ok && g.ok && canon(skeleton(w.cst)) !== canon(skeleton(g.cst))) what = 'both accept, rule skeletons differ';
+        // A target that died in its lexer agrees with the oracle only when the oracle's
+        // rejection is a lexer error too (its parser's own rejections all begin `Parse error`).
+        else if (!w.ok && !g.ok && g.err !== undefined && g.err !== '' && r.label !== 'typescript' && (w.err ?? '').startsWith('Parse error')) what = `oracle rejects in its parser, ${r.label} failed before parsing (${g.err})`;
+        if (!what) return;
+        const k = known.findIndex((e) => e.inputs.includes(input.src));
+        if (k >= 0) { knownHits[k]++; return; }
+        bad++;
+        const key = `${input.kind}: ${what}`;
+        by.set(key, (by.get(key) ?? 0) + 1);
+        if (samples.length < 12) samples.push(`${key} — ${JSON.stringify(input.src.length > 100 ? input.src.slice(0, 100) + '…' : input.src)}`);
+      });
+      console.log(`  ${c.grammar}/${r.label}: corpus ${inputs.length - bad}/${inputs.length} ≡ oracle (verdict + rule skeleton)`);
+      known.forEach((e, k) => {
+        console.log(`      expected-fail: ${knownHits[k]}/${e.inputs.length} listed inputs disagree — ${e.reason}`);
+        if (knownHits[k] === 0) { failures++; console.log(`  ${c.grammar}/${r.label}: no listed input disagrees any more: remove this CORPUS_EXPECTED_FAIL entry (${e.reason})`); }
+      });
+      for (const [key, n] of by) console.log(`      ${String(n).padStart(5)}  ${key}`);
+      for (const smp of samples) console.log(`      ${smp}`);
+      failures += bad;
+    }
+    corpusMs += Date.now() - t0;
+    corpusInputs += inputs.length;
+  }
+}
+console.log(`  parity corpus: ${corpusInputs} inputs over ${CASES.length} grammars, ${(corpusMs / 1000).toFixed(1)}s`);
+
+// A grammar the portable rendering cannot express is refused at emit time, never mis-parsed.
+// Longest match takes no alternative that advances nothing, so an entry rule that has to CHOOSE
+// its empty alternative (to accept the empty input) has no rendering.
+{
+  const { token, rule, defineGrammar, many, seq, range, star } = await import('../src/api.ts');
+  const Num = token(seq(range('0', '9'), star(range('0', '9'))), { scope: 'constant.numeric' });
+  const Program = rule(() => [[Num, ';'], [many(Num)]]);
+  const g = defineGrammar({ name: 'emptyentry', scopeName: 'source.emptyentry', tokens: { Number: Num }, prec: [], rules: { Program } });
+  for (const [label, target] of [['typescript', tsTarget], ['go', goTarget], ['rust', rustTarget]] as const) {
+    let msg = '';
+    try { emitParser(g, target); } catch (e) { msg = errText(e); }
+    if (/entry rule Program has several alternatives and can match the empty input/.test(msg)) continue;
+    failures++;
+    console.log(`  emptyentry/${label}: an entry rule with an empty alternative among several was not refused (${msg || 'emitted'})`);
+  }
+  console.log('  emptyentry: an entry rule that must choose its empty alternative is refused by every target');
 }
 
 if (failures > 0) {
