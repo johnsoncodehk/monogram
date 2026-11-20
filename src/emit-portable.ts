@@ -45,7 +45,8 @@ export type LexTok =
       pattern: TokenPattern; skip: boolean }
   | { kind: 'string'; name: string; delim: string; skip: boolean }                        // delim..delim, `\` escapes next
   | { kind: 'line'; name: string; prefix: string; skip: boolean }                         // prefix..end-of-line
-  | { kind: 'block'; name: string; open: string; close: string; skip: boolean }           // open..close
+  // open..close; `nested`: the body admits the opener again, so openers and closers pair up.
+  | { kind: 'block'; name: string; open: string; close: string; nested: boolean; skip: boolean }
   // The general case: the raw token-pattern AST, compiled to a backtracking-free matcher
   // by the target (no regex engine). Subsumes the fast paths above; used for the token
   // shapes they don't cleanly recognise (escaped identifiers, the number family, …).
@@ -458,6 +459,17 @@ function buildIR(grammar: CstGrammar): ParserIR {
   return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
+// Whether `lit` occurs in pattern p anywhere but as the leading item of the top-level sequence.
+function mentionsLiteral(p: TokenPattern, lit: string, top: boolean): boolean {
+  if (typeof p === 'string') return !top && p === lit;
+  switch (p.type) {
+    case 'seq': return p.items.some((it, i) => mentionsLiteral(it, lit, top && i === 0));
+    case 'alt': return p.items.some((it) => mentionsLiteral(it, lit, false));
+    case 'repeat': case 'lookahead': case 'lookbehind': return mentionsLiteral(p.body, lit, false);
+    default: return false;
+  }
+}
+
 // Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,
 // otherwise the general `pattern` matcher. The fast paths keep the common simple tokens
 // (and the calc/minijs grammars) on tight, readable scan code in every target.
@@ -466,7 +478,7 @@ function lexTok(t: TokenDecl): LexTok {
   const qs = tokenPatternQuoteDelimAndEscape(t);
   if (qs) return { kind: 'string', name: t.name, delim: qs.delim, skip };
   const bd = tokenPatternBlockDelimiters(t);
-  if (bd) return { kind: 'block', name: t.name, open: bd[0], close: bd[1], skip };
+  if (bd) return { kind: 'block', name: t.name, open: bd[0], close: bd[1], nested: mentionsLiteral(t.pattern, bd[0], true), skip };
   const loop = tokenPatternCharLoop(t);
   // Plain `run` only when NOTHING needs the general matcher: no cont-stop bails AND no
   // complex head alternative (`run` has no fallback path — a headBail entry char would

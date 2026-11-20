@@ -11,11 +11,12 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
-import type { Target } from './emit.ts';
-import type { TokenPattern, CstGrammar } from './types.ts';
+import type { CstGrammar } from './types.ts';
+import { defineTarget, type SharedAlgorithms } from './define-target.ts';
+import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
   FieldBind, TokenLeafPolicy, CustomShape, ParentFold, StreamType, PrattShape, RuleShapeAtom,
@@ -25,8 +26,6 @@ import { validateShapeOrThrow } from './shape-validate.ts';
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
-const rangeCond = (v: string, rs: CharRange[]) =>
-  '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `(${lo}..=${hi}).contains(&${v})`)).join(' || ') + ')';
 
 /** `starts_with` on a single ASCII byte collapses to a direct byte compare (no slice/bounds). */
 const startByteEq = (posExpr: string, s: string): string => {
@@ -36,20 +35,6 @@ const startByteEq = (posExpr: string, s: string): string => {
   }
   return `src[${posExpr}..].starts_with(${J(s)})`;
 };
-
-function bailCondRs(v: string, bail: number[], bailNonAscii: boolean): string {
-  const parts = bail.map((c) => `${v} == ${c}`);
-  if (bailNonAscii) parts.push(`${v} >= 128`);
-  return parts.length ? parts.join(' || ') : 'false';
-}
-
-function emitAsciiBoolTableRs(name: string, rs: CharRange[]): string {
-  const a = Array<boolean>(256).fill(false);
-  for (const [lo, hi] of rs) {
-    for (let c = Math.max(0, lo); c <= Math.min(127, hi); c++) a[c] = true;
-  }
-  return `const ${name}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
-}
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 // null FirstSig → 'false' (never matched here; predictive alts have all-non-null FIRSTs).
@@ -167,95 +152,25 @@ const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 }
 
 
-// Compile a token-pattern AST to backtracking-free matcher fns `_mN(s, p) -> i64`
-// (new position, or -1). Named functions (Rust closures can't recurse); the source is
-// threaded as a param (Rust has no convenient module-level mutable string).
-function ccCondRs(p: Extract<TokenPattern, { type: 'charClass' }>): string {
-  const parts = p.items.map((it) =>
-    it.type === 'char' ? `cc == ${it.value.charCodeAt(0)}` : `(${it.from.charCodeAt(0)}..=${it.to.charCodeAt(0)}).contains(&cc)`);
-  const inSet = '(' + parts.join(' || ') + ')';
-  return p.negate ? `!${inSet}` : inSet;
-}
-function compilePat(p: TokenPattern, defs: string[]): string {
-  const name = `_m${defs.length}`;
-  defs.push('');
-  let body: string;
-  if (typeof p === 'string') {
-    body = `if (p as usize) <= s.len() && s[p as usize..].starts_with(${J(p)}) { p + ${p.length} } else { -1 }`;
-  } else switch (p.type) {
-    case 'anyChar': body = `if (p as usize) < s.len() { p + 1 } else { -1 }`; break;
-    case 'charClass': body = `let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ${ccCondRs(p)} { p + 1 } else { -1 }`; break;
-    case 'seq': { const ms = p.items.map((x) => compilePat(x, defs)); body = `let mut p = p; ${ms.map((m) => `p = ${m}(s, p); if p < 0 { return -1; }`).join(' ')} p`; break; }
-    case 'alt': { const ms = p.items.map((x) => compilePat(x, defs)); body = `${ms.map((m) => `{ let r = ${m}(s, p); if r >= 0 { return r; } }`).join(' ')} -1`; break; }
-    case 'repeat': { const m = compilePat(p.body, defs); const mx = p.max !== undefined ? ` if c >= ${p.max} { break; }` : ''; body = `let mut q = p; let mut c = 0i64; loop { let r = ${m}(s, q); if r < 0 || r == q { break; } q = r; c += 1;${mx} } if c >= ${p.min} { q } else { -1 }`; break; }
-    case 'lookahead': { const m = compilePat(p.body, defs); body = `let r = ${m}(s, p); if ${p.negate ? 'r < 0' : 'r >= 0'} { p } else { -1 }`; break; }
-    case 'anchor': body = p.kind === 'start' ? `if p == 0 { p } else { -1 }` : `if p as usize == s.len() { p } else { -1 }`; break;
-    default: throw new Error(`portable Rust lexer: pattern '${(p as { type: string }).type}' unsupported`);
-  }
-  defs[Number(name.slice(2))] = `fn ${name}(s: &str, p: i64) -> i64 { ${body} }`;
-  return name;
-}
+// The relex family steps `lex_from` one token at a time; out of line, every step rebuilds and
+// returns the whole lexer state through memory.
+const LEX_FROM_ATTR = '#[inline(always)]\n';
 
-function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined, identLike: Set<string>): string {
-  const name = (t as { name: string }).name;
-  if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
+// One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
+function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+  const name = t.name;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const kid = kidOf(ids, name);
-  const push = (endE: string) => (t.skip
-    ? `if src[pos..${endE}].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
+  const push = t.skip
+    ? `if src[pos..e].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
     : stateful
-      ? `st.emit(pos, ${endE}, ${kid}, lid_of(&src[pos..${endE}])); `
-      : `toks.push(mk_tok(pos, ${endE}, pending_nl, ${kid}, lid_of(&src[pos..${endE}]))); pending_nl = false; `);
-  const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
+      ? `st.emit(pos, e, ${kid}, lid_of(&src[pos..e])); `
+      : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&src[pos..e]))); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
-  const ext = (v: string) => (identLike.has(name) ? `let ${v} = if ${v} < b.len() && b[${v}] >= 0x80 { _lx_ext(b, ${v}) } else { ${v} }; ` : '');
-  if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
-            let mut e = pos + 1;
-            while e < n { let cc = b[e] as u32; if !${rangeCond('cc', t.cont)} { break } e += 1; }
-            ${ext('e')}${push('e')}pos = e; continue;
-        }`;
-  if (t.kind === 'runBail') {
-    if (rangesHaveNonAscii(t.cont)) {
-      const m = compilePat(t.pattern, defs);
-      return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${ext('e')}${push('e')}pos = e; continue; } }`;
-    }
-    const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_').toUpperCase();
-    const fTab = `_RB_F_${tag}`, cTab = `_RB_C_${tag}`;
-    defs.push(emitAsciiBoolTableRs(fTab, t.first));
-    defs.push(emitAsciiBoolTableRs(cTab, t.cont));
-    const m = compilePat(t.pattern, defs);
-    const bailAt = (v: string) => bailCondRs(v, t.bail, t.bailNonAscii);
-    // Entry fallback covers cont-bail chars AND complex-head entry chars (headBail).
-    const entryBail = bailCondRs('c', [...new Set([...t.bail, ...t.headBail])].sort((a, b) => a - b), t.bailNonAscii || t.headBailNonAscii);
-    return `        if ${gate}${fTab}[c as usize] {
-            let mut e = pos + 1;
-            while e < n && ${cTab}[b[e] as usize] { e += 1; }
-            if e >= n || !(${bailAt('b[e] as u32')}) { ${ext('e')}${push('e')}pos = e; continue; }
-            { let e2 = ${m}(src, pos as i64); if e2 > pos as i64 { let e2 = e2 as usize; ${ext('e2')}${push('e2')}pos = e2; continue; } }
-        } else if ${entryBail} {
-            let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${ext('e')}${push('e')}pos = e; continue; }
-        }`;
-  }
-  if (t.kind === 'string') return `        if ${gate}c == ${t.delim.charCodeAt(0)} {
-            let mut e = pos + 1;
-            let mut closed = false;
-            while e < n { let ch = b[e] as u32; if ch == 92 { e += 2; continue } if ch == ${t.delim.charCodeAt(0)} { e += 1; closed = true; break } e += 1; }
-            if closed { ${push('e')}pos = e; continue; }
-        }`;
-  if (t.kind === 'line') return `        if ${gate}src[pos..].starts_with(${J(t.prefix)}) {
-            let mut e = pos + ${t.prefix.length};
-            while e < n && b[e] != 10 { e += 1; }
-            ${push('e')}pos = e; continue;
-        }`;
-  if (t.kind === 'block') return `        if ${gate}src[pos..].starts_with(${J(t.open)}) {
-            let mut e = pos + ${t.open.length};
-            // Byte-step + &str slice panics mid multi-byte char; match close on bytes.
-            while e < n && !b[e..].starts_with(${J(t.close)}.as_bytes()) { e += 1; }
-            if e < n { e += ${t.close.length}; ${push('e')}pos = e; continue; }
-        }`;
-  const m = compilePat(t.pattern, defs);
-  return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
+  const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
+  const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
+  return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
 
 function rustByteLit(b: number): string {
@@ -282,16 +197,14 @@ function rustMatchLabels(bytes: number[]): string {
 }
 
 function buildLexCandidates(
-  ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
+  ir: ParserIR, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
-  for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok, identLike);
-    if (!code) continue;
-    codes.push(code);
+  for (const t of shared.scannedTokens(ir)) {
+    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -366,8 +279,9 @@ function rsLidAny(ids: LexIdPlan, texts: readonly string[], idExpr: string): str
   return ls.map((l) => `${idExpr} == ${l}`).join(' || ');
 }
 
-function lexer(ir: ParserIR, ids: LexIdPlan): string {
-  const defs: string[] = [];
+function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
+  const scanFns = shared.lexScan(ir);
+  const scans = scanFns ? scanFns + '\n' : '';
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
   const nl = ir.newlineCfg;
@@ -409,7 +323,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan): string {
 ${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${p.length}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${p.length}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${p.length}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
@@ -587,7 +501,7 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -604,7 +518,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${tplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -621,7 +535,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxTplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -638,7 +552,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let b = src.as_bytes();
     let n = b.len();
 ${open}
@@ -659,14 +573,14 @@ ${loopBody}
     const nlLoopBody = `        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
 ${nlUniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, flow_depth: i64 }
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, flow_depth: i64 }
 impl<'a> NlScan<'a> {
     fn push_tok(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${nlRs!.hooksFrom.replace(/flow_depth/g, 'self.flow_depth')}
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
     }
 }
-fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, flow_depth: i64, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, i64) {
+${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, flow_depth: i64, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, i64) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -682,7 +596,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
     toks
 }`;
   }
-  return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
+  return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -1082,12 +996,7 @@ ${r.nudSeqs.map((seq, si) => `        { let save = self.pos; let sb = self.scrat
 }
 
 
-function docEditBlockRust(ir: ParserIR): string {
-  const windowLex = (!ir.regexCtx && !ir.tpl) || !ir.newlineCfg;
-  const hasNewline = !!(ir.newlineCfg && !ir.regexCtx && !ir.tpl);
-  const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
-  const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
-  const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
+function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const topReuse = topReusePlan(ir);
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
@@ -1095,462 +1004,13 @@ function docEditBlockRust(ir: ParserIR): string {
   const entriesInit = topReuse ? ', entries: Vec::new()' : '';
   const segsInit = shapeB ? ', segs: Vec::new()' : '';
   const reuseInit = `${entriesInit}${segsInit}`;
-  const adoptSuffix = `                        for j in (o_idx + 1)..old_toks.len() {
-                            out.push(shift_align(&old_toks[j], delta));
-                        }`;
-  const findTokAtOff = `
-fn find_tok_at_off(toks: &[AlignMeta], off: usize) -> Option<usize> {
-    let mut lo = 0usize; let mut hi = toks.len();
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if (toks[mid].off as usize) < off { lo = mid + 1; } else if (toks[mid].off as usize) > off { hi = mid; } else { return Some(mid); }
-    }
-    None
-}`;
-  const reconstructParens = `
-fn reconstruct_parens(toks: &[AlignMeta], text: &str, b: isize) -> Vec<bool> {
-    let mut need = if b >= 0 { toks[b as usize].pd } else { 0 };
-    let mut out = vec![false; need as usize];
-    let mut i = b;
-    while i >= 0 && need > 0 {
-        let t = &toks[i as usize];
-        if am_text(text, t) == "(" && t.pd == need {
-            out[(need - 1) as usize] = am_hd(t);
-            need -= 1;
-        }
-        i -= 1;
-    }
-    out
-}
-fn paren_stacks_eq(a: &[bool], b: &[bool]) -> bool { a == b }`;
-  const tplAnchor = `    let mut max_idx: isize = -1;
-    for (i, t) in old_toks.iter().enumerate() {
-        if (t.end as usize) < start { max_idx = i as isize; } else { break; }
-    }
-    let rb0: isize = if max_idx >= 0 { max_idx - 1 } else { -1 };
-    let mut rb: isize = -1;
-    if rb0 >= 0 {
-        for i in rb0 as usize..old_toks.len() {
-            if (old_toks[i].end as usize) > start { break; }
-            if old_toks[i].td == 0 { rb = i as isize; break; }
-        }
-    }
-    let mut out: Vec<AlignMeta> = if rb >= 0 { old_toks[..=rb as usize].to_vec() } else { Vec::new() };`;
-  const windowHelpers = windowLex ? (hasNewline ? `
-fn find_tok_at_off_kind(toks: &[AlignMeta], off: usize, kid: u16) -> Option<usize> {
-    let mut lo = 0usize;
-    let mut hi = toks.len();
-    let mut hit = None;
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if (toks[mid].off as usize) < off { lo = mid + 1; } else { hi = mid; }
-    }
-    if lo < toks.len() && toks[lo].off as usize == off { hit = Some(lo); }
-    let hit = hit?;
-    let mut start = hit;
-    while start > 0 && toks[start - 1].off as usize == off { start -= 1; }
-    let mut i = start;
-    while i < toks.len() && toks[i].off as usize == off {
-        if toks[i].kid == kid { return Some(i); }
-        i += 1;
-    }
-    None
-}
-fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: usize, end: usize, ins: &str) -> (Vec<AlignMeta>, usize) {
-    let delta = ins.len() as isize - (end - start) as isize;
-    let edit_end = start + ins.len();
-    let mut max_idx = None::<usize>;
-    for (i, t) in old_toks.iter().enumerate() {
-        if (t.end as usize) < start { max_idx = Some(i); } else { break; }
-    }
-    let rb = max_idx.map(|i| i as isize - 1).unwrap_or(-1);
-    let mut out: Vec<AlignMeta> = if rb >= 0 { old_toks[..=rb as usize].to_vec() } else { Vec::new() };
-    let (mut scan_off, mut pending_nl, mut flow_depth) = if rb >= 0 {
-        (old_toks[rb as usize].end as usize, old_toks[rb as usize].kid == _KID_NLTOK, old_toks[rb as usize].fd as i64)
-    } else {
-        (0, false, 0)
-    };
-    let mut scratch: Vec<Tok> = Vec::new();
-    let mut relexed = 0usize;
-    while scan_off < new_text.len() {
-        let before = scratch.len();
-        (scan_off, pending_nl, flow_depth) = lex_from(new_text, scan_off, pending_nl, flow_depth, &mut scratch, 1);
-        if scratch.len() == before { break; }
-        let t = &scratch[scratch.len() - 1];
-        out.push(mk_align(t.off, t.end, t.kid, t.nl, flow_depth as u16, 0, false, false, false, 0));
-        relexed += 1;
-        if (t.off as usize) >= edit_end {
-            if let Some(o_idx) = find_tok_at_off_kind(old_toks, (t.off as isize - delta) as usize, t.kid) {
-                let o = &old_toks[o_idx];
-                if o.kid == t.kid && o.end == (t.end as isize - delta) as u32 && am_nl(o) == t.nl && o.fd as i64 == flow_depth && am_text(old_text, o) == &new_text[t.off as usize..t.end as usize] {
-                    for ot in &old_toks[o_idx + 1..] {
-                        out.push(shift_align(ot, delta));
-                    }
-                    return (out, relexed);
-                }
-            }
-        }
-    }
-    (out, relexed)
-}
-` : rxOnly ? `
-fn find_tok_at_off(toks: &[AlignMeta], off: usize) -> Option<usize> {
-    let mut lo = 0usize;
-    let mut hi = toks.len();
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if (toks[mid].off as usize) < off { lo = mid + 1; } else { hi = mid; }
-    }
-    if lo < toks.len() && toks[lo].off as usize == off { Some(lo) } else { None }
-}
-fn reconstruct_parens(toks: &[AlignMeta], text: &str, b: isize) -> Vec<bool> {
-    let mut need = if b >= 0 { toks[b as usize].pd } else { 0 };
-    let mut out: Vec<bool> = Vec::new();
-    let mut i = b;
-    while i >= 0 && need > 0 {
-        let t = &toks[i as usize];
-        if am_text(text, t) == "(" && t.pd == need {
-            out.insert(0, am_hd(t));
-            need -= 1;
-        }
-        i -= 1;
-    }
-    out
-}
-fn paren_stacks_eq(a: &[bool], b: &[bool]) -> bool {
-    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x == y)
-}
-fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: usize, end: usize, ins: &str) -> (Vec<AlignMeta>, usize) {
-    let delta = ins.len() as isize - (end - start) as isize;
-    let edit_end = start + ins.len();
-    let mut max_idx = None::<usize>;
-    for (i, t) in old_toks.iter().enumerate() {
-        if (t.end as usize) < start { max_idx = Some(i); } else { break; }
-    }
-    let rb = max_idx.map(|i| i as isize - 1).unwrap_or(-1);
-    let mut out: Vec<AlignMeta> = if rb >= 0 { old_toks[..=rb as usize].to_vec() } else { Vec::new() };
-    let mut scan_off: usize;
-    let mut pending_nl = false;
-    let mut prev_lid: u16 = 0;
-    let mut prev_kid: u16 = 0;
-    let mut bp_lid: u16 = 0;
-    let mut has_prev = false;
-    let mut has_prev2 = false;
-    let mut paren_head: Vec<bool> = Vec::new();
-    let mut last_close = false;
-    let mut last_bang = false;
-    if rb >= 0 {
-        let anchor = &old_toks[rb as usize];
-        scan_off = anchor.end as usize;
-        prev_lid = lid_of(am_text(old_text, anchor));
-        prev_kid = anchor.kid;
-        has_prev = true;
-        if rb >= 1 {
-            let p = &old_toks[rb as usize - 1];
-            bp_lid = lid_of(am_text(old_text, p));
-            has_prev2 = true;
-        }
-        last_close = am_lc(anchor);
-        last_bang = am_lb(anchor);
-        paren_head = reconstruct_parens(old_toks, old_text, rb);
-    } else {
-        scan_off = 0;
-    }
-    let mut scratch: Vec<Tok> = Vec::new();
-    let mut relexed = 0usize;
-    while scan_off < new_text.len() {
-        let before = scratch.len();
-        (scan_off, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang) = lex_from(new_text, scan_off, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, &mut scratch, 1);
-        if scratch.len() == before { break; }
-        let t = &scratch[scratch.len() - 1];
-        let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
-        out.push(mk_align(t.off, t.end, t.kid, t.nl, 0, paren_head.len() as u16, last_close, last_bang, hd, 0));
-        relexed += 1;
-        if (t.off as usize) >= edit_end {
-            if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
-                let o = &old_toks[o_idx];
-                let new_prev_text = if out.len() > 1 { am_text(new_text, &out[out.len() - 2]) } else { "" };
-                let old_prev_text = if o_idx >= 1 { am_text(old_text, &old_toks[o_idx - 1]) } else { "" };
-                let bp_ok = new_prev_text == old_prev_text;
-                let old_stack = reconstruct_parens(old_toks, old_text, o_idx as isize);
-                if o.pd as usize == paren_head.len() && paren_stacks_eq(&old_stack, &paren_head) && am_lc(o) == last_close && am_lb(o) == last_bang && bp_ok && o.kid == t.kid && o.end == (t.end as isize - delta) as u32 && am_nl(o) == t.nl && am_text(old_text, o) == &new_text[t.off as usize..t.end as usize] {
-                    for ot in &old_toks[o_idx + 1..] {
-                        out.push(shift_align(ot, delta));
-                    }
-                    return (out, relexed);
-                }
-            }
-        }
-    }
-    (out, relexed)
-}
-` : rxTpl ? `${findTokAtOff}${reconstructParens}
-fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: usize, end: usize, ins: &str) -> (Vec<AlignMeta>, usize) {
-    let delta = ins.len() as isize - (end - start) as isize;
-    let edit_end = start + ins.len();
-${tplAnchor}
-    let mut scan_off: usize;
-    let mut pending_nl = false;
-    let mut prev_lid: u16 = 0;
-    let mut prev_kid: u16 = 0;
-    let mut bp_lid: u16 = 0;
-    let mut has_prev = false;
-    let mut has_prev2 = false;
-    let mut paren_head: Vec<bool> = Vec::new();
-    let mut last_close = false;
-    let mut last_bang = false;
-    let mut template_stack: Vec<i64> = Vec::new();
-    if rb >= 0 {
-        let anchor = &old_toks[rb as usize];
-        scan_off = anchor.end as usize;
-        prev_lid = lid_of(am_text(old_text, anchor));
-        prev_kid = anchor.kid;
-        has_prev = true;
-        if rb >= 1 {
-            let p = &old_toks[(rb - 1) as usize];
-            bp_lid = lid_of(am_text(old_text, p));
-            has_prev2 = true;
-        }
-        last_close = am_lc(anchor);
-        last_bang = am_lb(anchor);
-        paren_head = reconstruct_parens(old_toks, old_text, rb);
-    } else {
-        scan_off = 0;
-    }
-    let mut scratch: Vec<Tok> = Vec::new();
-    let mut relexed = 0usize;
-    while scan_off < new_text.len() {
-        let before = scratch.len();
-        let r = lex_from(new_text, scan_off, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, template_stack, &mut scratch, 1);
-        scan_off = r.0; pending_nl = r.1; prev_lid = r.2; prev_kid = r.3; bp_lid = r.4; has_prev = r.5; has_prev2 = r.6; paren_head = r.7; last_close = r.8; last_bang = r.9; template_stack = r.10;
-        if scratch.len() == before { break; }
-        let t = &scratch[scratch.len() - 1];
-        let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
-        out.push(mk_align(t.off, t.end, t.kid, t.nl, 0, paren_head.len() as u16, last_close, last_bang, hd, template_stack.len() as u8));
-        relexed += 1;
-        if (t.off as usize) >= edit_end {
-            if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
-                let o = &old_toks[o_idx];
-                let new_prev = if out.len() > 1 { am_text(new_text, &out[out.len()-2]) } else { "" };
-                let old_prev = if o_idx >= 1 { am_text(old_text, &old_toks[o_idx-1]) } else { "" };
-                let old_stack = reconstruct_parens(old_toks, old_text, o_idx as isize);
-                if o.td == 0 && template_stack.is_empty() && o.pd as usize == paren_head.len() && paren_stacks_eq(&old_stack, &paren_head) && am_lc(o) == last_close && am_lb(o) == last_bang && new_prev == old_prev && o.kid == t.kid && o.end == (t.end as isize - delta) as u32 && am_nl(o) == t.nl && am_text(old_text, o) == &new_text[t.off as usize..t.end as usize] {
-${adoptSuffix}
-                    return (out, relexed);
-                }
-            }
-        }
-    }
-    (out, relexed)
-}
-` : tplOnly ? `${findTokAtOff}
-fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: usize, end: usize, ins: &str) -> (Vec<AlignMeta>, usize) {
-    let delta = ins.len() as isize - (end - start) as isize;
-    let edit_end = start + ins.len();
-${tplAnchor}
-    let mut scan_off = if rb >= 0 { old_toks[rb as usize].end as usize } else { 0 };
-    let mut pending_nl = false;
-    let mut template_stack: Vec<i64> = Vec::new();
-    let mut scratch: Vec<Tok> = Vec::new();
-    let mut relexed = 0usize;
-    while scan_off < new_text.len() {
-        let before = scratch.len();
-        let r = lex_from(new_text, scan_off, pending_nl, template_stack, &mut scratch, 1);
-        scan_off = r.0; pending_nl = r.1; template_stack = r.2;
-        if scratch.len() == before { break; }
-        let t = &scratch[scratch.len() - 1];
-        out.push(mk_align(t.off, t.end, t.kid, t.nl, 0, 0, false, false, false, template_stack.len() as u8));
-        relexed += 1;
-        if (t.off as usize) >= edit_end {
-            if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
-                let o = &old_toks[o_idx];
-                if o.td == 0 && template_stack.is_empty() && o.kid == t.kid && o.end == (t.end as isize - delta) as u32 && am_nl(o) == t.nl && am_text(old_text, o) == &new_text[t.off as usize..t.end as usize] {
-${adoptSuffix}
-                    return (out, relexed);
-                }
-            }
-        }
-    }
-    (out, relexed)
-}
-` : `
-fn find_tok_at_off(toks: &[AlignMeta], off: usize) -> Option<usize> {
-    let mut lo = 0usize;
-    let mut hi = toks.len();
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if (toks[mid].off as usize) < off { lo = mid + 1; } else { hi = mid; }
-    }
-    if lo < toks.len() && toks[lo].off as usize == off { Some(lo) } else { None }
-}
-fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: usize, end: usize, ins: &str) -> (Vec<AlignMeta>, usize) {
-    let delta = ins.len() as isize - (end - start) as isize;
-    let edit_end = start + ins.len();
-    let mut max_idx = None::<usize>;
-    for (i, t) in old_toks.iter().enumerate() {
-        if (t.end as usize) < start { max_idx = Some(i); } else { break; }
-    }
-    let rb = max_idx.map(|i| i as isize - 1).unwrap_or(-1);
-    let mut out: Vec<AlignMeta> = if rb >= 0 { old_toks[..=rb as usize].to_vec() } else { Vec::new() };
-    let mut scan_off = if rb >= 0 { old_toks[rb as usize].end as usize } else { 0 };
-    let mut pending_nl = false;
-    let mut scratch: Vec<Tok> = Vec::new();
-    let mut relexed = 0usize;
-    while scan_off < new_text.len() {
-        let before = scratch.len();
-        (scan_off, pending_nl) = lex_from(new_text, scan_off, pending_nl, &mut scratch, 1);
-        if scratch.len() == before { break; }
-        let t = &scratch[scratch.len() - 1];
-        out.push(mk_align(t.off, t.end, t.kid, t.nl, 0, 0, false, false, false, 0));
-        relexed += 1;
-        if (t.off as usize) >= edit_end {
-            if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
-                let o = &old_toks[o_idx];
-                if o.kid == t.kid && o.end == (t.end as isize - delta) as u32 && am_nl(o) == t.nl && am_text(old_text, o) == &new_text[t.off as usize..t.end as usize] {
-                    for ot in &old_toks[o_idx + 1..] {
-                        out.push(shift_align(ot, delta));
-                    }
-                    return (out, relexed);
-                }
-            }
-        }
-    }
-    (out, relexed)
-}
-`) : '';
-  const editBody = windowLex
-    ? `        let mut cur_text = self.text.clone();
-        let mut cur_toks = self.toks.clone();
-        for e in edits {
-            let step_old_text = cur_text.clone();
-            let step_old_toks = cur_toks.clone();
-            let n = cur_text.len();
-            let start = e.start.min(n);
-            let end = e.end.max(start).min(n);
-            let ins = e.text.clone();
-            cur_text = format!("{}{}{}", &cur_text[..start], ins, &cur_text[end..]);
-            let (toks, step_relexed) = window_relex_step(&step_old_text, &step_old_toks, &cur_text, start, end, &ins);
-            cur_toks = toks;
-            relexed += step_relexed;
-        }
-        self.text = cur_text;
-        self.toks = cur_toks;`
-    : `        for e in edits {
-            let n = self.text.len();
-            let start = e.start.min(n);
-            let end = e.end.max(start).min(n);
-            self.text = format!("{}{}{}", &self.text[..start], e.text, &self.text[end..]);
-        }
-        self.toks = to_meta(&lex(&self.text));
-        relexed = self.toks.len();`;
-  const toMetaFn = hasNewline ? `
-fn scan_meta(src: &str) -> Vec<AlignMeta> {
-    let mut toks: Vec<Tok> = Vec::new();
-    let mut meta: Vec<AlignMeta> = Vec::new();
-    let (mut pos, mut pending_nl, mut flow_depth) = (0usize, false, 0i64);
-    while pos < src.len() {
-        let before = toks.len();
-        (pos, pending_nl, flow_depth) = lex_from(src, pos, pending_nl, flow_depth, &mut toks, 1);
-        if toks.len() == before { break; }
-        let t = &toks[toks.len() - 1];
-        meta.push(mk_align(t.off, t.end, t.kid, t.nl, flow_depth as u16, 0, false, false, false, 0));
-    }
-    meta
-}
-fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for newline") }
-` : rxOnly ? `
-fn scan_meta(src: &str) -> Vec<AlignMeta> {
-    let mut toks: Vec<Tok> = Vec::new();
-    let mut meta: Vec<AlignMeta> = Vec::new();
-    let (mut pos, mut pending_nl) = (0usize, false);
-    let (mut prev_lid, mut prev_kid, mut bp_lid) = (0u16, 0u16, 0u16);
-    let (mut has_prev, mut has_prev2) = (false, false);
-    let mut paren_head: Vec<bool> = Vec::new();
-    let (mut last_close, mut last_bang) = (false, false);
-    while pos < src.len() {
-        let before = toks.len();
-        (pos, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang) = lex_from(src, pos, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, &mut toks, 1);
-        if toks.len() == before { break; }
-        let t = &toks[toks.len() - 1];
-        let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
-        meta.push(mk_align(t.off, t.end, t.kid, t.nl, 0, paren_head.len() as u16, last_close, last_bang, hd, 0));
-    }
-    meta
-}
-fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for regex") }
-` : rxTpl ? `
-fn scan_meta(src: &str) -> Vec<AlignMeta> {
-    let mut toks: Vec<Tok> = Vec::new();
-    let mut meta: Vec<AlignMeta> = Vec::new();
-    let mut pos = 0usize;
-    let mut pending_nl = false;
-    let mut prev_lid: u16 = 0;
-    let mut prev_kid: u16 = 0;
-    let mut bp_lid: u16 = 0;
-    let mut has_prev = false;
-    let mut has_prev2 = false;
-    let mut paren_head: Vec<bool> = Vec::new();
-    let mut last_close = false;
-    let mut last_bang = false;
-    let mut template_stack: Vec<i64> = Vec::new();
-    while pos < src.len() {
-        let before = toks.len();
-        let r = lex_from(src, pos, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, template_stack, &mut toks, 1);
-        pos = r.0; pending_nl = r.1; prev_lid = r.2; prev_kid = r.3; bp_lid = r.4; has_prev = r.5; has_prev2 = r.6; paren_head = r.7; last_close = r.8; last_bang = r.9; template_stack = r.10;
-        if toks.len() == before { break; }
-        let t = &toks[toks.len() - 1];
-        let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
-        meta.push(mk_align(t.off, t.end, t.kid, t.nl, 0, paren_head.len() as u16, last_close, last_bang, hd, template_stack.len() as u8));
-    }
-    meta
-}
-fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for rx+tpl") }
-` : tplOnly ? `
-fn scan_meta(src: &str) -> Vec<AlignMeta> {
-    let mut toks: Vec<Tok> = Vec::new();
-    let mut meta: Vec<AlignMeta> = Vec::new();
-    let mut pos = 0usize;
-    let mut pending_nl = false;
-    let mut template_stack: Vec<i64> = Vec::new();
-    while pos < src.len() {
-        let before = toks.len();
-        let r = lex_from(src, pos, pending_nl, template_stack, &mut toks, 1);
-        pos = r.0; pending_nl = r.1; template_stack = r.2;
-        if toks.len() == before { break; }
-        let t = &toks[toks.len() - 1];
-        meta.push(mk_align(t.off, t.end, t.kid, t.nl, 0, 0, false, false, false, template_stack.len() as u8));
-    }
-    meta
-}
-fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for tpl") }
-` : `fn to_meta(toks: &[Tok]) -> Vec<AlignMeta> {
-    toks.iter().map(|t| mk_align(t.off, t.end, t.kid, t.nl, 0, 0, false, false, false, 0)).collect()
-}`;
-  // Packed AlignMeta: full-field equality covers the prior mode-specific checks
-  // (unused state fields are always zeroed by scan_meta / to_meta / window_relex).
-  const checkStreamEqFn = (hasNewline || rxOnly || rxTpl || tplOnly) ? `
-fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
-    let fresh = scan_meta(text);
-    if fresh.len() != meta.len() { return false; }
-    for (f, m) in fresh.iter().zip(meta.iter()) {
-        if f != m { return false; }
-        if am_text(text, f) != am_text(text, m) { return false; }
-    }
-    true
-}
-` : `
-fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
-    let fresh = to_meta(&lex(text));
-    if fresh.len() != meta.len() { return false; }
-    for (f, m) in fresh.iter().zip(meta.iter()) {
-        if f != m { return false; }
-        if am_text(text, f) != am_text(text, m) { return false; }
-    }
-    true
-}
-`;
-  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scan_meta(&text)' : 'to_meta(&lex(&text))';
-  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scan_meta(&self.text)' : 'to_meta(&lex(&self.text))';
+  const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
+  const editBody = `        let (text, toks, n) = relex_edits(&old_text, &old_toks, edits);
+        self.text = text;
+        self.toks = toks;
+        relexed = n as usize;`;
+  const initToks = 'scan_meta(&text)';
+  const freshMeta = 'scan_meta(&self.text)';
   const freshRetryRs = `        if self.root.is_none() {
             self.toks = ${freshMeta};
             let text = self.text.clone();
@@ -2117,7 +1577,7 @@ struct AlignMeta { off: u32, end: u32, kid: u16, pd: u16, fd: u16, flags: u8, td
     AlignMeta { off: (m.off as isize + delta) as u32, end: (m.end as isize + delta) as u32, kid: m.kid, pd: m.pd, fd: m.fd, flags: m.flags, td: m.td }
 }
 struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, stream_eq: Option<bool>, tree_eq: Option<bool> }
-${toMetaFn}
+${relexFamily}
 fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
     let old_n = old_toks.len();
     let new_n = new_toks.len();
@@ -2145,7 +1605,7 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
 fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
     meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, lid_of(tx)) }).collect()
 }
-${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
+${treeEqFn}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
     text: String,
     toks: Vec<AlignMeta>,
     align: Option<Align>,
@@ -2203,20 +1663,14 @@ impl<B: Builder + Default> Doc<B> {
                 // Re-bind names expected by editBody / editParse templates.
                 let edits = &edits_owned[..];
                 let _ = edits;
-${editBody.replace(/self\./g, 'd.').replace(/old_text/g, 'old_text')}
+${editBody.replace(/self\./g, 'd.')}
                 let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &d.text, &d.toks);
 ${editParse.replace(/self\./g, 'd.')}
             }
             let _ = relexed;
         }));
         if ok.is_err() {
-            self.text = old_text;
-            for e in &edits_owned {
-                let n = self.text.len();
-                let start = e.start.min(n);
-                let end = e.end.max(start).min(n);
-                self.text = format!("{}{}{}", &self.text[..start], e.text, &self.text[end..]);
-            }
+            self.text = apply_edits(&old_text, &edits_owned);
             let toks = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ${freshMeta.replace(/self\.text/g, 'self.text')}));
             match toks {
                 Ok(t) => {
@@ -5298,17 +4752,136 @@ pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
 `;
 }
 
-export const rustTarget: Target = {
-  name: 'rust',
-  ext: 'rs',
-  emitParser(grammar: CstGrammar): string {
-    const ir = portableIR(grammar);
-    return emitRustLibrary(ir, buildLexIdPlan(ir));
+const RS_ELEM: Record<ListTy, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', edits: 'Edit' };
+const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
+const RS_META: Record<MetaInt, string> = { off: 'u32', end: 'u32', kid: 'u16', pd: 'u16', fd: 'u16', td: 'u8' };
+const RS_TOK: Record<TokInt, string> = { off: 'u32', end: 'u32', kid: 'u16', lid: 'u16' };
+const RS_MK: Record<keyof MkMeta, string> = { off: 'u32', end: 'u32', kid: 'u16', nl: 'bool', fd: 'u16', pd: 'u16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'u8' };
+// Operator spelling and binding strength; unary is 90, a negative literal 7, an `as` cast 8
+// (bare as an argument or index, parenthesized as an operand, where `x as T < y` reads as generics).
+const RS_OPS: Record<BinOp, [string, number]> = {
+  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], add: ['+', 6], sub: ['-', 6],
+};
+const RS_CAST = 8;
+const RS_IND = '    ';
+const snake = (s: string): string => s.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
+const rsWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
+const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
+
+// Shared-algorithm lowering: snake_case, `as` casts, owned String/Vec vs borrowed &str/&[T].
+// Growth estimates are not reserved (no GC to save; realloc growth matches the base allocation
+// pattern), so nothing is over-reserved and there is nothing to trim. Exact capacities are kept.
+const rustLowering: Lowering = {
+  ident: snake,
+  num: { int: 'isize', lid: 'u16', depth: 'i64' },
+  type: (t, role, owned) => {
+    if (isList(t)) return role === 'param' ? `&[${RS_ELEM[t]}]` : `Vec<${RS_ELEM[t]}>`;
+    if (t === 'str') return role === 'param' || !owned ? '&str' : 'String';
+    if (t === 'edit') return '&Edit';
+    return RS_SCALAR[t];
   },
-  emitRunner,
+  cast: (_cx, r, nat) => ({ ...r, c: `${rsWrap(r, ATOM)} as ${nat}`, nat, prec: RS_CAST }),
+  owns: true,
+  borrowStr: (r) => (!r.owned ? r.c : /^\w+$/.test(r.c) ? `${r.c}.as_str()` : `(${r.c}).as_str()`),
+  borrowList: (r) => (r.owned ? `&${r.c}` : r.c),
+  borrowVal: (r) => `&${r.c}`,
+  charSet: (name, rs) => {
+    const a = Array<boolean>(256).fill(false);
+    for (const [lo, hi] of rs) for (let c = lo; c <= hi; c++) a[c] = true;
+    return `const ${name.toUpperCase()}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
+  },
+  expr: {
+    literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
+    not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
+    bin: (op, a, b) => {
+      const [sp, p] = RS_OPS[op];
+      const side = (r: R, right: boolean): string =>
+        (r.prec < p || r.prec === RS_CAST || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
+      return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
+    },
+    call: (name, args) => `${name}(${args.join(', ')})`,
+    len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
+    code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
+    hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
+    inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
+    own: (cx, r) => {
+      if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
+      if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
+      return r;
+    },
+  },
+  stmt: {
+    comment: (text) => [`// ${text}`],
+    let: (cx, s) => [`let ${s.mutable ? 'mut ' : ''}${s.id}: ${cx.type(s.ty, 'local', s.owned)} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`],
+    set: (id, val) => [`${id} = ${val};`],
+    if: (s) => {
+      const head = `if ${s.c}`;
+      if (s.inline !== undefined && RS_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
+      return [`${head} {`, ...rsBlock(s.then), ...(s.else ? ['} else {', ...rsBlock(s.else)] : []), '}'];
+    },
+    while: (c, body) => [`while ${c} {`, ...rsBlock(body), '}'],
+    break: () => ['break;'],
+    return: (vals) => [`return ${vals.length === 1 ? vals[0] : `(${vals.join(', ')})`};`],
+    fn: (f) => [
+      ...f.doc.map((l) => `// ${l}`),
+      ...(f.inline ? ['#[inline(always)]'] : []),
+      `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
+      ...rsBlock(f.body),
+      '}',
+    ].join('\n'),
+  },
+  relex: {
+    index: 'usize',
+    expr: {
+      index: (l, i) => ({ c: `${rsWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
+      metaInt: (cx, m, f) => cx.atom(`${rsWrap(m, ATOM)}.${f}`, 'int', RS_META[f]),
+      metaFlag: (cx, m, f) => cx.atom(`am_${f}(${cx.ref(m)})`, 'bool', 'bool'),
+      tokInt: (cx, t, f) => cx.atom(`${rsWrap(t, ATOM)}.${f}`, 'int', RS_TOK[f]),
+      tokNl: (cx, t) => cx.atom(`${rsWrap(t, ATOM)}.nl`, 'bool', 'bool'),
+      editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'usize'),
+      editText: (cx, e) => cx.atom(`${e.c}.text.as_str()`, 'str', 'str', { owned: false }),
+      metaText: (cx, t, m) => cx.atom(`am_text(${cx.str(t)}, ${cx.ref(m)})`, 'str', 'str', { owned: false }),
+      substr: (cx, s, a, b) => ({ c: `&${rsWrap(s, ATOM)}[${cx.coerce(a, 'usize')}..${cx.coerce(b, 'usize')}]`, ty: 'str', nat: 'str', prec: 90, owned: false }),
+      lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)})`, 'lid', cx.nat('lid')),
+      mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([f, r]) => cx.coerce(r, RS_MK[f])).join(', ')})`, 'meta', 'meta'),
+      shiftMeta: (cx, m, d) => cx.atom(`shift_align(${cx.ref(m)}, ${cx.coerce(d, 'isize')})`, 'meta', 'meta'),
+      metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: RS_OPS.eq[1] }),
+      splice: (cx, s, a, b, ins) => cx.atom(`format!("{}{}{}", &${rsWrap(s, ATOM)}[..${cx.coerce(a, 'usize')}], ${cx.str(ins)}, &${rsWrap(s, ATOM)}[${cx.coerce(b, 'usize')}..])`, 'str', 'str', { owned: true }),
+      newList: (cx, ty, cap) => cx.atom(cap ? `Vec::with_capacity(${cx.coerce(cap, 'usize')})` : 'Vec::new()', ty, ty, { owned: true }),
+      falses: (cx, n) => cx.atom(`vec![false; ${cx.coerce(n, 'usize')}]`, 'bools', 'bools', { owned: true }),
+      prefix: (cx, l, n) => cx.atom(`${rsWrap(l, ATOM)}[..${cx.coerce(n, 'usize')}].to_vec()`, l.ty, l.ty, { owned: true }),
+    },
+    stmt: {
+      setAt: (id, i, val) => [`${id}[${i}] = ${val};`],
+      push: (_cx, l, r) => [`${l}.push(${r.c});`],
+      for: (cx, v, from, to, body) => [`for ${v} in ${cx.coerce(from, 'isize')}..${cx.coerce(to, 'isize')} {`, ...rsBlock(body), '}'],
+      forEach: (v, l, body) => [`for ${v} in ${l} {`, ...rsBlock(body), '}'],
+      destructure: (_cx, s) => {
+        if (!s.declare) return [`(${s.ids.join(', ')}) = ${s.call};`];
+        return [`let (${s.names.map((n, i) => (n !== '_' && s.mutable(n) ? `mut ${s.ids[i]}` : s.ids[i])).join(', ')}) = ${s.call};`];
+      },
+      lexStep: (cx, s) => [
+        `let lexed = lex_from(${cx.str(s.text)}, ${s.pos} as usize, ${[...s.state, `&mut ${s.out}`].join(', ')}, 1);`,
+        `${s.pos} = lexed.0 as isize;`,
+        ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
+      ],
+      shrink: () => [],
+    },
+  },
 };
 
-function emitRustLibrary(ir: ParserIR, ids: LexIdPlan): string {
+export const rustTarget = defineTarget({
+  name: 'rust',
+  ext: 'rs',
+  lowering: rustLowering,
+  emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
+    const ir = portableIR(grammar);
+    return emitRustLibrary(ir, buildLexIdPlan(ir), shared);
+  },
+  emitRunner,
+});
+
+function emitRustLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
     const ar = buildArenaIdPlan(ir, ids);
     const reuse = topReusePlan(ir);
     const shapeB = reuse?.kind === 'B';
@@ -5337,7 +4910,7 @@ const _: () = assert!(std::mem::size_of::<Tok>() == 16);
 struct Node { rule_id: u16, kid_start: u32, kid_count: u32, offset: u32, end: u32, tok_start: u32, tok_end: u32, ext: u32 }
 const _: () = assert!(std::mem::size_of::<Node>() == 32);
 ${entryMetaStruct}${segStruct}
-${lexer(ir, ids)}
+${lexer(ir, ids, shared)}
 
 ${arenaIdTables}
 const ARENA_COMPACT_K: usize = 4;
@@ -5407,7 +4980,7 @@ fn parse<'a>(src: &'a str) -> Option<(Parser<'a>, i32)> {
     }
 }
 
-${docEditBlockRust(ir)}
+${docEditBlockRust(ir, shared)}
 ${emitParseWithHelpers(ir, shapeB)}
 `;
 }
@@ -5581,7 +5154,7 @@ fn main() {
 export function emitRust(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
   const ir = portableIR(grammar);
   const ids = buildLexIdPlan(ir);
-  const base = emitRustLibrary(ir, ids);
+  const base = emitRustLibrary(ir, ids, rustTarget.shared);
   if (!opts?.shape) return base;
   return base + emitRustShapeAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
 }

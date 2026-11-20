@@ -9,7 +9,8 @@
 // lexer — so no cross-target token format exists.
 //
 // Targets: `jsTarget` (the optimized SoA parser, emit-parser.ts) and the portable
-// `tsTarget`/`goTarget`/`rustTarget` (emit-portable.ts + target-*.ts).
+// `tsTarget`/`goTarget`/`rustTarget` (emit-portable.ts + target-*.ts), each registered by its
+// own module through `defineTarget` (define-target.ts) with the Lowering of the shared algorithms.
 import type { CstGrammar } from './types.ts';
 
 export interface Target {
