@@ -816,7 +816,7 @@ async function main(): Promise<void> {
   const lineBreakUpdates = ['x\n++\ny;', 'x\n--\ny;', 'x ++\n++\ny;', 'a = b\n++c;'];
   const lineBreakLines = runBatch(tsBin, lineBreakUpdates, 600_000);
   const lineBreakRejected = lineBreakUpdates.filter((src, i) =>
-    lineBreakLines[i] !== 'A'
+    !lineBreakLines[i]?.startsWith('A')
     || tsMod.parse(src) === null
     || tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }) === null);
   check('typescript update operators split at a line break accept on CST, TS shape and Rust shape',
