@@ -2,6 +2,7 @@
 # check: git archive <head> | tar -x -C T; node gen.ts T out; compare with SHA256SUMS fix/*
 # all-outputs: sha256 of emitParser(grammar, ts|go|rust) for every top-level grammar and test fixture (+ runners)
 4323940  defineTarget refactor — fix/* identical; all-outputs list identical to 3c1a1ad
+0f3284a  syntax-agnostic core (Lowering spells every construct) — all-outputs list identical to 3c1a1ad
 
 3e6c8a933cdefeaf8d93336452ca37d1a46fd5aa050061757c051b87647ebc9d  html.ts typescript
 3e6c8a933cdefeaf8d93336452ca37d1a46fd5aa050061757c051b87647ebc9d  html.ts go
