@@ -15,8 +15,7 @@
 //
 // Run with: node test/template-holes.ts
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import { emitParser, jsTarget, tsTarget, goTarget } from '../src/emit.ts';
@@ -28,6 +27,7 @@ import {
 import type { CstGrammar, RuleExpr } from '../src/types.ts';
 import { asGoMain } from './go-main.ts';
 import { objectify } from './emitted-obj.ts';
+import { goBuild, scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };
@@ -158,7 +158,7 @@ function verify(engine: string, parse: (src: string) => unknown | null) {
 }
 
 const grammar: CstGrammar = fixture();
-const dir = mkdtempSync(join(tmpdir(), 'template-holes-'));
+const dir = scratchDir('template-holes');
 
 verify('interpreter', createParser(grammar).parse);
 
@@ -180,7 +180,7 @@ if (haveGo) {
   writeFileSync(join(gdir, 'parser.go'), asGoMain(emitParser(grammar, goTarget)));
   writeFileSync(join(gdir, 'runner.go'), goTarget.emitRunner?.() ?? '');
   writeFileSync(join(gdir, 'go.mod'), 'module p\n\ngo 1.21\n');
-  execFileSync('go', ['build', '-o', join(gdir, 'p'), '.'], { cwd: gdir, stdio: 'pipe' });
+  goBuild(['-o', join(gdir, 'p'), '.'], { cwd: gdir });
   verify('portable go', (src) => {
     const r = spawnSync(join(gdir, 'p'), [], { input: src, encoding: 'utf8' });
     return r.status === 0 ? JSON.parse(r.stdout) : null;

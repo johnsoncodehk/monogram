@@ -16,12 +16,15 @@ import { createParser } from '../src/gen-parser.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 import { readFileSync, writeFileSync } from 'fs';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('emit-parser-verify');
 
 const grammar = (await import('../typescript.ts')).default;
 const oracle = createParser(grammar);
 
-// Emit, write to /tmp, import the standalone module.
-const EMITTED = '/tmp/emitted-parser.mts';
+// Emit into this run's scratch dir, import the standalone module.
+const EMITTED = `${TMP}/emitted.mts`;
 writeFileSync(EMITTED, emitParser(grammar, jsTarget));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 

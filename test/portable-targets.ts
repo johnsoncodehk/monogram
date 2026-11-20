@@ -28,12 +28,13 @@
 // Go/Rust toolchains are optional: a missing `go`/`rustc` is logged and skipped (the TS
 // rendering, which needs only node, always runs).
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
+import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
@@ -413,9 +414,7 @@ const skelObj = (o: unknown): unknown => {
 };
 const skeleton = (cstStr: string) => skelObj(JSON.parse(cstStr));
 
-const TMP = '/tmp/portable-targets';
-rmSync(TMP, { recursive: true, force: true });
-mkdirSync(TMP, { recursive: true });
+const TMP = scratchDir('portable-targets');
 const have = (cmd: string, args: string[]) => { try { execFileSync(cmd, args, { stdio: 'pipe' }); return true; } catch { return false; } };
 const HAS_GO = have('go', ['version']);
 const HAS_RUST = have('rustc', ['--version']);
@@ -923,7 +922,7 @@ for (const c of CASES) {
     writeFileSync(`${gdir}/parser.go`, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
-    execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });
+    goBuild(['-o', `${gdir}/p`, '.'], { cwd: gdir });
     const bin = `${gdir}/p`;
     runners.push({
       label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),

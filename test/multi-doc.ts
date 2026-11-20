@@ -11,9 +11,12 @@
 import { writeFileSync } from 'node:fs';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { objectify } from './emitted-obj.ts';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('multi-doc');
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-multidoc.mts';
+const emPath = `${TMP}/emitted.mts`;
 writeFileSync(emPath, emitParser(grammar, jsTarget));
 type Edit = { start: number; end: number; text: string };
 type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };

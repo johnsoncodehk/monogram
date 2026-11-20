@@ -15,9 +15,12 @@ import { readdir } from 'fs/promises';
 import { join } from 'path';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import ts from 'typescript';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('recovery-conformance');
 
 const grammar = (await import('../typescript.ts')).default;
-const emPath = '/tmp/emitted-recovery-conf.mts';
+const emPath = `${TMP}/emitted.mts`;
 writeFileSync(emPath, emitParser(grammar, jsTarget));
 type Cst = { root: number; errors: { offset: number; end: number; message: string }[] };
 const em = (await import(emPath + '?v=' + process.pid)) as { createParser(): { parse(s: string): Cst } };

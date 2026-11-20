@@ -9,11 +9,11 @@
 //
 //   node test/emit-portable-split.ts
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emitParser, goTarget, rustTarget, tsTarget } from '../src/emit.ts';
 import { asGoMain } from './go-main.ts';
+import { goBuild, scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -23,7 +23,7 @@ const check = (label: string, cond: boolean, detail = '') => {
 
 type Edit = { start: number; end: number; text: string };
 const grammar = (await import('../typescript.ts')).default;
-const dir = mkdtempSync(join(tmpdir(), 'monogram-portable-split-'));
+const dir = scratchDir('portable-split');
 writeFileSync(join(dir, 'parser.ts'), emitParser(grammar, tsTarget));
 const ts = (await import(join(dir, 'parser.ts'))) as { parse(s: string): unknown };
 const ref = (s: string) => { const c = ts.parse(s); return c === null ? '' : JSON.stringify(c); };
@@ -294,7 +294,7 @@ else {
   writeFileSync(join(gdir, 'parser.go'), asGoMain(emitParser(grammar, goTarget)));
   writeFileSync(join(gdir, 'main.go'), HARNESS);
   writeFileSync(join(gdir, 'go.mod'), 'module p\n\ngo 1.21\n');
-  execFileSync('go', ['build', '-o', 'h', '.'], { cwd: gdir, stdio: 'pipe' });
+  goBuild(['-o', 'h', '.'], { cwd: gdir });
   const out = JSON.parse(execFileSync(join(gdir, 'h'), {
     input: JSON.stringify({ Samples: SAMPLES, Dense: DENSE_LINE, DenseN: DENSE_N, Sessions: SESSIONS.map((x) => ({ Init: x.init, Edits: x.edits })) }), maxBuffer: 1 << 28,
   }).toString()) as Out;

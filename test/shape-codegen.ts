@@ -1,12 +1,15 @@
 // Gate: TS shape codegen — validateShape, emitTs+parseAst golden AST, no-shape byte identity.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { emitParser, tsTarget } from '../src/emit.ts';
 import { emitTs } from '../src/target-ts.ts';
 import { calcShape } from '../src/shape-calc.ts';
 import { validateShape, validateShapeOrThrow } from '../src/shape-validate.ts';
 import calcGrammar from './fixtures/calc.ts';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('shape-codegen');
 
 type Ast = Record<string, unknown>;
 
@@ -32,9 +35,7 @@ function emitAndLoad(shape?: typeof calcShape): Promise<{
   cstBuilder: unknown;
 }> {
   const src = emitTs(calcGrammar, shape ? { shape } : undefined);
-  const dir = '/tmp/shape-codegen';
-  mkdirSync(dir, { recursive: true });
-  const file = `${dir}/calc-parser.ts`;
+  const file = `${TMP}/calc-parser.ts`;
   writeFileSync(file, src);
   return import(file);
 }

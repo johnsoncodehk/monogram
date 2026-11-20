@@ -16,6 +16,9 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { compileTokenizer, type LexSpec, type Token } from '../src/emit-lexer.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { gtComposites } from '../src/grammar-utils.ts';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('emit-lexer-verify');
 
 type Golden = { spec: LexSpec & { name: string | null }; types: string[]; cases: [string, number[] | string][] };
 const DIR = new URL('./golden/lexer/', import.meta.url);
@@ -79,7 +82,7 @@ for (const name of ['typescript', 'typescriptreact', 'javascript', 'javascriptre
   const matches = goldens.filter(({ g }) => g.spec.name === name);
   if (matches.length !== 1) { console.log(`✗ ${name}: expected exactly one golden, found ${matches.length}`); bad++; continue; }
   const src = emitParser(grammar, jsTarget);
-  const path = `/tmp/emit-lexer-verify-${name}.mts`;
+  const path = `${TMP}/${name}.mts`;
   writeFileSync(path, src);
   const m = await import(path + '?v=' + Date.now());
   bad += check(`emitted ${name}`, matches[0].g, m.tokenize, m, gtComposites(grammar));

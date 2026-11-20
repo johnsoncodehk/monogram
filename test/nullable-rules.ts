@@ -10,13 +10,13 @@
 //
 // Run with: node test/nullable-rules.ts
 import { writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createParser } from '../src/gen-parser.ts';
 import { computeNullableRules } from '../src/grammar-analysis.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { token, rule, defineGrammar, many, opt, plus, oneOf, range } from '../src/api.ts';
 import type { RuleExpr } from '../src/types.ts';
+import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };
@@ -106,7 +106,7 @@ if (yaml) {
   const reject = ['&a - x', '!!t &a - x', '&a &b x', '[a,,b]', '[,a]', '{a,,b}', '{: a : b}'];
   const interp = createParser(yaml);
   const iOk = (s: string) => { try { interp.parse(s); return true; } catch { return false; } };
-  const file = join(tmpdir(), `monogram-nullable-yaml-${process.pid}.ts`);
+  const file = join(scratchDir('nullable-rules'), 'yaml.ts');
   writeFileSync(file, emitParser(yaml, jsTarget));
   const em = (await import(file + '?v=' + Date.now())).createParser();
   const eOk = (s: string) => { try { return em.parse(s).errors.length === 0; } catch { return false; } };

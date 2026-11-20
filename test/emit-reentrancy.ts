@@ -10,11 +10,11 @@
 // Handles read their tokens through createParser().tokenAt(handle, i).
 //
 //   node test/emit-reentrancy.ts
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import type { CstGrammar } from '../src/types.ts';
+import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean, detail = '') => {
@@ -63,7 +63,7 @@ function trace(tree: Tree, tok: (i: number) => Token, run: (f: Fns) => void, src
   return { seq, spanBad };
 }
 
-const dir = mkdtempSync(join(tmpdir(), 'monogram-emit-reentrancy-'));
+const dir = scratchDir('emit-reentrancy');
 for (const c of CASES) {
   let grammar: CstGrammar;
   try { grammar = (await import(c.path)).default; } catch { console.log(`  ${c.name}: (grammar not present — skipped)`); continue; }

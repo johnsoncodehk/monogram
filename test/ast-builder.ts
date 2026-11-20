@@ -2,9 +2,10 @@
 // builder golden snapshots, and (when run as main) CST-prefix identity vs master emit tip.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { emitParser, goTarget, rustTarget, tsTarget } from '../src/emit.ts';
 import { asGoMain } from './go-main.ts';
+import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; seeds: string[] };
@@ -129,8 +130,20 @@ const CASES: Case[] = [
   },
 ];
 
-const TMP = '/tmp/ast-builder-gate';
-mkdirSync(TMP, { recursive: true });
+const TMP = scratchDir('ast-builder');
+
+/** A ≥2MB typescript document: the typescript seeds repeated, one per line. */
+const CORPUS_2MB = (() => {
+  const seeds = CASES.find((x) => x.grammar === 'typescript')!.seeds;
+  const lines: string[] = [];
+  let bytes = 0;
+  for (let i = 0; bytes < 2_100_000; i++) {
+    const line = seeds[i % seeds.length] + '\n';
+    lines.push(line);
+    bytes += Buffer.byteLength(line);
+  }
+  return lines.join('');
+})();
 
 /** ≥300 inputs per grammar — whitespace paddings only (keep lexical validity). */
 function variants(seeds: string[], n = 300): string[] {
@@ -465,8 +478,7 @@ console.log('\nast-builder: ts createDoc builder / shift contracts');
 
 // ─── 4. Rust target: parse_with(CstBuilder) ≡ parse + SlimBuilder smoke ──────
 console.log('\nast-builder: rust parse_with(CstBuilder) ≡ parse()');
-const RUST_TMP = '/tmp/ast-builder-rust-gate';
-mkdirSync(RUST_TMP, { recursive: true });
+const RUST_TMP = scratchDir('ast-builder-rust');
 
 function haveRustc(): boolean {
   try { execFileSync('rustc', ['--version'], { stdio: 'pipe' }); return true; }
@@ -725,21 +737,9 @@ if (!haveRustc()) {
     check('rust slim 1; → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t1;\tNumber\t')));
   }
 
-  // 2MB corpus equivalence (rebuild if missing)
+  // 2MB corpus equivalence
   {
-    const corpusPath = '/tmp/p6c-corpus-2mb.ts';
-    if (!existsSync(corpusPath)) {
-      // Minimal rebuild: concatenate typescript seeds enough to pass ~2MB
-      const seeds = CASES.find((x) => x.grammar === 'typescript')!.seeds;
-      let body = '';
-      let i = 0;
-      while (Buffer.byteLength(body) < 2_100_000) {
-        body += seeds[i % seeds.length] + '\n';
-        i++;
-      }
-      writeFileSync(corpusPath, body);
-    }
-    const corpus = readFileSync(corpusPath, 'utf8');
+    const corpus = CORPUS_2MB;
     check('2MB corpus present', Buffer.byteLength(corpus) >= 2_000_000, `${Buffer.byteLength(corpus)} bytes`);
     const out = execFileSync(rustBin('typescript'), ['eq-batch'], {
       input: JSON.stringify([corpus]), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 180_000,
@@ -778,8 +778,7 @@ if (!haveRustc()) {
 
 // ─── 5. Go target: ParseWith(CstBuilder) ≡ parse + SlimBuilder smoke ─────────
 console.log('\nast-builder: go ParseWith(CstBuilder) ≡ parse()');
-const GO_TMP = '/tmp/ast-builder-go-gate';
-mkdirSync(GO_TMP, { recursive: true });
+const GO_TMP = scratchDir('ast-builder-go');
 
 function haveGo(): boolean {
   try { execFileSync('go', ['version'], { stdio: 'pipe' }); return true; }
@@ -1093,7 +1092,7 @@ if (!haveGo()) {
     writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
     writeFileSync(hfile, goHarness);
     try {
-      execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 180_000 });
+      goBuild(['-o', bin, gfile, hfile], { timeout: 180_000 });
     } catch (e) {
       check(`go build ${c.grammar}`, false, String(e).slice(0, 200));
       continue;
@@ -1125,18 +1124,7 @@ if (!haveGo()) {
 
   // 2MB corpus equivalence
   {
-    const corpusPath = '/tmp/p6c-corpus-2mb.ts';
-    if (!existsSync(corpusPath)) {
-      const seeds = CASES.find((x) => x.grammar === 'typescript')!.seeds;
-      let body = '';
-      let i = 0;
-      while (Buffer.byteLength(body) < 2_100_000) {
-        body += seeds[i % seeds.length] + '\n';
-        i++;
-      }
-      writeFileSync(corpusPath, body);
-    }
-    const corpus = readFileSync(corpusPath, 'utf8');
+    const corpus = CORPUS_2MB;
     check('go 2MB corpus present', Buffer.byteLength(corpus) >= 2_000_000, `${Buffer.byteLength(corpus)} bytes`);
     const bin = goBin('typescript');
     const out = execFileSync(bin, ['eq-batch'], {

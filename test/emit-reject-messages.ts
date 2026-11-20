@@ -19,11 +19,14 @@ import { createParser } from '../src/gen-parser.ts';
 import { emitParser, jsTarget } from '../src/emit.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 import { readFileSync, writeFileSync } from 'fs';
+import { scratchDir } from './scratch.ts';
+
+const TMP = scratchDir('emit-reject-messages');
 
 const grammar = (await import('../typescript.ts')).default;
 const oracle = createParser(grammar);
 
-const EMITTED = '/tmp/emitted-parser-msg.mts';
+const EMITTED = `${TMP}/emitted.mts`;
 writeFileSync(EMITTED, emitParser(grammar, jsTarget));
 const emitted = await import(EMITTED + '?v=' + Date.now());
 
