@@ -75,8 +75,8 @@ export type Stmt =
   | { k: 'comment'; text: string };
 
 export interface Param { name: string; ty: Ty }
-// `inline`: called once per token from a lexer's dispatch loop; a lowering may ask its compiler
-// to inline it. Printing hint only.
+// `inline`: called once per token from a lexer's dispatch loop. A lowering may ask its compiler
+// to inline it, or splice it into its call sites at generation time (`spliceInline`).
 export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean }
 export type CodeRange = [number, number];
 export interface CharSet { name: string; ranges: CodeRange[] }
@@ -148,6 +148,9 @@ export interface Lowering {
     return(vals: string[]): Lines;
     fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines; inline: boolean }): string;
   };
+  // `inline` fns are not printed as functions; each call site prints `inlineFn` of the body
+  // instead (for compilers that cannot be told to inline a function).
+  spliceInline?: boolean;
   // The token-stream constructs (metas, tokens, edits, lists) the relex family is written in.
   relex?: RelexLowering;
 }
@@ -428,6 +431,16 @@ class Printer implements Cx {
 
   private cur: Fn | null = null;
 
+  stmts(vars: Param[], body: Stmt[]): Lines {
+    this.env = new Map();
+    this.mutable = new Set();
+    this.reassigned = new Set();
+    this.cur = null;
+    this.scan(body);
+    for (const v of vars) this.env.set(v.name, { ty: v.ty, owned: false });
+    return this.block(body, 0);
+  }
+
   fn(f: Fn): string {
     this.env = new Map();
     this.mutable = new Set();
@@ -444,6 +457,91 @@ class Printer implements Cx {
       inline: f.inline === true,
     });
   }
+}
+
+// Statements printed in a caller's scope, where `vars` are already bound; `fns` are the callable
+// signatures.
+export function printStmts(lowering: Lowering, fns: Fn[], sets: CharSet[], vars: Param[], body: Stmt[]): Lines {
+  return new Printer(lowering, fns, sets).stmts(vars, body);
+}
+
+const hasReturn = (ss: Stmt[]): boolean => ss.some((s) =>
+  s.k === 'return' || (s.k === 'if' && (hasReturn(s.then) || hasReturn(s.else ?? []))) || (s.k === 'while' && hasReturn(s.body)));
+const alwaysReturns = (ss: Stmt[]): boolean => {
+  const l = ss[ss.length - 1];
+  return !!l && (l.k === 'return' || (l.k === 'if' && alwaysReturns(l.then) && alwaysReturns(l.else ?? [])));
+};
+
+// Generation-time inlining: the body of `f` (one numeric result) as statements that leave the
+// result in a new local `out` instead of returning it. Params become the caller's `args`;
+// locals that would clash with them are renamed. A return inside a loop ends the loop, and what
+// follows the loop runs only while `out` still holds `unset`, a value `f` never returns.
+export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stmt[] {
+  if (f.ret.length !== 1 || !isNum(f.ret[0]) || args.length !== f.params.length) throw new Error(`algo-ir: cannot inline ${f.name}`);
+  const ren = new Map(f.params.map((p, i) => [p.name, args[i]]));
+  const locals = new Set<string>();
+  const collect = (ss: Stmt[]): void => ss.forEach((s) => {
+    if (s.k === 'let') locals.add(s.name);
+    else if (s.k === 'if') { collect(s.then); collect(s.else ?? []); }
+    else if (s.k === 'while') collect(s.body);
+  });
+  collect(f.body);
+  const taken = new Set([...args, out, ...locals]);
+  for (const n of locals) {
+    if (n !== out && !args.includes(n)) continue;
+    let m = n;
+    for (let k = 1; taken.has(m); k++) m = `${n}${k}`;
+    taken.add(m);
+    ren.set(n, m);
+  }
+  const name = (n: string): string => ren.get(n) ?? n;
+  const ex = (e: Expr): Expr => {
+    if (e.k === 'var') return { k: 'var', name: name(e.name) };
+    const o: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(e)) {
+      o[key] = Array.isArray(v) ? v.map((y) => (typeof y === 'object' && y && 'k' in y ? ex(y as Expr) : y))
+        : typeof v === 'object' && v && 'k' in v ? ex(v as Expr) : v;
+    }
+    return o as Expr;
+  };
+  const setOut = (e: Expr): Stmt => ({ k: 'set', name: out, e: ex(e) });
+  const guard = (rest: Stmt[]): Stmt[] => (rest.length ? [{ k: 'if', c: { k: 'bin', op: 'eq', a: { k: 'var', name: out }, b: { k: 'int', v: unset } }, then: go(rest, false) }] : []);
+  const branch = (ss: Stmt[], inLoop: boolean): Stmt[] | undefined => (ss.length ? go(ss, inLoop) : undefined);
+  function go(ss: Stmt[], inLoop: boolean): Stmt[] {
+    const res: Stmt[] = [];
+    for (let i = 0; i < ss.length; i++) {
+      const s = ss[i], rest = ss.slice(i + 1);
+      switch (s.k) {
+        case 'let': res.push({ ...s, name: name(s.name), init: ex(s.init) }); continue;
+        case 'set': res.push({ ...s, name: name(s.name), e: ex(s.e) }); continue;
+        case 'break': case 'comment': res.push(s); continue;
+        case 'return':
+          if (s.es.length !== 1) throw new Error(`algo-ir: cannot inline ${f.name}`);
+          res.push(setOut(s.es[0]), ...(inLoop ? [{ k: 'break' } as Stmt] : []));
+          return res;
+        case 'if': {
+          const c = ex(s.c), t = s.then, e = s.else ?? [];
+          if (inLoop || !hasReturn([s])) { res.push({ k: 'if', c, then: go(t, inLoop), else: branch(e, inLoop) }); continue; }
+          const at = alwaysReturns(t), ae = alwaysReturns(e);
+          if (at && ae) res.push({ k: 'if', c, then: go(t, false), else: go(e, false) });
+          else if (at) res.push({ k: 'if', c, then: go(t, false), else: branch([...e, ...rest], false) });
+          else if (ae) res.push({ k: 'if', c, then: go([...t, ...rest], false), else: go(e, false) });
+          else res.push({ k: 'if', c, then: go(t, false), else: branch(e, false) }, ...guard(rest));
+          return res;
+        }
+        case 'while': {
+          if (inLoop && hasReturn(s.body)) throw new Error(`algo-ir: cannot inline ${f.name}: return in a nested loop`);
+          res.push({ k: 'while', c: ex(s.c), body: go(s.body, true) });
+          if (inLoop || !hasReturn(s.body)) continue;
+          res.push(...guard(rest));
+          return res;
+        }
+        default: throw new Error(`algo-ir: cannot inline ${f.name}: ${s.k}`);
+      }
+    }
+    return res;
+  }
+  return [{ k: 'let', name: out, ty: f.ret[0], init: { k: 'int', v: unset } }, ...go(f.body, false)];
 }
 
 export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = []): string {

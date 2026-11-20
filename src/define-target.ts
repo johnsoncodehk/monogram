@@ -8,17 +8,19 @@ import type { Lowering } from './algo-ir.ts';
 import type { Target } from './emit.ts';
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
-import { emitLexScan, scannedTokens, scannerName } from './lex-family.ts';
+import { emitLexScan, emitScanInline, scannedTokens, scannerName } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 
 // The shared algorithm families, printed for the defining target.
 export interface SharedAlgorithms {
   relexFamily(ir: ParserIR): string;
   // The token scanners, the tokens they cover, and the printed name of the scanner a dispatch
-  // site calls for a token.
+  // site calls for a token. A lowering with `spliceInline` gets the scanner's statements for its
+  // dispatch site instead (`out` declared and holding the scanner's result).
   lexScan(ir: ParserIR): string;
   scannedTokens(ir: ParserIR): LexTok[];
   scanner(token: string): string;
+  scanInline(ir: ParserIR, token: string, at: { s: string; p: string; out: string }): string[];
 }
 
 export interface TargetDefinition {
@@ -49,7 +51,11 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
     },
     lexScan: (ir) => emitLexScan(ir, lowering()),
     scannedTokens,
-    scanner: (token) => lowering().ident(scannerName(token)),
+    scanner: (token) => {
+      if (lowering().spliceInline) throw new Error(`defineTarget: target ${def.name} splices scanners; use scanInline`);
+      return lowering().ident(scannerName(token));
+    },
+    scanInline: (ir, token, at) => emitScanInline(ir, lowering(), token, at),
   };
   const target: PortableTarget = {
     name: def.name,

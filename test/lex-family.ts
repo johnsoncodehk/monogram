@@ -4,12 +4,15 @@
 //   1. no target module recognizes tokens itself: no LexTok-kind or token-pattern switch, no
 //      TokenPattern import — scanning arrives via `shared.lexScan` / `shared.scanner`;
 //   2. in every emitted TS / Go / Rust lexer, each scanned token's scanner is defined exactly
-//      once and called from the dispatch loop;
+//      once and called from the dispatch loop — or, for a lowering that splices inline fns (Go),
+//      no scanner fn is printed and each scanner's statements appear at the dispatch;
 //   3. the family, printed through the TS target and executed, scans a grammar covering every
 //      scanner kind (nested and flat block comments, line comments, escaping strings, char
 //      runs, seq / alt / repeat / negated-lookahead patterns) to the expected end — and to -1
 //      on unterminated or non-matching input;
-//   4. those cases catch defects: each mutant of the printed scanners fails at least one case.
+//   4. the same cases pass through every scanner spliced by generation-time inlining;
+//   5. those cases catch defects: each mutant of the printed scanners, and of the splicing
+//      (a loop return that does not end the loop, a missing after-loop guard), fails a case.
 //
 //   node test/lex-family.ts
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -64,25 +67,38 @@ if (nestedOf(flat, 'BlockComment') !== false) fail('javascript: BlockComment is 
 
 // ── 2. every emitted lexer defines each scanner once and calls it ──
 const HOSTS = [
-  { name: 'typescript', target: tsTarget, def: (n: string) => `function ${n}(`, use: (n: string) => `${n}(src, pos)` },
-  { name: 'go', target: goTarget, def: (n: string) => `func ${n}(`, use: (n: string) => `${n}(src, pos)` },
+  { name: 'typescript', target: tsTarget, def: (n: string) => `function ${n}(`, use: (n: string) => `${n}(src, pos)` as string | null },
+  { name: 'go', target: goTarget, def: (n: string) => `func ${n}(`, use: null },
   { name: 'rust', target: rustTarget, def: (n: string) => `fn ${n}(`, use: (n: string) => `${n}(src, pos as isize)` },
 ];
 const count = (s: string, sub: string) => s.split(sub).length - 1;
+// Occurrences of `block` as consecutive lines of `out`, ignoring indentation.
+const countBlock = (out: string[], block: string[]): number => {
+  const b = block.map((l) => l.trim());
+  let n = 0;
+  for (let i = 0; i + b.length <= out.length; i++) if (b.every((l, k) => out[i + k] === l)) n++;
+  return n;
+};
 const GRAMMARS: [string, CstGrammar][] = [['lexkinds', kinds], ['javascript', flat], ['calc', (await import('./fixtures/calc.ts')).default], ['envtpl', (await import('./fixtures/envtpl.ts')).default]];
 for (const [gname, g] of GRAMMARS) {
   const gir = portableIR(g);
   for (const h of HOSTS) {
     const out = h.target.emitParser(g);
+    const lines = out.split('\n').map((l) => l.trim());
     const toks = h.target.shared.scannedTokens(gir);
     for (const t of toks) {
+      if (h.use === null) {
+        if (out.includes(h.def('lexScan'))) fail(`${gname}/${h.name}: prints a scanner fn although it splices them`);
+        if (countBlock(lines, h.target.shared.scanInline(gir, t.name, { s: 'src', p: 'pos', out: 'e' })) < 1) fail(`${gname}/${h.name}: ${t.name}'s scanner is not spliced into the lexer`);
+        continue;
+      }
       const n = h.target.shared.scanner(t.name);
       if (count(out, h.def(n)) !== 1) fail(`${gname}/${h.name}: ${n} defined ${count(out, h.def(n))}×, want 1`);
       if (count(out, h.use(n)) < 1) fail(`${gname}/${h.name}: ${n} is never called by the lexer`);
     }
     if (gir.tpl && toks.some((t) => t.name === gir.tpl!.token)) fail(`${gname}/${h.name}: the template token is scanned outside the template state machine`);
   }
-  console.log(`  ${gname}: ${portableIR(g).tokens.length} tokens; ts / go / rust each define and call every scanner once`);
+  console.log(`  ${gname}: ${portableIR(g).tokens.length} tokens; ts / rust define and call every scanner once, go splices each`);
 }
 
 // ── 3. the printed family, executed ──
@@ -118,16 +134,23 @@ const CASES: Case[] = [
 const dir = mkdtempSync(join(tmpdir(), 'lex-family-'));
 const printed = tsTarget.shared.lexScan(ir);
 const names = ir.tokens.map((t) => tsTarget.shared.scanner(t.name));
+// Each scanner spliced into a wrapper fn `inline<scanner>(src, pos)`, as a dispatch site gets it.
+const spliced = ir.tokens.map((t) => [
+  `export function inline${tsTarget.shared.scanner(t.name)}(src: string, pos: number): number {`,
+  ...tsTarget.shared.scanInline(ir, t.name, { s: 'src', p: 'pos', out: 'e' }).map((l) => `  ${l}`),
+  '  return e;',
+  '}',
+].join('\n')).join('\n');
 let mod = 0;
 async function load(src: string): Promise<Record<string, (s: string, p: number) => number>> {
   const f = join(dir, `scan${mod++}.ts`);
   writeFileSync(f, `${src}\nexport { ${names.join(', ')} };\n`);
   return import(pathToFileURL(f).href);
 }
-function run(scan: Record<string, (s: string, p: number) => number>): string[] {
+function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''): string[] {
   const bad: string[] = [];
   for (const [tok, src, pos, end] of CASES) {
-    const got = scan[tsTarget.shared.scanner(tok)]!(src, pos);
+    const got = scan[prefix + tsTarget.shared.scanner(tok)]!(src, pos);
     if (got !== end) bad.push(`${tok}(${JSON.stringify(src)}, ${pos}) = ${got}, want ${end}`);
   }
   return bad;
@@ -135,8 +158,10 @@ function run(scan: Record<string, (s: string, p: number) => number>): string[] {
 try {
   for (const b of run(await load(printed))) fail(`lexkinds: ${b}`);
   console.log(`  lexkinds: ${CASES.length} scanner cases through the printed family`);
+  for (const b of run(await load(`${printed}\n${spliced}`), 'inline')) fail(`lexkinds/spliced: ${b}`);
+  console.log(`  lexkinds: ${CASES.length} scanner cases through the spliced scanners`);
 
-  // ── 4. mutants ──
+  // ── 5. mutants ──
   const MUTANTS: [string, RegExp, string][] = [
     ['nested block depth never grows', /depth = depth \+ 1/, 'depth = depth'],
     ['string escape skips one character', /e = e \+ 2/, 'e = e + 1'],
@@ -150,6 +175,16 @@ try {
     const bad = run(await load(printed.replace(re, by)));
     if (!bad.length) fail(`mutant "${what}" survives every case`);
     else console.log(`  mutant "${what}": caught (${bad.length} case(s))`);
+  }
+  const SPLICE_MUTANTS: [string, RegExp, string][] = [
+    ['a return inside a loop does not end it', /(\n\s+e = [^;\n]+;)\n\s+break;/g, '$1'],
+    ['no guard after a loop that may return', /if \(e === -2\) e = -1;/g, ''],
+  ];
+  for (const [what, re, by] of SPLICE_MUTANTS) {
+    if (!re.test(spliced)) { fail(`splice mutant "${what}": pattern not found in the spliced scanners`); continue; }
+    const bad = run(await load(`${printed}\n${spliced.replace(re, by)}`), 'inline');
+    if (!bad.length) fail(`splice mutant "${what}" survives every case`);
+    else console.log(`  splice mutant "${what}": caught (${bad.length} case(s))`);
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });

@@ -68,8 +68,9 @@ const TT_SKIP_PUNCT = ${TT_SKIP_PUNCT}
 `;
 }
 
-// One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
-function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+// One token at a dispatch site: the shared scanner, spliced in, says where it ends; the lexer
+// records it.
+function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
   const kid = kidOf(ids, name);
   const push = t.skip
@@ -78,8 +79,10 @@ function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: Le
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lxExt(src, e); ' : '';
-  const scan = `if e := ${shared.scanner(name)}(src, pos); e >= 0 { ${ext}${push}pos = e; continue }`;
-  return rxTok !== undefined && name === rxTok ? `\t\tif !prevIsValue() { ${scan} }` : `\t\t${scan}`;
+  const body = shared.scanInline(ir, name, { s: 'src', p: 'pos', out: 'e' });
+  const scan = ['{', ...goBlock([...body, `if e >= 0 { ${ext}${push}pos = e; continue }`]), '}'];
+  const lines = rxTok !== undefined && name === rxTok ? ['if !prevIsValue() {', ...goBlock(scan), '}'] : scan;
+  return lines.map((l) => `\t\t${l}`).join('\n');
 }
 
 function buildLexCandidates(
@@ -90,7 +93,7 @@ function buildLexCandidates(
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
   for (const t of shared.scannedTokens(ir)) {
-    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
+    codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -2837,6 +2840,7 @@ const goLowering: Lowering = {
   type: (t) => GO_TYPES[t],
   cast: (_cx, r, nat) => ({ ...r, c: `${nat}(${r.c})`, nat, prec: ATOM }),
   owns: false,
+  spliceInline: true,
   charSet: (name, rs) => `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),

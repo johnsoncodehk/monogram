@@ -7,13 +7,14 @@
 //
 // Boundary: the dispatch loop stays with each target — whitespace, punctuation, the first-byte
 // arms (buildLexDispatchPlan), lexer-mode state (regex / template / newline), token storage, and
-// what to do when no scanner matches. A target calls `scanner(name)` at its dispatch site.
+// what to do when no scanner matches. A target calls `scanner(name)` at its dispatch site, or,
+// when its lowering splices inline fns, prints `scanInline(name)` there.
 //
 // Offsets are in the target's native string units; the family only does arithmetic on them.
 
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
-import { type CharSet, type CodeRange, type Expr, type Fn, type Lowering, type Stmt, printFns } from './algo-ir.ts';
+import { type CharSet, type CodeRange, type Expr, type Fn, type Lowering, type Stmt, inlineFn, printFns, printStmts } from './algo-ir.ts';
 
 type Ex = Expr | string;
 const x = (e: Ex): Expr => (typeof e === 'string' ? { k: 'var', name: e } : e);
@@ -223,13 +224,31 @@ export function scannedTokens(ir: ParserIR): LexTok[] {
   return ir.tokens.filter((t) => t.name !== ir.tpl?.token);
 }
 
+const families = new WeakMap<ParserIR, { sets: CharSet[]; fns: Fn[] }>();
 export function lexScanFamily(ir: ParserIR): { sets: CharSet[]; fns: Fn[] } {
-  const b = new LexScan();
-  for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t), inline: true });
-  return { sets: b.sets, fns: b.fns };
+  let f = families.get(ir);
+  if (!f) {
+    const b = new LexScan();
+    for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t), inline: true });
+    f = { sets: b.sets, fns: b.fns };
+    families.set(ir, f);
+  }
+  return f;
 }
 
 export function emitLexScan(ir: ParserIR, lowering: Lowering): string {
   const { sets, fns } = lexScanFamily(ir);
-  return printFns(lowering, fns, sets);
+  return printFns(lowering, lowering.spliceInline ? fns.filter((f) => !f.inline) : fns, sets);
+}
+
+// Scanners return -1 or a position, never this.
+const UNSET = -2;
+
+// The scanner for `token` as statements in the caller's scope: `out` is declared and left holding
+// what the scanner returns for source `s` at position `p` (the caller's variables).
+export function emitScanInline(ir: ParserIR, lowering: Lowering, token: string, at: { s: string; p: string; out: string }): string[] {
+  const { sets, fns } = lexScanFamily(ir);
+  const f = fns.find((g) => g.name === scannerName(token));
+  if (!f) throw new Error(`lex-family: no scanner for ${token}`);
+  return printStmts(lowering, fns, sets, [{ name: at.s, ty: 'str' }, { name: at.p, ty: 'int' }], inlineFn(f, [at.s, at.p], at.out, UNSET));
 }
