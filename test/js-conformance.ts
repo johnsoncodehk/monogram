@@ -67,6 +67,8 @@ const validJs: string[] = [
   `delete obj.x; typeof x; void 0; !x; ~y; +z; -w;`,
   `const inst = x instanceof Y; const inOp = "k" in obj;`,
   `new Foo(); new Foo(1, 2); new foo.Bar(); new.target;`,
+  // a template in the `new` callee (MemberExpression : MemberExpression TemplateLiteral)
+  `new \`a\${0}b\`; new \`abc\`(1); new tag\`x\${y}\`(); new a.b\`x\`(1); new \`x\`.y(); new a\`x\`.b\`y\`(1);`,
   `(function () {})(); (() => {})();`,
   `import.meta.url;`,
   // control flow

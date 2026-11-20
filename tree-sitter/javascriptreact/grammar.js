@@ -130,7 +130,7 @@ module.exports = grammar({
 
     member_name: $ => choice($.ident, $.private_field, $.string, $.number, $.hex_number, $.octal_number, $.binary_number, $.big_int, seq("[", $.expr, "]")),
 
-    new_target: $ => choice($.ident, seq($.new_target, ".", $.ident), seq($.new_target, "[", $.expr, "]"), seq("(", $.expr, ")")),
+    new_target: $ => choice($.ident, $.template, seq($.new_target, ".", $.ident), seq($.new_target, "[", $.expr, "]"), seq($.new_target, $.template), seq("(", $.expr, ")")),
 
     class_heritage: $ => choice($.ident, $.number, $.string, "true", "false", "null", "undefined", seq($.class_heritage, ".", $.ident), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")),
 

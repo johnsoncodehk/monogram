@@ -52,6 +52,7 @@ export const CURATED_TS: string[] = [
   `const cond = a ? b : c ? d : e, cmp = a < b === c > d, seq = (a, b, c);`,
   `delete obj.x; typeof x; void 0; !x; ~y; +z; -w; a in obj; a instanceof Y;`,
   `new Foo(); new Foo(1, 2); new foo.Bar(); new.target; import.meta.url;`,
+  `new \`a\${0}b\`; new \`abc\`(1); new tag\`x\${y + 1}\`(); new a.b\`x\`(1); new \`x\`.y(); new a\`x\`.b\`y\`(1); new new a\`x\`()();`,
   `(function () {})(); (() => {})(); (class {});`,
   // — restricted productions: a line break before `++`/`--` ends the operand (ASI) —
   `x\n++\ny; a = b\n--c\nd ++\n++\ne; f()\n++\ng.h; i /* c */ ++; j // c\n++\nk;`,
@@ -113,7 +114,7 @@ export const CURATED_TS: string[] = [
 export const CURATED_TS_CST: string[] = [
   // a template's holes are parsed by the rule its reference declares: types in a
   // template-literal type, expressions in a template-literal expression, at any nesting
-  `type TL = \`a\${T[]}b\${A | B}\`; const tl = \`a\${y as \`b\${T[]}\`}c\`;`,
+  `type TL = \`a\${T[]}b\${A | B}\`; const tl = \`a\${y as \`b\${T[]}\`}c\`; new \`x\${y as T[]}\`;`,
 ];
 
 // ── 1b) Deliberately malformed snippets ─────────────────────────────────────────────────

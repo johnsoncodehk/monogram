@@ -234,8 +234,16 @@ const CASES: Case[] = [
       // here] ++`): after a line break the operator is the prefix of the NEXT statement.
       'x\n++\ny;', 'x\n--\ny;', 'x ++\n++\ny;', 'x\n++y\n--\nz;', 'a = b\n++c;', 'f()\n++\ny.z;',
       'var z =\nx\n++\ny;', 'function f() { return x\n++\ny; }', '{ x\n++\ny }', 'a[0]\n--\ny;',
+      // A template is part of the `new` callee (MemberExpression : MemberExpression
+      // TemplateLiteral, PrimaryExpression : TemplateLiteral); its holes are expressions.
+      'new `a${0}b`;', 'new `abc`;', 'new `abc`(1);', 'new `x${1 + 1}`.y(1);', 'new tag`x`();',
+      'new tag`x${1 + 1}`();', 'new a.b`x${y}`(1);', 'new a`x`.b`y`(1);', 'new a[0]`x`();',
+      'new (a)`x`();', 'new a`x${new b`y${0}`}`();', 'new a`x`()`y`;', 'new a`x`().b;', 'new a`x`()?.b;',
+      'async function f() { new a`x${await b}`(); }',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
+      // A `new` with no Arguments is not an optional-chain base, template callee or not.
+      'new a`x`?.b;', 'new `x`?.b;', 'new a?.`x`;', 'new `a${}b`;', 'async function f() { new a`x${await}`(); }',
       '1 + () => 2;', 'a++.b;', 'f(a, b,',
       // … so nothing after a line break is a postfix operator: `x\n++\n++\ny` is `x; ++ ++y`,
       // `x\n++` is `x; ++`, and `(x\n++)` leaves `++` with no operand.
@@ -302,9 +310,11 @@ const CASES: Case[] = [
       'function f(x: any): (this is T) { }', 'type F = (x: any) => x is T;', 'var v = (x: any): x is T => true;',
       'var x: this is\n string;', 'class C { p: this\n is: number }', 'class C { m(x): x\n is: string }', 'type A = this[];',
       // A template's holes are parsed by the rule its reference declares: types in a
-      // template-literal type, expressions everywhere else.
+      // template-literal type, expressions everywhere else — the `new` callee included.
       'type X = `a${T[]}b`;', 'type X = `a${A | B}b${C["k"]}`;', 'type X = `${infer U extends string}x`;',
       '`a${0}b`;', 'tag`a${1 + 1}b`;', 'x = `a${y as `b${T[]}`}c`;',
+      'new `a${0}b`;', 'new `abc`(1);', 'new tag`x${1 + 1}`();', 'new a.b`x${y}`(1);', 'new a<T>`x`();',
+      'new `x${y as T[]}`;', 'new a`x${new b`y${0}`}`();',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -331,7 +341,7 @@ const CASES: Case[] = [
       'var x: this\n is string;', 'function f(): this\n is string { }', 'function f(x: any): x\n is string { }',
       'class C { p: this is }', 'var v = y as this is;', 'function f(x: any): void is T { }', 'function f(x: any): class is T { }',
       // A hole holds what its template's reference declares, nothing else.
-      'x = `a${T[]}b`;', 'type X = `a${1 + 1}b`;'],
+      'x = `a${T[]}b`;', 'type X = `a${1 + 1}b`;', 'new `a${T[]}b`;', 'new a`x`?.b;', 'new a<T>`x`?.b;'],
   },
 ];
 

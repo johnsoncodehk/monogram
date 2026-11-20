@@ -121,6 +121,13 @@ const SNIPPETS: [string, string][] = [
   ['template', 'const s = `a ${x + 1} b ${y} c`;'],
   ['tagged-template', 'tag`v=${v}`;'],
   ['new', 'const i = new C(a, b); const j = new D;'],
+  // The `new` callee is a MemberExpression, and `MemberExpression TemplateLiteral` /
+  // `PrimaryExpression : TemplateLiteral` are MemberExpressions: the template belongs to the
+  // CALLEE and a following `( )` is the `new` Arguments — `new tag`x`()` is
+  // New(TaggedTemplate(tag, `x`), args), never Call(TaggedTemplate(New(tag), `x`)).
+  ['new-template-callee', 'new `a${0}b`; new `abc`; new `abc`(1); new `x`.y(1); new `x`[0];'],
+  ['new-tagged-callee', 'new tag`x`(); new tag`x`; new a.b`x${y}`(1); new a`x`.b`y`(1); new a[0]`x`(); new (a)`x`();'],
+  ['new-tagged-nested', 'new new a`x`()(); new a`x${new b`y`}`(); new a`x`()`y`; new a()`x`; new a`x`().b;'],
   ['unary', '!a; -b; +c; ~d; typeof e; void f; delete g.h; await p; ++i; j--;'],
   ['logical-assign', 'a ||= b; c &&= d; e ??= f;'],
   ['types-basic', 'const a: string = "x"; let b: number[] = []; var c: A | B;'],

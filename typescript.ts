@@ -305,8 +305,13 @@ const NewTarget = rule($ => [
   // a `new` expression is itself a valid new-target (NewExpression : `new` NewExpression),
   // so `new new Foo()()` / `new new f` chain — mirrors the Expr `new` arm but recurses here.
   ['new', not('<'), $, opt(alt([...typeArgsInExpr(), opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')']))],
+  // A template is part of the callee (PrimaryExpression : TemplateLiteral, MemberExpression :
+  // MemberExpression TemplateLiteral — see javascript.ts), with tsc's type arguments on the tag.
+  Template,
   [$, '.', Ident],
   [$, '[', Expr, ']'],
+  [$, Template],
+  [$, ...typeArgsInExpr(), Template],
   ['(', Expr, ')'],
 ]);
 
