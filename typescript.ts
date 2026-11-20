@@ -833,6 +833,20 @@ const ImportClause = rule($ => [
   ['*', 'as', Ident],
 ]);
 
+// The right-hand side of an import-equals declaration (`import x = …`), tsc's
+// parseModuleReference: an ExternalModuleReference `require ( specifier )`, or an
+// EntityName — identifiers joined by `.`, every segment a non-reserved identifier
+// (tsc parses it with allowReservedWords=false, so `a.default` / `a.if` are errors).
+// It is NOT an expression: no call, index, template tag, `new`, literal, `this`, type
+// arguments or operator continues it. The specifier is a bare string literal (tsc
+// parses a literal alone there, so `require("x" + y)` / `require("x", "y")` are
+// errors) or, when the first token is not a string, a full comma Expression
+// (`require(x)`, `require(1, 2)` parse; their wrongness is the checker's).
+const ModuleReference = rule($ => [
+  ['require', '(', alt(String_, [not(String_), Expr, many(',', Expr)]), ')'],
+  [notReserved, Ident, many('.', notReserved, Ident)],
+]);
+
 const Decl = rule($ => [
   // Function declarations live here (not in Stmt) so that at statement level a
   // leading `function` is preferred as a declaration over an IIFE expression-
@@ -917,8 +931,8 @@ const Decl = rule($ => [
   ['import', alt(
     [ImportClause, 'from', String_, opt(';')],          // import X from "m"  (also `import type from "m"` = default named `type`)
     ['type', ImportClause, 'from', String_, opt(';')],  // import type X from "m"
-    ['type', Ident, '=', Expr, opt(';')],               // import type X = require(…) / = ns.Foo (type-only import-equals)
-    [Ident, '=', Expr, opt(';')],                       // import x = expr  (also `import type = …` where `type` is the binding name)
+    ['type', Ident, '=', ModuleReference, opt(';')],    // import type X = require(…) / = ns.Foo (type-only import-equals)
+    [Ident, '=', ModuleReference, opt(';')],            // import x = require(…) / = ns.Foo  (also `import type = …` where `type` is the binding name)
     [String_, opt(';')],                                // import "m"
   )],
   [many(DecoratorExpr), 'export', alt($, Stmt)],
@@ -997,7 +1011,7 @@ export default defineGrammar({
     Binding, ForBinding, Param, ForHead, SwitchCase,
     TypeParams, TypeParam,
     Decl, InterfaceMember, ClassMember, EnumMember,
-    ImportClause, ImportSpecifier, ExportSpecifier,
+    ImportClause, ImportSpecifier, ExportSpecifier, ModuleReference,
     Program,
   },
 
