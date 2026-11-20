@@ -1285,8 +1285,8 @@ ${adoptSuffix}
   const toMetaFn = hasNewline ? `
 func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
 func scanMetaToks(src string) ([]alignMeta, []Tok) {
-\tvar toks []Tok
-\tvar meta []alignMeta
+\ttoks := make([]Tok, 0, len(src)/2)
+\tmeta := make([]alignMeta, 0, len(src)/2)
 \tpos := 0
 \tpendingNl := false
 \tflowDepth := 0
@@ -1297,14 +1297,17 @@ func scanMetaToks(src string) ([]alignMeta, []Tok) {
 \t\tt := toks[len(toks)-1]
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, uint16(flowDepth), 0, false, false, false, 0))
 \t}
+\t// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
+\tif cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
+\tif cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
 \treturn meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for newline") }
 ` : rxOnly ? `
 func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
 func scanMetaToks(src string) ([]alignMeta, []Tok) {
-\tvar toks []Tok
-\tvar meta []alignMeta
+\ttoks := make([]Tok, 0, len(src)/2)
+\tmeta := make([]alignMeta, 0, len(src)/2)
 \tpos := 0
 \tpendingNl := false
 \tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
@@ -1320,14 +1323,17 @@ func scanMetaToks(src string) ([]alignMeta, []Tok) {
 \t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, 0))
 \t}
+\t// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
+\tif cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
+\tif cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
 \treturn meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for regex") }
 ` : rxTpl ? `
 func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
 func scanMetaToks(src string) ([]alignMeta, []Tok) {
-\tvar toks []Tok
-\tvar meta []alignMeta
+\ttoks := make([]Tok, 0, len(src)/2)
+\tmeta := make([]alignMeta, 0, len(src)/2)
 \tpos := 0
 \tpendingNl := false
 \tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
@@ -1344,14 +1350,17 @@ func scanMetaToks(src string) ([]alignMeta, []Tok) {
 \t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, uint8(len(templateStack))))
 \t}
+\t// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
+\tif cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
+\tif cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
 \treturn meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for rx+tpl") }
 ` : tplOnly ? `
 func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
 func scanMetaToks(src string) ([]alignMeta, []Tok) {
-\tvar toks []Tok
-\tvar meta []alignMeta
+\ttoks := make([]Tok, 0, len(src)/2)
+\tmeta := make([]alignMeta, 0, len(src)/2)
 \tpos := 0
 \tpendingNl := false
 \tvar templateStack []int
@@ -1362,6 +1371,9 @@ func scanMetaToks(src string) ([]alignMeta, []Tok) {
 \t\tt := toks[len(toks)-1]
 \t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, 0, false, false, false, uint8(len(templateStack))))
 \t}
+\t// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
+\tif cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
+\tif cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
 \treturn meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for tpl") }
@@ -1851,10 +1863,13 @@ func newDocCst(src string, b *CstBuilder) *Doc {
 	var toks []Tok
 	d.toks, toks = scanMetaToks(src)
 	// A Doc owns its arena, so a new one starts empty; size it from the token count instead of
-	// growing it by repeated append copies (node and kid counts track the token count).
+	// growing it by repeated append copies (TS-family code runs ~0.6 nodes and ~1.1 kids per token).
+	// The token and meta slices are likewise sized from the source (len/2 covers dense code, where a
+	// token averages over two bytes): growth garbage is what drives GC cycles, since a dropped Doc
+	// leaves a small live heap.
 	n := len(toks)
-	if cap(b.Nodes) < n/2 { b.Nodes = make([]Node, 0, n/2) }
-	if cap(b.Kids) < n { b.Kids = make([]int32, 0, n) }
+	if cap(b.Nodes) < n*3/4 { b.Nodes = make([]Node, 0, n*3/4) }
+	if cap(b.Kids) < n*5/4 { b.Kids = make([]int32, 0, n*5/4) }
 	d.e.nodes, d.e.kids = b.Nodes[:0], b.Kids[:0]
 	d.root = d.e.parse(src, toks)
 ${topReuse ? '\td.entries = append([]EntryMeta(nil), d.e.entries...)\n' : ''}\treturn d
