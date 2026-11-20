@@ -226,11 +226,17 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
+      // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
+      '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
+      '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
+      'for (1 of x);', 'for (a + b in x);', 'for (f() in x);',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       '1 + () => 2;', 'a++.b;', 'f(a, b,',
       'for (a = (x in b)) c;',
-      'for (a = b ? x in c : y in d) e;'],
+      'for (a = b ? x in c : y in d) e;',
+      // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
+      'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;'],
   },
   {
     // The real typescript.ts grammar — the second, most complex full language proving the
