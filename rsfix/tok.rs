@@ -118,6 +118,7 @@ fn lex_match3(s: &str, p: isize) -> isize {
 // Shebang is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_shebang(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match3(s, p);
     if e > p { return e; }
     return -1;
@@ -125,6 +126,7 @@ fn lex_scan_shebang(s: &str, p: isize) -> isize {
 // JSDoc runs from /** to the first */ after it.
 #[inline(always)]
 fn lex_scan_j_s_doc(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     if !s.as_bytes()[p as usize..].starts_with("/**".as_bytes()) { return -1; }
     let mut e: isize = p + 3;
     while e < (s.len() as isize) {
@@ -168,6 +170,7 @@ fn lex_match7(s: &str, p: isize) -> isize {
 // TripleSlash is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_triple_slash(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match7(s, p);
     if e > p { return e; }
     return -1;
@@ -175,6 +178,7 @@ fn lex_scan_triple_slash(s: &str, p: isize) -> isize {
 // LineComment: // to the end of the line.
 #[inline(always)]
 fn lex_scan_line_comment(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     if !s.as_bytes()[p as usize..].starts_with("//".as_bytes()) { return -1; }
     let mut e: isize = p + 2;
     while e < (s.len() as isize) {
@@ -186,6 +190,7 @@ fn lex_scan_line_comment(s: &str, p: isize) -> isize {
 // BlockComment runs from /* to the first */ after it.
 #[inline(always)]
 fn lex_scan_block_comment(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     if !s.as_bytes()[p as usize..].starts_with("/*".as_bytes()) { return -1; }
     let mut e: isize = p + 2;
     while e < (s.len() as isize) {
@@ -316,6 +321,7 @@ fn lex_match21(s: &str, p: isize) -> isize {
 // Ident: an ASCII run while no bail character stops it, else the token pattern.
 #[inline(always)]
 fn lex_scan_ident(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     if p >= (s.len() as isize) { return -1; }
     let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
     if LEX_FIRST_IDENT[c as usize] {
@@ -426,6 +432,7 @@ fn lex_match31(s: &str, p: isize) -> isize {
 // HexNumber is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_hex_number(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match31(s, p);
     if e > p { return e; }
     return -1;
@@ -487,6 +494,7 @@ fn lex_match36(s: &str, p: isize) -> isize {
 // OctalNumber is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_octal_number(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match36(s, p);
     if e > p { return e; }
     return -1;
@@ -548,6 +556,7 @@ fn lex_match41(s: &str, p: isize) -> isize {
 // BinaryNumber is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_binary_number(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match41(s, p);
     if e > p { return e; }
     return -1;
@@ -604,6 +613,7 @@ fn lex_match46(s: &str, p: isize) -> isize {
 // BigInt is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_big_int(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match46(s, p);
     if e > p { return e; }
     return -1;
@@ -756,6 +766,7 @@ fn lex_match61(s: &str, p: isize) -> isize {
 // Number is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_number(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match61(s, p);
     if e > p { return e; }
     return -1;
@@ -996,6 +1007,7 @@ fn lex_match89(s: &str, p: isize) -> isize {
 // String is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_string(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match89(s, p);
     if e > p { return e; }
     return -1;
@@ -1129,6 +1141,7 @@ fn lex_match104(s: &str, p: isize) -> isize {
 // Regex is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_regex(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match104(s, p);
     if e > p { return e; }
     return -1;
@@ -1190,6 +1203,7 @@ fn lex_match110(s: &str, p: isize) -> isize {
 // Decorator is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_decorator(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match110(s, p);
     if e > p { return e; }
     return -1;
@@ -1212,6 +1226,7 @@ fn lex_match112(s: &str, p: isize) -> isize {
 // PrivateField is scanned by its token pattern.
 #[inline(always)]
 fn lex_scan_private_field(s: &str, p: isize) -> isize {
+    if p < 0 { return -1; }
     let e: isize = lex_match112(s, p);
     if e > p { return e; }
     return -1;
@@ -1302,6 +1317,7 @@ impl<'a> RxTplScan<'a> {
         self.bp_lid = self.prev_lid; self.has_prev2 = self.has_prev; self.prev_kid = kid; self.prev_lid = lid; self.has_prev = true;
     }
 }
+#[inline(always)]
 fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
@@ -9655,35 +9671,14 @@ pub fn slim_json_with(b: &SlimBuilder, root: i32) -> String {
 }
 
 
-fn med(mut v: Vec<f64>) -> f64 { v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v[v.len() / 2] }
+// Tokenize only: 20 warm-up runs, then the median and min of 101 runs.
 fn main() {
     let path = std::env::args().nth(1).unwrap();
     let src = std::fs::read_to_string(&path).unwrap();
-    let mut pw = Vec::new();
-    let mut dn = Vec::new();
-    for _ in 0..25 {
-        let t = std::time::Instant::now();
-        let mut b = CstBuilder::default();
-        let r = parse_with(&src, &mut b);
-        pw.push(t.elapsed().as_secs_f64() * 1e3);
-        assert!(r.is_some());
-        let t = std::time::Instant::now();
-        let d: Doc = Doc::new(src.clone());
-        dn.push(t.elapsed().as_secs_f64() * 1e3);
-        assert!(d.root_handle().is_some());
-    }
-    let mut d: Doc = Doc::new(src.clone());
-    let semis: Vec<usize> = src.match_indices(";").map(|(i, _)| i + 1).collect();
-    let mut ed = Vec::new();
-    let mut reused = 0;
-    for i in 0..400 {
-        let at = semis[(i * 7919) % semis.len()];
-        let e = if i % 2 == 0 { Edit { start: at, end: at, text: " ".into() } } else { Edit { start: semis[((i - 1) * 7919) % semis.len()], end: semis[((i - 1) * 7919) % semis.len()] + 1, text: "".into() } };
-        let t = std::time::Instant::now();
-        d.edit(&[e]);
-        ed.push(t.elapsed().as_secs_f64() * 1e3);
-        if d.alignment().map(|a| a.reused).unwrap_or(0) > 0 { reused += 1; }
-    }
-    assert!(d.root_handle().is_some());
-    println!("{}: parse_with {:.3}ms  Doc::new {:.3}ms  edit median {:.4}ms (reused {}/400)", path, med(pw), med(dn), med(ed), reused);
+    let n = tokenize(&src).len();
+    for _ in 0..20 { let _ = tokenize(&src); }
+    let mut ts: Vec<f64> = Vec::new();
+    for _ in 0..101 { let t = std::time::Instant::now(); let toks = tokenize(&src); ts.push(t.elapsed().as_secs_f64() * 1e3); assert_eq!(toks.len(), n); }
+    ts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!("tokenize {} toks median {:.3} ms  min {:.3} ms", n, ts[ts.len() / 2], ts[0]);
 }

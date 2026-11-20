@@ -1,4 +1,5 @@
 # Output equivalences (check: git archive <head> | tar -x -C T; node gen.ts T out; compare)
 cbb58a0 (master, base)  base/parser.go, base/parser.ts, base/bench.rs byte-identical to the previous package's base (02d8827)
-ecd5e4c (prev) -> 52a8f9c (fix)  only parser.go differs; parser.ts, bench.rs, tok.rs byte-identical
+ecd5e4c -> 52a8f9c (fix)  only parser.go differs; parser.ts, bench.rs, tok.rs byte-identical
+52a8f9c (fix) -> 00917e2 (rsfix)  every output differs: the scanner guard reaches all targets; bench.rs / tok.rs also inline lex_from
 # all-outputs-52a8f9c.txt: sha256 of emitParser(grammar, ts|go|rust) for every grammar and test fixture at the fix head (node all-outputs-hashes.ts <tree>)

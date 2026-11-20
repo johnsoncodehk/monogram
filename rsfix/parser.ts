@@ -83,12 +83,14 @@ function lexMatch3(s: string, p: number): number {
 }
 // Shebang is scanned by its token pattern.
 function lexScanShebang(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch3(s, p);
   if (e > p) return e;
   return -1;
 }
 // JSDoc runs from /** to the first */ after it.
 function lexScanJSDoc(s: string, p: number): number {
+  if (p < 0) return -1;
   if (!s.startsWith("/**", p)) return -1;
   let e: number = p + 3;
   while (e < s.length) {
@@ -131,12 +133,14 @@ function lexMatch7(s: string, p: number): number {
 }
 // TripleSlash is scanned by its token pattern.
 function lexScanTripleSlash(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch7(s, p);
   if (e > p) return e;
   return -1;
 }
 // LineComment: // to the end of the line.
 function lexScanLineComment(s: string, p: number): number {
+  if (p < 0) return -1;
   if (!s.startsWith("//", p)) return -1;
   let e: number = p + 2;
   while (e < s.length) {
@@ -147,6 +151,7 @@ function lexScanLineComment(s: string, p: number): number {
 }
 // BlockComment runs from /* to the first */ after it.
 function lexScanBlockComment(s: string, p: number): number {
+  if (p < 0) return -1;
   if (!s.startsWith("/*", p)) return -1;
   let e: number = p + 2;
   while (e < s.length) {
@@ -276,6 +281,7 @@ function lexMatch21(s: string, p: number): number {
 }
 // Ident: an ASCII run while no bail character stops it, else the token pattern.
 function lexScanIdent(s: string, p: number): number {
+  if (p < 0) return -1;
   if (p >= s.length) return -1;
   const c: number = s.charCodeAt(p);
   if (lexFirstIdent[c] === 1) {
@@ -385,6 +391,7 @@ function lexMatch31(s: string, p: number): number {
 }
 // HexNumber is scanned by its token pattern.
 function lexScanHexNumber(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch31(s, p);
   if (e > p) return e;
   return -1;
@@ -445,6 +452,7 @@ function lexMatch36(s: string, p: number): number {
 }
 // OctalNumber is scanned by its token pattern.
 function lexScanOctalNumber(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch36(s, p);
   if (e > p) return e;
   return -1;
@@ -505,6 +513,7 @@ function lexMatch41(s: string, p: number): number {
 }
 // BinaryNumber is scanned by its token pattern.
 function lexScanBinaryNumber(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch41(s, p);
   if (e > p) return e;
   return -1;
@@ -560,6 +569,7 @@ function lexMatch46(s: string, p: number): number {
 }
 // BigInt is scanned by its token pattern.
 function lexScanBigInt(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch46(s, p);
   if (e > p) return e;
   return -1;
@@ -711,6 +721,7 @@ function lexMatch61(s: string, p: number): number {
 }
 // Number is scanned by its token pattern.
 function lexScanNumber(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch61(s, p);
   if (e > p) return e;
   return -1;
@@ -950,6 +961,7 @@ function lexMatch89(s: string, p: number): number {
 }
 // String is scanned by its token pattern.
 function lexScanString(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch89(s, p);
   if (e > p) return e;
   return -1;
@@ -1082,6 +1094,7 @@ function lexMatch104(s: string, p: number): number {
 }
 // Regex is scanned by its token pattern.
 function lexScanRegex(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch104(s, p);
   if (e > p) return e;
   return -1;
@@ -1142,6 +1155,7 @@ function lexMatch110(s: string, p: number): number {
 }
 // Decorator is scanned by its token pattern.
 function lexScanDecorator(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch110(s, p);
   if (e > p) return e;
   return -1;
@@ -1163,6 +1177,7 @@ function lexMatch112(s: string, p: number): number {
 }
 // PrivateField is scanned by its token pattern.
 function lexScanPrivateField(s: string, p: number): number {
+  if (p < 0) return -1;
   const e: number = lexMatch112(s, p);
   if (e > p) return e;
   return -1;

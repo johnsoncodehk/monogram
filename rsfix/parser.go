@@ -159,22 +159,6 @@ func lexMatch3(s string, p int) int {
 	if q2 < 0 || q2 > len(s) { return -1 }
 	return q2
 }
-// Shebang is scanned by its token pattern.
-func lexScanShebang(s string, p int) int {
-	e := lexMatch3(s, p)
-	if e > p { return e }
-	return -1
-}
-// JSDoc runs from /** to the first */ after it.
-func lexScanJSDoc(s string, p int) int {
-	if !strings.HasPrefix(s[p:], "/**") { return -1 }
-	e := p + 3
-	for e < len(s) {
-		if strings.HasPrefix(s[e:], "*/") { return e + 2 }
-		e = e + 1
-	}
-	return -1
-}
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch4(s string, p int) int {
 	if strings.HasPrefix(s[p:], "///") { return p + 3 }
@@ -206,32 +190,6 @@ func lexMatch7(s string, p int) int {
 	q3 := lexMatch2(s, q2)
 	if q3 < 0 || q3 > len(s) { return -1 }
 	return q3
-}
-// TripleSlash is scanned by its token pattern.
-func lexScanTripleSlash(s string, p int) int {
-	e := lexMatch7(s, p)
-	if e > p { return e }
-	return -1
-}
-// LineComment: // to the end of the line.
-func lexScanLineComment(s string, p int) int {
-	if !strings.HasPrefix(s[p:], "//") { return -1 }
-	e := p + 2
-	for e < len(s) {
-		if int(s[e]) == 10 { break }
-		e = e + 1
-	}
-	return e
-}
-// BlockComment runs from /* to the first */ after it.
-func lexScanBlockComment(s string, p int) int {
-	if !strings.HasPrefix(s[p:], "/*") { return -1 }
-	e := p + 2
-	for e < len(s) {
-		if strings.HasPrefix(s[e:], "*/") { return e + 2 }
-		e = e + 1
-	}
-	return -1
 }
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch8(s string, p int) int {
@@ -352,30 +310,6 @@ func lexMatch21(s string, p int) int {
 	if q1 < 0 || q1 > len(s) { return -1 }
 	return q1
 }
-// Ident: an ASCII run while no bail character stops it, else the token pattern.
-func lexScanIdent(s string, p int) int {
-	if p >= len(s) { return -1 }
-	c := int(s[p])
-	if lexFirstIdent[c] {
-		e := p + 1
-		for e < len(s) {
-			if !lexContIdent[int(s[e])] { break }
-			e = e + 1
-		}
-		if e >= len(s) { return e }
-		d := int(s[e])
-		if !(d == 92) { return e }
-		e = lexMatch21(s, p)
-		if e > p { return e }
-		return -1
-	}
-	if c == 92 {
-		e := lexMatch21(s, p)
-		if e > p { return e }
-		return -1
-	}
-	return -1
-}
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch22(s string, p int) int {
 	if strings.HasPrefix(s[p:], "0") { return p + 1 }
@@ -461,12 +395,6 @@ func lexMatch31(s string, p int) int {
 	if q5 < 0 || q5 > len(s) { return -1 }
 	return q5
 }
-// HexNumber is scanned by its token pattern.
-func lexScanHexNumber(s string, p int) int {
-	e := lexMatch31(s, p)
-	if e > p { return e }
-	return -1
-}
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch32(s string, p int) int {
 	if p >= len(s) { return -1 }
@@ -520,12 +448,6 @@ func lexMatch36(s string, p int) int {
 	q5 := lexMatch30(s, q4)
 	if q5 < 0 || q5 > len(s) { return -1 }
 	return q5
-}
-// OctalNumber is scanned by its token pattern.
-func lexScanOctalNumber(s string, p int) int {
-	e := lexMatch36(s, p)
-	if e > p { return e }
-	return -1
 }
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch37(s string, p int) int {
@@ -581,12 +503,6 @@ func lexMatch41(s string, p int) int {
 	if q5 < 0 || q5 > len(s) { return -1 }
 	return q5
 }
-// BinaryNumber is scanned by its token pattern.
-func lexScanBinaryNumber(s string, p int) int {
-	e := lexMatch41(s, p)
-	if e > p { return e }
-	return -1
-}
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch42(s string, p int) int {
 	q := p
@@ -635,12 +551,6 @@ func lexMatch46(s string, p int) int {
 	q2 := lexMatch30(s, q1)
 	if q2 < 0 || q2 > len(s) { return -1 }
 	return q2
-}
-// BigInt is scanned by its token pattern.
-func lexScanBigInt(s string, p int) int {
-	e := lexMatch46(s, p)
-	if e > p { return e }
-	return -1
 }
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch47(s string, p int) int {
@@ -786,12 +696,6 @@ func lexMatch61(s string, p int) int {
 	q2 := lexMatch30(s, q1)
 	if q2 < 0 || q2 > len(s) { return -1 }
 	return q2
-}
-// Number is scanned by its token pattern.
-func lexScanNumber(s string, p int) int {
-	e := lexMatch61(s, p)
-	if e > p { return e }
-	return -1
 }
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch62(s string, p int) int {
@@ -1026,12 +930,6 @@ func lexMatch89(s string, p int) int {
 	if r >= 0 { return r }
 	return -1
 }
-// String is scanned by its token pattern.
-func lexScanString(s string, p int) int {
-	e := lexMatch89(s, p)
-	if e > p { return e }
-	return -1
-}
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch90(s string, p int) int {
 	if strings.HasPrefix(s[p:], "/") { return p + 1 }
@@ -1158,12 +1056,6 @@ func lexMatch104(s string, p int) int {
 	if q4 < 0 || q4 > len(s) { return -1 }
 	return q4
 }
-// Regex is scanned by its token pattern.
-func lexScanRegex(s string, p int) int {
-	e := lexMatch104(s, p)
-	if e > p { return e }
-	return -1
-}
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch105(s string, p int) int {
 	if strings.HasPrefix(s[p:], "@") { return p + 1 }
@@ -1218,12 +1110,6 @@ func lexMatch110(s string, p int) int {
 	if q1 < 0 || q1 > len(s) { return -1 }
 	return q1
 }
-// Decorator is scanned by its token pattern.
-func lexScanDecorator(s string, p int) int {
-	e := lexMatch110(s, p)
-	if e > p { return e }
-	return -1
-}
 // A token-pattern matcher: the position after the match, or -1.
 func lexMatch111(s string, p int) int {
 	if strings.HasPrefix(s[p:], "#") { return p + 1 }
@@ -1238,12 +1124,6 @@ func lexMatch112(s string, p int) int {
 	q2 := lexMatch20(s, q1)
 	if q2 < 0 || q2 > len(s) { return -1 }
 	return q2
-}
-// PrivateField is scanned by its token pattern.
-func lexScanPrivateField(s string, p int) int {
-	e := lexMatch112(s, p)
-	if e > p { return e }
-	return -1
 }
 func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
 	n := len(src)
@@ -1298,21 +1178,268 @@ func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16
 			pos = e; continue
 		}
 	if c >= 128 {
-		if e := lexScanShebang(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanJSDoc(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanTripleSlash(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanLineComment(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanBlockComment(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanIdent(src, pos); e >= 0 { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanHexNumber(src, pos); e >= 0 { emit(pos, e, 7, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanOctalNumber(src, pos); e >= 0 { emit(pos, e, 8, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanBinaryNumber(src, pos); e >= 0 { emit(pos, e, 9, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanBigInt(src, pos); e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanNumber(src, pos); e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanString(src, pos); e >= 0 { emit(pos, e, 12, lidOf(src[pos:e])); pos = e; continue }
-		if !prevIsValue() { if e := lexScanRegex(src, pos); e >= 0 { emit(pos, e, 14, lidOf(src[pos:e])); pos = e; continue } }
-		if e := lexScanDecorator(src, pos); e >= 0 { emit(pos, e, 15, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanPrivateField(src, pos); e >= 0 { e = lxExt(src, e); emit(pos, e, 16, lidOf(src[pos:e])); pos = e; continue }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch3(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				if !strings.HasPrefix(src[pos:], "/**") {
+					e = -1
+				} else {
+					e1 := pos + 3
+					for e1 < len(src) {
+						if strings.HasPrefix(src[e1:], "*/") {
+							e = e1 + 2
+							break
+						}
+						e1 = e1 + 1
+					}
+					if e == -2 { e = -1 }
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch7(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				if !strings.HasPrefix(src[pos:], "//") {
+					e = -1
+				} else {
+					e1 := pos + 2
+					for e1 < len(src) {
+						if int(src[e1]) == 10 { break }
+						e1 = e1 + 1
+					}
+					e = e1
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				if !strings.HasPrefix(src[pos:], "/*") {
+					e = -1
+				} else {
+					e1 := pos + 2
+					for e1 < len(src) {
+						if strings.HasPrefix(src[e1:], "*/") {
+							e = e1 + 2
+							break
+						}
+						e1 = e1 + 1
+					}
+					if e == -2 { e = -1 }
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				if pos >= len(src) {
+					e = -1
+				} else {
+					c := int(src[pos])
+					if lexFirstIdent[c] {
+						e1 := pos + 1
+						for e1 < len(src) {
+							if !lexContIdent[int(src[e1])] { break }
+							e1 = e1 + 1
+						}
+						if e1 >= len(src) {
+							e = e1
+						} else {
+							d := int(src[e1])
+							if !(d == 92) {
+								e = e1
+							} else {
+								e1 = lexMatch21(src, pos)
+								if e1 > pos {
+									e = e1
+								} else {
+									e = -1
+								}
+							}
+						}
+					} else {
+						if c == 92 {
+							e1 := lexMatch21(src, pos)
+							if e1 > pos {
+								e = e1
+							} else {
+								e = -1
+							}
+						} else {
+							e = -1
+						}
+					}
+				}
+			}
+			if e >= 0 { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch31(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 7, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch36(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 8, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch41(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 9, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch46(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch61(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch89(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 12, lidOf(src[pos:e])); pos = e; continue }
+		}
+		if !prevIsValue() {
+			{
+				e := -2
+				if pos < 0 {
+					e = -1
+				} else {
+					e1 := lexMatch104(src, pos)
+					if e1 > pos {
+						e = e1
+					} else {
+						e = -1
+					}
+				}
+				if e >= 0 { emit(pos, e, 14, lidOf(src[pos:e])); pos = e; continue }
+			}
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch110(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 15, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch112(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { e = lxExt(src, e); emit(pos, e, 16, lidOf(src[pos:e])); pos = e; continue }
+		}
 		if strings.HasPrefix(src[pos:], "...") { emit(pos, pos + 3, 0, 1); pos += 3; continue }
 		if strings.HasPrefix(src[pos:], "**=") { emit(pos, pos + 3, 0, 2); pos += 3; continue }
 		if strings.HasPrefix(src[pos:], "<<=") { emit(pos, pos + 3, 0, 3); pos += 3; continue }
@@ -1372,12 +1499,96 @@ func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16
 		if strings.HasPrefix(src[pos:], "!=") { emit(pos, pos + 2, 0, 23); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "!") { emit(pos, pos + 1, 0, 45); pos += 1; continue }
 		case 34, 39:
-		if e := lexScanString(src, pos); e >= 0 { emit(pos, e, 12, lidOf(src[pos:e])); pos = e; continue }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch89(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 12, lidOf(src[pos:e])); pos = e; continue }
+		}
 		case 35:
-		if e := lexScanShebang(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanPrivateField(src, pos); e >= 0 { e = lxExt(src, e); emit(pos, e, 16, lidOf(src[pos:e])); pos = e; continue }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch3(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch112(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { e = lxExt(src, e); emit(pos, e, 16, lidOf(src[pos:e])); pos = e; continue }
+		}
 		case 36, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 92, 95, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122:
-		if e := lexScanIdent(src, pos); e >= 0 { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				if pos >= len(src) {
+					e = -1
+				} else {
+					c := int(src[pos])
+					if lexFirstIdent[c] {
+						e1 := pos + 1
+						for e1 < len(src) {
+							if !lexContIdent[int(src[e1])] { break }
+							e1 = e1 + 1
+						}
+						if e1 >= len(src) {
+							e = e1
+						} else {
+							d := int(src[e1])
+							if !(d == 92) {
+								e = e1
+							} else {
+								e1 = lexMatch21(src, pos)
+								if e1 > pos {
+									e = e1
+								} else {
+									e = -1
+								}
+							}
+						}
+					} else {
+						if c == 92 {
+							e1 := lexMatch21(src, pos)
+							if e1 > pos {
+								e = e1
+							} else {
+								e = -1
+							}
+						} else {
+							e = -1
+						}
+					}
+				}
+			}
+			if e >= 0 { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
+		}
 		case 37:
 		if strings.HasPrefix(src[pos:], "%=") { emit(pos, pos + 2, 0, 15); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "%") { emit(pos, pos + 1, 0, 51); pos += 1; continue }
@@ -1406,26 +1617,215 @@ func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16
 		if strings.HasPrefix(src[pos:], "--") { emit(pos, pos + 2, 0, 28); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "-") { emit(pos, pos + 1, 0, 43); pos += 1; continue }
 		case 46:
-		if e := lexScanNumber(src, pos); e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch61(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
+		}
 		if strings.HasPrefix(src[pos:], "...") { emit(pos, pos + 3, 0, 1); pos += 3; continue }
 		if strings.HasPrefix(src[pos:], ".") { emit(pos, pos + 1, 0, 44); pos += 1; continue }
 		case 47:
-		if e := lexScanJSDoc(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanTripleSlash(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanLineComment(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if e := lexScanBlockComment(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		if !prevIsValue() { if e := lexScanRegex(src, pos); e >= 0 { emit(pos, e, 14, lidOf(src[pos:e])); pos = e; continue } }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				if !strings.HasPrefix(src[pos:], "/**") {
+					e = -1
+				} else {
+					e1 := pos + 3
+					for e1 < len(src) {
+						if strings.HasPrefix(src[e1:], "*/") {
+							e = e1 + 2
+							break
+						}
+						e1 = e1 + 1
+					}
+					if e == -2 { e = -1 }
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch7(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				if !strings.HasPrefix(src[pos:], "//") {
+					e = -1
+				} else {
+					e1 := pos + 2
+					for e1 < len(src) {
+						if int(src[e1]) == 10 { break }
+						e1 = e1 + 1
+					}
+					e = e1
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				if !strings.HasPrefix(src[pos:], "/*") {
+					e = -1
+				} else {
+					e1 := pos + 2
+					for e1 < len(src) {
+						if strings.HasPrefix(src[e1:], "*/") {
+							e = e1 + 2
+							break
+						}
+						e1 = e1 + 1
+					}
+					if e == -2 { e = -1 }
+				}
+			}
+			if e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		}
+		if !prevIsValue() {
+			{
+				e := -2
+				if pos < 0 {
+					e = -1
+				} else {
+					e1 := lexMatch104(src, pos)
+					if e1 > pos {
+						e = e1
+					} else {
+						e = -1
+					}
+				}
+				if e >= 0 { emit(pos, e, 14, lidOf(src[pos:e])); pos = e; continue }
+			}
+		}
 		if strings.HasPrefix(src[pos:], "/=") { emit(pos, pos + 2, 0, 14); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "/") { emit(pos, pos + 1, 0, 50); pos += 1; continue }
 		case 48:
-		if e := lexScanHexNumber(src, pos); e >= 0 { emit(pos, e, 7, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanOctalNumber(src, pos); e >= 0 { emit(pos, e, 8, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanBinaryNumber(src, pos); e >= 0 { emit(pos, e, 9, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanBigInt(src, pos); e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanNumber(src, pos); e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch31(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 7, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch36(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 8, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch41(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 9, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch46(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch61(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
+		}
 		case 49, 50, 51, 52, 53, 54, 55, 56, 57:
-		if e := lexScanBigInt(src, pos); e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
-		if e := lexScanNumber(src, pos); e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch46(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
+		}
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch61(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
+		}
 		case 58:
 		if strings.HasPrefix(src[pos:], ":") { emit(pos, pos + 1, 0, 39); pos += 1; continue }
 		case 59:
@@ -1448,7 +1848,20 @@ func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16
 		if strings.HasPrefix(src[pos:], "??") { emit(pos, pos + 2, 0, 19); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "?") { emit(pos, pos + 1, 0, 38); pos += 1; continue }
 		case 64:
-		if e := lexScanDecorator(src, pos); e >= 0 { emit(pos, e, 15, lidOf(src[pos:e])); pos = e; continue }
+		{
+			e := -2
+			if pos < 0 {
+				e = -1
+			} else {
+				e1 := lexMatch110(src, pos)
+				if e1 > pos {
+					e = e1
+				} else {
+					e = -1
+				}
+			}
+			if e >= 0 { emit(pos, e, 15, lidOf(src[pos:e])); pos = e; continue }
+		}
 		case 91:
 		if strings.HasPrefix(src[pos:], "[") { emit(pos, pos + 1, 0, 32); pos += 1; continue }
 		case 93:
