@@ -103,6 +103,7 @@ module.exports = grammar({
     [$.type_fn_param, $.expr],
     [$.type_fn_param, $.param],
     [$.template, $.type_template],
+    [$.expr, $.module_reference],
   ],
 
   rules: {

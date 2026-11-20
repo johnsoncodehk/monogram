@@ -1001,6 +1001,10 @@ export default defineGrammar({
     // A template-literal type and a template-literal expression are the same tokens up to their
     // first hole, wherever `<` or `(` leaves both a type and an expression possible.
     ['template', 'type_template'],
+    // An import-equals `require(` specifier is a bare string or else an expression (tsc's
+    // parseModuleSpecifier); the `not(String_)` that keeps the two apart has no tree-sitter
+    // counterpart, so `require("m")` is both until the `)`.
+    ['expr', 'module_reference'],
   ],
 
   rules: {
