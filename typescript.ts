@@ -199,6 +199,14 @@ const Type = rule($ => {
 
 // ── Expressions ──
 
+// A modifier KEYWORD is a modifier only while a member name can still follow it (tsc's
+// disambiguation). Directly before the tail of a member — `(` `=` `:` `;` `?` `!` `<`, the
+// `,` / `}` that end one, or a `{` — the word is the member's NAME instead: `public() {}`,
+// `static = 1`, `{ static: 1 }`, and equally after other modifiers (`public static() {}`,
+// `{ readonly override: 1 }`). Every modifier run of class and object-literal members is
+// built from this one definition, so no word is consumed as a modifier unchecked.
+const modifierWord = (...words: string[]) => alt([alt(...words), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}', ','))]);
+
 const Prop = rule($ => {
   // ( … ): T { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
   // MemberName and return type stay outside it (a computed key inherits the enclosing
@@ -208,11 +216,11 @@ const Prop = rule($ => {
   // `!` after its name (`{ static m() {} }`, `{ export p: 1 }`, `{ a! }`, `{ a?() {} }`
   // are all parse-clean — rejecting them is the checker's job). `const`/`default` are
   // NOT parsed as modifiers there (tsc parse errors), so they stay out of the soup.
-  // The soup arms are many1 + a plain fallback arm, so a member NAMED like a modifier
-  // (`{ static: 1 }`, `{ async }`) falls through to the plain shapes.
+  // A member NAMED like a modifier (`{ static: 1 }`, `{ public static() {} }`) is told
+  // apart by `modifierWord`; `{ async }` / `{ get: 1 }` fall through to the plain shapes.
   // `async` is pulled out of the soup into the dedicated async method arms below (so the
   // body gets its [Await] context); `static`/`get`/… stay lenient modifiers.
-  const propMod = alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out');
+  const propMod = modifierWord('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out');
   return [
     ['...', Expr],                                                     // spread
     // accessor (get/set), with any modifier soup (lenient, tsc-shaped) — body resets
@@ -649,14 +657,14 @@ const MemberName = rule($ => [
 // member's shared `modifiers …` prefix isn't re-parsed per alternative. Inner
 // alt() is first-match, so branches are ordered specific-before-general
 // (generator/accessor/index-sig before the MemberName method/field split).
-// A modifier KEYWORD counts as a modifier only when what follows can still be a
-// member (tsc's disambiguation): followed by '('/'='/':'/';'/'?'/'!'/'<'/'{'/'}'
-// it is the member NAME instead ('public() {}', 'static = 1'). 'declare' is a real
+// Whether a modifier KEYWORD is a modifier or the member NAME is `modifierWord`'s
+// decision (above), for EVERY word of a run, `static` included. 'declare' is a real
 // class modifier; 'export'/'in'/'out' are parse-tolerated by tsc (semantic errors).
 // `async` is NOT a generic class-member modifier here: it leads the async/async-generator
 // method arms below (which give the body its [Await] context), so the modifier soup must
 // not swallow it into a plain method (the class analog of the Decl modifier-prefix fix).
-const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
+const nonStaticMods = ['public', 'private', 'protected', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const'];
+const Modifier = modifierWord('public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const');
 // A class-member modifier run allows AT MOST ONE `static` — this is SYNTAX, not a deferred
 // duplicate-modifier check: ECMAScript's ClassElement production has a single `static` slot,
 // and `static static x` is rejected by BOTH tsc AND babel (the only valid reading of a second
@@ -672,8 +680,8 @@ const Modifier = alt([alt('public', 'private', 'protected', 'static', 'abstract'
 // table — so it is wrapped in tsRelax with plain `many(Modifier)` as the relaxed rendering: a
 // legitimate CAPABILITY bridge (GLR cannot express the at-most-one-static refinement cheaply),
 // and a highlighter over-accepting `static static` is harmless and measured.
-const NonStaticMod = alt([alt('public', 'private', 'protected', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const'), not(alt('(', '=', ':', ';', '?', '!', '<', '{', '}'))]);
-const modRun = tsRelax([many(NonStaticMod), opt('static', many(NonStaticMod))], many(Modifier));
+const NonStaticMod = modifierWord(...nonStaticMods);
+const modRun = tsRelax([many(NonStaticMod), opt(modifierWord('static'), many(NonStaticMod))], many(Modifier));
 const callTail = ['(', sep(Param, ','), ')', opt(":", ReturnType), opt(Block), opt(';')] as const;
 // Class member ( params ): T body, params+body routed to a [Await]/[Yield] family:
 // plain methods reset (a method body has its OWN, non-inherited context — the spec's
@@ -718,8 +726,10 @@ const ClassMember = rule($ => [
       )],
     ),
   ],
-  // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
-  // many(Modifier) would eat the name, so the member kind alt fails and we land here.
+  // Fallbacks for a member NAMED like a modifier whose follower `modifierWord` does not
+  // list: a lone word before a line break and a decorator (`public⏎@dec x() {}`). There the
+  // run takes the word, the member kind alt fails, and we land here. (They reach no further
+  // than a lone leading word: `public static⏎@dec x() {}` still rejects.)
   [not('constructor'), MemberName, opt('!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
   // `constructor` excluded here too (`constructor?()`/`constructor!()` are tsc parse
   // errors): every VALID `constructor(…)` is caught by the dedicated arms above, so a
