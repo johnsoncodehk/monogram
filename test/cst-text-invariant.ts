@@ -72,9 +72,7 @@ let verdictBad = 0;
 // EXPECTED-FAIL, still run and counted: grammars where the two engines are known to disagree for
 // a reason that is not a position left advanced. Owed as its own fix; when a grammar listed
 // here stops disagreeing the gate fails until its entry is removed.
-const VERDICT_EXPECTED_FAIL: Record<string, string> = {
-  html: 'a close tag whose name differs from its open tag (`<aA> </a>`): the interpreter rejects, the emitted parser accepts',
-};
+const VERDICT_EXPECTED_FAIL: Record<string, string> = {};
 const verdictKnown = new Map<string, number>();
 const verdictBadBy = new Map<string, number>();
 const verdictSamples: string[] = [];
@@ -223,4 +221,5 @@ if (verdictBad > 0) console.error('✗ the interpreter and the emitted parser di
 if (bad > 0 || textBad > 0 || verdictBad > 0 || staleExpectedFail) process.exit(1);
 console.log('✓ every leaf is {tokenType, offset, end} and every node {rule, children, offset, end}');
 console.log('✓ every tree (accepted or recovered, interpreter and emitted) holds every token of its input, in order');
-console.log(`✓ the interpreter and the emitted parser give the same verdict on every input (expected-fail: ${Object.keys(VERDICT_EXPECTED_FAIL).join(', ')})`);
+const expectedFail = Object.keys(VERDICT_EXPECTED_FAIL);
+console.log(`✓ the interpreter and the emitted parser give the same verdict on every input${expectedFail.length > 0 ? ` (expected-fail: ${expectedFail.join(', ')})` : ''}`);

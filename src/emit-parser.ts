@@ -25,7 +25,7 @@
 
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
-import { analyzeGrammar, findEntryRule, type Sec } from './grammar-analysis.ts';
+import { analyzeGrammar, findEntryRule, markupContainerOf, type MarkupContainer, type Sec } from './grammar-analysis.ts';
 import { emitLexer, emitTokenColumns, lexSpecOf } from './emit-lexer.ts';
 import type { Target } from './emit.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
@@ -354,6 +354,7 @@ function analyze(grammar: CstGrammar) {
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nudCap, nullableRules, firstSets, symtab, qualKeys,
     exprFirst, exprNullable,
+    markupContainer: markupContainerOf(grammar),
   };
 }
 
@@ -688,6 +689,69 @@ class Emitter {
     }
   }
 
+  /**
+   * The markup CONTAINER arm (grammar-analysis.ts markupContainerOf) — the interpreter's
+   * matchMarkupContainer, item for item. It is the arm's plain sequence with three differences:
+   *   • the content loop of an optional-end element ends before a trigger start tag;
+   *   • the end tag's name must be the start tag's (matchTokSame);
+   *   • an optional-end element's end tag is optional — tried, and left unconsumed when it is
+   *     absent or names another element (it is then an ancestor's).
+   * `_mkRef` is the start-tag name's token index (-1 when recovery synthesized the name: an
+   * element with no name has no trigger set and takes any end-tag name).
+   */
+  markupContainerInto(mc: MarkupContainer, onFail: string): string {
+    const items = mc.items;
+    const nameKind = (item: RuleExpr): number => {
+      const k = item.type === 'ref' ? this.a.symtab.typeKind.get(item.name) : undefined;
+      if (k === undefined) throw new Error('emit-parser: the markup container arm names its element with a token the symbol table does not hold');
+      return k;
+    };
+    const skip = (item: RuleExpr) => item.type === 'op' || item.type === 'prefix' || item.type === 'postfix';
+    const one = (i: number, fail: string): string => {
+      const item = items[i];
+      if (i === mc.closeNameIdx) return `if (!matchTokSame(${nameKind(item)}, _mkRef)) { ${fail} }`;
+      if (item.type === 'literal') this.vsetNext = this.vsetFor(items, i);
+      return this.matchInto(item, fail);
+    };
+    const parts: string[] = [];
+    // Start tag: items[0 .. contentIdx-1].
+    for (let i = 0; i < mc.contentIdx; i++) {
+      if (skip(items[i])) continue;
+      if (i === mc.openNameIdx) {
+        parts.push(`const _mkOn = pos;`, one(i, onFail), `const _mkRef = pos > _mkOn ? _mkOn : -1;`);
+        continue;
+      }
+      if (items[i].type === 'quantifier') {
+        const nx = items[i + 1];
+        this.quantFollowT = nx !== undefined && nx.type === 'literal' ? this.litT(nx.value) : -1;
+      }
+      parts.push(one(i, onFail));
+      this.quantFollowT = -1;
+    }
+    // Content.
+    parts.push(`const _mkTrig = _mkRef >= 0 ? MK_TRIGGERS.get(mkName(_mkRef)) : undefined;`);
+    const content = items[mc.contentIdx] as RuleExpr & { type: 'quantifier' };
+    const closeOpen = items[mc.closeStart];
+    parts.push(this.matchQuantifierInto(content.body, content.kind, onFail,
+      closeOpen.type === 'literal' ? this.litT(closeOpen.value) : -1, '_mkTrig'));
+    // End tag: items[closeStart ..]. Required unless the element is optional-end; an optional
+    // one is an optional group (same commitment device as matchQuantifierInto's '?').
+    const closeIdx: number[] = [];
+    for (let i = mc.closeStart; i < items.length; i++) if (!skip(items[i])) closeIdx.push(i);
+    parts.push(
+      `if (_mkTrig === undefined) {`,
+      ...closeIdx.map(i => one(i, onFail)),
+      `} else {`,
+      `  const _mkC = pos; const _mkCsn = scn; const _mkPb = probeBase; probeBase = pos;`,
+      `  _mkClose: {`,
+      ...closeIdx.map(i => one(i, `pos = _mkC; scn = _mkCsn; break _mkClose;`)),
+      `  }`,
+      `  probeBase = _mkPb;`,
+      `}`,
+    );
+    return parts.join('\n');
+  }
+
   // Quantifier: body is matched via a helper fn (pushes + boolean), so the loop here
   // uses `return`/`break` only against ITS OWN while — no nested-loop hazard.
   private quantFollowT = -1;
@@ -737,7 +801,11 @@ class Emitter {
     if (id === undefined) { id = this.vsetMsgs.length; this.vsetMsgs.push(msg); this.vsetIds.set(msg, id); }
     return id;
   }
-  private matchQuantifierInto(body: RuleExpr, kind: '*' | '+' | '?', onFail: string, closerT = -1): string {
+  // `stopVar` (the markup container's content loop only): a local holding the element's trigger
+  // set, or undefined. When set, the loop ends BEFORE an element that starts with a trigger
+  // start tag — a decision taken per element from its leading tokens, so the run-extension,
+  // which appends old siblings without looking at them, is not taken for that element.
+  private matchQuantifierInto(body: RuleExpr, kind: '*' | '+' | '?', onFail: string, closerT = -1, stopVar = ''): string {
     const fn = this.matchFn(body);
     if (kind === '?') {
       // Try once; on failure the helper restored pos/scn itself. The probe guard
@@ -760,7 +828,11 @@ class Emitter {
     // `recovering`, and a SUCCEEDING rule parses identically in both modes).
     const runInfo = this.quantRunInfo(body);
     const runId = runInfo === null ? -1 : runInfo.rid;
-    const ext = runId >= 0 ? `\n  if (adoptRunPos === pos) runExtend(${runId});` : '';
+    const ext = runId < 0 ? ''
+      : stopVar === '' ? `\n  if (adoptRunPos === pos) runExtend(${runId});`
+      : `\n  if (adoptRunPos === pos) { if (${stopVar} === undefined) runExtend(${runId}); else adoptRunPos = -1; }`;
+    if (stopVar !== '' && kind !== '*') throw new Error('emit-parser: the markup container content is a `*` repetition');
+    const stop = stopVar === '' ? [] : [`  if (${stopVar} !== undefined && mkAtTrigger(${stopVar})) break;`];
     const recFirst = this.quantRecoverFirst(body);
     const csFn = recFirst !== null ? this.membershipFn(recFirst) : 'null';
     // The element's LEADING token is the loop's continuation decision — its
@@ -776,6 +848,7 @@ class Emitter {
       const before = this.id(), bsn = this.id();
       return [
         `while (true) {`,
+        ...stop,
         `  const ${before} = pos; const ${bsn} = scn;`,
         `  ${failFor(before, bsn)}`,
         `  if (pos === ${before}) { scn = ${bsn}; break; }` + ext,
@@ -1761,6 +1834,7 @@ function emitRuleFns(e: Emitter, a: ReturnType<typeof analyze>) {
   // expression/type subtrees reuse and every statement re-walks on each edit.
   // Derived from the grammar shape — no language names.
   const spine = e.spineSet();
+  if (a.markupContainer !== null) emitMarkupRuntime(e, a, a.markupContainer);
   for (const rule of a.grammar.rules) {
     if (a.prattRules.has(rule.name)) emitPrattRule(e, a, rule);
     else if (a.leftRecSet.has(rule.name)) emitLeftRecRule(e, a, rule);
@@ -2178,7 +2252,50 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
 
 // Emit `arm_<rule>_<i>()` — a matchExpr(alt) specialization returning children|null.
 function emitArm(e: Emitter, a: ReturnType<typeof analyze>, ruleName: string, i: number, alt: RuleExpr) {
+  const mc = a.markupContainer;
+  if (mc !== null && alt === mc.arm) {
+    e.emit(`function arm_${sanitize(ruleName)}_${i}() {`);
+    e.emit(`  const _save = pos; const _sn = scn;`);
+    e.emit(e.markupContainerInto(mc, 'pos = _save; scn = _sn; return false;'));
+    e.emit(`  return true;`);
+    e.emit(`}`);
+    return;
+  }
   emitArmNamed(e, a, `arm_${sanitize(ruleName)}_${i}`, alt);
+}
+
+// The runtime of the markup container arm (see Emitter.markupContainerInto): the optional-end
+// map as data, the two name reads, and the end-tag name matcher.
+function emitMarkupRuntime(e: Emitter, a: ReturnType<typeof analyze>, mc: MarkupContainer) {
+  const open = a.symtab.puLitKind.get(a.grammar.markup!.tagOpen);
+  if (open === undefined) throw new Error('emit-parser: the markup tagOpen is not a punctuation literal of the grammar');
+  const nameKinds = [...mc.nameTokens].map(n => a.symtab.typeKind.get(n)!);
+  e.emit(`// ── Markup container arm: optional end tags + the end tag's name ──`);
+  e.emit(`// Element name (lowercased) → the start-tag names that implicitly close it.`);
+  e.emit(`const MK_TRIGGERS = new Map<string, Set<string>>([${[...mc.optionalEnd].map(([n, t]) => `[${J(n)}, new Set(${J([...t])})]`).join(', ')}]);`);
+  e.emit(String.raw`
+// An element name as it is compared: tag names are ASCII-case-insensitive.
+function mkName(i: number) { return tokTextAt(i).toLowerCase(); }
+// Is the lookahead a start tag whose name is in triggers? (An end tag is not: its second
+// token is the close marker, not a name.) Reads pos and pos+1 — inside the two tokens of
+// lookahead the memo/adoption watermark admits past frameMax.
+function mkAtTrigger(triggers: Set<string>) {
+  if (pos + 1 >= cap || tkT[pos] !== ${open}) return false;
+  const k = tkK[pos + 1];
+  if (${nameKinds.map(k => 'k !== ' + k).join(' && ')}) return false;
+  return triggers.has(mkName(pos + 1));
+}
+// An end tag's name: a name token whose text is the start tag's (token ref; -1 = the start tag
+// has no name to compare). A name token with ANOTHER element's name is not a missing token —
+// it is that element's end tag — so it fails without synthesis, in recovery too.
+function matchTokSame(nameKind: number, ref: number) {
+  if (pos >= cap || tkK[pos] !== nameKind) return recovering ? missTok(-nameKind) : false;
+  if (ref >= 0 && mkName(pos) !== mkName(ref)) return false;
+  scPush(~(pos << 2));
+  if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
+  return true;
+}
+`);
 }
 
 // Emit a named matcher fn for `expr`: pushes the matched children onto scratch and
