@@ -38,9 +38,10 @@ export type Expr =
   | { k: 'call'; fn: string; args: Expr[] }
   | { k: 'splice'; s: Expr; a: Expr; b: Expr; ins: Expr }
   | { k: 'own'; e: Expr }
-  | { k: 'newList'; ty: ListTy; cap?: Expr }
+  // `cap` is an exact final length; `estimate` is a growth guess that only GC hosts (Go) reserve.
+  | { k: 'newList'; ty: ListTy; cap?: Expr; estimate?: Expr }
   | { k: 'falses'; n: Expr }
-  | { k: 'prefix'; list: Expr; n: Expr; cap: Expr }
+  | { k: 'prefix'; list: Expr; n: Expr; estimate: Expr }
   | { k: 'lexAll'; text: Expr };
 
 export type Stmt =
@@ -285,7 +286,10 @@ class Printer {
       case 'newList': {
         const elem = this.tyName(e.ty, 'local').replace(/^\[\]/, '');
         if (h === 'ts') return this.atom('[]', e.ty, e.ty, { owned: true });
-        if (h === 'go') return this.atom(e.cap ? `make([]${elem}, 0, ${this.coerce(this.expr(e.cap), 'int')})` : 'nil', e.ty, e.ty, { owned: true });
+        if (h === 'go') {
+          const c = e.cap ?? e.estimate;
+          return this.atom(c ? `make([]${elem}, 0, ${this.coerce(this.expr(c), 'int')})` : 'nil', e.ty, e.ty, { owned: true });
+        }
         return this.atom(e.cap ? `Vec::with_capacity(${this.coerce(this.expr(e.cap), 'usize')})` : 'Vec::new()', e.ty, e.ty, { owned: true });
       }
       case 'falses': {
@@ -295,14 +299,14 @@ class Printer {
         return this.atom(`vec![false; ${this.coerce(n, 'usize')}]`, 'bools', 'bools', { owned: true });
       }
       case 'prefix': {
-        const l = this.expr(e.list), n = this.expr(e.n), c = this.expr(e.cap);
+        const l = this.expr(e.list), n = this.expr(e.n);
         if (!isList(l.ty)) throw new Error('algo-ir: prefix() on non-list');
         if (h === 'ts') return this.atom(`${this.wrap(l, ATOM)}.slice(0, ${n.c})`, l.ty, l.ty, { owned: true });
         if (h === 'go') {
           const elem = this.tyName(l.ty, 'local').slice(2);
-          return this.atom(`append(make([]${elem}, 0, ${this.coerce(c, 'int')}), ${this.wrap(l, ATOM)}[:${this.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true });
+          return this.atom(`append(make([]${elem}, 0, ${this.coerce(this.expr(e.estimate), 'int')}), ${this.wrap(l, ATOM)}[:${this.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true });
         }
-        return this.atom(`{ let mut v = Vec::with_capacity(${this.coerce(c, 'usize')}); v.extend_from_slice(&${this.wrap(l, ATOM)}[..${this.coerce(n, 'usize')}]); v }`, l.ty, l.ty, { owned: true });
+        return this.atom(`${this.wrap(l, ATOM)}[..${this.coerce(n, 'usize')}].to_vec()`, l.ty, l.ty, { owned: true });
       }
       case 'lexAll': {
         const t = this.expr(e.text);
@@ -388,7 +392,7 @@ class Printer {
           return [`${pad}${kw} ${name}: ${this.tyName(s.ty, 'local')} = ${r.c};`];
         }
         if (h === 'go') {
-          if (s.init.k === 'newList' && !s.init.cap) return [`${pad}var ${name} ${this.tyName(s.ty, 'local')}`];
+          if (s.init.k === 'newList' && !s.init.cap && !s.init.estimate) return [`${pad}var ${name} ${this.tyName(s.ty, 'local')}`];
           if (isNum(s.ty)) {
             const nat = this.nat(s.ty);
             if (r.lit) return [nat === 'int' ? `${pad}${name} := ${r.c}` : `${pad}var ${name} ${nat} = ${r.c}`];
@@ -514,8 +518,8 @@ class Printer {
         const v = this.env.get(s.list)!;
         const l = this.id(s.list);
         if (h === 'ts') return [];
-        if (h === 'go') return [`${pad}if cap(${l}) > 2*len(${l}) { ${l} = append(${this.tyName(v.ty, 'local')}(nil), ${l}...) }`];
-        return [`${pad}if ${l}.capacity() > 2 * ${l}.len() { ${l}.shrink_to_fit(); }`];
+        if (h !== 'go') return [];
+        return [`${pad}if cap(${l}) > 2*len(${l}) { ${l} = append(${this.tyName(v.ty, 'local')}(nil), ${l}...) }`];
       }
     }
   }

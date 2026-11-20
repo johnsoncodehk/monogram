@@ -61,7 +61,8 @@ const ti = (t: Ex, f: TokInt): Expr => ({ k: 'tokInt', t: x(t), f });
 const tnl = (t: Ex): Expr => ({ k: 'tokNl', t: x(t) });
 const mtext = (text: Ex, m: Ex): Expr => ({ k: 'metaText', text: x(text), m: x(m) });
 const call = (fn: string, ...args: Ex[]): Expr & { k: 'call' } => ({ k: 'call', fn, args: args.map(x) });
-const newList = (ty: ListTy, capHint?: Ex): Expr => ({ k: 'newList', ty, cap: capHint === undefined ? undefined : x(capHint) });
+const newList = (ty: ListTy, cap?: Ex): Expr => ({ k: 'newList', ty, cap: cap === undefined ? undefined : x(cap) });
+const estList = (ty: ListTy, estimate: Ex): Expr => ({ k: 'newList', ty, estimate: x(estimate) });
 
 const let_ = (name: string, ty: Ty, init: Ex): Stmt => ({ k: 'let', name, ty, init: x(init) });
 const set = (name: string, e: Ex): Stmt => ({ k: 'set', name, e: x(e) });
@@ -161,12 +162,12 @@ function scanMetaToksFn(m: RelexMode): Fn {
   }
   return {
     name: 'scanMetaToks',
-    doc: `${doc} One lexFrom step per token so each meta records the lexer state after it.\nCapacity hint len(src)/2 per list; sparse lists are trimmed because the Doc keeps them.`,
+    doc: `${doc} One lexFrom step per token so each meta records the lexer state after it.\nGrowth estimate len(src)/2 per list; sparse lists are trimmed because the Doc keeps them.`,
     params: [{ name: 'src', ty: 'str' }],
     ret: ['metas', 'toks'],
     body: [
-      let_('toks', 'toks', newList('toks', shr(len('src'), I(1)))),
-      let_('meta', 'metas', newList('metas', shr(len('src'), I(1)))),
+      let_('toks', 'toks', estList('toks', shr(len('src'), I(1)))),
+      let_('meta', 'metas', estList('metas', shr(len('src'), I(1)))),
       let_('pos', 'int', I(0)),
       ...stateLets(m),
       while_(lt('pos', len('src')), [
@@ -359,8 +360,8 @@ function windowRelexStepFn(m: RelexMode): Fn {
       let_('delta', 'int', sub(len('ins'), sub('end', 'start'))),
       let_('editEnd', 'int', add('start', len('ins'))),
       ...anchorSearch,
-      { k: 'comment', text: 'Capacity hint: old length plus the len/2 token density of the inserted text.' },
-      let_('out', 'metas', { k: 'prefix', list: x('oldToks'), n: add('rb', I(1)), cap: add(add(len('oldToks'), shr(len('ins'), I(1))), I(2)) }),
+      { k: 'comment', text: 'Growth estimate: old length plus the len/2 token density of the inserted text.' },
+      let_('out', 'metas', { k: 'prefix', list: x('oldToks'), n: add('rb', I(1)), estimate: add(add(len('oldToks'), shr(len('ins'), I(1))), I(2)) }),
       let_('scanOff', 'int', I(0)),
       ...stateLets(m),
       if_(ge('rb', I(0)), [let_('anchor', 'meta', at('oldToks', 'rb')), ...restoreFromAnchor(m)]),
