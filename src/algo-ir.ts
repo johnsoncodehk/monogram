@@ -79,6 +79,15 @@ const CMP = new Set<BinOp>(['==', '!=', '<', '<=', '>', '>=']);
 const ATOM = 100;
 const CAST = 8;
 
+function refs(e: Expr, out = new Set<string>()): Set<string> {
+  if (e.k === 'var') out.add(e.name);
+  for (const v of Object.values(e)) {
+    if (Array.isArray(v)) v.forEach((x) => typeof x === 'object' && x && refs(x as Expr, out));
+    else if (typeof v === 'object' && v && 'k' in v) refs(v as Expr, out);
+  }
+  return out;
+}
+
 const snake = (s: string): string => s.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
 const cap = (s: string): string => s[0].toUpperCase() + s.slice(1);
 
@@ -454,6 +463,10 @@ class Printer {
       case 'break': return [`${pad}break${semi}`];
       case 'return': {
         const fn = this.cur!;
+        s.es.forEach((e, i) => {
+          if (e.k !== 'var' || !this.env.get(e.name)?.owned) return;
+          if (s.es.some((o, j) => j > i && refs(o).has(e.name))) throw new Error(`algo-ir: return moves ${e.name} before a later element reads it`);
+        });
         const vals = s.es.map((e, i) => {
           const r = this.expr(e), t = fn.ret[i];
           if (isNum(t)) return this.coerce(r, this.nat(t));

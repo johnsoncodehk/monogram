@@ -359,7 +359,8 @@ function windowRelexStepFn(m: RelexMode): Fn {
       let_('delta', 'int', sub(len('ins'), sub('end', 'start'))),
       let_('editEnd', 'int', add('start', len('ins'))),
       ...anchorSearch,
-      let_('out', 'metas', { k: 'prefix', list: x('oldToks'), n: add('rb', I(1)), cap: len('oldToks') }),
+      { k: 'comment', text: 'Capacity hint: old length plus the len/2 token density of the inserted text.' },
+      let_('out', 'metas', { k: 'prefix', list: x('oldToks'), n: add('rb', I(1)), cap: add(add(len('oldToks'), shr(len('ins'), I(1))), I(2)) }),
       let_('scanOff', 'int', I(0)),
       ...stateLets(m),
       if_(ge('rb', I(0)), [let_('anchor', 'meta', at('oldToks', 'rb')), ...restoreFromAnchor(m)]),
@@ -391,7 +392,8 @@ function relexEditsFn(m: RelexMode): Fn {
       body: [
         let_('next', 'str', call('applyEdits', 'text', 'edits')),
         let_('meta', 'metas', call('scanMeta', 'next')),
-        ret('next', 'meta', len('meta')),
+        let_('n', 'int', len('meta')),
+        ret('next', 'meta', 'n'),
       ],
     };
   }

@@ -104,6 +104,12 @@ const CASES: Case[] = [
     reject: ['A B', 'A=', 'A=1 B=2', 'A=fn(1,'],
   },
   {
+    // Newline mode + template literals: the lexer mode without windowed relex (full re-lex per edit).
+    grammar: 'envtpl', path: './fixtures/envtpl.ts',
+    accept: ['A=1', 'A=`x`', 'A=`x${B}y`\nC=2', 'A=fn(`a`,\nb)\nB=`q${r}s${t}u`', 'A=`${a + b}`'],
+    reject: ['A=`x${B}', 'A=`x', 'A=`${}`'],
+  },
+  {
     // General (non-literal) inline alt: object keys are alt(Ident | Str | Number) — a
     // backtracking alternation of token refs inside a rule sequence.
     grammar: 'altjs', path: './fixtures/altjs.ts',
@@ -400,6 +406,10 @@ const envSegExtInit = Array.from({ length: 8 }, (_, i) => `K${i}=${i}`).join('\n
 const envSegExtIns = 'Z=9\n';
 const envSegExtPoke = envSegExtInit.indexOf('K3=') + 'K3='.length + envSegExtIns.length;
 const regexjsLargeInit = 'var r = /abc/g; a / b;\n'.repeat(60);
+const regexjsAfterParen = 'if (a) /b/g; c / d / e;';
+const tplLargeInit = ('`a${x}b`; f(1);\n').repeat(50);
+const jsLargeInit = ('var r = /a/g; `t${x}u`; f(1);\n').repeat(40);
+const jsLargeEdit = jsLargeInit.indexOf('f(1)', 600) + 2;
 const jsLookaheadInit = 'let x = (a)\nfoo;\nbar;';
 const jsLookaheadEdit = jsLookaheadInit.indexOf('\n') + 1; // first char of peeked-into second stmt
 const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
@@ -429,6 +439,8 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'let a = 1;\nlet b = 2;\nlet c = 3;', batches: [[[19, 20, '']], [[29, 30, '4']]], reused: 0 },
     // Reject-then-repair: same setup, batch 2 restores validity; must parse fresh (reused:0) ≡ fresh.
     { init: 'let a = 1;\nlet b = 2;\nlet c = 3;', batches: [[[19, 20, '']], [[19, 19, '2']]], reused: 0 },
+    // Relex across the edit merges tokens (`12`+`34` → `1234`): resync only after the merge.
+    { init: '12+34+56', batches: [[[2, 3, '']]] },
   ],
   javascript: [
     { init: 'let a = 1;\nf(a);', batches: [[[8, 9, '42']]] },
@@ -439,6 +451,11 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'var q = `x${a/b}y`;', batches: [[[12, 13, 'c']]] },
     // predecessor peeked into second stmt (ext > tokEnd); editing that region must not keep stmt0
     { init: jsLookaheadInit, batches: [[[jsLookaheadEdit, jsLookaheadEdit + 1, '+']]], maxReused: 1 },
+    // Edit inside a hole: regex/division state and template depth both resume from the anchor.
+    { init: 'a; `b${x}c`; d / e / f;', batches: [[[7, 8, 'g / h']]] },
+    // Division → regex flip far from the edit; suffix adoption needs equal prev-token/paren state.
+    { init: 'x = a / b / c; `t${y}u`;', batches: [[[4, 6, '']]] },
+    { init: jsLargeInit, batches: [[[jsLargeEdit, jsLargeEdit + 1, '9']]], large: true, maxRelexed: 15 },
   ],
   templatejs: [
     { init: '`a${x}b`;', batches: [[[4, 5, 'y']]] },
@@ -447,6 +464,12 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: '`a${x}b${y}c`;', batches: [[[6, 7, 'z']]] },
     { init: ('`a${x}b`; f(1);\n').repeat(50), batches: [[[600, 601, '9']]], large: true, maxRelexed: 15 },
     { init: '`a`; z; `b${x}c`;', batches: [[[5, 6, 'w']]] },
+    // Removing a hole: the head/tail split of the first template disappears.
+    { init: '`a${x}b` + c + `d${y}e`;', batches: [[[2, 6, '']]] },
+    // Adding a hole next to an existing one: template depth after the edit differs from the old stream.
+    { init: 'f(`a${x}b`, c);', batches: [[[8, 8, '${y}']]] },
+    // Edit inside the first hole: anchor search must back off to a td == 0 token, then resync.
+    { init: tplLargeInit, batches: [[[3, 4, 'y']]], maxRelexed: 15 },
   ],
   envspec: [
     // Existing scenes — reused pinned from S8 measurement (was 0 under shape-A-only).
@@ -471,6 +494,15 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: envReuseInit, batches: envMultiBatches, longSession: true, minReused: 1 },
     // Go adopted Seg.Ext + tokDelta (pre-fix: reused 9 from stale keep-prefix watermarks).
     { init: envSegExtInit, batches: [[[0, 0, envSegExtIns]], [[envSegExtPoke, envSegExtPoke + 1, '9']]], reused: 8 },
+    // Dropping a flow `(`: later tokens change flowDepth, so equal-text old tokens are not adopted.
+    { init: 'A=fn(1,\n2)\nB=3\nC=4', batches: [[[4, 5, '']]] },
+    // Opening a flow at the head swallows the next line break.
+    { init: 'A=fn(1,\n2)\nB=3\nC=4', batches: [[[0, 0, 'X=g(\n']]] },
+  ],
+  envtpl: [
+    { init: 'A=`x${B}y`\nC=2', batches: [[[6, 7, 'Q']]], fullRelex: true },
+    { init: 'A=fn(`a`,\nb)\nB=`q${r}s`', batches: [[[4, 5, '']]], fullRelex: true },
+    { init: 'A=1\nB=2', batches: [[[3, 3, '\nC=`z`']]], fullRelex: true },
   ],
   regexjs: [
     { init: 'var re = /[a-z]+/i; x / y;', batches: [[[11, 12, '0']]] },
@@ -479,6 +511,12 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: regexjsLargeInit, batches: [[[600, 601, '9']]], large: true, maxRelexed: 15 },
     { init: 'f(x); a / b;', batches: [[[2, 2, '(']]] },
     { init: 'if (x) /y/;', batches: [[[11, 11, ' /z/;']]] },
+    // `if (a)` → `f (a)`: the paren head flag flips, `/b/g` becomes division; adoption waits for equal state.
+    { init: regexjsAfterParen, batches: [[[0, 2, 'f']]] },
+    // `(a) / b` → `if (a) / b`: the reverse flip.
+    { init: '(a) / b / c; d / e;', batches: [[[0, 0, 'if ']]] },
+    // Edit at the head of a large doc: resume right after it.
+    { init: regexjsLargeInit, batches: [[[4, 5, 's']]], maxRelexed: 15 },
   ],
 };
 const applyEdits = (init: string, batches: EditBatch[]): string => {
