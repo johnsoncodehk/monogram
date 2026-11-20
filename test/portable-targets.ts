@@ -288,6 +288,16 @@ const CASES: Case[] = [
       'x = { public static() {} };', 'x = { static public: 1 };', 'x = { readonly override<T>() {} };', 'x = { declare abstract?() {} };',
       'x = { async static() {} };', 'x = { async public declare() {} };', 'x = { static, public };',
       'x = { static: 1, public() {}, get: 2 };', 'x = { public static x() {}, static get y() { return 1; } };',
+      // `this is T` is a TYPE (tsc: parseNonArrayType), so it stands wherever a type does; its
+      // target is a whole type. `x is T` exists only as a return type. `is` binds on the same line.
+      'var x: this is string;', 'function f(x: this is string) { }', 'declare class W { set p(x: this is string); }',
+      'class F { isFSO: this is F; m(): this is F { return true; } get g(): this is F { return true; } }',
+      'type A = this is T;', 'type A = U | this is T | V;', 'type A = (this is T)[];', 'type A = G<this is T>;',
+      'type A = keyof this is T;', 'type A = { p: this is T };', 'interface I { p: this is T }', 'type A = [a: this is T];',
+      'var v = y as this is T;', 'var v = y satisfies this is T;', 'var v = <this is T>y;', 'type A = U extends this is T ? 1 : 2;',
+      'var x: this is this is T;', 'var x: asserts y is this is T;', 'function f(x: any): x is this is T { }',
+      'function f(x: any): (this is T) { }', 'type F = (x: any) => x is T;', 'var v = (x: any): x is T => true;',
+      'var x: this is\n string;', 'class C { p: this\n is: number }', 'class C { m(x): x\n is: string }', 'type A = this[];',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -301,7 +311,15 @@ const CASES: Case[] = [
       'a > > b;', 'a >> = b;', 'a >\n= b;', 'a >>>>= b;',
       // Once a word is the member's name, nothing but the member's own tail may follow it.
       'class C { static static x; }', 'class C { public static<T> x; }', 'class C { public static?!: T; }', 'class C { public static x y; }', 'class C { public static = ; }',
-      'x = { public static x y };', 'x = { public static: };', 'x = { public static() x };', 'x = { static public: 1 2 };'],
+      'x = { public static x y };', 'x = { public static: };', 'x = { public static() x };', 'x = { static public: 1 2 };',
+      // `x is T` outside a return type; a predicate subject other than an identifier / `this`;
+      // a line break before `is`.
+      'var x: y is string;', 'function f(x: y is string) { }', 'class C { p: x is T; }', 'type A = x is T;',
+      'type A = (x is T);', 'type A = U | x is T;', 'var v = y as x is T;', 'function f(x: any): (x is T) { }',
+      'type A = this[] is T;', 'type A = (this) is T;', 'type A = void is T;', 'type A = this is T is U;',
+      'function f(x: any): this is x is T { }', 'function f(x: any): x is y is T { }',
+      'var x: this\n is string;', 'function f(): this\n is string { }', 'function f(x: any): x\n is string { }',
+      'class C { p: this is }', 'var v = y as this is;', 'function f(x: any): void is T { }', 'function f(x: any): class is T { }'],
   },
 ];
 

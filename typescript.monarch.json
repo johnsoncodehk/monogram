@@ -359,7 +359,6 @@
             "keyof": "operator",
             "typeof": "operator",
             "readonly": "keyword",
-            "this": "keyword",
             "is": "operator",
             "abstract": "keyword",
             "new": "operator",
@@ -371,6 +370,7 @@
             "null": "keyword",
             "undefined": "keyword",
             "void": "operator",
+            "this": "keyword",
             "unique": "keyword",
             "import": "keyword",
             "function": "keyword",
@@ -587,10 +587,6 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "this": {
-              "token": "keyword",
-              "switchTo": "@value"
-            },
             "is": {
               "token": "operator",
               "switchTo": "@root"
@@ -634,6 +630,10 @@
             "void": {
               "token": "operator",
               "switchTo": "@root"
+            },
+            "this": {
+              "token": "keyword",
+              "switchTo": "@value"
             },
             "unique": {
               "token": "keyword",
@@ -1128,7 +1128,6 @@
             "keyof": "operator",
             "typeof": "operator",
             "readonly": "keyword",
-            "this": "keyword",
             "is": "operator",
             "abstract": "keyword",
             "new": "operator",
@@ -1140,6 +1139,7 @@
             "null": "keyword",
             "undefined": "keyword",
             "void": "operator",
+            "this": "keyword",
             "unique": "keyword",
             "import": "keyword",
             "function": "keyword",

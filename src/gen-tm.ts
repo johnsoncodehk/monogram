@@ -6504,7 +6504,10 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
             if (it.type === 'literal' && it.value === kw) { saw = true; gated = false; } else walk(it);
           }
           return;
-        case 'quantifier': case 'group': case 'not':
+        // (`not` is absent: a lookahead's words are not literals OF the rule — the same
+        // reading as collectLiterals, which produced `typeLiterals`. A reserved-word guard
+        // `not(alt('function', …))` in a type rule is no occurrence of `function` in a type.)
+        case 'quantifier': case 'group':
           if (e.body.type === 'literal' && e.body.value === kw) { saw = true; gated = false; } else walk(e.body);
           return;
         case 'sep':

@@ -122,12 +122,12 @@ const TypeMember = rule($ => {
 const Type = rule($ => {
   const fnType = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
   return [
-    // A bare type reference / entity name. The type-predicate `x is T` is NOT here for the
-    // PARSER: tsc's parser accepts `x is T` ONLY in a function RETURN-TYPE position (see
-    // ReturnType below), so a predicate in any other type slot (var/param/property
-    // annotation, cast, type argument, union member, …) is a parse error. (`asserts x` is
-    // different — tsc's parser accepts it in EVERY position, so it stays in this general
-    // Type, below.) tsRelax: tree-sitter KEEPS the predicate in the general type (its
+    // A bare type reference / entity name. The identifier-subject predicate `x is T` is NOT
+    // here for the PARSER: tsc's parser accepts it ONLY in a function RETURN-TYPE position
+    // (see ReturnType below), so in any other type slot (var/param/property annotation, cast,
+    // type argument, union member, …) it is a parse error. (`this is T` and `asserts x` are
+    // different — tsc's parser accepts them in EVERY type position, so they are arms of this
+    // general Type, below.) tsRelax: tree-sitter KEEPS the predicate in the general type (its
     // status-quo shape, GLR-cheap), since a highlighter may over-accept a stray predicate
     // — adding the return-only ReturnType to ~18 slots for tree-sitter inflates its table.
     tsRelax(Ident, [Ident, opt('is', Type)]),
@@ -164,7 +164,14 @@ const Type = rule($ => {
     Number_,
     HexNumber, OctalNumber, BinaryNumber, BigInt_,
     ['-', alt(Number_, BigInt_)],
-    'true', 'false', 'null', 'undefined', 'void', 'this',
+    'true', 'false', 'null', 'undefined', 'void',
+    // The `this` type, and `this is T` — the this-type predicate. tsc parses the predicate
+    // where it parses the `this` type (parseNonArrayType: a `this` followed by `is` on the
+    // same line), so it is a type like any other: annotation, parameter, cast, type argument,
+    // union member, parenthesized, …. The target is a whole Type (`this is A | B`,
+    // `this is this is T`). A line break before `is` leaves a plain `this` type
+    // (`p: this⏎ is: number` is two class members).
+    ['this', opt(sameLine, 'is', $)],
     ['unique', $],   // `unique` is a general prefix type operator (tsc parses `unique <Type>`); `unique symbol` is the checker-valid case
     ['import', '(', $, ')'],
     Template,
@@ -246,22 +253,19 @@ const Prop = rule($ => {
   ];
 });
 
-// A function/method/accessor/arrow/fn-type RETURN type. Beyond an ordinary Type it may be
-// a TYPE PREDICATE `x is T` / `this is T` — a narrowing guard tsc's parser accepts ONLY in
-// return position. The SUBJECT is a bare identifier or `this` (a number/string/qualified/
-// parenthesized subject rejects); `await`/`yield` are accepted as ordinary-identifier
-// subjects. The `is` TARGET is an ordinary (non-predicate) Type, so `x is y is z` rejects.
-// `asserts` predicates are NOT here — they live in the general Type (tsc parses them in any
-// position), and a return type written `asserts x` falls through to the Type arm below.
-// A function/method/accessor/arrow/fn-type RETURN type. For the PARSER it adds the type
-// predicate `x is T` / `this is T` (subject = identifier or `this`; target = an ordinary
-// non-predicate Type, so `x is y is z` rejects) on top of an ordinary Type — and the
-// predicate appears ONLY here (return position), nowhere else. It stays TRANSPARENT (the
-// strict side is a plain `alt`, not a rule), so a normal return is a bare `Type` node —
-// identical CST shape to a pre-predicate return slot, leaving AST lowering / cst-match
-// unaffected. tsRelax: tree-sitter renders just `Type` here (the predicate lives in its
-// general type instead), so adding ReturnType to ~18 slots doesn't inflate its GLR table.
-const ReturnType = tsRelax(alt([alt(Ident, 'this'), 'is', Type], Type), Type);
+// A function/method/accessor/arrow/fn-type RETURN type. For the PARSER it adds the
+// identifier-subject type predicate `x is T` on top of an ordinary Type — the one predicate
+// form tsc's parser accepts ONLY in return position (parseTypeOrTypePredicate). The SUBJECT is
+// an identifier (a reserved word, number, string, qualified or parenthesized subject rejects;
+// `await`/`yield` are ordinary-identifier subjects), `is` follows it on the same line, and the
+// TARGET is an ordinary Type, so `x is y is z` rejects. The other predicate forms are NOT
+// here: `this is T` and `asserts x` / `asserts x is T` are arms of the general Type (tsc
+// parses them in any type position), so a return type written that way is the Type arm below.
+// It stays TRANSPARENT (the strict side is a plain `alt`, not a rule), so a normal return is a
+// bare `Type` node — identical CST shape to a pre-predicate return slot, leaving AST lowering /
+// cst-match unaffected. tsRelax: tree-sitter renders just `Type` here (the predicate lives in
+// its general type instead), so adding ReturnType to ~18 slots doesn't inflate its GLR table.
+const ReturnType = tsRelax(alt([notReserved, Ident, sameLine, 'is', Type], Type), Type);
 
 const ClassHeritage = rule($ => [
   // Non-constructor primaries: tsc PARSES `extends undefined/true/42/"x"` cleanly
