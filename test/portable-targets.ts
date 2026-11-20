@@ -374,6 +374,16 @@ const CASES: Case[] = [
       'import r = require("x");', "import r = require('x');", 'import r = require\n("x");', 'import r = require(x);', 'import r = require(1, 2);',
       'export import r = a.b;', 'import type r = require("x");', 'import type r = a.b;', 'import type = require("x");',
       'namespace N { import r = a.b }', 'declare module "m" {\nexport import r = require("x")\n}',
+      // A declaration without a body ends where a statement does (tsc's parseSemicolon): at a
+      // `;`, a line break, a `}` or the end of input. One that ends in a block needs nothing.
+      'function f(): void\nfunction f() {}', 'function f(): void; g();', 'namespace N { function f(): void }',
+      'function f() {} g();', 'function f() {};', 'class C {} g();', 'namespace N {} x;', 'enum E {} x;', 'interface I {} x;',
+      'declare module "x" {} x;', 'export default function () {} g();', 'export default class {} g();', 'export default interface I {} x;',
+      'export default @dec class {} g();', 'export default abstract class C {} g();', 'export default @dec abstract class C {}',
+      'type A = B\nC;', 'namespace N { type A = B }', 'declare module "x"\nfoo();', 'declare function f()\ng();',
+      'export = a\nb;', 'import "m"\nfoo();', 'export { a }; b();', 'export * from "m"\nfoo();', 'export as namespace N\nfoo();',
+      'namespace N { export * from "m" }', 'declare module "m" { export default a }', 'function w() { type A = B }',
+      'import r = a.b\nfoo();', 'import r = require("x")\n(g);', '@dec using x = y\nfoo();', 'type A = B;;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -406,6 +416,15 @@ const CASES: Case[] = [
       'import r = new x;', 'import r = new a.b();', 'import r = this;', 'import r = null;', 'import r = 1;', 'import r = "m";',
       'import r = (a);', 'import r = a.default;', 'import r = a.if;', 'import r = a.#p;', 'import r = a?.b;', 'import r = a!;',
       'export import r = this.x;', 'import type r = new x;', 'namespace N { import r = a.default }',
+      // ... nor is a body-less declaration followed by a statement on its line.
+      'type A = B C;', 'declare function f() g()', 'declare module "x" foo()', 'export as namespace N foo()',
+      'export default a b', 'export * from "m" foo()', 'export type { A } b()', 'export = a b',
+      'import a from "m" foo()', 'import "m" foo()', 'function f() g()', 'import r = a.b("x");', 'import rect = module("rect");',
+      'export * as ns from "m" foo()', 'export type * from "m" foo()', 'import type A from "m" foo()', 'import type r = require("x") foo()',
+      'export { a } from "m" b()', '@dec using x = y foo()', 'public using x = y foo()', 'export default function (): void g()',
+      'function f(): void type B = C', 'namespace N { type A = B C }', 'declare module "m" { export = a b }',
+      // `export default class` is a declaration, not a class expression with a tail.
+      'export default class {}.x', 'export default class C {}\n.x;',
       // A word left alone on its line is a property of its own, so the next member needs a separator.
       'x = { public\nx() {} };', 'x = { public\nx: 1 };', 'x = { async\nx() {} };', 'x = { readonly\n[k]: 1 };', 'x = { static public\nx: 1 };',
       // `export` is no modifier before `*` / `as`; `get` / `set` before a name is the accessor keyword.

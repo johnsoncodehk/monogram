@@ -24,6 +24,9 @@ function tsFnArms(nameParts, body) {
 // ASI), OR the next token is `}` (block end). A same-line non-`;`/`}` token can NOT end
 // the statement, so a mid-line split (`var x = a[]`) stays one statement (tsc-shaped).
 const asi = () => alt([';'], [not(sameLine)], [not(not('}'))]);
+// A function declaration's body: a block, or none (an overload or ambient signature), and a
+// declaration without a body ends as a statement does (tsc's parseFunctionBlockOrSemicolon).
+const fnBodyOrAsi = () => alt(Block, [not('{'), asi()]);
 // JavaScript is the SUBSET / base of the ECMAScript family; TypeScript is the
 // SUPERSET (JS + a type layer). The shared, type-free vocabulary — token consts,
 // the `notReserved`/`notReservedExpr` reserved-word guards, the precedence ladder
@@ -847,12 +850,16 @@ const ModuleReference = rule($ => [
   [notReserved, Ident, many('.', notReserved, Ident)],
 ]);
 
+// How a declaration ends is tsc's: one that ends in a block (`{ … }` of a function, class,
+// interface, enum, namespace or module) needs nothing after it; every other one ends as a
+// statement does, at `asi()` (tsc's parseSemicolon). An arm that wraps another declaration or
+// statement (`export …`, `declare …`, a modifier or decorator prefix) takes the wrapped one's end.
 const Decl = rule($ => [
   // Function declarations live here (not in Stmt) so that at statement level a
   // leading `function` is preferred as a declaration over an IIFE expression-
   // statement: Program tries Decl before Stmt, so `function f(){}\n()=>{}` parses
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
-  ...tsFnArms([notReserved, Ident], alt(Block, [not('{'), opt(';')])),
+  ...tsFnArms([notReserved, Ident], fnBodyOrAsi()),
   // The declaration NAME slots below carry `notReserved` (same guard as the type-alias
   // name): a reserved word is not a legal declaration name (`interface void {}`,
   // `class while {}`, `enum for {}`, `namespace debugger {}` — all TS errors), while a
@@ -861,7 +868,7 @@ const Decl = rule($ => [
   // extends B`) — the parser accepts them and the checker reports the duplicate;
   // mirror with many() rather than a single opt() clause.
   ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, opt(alt(';', ','))), '}'],   // shared heritage: repeated/order-free extends+implements, `extends Foo?.Bar`, empty `extends {`
-  ['type', notReserved, Ident, opt(TypeParams), '=', Type, opt(';')],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
+  ['type', notReserved, Ident, opt(TypeParams), '=', Type, asi()],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
   // class decl: optional decorators + optional `abstract`. gen-tm expands the
   // opt()/many() to recover the `class Ident … { … }` shape for highlighting.
   [many(DecoratorExpr), opt('abstract'), 'class', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
@@ -870,11 +877,11 @@ const Decl = rule($ => [
   // Named/anonymous are separate arms, mirroring the class-expression pair above.
   [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
   ['enum', notReserved, Ident, '{', sep(EnumMember, ','), '}'],
-  ['declare', 'function', opt('*'), notReserved, Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), opt(';')],
+  ['declare', 'function', opt('*'), notReserved, Ident, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), asi()],
   // ambient module shorthand `declare module "foo";` (no body — the module arm below
   // requires `{…}`) and `declare global { … }` (global-scope augmentation; `global`
   // is a contextual-keyword block, not a namespace name). tsc accepts both.
-  ['declare', 'module', String_, opt(';')],
+  ['declare', 'module', String_, asi()],
   ['declare', 'global', '{', many(Stmt), '}'],
   ['declare', alt($, Stmt)],
   // A leading `async`/`abstract` modifier before any declaration: tsc's parser
@@ -894,12 +901,12 @@ const Decl = rule($ => [
   [many1(alt('abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor')), alt(
     $,
     [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
-    [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), opt(';')],
+    [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
   )],
   ['async', not('function'), $],
   ['namespace', notReserved, Ident, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([notReserved, Ident, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
-  ['export', 'as', 'namespace', notReserved, Ident, opt(';')],   // UMD NamespaceExportDeclaration — BEFORE the lenient `export alt($, Stmt)` (else `as` wraps as an expr-statement)
+  ['export', 'as', 'namespace', notReserved, Ident, asi()],   // UMD NamespaceExportDeclaration — BEFORE the lenient `export alt($, Stmt)` (else `as` wraps as an expr-statement)
   ['export', alt($, Stmt)],
   // decorators before export/default/etc. — tsc allows either order. The variable-
   // statement alternates mirror tsc's parseDeclaration surface: after decorators it
@@ -912,29 +919,29 @@ const Decl = rule($ => [
     // `using` requires a real binding here: `@dec using x` is parse-clean but
     // `using 1` is a tsc parse error (zero-binding `var;` by contrast is clean,
     // so the var/let/const alternative above keeps the lenient sep()).
-    [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), opt(';')],
+    [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
   )],
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error).
   ['export', many(DecoratorExpr), 'default', alt(
-    ...tsFnArms([opt(notReserved, Ident)], alt(Block, [not('{'), opt(';')])),  // function
-    ['abstract', 'class', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named abstract class
-    ['abstract', 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous abstract class
+    ...tsFnArms([opt(notReserved, Ident)], fnBodyOrAsi()),  // function
+    [many(DecoratorExpr), opt('abstract'), 'class', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named class
+    [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous class
     ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, opt(alt(';', ','))), '}'],   // export default interface (interface is not an Expr)
-    [Expr, opt(';')],   // catch-all: export default <expr>
+    [Expr, asi()],   // catch-all: export default <expr>
   )],
-  ['export', opt('type'), '*', alt(['from', String_, opt(';')], ['as', alt(Ident, String_), 'from', String_, opt(';')])],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
-  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), opt(';')],
-  ['export', '=', Expr, opt(';')],
-  ['export', 'type', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), opt(';')],
+  ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', String_, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
+  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
+  ['export', '=', Expr, asi()],
+  ['export', 'type', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
   ['const', 'enum', notReserved, Ident, '{', sep(EnumMember, ','), '}'],
   ['import', alt(
-    [ImportClause, 'from', String_, opt(';')],          // import X from "m"  (also `import type from "m"` = default named `type`)
-    ['type', ImportClause, 'from', String_, opt(';')],  // import type X from "m"
-    ['type', Ident, '=', ModuleReference, opt(';')],    // import type X = require(…) / = ns.Foo (type-only import-equals)
-    [Ident, '=', ModuleReference, opt(';')],            // import x = require(…) / = ns.Foo  (also `import type = …` where `type` is the binding name)
-    [String_, opt(';')],                                // import "m"
-  )],
+    [ImportClause, 'from', String_],          // import X from "m"  (also `import type from "m"` = default named `type`)
+    ['type', ImportClause, 'from', String_],  // import type X from "m"
+    ['type', Ident, '=', ModuleReference],    // import type X = require(…) / = ns.Foo (type-only import-equals)
+    [Ident, '=', ModuleReference],            // import x = require(…) / = ns.Foo  (also `import type = …` where `type` is the binding name)
+    String_,                                  // import "m"
+  ), asi()],
   [many(DecoratorExpr), 'export', alt($, Stmt)],
 ]);
 
