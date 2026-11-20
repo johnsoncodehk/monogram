@@ -411,10 +411,10 @@ export const typescriptShape: ShapeSpec = {
 
     // ─── Class / interface / enum members ──────────────────────────────
     ClassMember: custom('estreeClassMember',
-      '6 alts spanning empty/ctor/static-block/decorated-method-field-soup/field. ' +
+      '4 alts spanning empty/ctor/static-block/decorated-method-field-soup. ' +
       'alt[3] alone is a giant nested alt of async/generator/get/set/index/constructor/' +
       'method/field — tens of ESTree ClassBody element types. choice() would need recursive ' +
-      'nested choice (forbidden) or an explosion of arms; custom is the honest escape.', { types: ['UnknownClassMember', 'MethodDefinition', 'StaticBlock', 'MethodDefinition', 'PropertyDefinition', 'MethodDefinition'] }),
+      'nested choice (forbidden) or an explosion of arms; custom is the honest escape.', { types: ['UnknownClassMember', 'MethodDefinition', 'StaticBlock', 'MethodDefinition'] }),
     InterfaceMember: custom('tsInterfaceMember',
       '6 alts (call/construct signature, get/set, mapped type member, readonly prop, ' +
       'method/prop, index signature) — each a different TS-ESTree node. Same argument as ' +
@@ -986,8 +986,7 @@ function estreeClassMember(ctx: TsAstCustomCtx): unknown {
   if (arm === 0) return null;
   if (arm === 1) return { type: 'MethodDefinition', kind: 'constructor', key: I('constructor'), value: { type: 'FunctionExpression', params: flatKids(ctx.kids[0] ?? []), body: ctx.kids[1] }, static: false };
   if (arm === 2) return { type: 'StaticBlock', body: ctx.kids[0] };
-  if (arm === 4) return { type: 'PropertyDefinition', key: ctx.kids[0], value: ctx.kids[1] ?? null, static: false, readonly: false };
-  if (arm !== 3 && arm !== 5) return unhandledCustom('estreeClassMember', ctx);
+  if (arm !== 3) return unhandledCustom('estreeClassMember', ctx);
   const nested = ctx.altPath[1];
   if (arm === 3 && nested === 8) {
     const branch = Array.isArray(ctx.kids[1]) ? ctx.kids[1] as unknown[] : [];
@@ -1007,8 +1006,7 @@ function estreeClassMember(ctx: TsAstCustomCtx): unknown {
       computed: false,
     };
   }
-  if (arm === 5) return { type: 'MethodDefinition', kind: 'method', key: ctx.kids[0], value: ctx.kids[1], static: true };
-  if (nested !== undefined && nested >= 0 && nested <= 8) {
+  if (nested !== undefined && nested >= 0 && nested <= 9) {
     return { type: 'MethodDefinition', kind: 'method', key: ctx.kids[0], value: ctx.kids[1], static: false };
   }
   return unhandledCustom('estreeClassMember', ctx);
