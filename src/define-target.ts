@@ -2,7 +2,8 @@
 // A target supplies its name, its `Lowering` (how the
 // shared algorithm IR is spelled, stored, owned and sized in that language) and its own parser
 // emitter; it receives the shared algorithm families already printed with that lowering, so a
-// target never authors or re-decides those algorithms.
+// target never authors or re-decides those algorithms. A target that embeds no shared algorithm
+// may omit the lowering; asking it for one is then an error.
 import type { Lowering } from './algo-ir.ts';
 import type { Target } from './emit.ts';
 import type { ParserIR } from './emit-portable.ts';
@@ -17,13 +18,13 @@ export interface SharedAlgorithms {
 export interface TargetDefinition {
   name: string;
   ext: string;
-  lowering: Lowering;
+  lowering?: Lowering;
   emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string;
   emitRunner?(): string;
 }
 
 export interface PortableTarget extends Target {
-  lowering: Lowering;
+  lowering?: Lowering;
   shared: SharedAlgorithms;
 }
 
@@ -31,7 +32,11 @@ const registry = new Map<string, PortableTarget>();
 
 export function defineTarget(def: TargetDefinition): PortableTarget {
   if (registry.has(def.name)) throw new Error(`defineTarget: target ${def.name} is already registered`);
-  const shared: SharedAlgorithms = { relexFamily: (ir) => emitRelexFamily(ir, def.lowering) };
+  const lowering = (): Lowering => {
+    if (!def.lowering) throw new Error(`defineTarget: target ${def.name} supplies no Lowering for shared algorithms`);
+    return def.lowering;
+  };
+  const shared: SharedAlgorithms = { relexFamily: (ir) => emitRelexFamily(ir, lowering()) };
   const target: PortableTarget = {
     name: def.name,
     ext: def.ext,

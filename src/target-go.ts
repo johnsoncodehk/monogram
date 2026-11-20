@@ -13,7 +13,7 @@ import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, ty
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, PREC, isNum, type Lowering, type MetaInt, type MkMeta, type TokInt, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
@@ -2909,13 +2909,18 @@ const GO_TYPES: Record<Ty, string> = {
 const GO_META: Record<MetaInt, string> = { off: 'int32', end: 'int32', kid: 'uint16', pd: 'uint16', fd: 'uint16', td: 'uint8' };
 const GO_TOK: Record<TokInt, string> = { off: 'uint32', end: 'uint32', kid: 'uint16', lid: 'uint16' };
 const GO_MK: Record<keyof MkMeta, string> = { off: 'int32', end: 'int32', kid: 'uint16', nl: 'bool', fd: 'uint16', pd: 'uint16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'uint8' };
+// Operator spelling and binding strength; unary is 90, a negative literal 7.
+const GO_OPS: Record<BinOp, [string, number]> = {
+  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], add: ['+', 6], sub: ['-', 6],
+};
+const GO_IND = '\t';
 const exported = (s: string): string => s[0].toUpperCase() + s.slice(1);
+const goWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
+const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 
 // Shared-algorithm lowering: explicit conversions, slices; growth estimates are reserved up front
 // (GC churn from append doubling is the cost they avoid) and over-reserved slices are trimmed.
 const goLowering: Lowering = {
-  indent: '\t',
-  stmtEnd: '',
   ident: (n) => n,
   num: { int: 'int', lid: 'uint16', depth: 'int' },
   index: 'int',
@@ -2923,47 +2928,69 @@ const goLowering: Lowering = {
   cast: (_cx, r, nat) => ({ ...r, c: `${nat}(${r.c})`, nat, prec: ATOM }),
   owns: false,
   expr: {
+    literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
+    not: (r) => ({ c: `!${goWrap(r, ATOM)}`, prec: 90 }),
+    bin: (op, a, b) => {
+      const [sp, p] = GO_OPS[op];
+      const side = (r: R, right: boolean): string =>
+        (r.prec < p || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
+      return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
+    },
+    index: (l, i) => ({ c: `${goWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
+    call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
-    metaInt: (cx, m, f) => cx.atom(`${cx.wrap(m, ATOM)}.${exported(f)}`, 'int', GO_META[f]),
+    metaInt: (cx, m, f) => cx.atom(`${goWrap(m, ATOM)}.${exported(f)}`, 'int', GO_META[f]),
     metaFlag: (cx, m, f) => cx.atom(`am${exported(f)}(${m.c})`, 'bool', 'bool'),
-    tokInt: (cx, t, f) => cx.atom(`${cx.wrap(t, ATOM)}.${exported(f)}`, 'int', GO_TOK[f]),
-    tokNl: (cx, t) => cx.atom(`${cx.wrap(t, ATOM)}.Nl`, 'bool', 'bool'),
+    tokInt: (cx, t, f) => cx.atom(`${goWrap(t, ATOM)}.${exported(f)}`, 'int', GO_TOK[f]),
+    tokNl: (cx, t) => cx.atom(`${goWrap(t, ATOM)}.Nl`, 'bool', 'bool'),
     editInt: (cx, e, f) => cx.atom(`${e.c}.${exported(f)}`, 'int', 'int'),
     editText: (cx, e) => cx.atom(`${e.c}.Text`, 'str', 'str'),
     metaText: (cx, t, m) => cx.atom(`amText(${t.c}, ${m.c})`, 'str', 'str'),
-    substr: (cx, s, a, b) => cx.atom(`${cx.wrap(s, ATOM)}[${cx.coerce(a, 'int')}:${cx.coerce(b, 'int')}]`, 'str', 'str'),
+    substr: (cx, s, a, b) => cx.atom(`${goWrap(s, ATOM)}[${cx.coerce(a, 'int')}:${cx.coerce(b, 'int')}]`, 'str', 'str'),
     lidOf: (cx, s) => cx.atom(`lidOf(${s.c})`, 'lid', cx.nat('lid')),
     mkMeta: (cx, fs) => cx.atom(`mkAlign(${fs.map(([f, r]) => cx.coerce(r, GO_MK[f])).join(', ')})`, 'meta', 'meta'),
     shiftMeta: (cx, m, d) => cx.atom(`shiftAlign(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
-    metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: PREC['=='] }),
-    splice: (cx, s, a, b, ins) => ({ c: `${cx.wrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${cx.wrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: PREC['+'] }),
+    metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: GO_OPS.eq[1] }),
+    splice: (cx, s, a, b, ins) => ({ c: `${goWrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${goWrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: GO_OPS.add[1] }),
     own: (_cx, r) => r,
     newList: (cx, ty, cap, estimate) => {
       const c = cap ?? estimate;
       return cx.atom(c ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(c, 'int')})` : 'nil', ty, ty, { owned: true });
     },
     falses: (cx, n) => cx.atom(`make([]bool, ${cx.coerce(n, 'int')})`, 'bools', 'bools', { owned: true }),
-    prefix: (cx, l, n, estimate) => cx.atom(`append(make(${GO_TYPES[l.ty]}, 0, ${cx.coerce(estimate, 'int')}), ${cx.wrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
+    prefix: (cx, l, n, estimate) => cx.atom(`append(make(${GO_TYPES[l.ty]}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
   },
   stmt: {
+    comment: (text) => [`// ${text}`],
     let: (cx, s) => {
-      if (s.emptyList) return `var ${s.id} ${cx.type(s.ty, 'local')}`;
-      if (!isNum(s.ty)) return `${s.id} := ${s.r.c}`;
+      if (s.emptyList) return [`var ${s.id} ${cx.type(s.ty, 'local')}`];
+      if (!isNum(s.ty)) return [`${s.id} := ${s.r.c}`];
       const nat = cx.nat(s.ty);
-      if (s.r.lit) return nat === 'int' ? `${s.id} := ${s.r.c}` : `var ${s.id} ${nat} = ${s.r.c}`;
-      return `${s.id} := ${cx.coerce(s.r, nat)}`;
+      if (s.r.lit) return [nat === 'int' ? `${s.id} := ${s.r.c}` : `var ${s.id} ${nat} = ${s.r.c}`];
+      return [`${s.id} := ${cx.coerce(s.r, nat)}`];
     },
-    push: (_cx, l, r) => `${l} = append(${l}, ${r.c})`,
-    ifHead: (c) => `if ${c}`,
-    inlineIf: (head, st) => `${head} { ${st} }`,
-    whileHead: (c) => `for ${c} {`,
-    forHead: (cx, v, from, to) => `for ${v} := ${cx.coerce(from, 'int')}; ${v} < ${cx.coerce(to, 'int')}; ${v}++ {`,
-    forEachHead: (v, l) => `for _, ${v} := range ${l} {`,
-    tuple: (vs) => vs.join(', '),
-    destructure: (_cx, s) => `${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`,
+    set: (id, val) => [`${id} = ${val}`],
+    setAt: (id, i, val) => [`${id}[${i}] = ${val}`],
+    push: (_cx, l, r) => [`${l} = append(${l}, ${r.c})`],
+    if: (s) => {
+      const head = `if ${s.c}`;
+      if (s.inline !== undefined && GO_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
+      return [`${head} {`, ...goBlock(s.then), ...(s.else ? ['} else {', ...goBlock(s.else)] : []), '}'];
+    },
+    while: (c, body) => [`for ${c} {`, ...goBlock(body), '}'],
+    for: (cx, v, from, to, body) => [`for ${v} := ${cx.coerce(from, 'int')}; ${v} < ${cx.coerce(to, 'int')}; ${v}++ {`, ...goBlock(body), '}'],
+    forEach: (v, l, body) => [`for _, ${v} := range ${l} {`, ...goBlock(body), '}'],
+    break: () => ['break'],
+    return: (vals) => [`return ${vals.join(', ')}`],
+    destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
     lexStep: (_cx, s) => [`${[s.pos, ...s.state].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
     shrink: (_cx, l, ty) => [`if cap(${l}) > 2*len(${l}) { ${l} = append(${GO_TYPES[ty]}(nil), ${l}...) }`],
-    fnHead: (name, ps, rets) => `func ${name}(${ps.map((p) => `${p.name} ${p.type}`).join(', ')}) ${rets.length === 1 ? rets[0] : `(${rets.join(', ')})`} {`,
+    fn: (f) => [
+      ...f.doc.map((l) => `// ${l}`),
+      `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
+      ...goBlock(f.body),
+      '}',
+    ].join('\n'),
   },
 };
 

@@ -1,11 +1,9 @@
-// Typed algorithm IR: a family is authored once as `Fn[]` and printed as straight-line code
-// for whichever target supplies a `Lowering`. This module knows no target: it walks the IR,
-// tracks types, mutability, ownership and operator precedence, and asks the lowering for every
-// spelling that differs between targets (types, casts, borrows, list storage and capacity,
-// field access, statement heads). Every branch and loop of the algorithm comes from the IR.
-//
-// The printer assumes the C-family surface all current targets share: `f(args)` calls,
-// `x[i]` indexing, infix operators, `{ … }` blocks, `x = v` assignment, `break`, `//` comments.
+// Typed algorithm IR: a family is authored once as `Fn[]` and printed by whichever target supplies
+// a `Lowering`. This module assumes no target and no surface syntax: it walks the IR, tracks
+// types, mutability and ownership, decides where a numeric conversion is needed, and hands every
+// construct — literals, operators, grouping, calls, indexing, statements, blocks, comments,
+// function shells — to the lowering as already-printed children. Every branch and loop of the
+// algorithm comes from the IR; a lowering only spells it.
 
 export type Num = 'int' | 'lid' | 'depth';
 export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'edits';
@@ -13,7 +11,8 @@ export type Ty = Num | 'bool' | 'str' | 'meta' | 'tok' | 'edit' | ListTy;
 export type MetaInt = 'off' | 'end' | 'kid' | 'pd' | 'fd' | 'td';
 export type MetaFlag = 'nl' | 'lc' | 'lb' | 'hd';
 export type TokInt = 'off' | 'end' | 'kid' | 'lid';
-type BinOp = '+' | '-' | '>>' | '<' | '<=' | '>' | '>=' | '==' | '!=' | '&&' | '||';
+export type BinOp = 'add' | 'sub' | 'shr' | 'lt' | 'le' | 'gt' | 'ge' | 'eq' | 'ne' | 'and' | 'or';
+export const COMPARISON = new Set<BinOp>(['lt', 'le', 'gt', 'ge', 'eq', 'ne']);
 
 export type MkMeta = { off: Expr; end: Expr; kid: Expr; nl: Expr; fd: Expr; pd: Expr; lc: Expr; lb: Expr; hd: Expr; td: Expr };
 // Argument order of the target runtime's meta constructor.
@@ -76,51 +75,51 @@ export const ELEM: Record<ListTy, Ty> = { metas: 'meta', toks: 'tok', bools: 'bo
 export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth';
 export const isList = (t: Ty): t is ListTy => t in ELEM;
 
-// Rendered expression: `c` has native type `nat`; `owned` marks values the expression owns
-// (meaningful for lowerings with `owns`); `lit` marks untyped numeric literals.
+// Printed expression: `c` has native type `nat`. `prec` is the lowering's own binding strength
+// (the printer only compares it with ATOM, "never needs grouping"); `owned` marks values the
+// expression owns (meaningful for lowerings with `owns`); `lit` marks untyped numeric literals.
 export interface R { c: string; ty: Ty; nat: string; prec: number; lit?: boolean; owned?: boolean }
+export type Printed = { c: string; prec: number };
 interface VarInfo { ty: Ty; owned: boolean }
 
-export const PREC: Record<BinOp, number> = { '||': 1, '&&': 2, '==': 3, '!=': 3, '<': 4, '<=': 4, '>': 4, '>=': 4, '>>': 5, '+': 6, '-': 6 };
-const CMP = new Set<BinOp>(['==', '!=', '<', '<=', '>', '>=']);
 export const ATOM = 100;
-export const UNARY = 90;
-// Precedence of a postfix cast (`x as T`): kept bare as an argument or index, parenthesized as
-// a binary operand.
-export const CAST = 8;
 
 export type Role = 'param' | 'local' | 'ret';
 
-// Printer services a lowering can use on already-rendered children.
+// Printer services a lowering can use on already-printed children.
 export interface Cx {
   atom(c: string, ty: Ty, nat: string, extra?: Partial<R>): R;
-  wrap(r: R, min: number): string;
   coerce(r: R, nat: string): string;
   nat(t: Ty): string;
   type(t: Ty, role: Role, owned?: boolean): string;
-  id(name: string): string;
   str(r: R): string;
   ref(r: R): string;
 }
 
-// What a target supplies to print the IR. Every member is a spelling, storage, ownership or
-// capacity decision; none may add control flow the IR does not contain.
+// Children of block statements arrive as printed lines relative to the statement; the lowering
+// places them (indentation, delimiters). `depth` is the statement's nesting level, for layout.
+type Lines = string[];
+
+// What a target supplies to print the IR: its complete surface syntax plus its type, ownership,
+// storage and capacity decisions. None may add control flow the IR does not contain.
 export interface Lowering {
-  indent: string;
-  stmtEnd: string;
   ident(name: string): string;
   num: Record<Num, string>;
   index: string;                                      // native type of list indices
   type(t: Ty, role: Role, owned: boolean): string;
   // Absent: numbers are untyped, so no conversions are printed.
   cast?(cx: Cx, r: R, nat: string): R;
-  ops?: Partial<Record<BinOp, string>>;
   // Single-owner values: lists and strings are owned or borrowed, and moves are checked.
   owns: boolean;
   borrowStr?(r: R): string;
   borrowList?(r: R): string;
   borrowVal?(r: R): string;
   expr: {
+    literal(v: number | boolean | string): Printed;
+    not(r: R): Printed;
+    bin(op: BinOp, a: R, b: R): Printed;
+    index(list: R, i: R): Printed;
+    call(name: string, args: string[]): string;
     len(cx: Cx, l: R): R;
     metaInt(cx: Cx, m: R, f: MetaInt): R;
     metaFlag(cx: Cx, m: R, f: MetaFlag): R;
@@ -141,18 +140,22 @@ export interface Lowering {
     prefix(cx: Cx, list: R, n: R, estimate: R): R;
   };
   stmt: {
-    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean }): string;
-    push(cx: Cx, list: string, r: R): string;
-    ifHead(c: string): string;
-    inlineIf(head: string, stmt: string): string;
-    whileHead(c: string): string;
-    forHead(cx: Cx, v: string, from: R, to: R): string;
-    forEachHead(v: string, list: string): string;
-    tuple(vals: string[]): string;
-    destructure(cx: Cx, s: { declare: boolean; names: string[]; ids: string[]; call: string; mutable: (n: string) => boolean; reassigned: (n: string) => boolean }): string;
-    lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[] }): string[];
-    shrink(cx: Cx, list: string, ty: ListTy): string[];
-    fnHead(name: string, params: { name: string; type: string }[], rets: string[]): string;
+    comment(text: string): Lines;
+    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean }): Lines;
+    set(id: string, val: string): Lines;
+    setAt(id: string, i: string, val: string): Lines;
+    push(cx: Cx, list: string, r: R): Lines;
+    // `inline` is the sole statement of a branch-free `if` printed on one line, when it is short.
+    if(s: { c: string; then: Lines; else?: Lines; inline?: string; depth: number }): Lines;
+    while(c: string, body: Lines): Lines;
+    for(cx: Cx, v: string, from: R, to: R, body: Lines): Lines;
+    forEach(v: string, list: string, body: Lines): Lines;
+    break(): Lines;
+    return(vals: string[]): Lines;
+    destructure(cx: Cx, s: { declare: boolean; names: string[]; ids: string[]; call: string; mutable: (n: string) => boolean; reassigned: (n: string) => boolean }): Lines;
+    lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[] }): Lines;
+    shrink(cx: Cx, list: string, ty: ListTy): Lines;
+    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines }): string;
   };
 }
 
@@ -177,7 +180,7 @@ class Printer implements Cx {
     this.sigs = new Map(fns.map((f) => [f.name, f]));
   }
 
-  id(name: string): string { return name === '_' ? name : this.L.ident(name); }
+  private id(name: string): string { return name === '_' ? name : this.L.ident(name); }
   nat(t: Ty): string { return isNum(t) ? this.L.num[t] : t; }
   type(t: Ty, role: Role, owned = true): string { return this.L.type(t, role, owned); }
 
@@ -187,7 +190,6 @@ class Printer implements Cx {
   }
 
   coerce(r: R, nat: string): string { return this.coerceR(r, nat).c; }
-  wrap(r: R, min: number): string { return r.prec < min ? `(${r.c})` : r.c; }
   str(r: R): string { return this.L.borrowStr ? this.L.borrowStr(r) : r.c; }
   private list(r: R): string { return this.L.borrowList ? this.L.borrowList(r) : r.c; }
   ref(r: R): string { return this.L.borrowVal ? this.L.borrowVal(r) : r.c; }
@@ -196,25 +198,22 @@ class Printer implements Cx {
   expr(e: Expr): R {
     const X = this.L.expr;
     switch (e.k) {
-      case 'int': return this.atom(String(e.v), 'int', this.nat('int'), { lit: true, prec: e.v < 0 ? 7 : ATOM });
-      case 'bool': return this.atom(String(e.v), 'bool', 'bool');
-      case 'str': return this.atom(JSON.stringify(e.v), 'str', 'str', { owned: false });
+      case 'int': return { ...X.literal(e.v), ty: 'int', nat: this.nat('int'), lit: true };
+      case 'bool': return { ...X.literal(e.v), ty: 'bool', nat: 'bool' };
+      case 'str': return { ...X.literal(e.v), ty: 'str', nat: 'str', owned: false };
       case 'var': {
         const v = this.env.get(e.name);
         if (!v) throw new Error(`algo-ir: unknown variable ${e.name}`);
         return this.atom(this.id(e.name), v.ty, this.nat(v.ty), { owned: v.owned });
       }
       case 'bin': return this.bin(e.op, this.expr(e.a), this.expr(e.b));
-      case 'not': {
-        const r = this.expr(e.e);
-        return { c: `!${this.wrap(r, ATOM)}`, ty: 'bool', nat: 'bool', prec: UNARY };
-      }
+      case 'not': return { ...X.not(this.expr(e.e)), ty: 'bool', nat: 'bool' };
       case 'len': return X.len(this, this.expr(e.e));
       case 'at': {
         const l = this.expr(e.list), i = this.expr(e.i);
         if (!isList(l.ty)) throw new Error('algo-ir: at() on non-list');
         const ty = ELEM[l.ty];
-        return this.atom(`${this.wrap(l, ATOM)}[${this.coerce(i, this.L.index)}]`, ty, this.nat(ty));
+        return { ...X.index(l, this.coerceR(i, this.L.index)), ty, nat: this.nat(ty) };
       }
       case 'metaInt': return X.metaInt(this, this.expr(e.m), e.f);
       case 'metaFlag': return X.metaFlag(this, this.expr(e.m), e.f);
@@ -243,18 +242,14 @@ class Printer implements Cx {
         if (!isList(l.ty)) throw new Error('algo-ir: prefix() on non-list');
         return X.prefix(this, l, this.expr(e.n), this.expr(e.estimate));
       }
-      case 'lexAll': return this.atom(`${this.id('lex')}(${this.str(this.expr(e.text))})`, 'toks', 'toks', { owned: true });
+      case 'lexAll': return this.atom(X.call(this.id('lex'), [this.str(this.expr(e.text))]), 'toks', 'toks', { owned: true });
     }
   }
 
   private bin(op: BinOp, a: R, b: R): R {
-    const p = PREC[op];
-    const side = (r: R, right: boolean): string => {
-      const needs = r.prec < p || r.prec === CAST || (right && r.prec === p) || (op === '>>' && r.prec < ATOM) || (CMP.has(op) && r.prec >= 3 && r.prec <= 4);
-      return needs ? `(${r.c})` : r.c;
-    };
-    const sop = this.L.ops?.[op] ?? op;
-    if (op === '&&' || op === '||') return { c: `${side(a, false)} ${op} ${side(b, true)}`, ty: 'bool', nat: 'bool', prec: p };
+    const cmp = COMPARISON.has(op);
+    const res = (c: R, d: R, ty: Ty, nat: string, lit?: boolean): R => ({ ...this.L.expr.bin(op, c, d), ty, nat, ...(lit ? { lit } : {}) });
+    if (op === 'and' || op === 'or') return res(a, b, 'bool', 'bool');
     if (isNum(a.ty) && isNum(b.ty)) {
       let [ca, cb, nat] = [a, b, a.lit ? b.nat : a.nat];
       if (!(a.lit || b.lit || a.nat === b.nat)) {
@@ -262,13 +257,10 @@ class Printer implements Cx {
         ca = this.coerceR(a, nat);
         cb = this.coerceR(b, nat);
       }
-      const cmp = CMP.has(op);
-      return { c: `${side(ca, false)} ${sop} ${side(cb, true)}`, ty: cmp ? 'bool' : 'int', nat: cmp ? 'bool' : nat, prec: p, lit: !cmp && a.lit && b.lit };
+      return { ...res(ca, cb, cmp ? 'bool' : 'int', cmp ? 'bool' : nat), lit: !cmp && a.lit && b.lit };
     }
-    if (a.ty === 'str' && b.ty === 'str') {
-      return { c: `${side({ ...a, c: this.str(a) }, false)} ${sop} ${side({ ...b, c: this.str(b) }, true)}`, ty: 'bool', nat: 'bool', prec: p };
-    }
-    if (a.ty === 'bool' && b.ty === 'bool') return { c: `${side(a, false)} ${sop} ${side(b, true)}`, ty: 'bool', nat: 'bool', prec: p };
+    if (a.ty === 'str' && b.ty === 'str') return res({ ...a, c: this.str(a) }, { ...b, c: this.str(b) }, 'bool', 'bool');
+    if (a.ty === 'bool' && b.ty === 'bool') return res(a, b, 'bool', 'bool');
     throw new Error(`algo-ir: ${a.ty} ${op} ${b.ty}`);
   }
 
@@ -282,7 +274,7 @@ class Printer implements Cx {
       if (isList(pt)) return this.list(r);
       return r.c;
     });
-    return `${this.id(e.fn)}(${args.join(', ')})`;
+    return this.L.expr.call(this.id(e.fn), args);
   }
 
   private scan(body: Stmt[]): void {
@@ -302,23 +294,21 @@ class Printer implements Cx {
     }
   }
 
-  private block(body: Stmt[], depth: number): string[] {
+  private block(body: Stmt[], depth: number): Lines {
     return body.flatMap((s) => this.stmt(s, depth));
   }
 
-  private stmt(s: Stmt, d: number): string[] {
+  private stmt(s: Stmt, d: number): Lines {
     const L = this.L, S = L.stmt;
-    const pad = L.indent.repeat(d);
-    const end = L.stmtEnd;
     switch (s.k) {
-      case 'comment': return [`${pad}// ${s.text}`];
+      case 'comment': return S.comment(s.text);
       case 'let': {
         const r = this.expr(s.init);
         const owned = s.ty === 'str' ? !!r.owned : isList(s.ty);
         if (L.owns && isList(s.ty) && !r.owned) throw new Error(`algo-ir: let ${s.name} needs an owned list`);
         this.env.set(s.name, { ty: s.ty, owned });
         const emptyList = s.init.k === 'newList' && !s.init.cap && !s.init.estimate;
-        return [pad + S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name), reassigned: this.reassigned.has(s.name), emptyList })];
+        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name), reassigned: this.reassigned.has(s.name), emptyList });
       }
       case 'set': {
         const v = this.env.get(s.name);
@@ -328,41 +318,39 @@ class Printer implements Cx {
         if (isNum(v.ty)) val = this.coerce(r, this.nat(v.ty));
         else if (L.owns && v.ty === 'str' && !v.owned) val = this.str(r);
         else if (L.owns && v.owned && !r.owned) throw new Error(`algo-ir: set ${s.name} needs an owned value`);
-        return [`${pad}${this.id(s.name)} = ${val}${end}`];
+        return S.set(this.id(s.name), val);
       }
       case 'setAt': {
         const v = this.env.get(s.list)!;
         const elem = ELEM[v.ty as ListTy];
         const i = this.expr(s.i), r = this.expr(s.e);
         const val = isNum(elem) ? this.coerce(r, this.nat(elem)) : r.c;
-        return [`${pad}${this.id(s.list)}[${this.coerce(i, L.index)}] = ${val}${end}`];
+        return S.setAt(this.id(s.list), this.coerce(i, L.index), val);
       }
-      case 'push': return [pad + S.push(this, this.id(s.list), this.expr(s.e))];
+      case 'push': return S.push(this, this.id(s.list), this.expr(s.e));
       case 'if': {
-        const head = S.ifHead(this.expr(s.c).c);
+        const c = this.expr(s.c).c;
+        let inline: string | undefined;
         if (!s.else && s.then.length === 1 && (s.then[0].k === 'break' || s.then[0].k === 'set' || s.then[0].k === 'return')) {
           const inner = this.stmt(s.then[0], 0);
-          const line = pad + S.inlineIf(head, inner[0]);
-          if (inner.length === 1 && line.length <= 110) return [line];
+          if (inner.length === 1) inline = inner[0];
         }
-        const out = [`${pad}${head} {`, ...this.block(s.then, d + 1)];
-        if (s.else) out.push(`${pad}} else {`, ...this.block(s.else, d + 1));
-        out.push(`${pad}}`);
-        return out;
+        const then = this.block(s.then, d + 1);
+        return S.if({ c, then, else: s.else && this.block(s.else, d + 1), inline, depth: d });
       }
-      case 'while': return [pad + S.whileHead(this.expr(s.c).c), ...this.block(s.body, d + 1), `${pad}}`];
+      case 'while': return S.while(this.expr(s.c).c, this.block(s.body, d + 1));
       case 'for': {
         const from = this.expr(s.from), to = this.expr(s.to);
         this.env.set(s.v, { ty: 'int', owned: false });
-        return [pad + S.forHead(this, this.id(s.v), from, to), ...this.block(s.body, d + 1), `${pad}}`];
+        return S.for(this, this.id(s.v), from, to, this.block(s.body, d + 1));
       }
       case 'forEach': {
         const l = this.expr(s.list);
         if (!isList(l.ty)) throw new Error('algo-ir: forEach over non-list');
         this.env.set(s.v, { ty: ELEM[l.ty], owned: false });
-        return [pad + S.forEachHead(this.id(s.v), l.c), ...this.block(s.body, d + 1), `${pad}}`];
+        return S.forEach(this.id(s.v), l.c, this.block(s.body, d + 1));
       }
-      case 'break': return [`${pad}break${end}`];
+      case 'break': return S.break();
       case 'return': {
         const fn = this.cur!;
         s.es.forEach((e, i) => {
@@ -376,7 +364,7 @@ class Printer implements Cx {
           if (L.owns && isList(t) && !r.owned) throw new Error(`algo-ir: return of borrowed list in ${fn.name}`);
           return r.c;
         });
-        return [`${pad}return ${vals.length === 1 ? vals[0] : S.tuple(vals)}${end}`];
+        return S.return(vals);
       }
       case 'letCall': case 'setCall': {
         const fn = this.sigs.get(s.call.fn);
@@ -384,19 +372,13 @@ class Printer implements Cx {
         const call = this.callCode(s.call);
         if (s.k === 'letCall') s.names.forEach((n, i) => { if (n !== '_') this.env.set(n, { ty: fn.ret[i], owned: true }); });
         else s.names.forEach((n, i) => { if (n !== '_' && this.env.get(n)?.ty !== fn.ret[i]) throw new Error(`algo-ir: setCall type of ${n}`); });
-        return [pad + S.destructure(this, {
+        return S.destructure(this, {
           declare: s.k === 'letCall', names: s.names, ids: s.names.map((n) => this.id(n)), call,
           mutable: (n) => this.mutable.has(n), reassigned: (n) => this.reassigned.has(n),
-        })];
+        });
       }
-      case 'lexStep': {
-        const lines = S.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)) });
-        return lines.map((l) => pad + l);
-      }
-      case 'shrink': {
-        const v = this.env.get(s.list)!;
-        return S.shrink(this, this.id(s.list), v.ty as ListTy).map((l) => pad + l);
-      }
+      case 'lexStep': return S.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)) });
+      case 'shrink': return S.shrink(this, this.id(s.list), this.env.get(s.list)!.ty as ListTy);
     }
   }
 
@@ -409,10 +391,13 @@ class Printer implements Cx {
     this.cur = f;
     this.scan(f.body);
     for (const p of f.params) this.env.set(p.name, { ty: p.ty, owned: false });
-    const params = f.params.map((p) => ({ name: this.id(p.name), type: this.type(p.ty, 'param') }));
-    const head = this.L.stmt.fnHead(this.id(f.name), params, f.ret.map((t) => this.type(t, 'ret')));
-    const doc = f.doc.split('\n').map((l) => `// ${l}`);
-    return [...doc, head, ...this.block(f.body, 1), '}'].join('\n');
+    return this.L.stmt.fn({
+      name: this.id(f.name),
+      params: f.params.map((p) => ({ name: this.id(p.name), type: this.type(p.ty, 'param') })),
+      rets: f.ret.map((t) => this.type(t, 'ret')),
+      doc: f.doc.split('\n'),
+      body: this.block(f.body, 1),
+    });
   }
 }
 

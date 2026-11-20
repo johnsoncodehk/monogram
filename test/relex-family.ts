@@ -51,7 +51,7 @@ for (const f of FIXTURES) {
   const expected = new Set(relexFamilyFns(mode).map((fn) => fn.name));
   for (const h of HOSTS) {
     const out = emitParser(grammar, h.target);
-    const family = emitRelexFamily(ir, h.target.lowering);
+    const family = emitRelexFamily(ir, h.target.lowering!);
     const at = out.indexOf(family);
     if (at < 0) { fail(`${f.path}/${h.host}: output does not embed the generated family verbatim`); continue; }
     if (out.indexOf(family, at + 1) >= 0) fail(`${f.path}/${h.host}: family embedded twice`);

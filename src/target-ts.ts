@@ -13,7 +13,7 @@ import type {
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, PREC, type Lowering, type Ty } from './algo-ir.ts';
+import { ATOM, COMPARISON, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
@@ -3463,57 +3463,83 @@ const TS_TYPES: Record<Ty, string> = {
   int: 'number', lid: 'number', depth: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
   metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', edits: 'Edit[]',
 };
+// Operator spelling and binding strength; unary is 90, a negative literal 7.
+const TS_OPS: Record<BinOp, [string, number]> = {
+  or: ['||', 1], and: ['&&', 2], eq: ['===', 3], ne: ['!==', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], add: ['+', 6], sub: ['-', 6],
+};
+const TS_IND = '  ';
+const tsWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
+const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 
 // Shared-algorithm lowering: untyped numbers, GC-managed arrays (capacity is never reserved).
 const tsLowering: Lowering = {
-  indent: '  ',
-  stmtEnd: ';',
   ident: (n) => n,
   num: { int: 'number', lid: 'number', depth: 'number' },
   index: 'number',
   type: (t) => TS_TYPES[t],
-  ops: { '==': '===', '!=': '!==' },
   owns: false,
   expr: {
-    len: (cx, l) => cx.atom(`${cx.wrap(l, ATOM)}.length`, 'int', 'number'),
-    metaInt: (cx, m, f) => cx.atom(`${cx.wrap(m, ATOM)}.${f}`, 'int', 'number'),
+    literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
+    not: (r) => ({ c: `!${tsWrap(r, ATOM)}`, prec: 90 }),
+    bin: (op, a, b) => {
+      const [sp, p] = TS_OPS[op];
+      const side = (r: R, right: boolean): string =>
+        (r.prec < p || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
+      return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
+    },
+    index: (l, i) => ({ c: `${tsWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
+    call: (name, args) => `${name}(${args.join(', ')})`,
+    len: (cx, l) => cx.atom(`${tsWrap(l, ATOM)}.length`, 'int', 'number'),
+    metaInt: (cx, m, f) => cx.atom(`${tsWrap(m, ATOM)}.${f}`, 'int', 'number'),
     metaFlag: (cx, m, f) => cx.atom(`am_${f}(${m.c})`, 'bool', 'bool'),
-    tokInt: (cx, t, f) => cx.atom(`${cx.wrap(t, ATOM)}.${f}`, 'int', 'number'),
-    tokNl: (cx, t) => cx.atom(`${cx.wrap(t, ATOM)}.nl`, 'bool', 'bool'),
+    tokInt: (cx, t, f) => cx.atom(`${tsWrap(t, ATOM)}.${f}`, 'int', 'number'),
+    tokNl: (cx, t) => cx.atom(`${tsWrap(t, ATOM)}.nl`, 'bool', 'bool'),
     editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'number'),
     editText: (cx, e) => cx.atom(`${e.c}.text`, 'str', 'str'),
     metaText: (cx, t, m) => cx.atom(`am_text(${t.c}, ${m.c})`, 'str', 'str'),
-    substr: (cx, s, a, b) => cx.atom(`${cx.wrap(s, ATOM)}.slice(${a.c}, ${b.c})`, 'str', 'str'),
+    substr: (cx, s, a, b) => cx.atom(`${tsWrap(s, ATOM)}.slice(${a.c}, ${b.c})`, 'str', 'str'),
     lidOf: (cx, s) => cx.atom(`lid_of(${s.c})`, 'lid', cx.nat('lid')),
     mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([, r]) => r.c).join(', ')})`, 'meta', 'meta'),
     shiftMeta: (cx, m, d) => cx.atom(`shift_align(${m.c}, ${d.c})`, 'meta', 'meta'),
     metaEq: (_cx, a, b) => ({
       c: ['off', 'end', 'kid', 'pd', 'fd', 'flags', 'td'].map((f) => `${a.c}.${f} === ${b.c}.${f}`).join(' && '),
-      ty: 'bool', nat: 'bool', prec: PREC['&&'],
+      ty: 'bool', nat: 'bool', prec: TS_OPS.and[1],
     }),
-    splice: (cx, s, a, b, ins) => ({ c: `${cx.wrap(s, ATOM)}.slice(0, ${a.c}) + ${ins.c} + ${cx.wrap(s, ATOM)}.slice(${b.c})`, ty: 'str', nat: 'str', prec: PREC['+'] }),
+    splice: (_cx, s, a, b, ins) => ({ c: `${tsWrap(s, ATOM)}.slice(0, ${a.c}) + ${ins.c} + ${tsWrap(s, ATOM)}.slice(${b.c})`, ty: 'str', nat: 'str', prec: TS_OPS.add[1] }),
     own: (_cx, r) => r,
     newList: (cx, ty) => cx.atom('[]', ty, ty, { owned: true }),
     falses: (cx, n) => cx.atom(`new Array<boolean>(${n.c}).fill(false)`, 'bools', 'bools', { owned: true }),
-    prefix: (cx, l, n) => cx.atom(`${cx.wrap(l, ATOM)}.slice(0, ${n.c})`, l.ty, l.ty, { owned: true }),
+    prefix: (cx, l, n) => cx.atom(`${tsWrap(l, ATOM)}.slice(0, ${n.c})`, l.ty, l.ty, { owned: true }),
   },
   stmt: {
-    let: (cx, s) => `${s.reassigned ? 'let' : 'const'} ${s.id}: ${cx.type(s.ty, 'local')} = ${s.r.c};`,
-    push: (_cx, l, r) => `${l}.push(${r.c});`,
-    ifHead: (c) => `if (${c})`,
-    inlineIf: (head, st) => `${head} ${st}`,
-    whileHead: (c) => `while (${c}) {`,
-    forHead: (_cx, v, from, to) => `for (let ${v} = ${from.c}; ${v} < ${to.c}; ${v}++) {`,
-    forEachHead: (v, l) => `for (const ${v} of ${l}) {`,
-    tuple: (vs) => `[${vs.join(', ')}]`,
+    comment: (text) => [`// ${text}`],
+    let: (cx, s) => [`${s.reassigned ? 'let' : 'const'} ${s.id}: ${cx.type(s.ty, 'local')} = ${s.r.c};`],
+    set: (id, val) => [`${id} = ${val};`],
+    setAt: (id, i, val) => [`${id}[${i}] = ${val};`],
+    push: (_cx, l, r) => [`${l}.push(${r.c});`],
+    if: (s) => {
+      const head = `if (${s.c})`;
+      if (s.inline !== undefined && TS_IND.length * s.depth + head.length + 1 + s.inline.length <= 110) return [`${head} ${s.inline}`];
+      return [`${head} {`, ...tsBlock(s.then), ...(s.else ? ['} else {', ...tsBlock(s.else)] : []), '}'];
+    },
+    while: (c, body) => [`while (${c}) {`, ...tsBlock(body), '}'],
+    for: (_cx, v, from, to, body) => [`for (let ${v} = ${from.c}; ${v} < ${to.c}; ${v}++) {`, ...tsBlock(body), '}'],
+    forEach: (v, l, body) => [`for (const ${v} of ${l}) {`, ...tsBlock(body), '}'],
+    break: () => ['break;'],
+    return: (vals) => [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`],
     destructure: (_cx, s) => {
       const pat = `[${s.names.map((n) => (n === '_' ? '' : n)).join(', ').replace(/(, )+$/, '')}]`;
-      if (!s.declare) return `${pat} = ${s.call};`;
-      return `${s.names.some((n) => s.reassigned(n)) ? 'let' : 'const'} ${pat} = ${s.call};`;
+      if (!s.declare) return [`${pat} = ${s.call};`];
+      return [`${s.names.some((n) => s.reassigned(n)) ? 'let' : 'const'} ${pat} = ${s.call};`];
     },
     lexStep: (_cx, s) => [`({ ${[s.posName === 'pos' ? 'pos' : `pos: ${s.posName}`, ...s.state].join(', ')} } = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, s.out].join(', ')}, 1));`],
     shrink: () => [],
-    fnHead: (name, ps, rets) => `function ${name}(${ps.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${rets.length === 1 ? rets[0] : `[${rets.join(', ')}]`} {`,
+    fn: (f) => [
+      ...f.doc.map((l) => `// ${l}`),
+      `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
+      ...tsBlock(f.body),
+      '}',
+    ].join('\n'),
   },
 };
 

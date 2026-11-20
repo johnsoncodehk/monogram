@@ -16,7 +16,7 @@ import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, bu
 import { isKeywordLiteral } from './grammar-utils.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
-import { ATOM, CAST, PREC, UNARY, isList, isNum, type ListTy, type Lowering, type MetaInt, type MkMeta, type TokInt } from './algo-ir.ts';
+import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
   FieldBind, TokenLeafPolicy, CustomShape, ParentFold, StreamType, PrattShape, RuleShapeAtom,
@@ -4844,14 +4844,21 @@ const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i6
 const RS_META: Record<MetaInt, string> = { off: 'u32', end: 'u32', kid: 'u16', pd: 'u16', fd: 'u16', td: 'u8' };
 const RS_TOK: Record<TokInt, string> = { off: 'u32', end: 'u32', kid: 'u16', lid: 'u16' };
 const RS_MK: Record<keyof MkMeta, string> = { off: 'u32', end: 'u32', kid: 'u16', nl: 'bool', fd: 'u16', pd: 'u16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'u8' };
+// Operator spelling and binding strength; unary is 90, a negative literal 7, an `as` cast 8
+// (bare as an argument or index, parenthesized as an operand, where `x as T < y` reads as generics).
+const RS_OPS: Record<BinOp, [string, number]> = {
+  or: ['||', 1], and: ['&&', 2], eq: ['==', 3], ne: ['!=', 3], lt: ['<', 4], le: ['<=', 4], gt: ['>', 4], ge: ['>=', 4], shr: ['>>', 5], add: ['+', 6], sub: ['-', 6],
+};
+const RS_CAST = 8;
+const RS_IND = '    ';
 const snake = (s: string): string => s.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
+const rsWrap = (r: R, min: number): string => (r.prec < min ? `(${r.c})` : r.c);
+const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
 
 // Shared-algorithm lowering: snake_case, `as` casts, owned String/Vec vs borrowed &str/&[T].
 // Growth estimates are not reserved (no GC to save; realloc growth matches the base allocation
 // pattern), so nothing is over-reserved and there is nothing to trim. Exact capacities are kept.
 const rustLowering: Lowering = {
-  indent: '    ',
-  stmtEnd: ';',
   ident: snake,
   num: { int: 'isize', lid: 'u16', depth: 'i64' },
   index: 'usize',
@@ -4861,47 +4868,64 @@ const rustLowering: Lowering = {
     if (t === 'edit') return '&Edit';
     return RS_SCALAR[t];
   },
-  cast: (cx, r, nat) => ({ ...r, c: `${cx.wrap(r, ATOM)} as ${nat}`, nat, prec: CAST }),
+  cast: (_cx, r, nat) => ({ ...r, c: `${rsWrap(r, ATOM)} as ${nat}`, nat, prec: RS_CAST }),
   owns: true,
   borrowStr: (r) => (!r.owned ? r.c : /^\w+$/.test(r.c) ? `${r.c}.as_str()` : `(${r.c}).as_str()`),
   borrowList: (r) => (r.owned ? `&${r.c}` : r.c),
   borrowVal: (r) => `&${r.c}`,
   expr: {
-    len: (cx, l) => cx.atom(`${cx.wrap(l, ATOM)}.len()`, 'int', 'usize'),
-    metaInt: (cx, m, f) => cx.atom(`${cx.wrap(m, ATOM)}.${f}`, 'int', RS_META[f]),
+    literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
+    not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
+    bin: (op, a, b) => {
+      const [sp, p] = RS_OPS[op];
+      const side = (r: R, right: boolean): string =>
+        (r.prec < p || r.prec === RS_CAST || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
+      return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
+    },
+    index: (l, i) => ({ c: `${rsWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
+    call: (name, args) => `${name}(${args.join(', ')})`,
+    len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
+    metaInt: (cx, m, f) => cx.atom(`${rsWrap(m, ATOM)}.${f}`, 'int', RS_META[f]),
     metaFlag: (cx, m, f) => cx.atom(`am_${f}(${cx.ref(m)})`, 'bool', 'bool'),
-    tokInt: (cx, t, f) => cx.atom(`${cx.wrap(t, ATOM)}.${f}`, 'int', RS_TOK[f]),
-    tokNl: (cx, t) => cx.atom(`${cx.wrap(t, ATOM)}.nl`, 'bool', 'bool'),
+    tokInt: (cx, t, f) => cx.atom(`${rsWrap(t, ATOM)}.${f}`, 'int', RS_TOK[f]),
+    tokNl: (cx, t) => cx.atom(`${rsWrap(t, ATOM)}.nl`, 'bool', 'bool'),
     editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'usize'),
     editText: (cx, e) => cx.atom(`${e.c}.text.as_str()`, 'str', 'str', { owned: false }),
     metaText: (cx, t, m) => cx.atom(`am_text(${cx.str(t)}, ${cx.ref(m)})`, 'str', 'str', { owned: false }),
-    substr: (cx, s, a, b) => ({ c: `&${cx.wrap(s, ATOM)}[${cx.coerce(a, 'usize')}..${cx.coerce(b, 'usize')}]`, ty: 'str', nat: 'str', prec: UNARY, owned: false }),
+    substr: (cx, s, a, b) => ({ c: `&${rsWrap(s, ATOM)}[${cx.coerce(a, 'usize')}..${cx.coerce(b, 'usize')}]`, ty: 'str', nat: 'str', prec: 90, owned: false }),
     lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)})`, 'lid', cx.nat('lid')),
     mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([f, r]) => cx.coerce(r, RS_MK[f])).join(', ')})`, 'meta', 'meta'),
     shiftMeta: (cx, m, d) => cx.atom(`shift_align(${cx.ref(m)}, ${cx.coerce(d, 'isize')})`, 'meta', 'meta'),
-    metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: PREC['=='] }),
-    splice: (cx, s, a, b, ins) => cx.atom(`format!("{}{}{}", &${cx.wrap(s, ATOM)}[..${cx.coerce(a, 'usize')}], ${cx.str(ins)}, &${cx.wrap(s, ATOM)}[${cx.coerce(b, 'usize')}..])`, 'str', 'str', { owned: true }),
+    metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: RS_OPS.eq[1] }),
+    splice: (cx, s, a, b, ins) => cx.atom(`format!("{}{}{}", &${rsWrap(s, ATOM)}[..${cx.coerce(a, 'usize')}], ${cx.str(ins)}, &${rsWrap(s, ATOM)}[${cx.coerce(b, 'usize')}..])`, 'str', 'str', { owned: true }),
     own: (cx, r) => {
-      if (r.ty === 'str') return cx.atom(`${cx.wrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
-      if (isList(r.ty)) return cx.atom(`${cx.wrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
+      if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
+      if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
       return r;
     },
     newList: (cx, ty, cap) => cx.atom(cap ? `Vec::with_capacity(${cx.coerce(cap, 'usize')})` : 'Vec::new()', ty, ty, { owned: true }),
     falses: (cx, n) => cx.atom(`vec![false; ${cx.coerce(n, 'usize')}]`, 'bools', 'bools', { owned: true }),
-    prefix: (cx, l, n) => cx.atom(`${cx.wrap(l, ATOM)}[..${cx.coerce(n, 'usize')}].to_vec()`, l.ty, l.ty, { owned: true }),
+    prefix: (cx, l, n) => cx.atom(`${rsWrap(l, ATOM)}[..${cx.coerce(n, 'usize')}].to_vec()`, l.ty, l.ty, { owned: true }),
   },
   stmt: {
-    let: (cx, s) => `let ${s.mutable ? 'mut ' : ''}${s.id}: ${cx.type(s.ty, 'local', s.owned)} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`,
-    push: (_cx, l, r) => `${l}.push(${r.c});`,
-    ifHead: (c) => `if ${c}`,
-    inlineIf: (head, st) => `${head} { ${st} }`,
-    whileHead: (c) => `while ${c} {`,
-    forHead: (cx, v, from, to) => `for ${v} in ${cx.coerce(from, 'isize')}..${cx.coerce(to, 'isize')} {`,
-    forEachHead: (v, l) => `for ${v} in ${l} {`,
-    tuple: (vs) => `(${vs.join(', ')})`,
+    comment: (text) => [`// ${text}`],
+    let: (cx, s) => [`let ${s.mutable ? 'mut ' : ''}${s.id}: ${cx.type(s.ty, 'local', s.owned)} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`],
+    set: (id, val) => [`${id} = ${val};`],
+    setAt: (id, i, val) => [`${id}[${i}] = ${val};`],
+    push: (_cx, l, r) => [`${l}.push(${r.c});`],
+    if: (s) => {
+      const head = `if ${s.c}`;
+      if (s.inline !== undefined && RS_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
+      return [`${head} {`, ...rsBlock(s.then), ...(s.else ? ['} else {', ...rsBlock(s.else)] : []), '}'];
+    },
+    while: (c, body) => [`while ${c} {`, ...rsBlock(body), '}'],
+    for: (cx, v, from, to, body) => [`for ${v} in ${cx.coerce(from, 'isize')}..${cx.coerce(to, 'isize')} {`, ...rsBlock(body), '}'],
+    forEach: (v, l, body) => [`for ${v} in ${l} {`, ...rsBlock(body), '}'],
+    break: () => ['break;'],
+    return: (vals) => [`return ${vals.length === 1 ? vals[0] : `(${vals.join(', ')})`};`],
     destructure: (_cx, s) => {
-      if (!s.declare) return `(${s.ids.join(', ')}) = ${s.call};`;
-      return `let (${s.names.map((n, i) => (n !== '_' && s.mutable(n) ? `mut ${s.ids[i]}` : s.ids[i])).join(', ')}) = ${s.call};`;
+      if (!s.declare) return [`(${s.ids.join(', ')}) = ${s.call};`];
+      return [`let (${s.names.map((n, i) => (n !== '_' && s.mutable(n) ? `mut ${s.ids[i]}` : s.ids[i])).join(', ')}) = ${s.call};`];
     },
     lexStep: (cx, s) => [
       `let lexed = lex_from(${cx.str(s.text)}, ${s.pos} as usize, ${[...s.state, `&mut ${s.out}`].join(', ')}, 1);`,
@@ -4909,7 +4933,12 @@ const rustLowering: Lowering = {
       ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
     ],
     shrink: () => [],
-    fnHead: (name, ps, rets) => `fn ${name}(${ps.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${rets.length === 1 ? rets[0] : `(${rets.join(', ')})`} {`,
+    fn: (f) => [
+      ...f.doc.map((l) => `// ${l}`),
+      `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
+      ...rsBlock(f.body),
+      '}',
+    ].join('\n'),
   },
 };
 
