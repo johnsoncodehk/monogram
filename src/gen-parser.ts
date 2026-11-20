@@ -1,6 +1,6 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
 import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
-import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
+import { analyzeGrammar, findEntryRule, markupContainerOf } from './grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 
@@ -46,63 +46,13 @@ export function createParser(grammar: CstGrammar) {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
 
-  // ── Markup optional-end-tag support (HTML omittable end tags; see MarkupConfig.optionalEndTags) ──
-  // Pure DATA in the grammar's markup config drives a structural recognition here: the
-  // engine finds the CONTAINER element arm — `tagOpen Name many(…) tagClose many(content)
-  // tagOpen closeMarker Name tagClose` — by the markup delimiters + the name token, with NO
-  // hardcoded tag names. When that arm is matched and the captured open-tag name is an
-  // optional-end element, its content repetition STOPS at a trigger sibling start tag and its
-  // close tag becomes OPTIONAL. Absent markup / optionalEndTags → `markupContainer` stays null
-  // and parsing is byte-identical (the dedicated path is never taken).
+  // ── Markup container arm (HTML element with children; see MarkupConfig.optionalEndTags) ──
+  // Which arm it is, and the optional-end map, are a function of the grammar alone and are
+  // derived once for both engines (grammar-analysis.ts markupContainerOf). The control —
+  // matchMarkupContainer below — is this engine's own. Absent markup / optionalEndTags →
+  // `markupContainer` is null and the dedicated path is never taken.
   const markup = grammar.markup;
-  // name → Set(lowercased trigger start-tags that implicitly close it).
-  const optionalEnd = new Map<string, Set<string>>();
-  if (markup?.optionalEndTags) {
-    for (const [name, triggers] of Object.entries(markup.optionalEndTags)) {
-      optionalEnd.set(name.toLowerCase(), new Set(triggers.map(t => t.toLowerCase())));
-    }
-  }
-  type MarkupContainer = {
-    arm: RuleExpr;          // the container alternative (a `seq`)
-    items: RuleExpr[];      // its sequence items
-    contentIdx: number;     // index of the `many(content)` quantifier
-    closeStart: number;     // index where the close tag begins (tagOpen of `</name>`)
-    nameTokens: Set<string>; // token name(s) that carry an element name (e.g. Name)
-  };
-  // Recognise the container arm structurally (only meaningful with markup + optionalEndTags).
-  function detectMarkupContainer(): MarkupContainer | null {
-    if (!markup || optionalEnd.size === 0) return null;
-    const open = markup.tagOpen, close = markup.tagClose, cm = markup.closeMarker;
-    if (!cm) return null;
-    const isLit = (e: RuleExpr | undefined, v: string) => !!e && e.type === 'literal' && e.value === v;
-    const isNameRef = (e: RuleExpr | undefined) =>
-      !!e && e.type === 'ref' && tokenNames.has(e.name);
-    for (const rule of grammar.rules) {
-      const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
-      for (const alt of alts) {
-        const items = alt.type === 'seq' ? alt.items : [alt];
-        const n = items.length;
-        // Shape: open  Name  …  close  <content*>  open  closeMarker  Name  close
-        if (n < 6) continue;
-        if (!isLit(items[0], open) || !isNameRef(items[1])) continue;
-        if (!(isLit(items[n - 4], open) && isLit(items[n - 3], cm) && isNameRef(items[n - 2]) && isLit(items[n - 1], close))) continue;
-        // The content quantifier sits right before the close tag, after the open tag's `close`.
-        const contentIdx = n - 5;
-        const content = items[contentIdx];
-        if (!content || content.type !== 'quantifier' || content.kind !== '*') continue;
-        if (!isLit(items[contentIdx - 1], close)) continue;   // the open tag's `>` precedes content
-        const nameTokens = new Set<string>();
-        // Hoist to locals: TS narrows a plain const via `.type === 'ref'`, but not a
-        // computed element access (`items[n-2]`) re-read after the guard.
-        const openNameItem = items[1], closeNameItem = items[n - 2];
-        if (openNameItem.type === 'ref') nameTokens.add(openNameItem.name);
-        if (closeNameItem.type === 'ref') nameTokens.add(closeNameItem.name);
-        return { arm: alt, items, contentIdx, closeStart: n - 4, nameTokens };
-      }
-    }
-    return null;
-  }
-  const markupContainer = detectMarkupContainer();
+  const markupContainer = markupContainerOf(grammar);
 
   const {
     opTable, prefixOps, noUnaryLhsOps, postfixOpValues,
@@ -1012,13 +962,13 @@ export function createParser(grammar: CstGrammar) {
         const result = matchExpr(item);
         if (result === null) { pos = saved; return null; }
         // The open-tag name leaf (a name token) — drives the optional-end lookup.
-        if (item.type === 'ref' && c.nameTokens.has(item.name) && result[0] !== undefined && 'tokenType' in result[0]) {
+        if (i === c.openNameIdx && result[0] !== undefined && 'tokenType' in result[0]) {
           openName = source.slice(result[0].offset, result[0].end);
         }
         children.push(...result);
       }
 
-      const triggers = optionalEnd.get(openName.toLowerCase());
+      const triggers = c.optionalEnd.get(openName.toLowerCase());
 
       // Content: a `*` over the content rule. For an optional-end element, stop the
       // repetition when the next start tag is a trigger sibling (it belongs to the

@@ -81,6 +81,61 @@ export function computeNullableRules(grammar: CstGrammar): { nullableRules: Set<
   return { nullableRules, exprNullable };
 }
 
+/** The markup CONTAINER arm — `tagOpen Name … tagClose content* tagOpen closeMarker Name tagClose`
+ *  (an HTML element with children) — and the data its two rules read:
+ *    • the end tag's name is the start tag's (compared ASCII-case-insensitively);
+ *    • an element named in `optionalEnd` stops its content at a start tag whose name is one of
+ *      its triggers, and its end tag may be omitted (MarkupConfig.optionalEndTags).
+ *  Recognised STRUCTURALLY, from the markup delimiters and the name token — no tag name is
+ *  known here. A pure function of the grammar: both engines match this arm with their own
+ *  control, over this one description of it. null → the grammar has no such arm (no markup
+ *  config, no closeMarker, or no optionalEndTags) and every arm is a plain sequence. */
+export interface MarkupContainer {
+  arm: RuleExpr;            // the container alternative (a `seq`)
+  items: RuleExpr[];        // its sequence items
+  openNameIdx: number;      // index of the start tag's name (a token ref)
+  contentIdx: number;       // index of the `content*` quantifier
+  closeStart: number;       // index where the end tag begins (its tagOpen)
+  closeNameIdx: number;     // index of the end tag's name (a token ref)
+  nameTokens: Set<string>;  // token name(s) that carry an element name (e.g. Name)
+  optionalEnd: Map<string, Set<string>>;  // lowercased name → lowercased trigger start-tag names
+}
+export function markupContainerOf(grammar: CstGrammar): MarkupContainer | null {
+  const markup = grammar.markup;
+  if (!markup?.optionalEndTags) return null;
+  const optionalEnd = new Map<string, Set<string>>();
+  for (const [name, triggers] of Object.entries(markup.optionalEndTags)) {
+    optionalEnd.set(name.toLowerCase(), new Set(triggers.map(t => t.toLowerCase())));
+  }
+  if (optionalEnd.size === 0) return null;
+  const open = markup.tagOpen, close = markup.tagClose, cm = markup.closeMarker;
+  if (!cm) return null;
+  const tokenNames = new Set(grammar.tokens.map(t => t.name));
+  const isLit = (e: RuleExpr | undefined, v: string) => !!e && e.type === 'literal' && e.value === v;
+  for (const rule of grammar.rules) {
+    const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
+    for (const alt of alts) {
+      const items = alt.type === 'seq' ? alt.items : [alt];
+      const n = items.length;
+      // Shape: open  Name  …  close  <content*>  open  closeMarker  Name  close
+      if (n < 6) continue;
+      const openName = items[1], closeName = items[n - 2];
+      if (!isLit(items[0], open) || openName.type !== 'ref' || !tokenNames.has(openName.name)) continue;
+      if (!(isLit(items[n - 4], open) && isLit(items[n - 3], cm) && closeName.type === 'ref' && tokenNames.has(closeName.name) && isLit(items[n - 1], close))) continue;
+      // The content quantifier sits right before the end tag, after the start tag's `close`.
+      const contentIdx = n - 5;
+      const content = items[contentIdx];
+      if (!content || content.type !== 'quantifier' || content.kind !== '*') continue;
+      if (!isLit(items[contentIdx - 1], close)) continue;   // the start tag's `>` precedes content
+      return {
+        arm: alt, items, openNameIdx: 1, contentIdx, closeStart: n - 4, closeNameIdx: n - 2,
+        nameTokens: new Set([openName.name, closeName.name]), optionalEnd,
+      };
+    }
+  }
+  return null;
+}
+
 export function analyzeGrammar(grammar: CstGrammar) {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
