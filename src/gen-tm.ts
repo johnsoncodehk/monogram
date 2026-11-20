@@ -1760,7 +1760,15 @@ function detectAngleBracketCast(grammar: CstGrammar): string | null {
   const ruleByName = new Map(grammar.rules.map(r => [r.name, r] as const));
   // a "cast head" is a rule whose EVERY expanded branch is exactly `'<' <typeRef> '>'` — the author
   // factored the angle-cast prefix into its own rule. Recover the type name (null if not that shape).
-  const castHeadType = (body: RuleExpr): string | null => {
+  // Memoized per rule: expandAlts is exponential in a body's opts, and the same rule is
+  // referenced from many expanded sequences.
+  const castHeadMemo = new Map<string, string | null>();
+  const castHeadType = (name: string): string | null => {
+    let ty = castHeadMemo.get(name);
+    if (ty === undefined) castHeadMemo.set(name, ty = castHeadShape(ruleByName.get(name)!.body));
+    return ty;
+  };
+  const castHeadShape = (body: RuleExpr): string | null => {
     const branches = expandAlts(body);
     if (!branches.length) return null;
     let ty: string | null = null;
@@ -1789,7 +1797,7 @@ function detectAngleBracketCast(grammar: CstGrammar): string | null {
       // via a cast-head RULE: `[<castHeadRef>, operand]` — the `<…>` is hidden behind the ref boundary,
       // so resolve it by name (mirrors detectCallExpression reaching its args through a separate rule).
       if (a.type === 'ref' && ruleByName.has(a.name)) {
-        const ty = castHeadType(ruleByName.get(a.name)!.body);
+        const ty = castHeadType(a.name);
         if (ty) found = ty;
       }
     }
@@ -3198,7 +3206,15 @@ function getTypeParamElementKeywords(body: RuleExpr, grammar: CstGrammar): strin
 function detectDeclarations(grammar: CstGrammar, tokenNames: Set<string>): DeclInfo[] {
   const results: DeclInfo[] = [];
 
+  // Memoized per rule: expandAlts is exponential in a body's opts, and analyzeSeq asks about
+  // the same refs from every expanded sequence.
+  const blockRuleMemo = new Map<string, boolean>();
   function isBlockRule(name: string): boolean {
+    let r = blockRuleMemo.get(name);
+    if (r === undefined) blockRuleMemo.set(name, r = isBlockRuleUncached(name));
+    return r;
+  }
+  function isBlockRuleUncached(name: string): boolean {
     const rule = grammar.rules.find(r => r.name === name);
     if (!rule) return false;
     // A rule is a block body only if EVERY normalised branch is `{ … }`-bounded — i.e. it is
