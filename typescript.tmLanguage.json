@@ -244,10 +244,10 @@
       "include": "#scope-constant-language-null"
     },
     {
-      "include": "#this-literal"
+      "include": "#scope-support-type-primitive"
     },
     {
-      "include": "#scope-support-type-primitive"
+      "include": "#this-literal"
     },
     {
       "include": "#super-literal"
@@ -3006,10 +3006,10 @@
           "include": "#scope-constant-language-null"
         },
         {
-          "include": "#this-literal"
+          "include": "#scope-support-type-primitive"
         },
         {
-          "include": "#scope-support-type-primitive"
+          "include": "#this-literal"
         },
         {
           "include": "#super-literal"
@@ -3384,7 +3384,7 @@
           "include": "$self"
         }
       ],
-      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.!*]|(?:keyof|typeof|readonly|this|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|unique)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{;\\-.!*=])|(?!(?:if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
+      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.!*]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{;\\-.!*=])|(?!(?:if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
     },
     "type-object": {
       "name": "meta.object-type.ts",
