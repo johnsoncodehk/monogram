@@ -2,12 +2,15 @@
 // themselves independently.
 //
 //   1. core modules (algo-ir / relex-family / define-target) import no target module, name no
-//      target, keep no host switch, and none of their string literals spell target syntax;
+//      target, keep no host switch, and none of their string literals carries punctuation —
+//      every operator, delimiter, comment marker and keyword comes from a target's Lowering
+//      (test/syntax-agnostic.ts prints the family through a non-C lowering);
 //   2. exactly one `defineTarget(...)` call per target module (target-ts / target-go /
 //      target-rust), each with its own `Lowering`; no target module imports another target
 //      module, an algorithm family, or the IR printer — families arrive via `shared`;
 //   3. the registry holds exactly those three targets, each the module's exported target,
-//      and refuses a second registration under the same name.
+//      refuses a second registration under the same name, and a target without a Lowering
+//      cannot be handed shared algorithms.
 //
 //   node test/define-target.ts
 import { readFileSync } from 'node:fs';
@@ -31,12 +34,14 @@ const imports = (s: string) => [...s.matchAll(/^import [^;]*? from '([^']+)'/gms
 const literals = (s: string) => [...s.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)]
   .map((m) => { let l = m[0]; while (/\$\{[^{}]*\}/.test(l)) l = l.replace(/\$\{[^{}]*\}/g, ''); return l; })
   .filter((l) => !/^.\.\//.test(l) && !/^.(algo-ir|defineTarget|relex-family):/.test(l));
-// Bare identifiers are IR tags and names, not emitted syntax.
-const isIdent = (l: string) => /^.\w*.$/.test(l);
 
 const TARGET_NAMES = /\b(ts|go|rust|typescript|golang|TS|Go|Rust|TypeScript|Golang)\b/;
 const HOST_SWITCH = /\b(host|Host|HOSTS)\b/;
-const TARGET_SYNTAX = /\b(Vec|String|usize|isize|u8|u16|u32|i64|int32|uint8|uint16|uint32|number|boolean|string|nil|func|fn|function|const|let|var|mut|make|append|as_str|to_vec|to_string|with_capacity|shrink_to_fit|format)\b|:=|===|!==|&mut|::|\.length\b|\.slice\(|\.push\(/;
+const PUNCT = /[^\w\s]/;
+// Line separators, and the parsed language's own `(` token text (grammar data), are not target syntax.
+const NOT_SYNTAX = new Set(["'\\n'", "'('"]);
+// Doc and comment prose (the lowering decides how comments are written) is not syntax.
+const isProse = (body: string) => (body.match(/[A-Za-z]{2,}/g) ?? []).length >= 4;
 
 for (const f of CORE) {
   const s = code(src(f));
@@ -44,7 +49,8 @@ for (const f of CORE) {
   if (HOST_SWITCH.test(s)) fail(`${f}: core mentions a host switch (${s.match(HOST_SWITCH)![0]})`);
   for (const l of literals(s)) {
     if (TARGET_NAMES.test(l)) fail(`${f}: literal names a target: ${l.slice(0, 80)}`);
-    if (!isIdent(l) && TARGET_SYNTAX.test(l)) fail(`${f}: literal spells target syntax (${l.match(TARGET_SYNTAX)![0]}): ${l.slice(0, 80)}`);
+    const body = l.slice(1, -1);
+    if (!NOT_SYNTAX.has(l) && !isProse(body) && PUNCT.test(body)) fail(`${f}: literal carries surface syntax (${body.match(PUNCT)![0]}): ${l.slice(0, 80)}`);
   }
 }
 
@@ -77,6 +83,13 @@ try {
   defineTarget({ name: 'go', ext: 'go', lowering: goTarget.lowering, emitParser: () => '' });
   fail('a second defineTarget("go") was accepted');
 } catch { /* expected */ }
+const bare = defineTarget({ name: 'no-lowering-probe', ext: 'txt', emitParser: (_g, shared) => shared.relexFamily({} as never) });
+try {
+  bare.emitParser({} as never);
+  fail('a target without a Lowering was handed shared algorithms');
+} catch (e) {
+  if (!/supplies no Lowering/.test((e as Error).message)) fail(`unexpected error for a target without a Lowering: ${(e as Error).message}`);
+}
 
 if (failures > 0) {
   console.error(`\n✗ defineTarget: ${failures} problem(s)`);

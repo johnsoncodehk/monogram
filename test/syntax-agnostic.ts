@@ -1,0 +1,171 @@
+// Gate: the shared algorithm core carries no surface syntax. A test-only target registered with
+// `defineTarget` prints the relex family as S-expressions — prefix operators, no braces,
+// semicolons, brackets, infix or C comments — for every lexer mode, and the printed forms
+// are counted against the IR: every statement, operator, index and negation the IR holds
+// reaches the lowering and comes out as its own form. Not a supported language; a proof that
+// all syntax lives in the lowering.
+//
+//   node test/syntax-agnostic.ts
+import { defineTarget } from '../src/define-target.ts';
+import { portableIR } from '../src/emit-portable.ts';
+import { relexFamilyFns, relexMode } from '../src/relex-family.ts';
+import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt } from '../src/algo-ir.ts';
+
+const OP: Record<BinOp, string> = { add: '+', sub: '-', shr: 'shr', lt: '<', le: '<=', gt: '>', ge: '>=', eq: '=', ne: '/=', and: 'and', or: 'or' };
+const form = (...xs: string[]) => `(${xs.join(' ')})`;
+const nest = (lines: string[]) => lines.map((l) => '  ' + l);
+const kebab = (s: string) => s.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+const at = (c: string) => ({ c, prec: ATOM });
+
+const sexpr: Lowering = {
+  ident: kebab,
+  num: { int: 'int', lid: 'lid', depth: 'int' },
+  index: 'int',
+  type: (t) => t,
+  cast: (_cx, r, nat) => ({ ...r, c: form('as', nat, r.c), nat, prec: ATOM }),
+  owns: false,
+  expr: {
+    literal: (v) => at(typeof v === 'string' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? '#t' : '#f') : String(v)),
+    not: (r) => at(form('not', r.c)),
+    bin: (op, a, b) => at(form(OP[op], a.c, b.c)),
+    index: (l, i) => at(form('nth', l.c, i.c)),
+    call: (name, args) => form(name, ...args),
+    len: (cx, l) => cx.atom(form('length', l.c), 'int', 'int'),
+    metaInt: (cx, m, f) => cx.atom(form(`meta-${f}`, m.c), 'int', 'int'),
+    metaFlag: (cx, m, f) => cx.atom(form(`meta-${f}?`, m.c), 'bool', 'bool'),
+    tokInt: (cx, t, f) => cx.atom(form(`tok-${f}`, t.c), 'int', f === 'lid' ? 'lid' : 'int'),
+    tokNl: (cx, t) => cx.atom(form('tok-nl?', t.c), 'bool', 'bool'),
+    editInt: (cx, e, f) => cx.atom(form(`edit-${f}`, e.c), 'int', 'int'),
+    editText: (cx, e) => cx.atom(form('edit-text', e.c), 'str', 'str'),
+    metaText: (cx, t, m) => cx.atom(form('meta-text', t.c, m.c), 'str', 'str'),
+    substr: (cx, s, a, b) => cx.atom(form('substring', s.c, a.c, b.c), 'str', 'str'),
+    lidOf: (cx, s) => cx.atom(form('lid-of', s.c), 'lid', 'lid'),
+    mkMeta: (cx, fs) => cx.atom(form('make-meta', ...fs.map(([f, r]) => `#:${f} ${r.c}`)), 'meta', 'meta'),
+    shiftMeta: (cx, m, d) => cx.atom(form('shift-meta', m.c, d.c), 'meta', 'meta'),
+    metaEq: (cx, a, b) => cx.atom(form('meta=?', a.c, b.c), 'bool', 'bool'),
+    splice: (cx, s, a, b, ins) => cx.atom(form('string-splice', s.c, a.c, b.c, ins.c), 'str', 'str'),
+    own: (_cx, r) => r,
+    newList: (cx, ty, cap, estimate) => cx.atom(form('make-list', ...(cap ? ['#:capacity', cap.c] : []), ...(estimate ? ['#:estimate', estimate.c] : [])), ty, ty, { owned: true }),
+    falses: (cx, n) => cx.atom(form('make-flags', n.c), 'bools', 'bools', { owned: true }),
+    prefix: (cx, l, n, estimate) => cx.atom(form('take', l.c, n.c, '#:estimate', estimate.c), l.ty, l.ty, { owned: true }),
+  },
+  stmt: {
+    comment: (text) => [`;; ${text}`],
+    let: (_cx, s) => [form('define', s.id, s.r.c)],
+    set: (id, val) => [form('set!', id, val)],
+    setAt: (id, i, val) => [form('set-nth!', id, i, val)],
+    push: (_cx, l, r) => [form('push!', l, r.c)],
+    if: (s) => (s.else
+      ? [`(if ${s.c}`, ...nest(['(begin', ...nest(s.then), ')', '(begin', ...nest(s.else), ')']), ')']
+      : [`(when ${s.c}`, ...nest(s.then), ')']),
+    while: (c, body) => [`(while ${c}`, ...nest(body), ')'],
+    for: (_cx, v, from, to, body) => [`(for (${v} ${from.c} ${to.c})`, ...nest(body), ')'],
+    forEach: (v, l, body) => [`(for-each (${v} ${l})`, ...nest(body), ')'],
+    break: () => ['(break)'],
+    return: (vals) => [form('return', ...vals)],
+    destructure: (_cx, s) => [form(s.declare ? 'define-values' : 'set-values!', form(...s.ids), s.call)],
+    lexStep: (_cx, s) => [form('lex-step!', s.text.c, s.pos, ...s.state, s.out)],
+    shrink: (_cx, l) => [form('shrink!', l)],
+    fn: (f) => [
+      ...f.doc.map((l) => `;; ${l}`),
+      `(defn ${f.name} (${f.params.map((p) => form(p.name, p.type)).join(' ')}) (returns ${f.rets.join(' ')})`,
+      ...nest(f.body),
+      ')',
+    ].join('\n'),
+  },
+};
+
+const target = defineTarget({
+  name: 'sexpr-syntax-probe',
+  ext: 'scm',
+  lowering: sexpr,
+  emitParser: (grammar, shared) => shared.relexFamily(portableIR(grammar)),
+});
+
+// IR census: what the printed forms must account for.
+const HEAD: Partial<Record<Stmt['k'], string[]>> = {
+  let: ['define'], set: ['set!'], setAt: ['set-nth!'], push: ['push!'], if: ['if', 'when'], while: ['while'], for: ['for'],
+  forEach: ['for-each'], break: ['break'], return: ['return'], letCall: ['define-values'], setCall: ['set-values!'],
+  lexStep: ['lex-step!'], shrink: ['shrink!'],
+};
+function census(fns: Fn[]): Map<string, number> {
+  const n = new Map<string, number>();
+  const bump = (k: string) => n.set(k, (n.get(k) ?? 0) + 1);
+  const ex = (e: Expr): void => {
+    if (e.k === 'bin') bump(OP[e.op]);
+    if (e.k === 'not') bump('not');
+    if (e.k === 'at') bump('nth');
+    for (const v of Object.values(e)) {
+      if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && 'k' in y && ex(y as Expr));
+      else if (v && typeof v === 'object' && 'k' in v) ex(v as Expr);
+    }
+  };
+  const st = (s: Stmt): void => {
+    bump(s.k === 'comment' ? ';;' : HEAD[s.k]!.join('|'));
+    for (const [key, v] of Object.entries(s)) {
+      if (key === 'then' || key === 'else' || key === 'body') (v as Stmt[] | undefined)?.forEach(st);
+      else if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && ex(y as Expr));
+      else if (v && typeof v === 'object' && 'k' in v) ex(v as Expr);
+    }
+  };
+  for (const f of fns) {
+    bump('defn');
+    for (let i = 0; i < f.doc.split('\n').length; i++) bump(';;');
+    f.body.forEach(st);
+  }
+  return n;
+}
+
+// Reader: balanced forms with string literals; collects each form's head.
+function read(src: string): Map<string, number> {
+  const heads = new Map<string, number>();
+  const code = src.split('\n').map((l) => (/^\s*;;/.test(l) ? '' : l)).join('\n');
+  let depth = 0, i = 0, expectHead = false;
+  while (i < code.length) {
+    const ch = code[i];
+    if (ch === '"') { i++; while (code[i] !== '"') i += code[i] === '\\' ? 2 : 1; i++; expectHead = false; continue; }
+    if (ch === '(') { depth++; i++; expectHead = true; continue; }
+    if (ch === ')') { if (--depth < 0) throw new Error('unbalanced )'); i++; expectHead = false; continue; }
+    if (/\s/.test(ch)) { i++; continue; }
+    let j = i;
+    while (j < code.length && !/[\s()"]/.test(code[j])) j++;
+    const tok = code.slice(i, j);
+    if (expectHead) heads.set(tok, (heads.get(tok) ?? 0) + 1);
+    else if (Object.values(OP).includes(tok) || tok === 'not' || tok === 'nth') throw new Error(`operator ${tok} outside head position`);
+    expectHead = false;
+    i = j;
+  }
+  if (depth !== 0) throw new Error(`unbalanced: depth ${depth}`);
+  heads.set(';;', src.split('\n').filter((l) => /^\s*;;/.test(l)).length);
+  return heads;
+}
+
+// `!` ends Lisp mutator names (`set!`); only a prefix `!` is C negation.
+const C_SURFACE = /[{};[\],]|&&|\|\||==|!=|(?<![\w?-])!|\/\/|:=|->|\.\w/;
+const FIXTURES = ['./fixtures/calc.ts', './fixtures/envspec.ts', './fixtures/regexjs.ts', './fixtures/templatejs.ts', '../javascript.ts', './fixtures/envtpl.ts'];
+
+let failures = 0;
+const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
+
+for (const path of FIXTURES) {
+  const grammar = (await import(path)).default;
+  const fns = relexFamilyFns(relexMode(portableIR(grammar)));
+  const out = target.emitParser(grammar);
+  const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  const bad = code.match(C_SURFACE);
+  if (bad) fail(`${path}: C-family surface ${JSON.stringify(bad[0])} in printed S-expressions`);
+  let heads: Map<string, number>;
+  try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
+  const want = census(fns);
+  for (const [k, n] of want) {
+    const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0);
+    if (got !== n) fail(`${path}: ${k} printed ${got}×, IR holds ${n}`);
+  }
+  console.log(`  ${path}: ${fns.length} functions, ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
+}
+
+if (failures > 0) {
+  console.error(`\n✗ syntax-agnostic: ${failures} problem(s)`);
+  process.exit(1);
+}
+console.log('\n✓ syntax-agnostic: the relex family prints as S-expressions through defineTarget; every IR construct accounted for');
