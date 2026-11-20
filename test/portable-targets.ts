@@ -228,6 +228,19 @@ const CASES: Case[] = [
     reject: ['yield x++ ++;', 'yield -x++ ++;', 'this is;', 'x =>;', 'export;', 'x++ ++;', 'export default 1'],
   },
   {
+    // The Guard and Dispatch a longest-match candidate is tried under (fixtures/guardjs.ts):
+    // a tie between candidates reached through different Dispatch sections goes to the
+    // earlier-declared one (`go;`, `self;` — the rule skeleton tells them apart), a SECOND guard
+    // refuses only what cannot match (`x: y;` vs `x;`), and no SECOND guard sits on an
+    // alternative that can match one token (`{x}`).
+    grammar: 'guardjs', path: './fixtures/guardjs.ts',
+    accept: [
+      'go;', 'stop;', 'x;', 'x: y;', 'x: go;', 'a: b: c;', '{x}', '{x!y}', '{x?}', '{[]}', 'self;', 'nil;',
+      '(self);', 'self + 1;', '1 + x;', 'go; stop; x;',
+    ],
+    reject: ['x y;', 'x:', 'x: ;', '{}', '{x!}', 'go', '{x', ': x;'],
+  },
+  {
     // The REAL javascript.ts grammar (89 rules after the [Await]/[Yield] fork) — the proof
     // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
     // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's

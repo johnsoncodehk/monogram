@@ -4,7 +4,7 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -26,6 +26,29 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
 const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
   isFirstGuardable(f, nAlts);
+// A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
+// keyed: the candidate is reached through its Dispatch key, which already tested the first token.
+const guardCond = (g: Guard, t: string, keyed: boolean): string[] =>
+  g === null ? [] : [...(keyed ? [] : [`inSet(${g.first.id}, ${t})`]), ...(g.second !== null ? [`secondIn(${g.second.id})`] : [])];
+// `if (<conds>) <body>` as one statement (just the body when there is no condition).
+const ifTs = (conds: string[], body: string) => (conds.length ? `  if (${conds.join(' && ')}) ${body}` : `  ${body}`);
+// A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
+// nilable: t may be null (no token left), which no key matches.
+const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
+  d.sections.map((sec) => {
+    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
+    const id = (k: string) => (sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
+    const sw = `  switch (${t}.${sec.by}) {\n${sec.groups.map((g) => `  case ${id(g.key)}:\n${g.arms.map((i) => arm(i, true)).join('\n')}\n  break;`).join('\n')}\n  }`;
+    return nilable ? `  if (${t} !== null) {\n${sw}\n  }` : sw;
+  }).join('\n');
+// Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
+// `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
+// in a list that has ranked candidates.
+const beatsTs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} === bestPos && ${i} < bi)` : `${pos} > bestPos`;
+const markTs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
+const biTs = (d: Dispatch) => (d.ranked.length ? ', bi = -1' : '');
+// The typed-AST layer tries an rd rule's alternatives in declaration order, each under its Guard.
+const astGuard = (r: RdRule, i: number): string => { const c = guardCond(r.altGuard[i]!, '_ft', false); return c.length ? `_ft !== null && ${c.join(' && ')}` : 'true'; };
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesTS(ids: LexIdPlan): string {
@@ -501,17 +524,17 @@ ${r.alts.map(arm).join(' ')}
   return null;
 }`;
   }
-  // Longest match over the alternatives, in declaration order (emit-portable.ts, RdRule).
-  const alt = (steps: Step[], i: number) => {
-    const body = `{ const kids: Cst[] = []; if (${steps.map((x) => stepCond(x, ids)).join(' && ')} && pos > bestPos) { best = branch(${J(r.cstName)}, kids, save); bestPos = pos; } pos = save; }`;
-    if (!isGuardable(r.altFirst[i], r.alts.length)) return `  ${body}`;
-    return `  if (_ft !== null && ${firstCond(r.altFirst[i], '_ft', ids)}) ${body}`;
+  // Longest match over the alternatives, reached through the rule's Dispatch (emit-portable.ts, RdRule).
+  const alt = (i: number, keyed: boolean) => {
+    const body = `{ const kids: Cst[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branch(${J(r.cstName)}, kids, save); bestPos = pos;${markTs(r.altDispatch, i)} } pos = save; }`;
+    const g = guardCond(r.altGuard[i]!, '_ft', keyed);
+    return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
-  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
+  const needPeek = r.altGuard.some((g) => g !== null);
   return `function parse${r.name}(): Node | null {
   const save = pos;
-  let best: Node | null = null, bestPos = save;
-${needPeek ? '  const _ft = peek();\n' : ''}${r.alts.map(alt).join('\n')}
+  let best: Node | null = null, bestPos = save${biTs(r.altDispatch)};
+${needPeek ? '  const _ft = peek();\n' : ''}${dispatchTs(r.altDispatch, '_ft', ids, alt, true)}
   pos = bestPos;
   return best;
 }`;
@@ -536,16 +559,16 @@ ${r.alts.map(arm).join(' ')}
   return null;
 }`;
   }
-  const alt = (steps: Step[], i: number) => {
-    const body = `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${steps.map((x) => stepCond(x, ids, true)).join(' && ')} && pos > bestPos) { best = branchW(${J(r.cstName)}, kids, spans, save); bestPos = pos; } pos = save; }`;
-    if (!isGuardable(r.altFirst[i], r.alts.length)) return `  ${body}`;
-    return `  if (_ft !== null && ${firstCond(r.altFirst[i], '_ft', ids)}) ${body}`;
+  const alt = (i: number, keyed: boolean) => {
+    const body = `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${r.alts[i]!.map((x) => stepCond(x, ids, true)).join(' && ')} && ${beatsTs(r.altDispatch, 'pos', i)}) { best = branchW(${J(r.cstName)}, kids, spans, save); bestPos = pos;${markTs(r.altDispatch, i)} } pos = save; }`;
+    const g = guardCond(r.altGuard[i]!, '_ft', keyed);
+    return ifTs(g.length && !keyed ? ['_ft !== null', ...g] : g, body);
   };
-  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
+  const needPeek = r.altGuard.some((g) => g !== null);
   return `function parse${r.name}W(): Frame | null {
   const save = pos;
-  let best: Frame | null = null, bestPos = save;
-${needPeek ? '  const _ft = peek();\n' : ''}${r.alts.map(alt).join('\n')}
+  let best: Frame | null = null, bestPos = save${biTs(r.altDispatch)};
+${needPeek ? '  const _ft = peek();\n' : ''}${dispatchTs(r.altDispatch, '_ft', ids, alt, true)}
   pos = bestPos;
   return best;
 }`;
@@ -736,35 +759,32 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan): string {
 }
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
-  // The NUD arms, each a longest-match candidate tried from `save` in declaration order
-  // (emit-portable.ts, PrattRule.nudOrder): `won(...)` records the arm as the best so far.
-  const won = (nodeExpr: string, form: string, tail: boolean, capped: boolean) =>
-    `best = ${nodeExpr}; bestPos = pos; bf = ${form}; bt = ${tail}; bc = ${capped};`;
+  // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
+  // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch): `won(...)` records the arm as the best so far.
+  const won = (i: number, nodeExpr: string, form: string, tail: boolean, capped: boolean) =>
+    `best = ${nodeExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids)).join(' && ') : 'true');
-  const seqArm = (steps: Step[], tail: boolean, capped: boolean) =>
-    `{ const kids: Cst[] = []; if (${stepsCond(steps)} && pos > bestPos) { ${won(`branch(${J(r.cstName)}, kids, save)`, '0', tail, capped)} } pos = save; }`;
-  const nudArm = (a: NudRef): string => {
+  const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
+    `{ const kids: Cst[] = []; if (${stepsCond(steps)} && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `branch(${J(r.cstName)}, kids, save)`, '0', tail, capped)} } pos = save; }`;
+  const nudArm = (i: number, keyed: boolean): string => {
+    const a = r.nudOrder[i]!;
     switch (a.kind) {
       case 'tok': {
         const k = r.nudToks[a.index]!;
-        const leafArm = `  if (t.kid === ${kidOf(ids, k)}) { pos++; if (pos > bestPos) { ${won(`{ rule: ${J(r.cstName)}, children: [{ tokenType: tok_kind(t), offset: t.off, end: t.end }], offset: t.off, end: t.end }`, '0', false, false)} } pos = save; }`;
+        const leafArm = ifTs(keyed ? [] : [`t.kid === ${kidOf(ids, k)}`], `{ pos++; if (${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.cstName)}, children: [{ tokenType: tok_kind(t), offset: t.off, end: t.end }], offset: t.off, end: t.end }`, '0', false, false)} } pos = save; }`);
         if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
         return `${leafArm}
-  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(parse${r.nudTplHole}); if (node !== null && pos > bestPos) { ${won(`{ rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end }`, '0', false, false)} } pos = save; }`;
+  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplate(parse${r.nudTplHole}); if (node !== null && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.cstName)}, children: [node], offset: node.offset, end: node.end }`, '0', false, false)} } pos = save; }`;
       }
       case 'bracket': {
         const b = r.nudBrackets[a.index]!;
-        return `  if (t.lid === ${lidOf(ids, b.first)}) ${seqArm(b.steps, r.nudBracketClosesTail[a.index]!, false)}`;
+        return ifTs(keyed ? [] : [`t.lid === ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
       }
-      case 'seq': {
-        const f = r.nudSeqFirst[a.index] ?? null;
-        const body = seqArm(r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false);
-        return isGuardable(f) ? `  if (${firstCond(f, 't', ids)}) ${body}` : `  ${body}`;
-      }
+      case 'seq':
+        return ifTs(guardCond(r.nudSeqGuard[a.index]!, 't', keyed), seqArm(i, r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false));
       case 'capped': {
         const c = r.nudCapped[a.index]!;
-        const f = r.nudCappedFirst[a.index] ?? null;
-        return `  if (minBp < ${c.capBp}${isGuardable(f) ? ` && ${firstCond(f, 't', ids)}` : ''}) ${seqArm(c.steps, false, true)}`;
+        return ifTs([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', keyed)], seqArm(i, c.steps, false, true));
       }
       case 'prefix':
         // An operand that parses but is not the target the operator requires fails the whole
@@ -775,7 +795,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
       const operand = ${r.name}_bp(pbp);
       if (operand !== null) {
         if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { pos = save; _capped = false; return null; }
-        if (pos > bestPos) { ${won(`{ rule: ${J(r.cstName)}, children: [{ tokenType: '$operator', offset: t.off, end: t.end }, operand], offset: t.off, end: operand.end }`, `${r.name}_PRE_FORM[t.lid]!`, true, false)} }
+        if (${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `{ rule: ${J(r.cstName)}, children: [{ tokenType: '$operator', offset: t.off, end: t.end }, operand], offset: t.off, end: operand.end }`, `${r.name}_PRE_FORM[t.lid]!`, true, false)} }
       }
       pos = save;
     } }`;
@@ -876,8 +896,8 @@ function ${r.name}_nud(minBp: number): Node | null {
   const t = peek();
   if (t === null) return null;
   const save = pos;
-  let best: Node | null = null, bestPos = save, bf = 0, bt = false, bc = false;
-${r.nudOrder.map(nudArm).join('\n')}
+  let best: Node | null = null, bestPos = save${biTs(r.nudDispatch)}, bf = 0, bt = false, bc = false;
+${dispatchTs(r.nudDispatch, 't', ids, nudArm)}
   // A sub-parse may leave _capped set (e.g. grouping a capped arrow): only a capped arm that
   // won makes THIS node capped.
   _capped = bc;
@@ -891,34 +911,31 @@ ${r.nudOrder.map(nudArm).join('\n')}
 /** Builder-mode Pratt — reuses ${name}_BIN/_PRE/_POST/_ATOM tables from the CST emit. */
 function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   const cn = J(r.cstName);
-  // The NUD arms: longest-match candidates in declaration order, as in prattRule.
-  const won = (frameExpr: string, form: string, tail: boolean, capped: boolean) =>
-    `best = ${frameExpr}; bestPos = pos; bf = ${form}; bt = ${tail}; bc = ${capped};`;
+  // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
+  const won = (i: number, frameExpr: string, form: string, tail: boolean, capped: boolean) =>
+    `best = ${frameExpr}; bestPos = pos;${markTs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, true)).join(' && ') : 'true');
-  const seqArm = (steps: Step[], tail: boolean, capped: boolean) =>
-    `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${stepsCond(steps)} && pos > bestPos) { ${won(`branchW(${cn}, kids, spans, save)`, '0', tail, capped)} } pos = save; }`;
-  const nudArm = (a: NudRef): string => {
+  const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
+    `{ const kids: any[] = []; const spans: BWSpan[] = []; if (${stepsCond(steps)} && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `branchW(${cn}, kids, spans, save)`, '0', tail, capped)} } pos = save; }`;
+  const nudArm = (i: number, keyed: boolean): string => {
+    const a = r.nudOrder[i]!;
     switch (a.kind) {
       case 'tok': {
         const k = r.nudToks[a.index]!;
-        const leafArm = `  if (t.kid === ${kidOf(ids, k)} && save + 1 > bestPos) { const lf = leafFrameW(tok_kind(t), t); pos++; ${won(`wrapUnaryW(${cn}, lf)`, '0', false, false)} pos = save; }`;
+        const leafArm = ifTs([...(keyed ? [] : [`t.kid === ${kidOf(ids, k)}`]), beatsTs(r.nudDispatch, 'save + 1', i)], `{ const lf = leafFrameW(tok_kind(t), t); pos++; ${won(i, `wrapUnaryW(${cn}, lf)`, '0', false, false)} pos = save; }`);
         if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
         return `${leafArm}
-  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(parse${r.nudTplHole}W); if (node !== null && pos > bestPos) { ${won(`wrapUnaryW(${cn}, node)`, '0', false, false)} } pos = save; }`;
+  if (t.kid === ${kidOf(ids, '$templateHead')}) { const node = matchTemplateW(parse${r.nudTplHole}W); if (node !== null && ${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `wrapUnaryW(${cn}, node)`, '0', false, false)} } pos = save; }`;
       }
       case 'bracket': {
         const b = r.nudBrackets[a.index]!;
-        return `  if (t.lid === ${lidOf(ids, b.first)}) ${seqArm(b.steps, r.nudBracketClosesTail[a.index]!, false)}`;
+        return ifTs(keyed ? [] : [`t.lid === ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
       }
-      case 'seq': {
-        const f = r.nudSeqFirst[a.index] ?? null;
-        const body = seqArm(r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false);
-        return isGuardable(f) ? `  if (${firstCond(f, 't', ids)}) ${body}` : `  ${body}`;
-      }
+      case 'seq':
+        return ifTs(guardCond(r.nudSeqGuard[a.index]!, 't', keyed), seqArm(i, r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false));
       case 'capped': {
         const c = r.nudCapped[a.index]!;
-        const f = r.nudCappedFirst[a.index] ?? null;
-        return `  if (minBp < ${c.capBp}${isGuardable(f) ? ` && ${firstCond(f, 't', ids)}` : ''}) ${seqArm(c.steps, false, true)}`;
+        return ifTs([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', keyed)], seqArm(i, c.steps, false, true));
       }
       case 'prefix':
         return `  { const pbp = ${r.name}_PRE[t.lid];
@@ -928,7 +945,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
       const operand = ${r.name}_bpW(pbp);
       if (operand !== null) {
         if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { pos = save; _capped = false; return null; }
-        if (pos > bestPos) { ${won(`joinFramesW(${cn}, lf, operand)`, `${r.name}_PRE_FORM[t.lid]!`, true, false)} }
+        if (${beatsTs(r.nudDispatch, 'pos', i)}) { ${won(i, `joinFramesW(${cn}, lf, operand)`, `${r.name}_PRE_FORM[t.lid]!`, true, false)} }
       }
       pos = save;
     } }`;
@@ -1020,8 +1037,8 @@ function ${r.name}_nudW(minBp: number): Frame | null {
   const t = peek();
   if (t === null) return null;
   const save = pos;
-  let best: Frame | null = null, bestPos = save, bf = 0, bt = false, bc = false;
-${r.nudOrder.map(nudArm).join('\n')}
+  let best: Frame | null = null, bestPos = save${biTs(r.nudDispatch)}, bf = 0, bt = false, bc = false;
+${dispatchTs(r.nudDispatch, 't', ids, nudArm)}
   _capped = bc;
   _form = bf;
   _tail = bt;
@@ -2321,9 +2338,7 @@ function emitChoiceArmTry(
     return '';
   }
   const leaves = shapeIR.leaves;
-  const guard = isGuardable(r.altFirst[altIdx] ?? null, r.alts.length)
-    ? `_ft !== null && ${firstCond(r.altFirst[altIdx]!, '_ft', ids)}`
-    : 'true';
+  const guard = astGuard(r, altIdx);
 
   if (arm.shape.kind === 'node') {
     const maps = fieldMaps(arm.shape);
@@ -2414,9 +2429,7 @@ function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: Sha
   }
   if (shape.kind === 'custom') {
     const tries = r.alts.map((alt, ai) => {
-      const guard = isGuardable(r.altFirst[ai] ?? null, r.alts.length)
-        ? `_ft !== null && ${firstCond(r.altFirst[ai]!, '_ft', ids)}`
-        : 'true';
+      const guard = astGuard(r, ai);
       const emptyB = new Map<number, string>();
       const stepsCode = emitAstRdAltSteps(alt, ids, leaves, emptyB, emptyB, emptyB, emptyB, ctx);
       const folds = J(shape.folds ?? []);
@@ -2435,7 +2448,7 @@ function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: Sha
     pos = sp;
   } }`;
     }).join('\n');
-    const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i] ?? null, r.alts.length));
+    const needPeek = r.altGuard.some((g) => g !== null);
     return finalize(`function parseAst${r.name}(): unknown {
   const save = pos;
   let best: unknown = null, bestPos = ${astBestInit(r)};
@@ -2517,7 +2530,7 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${tries}
       }
     }
     const armBlocks = armTries.sort((x, y) => x.altIdx - y.altIdx).map((x) => x.code);
-    const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i] ?? null, r.alts.length));
+    const needPeek = r.altGuard.some((g) => g !== null);
     return finalize(`function parseAst${r.name}(): ${retType} | null {
   const save = pos;
   let best: ${retType} | null = null, bestPos = ${astBestInit(r)};
@@ -2542,9 +2555,7 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${armBlocks.filter(Boolean).join('\n
 }`);
     }
     const tries = r.alts.map((alt, ai) => {
-      const guard = isGuardable(r.altFirst[ai] ?? null, r.alts.length)
-        ? `_ft !== null && ${firstCond(r.altFirst[ai]!, '_ft', ids)}`
-        : 'true';
+      const guard = astGuard(r, ai);
       const stepsCode = emitAstRdAltSteps(alt, ids, leaves, maps.bindings, maps.listBindings, maps.optBindings, maps.listElemHints, ctx);
       return `  { const sp = pos; const spOff = sp < toks.length ? toks[sp]!.off : 0; if (${guard}) {
     const _got = (() => {
@@ -2557,7 +2568,7 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${armBlocks.filter(Boolean).join('\n
     pos = sp;
   } }`;
     }).join('\n');
-    const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i] ?? null, r.alts.length));
+    const needPeek = r.altGuard.some((g) => g !== null);
     return finalize(`function parseAst${r.name}(): ${node.type} | null {
   const save = pos;
   let best: ${node.type} | null = null, bestPos = ${astBestInit(r)};
@@ -2888,7 +2899,7 @@ ${code}
     if (hard) { pos = save; _capped = false; return null; }
     if (_a !== null && _a !== undefined && pos > bestPos) { best = _a; bestPos = pos; bf = pf; bt = pt; bc = pc; }
     pos = save; }`;
-  const guarded = (f: FirstSig, arm: string): string => (arm !== '' && isGuardable(f) ? `  if (${firstCond(f, 't', ids)}) {\n${arm}\n  }` : arm);
+  const guarded = (g: Guard, arm: string): string => { const c = guardCond(g, 't', false); return arm !== '' && c.length ? `  if (${c.join(' && ')}) {\n${arm}\n  }` : arm; };
   const nudArm = (a: NudRef): string => {
     switch (a.kind) {
       case 'tok': {
@@ -2896,8 +2907,8 @@ ${code}
         return [tryArm(atomArm(tok)), tpl && tok === tpl.token ? tryArm(tplNudCode) : ''].filter(Boolean).join('\n');
       }
       case 'bracket': return tryArm(bracketArms[a.index] ?? '');
-      case 'seq': return guarded(r.nudSeqFirst[a.index] ?? null, tryArm(seqArms[a.index] ?? ''));
-      case 'capped': return guarded(r.nudCappedFirst[a.index] ?? null, tryArm(cappedArms[a.index] ?? ''));
+      case 'seq': return guarded(r.nudSeqGuard[a.index]!, tryArm(seqArms[a.index] ?? ''));
+      case 'capped': return guarded(r.nudCappedGuard[a.index]!, tryArm(cappedArms[a.index] ?? ''));
       case 'prefix': return tryArm(prefixCode);
     }
   };
@@ -3576,11 +3587,18 @@ function tokenSetRuntime(ir: ParserIR, ids: LexIdPlan): string {
   return `const _SET_STRIDE = ${b.stride};
 const _SET_KID = ${b.kidBase};
 const _SETS = new Uint32Array([${b.words.join(', ')}]);
+function inSet(k: number, t: Tok): boolean {
+  const r = k * _SET_STRIDE, c = _SET_KID + t.kid;
+  return (((_SETS[r + (t.lid >>> 5)]! >>> (t.lid & 31)) | (_SETS[r + (c >>> 5)]! >>> (c & 31))) & 1) === 1;
+}
 function ahead(k: number, is: boolean): boolean {
   const t = peek();
-  if (t === null) return !is;
-  const r = k * _SET_STRIDE, c = _SET_KID + t.kid;
-  return (((_SETS[r + (t.lid >>> 5)]! >>> (t.lid & 31)) | (_SETS[r + (c >>> 5)]! >>> (c & 31))) & 1) === (is ? 1 : 0);
+  return t === null ? !is : inSet(k, t) === is;
+}
+// Whether the token after the current one is in set k (a longest-match candidate's SECOND guard).
+function secondIn(k: number): boolean {
+  maxLook = Math.max(maxLook, pos + 2);
+  return pos + 1 < toks.length && inSet(k, toks[pos + 1]!);
 }`;
 }
 

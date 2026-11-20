@@ -9,7 +9,7 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
@@ -24,6 +24,32 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
 const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
   isFirstGuardable(f, nAlts);
+// A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, for the engine
+// (w '') or the builder walker (w 'W').
+// keyed: the candidate is reached through its Dispatch key, which already tested the first token.
+const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] => {
+  if (g === null) return [];
+  const parts = keyed ? [] : [`inTokenSet(${g.first.id}, ${t})`];
+  if (g.second !== null) parts.push(`p.secondIn${w}(${g.second.id})`);
+  return parts;
+};
+// `if <conds> <body>` as one statement line (just the body when there is no condition).
+const ifGo = (conds: string[], body: string) => (conds.length ? `\tif ${conds.join(' && ')} ${body}` : `\t${body}`);
+// A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
+// nilable: t may be nil (no token left), which no key matches.
+const dispatchGo = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
+  d.sections.map((sec) => {
+    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
+    const id = (k: string) => (sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
+    const sw = `\tswitch ${t}.${sec.by === 'lid' ? 'Lid' : 'Kid'} {\n${sec.groups.map((g) => `\tcase ${id(g.key)}:\n${g.arms.map((i) => arm(i, true)).join('\n')}`).join('\n')}\n\t}`;
+    return nilable ? `\tif ${t} != nil {\n${sw}\n\t}` : sw;
+  }).join('\n');
+// Whether the candidate i that just ended at pos beats the best so far: it ends past it, or — a
+// Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
+// kept only in a list that has ranked candidates.
+const beatsGo = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} == bestPos && ${i} < bi)` : `${pos} > bestPos`;
+const markGo = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
+const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesGo(ids: LexIdPlan): string {
@@ -620,17 +646,18 @@ ${r.alts.map(arm).join(' ')}
   // Longest match over the alternatives, in declaration order (emit-portable.ts, RdRule). The
   // best node so far stays in the arena: nb/kb move past it, so a later alternative that does
   // not beat it is truncated away and one that does leaves it unreferenced.
-  const alt = (steps: Step[], i: number) => {
-    const cond = steps.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && p.pos > bestPos { best = p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save); bestPos = p.pos; nb = len(p.nodes); kb = len(p.kids) } else { p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }; p.pos = save }`;
-    if (!isGuardable(r.altFirst[i], r.alts.length)) return `\t${body}`;
-    return `\tif _ft != nil && ${firstCond(r.altFirst[i], '_ft', ids)} ${body}`;
+  // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
+  const alt = (i: number, keyed: boolean) => {
+    const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
+    const body = `{ if ${cond} && ${beatsGo(r.altDispatch, 'p.pos', i)} { best = p.finish(${ruleIdOf(ar, r.cstName)}, sb, p.offAt(save), save); bestPos = p.pos;${markGo(r.altDispatch, i)} nb = len(p.nodes); kb = len(p.kids) } else { p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb] }; p.pos = save }`;
+    const g = guardCond(r.altGuard[i]!, '_ft', '', keyed);
+    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
-  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
+  const needPeek = r.altGuard.some((g) => g !== null);
   return `func (p *engine) parse${r.name}() int32 {
 \tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tbest := int32(-1); bestPos := save
-${needPeek ? '\t_ft := p.peek()\n' : ''}${r.alts.map(alt).join('\n')}
+\tbest := int32(-1); bestPos := save${biGo(r.altDispatch)}
+${needPeek ? '\t_ft := p.peek()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
 \tp.pos = bestPos
 \treturn best
 }`;
@@ -744,42 +771,39 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 }
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  // The NUD arms, each a longest-match candidate tried from `save` in declaration order
-  // (emit-portable.ts, PrattRule.nudOrder). `won` records the node just finished as the best so
-  // far and moves nb/kb past it; `lost` drops what the arm built.
+  // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
+  // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
+  // finished as the best so far and moves nb/kb past it; `lost` drops what the arm built.
   const rid = ruleIdOf(ar, r.cstName);
-  const won = (form: string, tail: boolean, capped: boolean) =>
-    `bestPos = p.pos; bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
+  const won = (i: number, form: string, tail: boolean, capped: boolean) =>
+    `bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
   const lost = `p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
-  const seqArm = (steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && p.pos > bestPos { best = p.finish(${rid}, sb, p.offAt(save), save); ${won('0', tail, capped)} } else { ${lost} }; p.pos = save }`;
-  const nudArm = (a: NudRef): string => {
+  const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
+    `{ if ${stepsCond(steps)} && ${beatsGo(r.nudDispatch, 'p.pos', i)} { best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capped)} } else { ${lost} }; p.pos = save }`;
+  const nudArm = (i: number, keyed: boolean): string => {
+    const a = r.nudOrder[i]!;
     switch (a.kind) {
       case 'tok': {
         const k = r.nudToks[a.index]!;
-        const leafArm = `\tif t.Kid == ${kidOf(ids, k)} && save+1 > bestPos { p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won('0', false, false)}; p.pos = save }`;
+        const leafArm = ifGo([...(keyed ? [] : [`t.Kid == ${kidOf(ids, k)}`]), beatsGo(r.nudDispatch, 'save+1', i)], `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.pos = save }`);
         if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
         return `${leafArm}
 \tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tnode := p.matchTemplate_${r.nudTplHole}()
-\t\tif node >= 0 && p.pos > bestPos { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won('0', false, false)} } else { ${lost} }
+\t\tif node >= 0 && ${beatsGo(r.nudDispatch, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, '0', false, false)} } else { ${lost} }
 \t\tp.pos = save
 \t}`;
       }
       case 'bracket': {
         const b = r.nudBrackets[a.index]!;
-        return `\tif t.Lid == ${lidOf(ids, b.first)} ${seqArm(b.steps, r.nudBracketClosesTail[a.index]!, false)}`;
+        return ifGo(keyed ? [] : [`t.Lid == ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
       }
-      case 'seq': {
-        const f = r.nudSeqFirst[a.index] ?? null;
-        const body = seqArm(r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false);
-        return isGuardable(f) ? `\tif ${firstCond(f, 't', ids)} ${body}` : `\t${body}`;
-      }
+      case 'seq':
+        return ifGo(guardCond(r.nudSeqGuard[a.index]!, 't', '', keyed), seqArm(i, r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false));
       case 'capped': {
         const c = r.nudCapped[a.index]!;
-        const f = r.nudCappedFirst[a.index] ?? null;
-        return `\tif minBp < ${c.capBp}${isGuardable(f) ? ` && ${firstCond(f, 't', ids)}` : ''} ${seqArm(c.steps, false, true)}`;
+        return ifGo([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', '', keyed)], seqArm(i, c.steps, false, true));
       }
       case 'prefix':
         // An operand that parses but is not the target the operator requires fails the whole
@@ -788,7 +812,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
 \t\toperand := p.bp_${r.name}(pbp.rbp)
 \t\tif operand >= 0 && pbp.tgt && p.form != 0 { p.pos = save; ${lost}; p.capped = false; return -1 }
-\t\tif operand >= 0 && p.pos > bestPos { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won('pbp.form', true, false)} } else { ${lost} }
+\t\tif operand >= 0 && ${beatsGo(r.nudDispatch, 'p.pos', i)} { p.scratch = append(p.scratch, operand); best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.pos = save
 \t}`;
     }
@@ -887,9 +911,9 @@ func (p *engine) nud_${r.name}(minBp int) int32 {
 \tt := p.peek()
 \tif t == nil { return -1 }
 \tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
-\tbest := int32(-1); bestPos := save; bf, bt, bc := uint8(0), false, false
+\tbest := int32(-1); bestPos := save${biGo(r.nudDispatch)}; bf, bt, bc := uint8(0), false, false
 \t_, _, _ = sb, nb, kb
-${r.nudOrder.map(nudArm).join('\n')}
+${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
 \t// A sub-parse may leave p.capped set: only a capped arm that won makes THIS node capped.
 \tp.capped = bc
 \tp.form = bf
@@ -1514,18 +1538,18 @@ ${r.alts.map(arm).join(' ')}
 \treturn spanned{}, false
 }`;
   }
-  // Longest match over the alternatives, in declaration order — as rdRule.
-  const alt = (steps: Step[], i: number) => {
-    const cond = steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
-    const body = `{ if ${cond} && p.pos > bestPos { best = p.finishW(${rid}, sb, p.offAtW(save), save); found = true; bestPos = p.pos; ${arenaMark(recv)} } else { p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }; p.pos = save }`;
-    if (!isGuardable(r.altFirst[i], r.alts.length)) return `\t${body}`;
-    return `\tif _ft != nil && ${firstCond(r.altFirst[i], '_ft', ids)} ${body}`;
+  // Longest match over the alternatives through the rule's Dispatch — as rdRule.
+  const alt = (i: number, keyed: boolean) => {
+    const cond = r.alts[i]!.map((x) => stepCondW(x, ids, ar, recv)).join(' && ');
+    const body = `{ if ${cond} && ${beatsGo(r.altDispatch, 'p.pos', i)} { best = p.finishW(${rid}, sb, p.offAtW(save), save); found = true; bestPos = p.pos;${markGo(r.altDispatch, i)} ${arenaMark(recv)} } else { p.scratch = p.scratch[:sb]; ${arenaRestore(recv)} }; p.pos = save }`;
+    const g = guardCond(r.altGuard[i]!, '_ft', 'W', keyed);
+    return ifGo(g.length && !keyed ? ['_ft != nil', ...g] : g, body);
   };
-  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
+  const needPeek = r.altGuard.some((g) => g !== null);
   return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tvar best spanned; found := false; bestPos := save
-${needPeek ? '\t_ft := p.peekW()\n' : ''}${r.alts.map(alt).join('\n')}
+\tvar best spanned; found := false; bestPos := save${biGo(r.altDispatch)}
+${needPeek ? '\t_ft := p.peekW()\n' : ''}${dispatchGo(r.altDispatch, '_ft', ids, alt, true)}
 \tp.pos = bestPos
 \treturn best, found
 }`;
@@ -1639,46 +1663,43 @@ function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: Arena
 
 function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   const rid = ruleIdOf(ar, r.cstName);
-  // The NUD arms: longest-match candidates in declaration order, as in prattRule.
-  const won = (form: string, tail: boolean, capped: boolean) =>
-    `found = true; bestPos = p.pos; bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark(recv)}`;
+  // The NUD arms: longest-match candidates through the rule's Dispatch, as in prattRule.
+  const won = (i: number, form: string, tail: boolean, capped: boolean) =>
+    `found = true; bestPos = p.pos;${markGo(r.nudDispatch, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark(recv)}`;
   const lost = `p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true');
-  const seqArm = (steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && p.pos > bestPos { best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won('0', tail, capped)} } else { ${lost} }; p.pos = save }`;
-  const nudArm = (a: NudRef): string => {
+  const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
+    `{ if ${stepsCond(steps)} && ${beatsGo(r.nudDispatch, 'p.pos', i)} { best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won(i, '0', tail, capped)} } else { ${lost} }; p.pos = save }`;
+  const nudArm = (i: number, keyed: boolean): string => {
+    const a = r.nudOrder[i]!;
     switch (a.kind) {
       case 'tok': {
         const k = r.nudToks[a.index]!;
-        const leafArm = `\tif t.Kid == ${kidOf(ids, k)} && save+1 > bestPos { p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won('0', false, false)}; p.pos = save }`;
+        const leafArm = ifGo([...(keyed ? [] : [`t.Kid == ${kidOf(ids, k)}`]), beatsGo(r.nudDispatch, 'save+1', i)], `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, '0', false, false)}; p.pos = save }`);
         if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
         return `${leafArm}
 \tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tn, ok := p.matchTemplateW_${r.nudTplHole}()
-\t\tif ok && p.pos > bestPos { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won('0', false, false)} } else { ${lost} }
+\t\tif ok && ${beatsGo(r.nudDispatch, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, '0', false, false)} } else { ${lost} }
 \t\tp.pos = save
 \t}`;
       }
       case 'bracket': {
         const b = r.nudBrackets[a.index]!;
-        return `\tif t.Lid == ${lidOf(ids, b.first)} ${seqArm(b.steps, r.nudBracketClosesTail[a.index]!, false)}`;
+        return ifGo(keyed ? [] : [`t.Lid == ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
       }
-      case 'seq': {
-        const f = r.nudSeqFirst[a.index] ?? null;
-        const body = seqArm(r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false);
-        return isGuardable(f) ? `\tif ${firstCond(f, 't', ids)} ${body}` : `\t${body}`;
-      }
+      case 'seq':
+        return ifGo(guardCond(r.nudSeqGuard[a.index]!, 't', 'W', keyed), seqArm(i, r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false));
       case 'capped': {
         const c = r.nudCapped[a.index]!;
-        const f = r.nudCappedFirst[a.index] ?? null;
-        return `\tif minBp < ${c.capBp}${isGuardable(f) ? ` && ${firstCond(f, 't', ids)}` : ''} ${seqArm(c.steps, false, true)}`;
+        return ifGo([`minBp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', 'W', keyed)], seqArm(i, c.steps, false, true));
       }
       case 'prefix':
         return `\tif pbp, ok := pre_${r.name}[t.Lid]; ok {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
 \t\tif ook && pbp.tgt && p.form != 0 { p.pos = save; ${lost}; p.capped = false; return spanned{}, false }
-\t\tif ook && p.pos > bestPos { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won('pbp.form', true, false)} } else { ${lost} }
+\t\tif ook && ${beatsGo(r.nudDispatch, 'p.pos', i)} { if operand.present { p.scratch = append(p.scratch, operand.h) }; best = p.finishW(${rid}, sb, p.offAtW(save), save); ${won(i, 'pbp.form', true, false)} } else { ${lost} }
 \t\tp.pos = save
 \t}`;
     }
@@ -1776,9 +1797,9 @@ func (p *${recv}) nudW_${r.name}(minBp int) (spanned, bool) {
 \tt := p.peekW()
 \tif t == nil { return spanned{}, false }
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
-\tvar best spanned; found := false; bestPos := save; bf, bt, bc := uint8(0), false, false
+\tvar best spanned; found := false; bestPos := save${biGo(r.nudDispatch)}; bf, bt, bc := uint8(0), false, false
 \t_, _, _ = sb, nb, kb
-${r.nudOrder.map(nudArm).join('\n')}
+${dispatchGo(r.nudDispatch, 't', ids, nudArm)}
 \tp.capped = bc
 \tp.form = bf
 \tp.tail = bt
@@ -1905,6 +1926,8 @@ func (p *${recv}) peekW() *Tok {
 \treturn nil
 }
 func (p *${recv}) aheadW(k int, is bool) bool { t := p.peekW(); return (t != nil && inTokenSet(k, t)) == is }
+// secondInW: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
+func (p *${recv}) secondInW(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
 func (p *${recv}) offAtW(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
 ${pushLeafW}
 ${finishW}
@@ -3118,6 +3141,8 @@ func (p *engine) peek() *Tok {
 }
 ${tokenSetRuntimeGo(ir, ids)}
 func (p *engine) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
+// secondIn: whether the token after the current one is in tokenSets[k] (a candidate's SECOND guard).
+func (p *engine) secondIn(k int) bool { i := p.pos + 1; if i >= p.maxLook { p.maxLook = i + 1 }; return i < len(p.toks) && inTokenSet(k, &p.toks[i]) }
 func (p *engine) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
 // tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.

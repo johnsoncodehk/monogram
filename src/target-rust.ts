@@ -11,7 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import type { CstGrammar } from './types.ts';
@@ -44,6 +44,31 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
 const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
   isFirstGuardable(f, nAlts);
+// A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
+// keyed: the candidate is reached through its Dispatch key, which already tested the first token.
+const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
+  g === null ? [] : [...(keyed ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : [])];
+// `if <conds> <body>` as one statement (just the body when there is no condition).
+const ifRs = (conds: string[], body: string) => (conds.length ? `        if ${conds.join(' && ')} ${body}` : `        ${body}`);
+// A candidate list's Dispatch over the buffered token t: arm(i, keyed) is candidate i's statement.
+// opt: t is an Option<Tok> (none left: no key matches), bound as `t` inside a keyed section.
+const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, opt = false): string =>
+  d.sections.map((sec) => {
+    if (sec.by === 'rest') return sec.arms.map((i) => arm(i, false)).join('\n');
+    const id = (k: string) => (sec.by === 'lid' ? lidOf(ids, k) : kidOf(ids, k));
+    const sw = `        match ${opt ? 't' : t}.${sec.by} {\n${sec.groups.map((g) => `        ${id(g.key)} => {\n${g.arms.map((i) => arm(i, true)).join('\n')}\n        }`).join('\n')}\n        _ => {}\n        }`;
+    return opt ? `        if let Some(t) = ${t} {\n${sw}\n        }` : sw;
+  }).join('\n');
+// Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
+// `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
+// in a list that has ranked candidates.
+const beatsRs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > best_pos || ${pos} == best_pos && ${i} < bi)` : `${pos} > best_pos`;
+const markRs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
+const biRs = (d: Dispatch) => (d.ranked.length ? ' let mut bi: i32 = -1;' : '');
+// The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
+// the second token is read directly. null: no guard.
+const astGuardRs = (g: Guard, t: string): string | null =>
+  g === null ? null : [`in_token_set(${g.first.id}, &${t})`, ...(g.second !== null ? [`self.toks.get(self.pos + 1).map_or(false, |t2| in_token_set(${g.second.id}, t2))`] : [])].join(' && ');
 
 /** A composed '>'-led literal (LexIdPlan.gtComps): only a lookahead operand, so never a tree leaf. */
 function gtCompLit(ids: LexIdPlan, s: { value: string; ttype: string }): boolean {
@@ -746,17 +771,18 @@ ${r.alts.map(arm).join('\n')}
   // Longest match over the alternatives, in declaration order (emit-portable.ts, RdRule). The
   // best node so far stays built: `ck` moves past it, so a later alternative that does not beat
   // it is restored away and one that does leaves it unreferenced.
-  const alt = (steps: Step[], i: number) => {
-    const cond = steps.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && self.pos > best_pos { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos; ck = self.b.checkpoint(); } else { self.scratch.truncate(sb); self.b.restore(ck); } self.pos = save; }`;
-    if (!isGuardable(r.altFirst[i], r.alts.length)) return `        ${body}`;
-    return `        if let Some(t) = _ft { if ${firstCond(r.altFirst[i], 't', ids)} ${body} }`;
+  // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
+  const alt = (i: number, keyed: boolean) => {
+    const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
+    const body = `{ if ${cond} && ${beatsRs(r.altDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint(); } else { self.scratch.truncate(sb); self.b.restore(ck); } self.pos = save; }`;
+    const g = guardCond(r.altGuard[i]!, 't', keyed);
+    return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
   };
-  const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
+  const needPeek = r.altGuard.some((g) => g !== null);
   return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
-        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;
-${needPeek ? '        let _ft = self.peek();\n' : ''}${r.alts.map(alt).join('\n')}
+        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(r.altDispatch)}
+${needPeek ? '        let _ft = self.peek();\n' : ''}${dispatchRs(r.altDispatch, '_ft', ids, alt, true)}
         self.pos = best_pos;
         best
     }`;
@@ -864,25 +890,26 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const binArms = r.binary.map((b) => `${lidOf(ids, b.op)} => Some((${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}))`).join(', ');
   const preArms = r.prefix.map((p) => `${lidOf(ids, p.op)} => Some((${p.rbp}, ${p.requireTarget}, ${p.form}))`).join(', ');
   const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some((${p.lbp}, ${p.requireTarget}))`).join(', ');
-  // The NUD arms, each a longest-match candidate tried from `save` in declaration order
-  // (emit-portable.ts, PrattRule.nudOrder). `won` records the node just finished as the best so
-  // far and moves `ck` past it; `lost` drops what the arm built.
-  const won = (form: string, tail: boolean, capped: boolean) =>
-    `best_pos = self.pos; bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
+  // The NUD arms, each a longest-match candidate tried from `save`, reached through the rule's
+  // Dispatch (emit-portable.ts, PrattRule.nudOrder / nudDispatch). `won` records the node just
+  // finished as the best so far and moves `ck` past it; `lost` drops what the arm built.
+  const won = (i: number, form: string, tail: boolean, capped: boolean) =>
+    `best_pos = self.pos;${markRs(r.nudDispatch, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
   const lost = `self.scratch.truncate(sb); self.b.restore(ck);`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
-  const seqArm = (steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && self.pos > best_pos { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won('0', tail, capped)} } else { ${lost} } self.pos = save; }`;
-  const nudArm = (a: NudRef): string => {
+  const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
+    `{ if ${stepsCond(steps)} && ${beatsRs(r.nudDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)} } else { ${lost} } self.pos = save; }`;
+  const nudArm = (i: number, keyed: boolean): string => {
+    const a = r.nudOrder[i]!;
     switch (a.kind) {
       case 'tok': {
         const k = r.nudToks[a.index]!;
-        const leafArm = `        if t.kid == ${kidOf(ids, k)} && save + 1 > best_pos { self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won('0', false, false)} self.pos = save; }`;
+        const leafArm = ifRs([...(keyed ? [] : [`t.kid == ${kidOf(ids, k)}`]), beatsRs(r.nudDispatch, 'save + 1', i)], `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won(i, '0', false, false)} self.pos = save; }`);
         if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
         return `${leafArm}
         if t.kid == ${kidOf(ids, "$templateHead")} {
             match self.match_template(Self::parse_${r.nudTplHole}) {
-                Some(n) if self.pos > best_pos => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won('0', false, false)} }
+                Some(n) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won(i, '0', false, false)} }
                 _ => { ${lost} }
             }
             self.pos = save;
@@ -890,17 +917,13 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
       }
       case 'bracket': {
         const b = r.nudBrackets[a.index]!;
-        return `        if t.lid == ${lidOf(ids, b.first)} ${seqArm(b.steps, r.nudBracketClosesTail[a.index]!, false)}`;
+        return ifRs(keyed ? [] : [`t.lid == ${lidOf(ids, b.first)}`], seqArm(i, b.steps, r.nudBracketClosesTail[a.index]!, false));
       }
-      case 'seq': {
-        const f = r.nudSeqFirst[a.index] ?? null;
-        const body = seqArm(r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false);
-        return isGuardable(f) ? `        if ${firstCond(f, 't', ids)} ${body}` : `        ${body}`;
-      }
+      case 'seq':
+        return ifRs(guardCond(r.nudSeqGuard[a.index]!, 't', keyed), seqArm(i, r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false));
       case 'capped': {
         const c = r.nudCapped[a.index]!;
-        const f = r.nudCappedFirst[a.index] ?? null;
-        return `        if min_bp < ${c.capBp}${isGuardable(f) ? ` && ${firstCond(f, 't', ids)}` : ''} ${seqArm(c.steps, false, true)}`;
+        return ifRs([`min_bp < ${c.capBp}`, ...guardCond(r.nudCappedGuard[a.index]!, 't', keyed)], seqArm(i, c.steps, false, true));
       }
       case 'prefix':
         // An operand that parses but is not the target the operator requires fails the whole
@@ -909,7 +932,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && self.form != 0 => { self.pos = save; ${lost} self.capped = false; return None; }
-                Some(operand) if self.pos > best_pos => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won('pform', true, false)} }
+                Some(operand) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
                 _ => { ${lost} }
             }
             self.pos = save;
@@ -1003,9 +1026,9 @@ ${postfixTokMatch}
         self.capped = false;
         let t = self.peek()?;
         let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
-        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;
+        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(r.nudDispatch)}
         let (mut bf, mut bt, mut bc) = (0u8, false, false);
-${r.nudOrder.map(nudArm).join('\n')}
+${dispatchRs(r.nudDispatch, 't', ids, nudArm)}
         // A sub-parse may leave self.capped set: only a capped arm that won makes THIS node capped.
         self.capped = bc;
         self.form = bf;
@@ -2160,6 +2183,14 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     #[allow(dead_code)]
     fn ahead(&mut self, k: usize, is: bool) -> bool { self.peek().map_or(false, |t| in_token_set(k, &t)) == is }
+    /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn second_in(&mut self, k: usize) -> bool {
+        let i = self.pos + 1;
+        if i + 1 > self.max_look { self.max_look = i + 1; }
+        i < self.toks.len() && in_token_set(k, &self.toks[i])
+    }
     #[inline(always)]
     fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off as usize } else { 0 } }
     #[inline(always)]
@@ -2482,13 +2513,15 @@ function buildRustShapeRuleFirst(ir: ParserIR): Map<string, FirstSig> {
   const out = new Map<string, FirstSig>();
   for (const rule of ir.rules) {
     if (rule.kind === 'rd') {
-      if (rule.altFirst.some((f) => f === null)) {
+      // A predictive rule's alternatives by their switch keys, any other's by their guards.
+      const firsts: FirstSig[] = rule.predictive ? rule.altFirst : rule.altGuard.map((g) => g && g.first);
+      if (firsts.some((f) => f === null)) {
         out.set(rule.name, null);
         continue;
       }
       const lits = new Set<string>();
       const toks = new Set<string>();
-      for (const f of rule.altFirst) {
+      for (const f of firsts) {
         f!.lits.forEach((x) => lits.add(x));
         f!.toks.forEach((x) => toks.add(x));
       }
@@ -2502,7 +2535,7 @@ function buildRustShapeRuleFirst(ir: ParserIR): Map<string, FirstSig> {
     for (const t of rule.nudToks) toks.add(t);
     for (const p of rule.prefix) lits.add(p.op);
     for (const b of rule.nudBrackets) lits.add(b.first);
-    for (const f of [...rule.nudSeqFirst, ...rule.nudCappedFirst]) {
+    for (const f of [...rule.nudSeqGuard, ...rule.nudCappedGuard].map((g) => g && g.first)) {
       if (f === null) { unknown = true; break; }
       f.lits.forEach((x) => lits.add(x));
       f.toks.forEach((x) => toks.add(x));
@@ -3065,10 +3098,8 @@ function emitRustRdMethod(
 
   const tryAlt = (altIdx: number, finish: string, guardFirst: boolean): string => {
     const alt = rule.alts[altIdx]!;
-    const useGuard = guardFirst && isGuardable(rule.altFirst[altIdx] ?? null, rule.alts.length);
-    const guardExpr = useGuard
-      ? `_ft.is_some() && { let t = _ft.unwrap(); ${firstCond(rule.altFirst[altIdx]!, 't', ids)} }`
-      : 'true';
+    const g = guardFirst ? astGuardRs(rule.altGuard[altIdx]!, 't') : null;
+    const guardExpr = g !== null ? `_ft.is_some() && { let t = _ft.unwrap(); ${g} }` : 'true';
     const steps = emitRustAstRdAltSteps(alt, ids, leaves);
     const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk_base').replaceAll('__SPOFF__', 'sp_off');
     return `{
@@ -3140,7 +3171,7 @@ function emitRustRdMethod(
   // SUPERSEDES an earlier best both are rolled back and the later one is built again from the
   // clean state — the stream then holds the winner's events only.
   const rdMethod = (tries: Array<{ altIdx: number; finish: string }>): string => {
-    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
+    const needPeek = rule.altGuard.some((g) => g !== null);
     const peek = needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : '';
     if (rule.predictive || tries.length <= 1) {   // at most one alternative can match: nothing to choose
       return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
@@ -3652,13 +3683,11 @@ function emitRustPrattMethod(
         return { guard: `matches!(t.kid, ${kinds.join(' | ')})`, code: [atomArmOf(tok), isTpl ? tplNudCode : ''].filter(Boolean).join('\n        ') };
       }
       case 'bracket': return { guard: `t.lid == ${lidOf(ids, rule.nudBrackets[a.index]!.first)}`, code: bracketArms[a.index] ?? '' };
-      case 'seq': {
-        const f = rule.nudSeqFirst[a.index] ?? null;
-        return { guard: isGuardable(f) ? firstCond(f, 't', ids) : 'true', code: seqArms[a.index] ?? '' };
-      }
+      case 'seq':
+        return { guard: astGuardRs(rule.nudSeqGuard[a.index]!, 't') ?? 'true', code: seqArms[a.index] ?? '' };
       case 'capped': {
-        const f = rule.nudCappedFirst[a.index] ?? null;
-        return { guard: `min_bp < ${rule.nudCapped[a.index]!.capBp}${isGuardable(f) ? ` && ${firstCond(f, 't', ids)}` : ''}`, code: cappedArms[a.index] ?? '' };
+        const g = astGuardRs(rule.nudCappedGuard[a.index]!, 't');
+        return { guard: `min_bp < ${rule.nudCapped[a.index]!.capBp}${g !== null ? ` && ${g}` : ''}`, code: cappedArms[a.index] ?? '' };
       }
       case 'prefix': return { guard: rule.prefix.length ? `matches!(t.lid, ${rule.prefix.map((p) => lidOf(ids, p.op)).join(' | ')})` : 'false', code: prefixCode };
     }

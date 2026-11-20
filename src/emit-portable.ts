@@ -59,8 +59,9 @@ export type Lit = { value: string; ttype: '$keyword' | '$punct' };
 // backtracking for it. Computed conservatively in buildIR; targets only render a predictive
 // dispatch when every branch in an alt-list is non-null AND the signatures are pairwise disjoint.
 export type FirstSig = { lits: string[]; toks: string[] } | null;
-// Cap on FIRST-set size for partial pre-filter guards on non-predictive rd/inline alts.
-// Larger sets skip the guard (|| chains can exceed a failed attempt). Tunable; see P4b/P5c.
+// Cap on FIRST-set size for partial pre-filter guards on non-predictive INLINE alts (ordered
+// choice). Larger sets skip the guard (|| chains can exceed a failed attempt). Tunable; see P4b/P5c.
+// A rule's longest-match candidates are guarded by their Guard instead (below), whatever its size.
 export const FIRST_GUARD_K = 4;
 /** toks-only sigs may use a larger K (kid compares cheaper than long lid || chains). 0 = off. */
 export const FIRST_GUARD_K_TOK = 0;
@@ -134,8 +135,71 @@ export type TokenSet = { lits: string[]; toks: string[] };
 // the same). A target never stops at the first alternative that matches; the one exception is
 // a list flagged `predictive`, where the FIRST signatures prove that at most one alternative
 // can match at any token, so dispatching to it IS the longest match.
+// A candidate is TRIED only where its `Guard` admits the lookahead (see Guard): a candidate the
+// guard refuses provably cannot match non-empty there, so it cannot win, and skipping it changes
+// no parse. Every target prints the guard as given — it is not a target's choice.
+// A target reaches the candidates a token admits through the list's `Dispatch`: a switch on the
+// token's literal and one on its kind, then the candidates keyed on neither, so a candidate whose
+// key the token does not have costs nothing. That tries candidates out of declaration order, so a
+// target keeps a later-tried candidate on a tie only when it was declared earlier.
 // (An inline `alt` step is the other construct: ordered choice, the first branch that matches.)
-export type RdRule = { kind: 'rd'; name: string; cstName: string; alts: Alt[]; altFirst: FirstSig[]; predictive: boolean };
+export type RdRule = {
+  kind: 'rd'; name: string; cstName: string; alts: Alt[];
+  altFirst: FirstSig[];     // parallel to alts: each one's Step-level FIRST signature — the `predictive` switch's keys
+  predictive: boolean;
+  altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
+  altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
+};
+// The candidates of a longest-match list, by what the first token must be, as sections a target
+// prints in order: a `lid` section switches on the token's literal and a `kid` section on its
+// kind — each group holds the candidates keyed on exactly that one literal / kind, in declaration
+// order — and a `rest` section holds the others (several keys, no guard, or an arm whose test is
+// not a set: the prefix arm, a template), in declaration order. Members are indices into the list
+// (RdRule.alts, PrattRule.nudOrder); each candidate is in one place. Sections come in the order of
+// their earliest-declared member, so a tie a declaration-order loop would settle by order rarely
+// has to replace a node already built.
+// `ranked`: the candidates that can tie one tried BEFORE them but declared AFTER them — a later
+// section's candidate whose key a token can share with that one's (a literal and a kind, or a
+// `rest` candidate: two different literals or two different kinds never admit one token). Only
+// those compare declaration indices on a tie; every other candidate wins only by ending past the
+// best so far, as in a declaration-order loop. Empty: no candidate needs the index.
+export type DispatchGroup = { key: string; arms: number[] };
+export type DispatchSection = { by: 'lid' | 'kid'; groups: DispatchGroup[] } | { by: 'rest'; arms: number[] };
+export type Dispatch = { sections: DispatchSection[]; ranked: number[] };
+/** The Dispatch of a candidate list from each candidate's key (null: in `rest`). */
+export function dispatchOf(keys: ReadonlyArray<TokenSet | null>): Dispatch {
+  const byLid = new Map<string, number[]>(), byKid = new Map<string, number[]>(), rest: number[] = [];
+  const add = (m: Map<string, number[]>, k: string, i: number) => { const a = m.get(k); if (a) a.push(i); else m.set(k, [i]); };
+  keys.forEach((k, i) => {
+    if (k !== null && k.lits.length === 1 && k.toks.length === 0) add(byLid, k.lits[0]!, i);
+    else if (k !== null && k.toks.length === 1 && k.lits.length === 0) add(byKid, k.toks[0]!, i);
+    else rest.push(i);
+  });
+  const groups = (m: Map<string, number[]>) => [...m].map(([key, arms]) => ({ key, arms }));
+  const first = (sec: DispatchSection) => Math.min(...(sec.by === 'rest' ? sec.arms : sec.groups.map((g) => g.arms[0]!)));
+  const sections: DispatchSection[] = [];
+  if (byLid.size) sections.push({ by: 'lid', groups: groups(byLid) });
+  if (byKid.size) sections.push({ by: 'kid', groups: groups(byKid) });
+  if (rest.length) sections.push({ by: 'rest', arms: rest });
+  sections.sort((x, y) => first(x) - first(y));
+  // Each candidate in trying order, with the section kind and key it is reached by.
+  type Tried = { i: number; by: DispatchSection['by']; key: string };
+  const tried: Tried[] = sections.flatMap((sec): Tried[] => sec.by === 'rest'
+    ? sec.arms.map((i) => ({ i, by: sec.by, key: '' }))
+    : sec.groups.flatMap((g) => g.arms.map((i) => ({ i, by: sec.by, key: g.key }))));
+  const mayShare = (x: Tried, y: Tried) => x.by === 'rest' || y.by === 'rest' || x.by !== y.by || x.key === y.key;
+  const ranked = tried.filter((x, n) => tried.slice(0, n).some((y) => y.i > x.i && mayShare(x, y))).map((x) => x.i).sort((a, b) => a - b);
+  return { sections, ranked };
+}
+// When a longest-match candidate is tried: only when the token at the candidate's start is in
+// ParserIR.tokenSets[first] and, if `second` is set, the token after it is in tokenSets[second]
+// (no token there refuses). `null` = always tried. From the grammar's own facts — the FIRST and
+// SECOND sets of grammar-analysis.ts (exprFirst / exprSecond), the sets the interpreter prunes its
+// candidates with — so a refused candidate cannot match non-empty at that token, and an empty match
+// never wins a longest match. Each set is one table test in every target, whatever its size.
+export type Guard = { first: GuardSet; second: GuardSet | null } | null;
+/** A member of ParserIR.tokenSets, by its index and its members. */
+export type GuardSet = TokenSet & { id: number };
 // One NUD arm of a Pratt rule, by the bucket that holds its plan and its index there.
 export type NudRef =
   | { kind: 'tok'; index: number }       // nudToks[index]
@@ -151,7 +215,7 @@ export type PrattRule = {
   nudToks: string[];                                  // NUD: a bare token wrapped in a node
   nudBrackets: Bracket[];                             // NUD: '(' … ')' / '[' … ']'
   nudSeqs: Step[][];                                  // NUD: a general sequence (guarded ident, class expr), tried with backtracking
-  nudSeqFirst: FirstSig[];                            // parallel to nudSeqs: each seq's FIRST signature (null = not knowable: always tried)
+  nudSeqGuard: Guard[];                               // parallel to nudSeqs: when each seq is a candidate (see Guard)
   // Tail closure is decided by the construct that builds a node: only a NUD that does not end in
   // a fresh operand, or an access-tail LED, leaves a node that access tails (and postfix ops) may
   // extend. Prefix and binary nodes always close the tail.
@@ -159,8 +223,9 @@ export type PrattRule = {
   nudSeqClosesTail: boolean[];                        // parallel to nudSeqs: ends in a fresh operand
   nudSeqPredictive: boolean;                          // all nudSeqs non-null & pairwise disjoint → render a switch
   nudCapped: Array<{ steps: Step[]; capBp: number }>; // NUD: an assignment-level capped sequence (arrow function) — parsed only when minBp < capBp, admits no led
-  nudOrder: NudRef[];                                 // every NUD arm above and the prefix arm, in declaration order: the longest-match candidates, in the order a target tries them
-  nudCappedFirst: FirstSig[];                         // parallel to nudCapped: each capped seq's FIRST signature
+  nudOrder: NudRef[];                                 // every NUD arm above and the prefix arm, in declaration order: the longest-match candidates
+  nudDispatch: Dispatch;                              // how a target reaches the nudOrder arms a token admits
+  nudCappedGuard: Guard[];                            // parallel to nudCapped: when each capped seq is a candidate (see Guard)
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
   prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
@@ -368,22 +433,41 @@ function buildIR(grammar: CstGrammar): ParserIR {
     return [stepOf(e)];
   }
 
-  // The FIRST signature of a rule alternative, from the grammar's own FIRST sets
-  // (grammar-analysis.ts exprFirst — the set the interpreter prunes its longest-match candidates
-  // with, which sees through a leading guard, an optional prefix and a rule reference): the
-  // tokens a NON-EMPTY match of the alternative can begin with. An alternative that can only
-  // match nothing at a token cannot win a longest match, so skipping it there changes no parse.
-  // `null` = not knowable (a Pratt rule leads) — always tried.
+  // The Guard of a longest-match candidate (a rule alternative), from the grammar's own FIRST and
+  // SECOND sets (grammar-analysis.ts exprFirst / exprSecond — the sets the interpreter prunes its
+  // longest-match candidates with; exprFirst sees through a leading guard, an optional prefix and
+  // a rule reference).
+  // - first: the tokens a NON-EMPTY match of the alternative can begin with. An alternative that
+  //   can only match nothing at a token cannot win a longest match, so skipping it there changes
+  //   no parse. Not knowable (a Pratt rule leads: exprFirst gives up on `prefix`) → no guard.
+  // - second: the tokens such a match can continue with. The argument: exprSecond over-approximates
+  //   the token that follows the FIRST token of every match, and `len1` says whether a match of
+  //   one token exists. Only when none does (and the alternative is not nullable — the
+  //   interpreter's condition, gen-parser.ts altSecondDispatch) is a second token outside that set
+  //   proof that the alternative cannot match non-empty here. That reads the token after the
+  //   first as what follows it in the grammar, which holds only where the first token is ONE
+  //   token of the stream: an interpolated template is a head token followed by its hole's
+  //   tokens, so an alternative that can begin with a template kind gets no second guard.
+  //   (A composed `>` operator is never a FIRST member — it is an infix operator — but may be a
+  //   SECOND one; it is keyed on the `>` token it begins with.)
+  //   test/fixtures/guardjs.ts has inputs the `len1` condition decides (`{x}`) and the guard refuses (`x;`).
   const templateTokens = new Set(grammar.tokens.filter((t) => t.template).map((t) => t.name));
-  const altFirstSig = (e: RuleExpr): FirstSig => {
+  const keySet = (keys: Iterable<string>): TokenSet => {
+    const lits: string[] = [], toks: string[] = [];
+    for (const k of keys) {
+      if (tokenNames.has(k)) { toks.push(k); if (templateTokens.has(k)) toks.push('$templateHead'); }   // an interpolated template opens with its head
+      else lits.push(gtComps.includes(k) ? '>' : k);                                                    // a composed operator begins at a '>' token
+    }
+    return { lits, toks };
+  };
+  const guardSet = (m: TokenSet): GuardSet => { const id = tokenSetOf(m); return { id, ...tokenSets[id]! }; };
+  const altGuard = (e: RuleExpr): Guard => {
     const f = a.exprFirst(e);
     if (f === null || f.size === 0) return null;
-    const ls = new Set<string>(), ts = new Set<string>();
-    for (const k of f) {
-      if (tokenNames.has(k)) { ts.add(k); if (templateTokens.has(k)) ts.add('$templateHead'); }   // an interpolated template opens with its head
-      else ls.add(gtComps.includes(k) ? '>' : k);                                                // a composed operator begins at a '>' token
-    }
-    return { lits: [...ls], toks: [...ts] };
+    const oneToken = [...f].every((k) => !templateTokens.has(k));
+    const sec = oneToken && !a.exprNullable(e) ? a.exprSecond(e) : null;
+    const second = sec !== null && sec.s !== null && !sec.len1 && sec.s.size > 0 ? guardSet(keySet(sec.s)) : null;
+    return { first: guardSet(keySet(f)), second };
   };
 
   const rules: RuleIR[] = grammar.rules.map((r) => {
@@ -391,8 +475,9 @@ function buildIR(grammar: CstGrammar): ParserIR {
     // Pratt rules AND left-recursive non-Pratt rules (e.g. NewTarget, TS Type) both parse as
     // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
     // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
-    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, notOf, litTtype, altFirstSig);
-    return { kind: 'rd', name: r.name, cstName, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)], altFirst: [], predictive: false };
+    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, notOf, litTtype, altGuard, templateTokens);
+    const items = r.body.type === 'alt' ? r.body.items : [r.body];
+    return { kind: 'rd', name: r.name, cstName, alts: items.map(altSteps), altFirst: [], predictive: false, altGuard: items.map(altGuard), altDispatch: { sections: [], ranked: [] } };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
   // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
@@ -474,11 +559,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     if (r.kind === 'rd') {
       r.altFirst = r.alts.map((alt) => seqFirst(alt));
       r.predictive = allDisjoint(r.altFirst);
-      // Not predictive: every alternative is a longest-match candidate, guarded by its FIRST.
-      if (!r.predictive) {
-        const body = grammar.rules[rules.indexOf(r)].body;
-        r.altFirst = (body.type === 'alt' ? body.items : [body]).map(altFirstSig);
-      }
+      if (!r.predictive && r.alts.length > 1) r.altDispatch = dispatchOf(r.altGuard.map((g) => g?.first ?? null));
       r.alts.forEach(annotateSteps);
     } else {
       r.nudSeqPredictive = allDisjoint(r.nudSeqs.map((seq) => seqFirst(seq)));
@@ -631,15 +712,15 @@ function buildPratt(
   name: string, cstName: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
   stepOf: (e: RuleExpr) => Step, notOf: (steps: Step[]) => Step,
   litTtype: (v: string) => '$keyword' | '$punct',
-  altFirstSig: (e: RuleExpr) => FirstSig,
+  altGuard: (e: RuleExpr) => Guard, templateTokens: ReadonlySet<string>,
 ): PrattRule {
   const alts = body.type === 'alt' ? body.items : [body];
   const nudToks: string[] = [];
   const nudBrackets: Bracket[] = [];
   const nudSeqs: Step[][] = [];
   const nudCapped: Array<{ steps: Step[]; capBp: number }> = [];
-  const nudSeqFirst: FirstSig[] = [];
-  const nudCappedFirst: FirstSig[] = [];
+  const nudSeqGuard: Guard[] = [];
+  const nudCappedGuard: Guard[] = [];
   const nudOrder: NudRef[] = [];
   let sawPrefix = false, sawBinary = false, sawPostfix = false, postfixSameLine = false;
   const leds: Bracket[] = [];
@@ -681,7 +762,7 @@ function buildPratt(
         if (capBp === null) throw new Error(`portable: capBelow connector '${items[0].capBelow}' has no binding power (rule ${name})`);
         const b = items[0].body;
         nudOrder.push({ kind: 'capped', index: nudCapped.length });
-        nudCappedFirst.push(altFirstSig(alt));
+        nudCappedGuard.push(altGuard(alt));
         nudCapped.push({ steps: (b.type === 'seq' ? b.items : [b]).map((it) => stepOfPratt(it)), capBp });
         continue;
       }
@@ -692,7 +773,7 @@ function buildPratt(
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
       }
       nudOrder.push({ kind: 'seq', index: nudSeqs.length });
-      nudSeqFirst.push(altFirstSig(alt));
+      nudSeqGuard.push(altGuard(alt));
       nudSeqs.push(nudItems.map((it) => stepOfPratt(it)));   // general NUD sequence (guarded ident, class expr)
       continue;
     }
@@ -757,7 +838,17 @@ function buildPratt(
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
   const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'not' || last === 'ahead'; });
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst, nudOrder, prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
+  // A template token arm also matches an interpolated template (its head token), so it is in `rest`.
+  const nudDispatch = dispatchOf(nudOrder.map((a): TokenSet | null => {
+    switch (a.kind) {
+      case 'tok': return nudTplHole !== undefined && templateTokens.has(nudToks[a.index]!) ? null : { lits: [], toks: [nudToks[a.index]!] };
+      case 'bracket': return { lits: [nudBrackets[a.index]!.first], toks: [] };
+      case 'seq': return nudSeqGuard[a.index]?.first ?? null;
+      case 'capped': return nudCappedGuard[a.index]?.first ?? null;
+      case 'prefix': return null;
+    }
+  }));
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqGuard, nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedGuard, nudOrder, nudDispatch, prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──
