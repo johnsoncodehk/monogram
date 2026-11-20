@@ -3137,7 +3137,7 @@
       "name": "storage.type.namespace.tsx"
     },
     "scope-support-variable": {
-      "match": "\\b(module|global|console|window|document|process|require|exports|globalThis)\\b",
+      "match": "\\b(module|global|require|console|window|document|process|exports|globalThis)\\b",
       "name": "support.variable.tsx"
     },
     "scope-keyword-control-from-from": {

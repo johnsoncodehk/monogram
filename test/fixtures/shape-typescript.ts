@@ -401,6 +401,7 @@ export const typescriptShape: ShapeSpec = {
       ],
     },
     ExportSpecifier: { kind: 'keep' },
+    ModuleReference: { kind: 'keep' },
 
     DecoratorExpr: custom('estreeDecorator',
       'alt[0] is `Decorator star(call|typeargs|!|.|?.|Template)` — the star is a ' +
@@ -461,13 +462,13 @@ export const typescriptShape: ShapeSpec = {
   },
 };
 
-/** Helper: assert we listed all 30 cstNames (used by runner). */
+/** Helper: assert we listed all 31 cstNames (used by runner). */
 export const EXPECTED_CST_NAMES = [
   'Type', 'TypeMember', 'DecoratorExpr', 'TypeofRef', 'Expr', 'Prop', 'MemberName',
   'NewTarget', 'ClassHeritage', 'Stmt', 'Block', 'BindingProperty', 'BindingElement',
   'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'ForHead',
   'SwitchCase', 'TypeParams', 'TypeParam', 'Decl', 'InterfaceMember', 'ClassMember',
-  'EnumMember', 'ImportClause', 'ImportSpecifier', 'ExportSpecifier', 'Program',
+  'EnumMember', 'ImportClause', 'ImportSpecifier', 'ExportSpecifier', 'ModuleReference', 'Program',
 ] as const;
 
 

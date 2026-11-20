@@ -105,7 +105,7 @@ function tsCapturesWith(parser: any, query: any, code: string): CaptureSpan[] {
       const start = c.node.startIndex, end = c.node.endIndex;
       const key = start + ':' + end;
       const prev = best.get(key);
-      if (!prev || pat >= prev.pat) best.set(key, { start, end, capture: c.name, family, pat });
+      if (!prev || pat >= prev.pat) best.set(key, { start, end, capture: c.name, node: c.node.type, family, pat });
     }
   }
   return [...best.values()].sort((a, b) => a.start - b.start || a.end - b.end);
@@ -115,7 +115,7 @@ function tsFamiliesWith(parser: any, query: any, code: string): Span[] {
 }
 
 /** The winning capture name of each captured node (same last-pattern-wins rule as the families). */
-export interface CaptureSpan extends Span { capture: string }
+export interface CaptureSpan extends Span { capture: string; node: string }   // node: the captured node's type (`ident`, or the anonymous keyword text)
 
 export function treesitterFamilies(code: string): Span[] {
   if (!tsParser || !tsQuery) throw new Error('call loadTreeSitter() first');

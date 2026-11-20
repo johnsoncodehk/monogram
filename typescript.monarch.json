@@ -867,6 +867,10 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "require": {
+              "token": "variable",
+              "switchTo": "@value"
+            },
             "delete": {
               "token": "operator",
               "switchTo": "@root"
@@ -968,10 +972,6 @@
               "switchTo": "@value"
             },
             "process": {
-              "token": "variable",
-              "switchTo": "@value"
-            },
-            "require": {
               "token": "variable",
               "switchTo": "@value"
             },
@@ -1198,6 +1198,7 @@
             "from": "keyword",
             "constructor": "keyword",
             "defer": "keyword",
+            "require": "variable",
             "delete": "operator",
             "string": "keyword",
             "number": "keyword",
@@ -1224,7 +1225,6 @@
             "window": "variable",
             "document": "variable",
             "process": "variable",
-            "require": "variable",
             "exports": "variable",
             "globalThis": "variable",
             "@default": "identifier"
