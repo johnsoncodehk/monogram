@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -417,6 +417,7 @@ function stepCond(s: Step, ids: LexIdPlan, w = false): string {
     case 'not': return w
       ? `(() => { const sp = pos; const bk = kids.length; const bs = spans.length; const m = ${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}; pos = sp; kids.length = bk; spans.length = bs; return !m; })()`
       : `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
+    case 'ahead': return `ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
     case 'suppress': return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = null; return _r; })()`;
@@ -1937,7 +1938,7 @@ ${editParse}
 
 type ShapeStepKind =
   | 'lit' | 'tok' | 'rule' | 'ruleBp' | 'star' | 'opt' | 'sep'
-  | 'altlit' | 'alt' | 'not' | 'seq' | 'sameLine' | 'suppress';
+  | 'altlit' | 'alt' | 'not' | 'ahead' | 'seq' | 'sameLine' | 'suppress';
 type ShapePrattKind =
   | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
   | 'led' | 'nudSeq' | 'nudCapped' | 'template';
@@ -1945,7 +1946,7 @@ type ShapeUnsupported = { rule: string; construct: string };
 
 const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
   'lit', 'tok', 'rule', 'ruleBp', 'star', 'opt', 'sep',
-  'altlit', 'alt', 'not', 'seq', 'sameLine', 'suppress',
+  'altlit', 'alt', 'not', 'ahead', 'seq', 'sameLine', 'suppress',
 ];
 const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
   'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',
@@ -2143,6 +2144,7 @@ function emitAstRdAltSteps(
       case 'altlit': return s.opts.some((o) => !leafDropped(o.ttype, leaves));
       case 'alt': return s.branches.some((b) => b.some(visible));
       case 'not':
+      case 'ahead':
       case 'sameLine': return false;
     }
   };
@@ -2177,6 +2179,8 @@ function emitAstRdAltSteps(
         return `(${emitSteps(s.steps, sink)})`;
       case 'sameLine':
         return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
+      case 'ahead':
+        return `ahead(${s.set}, ${s.is})`;
       case 'not': {
         const nv = local('Not');
         return `(() => { const ${nv}: unknown[] = []; return !_shapeProbe(${nv}, _ap, () => ${emitSteps(s.steps, nv)}); })()`;
@@ -3483,6 +3487,20 @@ function _matchComp(lid: number): boolean {
 }`;
 }
 
+// The `ahead` test: whether the next token is in tokenSets[k] (see tokenSetBits), compared with `is`.
+function tokenSetRuntime(ir: ParserIR, ids: LexIdPlan): string {
+  const b = tokenSetBits(ids, ir.tokenSets);
+  return `const _SET_STRIDE = ${b.stride};
+const _SET_KID = ${b.kidBase};
+const _SETS = new Uint32Array([${b.words.join(', ')}]);
+function ahead(k: number, is: boolean): boolean {
+  const t = peek();
+  if (t === null) return !is;
+  const r = k * _SET_STRIDE, c = _SET_KID + t.kid;
+  return (((_SETS[r + (t.lid >>> 5)]! >>> (t.lid & 31)) | (_SETS[r + (c >>> 5)]! >>> (c & 31))) & 1) === (is ? 1 : 0);
+}`;
+}
+
 function emitTsLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
     const reuse = topReusePlan(ir);
     const ruleFns = ir.rules.map((r) => {
@@ -3535,6 +3553,7 @@ let _suppressNext: Set<number> | null = null;
 let _suppressCur: Set<number> | null = null;
 let _src = '';
 function peek(): Tok | null { maxLook = Math.max(maxLook, pos + 1); return pos < toks.length ? toks[pos] : null; }
+${tokenSetRuntime(ir, ids)}
 ${gtRuntime(ir, ids)}
 function headLeafText(node: Cst): string {
   let n: Cst = node;

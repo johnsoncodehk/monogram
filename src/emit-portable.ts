@@ -111,10 +111,17 @@ export type Step =
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][]; firsts?: FirstSig[]; predictive?: boolean }                            // inline alternation of sub-sequences (backtracking unless predictive)
   | { t: 'not'; steps: Step[] }                                 // zero-width negative lookahead (consumes nothing)
+  | { t: 'ahead'; set: number; is: boolean }                    // zero-width: whether the next token is (is) or is not (!is) in ParserIR.tokenSets[set]
   | { t: 'seq'; steps: Step[] }                                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
   | { t: 'suppress'; connectors: string[]; steps: Step[] };     // parse the body with these LED connectors disabled (no-`in` context)
 export type Alt = Step[];
+// One token, tested without consuming it: a member is a literal text (the token's lid) or a token
+// kind (its kid). A lookahead whose body reads exactly one token — `not(alt('(', '=', …))`, or
+// `not(not(alt(Ident, String, '[')))` — is this test, so buildIR lowers it to an `ahead` step over
+// one shared set instead of a body every target prints at every site. Members are sorted; each
+// distinct set appears once in ParserIR.tokenSets.
+export type TokenSet = { lits: string[]; toks: string[] };
 
 export type RdRule = { kind: 'rd'; name: string; cstName: string; alts: Alt[]; altFirst: FirstSig[]; predictive: boolean };
 export type Bracket = { first: string; steps: Step[] };          // a literal-led sequence (grouping/array; LED call/index)
@@ -218,6 +225,7 @@ export type ParserIR = {
    *  literal is read (gtComposites), longest first; never lexed, so absent from `puncts`. */
   gtComps: string[];
   rules: RuleIR[];
+  tokenSets: TokenSet[];       // the sets `ahead` steps test, indexed by Step.set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
   newlineCfg: NewlineCfg | null;  // null unless the grammar declares `newline`
@@ -264,6 +272,47 @@ function buildIR(grammar: CstGrammar): ParserIR {
 
   const litTtype = (v: string): '$keyword' | '$punct' => (isKeywordLiteral(v) ? '$keyword' : '$punct');
 
+  // The members of a step that matches exactly one token and decides on it alone (a literal
+  // other than a composed `>` operator, a token kind, or an alternation of such); null otherwise.
+  const oneTokenOf = (s: Step): TokenSet | null => {
+    switch (s.t) {
+      case 'lit': return gtComps.includes(s.value) ? null : { lits: [s.value], toks: [] };
+      case 'tok': return { lits: [], toks: [s.name] };
+      case 'altlit': return s.opts.some((o) => gtComps.includes(o.value)) ? null : { lits: s.opts.map((o) => o.value), toks: [] };
+      case 'seq': return s.steps.length === 1 ? oneTokenOf(s.steps[0]) : null;
+      case 'alt': {
+        const lits: string[] = []; const toks: string[] = [];
+        for (const b of s.branches) {
+          const m = b.length === 1 ? oneTokenOf(b[0]) : null;
+          if (m === null) return null;
+          lits.push(...m.lits); toks.push(...m.toks);
+        }
+        return { lits, toks };
+      }
+      default: return null;
+    }
+  };
+  const tokenSets: TokenSet[] = [];
+  const tokenSetIds = new Map<string, number>();
+  const tokenSetOf = (m: TokenSet): number => {
+    const set = { lits: [...new Set(m.lits)].sort(), toks: [...new Set(m.toks)].sort() };
+    const key = JSON.stringify(set);
+    let id = tokenSetIds.get(key);
+    if (id === undefined) { id = tokenSets.length; tokenSets.push(set); tokenSetIds.set(key, id); }
+    return id;
+  };
+  // A negative lookahead. Over a one-token body it is the `ahead` test of that token's set; over
+  // an `ahead` it is the same test negated (so `not(not(x))` is a positive test).
+  const notOf = (steps: Step[]): Step => {
+    if (steps.length === 1) {
+      const s = steps[0];
+      if (s.t === 'ahead') return { t: 'ahead', set: s.set, is: !s.is };
+      const m = oneTokenOf(s);
+      if (m !== null) return { t: 'ahead', set: tokenSetOf(m), is: false };
+    }
+    return { t: 'not', steps };
+  };
+
   // RuleExpr → Step. `selfName` (when set) maps a self-ref to a fresh rule call.
   function stepOf(e: RuleExpr): Step {
     switch (e.type) {
@@ -274,7 +323,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
         if (e.suppress && e.suppress.length) return { t: 'suppress', connectors: e.suppress, steps: ss };   // no-`in` context
         return ss.length === 1 ? ss[0] : { t: 'seq', steps: ss };
       }
-      case 'not': return { t: 'not', steps: altSteps(e.body) };   // zero-width negative lookahead
+      case 'not': return notOf(altSteps(e.body));                 // zero-width negative lookahead
       case 'sameLine': return { t: 'sameLine' };                  // zero-width no-newline assertion
       case 'seq': return { t: 'seq', steps: e.items.map(stepOf) };  // grouped sub-sequence (star/sep body)
       case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
@@ -304,7 +353,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     // Pratt rules AND left-recursive non-Pratt rules (e.g. NewTarget, TS Type) both parse as
     // atom-then-continuation: buildPratt detects `startsSelf` and splits accordingly, so routing
     // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
-    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, altSteps, litTtype);
+    if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, notOf, litTtype);
     return { kind: 'rd', name: r.name, cstName, alts: r.body.type === 'alt' ? r.body.items.map(altSteps) : [altSteps(r.body)], altFirst: [], predictive: false };
   });
 
@@ -332,7 +381,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       }
       case 'seq': return seqFirst(s.steps);
       case 'suppress': return seqFirst(s.steps);
-      case 'not': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
+      case 'not': case 'ahead': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
     }
     return null;
   };
@@ -470,7 +519,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...(identToken ? [identToken] : []),
     ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
   ];
-  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, tokenSets, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // Whether `lit` occurs in pattern p anywhere but as the leading item of the top-level sequence.
@@ -541,7 +590,7 @@ function codesToRanges(codes: number[]): CharRange[] {
 // Binding powers come from the analysis (opTable/prefixOps), single-sourced with the interpreter.
 function buildPratt(
   name: string, cstName: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
-  stepOf: (e: RuleExpr) => Step, altSteps: (e: RuleExpr) => Step[],
+  stepOf: (e: RuleExpr) => Step, notOf: (steps: Step[]) => Step,
   litTtype: (v: string) => '$keyword' | '$punct',
 ): PrattRule {
   const alts = body.type === 'alt' ? body.items : [body];
@@ -633,7 +682,7 @@ function buildPratt(
     if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
-    if (e.type === 'not') return { t: 'not', steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
+    if (e.type === 'not') return notOf((e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
     if (e.type === 'group' && e.suppress && e.suppress.length) return { t: 'suppress', connectors: e.suppress, steps: (e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt) };
     // ctxMode (await/yield) is transparent to the portable parser (no fork); unwrap the group.
     if (e.type === 'group' && !e.capBelow) {
@@ -659,7 +708,7 @@ function buildPratt(
   const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
-  const ledClosesTail = leds.map((l, i) => !ledAccessTail[i] || l.steps[l.steps.length - 1]?.t === 'not');
+  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'not' || last === 'ahead'; });
   return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
@@ -726,6 +775,7 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
       for (const nll of r.ledNotLeftLeaf) if (nll) for (const x of nll) litTexts.add(x);
     }
   }
+  for (const s of ir.tokenSets) for (const x of s.lits) litTexts.add(x);
   if (ir.regexCtx) {
     for (const x of ir.regexCtx.divisionTexts) litTexts.add(x);
     for (const x of ir.regexCtx.regexTexts) litTexts.add(x);
@@ -749,6 +799,32 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
   const rest = [...litTexts].filter((t) => !punctSet.has(t)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const lids: string[] = ['', ...ir.puncts, ...rest];
   return { kids, lids, gtComps: ir.gtComps };
+}
+
+/**
+ * ParserIR.tokenSets as bit rows, the one table every target prints for its `ahead` test. A token
+ * t is in set k iff bit `t.lid` or bit `kidBase + t.kid` of row k is set (lid 0, "no literal", is
+ * never a member). Row k is `words[k * stride .. (k + 1) * stride)`, 32 bits per word, low bit first.
+ */
+export type TokenSetBits = { stride: number; kidBase: number; words: number[] };
+export function tokenSetBits(plan: LexIdPlan, sets: readonly TokenSet[]): TokenSetBits {
+  const kidBase = plan.lids.length;
+  const stride = Math.ceil((kidBase + plan.kids.length) / 32);
+  const words = new Array<number>(sets.length * stride).fill(0);
+  const put = (k: number, bit: number) => { words[k * stride + (bit >>> 5)] = (words[k * stride + (bit >>> 5)] | (1 << (bit & 31))) >>> 0; };
+  sets.forEach((s, k) => {
+    for (const l of s.lits) {
+      const lid = plan.lids.indexOf(l);
+      if (lid <= 0) throw new Error(`tokenSetBits: literal ${JSON.stringify(l)} has no lid`);
+      put(k, lid);
+    }
+    for (const t of s.toks) {
+      const kid = plan.kids.indexOf(t);
+      if (kid <= 0) throw new Error(`tokenSetBits: token kind ${JSON.stringify(t)} has no kid`);
+      put(k, kidBase + kid);
+    }
+  });
+  return { stride, kidBase, words };
 }
 
 /** Resolve lid for a known text; 0 if not in the plan (matches runtime lid_of). */

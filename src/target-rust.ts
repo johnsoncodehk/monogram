@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
@@ -672,6 +672,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
     case 'not': return `(|p: &mut Parser<'a, B>| -> bool { ${notBody(s.steps, ids, ar)} })(self)`;
+    case 'ahead': return `self.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ self.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); self.suppress_next = Vec::new(); _r }`;
@@ -691,6 +692,7 @@ function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(p)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(p)`;
     case 'not': return `(|p: &mut Parser<'a, B>| -> bool { ${notBody(s.steps, ids, ar)} })(p)`;
+    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
     case 'suppress': return `{ p.suppress_next = vec![${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]; let _r = (${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}); p.suppress_next = Vec::new(); _r }`;
@@ -1724,6 +1726,23 @@ impl Doc<CstBuilder> {
 
 
 /** Emit Builder trait, CstBuilder/SlimBuilder, sole Parser machine, and parse_with helpers. */
+// The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
+function tokenSetRuntimeRust(ir: ParserIR, ids: LexIdPlan): string {
+  const b = tokenSetBits(ids, ir.tokenSets);
+  return `#[allow(dead_code)]
+const TOKEN_SET_STRIDE: usize = ${b.stride};
+#[allow(dead_code)]
+const TOKEN_SET_KID: usize = ${b.kidBase};
+#[allow(dead_code)]
+static TOKEN_SETS: [u32; ${b.words.length}] = [${b.words.join(', ')}];
+#[inline(always)]
+#[allow(dead_code)]
+fn in_token_set(k: usize, t: &Tok) -> bool {
+    let (r, l, c) = (k * TOKEN_SET_STRIDE, t.lid as usize, TOKEN_SET_KID + t.kid as usize);
+    ((TOKEN_SETS[r + (l >> 5)] >> (l & 31)) | (TOKEN_SETS[r + (c >> 5)] >> (c & 31))) & 1 != 0
+}`;
+}
+
 function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB: boolean): string {
   const reuse = topReusePlan(ir);
   const entriesField = reuse ? '\n    entries: Vec<EntryMeta>,' : '';
@@ -2112,12 +2131,16 @@ struct Parser<'a, B: Builder = CstBuilder> {
     scratch: Vec<B::H>,${entriesField}${segsField}
 }
 
+${tokenSetRuntimeRust(ir, ids)}
 impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn peek(&mut self) -> Option<Tok> {
         if self.pos + 1 > self.max_look { self.max_look = self.pos + 1; }
         if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None }
     }
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn ahead(&mut self, k: usize, is: bool) -> bool { self.peek().map_or(false, |t| in_token_set(k, &t)) == is }
     #[inline(always)]
     fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off as usize } else { 0 } }
     #[inline(always)]
@@ -2410,6 +2433,7 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
       case 'seq':
       case 'suppress': return walkSeq(s.steps);
       case 'not':
+      case 'ahead':
       case 'sameLine': return 'nullable'; // zero-width: consumes nothing
       case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
       case 'star': return walkSeq([s.step]) === 'unknown' ? 'unknown' : 'nullable';
@@ -2692,6 +2716,7 @@ function emitRustAstRdAltSteps(
       case 'altlit': return s.opts.some((o) => !rustLeafDropped(o.ttype, leaves));
       case 'alt': return s.branches.some((b) => b.some(visible));
       case 'not':
+      case 'ahead':
       case 'sameLine': return false;
     }
   };
@@ -2709,6 +2734,7 @@ function emitRustAstRdAltSteps(
       case 'tok':
       case 'altlit': return true;
       case 'sameLine': return true;
+      case 'ahead': return true;
       case 'not': return true;
       case 'suppress': return s.steps.every(pure);
       case 'seq': return s.steps.every(pure);
@@ -2766,6 +2792,8 @@ function emitRustAstRdAltSteps(
         return emitSteps(s.steps, okVar);
       case 'sameLine':
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
+      case 'ahead':
+        return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t)) != ${s.is} { ${okVar} = false; }`;
       case 'not': {
         // Gate on okVar to match TS `&&` short-circuit — otherwise probe still
         // runs after a failed predecessor and can re-enter recursive rules.

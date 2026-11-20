@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -539,6 +539,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       return `func() bool { ${peekInit}${tries}; return false }()`;
     }
     case 'not': return `func() bool { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); m := ${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}; p.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return !m }()`;
+    case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
     case 'suppress': return `func() bool { p.suppressNext = map[uint16]bool{${s.connectors.map((c) => `${lidOf(ids, c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = nil; return _r }()`;
@@ -1434,6 +1435,7 @@ function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
       ? `func() bool { ${predAltBodyW(s.branches, ids, ar, s.firsts, recv)} }()`
       : `func() bool { ${altBodyW(s.branches, ids, ar, s.firsts, recv)} }()`;
     case 'not': return `func() bool { ${notBodyW(s.steps, ids, ar, recv)} }()`;
+    case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peekW(); return t != nil && !t.Nl }()`;
     case 'suppress': return `func() bool { p.suppressNext = map[uint16]bool{${s.connectors.map((c) => `${lidOf(ids, c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = nil; return _r }()`;
@@ -1865,6 +1867,7 @@ func (p *${recv}) peekW() *Tok {
 \tif p.pos < len(p.toks) { return &p.toks[p.pos] }
 \treturn nil
 }
+func (p *${recv}) aheadW(k int, is bool) bool { t := p.peekW(); return (t != nil && inTokenSet(k, t)) == is }
 func (p *${recv}) offAtW(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
 ${pushLeafW}
 ${finishW}
@@ -2553,6 +2556,18 @@ ${editReuse}
 `;
 }
 
+// The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
+function tokenSetRuntimeGo(ir: ParserIR, ids: LexIdPlan): string {
+  const b = tokenSetBits(ids, ir.tokenSets);
+  return `const _tokenSetStride = ${b.stride}
+const _tokenSetKid = ${b.kidBase}
+var _tokenSets = [...]uint32{${b.words.join(', ')}}
+func inTokenSet(k int, t *Tok) bool {
+\tr, l, c := k*_tokenSetStride, uint(t.Lid), uint(_tokenSetKid)+uint(t.Kid)
+\treturn ((_tokenSets[r+int(l>>5)]>>(l&31))|(_tokenSets[r+int(c>>5)]>>(c&31)))&1 != 0
+}`;
+}
+
 function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const dropTtIds = ['$punct', '$keyword', '$operator']
     .map((n) => {
@@ -3064,6 +3079,8 @@ func (p *engine) peek() *Tok {
 \tif p.pos < len(p.toks) { return &p.toks[p.pos] }
 \treturn nil
 }
+${tokenSetRuntimeGo(ir, ids)}
+func (p *engine) ahead(k int, is bool) bool { t := p.peek(); return (t != nil && inTokenSet(k, t)) == is }
 func (p *engine) offAt(i int) int { if i < len(p.toks) { return int(p.toks[i].Off) }; return 0 }
 // Wrap the scratch entries [sb:] as one node's children (flattened into kids); truncate scratch.
 // tokStart is the parse-consumption start (entry pos / leftmost operand), tokEnd is pos at finish.
