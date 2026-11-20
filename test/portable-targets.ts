@@ -329,6 +329,14 @@ const CASES: Case[] = [
       'class C { public static x; static public y; public static { } }',
       'x = { public static() {} };', 'x = { static public: 1 };', 'x = { readonly override<T>() {} };', 'x = { declare abstract?() {} };',
       'x = { async static() {} };', 'x = { async public declare() {} };', 'x = { static, public };',
+      // tsc's rule, per word: a member start (a name, `[`, `*`) must follow, on the same line for
+      // every word but `static` / `export` / `get` / `set`. Past a line break the word is the name.
+      'class C { public static\n@dec x() {} }', 'class C { readonly public\n@dec x() {} }', 'class C { public\n@dec x() {} }',
+      'class C { public\nx() {} }', 'class C { static\nx = 1; }', 'class C { export\nx() {} }', 'class C { async\nx() {} }',
+      'class C { declare\nx: T; readonly\n[k]: T; }', 'x = { static\nx() {} };', 'x = { export\nx: 1 };',
+      'class C { export type\nx() {} }', 'class C { get\nx() { return 1; } }', 'class C { static\n*g() {} }',
+      // `async` is a modifier like the others, so it also precedes a field; the line rule holds for it too.
+      'class C { async x; }', 'class C { static async x = 1; }', 'class C { async public\nx() {} }', 'class C { static async static\nx = 1; }',
       'x = { static: 1, public() {}, get: 2 };', 'x = { public static x() {}, static get y() { return 1; } };',
       // `this is T` is a TYPE (tsc: parseNonArrayType), so it stands wherever a type does; its
       // target is a whole type. `x is T` exists only as a return type. `is` binds on the same line.
@@ -372,7 +380,15 @@ const CASES: Case[] = [
       'var x: this\n is string;', 'function f(): this\n is string { }', 'function f(x: any): x\n is string { }',
       'class C { p: this is }', 'var v = y as this is;', 'function f(x: any): void is T { }', 'function f(x: any): class is T { }',
       // A hole holds what its template's reference declares, nothing else.
-      'x = `a${T[]}b`;', 'type X = `a${1 + 1}b`;', 'new `a${T[]}b`;', 'new a`x`?.b;', 'new a<T>`x`?.b;'],
+      'x = `a${T[]}b`;', 'type X = `a${1 + 1}b`;', 'new `a${T[]}b`;', 'new a`x`?.b;', 'new a<T>`x`?.b;',
+      // A word left alone on its line is a property of its own, so the next member needs a separator.
+      'x = { public\nx() {} };', 'x = { public\nx: 1 };', 'x = { async\nx() {} };', 'x = { readonly\n[k]: 1 };', 'x = { static public\nx: 1 };',
+      // `export` is no modifier before `*` / `as`; `get` / `set` before a name is the accessor keyword.
+      'class C { export *g() {} }', 'class C { export as() {} }', 'class C { get\nx = 1; }', 'class C { async get\nx = 1; }',
+      'class C { public @dec x() {} }', 'class C { export @dec x() {} }', 'class C { default x() {} }',
+      // One `static` per member, on either side of `async`; a field's `!` sits on its line.
+      'class C { static\nstatic x = 1; }', 'class C { static async static x = 1; }', 'class C { async static static x() {} }',
+      'x = { static static x: 1 };', 'class C { x\n!: T; }', 'class C { async public\n!: T; }'],
   },
 ];
 

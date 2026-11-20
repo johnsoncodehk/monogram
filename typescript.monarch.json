@@ -386,15 +386,15 @@
             "yield": "keyword",
             "satisfies": "operator",
             "meta": "keyword",
+            "export": "keyword",
             "public": "keyword",
             "private": "keyword",
             "protected": "keyword",
-            "static": "keyword",
             "override": "keyword",
             "accessor": "keyword",
-            "export": "keyword",
             "declare": "keyword",
             "out": "keyword",
+            "static": "keyword",
             "get": "keyword",
             "set": "keyword",
             "let": "keyword",
@@ -695,6 +695,10 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "export": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "public": {
               "token": "keyword",
               "switchTo": "@root"
@@ -707,10 +711,6 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "static": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
             "override": {
               "token": "keyword",
               "switchTo": "@root"
@@ -719,15 +719,15 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "export": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
             "declare": {
               "token": "keyword",
               "switchTo": "@root"
             },
             "out": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "static": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -1155,15 +1155,15 @@
             "yield": "keyword",
             "satisfies": "operator",
             "meta": "keyword",
+            "export": "keyword",
             "public": "keyword",
             "private": "keyword",
             "protected": "keyword",
-            "static": "keyword",
             "override": "keyword",
             "accessor": "keyword",
-            "export": "keyword",
             "declare": "keyword",
             "out": "keyword",
+            "static": "keyword",
             "get": "keyword",
             "set": "keyword",
             "let": "keyword",
