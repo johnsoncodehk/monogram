@@ -11,7 +11,7 @@ Variants (each has `bench/` = the original harness `main.go.tmpl`, `prof/` = New
 |-----------|----------------------------------------------------------------------------------|
 | ee11fdf   | pre-regression reference (package-level arena shared by every Doc)               |
 | aa02d65   | current master c704a6a (byte-identical parser.go, sha256 0ab23eac…)               |
-| cand      | candidate fix, generated from src/target-go.ts: token/meta slices presized from len(src)/2, node/kid arena from 0.75×/1.25× token count |
+| cand      | candidate fix, generated from src/target-go.ts: token/meta slices presized from len(src)/2 (trimmed back when the source is sparse), node/kid arena from 0.75×/1.25× token count |
 
 What each section isolates:
 1. original harness, alternating serial rounds (same numbers as the earlier summary).

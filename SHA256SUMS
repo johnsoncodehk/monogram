@@ -21,7 +21,7 @@ a832aaf88e45a23ce378e3b749d339e331ed234a311791ca5e2e1009d252e952  ./c22b9cc/go/p
 5932a9b04d6332871ff29c6038cfd8bdd594e1500bb4d3b20aa470397db6a427  ./ee11fdf/go/main.go
 a6bec3d274422965d835065c31ad47e5e2d4bbbbc6e73c8dea4231e0848990ea  ./ee11fdf/go/parser/parser.go
 5932a9b04d6332871ff29c6038cfd8bdd594e1500bb4d3b20aa470397db6a427  ./main.go.tmpl
-facc0d2356a77170e34fddf72eab7507e91e314dfa5426d0e7b6e8b6ef9b7e1f  ./profile/README.md
+26ec5cf6e35d47bb1dbfabba353516be885507baab1bddf5c354d7e53c79acf3  ./profile/README.md
 8cd779053033e19870d9517712acf9ccf1ca5189715670dceeb4d629452e8a55  ./profile/aa02d65/bench/go.mod
 5932a9b04d6332871ff29c6038cfd8bdd594e1500bb4d3b20aa470397db6a427  ./profile/aa02d65/bench/main.go
 0ab23eacfe3a3147cbc8be74b18cf84f9673117cf6ff8db224d68048d8749392  ./profile/aa02d65/bench/parser/parser.go
@@ -30,10 +30,10 @@ a8594dc743486b1faf31eaab77a1af81aae2cc3242fe746fc8084f5940c98323  ./profile/aa02
 0ab23eacfe3a3147cbc8be74b18cf84f9673117cf6ff8db224d68048d8749392  ./profile/aa02d65/prof/parser/parser.go
 8cd779053033e19870d9517712acf9ccf1ca5189715670dceeb4d629452e8a55  ./profile/cand/bench/go.mod
 5932a9b04d6332871ff29c6038cfd8bdd594e1500bb4d3b20aa470397db6a427  ./profile/cand/bench/main.go
-c4539519bcefcc708773b8555b6eba1707fc99564edfd8a5118739ee8e98662b  ./profile/cand/bench/parser/parser.go
+1fb7d7b09b0f474ad827742338dc8fc2c40528bbfddaa2a63ccf8fe8a4a1af54  ./profile/cand/bench/parser/parser.go
 8cd779053033e19870d9517712acf9ccf1ca5189715670dceeb4d629452e8a55  ./profile/cand/prof/go.mod
 a8594dc743486b1faf31eaab77a1af81aae2cc3242fe746fc8084f5940c98323  ./profile/cand/prof/main.go
-c4539519bcefcc708773b8555b6eba1707fc99564edfd8a5118739ee8e98662b  ./profile/cand/prof/parser/parser.go
+1fb7d7b09b0f474ad827742338dc8fc2c40528bbfddaa2a63ccf8fe8a4a1af54  ./profile/cand/prof/parser/parser.go
 8cd779053033e19870d9517712acf9ccf1ca5189715670dceeb4d629452e8a55  ./profile/ee11fdf/bench/go.mod
 5932a9b04d6332871ff29c6038cfd8bdd594e1500bb4d3b20aa470397db6a427  ./profile/ee11fdf/bench/main.go
 a6bec3d274422965d835065c31ad47e5e2d4bbbbc6e73c8dea4231e0848990ea  ./profile/ee11fdf/bench/parser/parser.go

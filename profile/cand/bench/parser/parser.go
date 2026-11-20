@@ -6672,6 +6672,9 @@ func scanMetaToks(src string) ([]alignMeta, []Tok) {
 		if t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
 		meta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, uint8(len(templateStack))))
 	}
+	// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
+	if cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
+	if cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
 	return meta, toks
 }
 func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for rx+tpl") }
