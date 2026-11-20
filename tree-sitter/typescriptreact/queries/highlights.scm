@@ -99,7 +99,7 @@
   "undefined" "false" "true" "null"
 ] @constant.builtin
 [
-  "global" "super" "this"
+  "require" "global" "super" "this"
 ] @variable.builtin
 [
   ">>>=" "**=" "<<=" ">>=" "??=" "||=" "&&=" "==="

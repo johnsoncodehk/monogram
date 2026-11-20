@@ -75,28 +75,34 @@ const FLOOR = 90;
 const fails: string[] = [];
 
 // Word roles. The family grade above cannot see a builtin name painted as a plain variable
-// (@variable.builtin and @variable are both 'value'), so the capture itself is checked here. A
-// `scopes` builtin name (support.variable) keeps @variable.builtin wherever the word is an
-// identifier, also when the grammar uses the same word as a keyword elsewhere (`module`,
-// `global`); where it IS the keyword, the keyword's own capture applies.
-const WORD_ROLES: { code: string; word: string; capture: string }[] = [
-  { code: 'x = console.log;', word: 'console', capture: 'variable.builtin' },   // a builtin that is no keyword
-  { code: 'x = module.exports;', word: 'module', capture: 'variable.builtin' },
-  { code: 'f(module);', word: 'module', capture: 'variable.builtin' },
-  { code: 'x = global.y;', word: 'global', capture: 'variable.builtin' },
-  { code: 'const x = require("y");', word: 'require', capture: 'variable.builtin' },
-  { code: 'declare module "m" {}', word: 'module', capture: 'keyword' },         // storage.type.namespace
-  { code: 'declare global {}', word: 'global', capture: 'variable.builtin' },    // its one scope, as the keyword token
+// (@variable.builtin and @variable are both 'value'), so the capture itself is checked here, with
+// the node it lands on. A `scopes` builtin name (support.variable) keeps @variable.builtin
+// wherever the word is lexed as an identifier, also when the grammar uses the same word as a
+// keyword elsewhere (`module`, `global`, `require`); where it IS the keyword (an anonymous node
+// of that text), the keyword's own capture applies.
+const WORD_ROLES: { code: string; word: string; node: string; capture: string }[] = [
+  { code: 'x = console.log;', word: 'console', node: 'ident', capture: 'variable.builtin' },   // a builtin that is no keyword
+  { code: 'x = module.exports;', word: 'module', node: 'ident', capture: 'variable.builtin' },
+  { code: 'f(module);', word: 'module', node: 'ident', capture: 'variable.builtin' },
+  { code: 'x = global.y;', word: 'global', node: 'ident', capture: 'variable.builtin' },
+  { code: 'const x = require("y");', word: 'require', node: 'ident', capture: 'variable.builtin' },
+  { code: 'x = require("y");', word: 'require', node: 'ident', capture: 'variable.builtin' },
+  { code: 'declare module "m" {}', word: 'module', node: 'module', capture: 'keyword' },        // storage.type.namespace
+  { code: 'declare global {}', word: 'global', node: 'global', capture: 'variable.builtin' },   // its one scope, as the keyword token
+  // The import-equals `require (` is the keyword token; its one scope is support.variable.
+  { code: 'import r = require("x");', word: 'require', node: 'require', capture: 'variable.builtin' },
+  { code: 'export import r = require("x");', word: 'require', node: 'require', capture: 'variable.builtin' },
 ];
-console.log('── tree-sitter word roles (winning capture per word) ──');
+console.log('── tree-sitter word roles (winning capture per word, and its node) ──');
 for (const r of WORD_ROLES) {
   const at = r.code.indexOf(r.word);
   const end = at + r.word.length;
   const hit = monogramTreesitterCaptures(r.code).filter((s) => s.start === at && s.end === end).at(-1);
-  const got = hit?.capture ?? '(none)';
-  const ok = got === r.capture;
-  console.log(`  ${ok ? '✓' : '✗'} ${JSON.stringify(r.code).padEnd(28)} ${r.word.padEnd(8)} ${got}${ok ? '' : `  (want ${r.capture})`}`);
-  if (!ok) fails.push(`${JSON.stringify(r.code)}: \`${r.word}\` is @${got}, want @${r.capture}`);
+  const got = hit ? `${hit.node} @${hit.capture}` : '(none)';
+  const want = `${r.node} @${r.capture}`;
+  const ok = got === want;
+  console.log(`  ${ok ? '✓' : '✗'} ${JSON.stringify(r.code).padEnd(34)} ${r.word.padEnd(8)} ${got}${ok ? '' : `  (want ${want})`}`);
+  if (!ok) fails.push(`${JSON.stringify(r.code)}: \`${r.word}\` is ${got}, want ${want}`);
 }
 if (monoPct < FLOOR) fails.push(`Monogram ${monoPct.toFixed(1)}% below floor ${FLOOR}%`);
 if (monoPct < offPct) fails.push(`Monogram ${monoPct.toFixed(1)}% no longer beats official ${offPct.toFixed(1)}%`);

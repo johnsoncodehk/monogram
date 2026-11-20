@@ -2632,7 +2632,7 @@
       "name": "storage.type.namespace.ts"
     },
     "scope-support-variable": {
-      "match": "\\b(module|global|console|window|document|process|require|exports|globalThis)\\b",
+      "match": "\\b(module|global|require|console|window|document|process|exports|globalThis)\\b",
       "name": "support.variable.ts"
     },
     "scope-keyword-control-from-from": {

@@ -368,6 +368,12 @@ const CASES: Case[] = [
       '`a${0}b`;', 'tag`a${1 + 1}b`;', 'x = `a${y as `b${T[]}`}c`;',
       'new `a${0}b`;', 'new `abc`(1);', 'new tag`x${1 + 1}`();', 'new a.b`x${y}`(1);', 'new a<T>`x`();',
       'new `x${y as T[]}`;', 'new a`x${new b`y${0}`}`();',
+      // An import-equals right-hand side is an EntityName (non-reserved identifiers joined by
+      // `.`) or `require(` a string literal, or else an Expression `)`.
+      'import r = m;', 'import r = a.b.c;', 'import r = a\n.b;', 'import r = a.let.async;', 'import r = require;', 'import r = require.x;',
+      'import r = require("x");', "import r = require('x');", 'import r = require\n("x");', 'import r = require(x);', 'import r = require(1, 2);',
+      'export import r = a.b;', 'import type r = require("x");', 'import type r = a.b;', 'import type = require("x");',
+      'namespace N { import r = a.b }', 'declare module "m" {\nexport import r = require("x")\n}',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -395,6 +401,11 @@ const CASES: Case[] = [
       'class C { p: this is }', 'var v = y as this is;', 'function f(x: any): void is T { }', 'function f(x: any): class is T { }',
       // A hole holds what its template's reference declares, nothing else.
       'x = `a${T[]}b`;', 'type X = `a${1 + 1}b`;', 'new `a${T[]}b`;', 'new a`x`?.b;', 'new a<T>`x`?.b;',
+      // An import-equals right-hand side is no expression: no literal, `this`, `new`, keyword
+      // segment, private name, optional chain or non-null tail.
+      'import r = new x;', 'import r = new a.b();', 'import r = this;', 'import r = null;', 'import r = 1;', 'import r = "m";',
+      'import r = (a);', 'import r = a.default;', 'import r = a.if;', 'import r = a.#p;', 'import r = a?.b;', 'import r = a!;',
+      'export import r = this.x;', 'import type r = new x;', 'namespace N { import r = a.default }',
       // A word left alone on its line is a property of its own, so the next member needs a separator.
       'x = { public\nx() {} };', 'x = { public\nx: 1 };', 'x = { async\nx() {} };', 'x = { readonly\n[k]: 1 };', 'x = { static public\nx: 1 };',
       // `export` is no modifier before `*` / `as`; `get` / `set` before a name is the accessor keyword.
