@@ -30,8 +30,8 @@ import type { CstGrammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { buildRoleMap, leafRoles, spanBuckets, scopeAt, GEN_OPTS, type TmTok, type Bucket } from './generative-detect.ts';
 import {
-  checkReachability, tokenCensus, literalDischarge, leafCoverage, loadTmFromObject, tmTokenize,
-  type TmGrammarJson,
+  checkReachability, tokenCensus, literalDischarge, leafCoverage, contentObligations, loadTmFromObject, tmTokenize,
+  type TmGrammarJson, type LeafObligations,
 } from './tm-completeness.ts';
 
 // ── a mutation: a precise, kind-labelled fault injected into the emitted grammar ──
@@ -115,19 +115,18 @@ async function tryLoad(scope: string, grammar: object): Promise<{ tm: any } | { 
   catch (e: any) { return { err: `compile-error(${String(e?.message ?? e).slice(0, 30)})` }; }
 }
 // grammar-derived-corpus detector (leaf coverage over generated inputs)
-async function corpusCatches(g: CstGrammar, scope: string, mutated: object): Promise<string | null> {
+async function corpusCatches(obligations: LeafObligations[], scope: string, mutated: object): Promise<string | null> {
   const r = await tryLoad(scope, mutated);
   if ('err' in r) return `leaf-coverage:${r.err}`;
-  const cov = leafCoverage(g, r.tm, { ...GEN_OPTS, maxInputs: 250 });
+  const cov = leafCoverage(r.tm, obligations);
   return cov.painted < cov.den ? `leaf-coverage(${cov.painted}/${cov.den})` : null;
 }
 // targeted DIFFERENTIAL detector: did the witness leaf's paint change vs baseline?
-async function differentialCatches(scope: string, base: object, mutated: object, witness: string, leaf: string): Promise<string | null> {
-  const [bt, mt] = await Promise.all([tryLoad(scope, base), tryLoad(scope, mutated)]);
-  if ('err' in bt) return null;
+async function differentialCatches(scope: string, baseTm: any, mutated: object, witness: string, leaf: string): Promise<string | null> {
+  const mt = await tryLoad(scope, mutated);
   if ('err' in mt) return `differential:${mt.err}`;
   const at = witness.indexOf(leaf); if (at < 0) return null;
-  const bb = bucketsAt(bt.tm, witness, at, leaf.length), mb = bucketsAt(mt.tm, witness, at, leaf.length);
+  const bb = bucketsAt(baseTm, witness, at, leaf.length), mb = bucketsAt(mt.tm, witness, at, leaf.length);
   const bs = [...bb].sort().join('|'), ms = [...mb].sort().join('|');
   return bs !== ms ? `differential({${bs||'∅'}}→{${ms||'∅'}})` : null;
 }
@@ -154,13 +153,14 @@ async function runGrammar(name: string, module: string, scope: string): Promise<
     for (const [k, v] of Object.entries(base.repository) as [string, any][]) if (typeof v?.name === 'string' && inner.startsWith(v.name + '.')) return k;
     return null;
   };
+  const obligations = contentObligations(g, { ...GEN_OPTS, maxInputs: 250 });
   const rows: Row[] = [];
   for (const m of buildCatalogue(base, paintKey)) {
     const mutated = structuredClone(base);
     if (!m.apply(mutated)) { rows.push({ grammar: name, label: m.label, cls: m.cls, equivalent: !!m.equivalent, killedBy: [], survived: false, skipped: true }); continue; }
     const killedBy = structuralCatches(g, mutated);
-    const corpus = await corpusCatches(g, scope, mutated); if (corpus) killedBy.push(corpus);
-    if (m.witness && m.leaf) { const d = await differentialCatches(scope, base, mutated, m.witness, m.leaf); if (d) killedBy.push(d); }
+    const corpus = await corpusCatches(obligations, scope, mutated); if (corpus) killedBy.push(corpus);
+    if (m.witness && m.leaf) { const d = await differentialCatches(scope, baseTm, mutated, m.witness, m.leaf); if (d) killedBy.push(d); }
     rows.push({ grammar: name, label: m.label, cls: m.cls, equivalent: !!m.equivalent, killedBy, survived: killedBy.length === 0, skipped: false });
   }
   return rows;

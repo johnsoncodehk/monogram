@@ -15,6 +15,9 @@
 //             call/member/index chains, arrays, and statement forms (the grammar the Go/Rust
 //             output is benchmarked against oxc with).
 //
+// The javascript case also runs a Unicode corpus (non-ASCII accept/reject with lexer messages,
+// edits next to multi-byte characters) on the same three parsers.
+//
 // Go/Rust toolchains are optional: a missing `go`/`rustc` is logged and skipped (the TS
 // rendering, which needs only node, always runs).
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -297,10 +300,12 @@ const HAS_RUST = have('rustc', ['--version']);
 if (!HAS_GO) console.log('  go: (toolchain absent — skipped)');
 if (!HAS_RUST) console.log('  rust: (toolchain absent — skipped)');
 
-type Outcome = { ok: true; cst: string } | { ok: false };
+type Outcome = { ok: true; cst: string } | { ok: false; err?: string };
 function runProc(cmd: string, args: string[], src: string): Outcome {
-  try { return { ok: true, cst: canon(JSON.parse(execFileSync(cmd, args, { input: src, stdio: ['pipe', 'pipe', 'pipe'] }).toString())) }; }
-  catch { return { ok: false }; }
+  const r = spawnSync(cmd, args, { input: src, encoding: 'utf8', maxBuffer: 32 << 20 });
+  if (r.status !== 0) return { ok: false, err: r.stderr ?? '' };
+  try { return { ok: true, cst: canon(JSON.parse(r.stdout)) }; }
+  catch { return { ok: false, err: 'bad json' }; }
 }
 function runTokSpans(cmd: string, args: string[], src: string): string | null {
   const r = spawnSync(cmd, args, { input: src, encoding: 'utf8' });
@@ -318,13 +323,49 @@ function parseAlignStderr(stderr: string): Align | undefined {
   return undefined;
 }
 function runEditSession(cmd: string, args: string[], json: string): EditOutcome {
-  const r = spawnSync(cmd, args, { input: json, encoding: 'utf8' });
+  const r = spawnSync(cmd, args, { input: json, encoding: 'utf8', maxBuffer: 32 << 20 });
   const align = parseAlignStderr(r.stderr ?? '');
-  if (r.status !== 0) return { ok: false, align };
+  if (r.status !== 0) return { ok: false, align, err: r.stderr ?? '' };
   try {
     return { ok: true, cst: canon(JSON.parse(r.stdout)), align };
-  } catch { return { ok: false, align }; }
+  } catch { return { ok: false, align, err: 'bad json' }; }
 }
+
+// The ts target's library runs in this process: one module load per grammar instead of one
+// node start per input. Go/Rust run their emitted CLI runner per input (a native start is ~1 ms).
+type TsDoc = { edit(edits: { start: number; end: number; text: string }[]): unknown; align(): unknown; root(): unknown };
+type TsLib = { parse(src: string): unknown; createDoc(src: string, opts: { validate: boolean }): TsDoc };
+const errText = (e: unknown) => String((e as Error)?.message ?? e);
+function tsRun(lib: TsLib, src: string): Outcome {
+  try {
+    const root = lib.parse(src);
+    return root === null ? { ok: false } : { ok: true, cst: canon(root) };
+  } catch (e) { return { ok: false, err: errText(e) }; }
+}
+function tsEditSession(lib: TsLib, json: string, fast: boolean): EditOutcome {
+  let doc: TsDoc, a: unknown;
+  try {
+    const { init, batches } = JSON.parse(json) as { init: string; batches: EditBatch[] };
+    doc = lib.createDoc(init, { validate: !fast });
+    for (const batch of batches) doc.edit(batch.map(([start, end, text]) => ({ start, end, text })));
+    a = doc.align();
+  } catch (e) { return { ok: false, err: errText(e) }; }
+  // Through JSON, as the CLI runner reports it: a field left undefined is absent.
+  const align = a ? JSON.parse(JSON.stringify(a)) as Align : undefined;
+  try {
+    const root = doc.root();
+    return root === null ? { ok: false, align } : { ok: true, cst: canon(root), align };
+  } catch (e) { return { ok: false, align, err: errText(e) }; }
+}
+
+type Runner = {
+  label: string;
+  run: (src: string) => Outcome;
+  edit: (json: string, fast: boolean) => EditOutcome;
+  spans: { cmd: string; args: string[] };
+  /** Doc.edit offsets are UTF-8 bytes (go/rust), not UTF-16 units (ts). */
+  utf8Edits: boolean;
+};
 
 type AlignMeta = { kind: string; off: number; end: number; nl: boolean };
 const oracleToks = (g: CstGrammar, src: string): AlignMeta[] => {
@@ -530,23 +571,200 @@ const applyEdits = (init: string, batches: EditBatch[]): string => {
   return text;
 };
 
+// ── Unicode on the real javascript grammar ──
+// Every target accepts the oracle's non-ASCII inputs (no panic / no silent reject) with the same
+// rule skeleton, rejects what it rejects with the same primary lexer message, and an edit next
+// to a multi-byte character (go/rust Doc.edit offsets are UTF-8 bytes) ≡ a fresh parse.
+const UNICODE_ACCEPT: string[] = [
+  // template head / middle / tail each carry non-ASCII
+  'const head = `héllo`;',
+  'const mid = `pré${x}süff`;',
+  'const both = `頭${a}中${b}尾🎉`;',
+  // comments
+  '/* 多行注释 🚀 */\nconst a = 1;',
+  '// кириллица коммент\nconst b = 2;',
+  // string / regex
+  'const s = "日本語🎉";',
+  'const r = /[α-ω]+/u;',
+  // CJK / emoji ZWJ / combining / 4-byte
+  'const z = "👨‍👩‍👧‍👦";',
+  'const c = "e\u0301";',
+  'const u = "\u{1F600}";',
+  'const mix = `café /* not comment */`;',
+  'const line = "你好"; // 行尾é',
+  // critical closed forms (guard against over-reject after unterminated fix)
+  '/* abc */',
+  '`cafe`',
+  '"abc"',
+  "const x = /* abc */ 1;",
+  'const x = `cafe`;',
+  'const x = "abc";',
+  // Unicode whitespace between tokens (JS \s non-ASCII set) — interpreter skips these
+  'const a =\u00A01;',              // NBSP
+  'const b\u3000= 2;',              // ideographic space
+  '\uFEFFconst c = 3;',             // BOM
+  'const d\u2003=\u20024;',         // EM space / EN space
+  'const e\u202F= 5;',              // narrow NBSP
+  'const f\u1680= 6;',              // Ogham space mark
+  'const g\u2000=\u200A7;',         // en-quad / hair space (range ends)
+  // Unicode identifiers (ID_Start letters) — interpreter's \p{ID_Start} fallback
+  'const \u03B1 = \u03B2;',         // α = β
+  'const caf\u00E9 = 1;',           // precomposed é
+  'const \u5909\u6570 = 42;',       // CJK identifier
+  'let \u03C2 = \u03B1 + \u03B2;',  // Greek mix in expression
+];
+
+/** Reject cases. `lexMsg` set ⇒ expect that primary lexer message (≡ oracle). */
+const UNICODE_REJECT: { src: string; lexMsg: string | null }[] = [
+  { src: '/* abc', lexMsg: null }, // unterminated block → `/`+`*` puncts → parse reject (not a lex throw)
+  { src: '`cafe', lexMsg: 'Unterminated template literal at offset 5' },
+  { src: '"abc', lexMsg: 'Unexpected character at offset 0: \'"\'' },
+  { src: "'abc", lexMsg: "Unexpected character at offset 0: '''" },
+  { src: 'const x = `cafe', lexMsg: 'Unterminated template literal at offset 15' },
+  { src: 'const x = "abc', lexMsg: 'Unexpected character at offset 10: \'"\'' },
+  // emoji is not ID_Start; ZWSP is not JS \s — all targets must reject (messages differ in
+  // encoding of the offending char across targets, so no lexMsg pin)
+  { src: 'const \u{1F600} = 1;', lexMsg: null },
+  { src: 'const x\u200B= 1;', lexMsg: null },
+];
+
+// init = 'const x = "café";' — JS indices: " @10, c@11, a@12, f@13, é@14, "@15, ;@16
+const UNICODE_EDITS: { name: string; init: string; batches: EditBatch[]; restores?: boolean }[] = [
+  { name: 'edit-before-multibyte', init: 'const x = "café";', batches: [[[14, 14, 'X']]] },
+  { name: 'edit-replace-multibyte', init: 'const x = "café";', batches: [[[14, 15, 'e']]] },
+  { name: 'edit-after-multibyte', init: 'const x = "café";', batches: [[[15, 15, '!']]] },
+  // delete the closing backtick / `*/` → reject; restore → accept (edit ≡ fresh)
+  { name: 'edit-unterm-template-restore', init: 'const x = `cafe`;', batches: [[[15, 16, '']], [[15, 15, '`']]], restores: true },
+  { name: 'edit-unterm-block-restore', init: '/* abc */\nconst a = 1;', batches: [[[7, 9, '']], [[7, 7, '*/']]], restores: true },
+];
+
+/** Primary lexer-error text shared with the generated lexer (emit-lexer.ts). */
+function primaryLexMsg(err?: string): string | null {
+  if (!err) return null;
+  const u = err.match(/Unterminated template literal at offset \d+/);
+  if (u) return u[0];
+  const c = err.match(/Unexpected character at offset \d+: '[\s\S]'/);
+  return c ? c[0] : null;
+}
+/** UTF-16 edit batches → the UTF-8 byte offsets go/rust Doc.edit takes. */
+function toUtf8Batches(init: string, batches: EditBatch[]): EditBatch[] {
+  const u8 = (s: string, jsIdx: number) => Buffer.byteLength(s.slice(0, jsIdx), 'utf8');
+  let text = init;
+  const out: EditBatch[] = [];
+  for (const batch of batches) {
+    const b: EditBatch = [];
+    const sorted = [...batch].sort((a, c) => c[0] - a[0]);
+    for (const [s, e, r] of sorted) b.push([u8(text, s), u8(text, e), r]);
+    b.reverse();
+    out.push(b);
+    for (const [s, e, r] of batch) text = text.slice(0, s) + r + text.slice(e);
+  }
+  return out;
+}
+
+function unicodeParity(r: Runner, oracleOut: (src: string) => Outcome): void {
+  let acc = 0, snap = 0;
+  for (const src of UNICODE_ACCEPT) {
+    const want = oracleOut(src);
+    const got = r.run(src);
+    if (!want.ok) {
+      failures++;
+      console.log(`  javascript/unicode: oracle REJECT unexpected on ${JSON.stringify(src)}`);
+      continue;
+    }
+    if (!got.ok) {
+      failures++;
+      console.log(`  javascript/unicode/${r.label}: ACCEPT fail (panic/reject) on ${JSON.stringify(src)} err=${(got.err ?? '').slice(0, 240)}`);
+      continue;
+    }
+    acc++;
+    if (canon(skeleton(want.cst)) !== canon(skeleton(got.cst))) {
+      snap++;
+      failures++;
+      console.log(`  javascript/unicode/${r.label}: SHAPE drift on ${JSON.stringify(src)}`);
+    }
+  }
+  console.log(`  javascript/unicode/${r.label}: ${acc}/${UNICODE_ACCEPT.length} accept ≡ oracle${snap ? ` · ${snap} shape drift` : ''}`);
+
+  let rej = 0;
+  for (const { src, lexMsg } of UNICODE_REJECT) {
+    const want = oracleOut(src);
+    const got = r.run(src);
+    if (want.ok || got.ok) {
+      failures++;
+      console.log(`  javascript/unicode/${r.label}: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
+      continue;
+    }
+    if (lexMsg !== null) {
+      const gotMsg = primaryLexMsg(got.err);
+      const wantMsg = primaryLexMsg(want.err) ?? lexMsg;
+      if (gotMsg !== wantMsg) {
+        failures++;
+        console.log(`  javascript/unicode/${r.label}: REJECT msg drift on ${JSON.stringify(src)}\n    want ${wantMsg}\n    got  ${gotMsg ?? got.err}`);
+        continue;
+      }
+    }
+    rej++;
+  }
+  console.log(`  javascript/unicode/${r.label}: ${rej}/${UNICODE_REJECT.length} reject ≡ oracle`);
+
+  let editOk = 0;
+  const payload = (init: string, batches: EditBatch[]) => JSON.stringify({ init, batches: r.utf8Edits ? toUtf8Batches(init, batches) : batches });
+  for (const sc of UNICODE_EDITS) {
+    // After the first batch alone, an unterminated-restore case must reject.
+    if (sc.restores) {
+      const mid = applyEdits(sc.init, sc.batches.slice(0, 1));
+      const midEdit = r.edit(payload(sc.init, sc.batches.slice(0, 1)), false);
+      const midFresh = r.run(mid);
+      const midOracle = oracleOut(mid);
+      if (midEdit.ok || midFresh.ok || midOracle.ok) {
+        failures++;
+        console.log(`  javascript/unicode/${r.label}: edit mid-state should reject (${sc.name}) mid=${JSON.stringify(mid)} edit=${midEdit.ok} fresh=${midFresh.ok} oracle=${midOracle.ok}`);
+      }
+    }
+    const final = applyEdits(sc.init, sc.batches);
+    const a = r.edit(payload(sc.init, sc.batches), false);
+    const b = r.run(final);
+    const o = oracleOut(final);
+    if (!a.ok || !b.ok || !o.ok) {
+      failures++;
+      console.log(`  javascript/unicode/${r.label}: edit-session final should accept (${sc.name}) final=${JSON.stringify(final)} A ok=${a.ok} B ok=${b.ok} oracle ok=${o.ok} err=${(a.ok ? '' : a.err ?? '').slice(0, 240)}`);
+    } else if (a.cst === b.cst) editOk++;
+    else {
+      failures++;
+      console.log(`  javascript/unicode/${r.label}: edit-session mismatch (${sc.name}) final=${JSON.stringify(final)}`);
+    }
+  }
+  console.log(`  javascript/unicode/${r.label}: ${editOk}/${UNICODE_EDITS.length} edit-sessions ≡ fresh`);
+}
+
 let failures = 0;
 for (const c of CASES) {
   const grammar: CstGrammar = (await import(c.path)).default;
   const oracle = createParser(grammar);
-  const oracleOut = (src: string): Outcome => { try { return { ok: true, cst: canon(oracle.parse(src)) }; } catch { return { ok: false }; } };
+  const oracleOut = (src: string): Outcome => {
+    try { return { ok: true, cst: canon(oracle.parse(src)) }; } catch (e) { return { ok: false, err: errText(e) }; }
+  };
 
   const dir = `${TMP}/${c.grammar}`;
   mkdirSync(dir, { recursive: true });
-  const runners: Array<{ label: string; run: (src: string) => Outcome }> = [];
+  const runners: Runner[] = [];
 
   // emitParser is the parser LIBRARY (exports a `parse` entry, no I/O); the executable CLI
   // runner (stdin → CST JSON) is the target's emitRunner(), assembled in HERE — the harness's
   // job, not the parser's. ts/rust append the runner to the library (one file); Go needs it as
   // a SEPARATE runner.go in the same `package main` (its import rules forbid appending inline).
+  // The ts library is also imported on its own; its CLI runner serves only tok-spans, which reads
+  // the parser cursor from inside the module.
+  const tsLibSrc = emitParser(grammar, tsTarget);
   const tsFile = `${dir}/p.ts`;
-  writeFileSync(tsFile, emitParser(grammar, tsTarget) + (tsTarget.emitRunner?.() ?? ''));
-  runners.push({ label: 'typescript', run: (src) => runProc('node', [tsFile], src) });
+  writeFileSync(tsFile, tsLibSrc + (tsTarget.emitRunner?.() ?? ''));
+  writeFileSync(`${dir}/lib.ts`, tsLibSrc);
+  const tsLib = await import(`${dir}/lib.ts`) as TsLib;
+  runners.push({
+    label: 'typescript', run: (src) => tsRun(tsLib, src), edit: (json, fast) => tsEditSession(tsLib, json, fast),
+    spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false,
+  });
 
   if (HAS_GO && !c.tsOnly) {
     const gdir = `${dir}/go`; mkdirSync(gdir, { recursive: true });
@@ -554,13 +772,21 @@ for (const c of CASES) {
     writeFileSync(`${gdir}/runner.go`, goTarget.emitRunner?.() ?? '');
     writeFileSync(`${gdir}/go.mod`, 'module p\n\ngo 1.21\n');
     execFileSync('go', ['build', '-o', `${gdir}/p`, '.'], { cwd: gdir, stdio: 'pipe' });
-    runners.push({ label: 'go', run: (src) => runProc(`${gdir}/p`, [], src) });
+    const bin = `${gdir}/p`;
+    runners.push({
+      label: 'go', run: (src) => runProc(bin, [], src), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
+    });
   }
   if (HAS_RUST && !c.tsOnly) {
     const rfile = `${dir}/main.rs`;
+    const bin = `${dir}/pr`;
     writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
-    execFileSync('rustc', ['-O', '-A', 'warnings', rfile, '-o', `${dir}/pr`], { stdio: 'pipe' });
-    runners.push({ label: 'rust', run: (src) => runProc(`${dir}/pr`, [], src) });
+    execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe' });
+    runners.push({
+      label: 'rust', run: (src) => runProc(bin, [], src), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+      spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
+    });
   }
 
   // tok-spans: top-level kids record parse-consumption [tokStart, tokEnd); cross-target
@@ -569,11 +795,7 @@ for (const c of CASES) {
   // envspec: a Newline token spans its line break and occupies a token index like any other;
   // if contiguous ever fails here, partition by grammar with evidence rather than relaxing.
   {
-    const spanRunners: Array<{ label: string; cmd: string; args: string[] }> = [
-      { label: 'typescript', cmd: 'node', args: [tsFile, 'tok-spans'] },
-    ];
-    if (HAS_GO && !c.tsOnly) spanRunners.push({ label: 'go', cmd: `${dir}/go/p`, args: ['tok-spans'] });
-    if (HAS_RUST && !c.tsOnly) spanRunners.push({ label: 'rust', cmd: `${dir}/pr`, args: ['tok-spans'] });
+    const spanRunners = runners.map((r) => ({ label: r.label, ...r.spans }));
 
     const parseSpans = (out: string) => {
       const lines = out.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trimEnd().split('\n').filter(Boolean);
@@ -708,11 +930,8 @@ for (const c of CASES) {
     const editScenarios = EDIT_SCENARIOS[c.grammar];
     if (editScenarios) {
       let editOk = 0, alignOk = 0, fastOk = 0;
-      const editCmd = r.label === 'typescript' ? 'node' : r.label === 'go' ? `${dir}/go/p` : `${dir}/pr`;
-      const editArgs = r.label === 'typescript' ? [`${dir}/p.ts`, 'edit-session'] : ['edit-session'];
-      const fastArgs = r.label === 'typescript' ? [`${dir}/p.ts`, 'edit-session-fast'] : ['edit-session-fast'];
-      const runEdit = (json: string) => runEditSession(editCmd, editArgs, json);
-      const runFast = (json: string) => runEditSession(editCmd, fastArgs, json);
+      const runEdit = (json: string) => r.edit(json, false);
+      const runFast = (json: string) => r.edit(json, true);
       for (const sc of editScenarios) {
         const final = applyEdits(sc.init, sc.batches);
         const payload = JSON.stringify({ init: sc.init, batches: sc.batches });
@@ -793,6 +1012,7 @@ for (const c of CASES) {
       console.log(`  ${c.grammar}/${r.label}: ${alignOk}/${editScenarios.length} token-alignments ≡ oracle`);
       console.log(`  ${c.grammar}/${r.label}: ${fastOk}/${editScenarios.length} fast ≡ validated`);
     }
+    if (c.grammar === 'javascript') unicodeParity(r, oracleOut);
   }
 }
 
