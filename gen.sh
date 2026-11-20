@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# usage: ./gen.sh <monogram git clone> — regenerates base/ fam/ fix/ from `git archive <commit>` and checks SHA256SUMS.
+# usage: ./gen.sh <monogram git clone> — regenerates each variant dir from `git archive <commit>` and checks SHA256SUMS.
 set -eu
 REPO=$(cd "$1" && pwd); cd "$(dirname "$0")"; T=$(mktemp -d)
 while read -r v c; do

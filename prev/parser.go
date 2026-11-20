@@ -127,315 +127,1124 @@ const lidLParen uint16 = 36
 const lidRParen uint16 = 37
 const lidBraceOpen uint16 = 40
 const lidInterpClose uint16 = 42
-func _m0(s string, p int) int { p = _m1(s, p); if p < 0 { return -1 }; p = _m2(s, p); if p < 0 { return -1 }; p = _m3(s, p); if p < 0 { return -1 }; return p }
-func _m1(s string, p int) int { if p == 0 { return p }; return -1 }
-func _m2(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "#!") { return p + 2 }; return -1 }
-func _m3(s string, p int) int { q, c := p, 0; for { r := _m4(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m4(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 10) { return p + 1 }; return -1 }
-func _m5(s string, p int) int { p = _m6(s, p); if p < 0 { return -1 }; p = _m7(s, p); if p < 0 { return -1 }; p = _m9(s, p); if p < 0 { return -1 }; p = _m10(s, p); if p < 0 { return -1 }; return p }
-func _m6(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "///") { return p + 3 }; return -1 }
-func _m7(s string, p int) int { q, c := p, 0; for { r := _m8(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m8(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc == 32 || cc == 9) { return p + 1 }; return -1 }
-func _m9(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "<") { return p + 1 }; return -1 }
-func _m10(s string, p int) int { q, c := p, 0; for { r := _m11(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m11(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 10) { return p + 1 }; return -1 }
-var _rbF_Ident = [256]bool{36: true, 65: true, 66: true, 67: true, 68: true, 69: true, 70: true, 71: true, 72: true, 73: true, 74: true, 75: true, 76: true, 77: true, 78: true, 79: true, 80: true, 81: true, 82: true, 83: true, 84: true, 85: true, 86: true, 87: true, 88: true, 89: true, 90: true, 95: true, 97: true, 98: true, 99: true, 100: true, 101: true, 102: true, 103: true, 104: true, 105: true, 106: true, 107: true, 108: true, 109: true, 110: true, 111: true, 112: true, 113: true, 114: true, 115: true, 116: true, 117: true, 118: true, 119: true, 120: true, 121: true, 122: true}
-var _rbC_Ident = [256]bool{36: true, 48: true, 49: true, 50: true, 51: true, 52: true, 53: true, 54: true, 55: true, 56: true, 57: true, 65: true, 66: true, 67: true, 68: true, 69: true, 70: true, 71: true, 72: true, 73: true, 74: true, 75: true, 76: true, 77: true, 78: true, 79: true, 80: true, 81: true, 82: true, 83: true, 84: true, 85: true, 86: true, 87: true, 88: true, 89: true, 90: true, 95: true, 97: true, 98: true, 99: true, 100: true, 101: true, 102: true, 103: true, 104: true, 105: true, 106: true, 107: true, 108: true, 109: true, 110: true, 111: true, 112: true, 113: true, 114: true, 115: true, 116: true, 117: true, 118: true, 119: true, 120: true, 121: true, 122: true}
-func _m14(s string, p int) int { p = _m15(s, p); if p < 0 { return -1 }; p = _m27(s, p); if p < 0 { return -1 }; return p }
-func _m15(s string, p int) int { if r := _m16(s, p); r >= 0 { return r }; if r := _m17(s, p); r >= 0 { return r }; return -1 }
-func _m16(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc == 95 || cc == 36) { return p + 1 }; return -1 }
-func _m17(s string, p int) int { if r := _m18(s, p); r >= 0 { return r }; if r := _m22(s, p); r >= 0 { return r }; return -1 }
-func _m18(s string, p int) int { p = _m19(s, p); if p < 0 { return -1 }; p = _m20(s, p); if p < 0 { return -1 }; return p }
-func _m19(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u") { return p + 2 }; return -1 }
-func _m20(s string, p int) int { q, c := p, 0; for { r := _m21(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m21(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m22(s string, p int) int { p = _m23(s, p); if p < 0 { return -1 }; p = _m24(s, p); if p < 0 { return -1 }; p = _m26(s, p); if p < 0 { return -1 }; return p }
-func _m23(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u{") { return p + 3 }; return -1 }
-func _m24(s string, p int) int { q, c := p, 0; for { r := _m25(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m25(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m26(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
-func _m27(s string, p int) int { q, c := p, 0; for { r := _m28(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m28(s string, p int) int { if r := _m29(s, p); r >= 0 { return r }; if r := _m30(s, p); r >= 0 { return r }; return -1 }
-func _m29(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc >= 48 && cc <= 57 || cc == 95 || cc == 36) { return p + 1 }; return -1 }
-func _m30(s string, p int) int { if r := _m31(s, p); r >= 0 { return r }; if r := _m35(s, p); r >= 0 { return r }; return -1 }
-func _m31(s string, p int) int { p = _m32(s, p); if p < 0 { return -1 }; p = _m33(s, p); if p < 0 { return -1 }; return p }
-func _m32(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u") { return p + 2 }; return -1 }
-func _m33(s string, p int) int { q, c := p, 0; for { r := _m34(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m34(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m35(s string, p int) int { p = _m36(s, p); if p < 0 { return -1 }; p = _m37(s, p); if p < 0 { return -1 }; p = _m39(s, p); if p < 0 { return -1 }; return p }
-func _m36(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u{") { return p + 3 }; return -1 }
-func _m37(s string, p int) int { q, c := p, 0; for { r := _m38(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m38(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m39(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
-func _m40(s string, p int) int { p = _m41(s, p); if p < 0 { return -1 }; p = _m42(s, p); if p < 0 { return -1 }; p = _m43(s, p); if p < 0 { return -1 }; p = _m45(s, p); if p < 0 { return -1 }; p = _m50(s, p); if p < 0 { return -1 }; p = _m52(s, p); if p < 0 { return -1 }; return p }
-func _m41(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "0") { return p + 1 }; return -1 }
-func _m42(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc == 120 || cc == 88) { return p + 1 }; return -1 }
-func _m43(s string, p int) int { q, c := p, 0; for { r := _m44(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m44(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m45(s string, p int) int { q, c := p, 0; for { r := _m46(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m46(s string, p int) int { p = _m47(s, p); if p < 0 { return -1 }; p = _m48(s, p); if p < 0 { return -1 }; return p }
-func _m47(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "_") { return p + 1 }; return -1 }
-func _m48(s string, p int) int { q, c := p, 0; for { r := _m49(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m49(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m50(s string, p int) int { q, c := p, 0; for { r := _m51(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 1 { break } }; if c >= 0 { return q }; return -1 }
-func _m51(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "n") { return p + 1 }; return -1 }
-func _m52(s string, p int) int { r := _m53(s, p); if r < 0 { return p }; return -1 }
-func _m53(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc == 95 || cc == 36 || cc == 92) { return p + 1 }; return -1 }
-func _m54(s string, p int) int { p = _m55(s, p); if p < 0 { return -1 }; p = _m56(s, p); if p < 0 { return -1 }; p = _m57(s, p); if p < 0 { return -1 }; p = _m59(s, p); if p < 0 { return -1 }; p = _m64(s, p); if p < 0 { return -1 }; p = _m66(s, p); if p < 0 { return -1 }; return p }
-func _m55(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "0") { return p + 1 }; return -1 }
-func _m56(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc == 111 || cc == 79) { return p + 1 }; return -1 }
-func _m57(s string, p int) int { q, c := p, 0; for { r := _m58(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m58(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 55) { return p + 1 }; return -1 }
-func _m59(s string, p int) int { q, c := p, 0; for { r := _m60(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m60(s string, p int) int { p = _m61(s, p); if p < 0 { return -1 }; p = _m62(s, p); if p < 0 { return -1 }; return p }
-func _m61(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "_") { return p + 1 }; return -1 }
-func _m62(s string, p int) int { q, c := p, 0; for { r := _m63(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m63(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 55) { return p + 1 }; return -1 }
-func _m64(s string, p int) int { q, c := p, 0; for { r := _m65(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 1 { break } }; if c >= 0 { return q }; return -1 }
-func _m65(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "n") { return p + 1 }; return -1 }
-func _m66(s string, p int) int { r := _m67(s, p); if r < 0 { return p }; return -1 }
-func _m67(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc == 95 || cc == 36 || cc == 92) { return p + 1 }; return -1 }
-func _m68(s string, p int) int { p = _m69(s, p); if p < 0 { return -1 }; p = _m70(s, p); if p < 0 { return -1 }; p = _m71(s, p); if p < 0 { return -1 }; p = _m73(s, p); if p < 0 { return -1 }; p = _m78(s, p); if p < 0 { return -1 }; p = _m80(s, p); if p < 0 { return -1 }; return p }
-func _m69(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "0") { return p + 1 }; return -1 }
-func _m70(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc == 98 || cc == 66) { return p + 1 }; return -1 }
-func _m71(s string, p int) int { q, c := p, 0; for { r := _m72(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m72(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc == 48 || cc == 49) { return p + 1 }; return -1 }
-func _m73(s string, p int) int { q, c := p, 0; for { r := _m74(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m74(s string, p int) int { p = _m75(s, p); if p < 0 { return -1 }; p = _m76(s, p); if p < 0 { return -1 }; return p }
-func _m75(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "_") { return p + 1 }; return -1 }
-func _m76(s string, p int) int { q, c := p, 0; for { r := _m77(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m77(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc == 48 || cc == 49) { return p + 1 }; return -1 }
-func _m78(s string, p int) int { q, c := p, 0; for { r := _m79(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 1 { break } }; if c >= 0 { return q }; return -1 }
-func _m79(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "n") { return p + 1 }; return -1 }
-func _m80(s string, p int) int { r := _m81(s, p); if r < 0 { return p }; return -1 }
-func _m81(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc == 95 || cc == 36 || cc == 92) { return p + 1 }; return -1 }
-func _m82(s string, p int) int { p = _m83(s, p); if p < 0 { return -1 }; p = _m91(s, p); if p < 0 { return -1 }; p = _m92(s, p); if p < 0 { return -1 }; return p }
-func _m83(s string, p int) int { p = _m84(s, p); if p < 0 { return -1 }; p = _m86(s, p); if p < 0 { return -1 }; return p }
-func _m84(s string, p int) int { q, c := p, 0; for { r := _m85(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m85(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m86(s string, p int) int { q, c := p, 0; for { r := _m87(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m87(s string, p int) int { p = _m88(s, p); if p < 0 { return -1 }; p = _m89(s, p); if p < 0 { return -1 }; return p }
-func _m88(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "_") { return p + 1 }; return -1 }
-func _m89(s string, p int) int { q, c := p, 0; for { r := _m90(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m90(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m91(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "n") { return p + 1 }; return -1 }
-func _m92(s string, p int) int { r := _m93(s, p); if r < 0 { return p }; return -1 }
-func _m93(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc == 95 || cc == 36 || cc == 92) { return p + 1 }; return -1 }
-func _m94(s string, p int) int { p = _m95(s, p); if p < 0 { return -1 }; p = _m128(s, p); if p < 0 { return -1 }; p = _m141(s, p); if p < 0 { return -1 }; return p }
-func _m95(s string, p int) int { if r := _m96(s, p); r >= 0 { return r }; if r := _m118(s, p); r >= 0 { return r }; return -1 }
-func _m96(s string, p int) int { p = _m97(s, p); if p < 0 { return -1 }; p = _m108(s, p); if p < 0 { return -1 }; return p }
-func _m97(s string, p int) int { if r := _m98(s, p); r >= 0 { return r }; if r := _m99(s, p); r >= 0 { return r }; return -1 }
-func _m98(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "0") { return p + 1 }; return -1 }
-func _m99(s string, p int) int { p = _m100(s, p); if p < 0 { return -1 }; p = _m101(s, p); if p < 0 { return -1 }; p = _m103(s, p); if p < 0 { return -1 }; return p }
-func _m100(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 49 && cc <= 57) { return p + 1 }; return -1 }
-func _m101(s string, p int) int { q, c := p, 0; for { r := _m102(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m102(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m103(s string, p int) int { q, c := p, 0; for { r := _m104(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m104(s string, p int) int { p = _m105(s, p); if p < 0 { return -1 }; p = _m106(s, p); if p < 0 { return -1 }; return p }
-func _m105(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "_") { return p + 1 }; return -1 }
-func _m106(s string, p int) int { q, c := p, 0; for { r := _m107(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m107(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m108(s string, p int) int { q, c := p, 0; for { r := _m109(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 1 { break } }; if c >= 0 { return q }; return -1 }
-func _m109(s string, p int) int { p = _m110(s, p); if p < 0 { return -1 }; p = _m111(s, p); if p < 0 { return -1 }; p = _m113(s, p); if p < 0 { return -1 }; return p }
-func _m110(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], ".") { return p + 1 }; return -1 }
-func _m111(s string, p int) int { q, c := p, 0; for { r := _m112(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m112(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m113(s string, p int) int { q, c := p, 0; for { r := _m114(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m114(s string, p int) int { p = _m115(s, p); if p < 0 { return -1 }; p = _m116(s, p); if p < 0 { return -1 }; return p }
-func _m115(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "_") { return p + 1 }; return -1 }
-func _m116(s string, p int) int { q, c := p, 0; for { r := _m117(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m117(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m118(s string, p int) int { p = _m119(s, p); if p < 0 { return -1 }; p = _m120(s, p); if p < 0 { return -1 }; return p }
-func _m119(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], ".") { return p + 1 }; return -1 }
-func _m120(s string, p int) int { p = _m121(s, p); if p < 0 { return -1 }; p = _m123(s, p); if p < 0 { return -1 }; return p }
-func _m121(s string, p int) int { q, c := p, 0; for { r := _m122(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m122(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m123(s string, p int) int { q, c := p, 0; for { r := _m124(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m124(s string, p int) int { p = _m125(s, p); if p < 0 { return -1 }; p = _m126(s, p); if p < 0 { return -1 }; return p }
-func _m125(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "_") { return p + 1 }; return -1 }
-func _m126(s string, p int) int { q, c := p, 0; for { r := _m127(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m127(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m128(s string, p int) int { q, c := p, 0; for { r := _m129(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 1 { break } }; if c >= 0 { return q }; return -1 }
-func _m129(s string, p int) int { p = _m130(s, p); if p < 0 { return -1 }; p = _m131(s, p); if p < 0 { return -1 }; p = _m133(s, p); if p < 0 { return -1 }; return p }
-func _m130(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc == 101 || cc == 69) { return p + 1 }; return -1 }
-func _m131(s string, p int) int { q, c := p, 0; for { r := _m132(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 1 { break } }; if c >= 0 { return q }; return -1 }
-func _m132(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc == 43 || cc == 45) { return p + 1 }; return -1 }
-func _m133(s string, p int) int { p = _m134(s, p); if p < 0 { return -1 }; p = _m136(s, p); if p < 0 { return -1 }; return p }
-func _m134(s string, p int) int { q, c := p, 0; for { r := _m135(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m135(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m136(s string, p int) int { q, c := p, 0; for { r := _m137(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m137(s string, p int) int { p = _m138(s, p); if p < 0 { return -1 }; p = _m139(s, p); if p < 0 { return -1 }; return p }
-func _m138(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "_") { return p + 1 }; return -1 }
-func _m139(s string, p int) int { q, c := p, 0; for { r := _m140(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m140(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57) { return p + 1 }; return -1 }
-func _m141(s string, p int) int { r := _m142(s, p); if r < 0 { return p }; return -1 }
-func _m142(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc == 95 || cc == 36 || cc == 92) { return p + 1 }; return -1 }
-func _m143(s string, p int) int { if r := _m144(s, p); r >= 0 { return r }; if r := _m175(s, p); r >= 0 { return r }; return -1 }
-func _m144(s string, p int) int { p = _m145(s, p); if p < 0 { return -1 }; p = _m146(s, p); if p < 0 { return -1 }; p = _m174(s, p); if p < 0 { return -1 }; return p }
-func _m145(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\"") { return p + 1 }; return -1 }
-func _m146(s string, p int) int { q, c := p, 0; for { r := _m147(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m147(s string, p int) int { if r := _m148(s, p); r >= 0 { return r }; if r := _m149(s, p); r >= 0 { return r }; return -1 }
-func _m148(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 34 || cc == 92) { return p + 1 }; return -1 }
-func _m149(s string, p int) int { p = _m150(s, p); if p < 0 { return -1 }; p = _m151(s, p); if p < 0 { return -1 }; return p }
-func _m150(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\") { return p + 1 }; return -1 }
-func _m151(s string, p int) int { if r := _m152(s, p); r >= 0 { return r }; if r := _m165(s, p); r >= 0 { return r }; if r := _m169(s, p); r >= 0 { return r }; if r := _m173(s, p); r >= 0 { return r }; return -1 }
-func _m152(s string, p int) int { p = _m153(s, p); if p < 0 { return -1 }; p = _m154(s, p); if p < 0 { return -1 }; p = _m164(s, p); if p < 0 { return -1 }; return p }
-func _m153(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "u{") { return p + 2 }; return -1 }
-func _m154(s string, p int) int { p = _m155(s, p); if p < 0 { return -1 }; p = _m157(s, p); if p < 0 { return -1 }; return p }
-func _m155(s string, p int) int { q, c := p, 0; for { r := _m156(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m156(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "0") { return p + 1 }; return -1 }
-func _m157(s string, p int) int { if r := _m158(s, p); r >= 0 { return r }; if r := _m160(s, p); r >= 0 { return r }; return -1 }
-func _m158(s string, p int) int { q, c := p, 0; for { r := _m159(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 5 { break } }; if c >= 1 { return q }; return -1 }
-func _m159(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m160(s string, p int) int { p = _m161(s, p); if p < 0 { return -1 }; p = _m162(s, p); if p < 0 { return -1 }; return p }
-func _m161(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "10") { return p + 2 }; return -1 }
-func _m162(s string, p int) int { q, c := p, 0; for { r := _m163(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m163(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m164(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
-func _m165(s string, p int) int { p = _m166(s, p); if p < 0 { return -1 }; p = _m167(s, p); if p < 0 { return -1 }; return p }
-func _m166(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "u") { return p + 1 }; return -1 }
-func _m167(s string, p int) int { q, c := p, 0; for { r := _m168(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m168(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m169(s string, p int) int { p = _m170(s, p); if p < 0 { return -1 }; p = _m171(s, p); if p < 0 { return -1 }; return p }
-func _m170(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "x") { return p + 1 }; return -1 }
-func _m171(s string, p int) int { q, c := p, 0; for { r := _m172(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 2 { break } }; if c >= 2 { return q }; return -1 }
-func _m172(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m173(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 117 || cc == 120) { return p + 1 }; return -1 }
-func _m174(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\"") { return p + 1 }; return -1 }
-func _m175(s string, p int) int { p = _m176(s, p); if p < 0 { return -1 }; p = _m177(s, p); if p < 0 { return -1 }; p = _m205(s, p); if p < 0 { return -1 }; return p }
-func _m176(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "'") { return p + 1 }; return -1 }
-func _m177(s string, p int) int { q, c := p, 0; for { r := _m178(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m178(s string, p int) int { if r := _m179(s, p); r >= 0 { return r }; if r := _m180(s, p); r >= 0 { return r }; return -1 }
-func _m179(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 39 || cc == 92) { return p + 1 }; return -1 }
-func _m180(s string, p int) int { p = _m181(s, p); if p < 0 { return -1 }; p = _m182(s, p); if p < 0 { return -1 }; return p }
-func _m181(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\") { return p + 1 }; return -1 }
-func _m182(s string, p int) int { if r := _m183(s, p); r >= 0 { return r }; if r := _m196(s, p); r >= 0 { return r }; if r := _m200(s, p); r >= 0 { return r }; if r := _m204(s, p); r >= 0 { return r }; return -1 }
-func _m183(s string, p int) int { p = _m184(s, p); if p < 0 { return -1 }; p = _m185(s, p); if p < 0 { return -1 }; p = _m195(s, p); if p < 0 { return -1 }; return p }
-func _m184(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "u{") { return p + 2 }; return -1 }
-func _m185(s string, p int) int { p = _m186(s, p); if p < 0 { return -1 }; p = _m188(s, p); if p < 0 { return -1 }; return p }
-func _m186(s string, p int) int { q, c := p, 0; for { r := _m187(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m187(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "0") { return p + 1 }; return -1 }
-func _m188(s string, p int) int { if r := _m189(s, p); r >= 0 { return r }; if r := _m191(s, p); r >= 0 { return r }; return -1 }
-func _m189(s string, p int) int { q, c := p, 0; for { r := _m190(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 5 { break } }; if c >= 1 { return q }; return -1 }
-func _m190(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m191(s string, p int) int { p = _m192(s, p); if p < 0 { return -1 }; p = _m193(s, p); if p < 0 { return -1 }; return p }
-func _m192(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "10") { return p + 2 }; return -1 }
-func _m193(s string, p int) int { q, c := p, 0; for { r := _m194(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m194(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m195(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
-func _m196(s string, p int) int { p = _m197(s, p); if p < 0 { return -1 }; p = _m198(s, p); if p < 0 { return -1 }; return p }
-func _m197(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "u") { return p + 1 }; return -1 }
-func _m198(s string, p int) int { q, c := p, 0; for { r := _m199(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m199(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m200(s string, p int) int { p = _m201(s, p); if p < 0 { return -1 }; p = _m202(s, p); if p < 0 { return -1 }; return p }
-func _m201(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "x") { return p + 1 }; return -1 }
-func _m202(s string, p int) int { q, c := p, 0; for { r := _m203(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 2 { break } }; if c >= 2 { return q }; return -1 }
-func _m203(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m204(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 117 || cc == 120) { return p + 1 }; return -1 }
-func _m205(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "'") { return p + 1 }; return -1 }
-func _m206(s string, p int) int { p = _m207(s, p); if p < 0 { return -1 }; p = _m208(s, p); if p < 0 { return -1 }; p = _m222(s, p); if p < 0 { return -1 }; p = _m237(s, p); if p < 0 { return -1 }; p = _m238(s, p); if p < 0 { return -1 }; return p }
-func _m207(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "/") { return p + 1 }; return -1 }
-func _m208(s string, p int) int { if r := _m209(s, p); r >= 0 { return r }; if r := _m210(s, p); r >= 0 { return r }; if r := _m213(s, p); r >= 0 { return r }; return -1 }
-func _m209(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 47 || cc == 92 || cc == 91 || cc == 42 || cc == 10) { return p + 1 }; return -1 }
-func _m210(s string, p int) int { p = _m211(s, p); if p < 0 { return -1 }; p = _m212(s, p); if p < 0 { return -1 }; return p }
-func _m211(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\") { return p + 1 }; return -1 }
-func _m212(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 10 || cc == 13 || cc == 8232 || cc == 8233) { return p + 1 }; return -1 }
-func _m213(s string, p int) int { p = _m214(s, p); if p < 0 { return -1 }; p = _m215(s, p); if p < 0 { return -1 }; p = _m221(s, p); if p < 0 { return -1 }; return p }
-func _m214(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "[") { return p + 1 }; return -1 }
-func _m215(s string, p int) int { q, c := p, 0; for { r := _m216(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m216(s string, p int) int { if r := _m217(s, p); r >= 0 { return r }; if r := _m218(s, p); r >= 0 { return r }; return -1 }
-func _m217(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 93 || cc == 92 || cc == 10) { return p + 1 }; return -1 }
-func _m218(s string, p int) int { p = _m219(s, p); if p < 0 { return -1 }; p = _m220(s, p); if p < 0 { return -1 }; return p }
-func _m219(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\") { return p + 1 }; return -1 }
-func _m220(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 10 || cc == 13 || cc == 8232 || cc == 8233) { return p + 1 }; return -1 }
-func _m221(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "]") { return p + 1 }; return -1 }
-func _m222(s string, p int) int { q, c := p, 0; for { r := _m223(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m223(s string, p int) int { if r := _m224(s, p); r >= 0 { return r }; if r := _m225(s, p); r >= 0 { return r }; if r := _m228(s, p); r >= 0 { return r }; return -1 }
-func _m224(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 47 || cc == 92 || cc == 91 || cc == 10) { return p + 1 }; return -1 }
-func _m225(s string, p int) int { p = _m226(s, p); if p < 0 { return -1 }; p = _m227(s, p); if p < 0 { return -1 }; return p }
-func _m226(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\") { return p + 1 }; return -1 }
-func _m227(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 10 || cc == 13 || cc == 8232 || cc == 8233) { return p + 1 }; return -1 }
-func _m228(s string, p int) int { p = _m229(s, p); if p < 0 { return -1 }; p = _m230(s, p); if p < 0 { return -1 }; p = _m236(s, p); if p < 0 { return -1 }; return p }
-func _m229(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "[") { return p + 1 }; return -1 }
-func _m230(s string, p int) int { q, c := p, 0; for { r := _m231(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m231(s string, p int) int { if r := _m232(s, p); r >= 0 { return r }; if r := _m233(s, p); r >= 0 { return r }; return -1 }
-func _m232(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 93 || cc == 92 || cc == 10) { return p + 1 }; return -1 }
-func _m233(s string, p int) int { p = _m234(s, p); if p < 0 { return -1 }; p = _m235(s, p); if p < 0 { return -1 }; return p }
-func _m234(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\") { return p + 1 }; return -1 }
-func _m235(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if !(cc == 10 || cc == 13 || cc == 8232 || cc == 8233) { return p + 1 }; return -1 }
-func _m236(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "]") { return p + 1 }; return -1 }
-func _m237(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "/") { return p + 1 }; return -1 }
-func _m238(s string, p int) int { q, c := p, 0; for { r := _m239(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m239(s string, p int) int { if r := _m240(s, p); r >= 0 { return r }; if r := _m241(s, p); r >= 0 { return r }; return -1 }
-func _m240(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc >= 48 && cc <= 57 || cc == 95 || cc == 36) { return p + 1 }; return -1 }
-func _m241(s string, p int) int { if r := _m242(s, p); r >= 0 { return r }; if r := _m246(s, p); r >= 0 { return r }; return -1 }
-func _m242(s string, p int) int { p = _m243(s, p); if p < 0 { return -1 }; p = _m244(s, p); if p < 0 { return -1 }; return p }
-func _m243(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u") { return p + 2 }; return -1 }
-func _m244(s string, p int) int { q, c := p, 0; for { r := _m245(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m245(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m246(s string, p int) int { p = _m247(s, p); if p < 0 { return -1 }; p = _m248(s, p); if p < 0 { return -1 }; p = _m250(s, p); if p < 0 { return -1 }; return p }
-func _m247(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u{") { return p + 3 }; return -1 }
-func _m248(s string, p int) int { q, c := p, 0; for { r := _m249(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m249(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m250(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
-func _m251(s string, p int) int { p = _m252(s, p); if p < 0 { return -1 }; p = _m253(s, p); if p < 0 { return -1 }; return p }
-func _m252(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "@") { return p + 1 }; return -1 }
-func _m253(s string, p int) int { q, c := p, 0; for { r := _m254(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 1 { break } }; if c >= 0 { return q }; return -1 }
-func _m254(s string, p int) int { p = _m255(s, p); if p < 0 { return -1 }; p = _m267(s, p); if p < 0 { return -1 }; return p }
-func _m255(s string, p int) int { if r := _m256(s, p); r >= 0 { return r }; if r := _m257(s, p); r >= 0 { return r }; return -1 }
-func _m256(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc == 95 || cc == 36) { return p + 1 }; return -1 }
-func _m257(s string, p int) int { if r := _m258(s, p); r >= 0 { return r }; if r := _m262(s, p); r >= 0 { return r }; return -1 }
-func _m258(s string, p int) int { p = _m259(s, p); if p < 0 { return -1 }; p = _m260(s, p); if p < 0 { return -1 }; return p }
-func _m259(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u") { return p + 2 }; return -1 }
-func _m260(s string, p int) int { q, c := p, 0; for { r := _m261(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m261(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m262(s string, p int) int { p = _m263(s, p); if p < 0 { return -1 }; p = _m264(s, p); if p < 0 { return -1 }; p = _m266(s, p); if p < 0 { return -1 }; return p }
-func _m263(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u{") { return p + 3 }; return -1 }
-func _m264(s string, p int) int { q, c := p, 0; for { r := _m265(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m265(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m266(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
-func _m267(s string, p int) int { q, c := p, 0; for { r := _m268(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m268(s string, p int) int { if r := _m269(s, p); r >= 0 { return r }; if r := _m281(s, p); r >= 0 { return r }; return -1 }
-func _m269(s string, p int) int { if r := _m270(s, p); r >= 0 { return r }; if r := _m271(s, p); r >= 0 { return r }; return -1 }
-func _m270(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc >= 48 && cc <= 57 || cc == 95 || cc == 36) { return p + 1 }; return -1 }
-func _m271(s string, p int) int { if r := _m272(s, p); r >= 0 { return r }; if r := _m276(s, p); r >= 0 { return r }; return -1 }
-func _m272(s string, p int) int { p = _m273(s, p); if p < 0 { return -1 }; p = _m274(s, p); if p < 0 { return -1 }; return p }
-func _m273(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u") { return p + 2 }; return -1 }
-func _m274(s string, p int) int { q, c := p, 0; for { r := _m275(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m275(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m276(s string, p int) int { p = _m277(s, p); if p < 0 { return -1 }; p = _m278(s, p); if p < 0 { return -1 }; p = _m280(s, p); if p < 0 { return -1 }; return p }
-func _m277(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u{") { return p + 3 }; return -1 }
-func _m278(s string, p int) int { q, c := p, 0; for { r := _m279(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m279(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m280(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
-func _m281(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], ".") { return p + 1 }; return -1 }
-func _m282(s string, p int) int { p = _m283(s, p); if p < 0 { return -1 }; p = _m284(s, p); if p < 0 { return -1 }; p = _m296(s, p); if p < 0 { return -1 }; return p }
-func _m283(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "#") { return p + 1 }; return -1 }
-func _m284(s string, p int) int { if r := _m285(s, p); r >= 0 { return r }; if r := _m286(s, p); r >= 0 { return r }; return -1 }
-func _m285(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc == 95 || cc == 36) { return p + 1 }; return -1 }
-func _m286(s string, p int) int { if r := _m287(s, p); r >= 0 { return r }; if r := _m291(s, p); r >= 0 { return r }; return -1 }
-func _m287(s string, p int) int { p = _m288(s, p); if p < 0 { return -1 }; p = _m289(s, p); if p < 0 { return -1 }; return p }
-func _m288(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u") { return p + 2 }; return -1 }
-func _m289(s string, p int) int { q, c := p, 0; for { r := _m290(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m290(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m291(s string, p int) int { p = _m292(s, p); if p < 0 { return -1 }; p = _m293(s, p); if p < 0 { return -1 }; p = _m295(s, p); if p < 0 { return -1 }; return p }
-func _m292(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u{") { return p + 3 }; return -1 }
-func _m293(s string, p int) int { q, c := p, 0; for { r := _m294(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m294(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m295(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
-func _m296(s string, p int) int { q, c := p, 0; for { r := _m297(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 0 { return q }; return -1 }
-func _m297(s string, p int) int { if r := _m298(s, p); r >= 0 { return r }; if r := _m299(s, p); r >= 0 { return r }; return -1 }
-func _m298(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc >= 48 && cc <= 57 || cc == 95 || cc == 36) { return p + 1 }; return -1 }
-func _m299(s string, p int) int { if r := _m300(s, p); r >= 0 { return r }; if r := _m304(s, p); r >= 0 { return r }; return -1 }
-func _m300(s string, p int) int { p = _m301(s, p); if p < 0 { return -1 }; p = _m302(s, p); if p < 0 { return -1 }; return p }
-func _m301(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u") { return p + 2 }; return -1 }
-func _m302(s string, p int) int { q, c := p, 0; for { r := _m303(s, q); if r < 0 || r == q { break }; q = r; c++; if c >= 4 { break } }; if c >= 4 { return q }; return -1 }
-func _m303(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m304(s string, p int) int { p = _m305(s, p); if p < 0 { return -1 }; p = _m306(s, p); if p < 0 { return -1 }; p = _m308(s, p); if p < 0 { return -1 }; return p }
-func _m305(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "\\u{") { return p + 3 }; return -1 }
-func _m306(s string, p int) int { q, c := p, 0; for { r := _m307(s, q); if r < 0 || r == q { break }; q = r; c++ }; if c >= 1 { return q }; return -1 }
-func _m307(s string, p int) int { if p >= len(s) { return -1 }; cc := int(s[p]); if (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) { return p + 1 }; return -1 }
-func _m308(s string, p int) int { if p <= len(s) && strings.HasPrefix(s[p:], "}") { return p + 1 }; return -1 }
+var lexFirstIdent = [256]bool{36: true, 65: true, 66: true, 67: true, 68: true, 69: true, 70: true, 71: true, 72: true, 73: true, 74: true, 75: true, 76: true, 77: true, 78: true, 79: true, 80: true, 81: true, 82: true, 83: true, 84: true, 85: true, 86: true, 87: true, 88: true, 89: true, 90: true, 95: true, 97: true, 98: true, 99: true, 100: true, 101: true, 102: true, 103: true, 104: true, 105: true, 106: true, 107: true, 108: true, 109: true, 110: true, 111: true, 112: true, 113: true, 114: true, 115: true, 116: true, 117: true, 118: true, 119: true, 120: true, 121: true, 122: true}
+var lexContIdent = [256]bool{36: true, 48: true, 49: true, 50: true, 51: true, 52: true, 53: true, 54: true, 55: true, 56: true, 57: true, 65: true, 66: true, 67: true, 68: true, 69: true, 70: true, 71: true, 72: true, 73: true, 74: true, 75: true, 76: true, 77: true, 78: true, 79: true, 80: true, 81: true, 82: true, 83: true, 84: true, 85: true, 86: true, 87: true, 88: true, 89: true, 90: true, 95: true, 97: true, 98: true, 99: true, 100: true, 101: true, 102: true, 103: true, 104: true, 105: true, 106: true, 107: true, 108: true, 109: true, 110: true, 111: true, 112: true, 113: true, 114: true, 115: true, 116: true, 117: true, 118: true, 119: true, 120: true, 121: true, 122: true}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch0(s string, p int) int {
+	if p == 0 { return p }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch1(s string, p int) int {
+	if strings.HasPrefix(s[p:], "#!") { return p + 2 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch2(s string, p int) int {
+	q := p
+	for q < len(s) {
+		c := int(s[q])
+		if c == 10 { break }
+		q = q + 1
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch3(s string, p int) int {
+	q0 := lexMatch0(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch1(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch2(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// Shebang is scanned by its token pattern.
+func lexScanShebang(s string, p int) int {
+	e := lexMatch3(s, p)
+	if e > p { return e }
+	return -1
+}
+// JSDoc runs from /** to the first */ after it.
+func lexScanJSDoc(s string, p int) int {
+	if !strings.HasPrefix(s[p:], "/**") { return -1 }
+	e := p + 3
+	for e < len(s) {
+		if strings.HasPrefix(s[e:], "*/") { return e + 2 }
+		e = e + 1
+	}
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch4(s string, p int) int {
+	if strings.HasPrefix(s[p:], "///") { return p + 3 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch5(s string, p int) int {
+	q := p
+	for q < len(s) {
+		c := int(s[q])
+		if !(c == 32 || c == 9) { break }
+		q = q + 1
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch6(s string, p int) int {
+	if strings.HasPrefix(s[p:], "<") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch7(s string, p int) int {
+	q0 := lexMatch4(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch5(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch6(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	q3 := lexMatch2(s, q2)
+	if q3 < 0 || q3 > len(s) { return -1 }
+	return q3
+}
+// TripleSlash is scanned by its token pattern.
+func lexScanTripleSlash(s string, p int) int {
+	e := lexMatch7(s, p)
+	if e > p { return e }
+	return -1
+}
+// LineComment: // to the end of the line.
+func lexScanLineComment(s string, p int) int {
+	if !strings.HasPrefix(s[p:], "//") { return -1 }
+	e := p + 2
+	for e < len(s) {
+		if int(s[e]) == 10 { break }
+		e = e + 1
+	}
+	return e
+}
+// BlockComment runs from /* to the first */ after it.
+func lexScanBlockComment(s string, p int) int {
+	if !strings.HasPrefix(s[p:], "/*") { return -1 }
+	e := p + 2
+	for e < len(s) {
+		if strings.HasPrefix(s[e:], "*/") { return e + 2 }
+		e = e + 1
+	}
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch8(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c == 36 { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch9(s string, p int) int {
+	if strings.HasPrefix(s[p:], "\\u") { return p + 2 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch10(s string, p int) int {
+	q := p
+	n := 0
+	for q < len(s) {
+		if n >= 4 { break }
+		c := int(s[q])
+		if !(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102) { break }
+		q = q + 1
+		n = n + 1
+	}
+	if n < 4 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch11(s string, p int) int {
+	q0 := lexMatch9(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch10(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch12(s string, p int) int {
+	if strings.HasPrefix(s[p:], "\\u{") { return p + 3 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch13(s string, p int) int {
+	q := p
+	n := 0
+	for q < len(s) {
+		c := int(s[q])
+		if !(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102) { break }
+		q = q + 1
+		n = n + 1
+	}
+	if n < 1 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch14(s string, p int) int {
+	if strings.HasPrefix(s[p:], "}") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch15(s string, p int) int {
+	q0 := lexMatch12(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch13(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch14(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch16(s string, p int) int {
+	r := -1
+	r = lexMatch11(s, p)
+	if r >= 0 { return r }
+	r = lexMatch15(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch17(s string, p int) int {
+	r := -1
+	r = lexMatch8(s, p)
+	if r >= 0 { return r }
+	r = lexMatch16(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch18(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if c >= 97 && c <= 122 || c >= 65 && c <= 90 || c >= 48 && c <= 57 || c == 95 || c == 36 { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch19(s string, p int) int {
+	r := -1
+	r = lexMatch18(s, p)
+	if r >= 0 { return r }
+	r = lexMatch16(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch20(s string, p int) int {
+	q := p
+	r := lexMatch19(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch19(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch21(s string, p int) int {
+	q0 := lexMatch17(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch20(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// Ident: an ASCII run while no bail character stops it, else the token pattern.
+func lexScanIdent(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if lexFirstIdent[c] {
+		e := p + 1
+		for e < len(s) {
+			if !lexContIdent[int(s[e])] { break }
+			e = e + 1
+		}
+		if e >= len(s) { return e }
+		d := int(s[e])
+		if !(d == 92) { return e }
+		e = lexMatch21(s, p)
+		if e > p { return e }
+		return -1
+	}
+	if c == 92 {
+		e := lexMatch21(s, p)
+		if e > p { return e }
+		return -1
+	}
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch22(s string, p int) int {
+	if strings.HasPrefix(s[p:], "0") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch23(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if c == 120 || c == 88 { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch24(s string, p int) int {
+	if strings.HasPrefix(s[p:], "_") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch25(s string, p int) int {
+	q0 := lexMatch24(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch13(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch26(s string, p int) int {
+	q := p
+	r := lexMatch25(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch25(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch27(s string, p int) int {
+	if strings.HasPrefix(s[p:], "n") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch28(s string, p int) int {
+	q := p
+	n := 0
+	r := lexMatch27(s, q)
+	for r >= 0 && r != q {
+		q = r
+		n = n + 1
+		if n >= 1 { break }
+		r = lexMatch27(s, q)
+	}
+	if n < 0 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch29(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if c >= 48 && c <= 57 || c >= 65 && c <= 90 || c >= 97 && c <= 122 || c == 95 || c == 36 || c == 92 {
+		return p + 1
+	}
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch30(s string, p int) int {
+	r := lexMatch29(s, p)
+	if r < 0 { return p }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch31(s string, p int) int {
+	q0 := lexMatch22(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch23(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch13(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	q3 := lexMatch26(s, q2)
+	if q3 < 0 || q3 > len(s) { return -1 }
+	q4 := lexMatch28(s, q3)
+	if q4 < 0 || q4 > len(s) { return -1 }
+	q5 := lexMatch30(s, q4)
+	if q5 < 0 || q5 > len(s) { return -1 }
+	return q5
+}
+// HexNumber is scanned by its token pattern.
+func lexScanHexNumber(s string, p int) int {
+	e := lexMatch31(s, p)
+	if e > p { return e }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch32(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if c == 111 || c == 79 { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch33(s string, p int) int {
+	q := p
+	n := 0
+	for q < len(s) {
+		c := int(s[q])
+		if !(c >= 48 && c <= 55) { break }
+		q = q + 1
+		n = n + 1
+	}
+	if n < 1 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch34(s string, p int) int {
+	q0 := lexMatch24(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch33(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch35(s string, p int) int {
+	q := p
+	r := lexMatch34(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch34(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch36(s string, p int) int {
+	q0 := lexMatch22(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch32(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch33(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	q3 := lexMatch35(s, q2)
+	if q3 < 0 || q3 > len(s) { return -1 }
+	q4 := lexMatch28(s, q3)
+	if q4 < 0 || q4 > len(s) { return -1 }
+	q5 := lexMatch30(s, q4)
+	if q5 < 0 || q5 > len(s) { return -1 }
+	return q5
+}
+// OctalNumber is scanned by its token pattern.
+func lexScanOctalNumber(s string, p int) int {
+	e := lexMatch36(s, p)
+	if e > p { return e }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch37(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if c == 98 || c == 66 { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch38(s string, p int) int {
+	q := p
+	n := 0
+	for q < len(s) {
+		c := int(s[q])
+		if !(c == 48 || c == 49) { break }
+		q = q + 1
+		n = n + 1
+	}
+	if n < 1 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch39(s string, p int) int {
+	q0 := lexMatch24(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch38(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch40(s string, p int) int {
+	q := p
+	r := lexMatch39(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch39(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch41(s string, p int) int {
+	q0 := lexMatch22(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch37(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch38(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	q3 := lexMatch40(s, q2)
+	if q3 < 0 || q3 > len(s) { return -1 }
+	q4 := lexMatch28(s, q3)
+	if q4 < 0 || q4 > len(s) { return -1 }
+	q5 := lexMatch30(s, q4)
+	if q5 < 0 || q5 > len(s) { return -1 }
+	return q5
+}
+// BinaryNumber is scanned by its token pattern.
+func lexScanBinaryNumber(s string, p int) int {
+	e := lexMatch41(s, p)
+	if e > p { return e }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch42(s string, p int) int {
+	q := p
+	n := 0
+	for q < len(s) {
+		c := int(s[q])
+		if !(c >= 48 && c <= 57) { break }
+		q = q + 1
+		n = n + 1
+	}
+	if n < 1 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch43(s string, p int) int {
+	q0 := lexMatch24(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch42(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch44(s string, p int) int {
+	q := p
+	r := lexMatch43(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch43(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch45(s string, p int) int {
+	q0 := lexMatch42(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch44(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch46(s string, p int) int {
+	q0 := lexMatch45(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch27(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch30(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// BigInt is scanned by its token pattern.
+func lexScanBigInt(s string, p int) int {
+	e := lexMatch46(s, p)
+	if e > p { return e }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch47(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if c >= 49 && c <= 57 { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch48(s string, p int) int {
+	q := p
+	for q < len(s) {
+		c := int(s[q])
+		if !(c >= 48 && c <= 57) { break }
+		q = q + 1
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch49(s string, p int) int {
+	q0 := lexMatch47(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch48(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch44(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch50(s string, p int) int {
+	r := -1
+	r = lexMatch22(s, p)
+	if r >= 0 { return r }
+	r = lexMatch49(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch51(s string, p int) int {
+	if strings.HasPrefix(s[p:], ".") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch52(s string, p int) int {
+	q0 := lexMatch51(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch48(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch44(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch53(s string, p int) int {
+	q := p
+	n := 0
+	r := lexMatch52(s, q)
+	for r >= 0 && r != q {
+		q = r
+		n = n + 1
+		if n >= 1 { break }
+		r = lexMatch52(s, q)
+	}
+	if n < 0 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch54(s string, p int) int {
+	q0 := lexMatch50(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch53(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch55(s string, p int) int {
+	q0 := lexMatch51(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch45(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch56(s string, p int) int {
+	r := -1
+	r = lexMatch54(s, p)
+	if r >= 0 { return r }
+	r = lexMatch55(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch57(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if c == 101 || c == 69 { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch58(s string, p int) int {
+	q := p
+	n := 0
+	for q < len(s) {
+		if n >= 1 { break }
+		c := int(s[q])
+		if !(c == 43 || c == 45) { break }
+		q = q + 1
+		n = n + 1
+	}
+	if n < 0 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch59(s string, p int) int {
+	q0 := lexMatch57(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch58(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch45(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch60(s string, p int) int {
+	q := p
+	n := 0
+	r := lexMatch59(s, q)
+	for r >= 0 && r != q {
+		q = r
+		n = n + 1
+		if n >= 1 { break }
+		r = lexMatch59(s, q)
+	}
+	if n < 0 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch61(s string, p int) int {
+	q0 := lexMatch56(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch60(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch30(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// Number is scanned by its token pattern.
+func lexScanNumber(s string, p int) int {
+	e := lexMatch61(s, p)
+	if e > p { return e }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch62(s string, p int) int {
+	if strings.HasPrefix(s[p:], "\"") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch63(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if !(c == 34 || c == 92) { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch64(s string, p int) int {
+	if strings.HasPrefix(s[p:], "\\") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch65(s string, p int) int {
+	if strings.HasPrefix(s[p:], "u{") { return p + 2 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch66(s string, p int) int {
+	q := p
+	r := lexMatch22(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch22(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch67(s string, p int) int {
+	q := p
+	n := 0
+	for q < len(s) {
+		if n >= 5 { break }
+		c := int(s[q])
+		if !(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102) { break }
+		q = q + 1
+		n = n + 1
+	}
+	if n < 1 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch68(s string, p int) int {
+	if strings.HasPrefix(s[p:], "10") { return p + 2 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch69(s string, p int) int {
+	q0 := lexMatch68(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch10(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch70(s string, p int) int {
+	r := -1
+	r = lexMatch67(s, p)
+	if r >= 0 { return r }
+	r = lexMatch69(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch71(s string, p int) int {
+	q0 := lexMatch66(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch70(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch72(s string, p int) int {
+	q0 := lexMatch65(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch71(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch14(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch73(s string, p int) int {
+	if strings.HasPrefix(s[p:], "u") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch74(s string, p int) int {
+	q0 := lexMatch73(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch10(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch75(s string, p int) int {
+	if strings.HasPrefix(s[p:], "x") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch76(s string, p int) int {
+	q := p
+	n := 0
+	for q < len(s) {
+		if n >= 2 { break }
+		c := int(s[q])
+		if !(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102) { break }
+		q = q + 1
+		n = n + 1
+	}
+	if n < 2 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch77(s string, p int) int {
+	q0 := lexMatch75(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch76(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch78(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if !(c == 117 || c == 120) { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch79(s string, p int) int {
+	r := -1
+	r = lexMatch72(s, p)
+	if r >= 0 { return r }
+	r = lexMatch74(s, p)
+	if r >= 0 { return r }
+	r = lexMatch77(s, p)
+	if r >= 0 { return r }
+	r = lexMatch78(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch80(s string, p int) int {
+	q0 := lexMatch64(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch79(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch81(s string, p int) int {
+	r := -1
+	r = lexMatch63(s, p)
+	if r >= 0 { return r }
+	r = lexMatch80(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch82(s string, p int) int {
+	q := p
+	r := lexMatch81(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch81(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch83(s string, p int) int {
+	q0 := lexMatch62(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch82(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch62(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch84(s string, p int) int {
+	if strings.HasPrefix(s[p:], "'") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch85(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if !(c == 39 || c == 92) { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch86(s string, p int) int {
+	r := -1
+	r = lexMatch85(s, p)
+	if r >= 0 { return r }
+	r = lexMatch80(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch87(s string, p int) int {
+	q := p
+	r := lexMatch86(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch86(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch88(s string, p int) int {
+	q0 := lexMatch84(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch87(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch84(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch89(s string, p int) int {
+	r := -1
+	r = lexMatch83(s, p)
+	if r >= 0 { return r }
+	r = lexMatch88(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// String is scanned by its token pattern.
+func lexScanString(s string, p int) int {
+	e := lexMatch89(s, p)
+	if e > p { return e }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch90(s string, p int) int {
+	if strings.HasPrefix(s[p:], "/") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch91(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if !(c == 47 || c == 92 || c == 91 || c == 42 || c == 10) { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch92(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if !(c == 10 || c == 13 || c == 8232 || c == 8233) { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch93(s string, p int) int {
+	q0 := lexMatch64(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch92(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch94(s string, p int) int {
+	if strings.HasPrefix(s[p:], "[") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch95(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if !(c == 93 || c == 92 || c == 10) { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch96(s string, p int) int {
+	r := -1
+	r = lexMatch95(s, p)
+	if r >= 0 { return r }
+	r = lexMatch93(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch97(s string, p int) int {
+	q := p
+	r := lexMatch96(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch96(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch98(s string, p int) int {
+	if strings.HasPrefix(s[p:], "]") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch99(s string, p int) int {
+	q0 := lexMatch94(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch97(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch98(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch100(s string, p int) int {
+	r := -1
+	r = lexMatch91(s, p)
+	if r >= 0 { return r }
+	r = lexMatch93(s, p)
+	if r >= 0 { return r }
+	r = lexMatch99(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch101(s string, p int) int {
+	if p >= len(s) { return -1 }
+	c := int(s[p])
+	if !(c == 47 || c == 92 || c == 91 || c == 10) { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch102(s string, p int) int {
+	r := -1
+	r = lexMatch101(s, p)
+	if r >= 0 { return r }
+	r = lexMatch93(s, p)
+	if r >= 0 { return r }
+	r = lexMatch99(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch103(s string, p int) int {
+	q := p
+	r := lexMatch102(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch102(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch104(s string, p int) int {
+	q0 := lexMatch90(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch100(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch103(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	q3 := lexMatch90(s, q2)
+	if q3 < 0 || q3 > len(s) { return -1 }
+	q4 := lexMatch20(s, q3)
+	if q4 < 0 || q4 > len(s) { return -1 }
+	return q4
+}
+// Regex is scanned by its token pattern.
+func lexScanRegex(s string, p int) int {
+	e := lexMatch104(s, p)
+	if e > p { return e }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch105(s string, p int) int {
+	if strings.HasPrefix(s[p:], "@") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch106(s string, p int) int {
+	r := -1
+	r = lexMatch19(s, p)
+	if r >= 0 { return r }
+	r = lexMatch51(s, p)
+	if r >= 0 { return r }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch107(s string, p int) int {
+	q := p
+	r := lexMatch106(s, q)
+	for r >= 0 && r != q {
+		q = r
+		r = lexMatch106(s, q)
+	}
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch108(s string, p int) int {
+	q0 := lexMatch17(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch107(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch109(s string, p int) int {
+	q := p
+	n := 0
+	r := lexMatch108(s, q)
+	for r >= 0 && r != q {
+		q = r
+		n = n + 1
+		if n >= 1 { break }
+		r = lexMatch108(s, q)
+	}
+	if n < 0 { return -1 }
+	return q
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch110(s string, p int) int {
+	q0 := lexMatch105(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch109(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	return q1
+}
+// Decorator is scanned by its token pattern.
+func lexScanDecorator(s string, p int) int {
+	e := lexMatch110(s, p)
+	if e > p { return e }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch111(s string, p int) int {
+	if strings.HasPrefix(s[p:], "#") { return p + 1 }
+	return -1
+}
+// A token-pattern matcher: the position after the match, or -1.
+func lexMatch112(s string, p int) int {
+	q0 := lexMatch111(s, p)
+	if q0 < 0 || q0 > len(s) { return -1 }
+	q1 := lexMatch17(s, q0)
+	if q1 < 0 || q1 > len(s) { return -1 }
+	q2 := lexMatch20(s, q1)
+	if q2 < 0 || q2 > len(s) { return -1 }
+	return q2
+}
+// PrivateField is scanned by its token pattern.
+func lexScanPrivateField(s string, p int) int {
+	e := lexMatch112(s, p)
+	if e > p { return e }
+	return -1
+}
 func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
 	n := len(src)
 	prevIsValue := func() bool {
@@ -489,40 +1298,21 @@ func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16
 			pos = e; continue
 		}
 	if c >= 128 {
-		if true { if e := _m0(src, pos); e > pos { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue } }
-		if strings.HasPrefix(src[pos:], "/**") {
-			e := pos + 3
-			for e < n && !strings.HasPrefix(src[e:], "*/") { e++ }
-			if e < n { e += 2; if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		}
-		if true { if e := _m5(src, pos); e > pos { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue } }
-		if strings.HasPrefix(src[pos:], "//") {
-			e := pos + 2
-			for e < n && src[e] != 10 { e++ }
-			if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue
-		}
-		if strings.HasPrefix(src[pos:], "/*") {
-			e := pos + 2
-			for e < n && !strings.HasPrefix(src[e:], "*/") { e++ }
-			if e < n { e += 2; if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		}
-		if _rbF_Ident[c] {
-			e := pos + 1
-			for e < n && _rbC_Ident[src[e]] { e++ }
-			if e >= n || !(int(src[e]) == 92) { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
-			if e2 := _m14(src, pos); e2 > pos { e2 = lxExt(src, e2); emit(pos, e2, 6, lidOf(src[pos:e2])); pos = e2; continue }
-		} else if c == 92 {
-			if e := _m14(src, pos); e > pos { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
-		}
-		if true { if e := _m40(src, pos); e > pos { emit(pos, e, 7, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m54(src, pos); e > pos { emit(pos, e, 8, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m68(src, pos); e > pos { emit(pos, e, 9, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m82(src, pos); e > pos { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m94(src, pos); e > pos { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m143(src, pos); e > pos { emit(pos, e, 12, lidOf(src[pos:e])); pos = e; continue } }
-		if !prevIsValue() && true { if e := _m206(src, pos); e > pos { emit(pos, e, 14, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m251(src, pos); e > pos { emit(pos, e, 15, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m282(src, pos); e > pos { emit(pos, e, 16, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanShebang(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanJSDoc(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanTripleSlash(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanLineComment(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanBlockComment(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanIdent(src, pos); e >= 0 { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanHexNumber(src, pos); e >= 0 { emit(pos, e, 7, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanOctalNumber(src, pos); e >= 0 { emit(pos, e, 8, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanBinaryNumber(src, pos); e >= 0 { emit(pos, e, 9, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanBigInt(src, pos); e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanNumber(src, pos); e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanString(src, pos); e >= 0 { emit(pos, e, 12, lidOf(src[pos:e])); pos = e; continue }
+		if !prevIsValue() { if e := lexScanRegex(src, pos); e >= 0 { emit(pos, e, 14, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanDecorator(src, pos); e >= 0 { emit(pos, e, 15, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanPrivateField(src, pos); e >= 0 { e = lxExt(src, e); emit(pos, e, 16, lidOf(src[pos:e])); pos = e; continue }
 		if strings.HasPrefix(src[pos:], "...") { emit(pos, pos + 3, 0, 1); pos += 3; continue }
 		if strings.HasPrefix(src[pos:], "**=") { emit(pos, pos + 3, 0, 2); pos += 3; continue }
 		if strings.HasPrefix(src[pos:], "<<=") { emit(pos, pos + 3, 0, 3); pos += 3; continue }
@@ -582,19 +1372,12 @@ func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16
 		if strings.HasPrefix(src[pos:], "!=") { emit(pos, pos + 2, 0, 23); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "!") { emit(pos, pos + 1, 0, 45); pos += 1; continue }
 		case 34, 39:
-		if true { if e := _m143(src, pos); e > pos { emit(pos, e, 12, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanString(src, pos); e >= 0 { emit(pos, e, 12, lidOf(src[pos:e])); pos = e; continue }
 		case 35:
-		if true { if e := _m0(src, pos); e > pos { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue } }
-		if true { if e := _m282(src, pos); e > pos { emit(pos, e, 16, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanShebang(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanPrivateField(src, pos); e >= 0 { e = lxExt(src, e); emit(pos, e, 16, lidOf(src[pos:e])); pos = e; continue }
 		case 36, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 92, 95, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122:
-		if _rbF_Ident[c] {
-			e := pos + 1
-			for e < n && _rbC_Ident[src[e]] { e++ }
-			if e >= n || !(int(src[e]) == 92) { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
-			if e2 := _m14(src, pos); e2 > pos { e2 = lxExt(src, e2); emit(pos, e2, 6, lidOf(src[pos:e2])); pos = e2; continue }
-		} else if c == 92 {
-			if e := _m14(src, pos); e > pos { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
-		}
+		if e := lexScanIdent(src, pos); e >= 0 { e = lxExt(src, e); emit(pos, e, 6, lidOf(src[pos:e])); pos = e; continue }
 		case 37:
 		if strings.HasPrefix(src[pos:], "%=") { emit(pos, pos + 2, 0, 15); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "%") { emit(pos, pos + 1, 0, 51); pos += 1; continue }
@@ -623,38 +1406,26 @@ func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16
 		if strings.HasPrefix(src[pos:], "--") { emit(pos, pos + 2, 0, 28); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "-") { emit(pos, pos + 1, 0, 43); pos += 1; continue }
 		case 46:
-		if true { if e := _m94(src, pos); e > pos { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanNumber(src, pos); e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
 		if strings.HasPrefix(src[pos:], "...") { emit(pos, pos + 3, 0, 1); pos += 3; continue }
 		if strings.HasPrefix(src[pos:], ".") { emit(pos, pos + 1, 0, 44); pos += 1; continue }
 		case 47:
-		if strings.HasPrefix(src[pos:], "/**") {
-			e := pos + 3
-			for e < n && !strings.HasPrefix(src[e:], "*/") { e++ }
-			if e < n { e += 2; if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		}
-		if true { if e := _m5(src, pos); e > pos { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue } }
-		if strings.HasPrefix(src[pos:], "//") {
-			e := pos + 2
-			for e < n && src[e] != 10 { e++ }
-			if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue
-		}
-		if strings.HasPrefix(src[pos:], "/*") {
-			e := pos + 2
-			for e < n && !strings.HasPrefix(src[e:], "*/") { e++ }
-			if e < n { e += 2; if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
-		}
-		if !prevIsValue() && true { if e := _m206(src, pos); e > pos { emit(pos, e, 14, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanJSDoc(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanTripleSlash(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanLineComment(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if e := lexScanBlockComment(src, pos); e >= 0 { if strings.ContainsAny(src[pos:e], "\n\r\u2028\u2029") { pendingNl = true }; pos = e; continue }
+		if !prevIsValue() { if e := lexScanRegex(src, pos); e >= 0 { emit(pos, e, 14, lidOf(src[pos:e])); pos = e; continue } }
 		if strings.HasPrefix(src[pos:], "/=") { emit(pos, pos + 2, 0, 14); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "/") { emit(pos, pos + 1, 0, 50); pos += 1; continue }
 		case 48:
-		if true { if e := _m40(src, pos); e > pos { emit(pos, e, 7, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m54(src, pos); e > pos { emit(pos, e, 8, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m68(src, pos); e > pos { emit(pos, e, 9, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m82(src, pos); e > pos { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m94(src, pos); e > pos { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanHexNumber(src, pos); e >= 0 { emit(pos, e, 7, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanOctalNumber(src, pos); e >= 0 { emit(pos, e, 8, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanBinaryNumber(src, pos); e >= 0 { emit(pos, e, 9, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanBigInt(src, pos); e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanNumber(src, pos); e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
 		case 49, 50, 51, 52, 53, 54, 55, 56, 57:
-		if true { if e := _m82(src, pos); e > pos { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue } }
-		if true { if e := _m94(src, pos); e > pos { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanBigInt(src, pos); e >= 0 { emit(pos, e, 10, lidOf(src[pos:e])); pos = e; continue }
+		if e := lexScanNumber(src, pos); e >= 0 { emit(pos, e, 11, lidOf(src[pos:e])); pos = e; continue }
 		case 58:
 		if strings.HasPrefix(src[pos:], ":") { emit(pos, pos + 1, 0, 39); pos += 1; continue }
 		case 59:
@@ -677,7 +1448,7 @@ func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16
 		if strings.HasPrefix(src[pos:], "??") { emit(pos, pos + 2, 0, 19); pos += 2; continue }
 		if strings.HasPrefix(src[pos:], "?") { emit(pos, pos + 1, 0, 38); pos += 1; continue }
 		case 64:
-		if true { if e := _m251(src, pos); e > pos { emit(pos, e, 15, lidOf(src[pos:e])); pos = e; continue } }
+		if e := lexScanDecorator(src, pos); e >= 0 { emit(pos, e, 15, lidOf(src[pos:e])); pos = e; continue }
 		case 91:
 		if strings.HasPrefix(src[pos:], "[") { emit(pos, pos + 1, 0, 32); pos += 1; continue }
 		case 93:
@@ -6654,7 +7425,7 @@ type Align struct {
 
 // ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----
 // Fresh lex of src: (meta, tokens). One lexFrom step per token so each meta records the lexer state after it.
-// Capacity hint len(src)/2 per list; sparse lists are trimmed because the Doc keeps them.
+// Growth estimate len(src)/2 per list; sparse lists are trimmed because the Doc keeps them.
 func scanMetaToks(src string) ([]alignMeta, []Tok) {
 	toks := make([]Tok, 0, len(src) >> 1)
 	meta := make([]alignMeta, 0, len(src) >> 1)
@@ -6786,7 +7557,7 @@ func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start 
 			}
 		}
 	}
-	// Capacity hint: old length plus the len/2 token density of the inserted text.
+	// Growth estimate: old length plus the len/2 token density of the inserted text.
 	out := append(make([]alignMeta, 0, len(oldToks) + (len(ins) >> 1) + 2), oldToks[:rb + 1]...)
 	scanOff := 0
 	pendingNl := false

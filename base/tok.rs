@@ -8189,236 +8189,32 @@ struct AlignMeta { off: u32, end: u32, kid: u16, pd: u16, fd: u16, flags: u8, td
 }
 struct Align { old_n: usize, new_n: usize, prefix: usize, suffix: usize, relexed: usize, reused: usize, stream_eq: Option<bool>, tree_eq: Option<bool> }
 
-// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----
-// Fresh lex of src: (meta, tokens). One lexFrom step per token so each meta records the lexer state after it.
-// Capacity hint len(src)/2 per list; sparse lists are trimmed because the Doc keeps them.
-fn scan_meta_toks(src: &str) -> (Vec<AlignMeta>, Vec<Tok>) {
-    let mut toks: Vec<Tok> = Vec::with_capacity(src.len() >> 1);
-    let mut meta: Vec<AlignMeta> = Vec::with_capacity(src.len() >> 1);
-    let mut pos: isize = 0;
-    let mut pending_nl: bool = false;
-    let mut prev_lid: u16 = 0;
-    let mut prev_kid: u16 = 0;
-    let mut bp_lid: u16 = 0;
-    let mut has_prev: bool = false;
-    let mut has_prev2: bool = false;
-    let mut paren_head: Vec<bool> = Vec::new();
-    let mut last_close: bool = false;
-    let mut last_bang: bool = false;
-    let mut template_stack: Vec<i64> = Vec::new();
-    while pos < (src.len() as isize) {
-        let before: isize = toks.len() as isize;
-        let lexed = lex_from(src, pos as usize, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, template_stack, &mut toks, 1);
-        pos = lexed.0 as isize;
-        pending_nl = lexed.1;
-        prev_lid = lexed.2;
-        prev_kid = lexed.3;
-        bp_lid = lexed.4;
-        has_prev = lexed.5;
-        has_prev2 = lexed.6;
-        paren_head = lexed.7;
-        last_close = lexed.8;
-        last_bang = lexed.9;
-        template_stack = lexed.10;
-        if (toks.len() as isize) == before { break; }
-        let t: Tok = toks[toks.len() - 1];
-        meta.push(mk_align(t.off, t.end, t.kid, t.nl, 0, paren_head.len() as u16, last_close, last_bang, t.lid == 36 && paren_head.len() > 0 && paren_head[paren_head.len() - 1], template_stack.len() as u8));
-    }
-    if toks.capacity() > 2 * toks.len() { toks.shrink_to_fit(); }
-    if meta.capacity() > 2 * meta.len() { meta.shrink_to_fit(); }
-    return (meta, toks);
-}
-// Fresh meta stream of src.
 fn scan_meta(src: &str) -> Vec<AlignMeta> {
-    let (meta, _) = scan_meta_toks(src);
-    return meta;
-}
-// Incremental meta == fresh scan (every field, plus token text).
-fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
-    let fresh: Vec<AlignMeta> = scan_meta(text);
-    if fresh.len() != meta.len() { return false; }
-    for i in 0..fresh.len() as isize {
-        let f: AlignMeta = fresh[i as usize];
-        let g: AlignMeta = meta[i as usize];
-        if !(f == g) { return false; }
-        if am_text(text, &f) != am_text(text, &g) { return false; }
-    }
-    return true;
-}
-// Edit range clamped to 0 <= start <= end <= n.
-fn edit_range(n: isize, e: &Edit) -> (isize, isize) {
-    let mut start: isize = e.start as isize;
-    if start < 0 { start = 0; }
-    if start > n { start = n; }
-    let mut end: isize = e.end as isize;
-    if end < start { end = start; }
-    if end > n { end = n; }
-    return (start, end);
-}
-// Text after applying edits in order (each against the previous result).
-fn apply_edits(text: &str, edits: &[Edit]) -> String {
-    let mut out: String = text.to_string();
-    for e in edits {
-        let (start, end) = edit_range(out.len() as isize, e);
-        out = format!("{}{}{}", &out[..start as usize], e.text.as_str(), &out[end as usize..]);
-    }
-    return out;
-}
-// Index of the first token at offset off with kind kid (tokens sorted by off), or -1.
-fn find_tok_at_off_kind(toks: &[AlignMeta], off: isize, kid: isize) -> isize {
-    let mut lo: isize = 0;
-    let mut hi: isize = toks.len() as isize;
-    while lo < hi {
-        let mid: isize = (lo + hi) >> 1;
-        if (toks[mid as usize].off as isize) < off {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    while lo < (toks.len() as isize) && (toks[lo as usize].off as isize) == off {
-        if (toks[lo as usize].kid as isize) == kid { return lo; }
-        lo = lo + 1;
-    }
-    return -1;
-}
-// Open-paren head flags in effect after toks[b], rebuilt from pd/hd of earlier "(" tokens.
-fn reconstruct_parens(toks: &[AlignMeta], text: &str, b: isize) -> Vec<bool> {
-    let mut need: isize = 0;
-    if b >= 0 { need = toks[b as usize].pd as isize; }
-    let mut out: Vec<bool> = vec![false; need as usize];
-    let mut i: isize = b;
-    while i >= 0 && need > 0 {
-        let t: AlignMeta = toks[i as usize];
-        if am_text(text, &t) == "(" && (t.pd as isize) == need {
-            out[(need - 1) as usize] = am_hd(&t);
-            need = need - 1;
-        }
-        i = i - 1;
-    }
-    return out;
-}
-// Element-wise equality of two paren head stacks.
-fn paren_stacks_eq(a: &[bool], b: &[bool]) -> bool {
-    if a.len() != b.len() { return false; }
-    for i in 0..a.len() as isize {
-        if a[i as usize] != b[i as usize] { return false; }
-    }
-    return true;
-}
-// One edit: keep tokens before the anchor, relex from the anchor with restored lexer state,
-// and adopt the shifted old suffix at the first token past the edit whose state matches.
-// Returns (new meta, tokens relexed).
-fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: isize, end: isize, ins: &str) -> (Vec<AlignMeta>, isize) {
-    let delta: isize = (ins.len() as isize) - (end - start);
-    let edit_end: isize = start + (ins.len() as isize);
-    let mut max_idx: isize = -1;
-    for i in 0..old_toks.len() as isize {
-        if (old_toks[i as usize].end as isize) < start {
-            max_idx = i;
-        } else {
-            break;
-        }
-    }
-    let mut rb: isize = -1;
-    if max_idx >= 0 { rb = max_idx - 1; }
-    // Template depth cannot be restored from meta: resume only after a td == 0 token.
-    if rb >= 0 {
-        let rb0: isize = rb;
-        rb = -1;
-        for i in rb0..old_toks.len() as isize {
-            if (old_toks[i as usize].end as isize) > start { break; }
-            if old_toks[i as usize].td == 0 {
-                rb = i;
-                break;
-            }
-        }
-    }
-    // Capacity hint: old length plus the len/2 token density of the inserted text.
-    let mut out: Vec<AlignMeta> = { let mut v = Vec::with_capacity(old_toks.len() + (ins.len() >> 1) + 2); v.extend_from_slice(&old_toks[..(rb + 1) as usize]); v };
-    let mut scan_off: isize = 0;
-    let mut pending_nl: bool = false;
+    let mut toks: Vec<Tok> = Vec::new();
+    let mut meta: Vec<AlignMeta> = Vec::new();
+    let mut pos = 0usize;
+    let mut pending_nl = false;
     let mut prev_lid: u16 = 0;
     let mut prev_kid: u16 = 0;
     let mut bp_lid: u16 = 0;
-    let mut has_prev: bool = false;
-    let mut has_prev2: bool = false;
+    let mut has_prev = false;
+    let mut has_prev2 = false;
     let mut paren_head: Vec<bool> = Vec::new();
-    let mut last_close: bool = false;
-    let mut last_bang: bool = false;
+    let mut last_close = false;
+    let mut last_bang = false;
     let mut template_stack: Vec<i64> = Vec::new();
-    if rb >= 0 {
-        let anchor: AlignMeta = old_toks[rb as usize];
-        scan_off = anchor.end as isize;
-        prev_lid = lid_of(am_text(old_text, &anchor));
-        prev_kid = anchor.kid;
-        has_prev = true;
-        if rb >= 1 {
-            bp_lid = lid_of(am_text(old_text, &old_toks[(rb - 1) as usize]));
-            has_prev2 = true;
-        }
-        last_close = am_lc(&anchor);
-        last_bang = am_lb(&anchor);
-        paren_head = reconstruct_parens(old_toks, old_text, rb);
+    while pos < src.len() {
+        let before = toks.len();
+        let r = lex_from(src, pos, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, template_stack, &mut toks, 1);
+        pos = r.0; pending_nl = r.1; prev_lid = r.2; prev_kid = r.3; bp_lid = r.4; has_prev = r.5; has_prev2 = r.6; paren_head = r.7; last_close = r.8; last_bang = r.9; template_stack = r.10;
+        if toks.len() == before { break; }
+        let t = &toks[toks.len() - 1];
+        let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
+        meta.push(mk_align(t.off, t.end, t.kid, t.nl, 0, paren_head.len() as u16, last_close, last_bang, hd, template_stack.len() as u8));
     }
-    let mut scratch: Vec<Tok> = Vec::new();
-    let mut relexed: isize = 0;
-    while scan_off < (new_text.len() as isize) {
-        let before: isize = scratch.len() as isize;
-        let lexed = lex_from(new_text, scan_off as usize, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, template_stack, &mut scratch, 1);
-        scan_off = lexed.0 as isize;
-        pending_nl = lexed.1;
-        prev_lid = lexed.2;
-        prev_kid = lexed.3;
-        bp_lid = lexed.4;
-        has_prev = lexed.5;
-        has_prev2 = lexed.6;
-        paren_head = lexed.7;
-        last_close = lexed.8;
-        last_bang = lexed.9;
-        template_stack = lexed.10;
-        if (scratch.len() as isize) == before { break; }
-        let t: Tok = scratch[scratch.len() - 1];
-        out.push(mk_align(t.off, t.end, t.kid, t.nl, 0, paren_head.len() as u16, last_close, last_bang, t.lid == 36 && paren_head.len() > 0 && paren_head[paren_head.len() - 1], template_stack.len() as u8));
-        relexed = relexed + 1;
-        if (t.off as isize) >= edit_end {
-            let o_idx: isize = find_tok_at_off_kind(old_toks, (t.off as isize) - delta, t.kid as isize);
-            if o_idx >= 0 {
-                let o: AlignMeta = old_toks[o_idx as usize];
-                let mut new_prev: &str = "";
-                if out.len() > 1 { new_prev = am_text(new_text, &out[out.len() - 2]); }
-                let mut old_prev: &str = "";
-                if o_idx >= 1 { old_prev = am_text(old_text, &old_toks[(o_idx - 1) as usize]); }
-                if o.kid == t.kid && (o.end as isize) == (t.end as isize) - delta && am_nl(&o) == t.nl && am_text(old_text, &o) == &new_text[t.off as usize..t.end as usize] && o.td == 0 && template_stack.len() == 0 && (o.pd as isize) == (paren_head.len() as isize) && am_lc(&o) == last_close && am_lb(&o) == last_bang && new_prev == old_prev {
-                    let old_stack: Vec<bool> = reconstruct_parens(old_toks, old_text, o_idx);
-                    if paren_stacks_eq(&old_stack, &paren_head) {
-                        for j in o_idx + 1..old_toks.len() as isize {
-                            out.push(shift_align(&old_toks[j as usize], delta));
-                        }
-                        return (out, relexed);
-                    }
-                }
-            }
-        }
-    }
-    return (out, relexed);
+    meta
 }
-// Apply edits to (text, meta): returns (new text, new meta, tokens relexed).
-fn relex_edits(text: &str, toks: &[AlignMeta], edits: &[Edit]) -> (String, Vec<AlignMeta>, isize) {
-    let mut cur_text: String = text.to_string();
-    let mut cur_toks: Vec<AlignMeta> = toks.to_vec();
-    let mut relexed: isize = 0;
-    for e in edits {
-        let (start, end) = edit_range(cur_text.len() as isize, e);
-        let ins: &str = e.text.as_str();
-        let next: String = format!("{}{}{}", &cur_text[..start as usize], ins, &cur_text[end as usize..]);
-        let (step_toks, step_relexed) = window_relex_step(cur_text.as_str(), &cur_toks, next.as_str(), start, end, ins);
-        cur_text = next;
-        cur_toks = step_toks;
-        relexed = relexed + step_relexed;
-    }
-    return (cur_text, cur_toks, relexed);
-}
+fn to_meta(_toks: &[Tok]) -> Vec<AlignMeta> { panic!("use scan_meta for rx+tpl") }
 
 fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, new_toks: &[AlignMeta]) -> (usize, usize, usize, usize) {
     let old_n = old_toks.len();
@@ -8446,6 +8242,16 @@ fn compute_align_core(old_text: &str, old_toks: &[AlignMeta], new_text: &str, ne
 }
 fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
     meta.iter().map(|m| { let tx = am_text(text, m); mk_tok(m.off as usize, m.end as usize, am_nl(m), m.kid, lid_of(tx)) }).collect()
+}
+
+fn check_stream_eq(text: &str, meta: &[AlignMeta]) -> bool {
+    let fresh = scan_meta(text);
+    if fresh.len() != meta.len() { return false; }
+    for (f, m) in fresh.iter().zip(meta.iter()) {
+        if f != m { return false; }
+        if am_text(text, f) != am_text(text, m) { return false; }
+    }
+    true
 }
 
 fn cmp_kid(nodes_a: &[Node], kids_a: &[i32], toks_a: &[Tok], kid_a: i32, nodes_b: &[Node], kids_b: &[i32], toks_b: &[Tok], kid_b: i32) -> bool {
@@ -8487,6 +8293,102 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
         }
         _ => false,
     }
+}
+
+fn find_tok_at_off(toks: &[AlignMeta], off: usize) -> Option<usize> {
+    let mut lo = 0usize; let mut hi = toks.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if (toks[mid].off as usize) < off { lo = mid + 1; } else if (toks[mid].off as usize) > off { hi = mid; } else { return Some(mid); }
+    }
+    None
+}
+fn reconstruct_parens(toks: &[AlignMeta], text: &str, b: isize) -> Vec<bool> {
+    let mut need = if b >= 0 { toks[b as usize].pd } else { 0 };
+    let mut out = vec![false; need as usize];
+    let mut i = b;
+    while i >= 0 && need > 0 {
+        let t = &toks[i as usize];
+        if am_text(text, t) == "(" && t.pd == need {
+            out[(need - 1) as usize] = am_hd(t);
+            need -= 1;
+        }
+        i -= 1;
+    }
+    out
+}
+fn paren_stacks_eq(a: &[bool], b: &[bool]) -> bool { a == b }
+fn window_relex_step(old_text: &str, old_toks: &[AlignMeta], new_text: &str, start: usize, end: usize, ins: &str) -> (Vec<AlignMeta>, usize) {
+    let delta = ins.len() as isize - (end - start) as isize;
+    let edit_end = start + ins.len();
+    let mut max_idx: isize = -1;
+    for (i, t) in old_toks.iter().enumerate() {
+        if (t.end as usize) < start { max_idx = i as isize; } else { break; }
+    }
+    let rb0: isize = if max_idx >= 0 { max_idx - 1 } else { -1 };
+    let mut rb: isize = -1;
+    if rb0 >= 0 {
+        for i in rb0 as usize..old_toks.len() {
+            if (old_toks[i].end as usize) > start { break; }
+            if old_toks[i].td == 0 { rb = i as isize; break; }
+        }
+    }
+    let mut out: Vec<AlignMeta> = if rb >= 0 { old_toks[..=rb as usize].to_vec() } else { Vec::new() };
+    let mut scan_off: usize;
+    let mut pending_nl = false;
+    let mut prev_lid: u16 = 0;
+    let mut prev_kid: u16 = 0;
+    let mut bp_lid: u16 = 0;
+    let mut has_prev = false;
+    let mut has_prev2 = false;
+    let mut paren_head: Vec<bool> = Vec::new();
+    let mut last_close = false;
+    let mut last_bang = false;
+    let mut template_stack: Vec<i64> = Vec::new();
+    if rb >= 0 {
+        let anchor = &old_toks[rb as usize];
+        scan_off = anchor.end as usize;
+        prev_lid = lid_of(am_text(old_text, anchor));
+        prev_kid = anchor.kid;
+        has_prev = true;
+        if rb >= 1 {
+            let p = &old_toks[(rb - 1) as usize];
+            bp_lid = lid_of(am_text(old_text, p));
+            has_prev2 = true;
+        }
+        last_close = am_lc(anchor);
+        last_bang = am_lb(anchor);
+        paren_head = reconstruct_parens(old_toks, old_text, rb);
+    } else {
+        scan_off = 0;
+    }
+    let mut scratch: Vec<Tok> = Vec::new();
+    let mut relexed = 0usize;
+    while scan_off < new_text.len() {
+        let before = scratch.len();
+        let r = lex_from(new_text, scan_off, pending_nl, prev_lid, prev_kid, bp_lid, has_prev, has_prev2, paren_head, last_close, last_bang, template_stack, &mut scratch, 1);
+        scan_off = r.0; pending_nl = r.1; prev_lid = r.2; prev_kid = r.3; bp_lid = r.4; has_prev = r.5; has_prev2 = r.6; paren_head = r.7; last_close = r.8; last_bang = r.9; template_stack = r.10;
+        if scratch.len() == before { break; }
+        let t = &scratch[scratch.len() - 1];
+        let hd = if t.lid == _LID_LPAREN && !paren_head.is_empty() { paren_head[paren_head.len() - 1] } else { false };
+        out.push(mk_align(t.off, t.end, t.kid, t.nl, 0, paren_head.len() as u16, last_close, last_bang, hd, template_stack.len() as u8));
+        relexed += 1;
+        if (t.off as usize) >= edit_end {
+            if let Some(o_idx) = find_tok_at_off(old_toks, (t.off as isize - delta) as usize) {
+                let o = &old_toks[o_idx];
+                let new_prev = if out.len() > 1 { am_text(new_text, &out[out.len()-2]) } else { "" };
+                let old_prev = if o_idx >= 1 { am_text(old_text, &old_toks[o_idx-1]) } else { "" };
+                let old_stack = reconstruct_parens(old_toks, old_text, o_idx as isize);
+                if o.td == 0 && template_stack.is_empty() && o.pd as usize == paren_head.len() && paren_stacks_eq(&old_stack, &paren_head) && am_lc(o) == last_close && am_lb(o) == last_bang && new_prev == old_prev && o.kid == t.kid && o.end == (t.end as isize - delta) as u32 && am_nl(o) == t.nl && am_text(old_text, o) == &new_text[t.off as usize..t.end as usize] {
+                        for j in (o_idx + 1)..old_toks.len() {
+                            out.push(shift_align(&old_toks[j], delta));
+                        }
+                    return (out, relexed);
+                }
+            }
+        }
+    }
+    (out, relexed)
 }
 
 fn count_live(nodes: &[Node], kids: &[i32], id: i32) -> usize {
@@ -8719,10 +8621,22 @@ impl<B: Builder + Default> Doc<B> {
                 // Re-bind names expected by editBody / editParse templates.
                 let edits = &edits_owned[..];
                 let _ = edits;
-        let (text, toks, n) = relex_edits(&old_text, &old_toks, edits);
-        d.text = text;
-        d.toks = toks;
-        relexed = n as usize;
+        let mut cur_text = d.text.clone();
+        let mut cur_toks = d.toks.clone();
+        for e in edits {
+            let step_old_text = cur_text.clone();
+            let step_old_toks = cur_toks.clone();
+            let n = cur_text.len();
+            let start = e.start.min(n);
+            let end = e.end.max(start).min(n);
+            let ins = e.text.clone();
+            cur_text = format!("{}{}{}", &cur_text[..start], ins, &cur_text[end..]);
+            let (toks, step_relexed) = window_relex_step(&step_old_text, &step_old_toks, &cur_text, start, end, &ins);
+            cur_toks = toks;
+            relexed += step_relexed;
+        }
+        d.text = cur_text;
+        d.toks = cur_toks;
                 let (old_n, new_n, prefix, suffix) = compute_align_core(&old_text, &old_toks, &d.text, &d.toks);
         let byte_delta = d.text.len() as isize - old_text.len() as isize;
         let mut reused = 0usize;
@@ -8797,7 +8711,13 @@ impl<B: Builder + Default> Doc<B> {
             let _ = relexed;
         }));
         if ok.is_err() {
-            self.text = apply_edits(&old_text, &edits_owned);
+            self.text = old_text;
+            for e in &edits_owned {
+                let n = self.text.len();
+                let start = e.start.min(n);
+                let end = e.end.max(start).min(n);
+                self.text = format!("{}{}{}", &self.text[..start], e.text, &self.text[end..]);
+            }
             let toks = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan_meta(&self.text)));
             match toks {
                 Ok(t) => {
@@ -8875,35 +8795,14 @@ pub fn slim_json_with(b: &SlimBuilder, root: i32) -> String {
 }
 
 
-fn med(mut v: Vec<f64>) -> f64 { v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v[v.len() / 2] }
+// Tokenize only: 20 warm-up runs, then the median and min of 101 runs.
 fn main() {
     let path = std::env::args().nth(1).unwrap();
     let src = std::fs::read_to_string(&path).unwrap();
-    let mut pw = Vec::new();
-    let mut dn = Vec::new();
-    for _ in 0..25 {
-        let t = std::time::Instant::now();
-        let mut b = CstBuilder::default();
-        let r = parse_with(&src, &mut b);
-        pw.push(t.elapsed().as_secs_f64() * 1e3);
-        assert!(r.is_some());
-        let t = std::time::Instant::now();
-        let d: Doc = Doc::new(src.clone());
-        dn.push(t.elapsed().as_secs_f64() * 1e3);
-        assert!(d.root_handle().is_some());
-    }
-    let mut d: Doc = Doc::new(src.clone());
-    let semis: Vec<usize> = src.match_indices(";").map(|(i, _)| i + 1).collect();
-    let mut ed = Vec::new();
-    let mut reused = 0;
-    for i in 0..400 {
-        let at = semis[(i * 7919) % semis.len()];
-        let e = if i % 2 == 0 { Edit { start: at, end: at, text: " ".into() } } else { Edit { start: semis[((i - 1) * 7919) % semis.len()], end: semis[((i - 1) * 7919) % semis.len()] + 1, text: "".into() } };
-        let t = std::time::Instant::now();
-        d.edit(&[e]);
-        ed.push(t.elapsed().as_secs_f64() * 1e3);
-        if d.alignment().map(|a| a.reused).unwrap_or(0) > 0 { reused += 1; }
-    }
-    assert!(d.root_handle().is_some());
-    println!("{}: parse_with {:.3}ms  Doc::new {:.3}ms  edit median {:.4}ms (reused {}/400)", path, med(pw), med(dn), med(ed), reused);
+    let n = tokenize(&src).len();
+    for _ in 0..20 { let _ = tokenize(&src); }
+    let mut ts: Vec<f64> = Vec::new();
+    for _ in 0..101 { let t = std::time::Instant::now(); let toks = tokenize(&src); ts.push(t.elapsed().as_secs_f64() * 1e3); assert_eq!(toks.len(), n); }
+    ts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!("tokenize {} toks median {:.3} ms  min {:.3} ms", n, ts[ts.len() / 2], ts[0]);
 }

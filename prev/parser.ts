@@ -49,320 +49,1127 @@ const LID_LPAREN = 36;
 const LID_RPAREN = 37;
 const LID_BRACE_OPEN = 40;
 const LID_INTERP_CLOSE = 42;
-let _s = "";
-const _m0 = (p: number): number => { p = _m1(p); if (p < 0) return -1; p = _m2(p); if (p < 0) return -1; p = _m3(p); if (p < 0) return -1; return p; };
-const _m1 = (p: number): number => p === 0 ? p : -1;
-const _m2 = (p: number): number => _s.startsWith("#!", p) ? p + 2 : -1;
-const _m3 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m4(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m4 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 10) ? p + 1 : -1; };
-const _m5 = (p: number): number => { p = _m6(p); if (p < 0) return -1; p = _m7(p); if (p < 0) return -1; p = _m9(p); if (p < 0) return -1; p = _m10(p); if (p < 0) return -1; return p; };
-const _m6 = (p: number): number => _s.startsWith("///", p) ? p + 3 : -1;
-const _m7 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m8(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m8 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc === 32 || cc === 9) ? p + 1 : -1; };
-const _m9 = (p: number): number => _s.startsWith("<", p) ? p + 1 : -1;
-const _m10 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m11(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m11 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 10) ? p + 1 : -1; };
-const _rbF_Ident = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [[36,36], [65,90], [95,95], [97,122]]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();
-const _rbC_Ident = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [[36,36], [48,57], [65,90], [95,95], [97,122]]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();
-const _m14 = (p: number): number => { p = _m15(p); if (p < 0) return -1; p = _m27(p); if (p < 0) return -1; return p; };
-const _m15 = (p: number): number => { { const r = _m16(p); if (r >= 0) return r; } { const r = _m17(p); if (r >= 0) return r; } return -1; };
-const _m16 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc === 95 || cc === 36) ? p + 1 : -1; };
-const _m17 = (p: number): number => { { const r = _m18(p); if (r >= 0) return r; } { const r = _m22(p); if (r >= 0) return r; } return -1; };
-const _m18 = (p: number): number => { p = _m19(p); if (p < 0) return -1; p = _m20(p); if (p < 0) return -1; return p; };
-const _m19 = (p: number): number => _s.startsWith("\\u", p) ? p + 2 : -1;
-const _m20 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m21(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m21 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m22 = (p: number): number => { p = _m23(p); if (p < 0) return -1; p = _m24(p); if (p < 0) return -1; p = _m26(p); if (p < 0) return -1; return p; };
-const _m23 = (p: number): number => _s.startsWith("\\u{", p) ? p + 3 : -1;
-const _m24 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m25(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m25 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m26 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
-const _m27 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m28(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m28 = (p: number): number => { { const r = _m29(p); if (r >= 0) return r; } { const r = _m30(p); if (r >= 0) return r; } return -1; };
-const _m29 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc >= 48 && cc <= 57 || cc === 95 || cc === 36) ? p + 1 : -1; };
-const _m30 = (p: number): number => { { const r = _m31(p); if (r >= 0) return r; } { const r = _m35(p); if (r >= 0) return r; } return -1; };
-const _m31 = (p: number): number => { p = _m32(p); if (p < 0) return -1; p = _m33(p); if (p < 0) return -1; return p; };
-const _m32 = (p: number): number => _s.startsWith("\\u", p) ? p + 2 : -1;
-const _m33 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m34(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m34 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m35 = (p: number): number => { p = _m36(p); if (p < 0) return -1; p = _m37(p); if (p < 0) return -1; p = _m39(p); if (p < 0) return -1; return p; };
-const _m36 = (p: number): number => _s.startsWith("\\u{", p) ? p + 3 : -1;
-const _m37 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m38(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m38 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m39 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
-const _m40 = (p: number): number => { p = _m41(p); if (p < 0) return -1; p = _m42(p); if (p < 0) return -1; p = _m43(p); if (p < 0) return -1; p = _m45(p); if (p < 0) return -1; p = _m50(p); if (p < 0) return -1; p = _m52(p); if (p < 0) return -1; return p; };
-const _m41 = (p: number): number => _s.startsWith("0", p) ? p + 1 : -1;
-const _m42 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc === 120 || cc === 88) ? p + 1 : -1; };
-const _m43 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m44(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m44 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m45 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m46(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m46 = (p: number): number => { p = _m47(p); if (p < 0) return -1; p = _m48(p); if (p < 0) return -1; return p; };
-const _m47 = (p: number): number => _s.startsWith("_", p) ? p + 1 : -1;
-const _m48 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m49(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m49 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m50 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m51(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 1) break; } return c >= 0 ? q : -1; };
-const _m51 = (p: number): number => _s.startsWith("n", p) ? p + 1 : -1;
-const _m52 = (p: number): number => { const r = _m53(p); return r < 0 ? p : -1; };
-const _m53 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc === 95 || cc === 36 || cc === 92) ? p + 1 : -1; };
-const _m54 = (p: number): number => { p = _m55(p); if (p < 0) return -1; p = _m56(p); if (p < 0) return -1; p = _m57(p); if (p < 0) return -1; p = _m59(p); if (p < 0) return -1; p = _m64(p); if (p < 0) return -1; p = _m66(p); if (p < 0) return -1; return p; };
-const _m55 = (p: number): number => _s.startsWith("0", p) ? p + 1 : -1;
-const _m56 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc === 111 || cc === 79) ? p + 1 : -1; };
-const _m57 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m58(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m58 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 55) ? p + 1 : -1; };
-const _m59 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m60(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m60 = (p: number): number => { p = _m61(p); if (p < 0) return -1; p = _m62(p); if (p < 0) return -1; return p; };
-const _m61 = (p: number): number => _s.startsWith("_", p) ? p + 1 : -1;
-const _m62 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m63(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m63 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 55) ? p + 1 : -1; };
-const _m64 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m65(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 1) break; } return c >= 0 ? q : -1; };
-const _m65 = (p: number): number => _s.startsWith("n", p) ? p + 1 : -1;
-const _m66 = (p: number): number => { const r = _m67(p); return r < 0 ? p : -1; };
-const _m67 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc === 95 || cc === 36 || cc === 92) ? p + 1 : -1; };
-const _m68 = (p: number): number => { p = _m69(p); if (p < 0) return -1; p = _m70(p); if (p < 0) return -1; p = _m71(p); if (p < 0) return -1; p = _m73(p); if (p < 0) return -1; p = _m78(p); if (p < 0) return -1; p = _m80(p); if (p < 0) return -1; return p; };
-const _m69 = (p: number): number => _s.startsWith("0", p) ? p + 1 : -1;
-const _m70 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc === 98 || cc === 66) ? p + 1 : -1; };
-const _m71 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m72(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m72 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc === 48 || cc === 49) ? p + 1 : -1; };
-const _m73 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m74(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m74 = (p: number): number => { p = _m75(p); if (p < 0) return -1; p = _m76(p); if (p < 0) return -1; return p; };
-const _m75 = (p: number): number => _s.startsWith("_", p) ? p + 1 : -1;
-const _m76 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m77(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m77 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc === 48 || cc === 49) ? p + 1 : -1; };
-const _m78 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m79(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 1) break; } return c >= 0 ? q : -1; };
-const _m79 = (p: number): number => _s.startsWith("n", p) ? p + 1 : -1;
-const _m80 = (p: number): number => { const r = _m81(p); return r < 0 ? p : -1; };
-const _m81 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc === 95 || cc === 36 || cc === 92) ? p + 1 : -1; };
-const _m82 = (p: number): number => { p = _m83(p); if (p < 0) return -1; p = _m91(p); if (p < 0) return -1; p = _m92(p); if (p < 0) return -1; return p; };
-const _m83 = (p: number): number => { p = _m84(p); if (p < 0) return -1; p = _m86(p); if (p < 0) return -1; return p; };
-const _m84 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m85(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m85 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m86 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m87(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m87 = (p: number): number => { p = _m88(p); if (p < 0) return -1; p = _m89(p); if (p < 0) return -1; return p; };
-const _m88 = (p: number): number => _s.startsWith("_", p) ? p + 1 : -1;
-const _m89 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m90(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m90 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m91 = (p: number): number => _s.startsWith("n", p) ? p + 1 : -1;
-const _m92 = (p: number): number => { const r = _m93(p); return r < 0 ? p : -1; };
-const _m93 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc === 95 || cc === 36 || cc === 92) ? p + 1 : -1; };
-const _m94 = (p: number): number => { p = _m95(p); if (p < 0) return -1; p = _m128(p); if (p < 0) return -1; p = _m141(p); if (p < 0) return -1; return p; };
-const _m95 = (p: number): number => { { const r = _m96(p); if (r >= 0) return r; } { const r = _m118(p); if (r >= 0) return r; } return -1; };
-const _m96 = (p: number): number => { p = _m97(p); if (p < 0) return -1; p = _m108(p); if (p < 0) return -1; return p; };
-const _m97 = (p: number): number => { { const r = _m98(p); if (r >= 0) return r; } { const r = _m99(p); if (r >= 0) return r; } return -1; };
-const _m98 = (p: number): number => _s.startsWith("0", p) ? p + 1 : -1;
-const _m99 = (p: number): number => { p = _m100(p); if (p < 0) return -1; p = _m101(p); if (p < 0) return -1; p = _m103(p); if (p < 0) return -1; return p; };
-const _m100 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 49 && cc <= 57) ? p + 1 : -1; };
-const _m101 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m102(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m102 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m103 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m104(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m104 = (p: number): number => { p = _m105(p); if (p < 0) return -1; p = _m106(p); if (p < 0) return -1; return p; };
-const _m105 = (p: number): number => _s.startsWith("_", p) ? p + 1 : -1;
-const _m106 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m107(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m107 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m108 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m109(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 1) break; } return c >= 0 ? q : -1; };
-const _m109 = (p: number): number => { p = _m110(p); if (p < 0) return -1; p = _m111(p); if (p < 0) return -1; p = _m113(p); if (p < 0) return -1; return p; };
-const _m110 = (p: number): number => _s.startsWith(".", p) ? p + 1 : -1;
-const _m111 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m112(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m112 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m113 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m114(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m114 = (p: number): number => { p = _m115(p); if (p < 0) return -1; p = _m116(p); if (p < 0) return -1; return p; };
-const _m115 = (p: number): number => _s.startsWith("_", p) ? p + 1 : -1;
-const _m116 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m117(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m117 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m118 = (p: number): number => { p = _m119(p); if (p < 0) return -1; p = _m120(p); if (p < 0) return -1; return p; };
-const _m119 = (p: number): number => _s.startsWith(".", p) ? p + 1 : -1;
-const _m120 = (p: number): number => { p = _m121(p); if (p < 0) return -1; p = _m123(p); if (p < 0) return -1; return p; };
-const _m121 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m122(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m122 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m123 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m124(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m124 = (p: number): number => { p = _m125(p); if (p < 0) return -1; p = _m126(p); if (p < 0) return -1; return p; };
-const _m125 = (p: number): number => _s.startsWith("_", p) ? p + 1 : -1;
-const _m126 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m127(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m127 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m128 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m129(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 1) break; } return c >= 0 ? q : -1; };
-const _m129 = (p: number): number => { p = _m130(p); if (p < 0) return -1; p = _m131(p); if (p < 0) return -1; p = _m133(p); if (p < 0) return -1; return p; };
-const _m130 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc === 101 || cc === 69) ? p + 1 : -1; };
-const _m131 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m132(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 1) break; } return c >= 0 ? q : -1; };
-const _m132 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc === 43 || cc === 45) ? p + 1 : -1; };
-const _m133 = (p: number): number => { p = _m134(p); if (p < 0) return -1; p = _m136(p); if (p < 0) return -1; return p; };
-const _m134 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m135(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m135 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m136 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m137(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m137 = (p: number): number => { p = _m138(p); if (p < 0) return -1; p = _m139(p); if (p < 0) return -1; return p; };
-const _m138 = (p: number): number => _s.startsWith("_", p) ? p + 1 : -1;
-const _m139 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m140(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m140 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57) ? p + 1 : -1; };
-const _m141 = (p: number): number => { const r = _m142(p); return r < 0 ? p : -1; };
-const _m142 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 90 || cc >= 97 && cc <= 122 || cc === 95 || cc === 36 || cc === 92) ? p + 1 : -1; };
-const _m143 = (p: number): number => { { const r = _m144(p); if (r >= 0) return r; } { const r = _m175(p); if (r >= 0) return r; } return -1; };
-const _m144 = (p: number): number => { p = _m145(p); if (p < 0) return -1; p = _m146(p); if (p < 0) return -1; p = _m174(p); if (p < 0) return -1; return p; };
-const _m145 = (p: number): number => _s.startsWith("\"", p) ? p + 1 : -1;
-const _m146 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m147(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m147 = (p: number): number => { { const r = _m148(p); if (r >= 0) return r; } { const r = _m149(p); if (r >= 0) return r; } return -1; };
-const _m148 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 34 || cc === 92) ? p + 1 : -1; };
-const _m149 = (p: number): number => { p = _m150(p); if (p < 0) return -1; p = _m151(p); if (p < 0) return -1; return p; };
-const _m150 = (p: number): number => _s.startsWith("\\", p) ? p + 1 : -1;
-const _m151 = (p: number): number => { { const r = _m152(p); if (r >= 0) return r; } { const r = _m165(p); if (r >= 0) return r; } { const r = _m169(p); if (r >= 0) return r; } { const r = _m173(p); if (r >= 0) return r; } return -1; };
-const _m152 = (p: number): number => { p = _m153(p); if (p < 0) return -1; p = _m154(p); if (p < 0) return -1; p = _m164(p); if (p < 0) return -1; return p; };
-const _m153 = (p: number): number => _s.startsWith("u{", p) ? p + 2 : -1;
-const _m154 = (p: number): number => { p = _m155(p); if (p < 0) return -1; p = _m157(p); if (p < 0) return -1; return p; };
-const _m155 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m156(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m156 = (p: number): number => _s.startsWith("0", p) ? p + 1 : -1;
-const _m157 = (p: number): number => { { const r = _m158(p); if (r >= 0) return r; } { const r = _m160(p); if (r >= 0) return r; } return -1; };
-const _m158 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m159(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 5) break; } return c >= 1 ? q : -1; };
-const _m159 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m160 = (p: number): number => { p = _m161(p); if (p < 0) return -1; p = _m162(p); if (p < 0) return -1; return p; };
-const _m161 = (p: number): number => _s.startsWith("10", p) ? p + 2 : -1;
-const _m162 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m163(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m163 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m164 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
-const _m165 = (p: number): number => { p = _m166(p); if (p < 0) return -1; p = _m167(p); if (p < 0) return -1; return p; };
-const _m166 = (p: number): number => _s.startsWith("u", p) ? p + 1 : -1;
-const _m167 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m168(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m168 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m169 = (p: number): number => { p = _m170(p); if (p < 0) return -1; p = _m171(p); if (p < 0) return -1; return p; };
-const _m170 = (p: number): number => _s.startsWith("x", p) ? p + 1 : -1;
-const _m171 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m172(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 2) break; } return c >= 2 ? q : -1; };
-const _m172 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m173 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 117 || cc === 120) ? p + 1 : -1; };
-const _m174 = (p: number): number => _s.startsWith("\"", p) ? p + 1 : -1;
-const _m175 = (p: number): number => { p = _m176(p); if (p < 0) return -1; p = _m177(p); if (p < 0) return -1; p = _m205(p); if (p < 0) return -1; return p; };
-const _m176 = (p: number): number => _s.startsWith("'", p) ? p + 1 : -1;
-const _m177 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m178(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m178 = (p: number): number => { { const r = _m179(p); if (r >= 0) return r; } { const r = _m180(p); if (r >= 0) return r; } return -1; };
-const _m179 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 39 || cc === 92) ? p + 1 : -1; };
-const _m180 = (p: number): number => { p = _m181(p); if (p < 0) return -1; p = _m182(p); if (p < 0) return -1; return p; };
-const _m181 = (p: number): number => _s.startsWith("\\", p) ? p + 1 : -1;
-const _m182 = (p: number): number => { { const r = _m183(p); if (r >= 0) return r; } { const r = _m196(p); if (r >= 0) return r; } { const r = _m200(p); if (r >= 0) return r; } { const r = _m204(p); if (r >= 0) return r; } return -1; };
-const _m183 = (p: number): number => { p = _m184(p); if (p < 0) return -1; p = _m185(p); if (p < 0) return -1; p = _m195(p); if (p < 0) return -1; return p; };
-const _m184 = (p: number): number => _s.startsWith("u{", p) ? p + 2 : -1;
-const _m185 = (p: number): number => { p = _m186(p); if (p < 0) return -1; p = _m188(p); if (p < 0) return -1; return p; };
-const _m186 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m187(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m187 = (p: number): number => _s.startsWith("0", p) ? p + 1 : -1;
-const _m188 = (p: number): number => { { const r = _m189(p); if (r >= 0) return r; } { const r = _m191(p); if (r >= 0) return r; } return -1; };
-const _m189 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m190(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 5) break; } return c >= 1 ? q : -1; };
-const _m190 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m191 = (p: number): number => { p = _m192(p); if (p < 0) return -1; p = _m193(p); if (p < 0) return -1; return p; };
-const _m192 = (p: number): number => _s.startsWith("10", p) ? p + 2 : -1;
-const _m193 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m194(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m194 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m195 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
-const _m196 = (p: number): number => { p = _m197(p); if (p < 0) return -1; p = _m198(p); if (p < 0) return -1; return p; };
-const _m197 = (p: number): number => _s.startsWith("u", p) ? p + 1 : -1;
-const _m198 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m199(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m199 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m200 = (p: number): number => { p = _m201(p); if (p < 0) return -1; p = _m202(p); if (p < 0) return -1; return p; };
-const _m201 = (p: number): number => _s.startsWith("x", p) ? p + 1 : -1;
-const _m202 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m203(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 2) break; } return c >= 2 ? q : -1; };
-const _m203 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m204 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 117 || cc === 120) ? p + 1 : -1; };
-const _m205 = (p: number): number => _s.startsWith("'", p) ? p + 1 : -1;
-const _m206 = (p: number): number => { p = _m207(p); if (p < 0) return -1; p = _m208(p); if (p < 0) return -1; p = _m222(p); if (p < 0) return -1; p = _m237(p); if (p < 0) return -1; p = _m238(p); if (p < 0) return -1; return p; };
-const _m207 = (p: number): number => _s.startsWith("/", p) ? p + 1 : -1;
-const _m208 = (p: number): number => { { const r = _m209(p); if (r >= 0) return r; } { const r = _m210(p); if (r >= 0) return r; } { const r = _m213(p); if (r >= 0) return r; } return -1; };
-const _m209 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 47 || cc === 92 || cc === 91 || cc === 42 || cc === 10) ? p + 1 : -1; };
-const _m210 = (p: number): number => { p = _m211(p); if (p < 0) return -1; p = _m212(p); if (p < 0) return -1; return p; };
-const _m211 = (p: number): number => _s.startsWith("\\", p) ? p + 1 : -1;
-const _m212 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 10 || cc === 13 || cc === 8232 || cc === 8233) ? p + 1 : -1; };
-const _m213 = (p: number): number => { p = _m214(p); if (p < 0) return -1; p = _m215(p); if (p < 0) return -1; p = _m221(p); if (p < 0) return -1; return p; };
-const _m214 = (p: number): number => _s.startsWith("[", p) ? p + 1 : -1;
-const _m215 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m216(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m216 = (p: number): number => { { const r = _m217(p); if (r >= 0) return r; } { const r = _m218(p); if (r >= 0) return r; } return -1; };
-const _m217 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 93 || cc === 92 || cc === 10) ? p + 1 : -1; };
-const _m218 = (p: number): number => { p = _m219(p); if (p < 0) return -1; p = _m220(p); if (p < 0) return -1; return p; };
-const _m219 = (p: number): number => _s.startsWith("\\", p) ? p + 1 : -1;
-const _m220 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 10 || cc === 13 || cc === 8232 || cc === 8233) ? p + 1 : -1; };
-const _m221 = (p: number): number => _s.startsWith("]", p) ? p + 1 : -1;
-const _m222 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m223(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m223 = (p: number): number => { { const r = _m224(p); if (r >= 0) return r; } { const r = _m225(p); if (r >= 0) return r; } { const r = _m228(p); if (r >= 0) return r; } return -1; };
-const _m224 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 47 || cc === 92 || cc === 91 || cc === 10) ? p + 1 : -1; };
-const _m225 = (p: number): number => { p = _m226(p); if (p < 0) return -1; p = _m227(p); if (p < 0) return -1; return p; };
-const _m226 = (p: number): number => _s.startsWith("\\", p) ? p + 1 : -1;
-const _m227 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 10 || cc === 13 || cc === 8232 || cc === 8233) ? p + 1 : -1; };
-const _m228 = (p: number): number => { p = _m229(p); if (p < 0) return -1; p = _m230(p); if (p < 0) return -1; p = _m236(p); if (p < 0) return -1; return p; };
-const _m229 = (p: number): number => _s.startsWith("[", p) ? p + 1 : -1;
-const _m230 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m231(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m231 = (p: number): number => { { const r = _m232(p); if (r >= 0) return r; } { const r = _m233(p); if (r >= 0) return r; } return -1; };
-const _m232 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 93 || cc === 92 || cc === 10) ? p + 1 : -1; };
-const _m233 = (p: number): number => { p = _m234(p); if (p < 0) return -1; p = _m235(p); if (p < 0) return -1; return p; };
-const _m234 = (p: number): number => _s.startsWith("\\", p) ? p + 1 : -1;
-const _m235 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return !(cc === 10 || cc === 13 || cc === 8232 || cc === 8233) ? p + 1 : -1; };
-const _m236 = (p: number): number => _s.startsWith("]", p) ? p + 1 : -1;
-const _m237 = (p: number): number => _s.startsWith("/", p) ? p + 1 : -1;
-const _m238 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m239(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m239 = (p: number): number => { { const r = _m240(p); if (r >= 0) return r; } { const r = _m241(p); if (r >= 0) return r; } return -1; };
-const _m240 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc >= 48 && cc <= 57 || cc === 95 || cc === 36) ? p + 1 : -1; };
-const _m241 = (p: number): number => { { const r = _m242(p); if (r >= 0) return r; } { const r = _m246(p); if (r >= 0) return r; } return -1; };
-const _m242 = (p: number): number => { p = _m243(p); if (p < 0) return -1; p = _m244(p); if (p < 0) return -1; return p; };
-const _m243 = (p: number): number => _s.startsWith("\\u", p) ? p + 2 : -1;
-const _m244 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m245(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m245 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m246 = (p: number): number => { p = _m247(p); if (p < 0) return -1; p = _m248(p); if (p < 0) return -1; p = _m250(p); if (p < 0) return -1; return p; };
-const _m247 = (p: number): number => _s.startsWith("\\u{", p) ? p + 3 : -1;
-const _m248 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m249(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m249 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m250 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
-const _m251 = (p: number): number => { p = _m252(p); if (p < 0) return -1; p = _m253(p); if (p < 0) return -1; return p; };
-const _m252 = (p: number): number => _s.startsWith("@", p) ? p + 1 : -1;
-const _m253 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m254(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 1) break; } return c >= 0 ? q : -1; };
-const _m254 = (p: number): number => { p = _m255(p); if (p < 0) return -1; p = _m267(p); if (p < 0) return -1; return p; };
-const _m255 = (p: number): number => { { const r = _m256(p); if (r >= 0) return r; } { const r = _m257(p); if (r >= 0) return r; } return -1; };
-const _m256 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc === 95 || cc === 36) ? p + 1 : -1; };
-const _m257 = (p: number): number => { { const r = _m258(p); if (r >= 0) return r; } { const r = _m262(p); if (r >= 0) return r; } return -1; };
-const _m258 = (p: number): number => { p = _m259(p); if (p < 0) return -1; p = _m260(p); if (p < 0) return -1; return p; };
-const _m259 = (p: number): number => _s.startsWith("\\u", p) ? p + 2 : -1;
-const _m260 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m261(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m261 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m262 = (p: number): number => { p = _m263(p); if (p < 0) return -1; p = _m264(p); if (p < 0) return -1; p = _m266(p); if (p < 0) return -1; return p; };
-const _m263 = (p: number): number => _s.startsWith("\\u{", p) ? p + 3 : -1;
-const _m264 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m265(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m265 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m266 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
-const _m267 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m268(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m268 = (p: number): number => { { const r = _m269(p); if (r >= 0) return r; } { const r = _m281(p); if (r >= 0) return r; } return -1; };
-const _m269 = (p: number): number => { { const r = _m270(p); if (r >= 0) return r; } { const r = _m271(p); if (r >= 0) return r; } return -1; };
-const _m270 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc >= 48 && cc <= 57 || cc === 95 || cc === 36) ? p + 1 : -1; };
-const _m271 = (p: number): number => { { const r = _m272(p); if (r >= 0) return r; } { const r = _m276(p); if (r >= 0) return r; } return -1; };
-const _m272 = (p: number): number => { p = _m273(p); if (p < 0) return -1; p = _m274(p); if (p < 0) return -1; return p; };
-const _m273 = (p: number): number => _s.startsWith("\\u", p) ? p + 2 : -1;
-const _m274 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m275(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m275 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m276 = (p: number): number => { p = _m277(p); if (p < 0) return -1; p = _m278(p); if (p < 0) return -1; p = _m280(p); if (p < 0) return -1; return p; };
-const _m277 = (p: number): number => _s.startsWith("\\u{", p) ? p + 3 : -1;
-const _m278 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m279(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m279 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m280 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
-const _m281 = (p: number): number => _s.startsWith(".", p) ? p + 1 : -1;
-const _m282 = (p: number): number => { p = _m283(p); if (p < 0) return -1; p = _m284(p); if (p < 0) return -1; p = _m296(p); if (p < 0) return -1; return p; };
-const _m283 = (p: number): number => _s.startsWith("#", p) ? p + 1 : -1;
-const _m284 = (p: number): number => { { const r = _m285(p); if (r >= 0) return r; } { const r = _m286(p); if (r >= 0) return r; } return -1; };
-const _m285 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc === 95 || cc === 36) ? p + 1 : -1; };
-const _m286 = (p: number): number => { { const r = _m287(p); if (r >= 0) return r; } { const r = _m291(p); if (r >= 0) return r; } return -1; };
-const _m287 = (p: number): number => { p = _m288(p); if (p < 0) return -1; p = _m289(p); if (p < 0) return -1; return p; };
-const _m288 = (p: number): number => _s.startsWith("\\u", p) ? p + 2 : -1;
-const _m289 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m290(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m290 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m291 = (p: number): number => { p = _m292(p); if (p < 0) return -1; p = _m293(p); if (p < 0) return -1; p = _m295(p); if (p < 0) return -1; return p; };
-const _m292 = (p: number): number => _s.startsWith("\\u{", p) ? p + 3 : -1;
-const _m293 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m294(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m294 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m295 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
-const _m296 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m297(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 0 ? q : -1; };
-const _m297 = (p: number): number => { { const r = _m298(p); if (r >= 0) return r; } { const r = _m299(p); if (r >= 0) return r; } return -1; };
-const _m298 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 97 && cc <= 122 || cc >= 65 && cc <= 90 || cc >= 48 && cc <= 57 || cc === 95 || cc === 36) ? p + 1 : -1; };
-const _m299 = (p: number): number => { { const r = _m300(p); if (r >= 0) return r; } { const r = _m304(p); if (r >= 0) return r; } return -1; };
-const _m300 = (p: number): number => { p = _m301(p); if (p < 0) return -1; p = _m302(p); if (p < 0) return -1; return p; };
-const _m301 = (p: number): number => _s.startsWith("\\u", p) ? p + 2 : -1;
-const _m302 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m303(q); if (r < 0 || r === q) break; q = r; c++; if (c >= 4) break; } return c >= 4 ? q : -1; };
-const _m303 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m304 = (p: number): number => { p = _m305(p); if (p < 0) return -1; p = _m306(p); if (p < 0) return -1; p = _m308(p); if (p < 0) return -1; return p; };
-const _m305 = (p: number): number => _s.startsWith("\\u{", p) ? p + 3 : -1;
-const _m306 = (p: number): number => { let q = p, c = 0; for (;;) { const r = _m307(q); if (r < 0 || r === q) break; q = r; c++;  } return c >= 1 ? q : -1; };
-const _m307 = (p: number): number => { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return (cc >= 48 && cc <= 57 || cc >= 65 && cc <= 70 || cc >= 97 && cc <= 102) ? p + 1 : -1; };
-const _m308 = (p: number): number => _s.startsWith("}", p) ? p + 1 : -1;
+const lexFirstIdent = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [[36,36], [65,90], [95,95], [97,122]]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();
+const lexContIdent = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [[36,36], [48,57], [65,90], [95,95], [97,122]]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch0(s: string, p: number): number {
+  if (p === 0) return p;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch1(s: string, p: number): number {
+  if (s.startsWith("#!", p)) return p + 2;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch2(s: string, p: number): number {
+  let q: number = p;
+  while (q < s.length) {
+    const c: number = s.charCodeAt(q);
+    if (c === 10) break;
+    q = q + 1;
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch3(s: string, p: number): number {
+  const q0: number = lexMatch0(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch1(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch2(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// Shebang is scanned by its token pattern.
+function lexScanShebang(s: string, p: number): number {
+  const e: number = lexMatch3(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// JSDoc runs from /** to the first */ after it.
+function lexScanJSDoc(s: string, p: number): number {
+  if (!s.startsWith("/**", p)) return -1;
+  let e: number = p + 3;
+  while (e < s.length) {
+    if (s.startsWith("*/", e)) return e + 2;
+    e = e + 1;
+  }
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch4(s: string, p: number): number {
+  if (s.startsWith("///", p)) return p + 3;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch5(s: string, p: number): number {
+  let q: number = p;
+  while (q < s.length) {
+    const c: number = s.charCodeAt(q);
+    if (!(c === 32 || c === 9)) break;
+    q = q + 1;
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch6(s: string, p: number): number {
+  if (s.startsWith("<", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch7(s: string, p: number): number {
+  const q0: number = lexMatch4(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch5(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch6(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  const q3: number = lexMatch2(s, q2);
+  if (q3 < 0 || q3 > s.length) return -1;
+  return q3;
+}
+// TripleSlash is scanned by its token pattern.
+function lexScanTripleSlash(s: string, p: number): number {
+  const e: number = lexMatch7(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// LineComment: // to the end of the line.
+function lexScanLineComment(s: string, p: number): number {
+  if (!s.startsWith("//", p)) return -1;
+  let e: number = p + 2;
+  while (e < s.length) {
+    if (s.charCodeAt(e) === 10) break;
+    e = e + 1;
+  }
+  return e;
+}
+// BlockComment runs from /* to the first */ after it.
+function lexScanBlockComment(s: string, p: number): number {
+  if (!s.startsWith("/*", p)) return -1;
+  let e: number = p + 2;
+  while (e < s.length) {
+    if (s.startsWith("*/", e)) return e + 2;
+    e = e + 1;
+  }
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch8(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (c >= 97 && c <= 122 || c >= 65 && c <= 90 || c === 95 || c === 36) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch9(s: string, p: number): number {
+  if (s.startsWith("\\u", p)) return p + 2;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch10(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  while (q < s.length) {
+    if (n >= 4) break;
+    const c: number = s.charCodeAt(q);
+    if (!(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102)) break;
+    q = q + 1;
+    n = n + 1;
+  }
+  if (n < 4) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch11(s: string, p: number): number {
+  const q0: number = lexMatch9(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch10(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch12(s: string, p: number): number {
+  if (s.startsWith("\\u{", p)) return p + 3;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch13(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  while (q < s.length) {
+    const c: number = s.charCodeAt(q);
+    if (!(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102)) break;
+    q = q + 1;
+    n = n + 1;
+  }
+  if (n < 1) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch14(s: string, p: number): number {
+  if (s.startsWith("}", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch15(s: string, p: number): number {
+  const q0: number = lexMatch12(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch13(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch14(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch16(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch11(s, p);
+  if (r >= 0) return r;
+  r = lexMatch15(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch17(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch8(s, p);
+  if (r >= 0) return r;
+  r = lexMatch16(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch18(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (c >= 97 && c <= 122 || c >= 65 && c <= 90 || c >= 48 && c <= 57 || c === 95 || c === 36) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch19(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch18(s, p);
+  if (r >= 0) return r;
+  r = lexMatch16(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch20(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch19(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch19(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch21(s: string, p: number): number {
+  const q0: number = lexMatch17(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch20(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// Ident: an ASCII run while no bail character stops it, else the token pattern.
+function lexScanIdent(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (lexFirstIdent[c] === 1) {
+    let e: number = p + 1;
+    while (e < s.length) {
+      if (!(lexContIdent[s.charCodeAt(e)] === 1)) break;
+      e = e + 1;
+    }
+    if (e >= s.length) return e;
+    const d: number = s.charCodeAt(e);
+    if (!(d === 92)) return e;
+    e = lexMatch21(s, p);
+    if (e > p) return e;
+    return -1;
+  }
+  if (c === 92) {
+    let e: number = lexMatch21(s, p);
+    if (e > p) return e;
+    return -1;
+  }
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch22(s: string, p: number): number {
+  if (s.startsWith("0", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch23(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (c === 120 || c === 88) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch24(s: string, p: number): number {
+  if (s.startsWith("_", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch25(s: string, p: number): number {
+  const q0: number = lexMatch24(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch13(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch26(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch25(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch25(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch27(s: string, p: number): number {
+  if (s.startsWith("n", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch28(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  let r: number = lexMatch27(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    n = n + 1;
+    if (n >= 1) break;
+    r = lexMatch27(s, q);
+  }
+  if (n < 0) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch29(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (c >= 48 && c <= 57 || c >= 65 && c <= 90 || c >= 97 && c <= 122 || c === 95 || c === 36 || c === 92) {
+    return p + 1;
+  }
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch30(s: string, p: number): number {
+  const r: number = lexMatch29(s, p);
+  if (r < 0) return p;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch31(s: string, p: number): number {
+  const q0: number = lexMatch22(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch23(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch13(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  const q3: number = lexMatch26(s, q2);
+  if (q3 < 0 || q3 > s.length) return -1;
+  const q4: number = lexMatch28(s, q3);
+  if (q4 < 0 || q4 > s.length) return -1;
+  const q5: number = lexMatch30(s, q4);
+  if (q5 < 0 || q5 > s.length) return -1;
+  return q5;
+}
+// HexNumber is scanned by its token pattern.
+function lexScanHexNumber(s: string, p: number): number {
+  const e: number = lexMatch31(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch32(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (c === 111 || c === 79) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch33(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  while (q < s.length) {
+    const c: number = s.charCodeAt(q);
+    if (!(c >= 48 && c <= 55)) break;
+    q = q + 1;
+    n = n + 1;
+  }
+  if (n < 1) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch34(s: string, p: number): number {
+  const q0: number = lexMatch24(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch33(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch35(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch34(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch34(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch36(s: string, p: number): number {
+  const q0: number = lexMatch22(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch32(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch33(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  const q3: number = lexMatch35(s, q2);
+  if (q3 < 0 || q3 > s.length) return -1;
+  const q4: number = lexMatch28(s, q3);
+  if (q4 < 0 || q4 > s.length) return -1;
+  const q5: number = lexMatch30(s, q4);
+  if (q5 < 0 || q5 > s.length) return -1;
+  return q5;
+}
+// OctalNumber is scanned by its token pattern.
+function lexScanOctalNumber(s: string, p: number): number {
+  const e: number = lexMatch36(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch37(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (c === 98 || c === 66) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch38(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  while (q < s.length) {
+    const c: number = s.charCodeAt(q);
+    if (!(c === 48 || c === 49)) break;
+    q = q + 1;
+    n = n + 1;
+  }
+  if (n < 1) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch39(s: string, p: number): number {
+  const q0: number = lexMatch24(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch38(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch40(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch39(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch39(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch41(s: string, p: number): number {
+  const q0: number = lexMatch22(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch37(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch38(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  const q3: number = lexMatch40(s, q2);
+  if (q3 < 0 || q3 > s.length) return -1;
+  const q4: number = lexMatch28(s, q3);
+  if (q4 < 0 || q4 > s.length) return -1;
+  const q5: number = lexMatch30(s, q4);
+  if (q5 < 0 || q5 > s.length) return -1;
+  return q5;
+}
+// BinaryNumber is scanned by its token pattern.
+function lexScanBinaryNumber(s: string, p: number): number {
+  const e: number = lexMatch41(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch42(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  while (q < s.length) {
+    const c: number = s.charCodeAt(q);
+    if (!(c >= 48 && c <= 57)) break;
+    q = q + 1;
+    n = n + 1;
+  }
+  if (n < 1) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch43(s: string, p: number): number {
+  const q0: number = lexMatch24(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch42(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch44(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch43(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch43(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch45(s: string, p: number): number {
+  const q0: number = lexMatch42(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch44(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch46(s: string, p: number): number {
+  const q0: number = lexMatch45(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch27(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch30(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// BigInt is scanned by its token pattern.
+function lexScanBigInt(s: string, p: number): number {
+  const e: number = lexMatch46(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch47(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (c >= 49 && c <= 57) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch48(s: string, p: number): number {
+  let q: number = p;
+  while (q < s.length) {
+    const c: number = s.charCodeAt(q);
+    if (!(c >= 48 && c <= 57)) break;
+    q = q + 1;
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch49(s: string, p: number): number {
+  const q0: number = lexMatch47(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch48(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch44(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch50(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch22(s, p);
+  if (r >= 0) return r;
+  r = lexMatch49(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch51(s: string, p: number): number {
+  if (s.startsWith(".", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch52(s: string, p: number): number {
+  const q0: number = lexMatch51(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch48(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch44(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch53(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  let r: number = lexMatch52(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    n = n + 1;
+    if (n >= 1) break;
+    r = lexMatch52(s, q);
+  }
+  if (n < 0) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch54(s: string, p: number): number {
+  const q0: number = lexMatch50(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch53(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch55(s: string, p: number): number {
+  const q0: number = lexMatch51(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch45(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch56(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch54(s, p);
+  if (r >= 0) return r;
+  r = lexMatch55(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch57(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (c === 101 || c === 69) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch58(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  while (q < s.length) {
+    if (n >= 1) break;
+    const c: number = s.charCodeAt(q);
+    if (!(c === 43 || c === 45)) break;
+    q = q + 1;
+    n = n + 1;
+  }
+  if (n < 0) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch59(s: string, p: number): number {
+  const q0: number = lexMatch57(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch58(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch45(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch60(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  let r: number = lexMatch59(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    n = n + 1;
+    if (n >= 1) break;
+    r = lexMatch59(s, q);
+  }
+  if (n < 0) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch61(s: string, p: number): number {
+  const q0: number = lexMatch56(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch60(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch30(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// Number is scanned by its token pattern.
+function lexScanNumber(s: string, p: number): number {
+  const e: number = lexMatch61(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch62(s: string, p: number): number {
+  if (s.startsWith("\"", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch63(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (!(c === 34 || c === 92)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch64(s: string, p: number): number {
+  if (s.startsWith("\\", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch65(s: string, p: number): number {
+  if (s.startsWith("u{", p)) return p + 2;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch66(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch22(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch22(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch67(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  while (q < s.length) {
+    if (n >= 5) break;
+    const c: number = s.charCodeAt(q);
+    if (!(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102)) break;
+    q = q + 1;
+    n = n + 1;
+  }
+  if (n < 1) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch68(s: string, p: number): number {
+  if (s.startsWith("10", p)) return p + 2;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch69(s: string, p: number): number {
+  const q0: number = lexMatch68(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch10(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch70(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch67(s, p);
+  if (r >= 0) return r;
+  r = lexMatch69(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch71(s: string, p: number): number {
+  const q0: number = lexMatch66(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch70(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch72(s: string, p: number): number {
+  const q0: number = lexMatch65(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch71(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch14(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch73(s: string, p: number): number {
+  if (s.startsWith("u", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch74(s: string, p: number): number {
+  const q0: number = lexMatch73(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch10(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch75(s: string, p: number): number {
+  if (s.startsWith("x", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch76(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  while (q < s.length) {
+    if (n >= 2) break;
+    const c: number = s.charCodeAt(q);
+    if (!(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102)) break;
+    q = q + 1;
+    n = n + 1;
+  }
+  if (n < 2) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch77(s: string, p: number): number {
+  const q0: number = lexMatch75(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch76(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch78(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (!(c === 117 || c === 120)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch79(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch72(s, p);
+  if (r >= 0) return r;
+  r = lexMatch74(s, p);
+  if (r >= 0) return r;
+  r = lexMatch77(s, p);
+  if (r >= 0) return r;
+  r = lexMatch78(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch80(s: string, p: number): number {
+  const q0: number = lexMatch64(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch79(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch81(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch63(s, p);
+  if (r >= 0) return r;
+  r = lexMatch80(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch82(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch81(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch81(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch83(s: string, p: number): number {
+  const q0: number = lexMatch62(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch82(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch62(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch84(s: string, p: number): number {
+  if (s.startsWith("'", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch85(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (!(c === 39 || c === 92)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch86(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch85(s, p);
+  if (r >= 0) return r;
+  r = lexMatch80(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch87(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch86(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch86(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch88(s: string, p: number): number {
+  const q0: number = lexMatch84(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch87(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch84(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch89(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch83(s, p);
+  if (r >= 0) return r;
+  r = lexMatch88(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// String is scanned by its token pattern.
+function lexScanString(s: string, p: number): number {
+  const e: number = lexMatch89(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch90(s: string, p: number): number {
+  if (s.startsWith("/", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch91(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (!(c === 47 || c === 92 || c === 91 || c === 42 || c === 10)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch92(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (!(c === 10 || c === 13 || c === 8232 || c === 8233)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch93(s: string, p: number): number {
+  const q0: number = lexMatch64(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch92(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch94(s: string, p: number): number {
+  if (s.startsWith("[", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch95(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (!(c === 93 || c === 92 || c === 10)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch96(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch95(s, p);
+  if (r >= 0) return r;
+  r = lexMatch93(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch97(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch96(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch96(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch98(s: string, p: number): number {
+  if (s.startsWith("]", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch99(s: string, p: number): number {
+  const q0: number = lexMatch94(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch97(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch98(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch100(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch91(s, p);
+  if (r >= 0) return r;
+  r = lexMatch93(s, p);
+  if (r >= 0) return r;
+  r = lexMatch99(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch101(s: string, p: number): number {
+  if (p >= s.length) return -1;
+  const c: number = s.charCodeAt(p);
+  if (!(c === 47 || c === 92 || c === 91 || c === 10)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch102(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch101(s, p);
+  if (r >= 0) return r;
+  r = lexMatch93(s, p);
+  if (r >= 0) return r;
+  r = lexMatch99(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch103(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch102(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch102(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch104(s: string, p: number): number {
+  const q0: number = lexMatch90(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch100(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch103(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  const q3: number = lexMatch90(s, q2);
+  if (q3 < 0 || q3 > s.length) return -1;
+  const q4: number = lexMatch20(s, q3);
+  if (q4 < 0 || q4 > s.length) return -1;
+  return q4;
+}
+// Regex is scanned by its token pattern.
+function lexScanRegex(s: string, p: number): number {
+  const e: number = lexMatch104(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch105(s: string, p: number): number {
+  if (s.startsWith("@", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch106(s: string, p: number): number {
+  let r: number = -1;
+  r = lexMatch19(s, p);
+  if (r >= 0) return r;
+  r = lexMatch51(s, p);
+  if (r >= 0) return r;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch107(s: string, p: number): number {
+  let q: number = p;
+  let r: number = lexMatch106(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    r = lexMatch106(s, q);
+  }
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch108(s: string, p: number): number {
+  const q0: number = lexMatch17(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch107(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch109(s: string, p: number): number {
+  let q: number = p;
+  let n: number = 0;
+  let r: number = lexMatch108(s, q);
+  while (r >= 0 && r !== q) {
+    q = r;
+    n = n + 1;
+    if (n >= 1) break;
+    r = lexMatch108(s, q);
+  }
+  if (n < 0) return -1;
+  return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch110(s: string, p: number): number {
+  const q0: number = lexMatch105(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch109(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  return q1;
+}
+// Decorator is scanned by its token pattern.
+function lexScanDecorator(s: string, p: number): number {
+  const e: number = lexMatch110(s, p);
+  if (e > p) return e;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch111(s: string, p: number): number {
+  if (s.startsWith("#", p)) return p + 1;
+  return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+function lexMatch112(s: string, p: number): number {
+  const q0: number = lexMatch111(s, p);
+  if (q0 < 0 || q0 > s.length) return -1;
+  const q1: number = lexMatch17(s, q0);
+  if (q1 < 0 || q1 > s.length) return -1;
+  const q2: number = lexMatch20(s, q1);
+  if (q2 < 0 || q2 > s.length) return -1;
+  return q2;
+}
+// PrivateField is scanned by its token pattern.
+function lexScanPrivateField(s: string, p: number): number {
+  const e: number = lexMatch112(s, p);
+  if (e > p) return e;
+  return -1;
+}
 function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
-  _s = src;
   function prevIsValue(): boolean {
     if (!hasPrev) return false;
     if (_pav[prevLid]) return lastBang;
@@ -406,40 +1213,21 @@ function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, 
       pos = sp.end; continue;
     }
     if (c >= 128) {
-    if (true) { const e = _m0(pos); if (e > pos) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
-    if (src.startsWith("/**", pos)) {
-      let e = pos + 3;
-      while (e < n && !src.startsWith("*/", e)) e++;
-      if (e < n) { e += 2; if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; }
-    }
-    if (true) { const e = _m5(pos); if (e > pos) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
-    if (src.startsWith("//", pos)) {
-      let e = pos + 2;
-      while (e < n && src.charCodeAt(e) !== 10) e++;
-      if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue;
-    }
-    if (src.startsWith("/*", pos)) {
-      let e = pos + 2;
-      while (e < n && !src.startsWith("*/", e)) e++;
-      if (e < n) { e += 2; if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; }
-    }
-    if (_rbF_Ident[c]) {
-      let e = pos + 1;
-      while (e < n && _rbC_Ident[src.charCodeAt(e)]) e++;
-      if (e >= n || !(src.charCodeAt(e) === 92)) { e = lx_ext(src, e); emit(pos, e, 6, lid_of(src.slice(pos, e))); pos = e; continue; }
-      { let e2 = _m14(pos); if (e2 > pos) { e2 = lx_ext(src, e2); emit(pos, e2, 6, lid_of(src.slice(pos, e2))); pos = e2; continue; } }
-    } else if (c === 92) {
-      let e = _m14(pos); if (e > pos) { e = lx_ext(src, e); emit(pos, e, 6, lid_of(src.slice(pos, e))); pos = e; continue; }
-    }
-    if (true) { const e = _m40(pos); if (e > pos) { emit(pos, e, 7, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m54(pos); if (e > pos) { emit(pos, e, 8, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m68(pos); if (e > pos) { emit(pos, e, 9, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m82(pos); if (e > pos) { emit(pos, e, 10, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m94(pos); if (e > pos) { emit(pos, e, 11, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m143(pos); if (e > pos) { emit(pos, e, 12, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (!prevIsValue() && true) { const e = _m206(pos); if (e > pos) { emit(pos, e, 14, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m251(pos); if (e > pos) { emit(pos, e, 15, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m282(pos); if (e > pos) { emit(pos, e, 16, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanShebang(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanJSDoc(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanTripleSlash(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanLineComment(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanBlockComment(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanIdent(src, pos); if (e >= 0) { e = lx_ext(src, e); emit(pos, e, 6, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanHexNumber(src, pos); if (e >= 0) { emit(pos, e, 7, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanOctalNumber(src, pos); if (e >= 0) { emit(pos, e, 8, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanBinaryNumber(src, pos); if (e >= 0) { emit(pos, e, 9, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanBigInt(src, pos); if (e >= 0) { emit(pos, e, 10, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanNumber(src, pos); if (e >= 0) { emit(pos, e, 11, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanString(src, pos); if (e >= 0) { emit(pos, e, 12, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    if (!prevIsValue()) { let e = lexScanRegex(src, pos); if (e >= 0) { emit(pos, e, 14, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanDecorator(src, pos); if (e >= 0) { emit(pos, e, 15, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanPrivateField(src, pos); if (e >= 0) { e = lx_ext(src, e); emit(pos, e, 16, lid_of(src.slice(pos, e))); pos = e; continue; } }
     if (src.startsWith("...", pos)) { emit(pos, pos + 3, 0, 1); pos += 3; continue; }
     if (src.startsWith("**=", pos)) { emit(pos, pos + 3, 0, 2); pos += 3; continue; }
     if (src.startsWith("<<=", pos)) { emit(pos, pos + 3, 0, 3); pos += 3; continue; }
@@ -501,11 +1289,11 @@ function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, 
           break;
         case 34:
         case 39:
-    if (true) { const e = _m143(pos); if (e > pos) { emit(pos, e, 12, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanString(src, pos); if (e >= 0) { emit(pos, e, 12, lid_of(src.slice(pos, e))); pos = e; continue; } }
           break;
         case 35:
-    if (true) { const e = _m0(pos); if (e > pos) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
-    if (true) { const e = _m282(pos); if (e > pos) { emit(pos, e, 16, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanShebang(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanPrivateField(src, pos); if (e >= 0) { e = lx_ext(src, e); emit(pos, e, 16, lid_of(src.slice(pos, e))); pos = e; continue; } }
           break;
         case 36:
         case 65:
@@ -562,14 +1350,7 @@ function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, 
         case 120:
         case 121:
         case 122:
-    if (_rbF_Ident[c]) {
-      let e = pos + 1;
-      while (e < n && _rbC_Ident[src.charCodeAt(e)]) e++;
-      if (e >= n || !(src.charCodeAt(e) === 92)) { e = lx_ext(src, e); emit(pos, e, 6, lid_of(src.slice(pos, e))); pos = e; continue; }
-      { let e2 = _m14(pos); if (e2 > pos) { e2 = lx_ext(src, e2); emit(pos, e2, 6, lid_of(src.slice(pos, e2))); pos = e2; continue; } }
-    } else if (c === 92) {
-      let e = _m14(pos); if (e > pos) { e = lx_ext(src, e); emit(pos, e, 6, lid_of(src.slice(pos, e))); pos = e; continue; }
-    }
+    { let e = lexScanIdent(src, pos); if (e >= 0) { e = lx_ext(src, e); emit(pos, e, 6, lid_of(src.slice(pos, e))); pos = e; continue; } }
           break;
         case 37:
     if (src.startsWith("%=", pos)) { emit(pos, pos + 2, 0, 15); pos += 2; continue; }
@@ -607,37 +1388,25 @@ function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, 
     if (src.startsWith("-", pos)) { emit(pos, pos + 1, 0, 43); pos += 1; continue; }
           break;
         case 46:
-    if (true) { const e = _m94(pos); if (e > pos) { emit(pos, e, 11, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanNumber(src, pos); if (e >= 0) { emit(pos, e, 11, lid_of(src.slice(pos, e))); pos = e; continue; } }
     if (src.startsWith("...", pos)) { emit(pos, pos + 3, 0, 1); pos += 3; continue; }
     if (src.startsWith(".", pos)) { emit(pos, pos + 1, 0, 44); pos += 1; continue; }
           break;
         case 47:
-    if (src.startsWith("/**", pos)) {
-      let e = pos + 3;
-      while (e < n && !src.startsWith("*/", e)) e++;
-      if (e < n) { e += 2; if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; }
-    }
-    if (true) { const e = _m5(pos); if (e > pos) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
-    if (src.startsWith("//", pos)) {
-      let e = pos + 2;
-      while (e < n && src.charCodeAt(e) !== 10) e++;
-      if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue;
-    }
-    if (src.startsWith("/*", pos)) {
-      let e = pos + 2;
-      while (e < n && !src.startsWith("*/", e)) e++;
-      if (e < n) { e += 2; if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; }
-    }
-    if (!prevIsValue() && true) { const e = _m206(pos); if (e > pos) { emit(pos, e, 14, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanJSDoc(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanTripleSlash(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanLineComment(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    { let e = lexScanBlockComment(src, pos); if (e >= 0) { if (/[\n\r\u2028\u2029]/.test(src.slice(pos, e))) pendingNl = true; pos = e; continue; } }
+    if (!prevIsValue()) { let e = lexScanRegex(src, pos); if (e >= 0) { emit(pos, e, 14, lid_of(src.slice(pos, e))); pos = e; continue; } }
     if (src.startsWith("/=", pos)) { emit(pos, pos + 2, 0, 14); pos += 2; continue; }
     if (src.startsWith("/", pos)) { emit(pos, pos + 1, 0, 50); pos += 1; continue; }
           break;
         case 48:
-    if (true) { const e = _m40(pos); if (e > pos) { emit(pos, e, 7, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m54(pos); if (e > pos) { emit(pos, e, 8, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m68(pos); if (e > pos) { emit(pos, e, 9, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m82(pos); if (e > pos) { emit(pos, e, 10, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m94(pos); if (e > pos) { emit(pos, e, 11, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanHexNumber(src, pos); if (e >= 0) { emit(pos, e, 7, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanOctalNumber(src, pos); if (e >= 0) { emit(pos, e, 8, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanBinaryNumber(src, pos); if (e >= 0) { emit(pos, e, 9, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanBigInt(src, pos); if (e >= 0) { emit(pos, e, 10, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanNumber(src, pos); if (e >= 0) { emit(pos, e, 11, lid_of(src.slice(pos, e))); pos = e; continue; } }
           break;
         case 49:
         case 50:
@@ -648,8 +1417,8 @@ function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, 
         case 55:
         case 56:
         case 57:
-    if (true) { const e = _m82(pos); if (e > pos) { emit(pos, e, 10, lid_of(src.slice(pos, e))); pos = e; continue; } }
-    if (true) { const e = _m94(pos); if (e > pos) { emit(pos, e, 11, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanBigInt(src, pos); if (e >= 0) { emit(pos, e, 10, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanNumber(src, pos); if (e >= 0) { emit(pos, e, 11, lid_of(src.slice(pos, e))); pos = e; continue; } }
           break;
         case 58:
     if (src.startsWith(":", pos)) { emit(pos, pos + 1, 0, 39); pos += 1; continue; }
@@ -679,7 +1448,7 @@ function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, 
     if (src.startsWith("?", pos)) { emit(pos, pos + 1, 0, 38); pos += 1; continue; }
           break;
         case 64:
-    if (true) { const e = _m251(pos); if (e > pos) { emit(pos, e, 15, lid_of(src.slice(pos, e))); pos = e; continue; } }
+    { let e = lexScanDecorator(src, pos); if (e >= 0) { emit(pos, e, 15, lid_of(src.slice(pos, e))); pos = e; continue; } }
           break;
         case 91:
     if (src.startsWith("[", pos)) { emit(pos, pos + 1, 0, 32); pos += 1; continue; }
@@ -5715,7 +6484,7 @@ type Align = { oldN: number; newN: number; prefix: number; suffix: number; relex
 
 // ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----
 // Fresh lex of src: (meta, tokens). One lexFrom step per token so each meta records the lexer state after it.
-// Capacity hint len(src)/2 per list; sparse lists are trimmed because the Doc keeps them.
+// Growth estimate len(src)/2 per list; sparse lists are trimmed because the Doc keeps them.
 function scanMetaToks(src: string): [AlignMeta[], Tok[]] {
   let toks: Tok[] = [];
   let meta: AlignMeta[] = [];
@@ -5847,7 +6616,7 @@ function windowRelexStep(oldText: string, oldToks: AlignMeta[], newText: string,
       }
     }
   }
-  // Capacity hint: old length plus the len/2 token density of the inserted text.
+  // Growth estimate: old length plus the len/2 token density of the inserted text.
   const out: AlignMeta[] = oldToks.slice(0, rb + 1);
   let scanOff: number = 0;
   let pendingNl: boolean = false;

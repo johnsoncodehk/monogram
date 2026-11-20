@@ -1,12 +1,15 @@
 {
   "repo": "johnsoncodehk/monogram",
   "input": { "file": "in.ts", "bytes": 270780, "sha256": "65f5f596db0eaeb5d12e3992cd150c9afbd16945e385edb2843dc2a5758eef1d" },
+  "tokenize2mb": { "file": "tok2mb.ts", "bytes": 2000128, "sha256": "297997edb2c33a9f6d5491ef8ed3e5ec6e8b3e17efc86e71b3f4a0d7cdc81866", "included": true },
   "variants": {
-    "base": { "commit": "02d8827", "ref": "master" },
-    "fam":  { "commit": "ac70b67", "ref": "PR #78 (first Linux run)" },
-    "fix":  { "commit": "3c1a1ad", "ref": "PR #78 head" }
+    "base": { "commit": "cbb58a0c7a3be743efd2c4e0f9589faa0a5168dc", "ref": "master (after #79); emitted output identical to 02d8827" },
+    "prev": { "commit": "ecd5e4c", "ref": "PR #78, lex-scan family, Go scanner calls" },
+    "fix":  { "commit": "52a8f9c", "ref": "PR #78 head, Go scanners spliced at generation time" }
   },
   "generate": "./gen.sh <monogram clone>  # per variant: git archive <commit> | tar -x; node gen.ts <tree> <variant>; sha256 -c SHA256SUMS",
   "run": "./run.sh <in.ts> 7",
+  "summarize": "node summarize.ts results/results.log",
+  "rows": ["gobench", "goprof", "goedit", "gotok in.ts", "gotok 2mb", "rust", "rstok in.ts", "rstok 2mb", "ts", "tstok in.ts", "tstok 2mb"],
   "hashes": "SHA256SUMS"
 }

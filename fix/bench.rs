@@ -83,315 +83,1139 @@ fn lid_of_punct(text: &str, n: usize) -> u16 {
         _ => 0,
     }
 }
-fn _m0(s: &str, p: i64) -> i64 { let mut p = p; p = _m1(s, p); if p < 0 { return -1; } p = _m2(s, p); if p < 0 { return -1; } p = _m3(s, p); if p < 0 { return -1; } p }
-fn _m1(s: &str, p: i64) -> i64 { if p == 0 { p } else { -1 } }
-fn _m2(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("#!") { p + 2 } else { -1 } }
-fn _m3(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m4(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m4(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 10) { p + 1 } else { -1 } }
-fn _m5(s: &str, p: i64) -> i64 { let mut p = p; p = _m6(s, p); if p < 0 { return -1; } p = _m7(s, p); if p < 0 { return -1; } p = _m9(s, p); if p < 0 { return -1; } p = _m10(s, p); if p < 0 { return -1; } p }
-fn _m6(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("///") { p + 3 } else { -1 } }
-fn _m7(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m8(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m8(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if (cc == 32 || cc == 9) { p + 1 } else { -1 } }
-fn _m9(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("<") { p + 1 } else { -1 } }
-fn _m10(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m11(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m11(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 10) { p + 1 } else { -1 } }
-const _RB_F_IDENT: [bool; 256] = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false];
-const _RB_C_IDENT: [bool; 256] = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false];
-fn _m14(s: &str, p: i64) -> i64 { let mut p = p; p = _m15(s, p); if p < 0 { return -1; } p = _m27(s, p); if p < 0 { return -1; } p }
-fn _m15(s: &str, p: i64) -> i64 { { let r = _m16(s, p); if r >= 0 { return r; } } { let r = _m17(s, p); if r >= 0 { return r; } } -1 }
-fn _m16(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((97..=122).contains(&cc) || (65..=90).contains(&cc) || cc == 95 || cc == 36) { p + 1 } else { -1 } }
-fn _m17(s: &str, p: i64) -> i64 { { let r = _m18(s, p); if r >= 0 { return r; } } { let r = _m22(s, p); if r >= 0 { return r; } } -1 }
-fn _m18(s: &str, p: i64) -> i64 { let mut p = p; p = _m19(s, p); if p < 0 { return -1; } p = _m20(s, p); if p < 0 { return -1; } p }
-fn _m19(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u") { p + 2 } else { -1 } }
-fn _m20(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m21(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m21(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m22(s: &str, p: i64) -> i64 { let mut p = p; p = _m23(s, p); if p < 0 { return -1; } p = _m24(s, p); if p < 0 { return -1; } p = _m26(s, p); if p < 0 { return -1; } p }
-fn _m23(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u{") { p + 3 } else { -1 } }
-fn _m24(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m25(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m25(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m26(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
-fn _m27(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m28(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m28(s: &str, p: i64) -> i64 { { let r = _m29(s, p); if r >= 0 { return r; } } { let r = _m30(s, p); if r >= 0 { return r; } } -1 }
-fn _m29(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((97..=122).contains(&cc) || (65..=90).contains(&cc) || (48..=57).contains(&cc) || cc == 95 || cc == 36) { p + 1 } else { -1 } }
-fn _m30(s: &str, p: i64) -> i64 { { let r = _m31(s, p); if r >= 0 { return r; } } { let r = _m35(s, p); if r >= 0 { return r; } } -1 }
-fn _m31(s: &str, p: i64) -> i64 { let mut p = p; p = _m32(s, p); if p < 0 { return -1; } p = _m33(s, p); if p < 0 { return -1; } p }
-fn _m32(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u") { p + 2 } else { -1 } }
-fn _m33(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m34(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m34(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m35(s: &str, p: i64) -> i64 { let mut p = p; p = _m36(s, p); if p < 0 { return -1; } p = _m37(s, p); if p < 0 { return -1; } p = _m39(s, p); if p < 0 { return -1; } p }
-fn _m36(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u{") { p + 3 } else { -1 } }
-fn _m37(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m38(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m38(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m39(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
-fn _m40(s: &str, p: i64) -> i64 { let mut p = p; p = _m41(s, p); if p < 0 { return -1; } p = _m42(s, p); if p < 0 { return -1; } p = _m43(s, p); if p < 0 { return -1; } p = _m45(s, p); if p < 0 { return -1; } p = _m50(s, p); if p < 0 { return -1; } p = _m52(s, p); if p < 0 { return -1; } p }
-fn _m41(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("0") { p + 1 } else { -1 } }
-fn _m42(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if (cc == 120 || cc == 88) { p + 1 } else { -1 } }
-fn _m43(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m44(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m44(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m45(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m46(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m46(s: &str, p: i64) -> i64 { let mut p = p; p = _m47(s, p); if p < 0 { return -1; } p = _m48(s, p); if p < 0 { return -1; } p }
-fn _m47(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("_") { p + 1 } else { -1 } }
-fn _m48(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m49(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m49(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m50(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m51(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 1 { break; } } if c >= 0 { q } else { -1 } }
-fn _m51(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("n") { p + 1 } else { -1 } }
-fn _m52(s: &str, p: i64) -> i64 { let r = _m53(s, p); if r < 0 { p } else { -1 } }
-fn _m53(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=90).contains(&cc) || (97..=122).contains(&cc) || cc == 95 || cc == 36 || cc == 92) { p + 1 } else { -1 } }
-fn _m54(s: &str, p: i64) -> i64 { let mut p = p; p = _m55(s, p); if p < 0 { return -1; } p = _m56(s, p); if p < 0 { return -1; } p = _m57(s, p); if p < 0 { return -1; } p = _m59(s, p); if p < 0 { return -1; } p = _m64(s, p); if p < 0 { return -1; } p = _m66(s, p); if p < 0 { return -1; } p }
-fn _m55(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("0") { p + 1 } else { -1 } }
-fn _m56(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if (cc == 111 || cc == 79) { p + 1 } else { -1 } }
-fn _m57(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m58(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m58(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=55).contains(&cc)) { p + 1 } else { -1 } }
-fn _m59(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m60(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m60(s: &str, p: i64) -> i64 { let mut p = p; p = _m61(s, p); if p < 0 { return -1; } p = _m62(s, p); if p < 0 { return -1; } p }
-fn _m61(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("_") { p + 1 } else { -1 } }
-fn _m62(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m63(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m63(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=55).contains(&cc)) { p + 1 } else { -1 } }
-fn _m64(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m65(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 1 { break; } } if c >= 0 { q } else { -1 } }
-fn _m65(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("n") { p + 1 } else { -1 } }
-fn _m66(s: &str, p: i64) -> i64 { let r = _m67(s, p); if r < 0 { p } else { -1 } }
-fn _m67(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=90).contains(&cc) || (97..=122).contains(&cc) || cc == 95 || cc == 36 || cc == 92) { p + 1 } else { -1 } }
-fn _m68(s: &str, p: i64) -> i64 { let mut p = p; p = _m69(s, p); if p < 0 { return -1; } p = _m70(s, p); if p < 0 { return -1; } p = _m71(s, p); if p < 0 { return -1; } p = _m73(s, p); if p < 0 { return -1; } p = _m78(s, p); if p < 0 { return -1; } p = _m80(s, p); if p < 0 { return -1; } p }
-fn _m69(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("0") { p + 1 } else { -1 } }
-fn _m70(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if (cc == 98 || cc == 66) { p + 1 } else { -1 } }
-fn _m71(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m72(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m72(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if (cc == 48 || cc == 49) { p + 1 } else { -1 } }
-fn _m73(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m74(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m74(s: &str, p: i64) -> i64 { let mut p = p; p = _m75(s, p); if p < 0 { return -1; } p = _m76(s, p); if p < 0 { return -1; } p }
-fn _m75(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("_") { p + 1 } else { -1 } }
-fn _m76(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m77(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m77(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if (cc == 48 || cc == 49) { p + 1 } else { -1 } }
-fn _m78(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m79(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 1 { break; } } if c >= 0 { q } else { -1 } }
-fn _m79(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("n") { p + 1 } else { -1 } }
-fn _m80(s: &str, p: i64) -> i64 { let r = _m81(s, p); if r < 0 { p } else { -1 } }
-fn _m81(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=90).contains(&cc) || (97..=122).contains(&cc) || cc == 95 || cc == 36 || cc == 92) { p + 1 } else { -1 } }
-fn _m82(s: &str, p: i64) -> i64 { let mut p = p; p = _m83(s, p); if p < 0 { return -1; } p = _m91(s, p); if p < 0 { return -1; } p = _m92(s, p); if p < 0 { return -1; } p }
-fn _m83(s: &str, p: i64) -> i64 { let mut p = p; p = _m84(s, p); if p < 0 { return -1; } p = _m86(s, p); if p < 0 { return -1; } p }
-fn _m84(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m85(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m85(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m86(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m87(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m87(s: &str, p: i64) -> i64 { let mut p = p; p = _m88(s, p); if p < 0 { return -1; } p = _m89(s, p); if p < 0 { return -1; } p }
-fn _m88(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("_") { p + 1 } else { -1 } }
-fn _m89(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m90(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m90(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m91(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("n") { p + 1 } else { -1 } }
-fn _m92(s: &str, p: i64) -> i64 { let r = _m93(s, p); if r < 0 { p } else { -1 } }
-fn _m93(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=90).contains(&cc) || (97..=122).contains(&cc) || cc == 95 || cc == 36 || cc == 92) { p + 1 } else { -1 } }
-fn _m94(s: &str, p: i64) -> i64 { let mut p = p; p = _m95(s, p); if p < 0 { return -1; } p = _m128(s, p); if p < 0 { return -1; } p = _m141(s, p); if p < 0 { return -1; } p }
-fn _m95(s: &str, p: i64) -> i64 { { let r = _m96(s, p); if r >= 0 { return r; } } { let r = _m118(s, p); if r >= 0 { return r; } } -1 }
-fn _m96(s: &str, p: i64) -> i64 { let mut p = p; p = _m97(s, p); if p < 0 { return -1; } p = _m108(s, p); if p < 0 { return -1; } p }
-fn _m97(s: &str, p: i64) -> i64 { { let r = _m98(s, p); if r >= 0 { return r; } } { let r = _m99(s, p); if r >= 0 { return r; } } -1 }
-fn _m98(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("0") { p + 1 } else { -1 } }
-fn _m99(s: &str, p: i64) -> i64 { let mut p = p; p = _m100(s, p); if p < 0 { return -1; } p = _m101(s, p); if p < 0 { return -1; } p = _m103(s, p); if p < 0 { return -1; } p }
-fn _m100(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((49..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m101(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m102(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m102(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m103(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m104(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m104(s: &str, p: i64) -> i64 { let mut p = p; p = _m105(s, p); if p < 0 { return -1; } p = _m106(s, p); if p < 0 { return -1; } p }
-fn _m105(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("_") { p + 1 } else { -1 } }
-fn _m106(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m107(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m107(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m108(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m109(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 1 { break; } } if c >= 0 { q } else { -1 } }
-fn _m109(s: &str, p: i64) -> i64 { let mut p = p; p = _m110(s, p); if p < 0 { return -1; } p = _m111(s, p); if p < 0 { return -1; } p = _m113(s, p); if p < 0 { return -1; } p }
-fn _m110(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with(".") { p + 1 } else { -1 } }
-fn _m111(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m112(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m112(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m113(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m114(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m114(s: &str, p: i64) -> i64 { let mut p = p; p = _m115(s, p); if p < 0 { return -1; } p = _m116(s, p); if p < 0 { return -1; } p }
-fn _m115(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("_") { p + 1 } else { -1 } }
-fn _m116(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m117(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m117(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m118(s: &str, p: i64) -> i64 { let mut p = p; p = _m119(s, p); if p < 0 { return -1; } p = _m120(s, p); if p < 0 { return -1; } p }
-fn _m119(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with(".") { p + 1 } else { -1 } }
-fn _m120(s: &str, p: i64) -> i64 { let mut p = p; p = _m121(s, p); if p < 0 { return -1; } p = _m123(s, p); if p < 0 { return -1; } p }
-fn _m121(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m122(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m122(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m123(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m124(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m124(s: &str, p: i64) -> i64 { let mut p = p; p = _m125(s, p); if p < 0 { return -1; } p = _m126(s, p); if p < 0 { return -1; } p }
-fn _m125(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("_") { p + 1 } else { -1 } }
-fn _m126(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m127(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m127(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m128(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m129(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 1 { break; } } if c >= 0 { q } else { -1 } }
-fn _m129(s: &str, p: i64) -> i64 { let mut p = p; p = _m130(s, p); if p < 0 { return -1; } p = _m131(s, p); if p < 0 { return -1; } p = _m133(s, p); if p < 0 { return -1; } p }
-fn _m130(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if (cc == 101 || cc == 69) { p + 1 } else { -1 } }
-fn _m131(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m132(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 1 { break; } } if c >= 0 { q } else { -1 } }
-fn _m132(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if (cc == 43 || cc == 45) { p + 1 } else { -1 } }
-fn _m133(s: &str, p: i64) -> i64 { let mut p = p; p = _m134(s, p); if p < 0 { return -1; } p = _m136(s, p); if p < 0 { return -1; } p }
-fn _m134(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m135(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m135(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m136(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m137(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m137(s: &str, p: i64) -> i64 { let mut p = p; p = _m138(s, p); if p < 0 { return -1; } p = _m139(s, p); if p < 0 { return -1; } p }
-fn _m138(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("_") { p + 1 } else { -1 } }
-fn _m139(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m140(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m140(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc)) { p + 1 } else { -1 } }
-fn _m141(s: &str, p: i64) -> i64 { let r = _m142(s, p); if r < 0 { p } else { -1 } }
-fn _m142(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=90).contains(&cc) || (97..=122).contains(&cc) || cc == 95 || cc == 36 || cc == 92) { p + 1 } else { -1 } }
-fn _m143(s: &str, p: i64) -> i64 { { let r = _m144(s, p); if r >= 0 { return r; } } { let r = _m175(s, p); if r >= 0 { return r; } } -1 }
-fn _m144(s: &str, p: i64) -> i64 { let mut p = p; p = _m145(s, p); if p < 0 { return -1; } p = _m146(s, p); if p < 0 { return -1; } p = _m174(s, p); if p < 0 { return -1; } p }
-fn _m145(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\"") { p + 1 } else { -1 } }
-fn _m146(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m147(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m147(s: &str, p: i64) -> i64 { { let r = _m148(s, p); if r >= 0 { return r; } } { let r = _m149(s, p); if r >= 0 { return r; } } -1 }
-fn _m148(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 34 || cc == 92) { p + 1 } else { -1 } }
-fn _m149(s: &str, p: i64) -> i64 { let mut p = p; p = _m150(s, p); if p < 0 { return -1; } p = _m151(s, p); if p < 0 { return -1; } p }
-fn _m150(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\") { p + 1 } else { -1 } }
-fn _m151(s: &str, p: i64) -> i64 { { let r = _m152(s, p); if r >= 0 { return r; } } { let r = _m165(s, p); if r >= 0 { return r; } } { let r = _m169(s, p); if r >= 0 { return r; } } { let r = _m173(s, p); if r >= 0 { return r; } } -1 }
-fn _m152(s: &str, p: i64) -> i64 { let mut p = p; p = _m153(s, p); if p < 0 { return -1; } p = _m154(s, p); if p < 0 { return -1; } p = _m164(s, p); if p < 0 { return -1; } p }
-fn _m153(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("u{") { p + 2 } else { -1 } }
-fn _m154(s: &str, p: i64) -> i64 { let mut p = p; p = _m155(s, p); if p < 0 { return -1; } p = _m157(s, p); if p < 0 { return -1; } p }
-fn _m155(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m156(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m156(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("0") { p + 1 } else { -1 } }
-fn _m157(s: &str, p: i64) -> i64 { { let r = _m158(s, p); if r >= 0 { return r; } } { let r = _m160(s, p); if r >= 0 { return r; } } -1 }
-fn _m158(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m159(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 5 { break; } } if c >= 1 { q } else { -1 } }
-fn _m159(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m160(s: &str, p: i64) -> i64 { let mut p = p; p = _m161(s, p); if p < 0 { return -1; } p = _m162(s, p); if p < 0 { return -1; } p }
-fn _m161(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("10") { p + 2 } else { -1 } }
-fn _m162(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m163(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m163(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m164(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
-fn _m165(s: &str, p: i64) -> i64 { let mut p = p; p = _m166(s, p); if p < 0 { return -1; } p = _m167(s, p); if p < 0 { return -1; } p }
-fn _m166(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("u") { p + 1 } else { -1 } }
-fn _m167(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m168(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m168(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m169(s: &str, p: i64) -> i64 { let mut p = p; p = _m170(s, p); if p < 0 { return -1; } p = _m171(s, p); if p < 0 { return -1; } p }
-fn _m170(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("x") { p + 1 } else { -1 } }
-fn _m171(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m172(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 2 { break; } } if c >= 2 { q } else { -1 } }
-fn _m172(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m173(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 117 || cc == 120) { p + 1 } else { -1 } }
-fn _m174(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\"") { p + 1 } else { -1 } }
-fn _m175(s: &str, p: i64) -> i64 { let mut p = p; p = _m176(s, p); if p < 0 { return -1; } p = _m177(s, p); if p < 0 { return -1; } p = _m205(s, p); if p < 0 { return -1; } p }
-fn _m176(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("'") { p + 1 } else { -1 } }
-fn _m177(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m178(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m178(s: &str, p: i64) -> i64 { { let r = _m179(s, p); if r >= 0 { return r; } } { let r = _m180(s, p); if r >= 0 { return r; } } -1 }
-fn _m179(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 39 || cc == 92) { p + 1 } else { -1 } }
-fn _m180(s: &str, p: i64) -> i64 { let mut p = p; p = _m181(s, p); if p < 0 { return -1; } p = _m182(s, p); if p < 0 { return -1; } p }
-fn _m181(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\") { p + 1 } else { -1 } }
-fn _m182(s: &str, p: i64) -> i64 { { let r = _m183(s, p); if r >= 0 { return r; } } { let r = _m196(s, p); if r >= 0 { return r; } } { let r = _m200(s, p); if r >= 0 { return r; } } { let r = _m204(s, p); if r >= 0 { return r; } } -1 }
-fn _m183(s: &str, p: i64) -> i64 { let mut p = p; p = _m184(s, p); if p < 0 { return -1; } p = _m185(s, p); if p < 0 { return -1; } p = _m195(s, p); if p < 0 { return -1; } p }
-fn _m184(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("u{") { p + 2 } else { -1 } }
-fn _m185(s: &str, p: i64) -> i64 { let mut p = p; p = _m186(s, p); if p < 0 { return -1; } p = _m188(s, p); if p < 0 { return -1; } p }
-fn _m186(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m187(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m187(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("0") { p + 1 } else { -1 } }
-fn _m188(s: &str, p: i64) -> i64 { { let r = _m189(s, p); if r >= 0 { return r; } } { let r = _m191(s, p); if r >= 0 { return r; } } -1 }
-fn _m189(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m190(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 5 { break; } } if c >= 1 { q } else { -1 } }
-fn _m190(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m191(s: &str, p: i64) -> i64 { let mut p = p; p = _m192(s, p); if p < 0 { return -1; } p = _m193(s, p); if p < 0 { return -1; } p }
-fn _m192(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("10") { p + 2 } else { -1 } }
-fn _m193(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m194(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m194(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m195(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
-fn _m196(s: &str, p: i64) -> i64 { let mut p = p; p = _m197(s, p); if p < 0 { return -1; } p = _m198(s, p); if p < 0 { return -1; } p }
-fn _m197(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("u") { p + 1 } else { -1 } }
-fn _m198(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m199(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m199(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m200(s: &str, p: i64) -> i64 { let mut p = p; p = _m201(s, p); if p < 0 { return -1; } p = _m202(s, p); if p < 0 { return -1; } p }
-fn _m201(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("x") { p + 1 } else { -1 } }
-fn _m202(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m203(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 2 { break; } } if c >= 2 { q } else { -1 } }
-fn _m203(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m204(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 117 || cc == 120) { p + 1 } else { -1 } }
-fn _m205(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("'") { p + 1 } else { -1 } }
-fn _m206(s: &str, p: i64) -> i64 { let mut p = p; p = _m207(s, p); if p < 0 { return -1; } p = _m208(s, p); if p < 0 { return -1; } p = _m222(s, p); if p < 0 { return -1; } p = _m237(s, p); if p < 0 { return -1; } p = _m238(s, p); if p < 0 { return -1; } p }
-fn _m207(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("/") { p + 1 } else { -1 } }
-fn _m208(s: &str, p: i64) -> i64 { { let r = _m209(s, p); if r >= 0 { return r; } } { let r = _m210(s, p); if r >= 0 { return r; } } { let r = _m213(s, p); if r >= 0 { return r; } } -1 }
-fn _m209(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 47 || cc == 92 || cc == 91 || cc == 42 || cc == 10) { p + 1 } else { -1 } }
-fn _m210(s: &str, p: i64) -> i64 { let mut p = p; p = _m211(s, p); if p < 0 { return -1; } p = _m212(s, p); if p < 0 { return -1; } p }
-fn _m211(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\") { p + 1 } else { -1 } }
-fn _m212(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 10 || cc == 13 || cc == 8232 || cc == 8233) { p + 1 } else { -1 } }
-fn _m213(s: &str, p: i64) -> i64 { let mut p = p; p = _m214(s, p); if p < 0 { return -1; } p = _m215(s, p); if p < 0 { return -1; } p = _m221(s, p); if p < 0 { return -1; } p }
-fn _m214(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("[") { p + 1 } else { -1 } }
-fn _m215(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m216(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m216(s: &str, p: i64) -> i64 { { let r = _m217(s, p); if r >= 0 { return r; } } { let r = _m218(s, p); if r >= 0 { return r; } } -1 }
-fn _m217(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 93 || cc == 92 || cc == 10) { p + 1 } else { -1 } }
-fn _m218(s: &str, p: i64) -> i64 { let mut p = p; p = _m219(s, p); if p < 0 { return -1; } p = _m220(s, p); if p < 0 { return -1; } p }
-fn _m219(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\") { p + 1 } else { -1 } }
-fn _m220(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 10 || cc == 13 || cc == 8232 || cc == 8233) { p + 1 } else { -1 } }
-fn _m221(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("]") { p + 1 } else { -1 } }
-fn _m222(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m223(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m223(s: &str, p: i64) -> i64 { { let r = _m224(s, p); if r >= 0 { return r; } } { let r = _m225(s, p); if r >= 0 { return r; } } { let r = _m228(s, p); if r >= 0 { return r; } } -1 }
-fn _m224(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 47 || cc == 92 || cc == 91 || cc == 10) { p + 1 } else { -1 } }
-fn _m225(s: &str, p: i64) -> i64 { let mut p = p; p = _m226(s, p); if p < 0 { return -1; } p = _m227(s, p); if p < 0 { return -1; } p }
-fn _m226(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\") { p + 1 } else { -1 } }
-fn _m227(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 10 || cc == 13 || cc == 8232 || cc == 8233) { p + 1 } else { -1 } }
-fn _m228(s: &str, p: i64) -> i64 { let mut p = p; p = _m229(s, p); if p < 0 { return -1; } p = _m230(s, p); if p < 0 { return -1; } p = _m236(s, p); if p < 0 { return -1; } p }
-fn _m229(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("[") { p + 1 } else { -1 } }
-fn _m230(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m231(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m231(s: &str, p: i64) -> i64 { { let r = _m232(s, p); if r >= 0 { return r; } } { let r = _m233(s, p); if r >= 0 { return r; } } -1 }
-fn _m232(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 93 || cc == 92 || cc == 10) { p + 1 } else { -1 } }
-fn _m233(s: &str, p: i64) -> i64 { let mut p = p; p = _m234(s, p); if p < 0 { return -1; } p = _m235(s, p); if p < 0 { return -1; } p }
-fn _m234(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\") { p + 1 } else { -1 } }
-fn _m235(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if !(cc == 10 || cc == 13 || cc == 8232 || cc == 8233) { p + 1 } else { -1 } }
-fn _m236(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("]") { p + 1 } else { -1 } }
-fn _m237(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("/") { p + 1 } else { -1 } }
-fn _m238(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m239(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m239(s: &str, p: i64) -> i64 { { let r = _m240(s, p); if r >= 0 { return r; } } { let r = _m241(s, p); if r >= 0 { return r; } } -1 }
-fn _m240(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((97..=122).contains(&cc) || (65..=90).contains(&cc) || (48..=57).contains(&cc) || cc == 95 || cc == 36) { p + 1 } else { -1 } }
-fn _m241(s: &str, p: i64) -> i64 { { let r = _m242(s, p); if r >= 0 { return r; } } { let r = _m246(s, p); if r >= 0 { return r; } } -1 }
-fn _m242(s: &str, p: i64) -> i64 { let mut p = p; p = _m243(s, p); if p < 0 { return -1; } p = _m244(s, p); if p < 0 { return -1; } p }
-fn _m243(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u") { p + 2 } else { -1 } }
-fn _m244(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m245(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m245(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m246(s: &str, p: i64) -> i64 { let mut p = p; p = _m247(s, p); if p < 0 { return -1; } p = _m248(s, p); if p < 0 { return -1; } p = _m250(s, p); if p < 0 { return -1; } p }
-fn _m247(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u{") { p + 3 } else { -1 } }
-fn _m248(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m249(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m249(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m250(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
-fn _m251(s: &str, p: i64) -> i64 { let mut p = p; p = _m252(s, p); if p < 0 { return -1; } p = _m253(s, p); if p < 0 { return -1; } p }
-fn _m252(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("@") { p + 1 } else { -1 } }
-fn _m253(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m254(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 1 { break; } } if c >= 0 { q } else { -1 } }
-fn _m254(s: &str, p: i64) -> i64 { let mut p = p; p = _m255(s, p); if p < 0 { return -1; } p = _m267(s, p); if p < 0 { return -1; } p }
-fn _m255(s: &str, p: i64) -> i64 { { let r = _m256(s, p); if r >= 0 { return r; } } { let r = _m257(s, p); if r >= 0 { return r; } } -1 }
-fn _m256(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((97..=122).contains(&cc) || (65..=90).contains(&cc) || cc == 95 || cc == 36) { p + 1 } else { -1 } }
-fn _m257(s: &str, p: i64) -> i64 { { let r = _m258(s, p); if r >= 0 { return r; } } { let r = _m262(s, p); if r >= 0 { return r; } } -1 }
-fn _m258(s: &str, p: i64) -> i64 { let mut p = p; p = _m259(s, p); if p < 0 { return -1; } p = _m260(s, p); if p < 0 { return -1; } p }
-fn _m259(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u") { p + 2 } else { -1 } }
-fn _m260(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m261(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m261(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m262(s: &str, p: i64) -> i64 { let mut p = p; p = _m263(s, p); if p < 0 { return -1; } p = _m264(s, p); if p < 0 { return -1; } p = _m266(s, p); if p < 0 { return -1; } p }
-fn _m263(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u{") { p + 3 } else { -1 } }
-fn _m264(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m265(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m265(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m266(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
-fn _m267(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m268(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m268(s: &str, p: i64) -> i64 { { let r = _m269(s, p); if r >= 0 { return r; } } { let r = _m281(s, p); if r >= 0 { return r; } } -1 }
-fn _m269(s: &str, p: i64) -> i64 { { let r = _m270(s, p); if r >= 0 { return r; } } { let r = _m271(s, p); if r >= 0 { return r; } } -1 }
-fn _m270(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((97..=122).contains(&cc) || (65..=90).contains(&cc) || (48..=57).contains(&cc) || cc == 95 || cc == 36) { p + 1 } else { -1 } }
-fn _m271(s: &str, p: i64) -> i64 { { let r = _m272(s, p); if r >= 0 { return r; } } { let r = _m276(s, p); if r >= 0 { return r; } } -1 }
-fn _m272(s: &str, p: i64) -> i64 { let mut p = p; p = _m273(s, p); if p < 0 { return -1; } p = _m274(s, p); if p < 0 { return -1; } p }
-fn _m273(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u") { p + 2 } else { -1 } }
-fn _m274(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m275(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m275(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m276(s: &str, p: i64) -> i64 { let mut p = p; p = _m277(s, p); if p < 0 { return -1; } p = _m278(s, p); if p < 0 { return -1; } p = _m280(s, p); if p < 0 { return -1; } p }
-fn _m277(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u{") { p + 3 } else { -1 } }
-fn _m278(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m279(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m279(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m280(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
-fn _m281(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with(".") { p + 1 } else { -1 } }
-fn _m282(s: &str, p: i64) -> i64 { let mut p = p; p = _m283(s, p); if p < 0 { return -1; } p = _m284(s, p); if p < 0 { return -1; } p = _m296(s, p); if p < 0 { return -1; } p }
-fn _m283(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("#") { p + 1 } else { -1 } }
-fn _m284(s: &str, p: i64) -> i64 { { let r = _m285(s, p); if r >= 0 { return r; } } { let r = _m286(s, p); if r >= 0 { return r; } } -1 }
-fn _m285(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((97..=122).contains(&cc) || (65..=90).contains(&cc) || cc == 95 || cc == 36) { p + 1 } else { -1 } }
-fn _m286(s: &str, p: i64) -> i64 { { let r = _m287(s, p); if r >= 0 { return r; } } { let r = _m291(s, p); if r >= 0 { return r; } } -1 }
-fn _m287(s: &str, p: i64) -> i64 { let mut p = p; p = _m288(s, p); if p < 0 { return -1; } p = _m289(s, p); if p < 0 { return -1; } p }
-fn _m288(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u") { p + 2 } else { -1 } }
-fn _m289(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m290(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m290(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m291(s: &str, p: i64) -> i64 { let mut p = p; p = _m292(s, p); if p < 0 { return -1; } p = _m293(s, p); if p < 0 { return -1; } p = _m295(s, p); if p < 0 { return -1; } p }
-fn _m292(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u{") { p + 3 } else { -1 } }
-fn _m293(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m294(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m294(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m295(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
-fn _m296(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m297(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 0 { q } else { -1 } }
-fn _m297(s: &str, p: i64) -> i64 { { let r = _m298(s, p); if r >= 0 { return r; } } { let r = _m299(s, p); if r >= 0 { return r; } } -1 }
-fn _m298(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((97..=122).contains(&cc) || (65..=90).contains(&cc) || (48..=57).contains(&cc) || cc == 95 || cc == 36) { p + 1 } else { -1 } }
-fn _m299(s: &str, p: i64) -> i64 { { let r = _m300(s, p); if r >= 0 { return r; } } { let r = _m304(s, p); if r >= 0 { return r; } } -1 }
-fn _m300(s: &str, p: i64) -> i64 { let mut p = p; p = _m301(s, p); if p < 0 { return -1; } p = _m302(s, p); if p < 0 { return -1; } p }
-fn _m301(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u") { p + 2 } else { -1 } }
-fn _m302(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m303(s, q); if r < 0 || r == q { break; } q = r; c += 1; if c >= 4 { break; } } if c >= 4 { q } else { -1 } }
-fn _m303(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m304(s: &str, p: i64) -> i64 { let mut p = p; p = _m305(s, p); if p < 0 { return -1; } p = _m306(s, p); if p < 0 { return -1; } p = _m308(s, p); if p < 0 { return -1; } p }
-fn _m305(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("\\u{") { p + 3 } else { -1 } }
-fn _m306(s: &str, p: i64) -> i64 { let mut q = p; let mut c = 0i64; loop { let r = _m307(s, q); if r < 0 || r == q { break; } q = r; c += 1; } if c >= 1 { q } else { -1 } }
-fn _m307(s: &str, p: i64) -> i64 { let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ((48..=57).contains(&cc) || (65..=70).contains(&cc) || (97..=102).contains(&cc)) { p + 1 } else { -1 } }
-fn _m308(s: &str, p: i64) -> i64 { if (p as usize) <= s.len() && s[p as usize..].starts_with("}") { p + 1 } else { -1 } }
+const LEX_FIRST_IDENT: [bool; 256] = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false];
+const LEX_CONT_IDENT: [bool; 256] = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false];
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match0(s: &str, p: isize) -> isize {
+    if p == 0 { return p; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match1(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("#!".as_bytes()) { return p + 2; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match2(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    while q < (s.len() as isize) {
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if c == 10 { break; }
+        q = q + 1;
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match3(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match0(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match1(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match2(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// Shebang is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_shebang(s: &str, p: isize) -> isize {
+    let e: isize = lex_match3(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// JSDoc runs from /** to the first */ after it.
+#[inline(always)]
+fn lex_scan_j_s_doc(s: &str, p: isize) -> isize {
+    if !s.as_bytes()[p as usize..].starts_with("/**".as_bytes()) { return -1; }
+    let mut e: isize = p + 3;
+    while e < (s.len() as isize) {
+        if s.as_bytes()[e as usize..].starts_with("*/".as_bytes()) { return e + 2; }
+        e = e + 1;
+    }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match4(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("///".as_bytes()) { return p + 3; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match5(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    while q < (s.len() as isize) {
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c == 32 || c == 9) { break; }
+        q = q + 1;
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match6(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("<".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match7(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match4(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match5(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match6(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    let q3: isize = lex_match2(s, q2);
+    if q3 < 0 || q3 > (s.len() as isize) { return -1; }
+    return q3;
+}
+// TripleSlash is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_triple_slash(s: &str, p: isize) -> isize {
+    let e: isize = lex_match7(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// LineComment: // to the end of the line.
+#[inline(always)]
+fn lex_scan_line_comment(s: &str, p: isize) -> isize {
+    if !s.as_bytes()[p as usize..].starts_with("//".as_bytes()) { return -1; }
+    let mut e: isize = p + 2;
+    while e < (s.len() as isize) {
+        if (s.as_bytes()[e as usize] as u32) == 10 { break; }
+        e = e + 1;
+    }
+    return e;
+}
+// BlockComment runs from /* to the first */ after it.
+#[inline(always)]
+fn lex_scan_block_comment(s: &str, p: isize) -> isize {
+    if !s.as_bytes()[p as usize..].starts_with("/*".as_bytes()) { return -1; }
+    let mut e: isize = p + 2;
+    while e < (s.len() as isize) {
+        if s.as_bytes()[e as usize..].starts_with("*/".as_bytes()) { return e + 2; }
+        e = e + 1;
+    }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match8(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c == 36 { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match9(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("\\u".as_bytes()) { return p + 2; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match10(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    while q < (s.len() as isize) {
+        if n >= 4 { break; }
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102) { break; }
+        q = q + 1;
+        n = n + 1;
+    }
+    if n < 4 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match11(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match9(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match10(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match12(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("\\u{".as_bytes()) { return p + 3; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match13(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    while q < (s.len() as isize) {
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102) { break; }
+        q = q + 1;
+        n = n + 1;
+    }
+    if n < 1 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match14(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("}".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match15(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match12(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match13(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match14(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match16(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match11(s, p);
+    if r >= 0 { return r; }
+    r = lex_match15(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match17(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match8(s, p);
+    if r >= 0 { return r; }
+    r = lex_match16(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match18(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if c >= 97 && c <= 122 || c >= 65 && c <= 90 || c >= 48 && c <= 57 || c == 95 || c == 36 { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match19(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match18(s, p);
+    if r >= 0 { return r; }
+    r = lex_match16(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match20(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match19(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match19(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match21(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match17(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match20(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// Ident: an ASCII run while no bail character stops it, else the token pattern.
+#[inline(always)]
+fn lex_scan_ident(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if LEX_FIRST_IDENT[c as usize] {
+        let mut e: isize = p + 1;
+        while e < (s.len() as isize) {
+            if !LEX_CONT_IDENT[(s.as_bytes()[e as usize] as u32) as usize] { break; }
+            e = e + 1;
+        }
+        if e >= (s.len() as isize) { return e; }
+        let d: isize = (s.as_bytes()[e as usize] as u32) as isize;
+        if !(d == 92) { return e; }
+        e = lex_match21(s, p);
+        if e > p { return e; }
+        return -1;
+    }
+    if c == 92 {
+        let mut e: isize = lex_match21(s, p);
+        if e > p { return e; }
+        return -1;
+    }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match22(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("0".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match23(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if c == 120 || c == 88 { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match24(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("_".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match25(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match24(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match13(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match26(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match25(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match25(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match27(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("n".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match28(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    let mut r: isize = lex_match27(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        n = n + 1;
+        if n >= 1 { break; }
+        r = lex_match27(s, q);
+    }
+    if n < 0 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match29(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if c >= 48 && c <= 57 || c >= 65 && c <= 90 || c >= 97 && c <= 122 || c == 95 || c == 36 || c == 92 {
+        return p + 1;
+    }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match30(s: &str, p: isize) -> isize {
+    let r: isize = lex_match29(s, p);
+    if r < 0 { return p; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match31(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match22(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match23(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match13(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    let q3: isize = lex_match26(s, q2);
+    if q3 < 0 || q3 > (s.len() as isize) { return -1; }
+    let q4: isize = lex_match28(s, q3);
+    if q4 < 0 || q4 > (s.len() as isize) { return -1; }
+    let q5: isize = lex_match30(s, q4);
+    if q5 < 0 || q5 > (s.len() as isize) { return -1; }
+    return q5;
+}
+// HexNumber is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_hex_number(s: &str, p: isize) -> isize {
+    let e: isize = lex_match31(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match32(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if c == 111 || c == 79 { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match33(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    while q < (s.len() as isize) {
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c >= 48 && c <= 55) { break; }
+        q = q + 1;
+        n = n + 1;
+    }
+    if n < 1 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match34(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match24(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match33(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match35(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match34(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match34(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match36(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match22(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match32(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match33(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    let q3: isize = lex_match35(s, q2);
+    if q3 < 0 || q3 > (s.len() as isize) { return -1; }
+    let q4: isize = lex_match28(s, q3);
+    if q4 < 0 || q4 > (s.len() as isize) { return -1; }
+    let q5: isize = lex_match30(s, q4);
+    if q5 < 0 || q5 > (s.len() as isize) { return -1; }
+    return q5;
+}
+// OctalNumber is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_octal_number(s: &str, p: isize) -> isize {
+    let e: isize = lex_match36(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match37(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if c == 98 || c == 66 { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match38(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    while q < (s.len() as isize) {
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c == 48 || c == 49) { break; }
+        q = q + 1;
+        n = n + 1;
+    }
+    if n < 1 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match39(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match24(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match38(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match40(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match39(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match39(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match41(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match22(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match37(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match38(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    let q3: isize = lex_match40(s, q2);
+    if q3 < 0 || q3 > (s.len() as isize) { return -1; }
+    let q4: isize = lex_match28(s, q3);
+    if q4 < 0 || q4 > (s.len() as isize) { return -1; }
+    let q5: isize = lex_match30(s, q4);
+    if q5 < 0 || q5 > (s.len() as isize) { return -1; }
+    return q5;
+}
+// BinaryNumber is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_binary_number(s: &str, p: isize) -> isize {
+    let e: isize = lex_match41(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match42(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    while q < (s.len() as isize) {
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c >= 48 && c <= 57) { break; }
+        q = q + 1;
+        n = n + 1;
+    }
+    if n < 1 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match43(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match24(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match42(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match44(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match43(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match43(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match45(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match42(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match44(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match46(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match45(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match27(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match30(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// BigInt is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_big_int(s: &str, p: isize) -> isize {
+    let e: isize = lex_match46(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match47(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if c >= 49 && c <= 57 { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match48(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    while q < (s.len() as isize) {
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c >= 48 && c <= 57) { break; }
+        q = q + 1;
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match49(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match47(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match48(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match44(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match50(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match22(s, p);
+    if r >= 0 { return r; }
+    r = lex_match49(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match51(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with(".".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match52(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match51(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match48(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match44(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match53(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    let mut r: isize = lex_match52(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        n = n + 1;
+        if n >= 1 { break; }
+        r = lex_match52(s, q);
+    }
+    if n < 0 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match54(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match50(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match53(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match55(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match51(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match45(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match56(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match54(s, p);
+    if r >= 0 { return r; }
+    r = lex_match55(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match57(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if c == 101 || c == 69 { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match58(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    while q < (s.len() as isize) {
+        if n >= 1 { break; }
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c == 43 || c == 45) { break; }
+        q = q + 1;
+        n = n + 1;
+    }
+    if n < 0 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match59(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match57(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match58(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match45(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match60(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    let mut r: isize = lex_match59(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        n = n + 1;
+        if n >= 1 { break; }
+        r = lex_match59(s, q);
+    }
+    if n < 0 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match61(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match56(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match60(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match30(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// Number is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_number(s: &str, p: isize) -> isize {
+    let e: isize = lex_match61(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match62(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("\"".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match63(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if !(c == 34 || c == 92) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match64(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("\\".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match65(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("u{".as_bytes()) { return p + 2; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match66(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match22(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match22(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match67(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    while q < (s.len() as isize) {
+        if n >= 5 { break; }
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102) { break; }
+        q = q + 1;
+        n = n + 1;
+    }
+    if n < 1 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match68(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("10".as_bytes()) { return p + 2; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match69(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match68(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match10(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match70(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match67(s, p);
+    if r >= 0 { return r; }
+    r = lex_match69(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match71(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match66(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match70(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match72(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match65(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match71(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match14(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match73(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("u".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match74(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match73(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match10(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match75(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("x".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match76(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    while q < (s.len() as isize) {
+        if n >= 2 { break; }
+        let c: isize = (s.as_bytes()[q as usize] as u32) as isize;
+        if !(c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102) { break; }
+        q = q + 1;
+        n = n + 1;
+    }
+    if n < 2 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match77(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match75(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match76(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match78(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if !(c == 117 || c == 120) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match79(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match72(s, p);
+    if r >= 0 { return r; }
+    r = lex_match74(s, p);
+    if r >= 0 { return r; }
+    r = lex_match77(s, p);
+    if r >= 0 { return r; }
+    r = lex_match78(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match80(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match64(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match79(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match81(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match63(s, p);
+    if r >= 0 { return r; }
+    r = lex_match80(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match82(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match81(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match81(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match83(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match62(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match82(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match62(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match84(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("'".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match85(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if !(c == 39 || c == 92) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match86(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match85(s, p);
+    if r >= 0 { return r; }
+    r = lex_match80(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match87(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match86(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match86(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match88(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match84(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match87(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match84(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match89(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match83(s, p);
+    if r >= 0 { return r; }
+    r = lex_match88(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// String is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_string(s: &str, p: isize) -> isize {
+    let e: isize = lex_match89(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match90(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("/".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match91(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if !(c == 47 || c == 92 || c == 91 || c == 42 || c == 10) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match92(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if !(c == 10 || c == 13 || c == 8232 || c == 8233) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match93(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match64(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match92(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match94(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("[".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match95(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if !(c == 93 || c == 92 || c == 10) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match96(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match95(s, p);
+    if r >= 0 { return r; }
+    r = lex_match93(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match97(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match96(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match96(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match98(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("]".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match99(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match94(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match97(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match98(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match100(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match91(s, p);
+    if r >= 0 { return r; }
+    r = lex_match93(s, p);
+    if r >= 0 { return r; }
+    r = lex_match99(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match101(s: &str, p: isize) -> isize {
+    if p >= (s.len() as isize) { return -1; }
+    let c: isize = (s.as_bytes()[p as usize] as u32) as isize;
+    if !(c == 47 || c == 92 || c == 91 || c == 10) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match102(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match101(s, p);
+    if r >= 0 { return r; }
+    r = lex_match93(s, p);
+    if r >= 0 { return r; }
+    r = lex_match99(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match103(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match102(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match102(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match104(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match90(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match100(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match103(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    let q3: isize = lex_match90(s, q2);
+    if q3 < 0 || q3 > (s.len() as isize) { return -1; }
+    let q4: isize = lex_match20(s, q3);
+    if q4 < 0 || q4 > (s.len() as isize) { return -1; }
+    return q4;
+}
+// Regex is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_regex(s: &str, p: isize) -> isize {
+    let e: isize = lex_match104(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match105(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("@".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match106(s: &str, p: isize) -> isize {
+    let mut r: isize = -1;
+    r = lex_match19(s, p);
+    if r >= 0 { return r; }
+    r = lex_match51(s, p);
+    if r >= 0 { return r; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match107(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut r: isize = lex_match106(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        r = lex_match106(s, q);
+    }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match108(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match17(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match107(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match109(s: &str, p: isize) -> isize {
+    let mut q: isize = p;
+    let mut n: isize = 0;
+    let mut r: isize = lex_match108(s, q);
+    while r >= 0 && r != q {
+        q = r;
+        n = n + 1;
+        if n >= 1 { break; }
+        r = lex_match108(s, q);
+    }
+    if n < 0 { return -1; }
+    return q;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match110(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match105(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match109(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    return q1;
+}
+// Decorator is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_decorator(s: &str, p: isize) -> isize {
+    let e: isize = lex_match110(s, p);
+    if e > p { return e; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match111(s: &str, p: isize) -> isize {
+    if s.as_bytes()[p as usize..].starts_with("#".as_bytes()) { return p + 1; }
+    return -1;
+}
+// A token-pattern matcher: the position after the match, or -1.
+fn lex_match112(s: &str, p: isize) -> isize {
+    let q0: isize = lex_match111(s, p);
+    if q0 < 0 || q0 > (s.len() as isize) { return -1; }
+    let q1: isize = lex_match17(s, q0);
+    if q1 < 0 || q1 > (s.len() as isize) { return -1; }
+    let q2: isize = lex_match20(s, q1);
+    if q2 < 0 || q2 > (s.len() as isize) { return -1; }
+    return q2;
+}
+// PrivateField is scanned by its token pattern.
+#[inline(always)]
+fn lex_scan_private_field(s: &str, p: isize) -> isize {
+    let e: isize = lex_match112(s, p);
+    if e > p { return e; }
+    return -1;
+}
 #[inline(always)] fn _utf8_char_at(b: &[u8], pos: usize) -> Option<(char, usize)> {
     let s = std::str::from_utf8(&b[pos..]).ok()?;
     let ch = s.chars().next()?;
@@ -493,42 +1317,21 @@ fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid
         }
                 if c >= 128 {
         if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) { if ch == '\u{2028}' || ch == '\u{2029}' { st.pending_nl = true; } pos += w; continue; } } }
-        if true { let e = _m0(src, pos as i64); if e > pos as i64 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
-        if src[pos..].starts_with("/**") {
-            let mut e = pos + 3;
-            // Byte-step + &str slice panics mid multi-byte char; match close on bytes.
-            while e < n && !b[e..].starts_with("*/".as_bytes()) { e += 1; }
-            if e < n { e += 2; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; }
-        }
-        if true { let e = _m5(src, pos as i64); if e > pos as i64 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
-        if src[pos..].starts_with("//") {
-            let mut e = pos + 2;
-            while e < n && b[e] != 10 { e += 1; }
-            if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue;
-        }
-        if src[pos..].starts_with("/*") {
-            let mut e = pos + 2;
-            // Byte-step + &str slice panics mid multi-byte char; match close on bytes.
-            while e < n && !b[e..].starts_with("*/".as_bytes()) { e += 1; }
-            if e < n { e += 2; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; }
-        }
-        if _RB_F_IDENT[c as usize] {
-            let mut e = pos + 1;
-            while e < n && _RB_C_IDENT[b[e] as usize] { e += 1; }
-            if e >= n || !(b[e] as u32 == 92) { let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; st.emit(pos, e, 6, lid_of(&src[pos..e])); pos = e; continue; }
-            { let e2 = _m14(src, pos as i64); if e2 > pos as i64 { let e2 = e2 as usize; let e2 = if e2 < b.len() && b[e2] >= 0x80 { _lx_ext(b, e2) } else { e2 }; st.emit(pos, e2, 6, lid_of(&src[pos..e2])); pos = e2; continue; } }
-        } else if c == 92 {
-            let e = _m14(src, pos as i64); if e > pos as i64 { let e = e as usize; let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; st.emit(pos, e, 6, lid_of(&src[pos..e])); pos = e; continue; }
-        }
-        if true { let e = _m40(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 7, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m54(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 8, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m68(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 9, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m82(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 10, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m94(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 11, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m143(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 12, lid_of(&src[pos..e])); pos = e; continue; } }
-        if !st.prev_is_value() && true { let e = _m206(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 14, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m251(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 15, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m282(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 16, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_shebang(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_j_s_doc(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_triple_slash(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_line_comment(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_block_comment(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_ident(src, pos as isize); if e >= 0 { let e = e as usize; let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; st.emit(pos, e, 6, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_hex_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 7, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_octal_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 8, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_binary_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 9, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_big_int(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 10, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 11, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_string(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 12, lid_of(&src[pos..e])); pos = e; continue; } }
+        if !st.prev_is_value() { let e = lex_scan_regex(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 14, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_decorator(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 15, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_private_field(src, pos as isize); if e >= 0 { let e = e as usize; let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; st.emit(pos, e, 16, lid_of(&src[pos..e])); pos = e; continue; } }
         if src[pos..].starts_with("...") { st.emit(pos, pos + 3, 0, 1); pos += 3; continue; }
         if src[pos..].starts_with("**=") { st.emit(pos, pos + 3, 0, 2); pos += 3; continue; }
         if src[pos..].starts_with("<<=") { st.emit(pos, pos + 3, 0, 3); pos += 3; continue; }
@@ -596,21 +1399,14 @@ fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid
         if b[pos] == 33 { st.emit(pos, pos + 1, 0, 45); pos += 1; continue; }
                 }
                 34 | 39 => {
-        if true { let e = _m143(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 12, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_string(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 12, lid_of(&src[pos..e])); pos = e; continue; } }
                 }
                 b'#' => {
-        if true { let e = _m0(src, pos as i64); if e > pos as i64 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
-        if true { let e = _m282(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 16, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_shebang(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_private_field(src, pos as isize); if e >= 0 { let e = e as usize; let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; st.emit(pos, e, 16, lid_of(&src[pos..e])); pos = e; continue; } }
                 }
                 b'$' | b'A'..=b'Z' | 92 | b'_' | b'a'..=b'z' => {
-        if _RB_F_IDENT[c as usize] {
-            let mut e = pos + 1;
-            while e < n && _RB_C_IDENT[b[e] as usize] { e += 1; }
-            if e >= n || !(b[e] as u32 == 92) { let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; st.emit(pos, e, 6, lid_of(&src[pos..e])); pos = e; continue; }
-            { let e2 = _m14(src, pos as i64); if e2 > pos as i64 { let e2 = e2 as usize; let e2 = if e2 < b.len() && b[e2] >= 0x80 { _lx_ext(b, e2) } else { e2 }; st.emit(pos, e2, 6, lid_of(&src[pos..e2])); pos = e2; continue; } }
-        } else if c == 92 {
-            let e = _m14(src, pos as i64); if e > pos as i64 { let e = e as usize; let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; st.emit(pos, e, 6, lid_of(&src[pos..e])); pos = e; continue; }
-        }
+        { let e = lex_scan_ident(src, pos as isize); if e >= 0 { let e = e as usize; let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; st.emit(pos, e, 6, lid_of(&src[pos..e])); pos = e; continue; } }
                 }
                 b'%' => {
         if src[pos..].starts_with("%=") { st.emit(pos, pos + 2, 0, 15); pos += 2; continue; }
@@ -648,43 +1444,29 @@ fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid
         if b[pos] == 45 { st.emit(pos, pos + 1, 0, 43); pos += 1; continue; }
                 }
                 b'.' => {
-        if true { let e = _m94(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 11, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 11, lid_of(&src[pos..e])); pos = e; continue; } }
         if src[pos..].starts_with("...") { st.emit(pos, pos + 3, 0, 1); pos += 3; continue; }
         if b[pos] == 46 { st.emit(pos, pos + 1, 0, 44); pos += 1; continue; }
                 }
                 b'/' => {
-        if src[pos..].starts_with("/**") {
-            let mut e = pos + 3;
-            // Byte-step + &str slice panics mid multi-byte char; match close on bytes.
-            while e < n && !b[e..].starts_with("*/".as_bytes()) { e += 1; }
-            if e < n { e += 2; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; }
-        }
-        if true { let e = _m5(src, pos as i64); if e > pos as i64 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
-        if src[pos..].starts_with("//") {
-            let mut e = pos + 2;
-            while e < n && b[e] != 10 { e += 1; }
-            if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue;
-        }
-        if src[pos..].starts_with("/*") {
-            let mut e = pos + 2;
-            // Byte-step + &str slice panics mid multi-byte char; match close on bytes.
-            while e < n && !b[e..].starts_with("*/".as_bytes()) { e += 1; }
-            if e < n { e += 2; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; }
-        }
-        if !st.prev_is_value() && true { let e = _m206(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 14, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_j_s_doc(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_triple_slash(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_line_comment(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        { let e = lex_scan_block_comment(src, pos as isize); if e >= 0 { let e = e as usize; if src[pos..e].chars().any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')) { st.pending_nl = true; } pos = e; continue; } }
+        if !st.prev_is_value() { let e = lex_scan_regex(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 14, lid_of(&src[pos..e])); pos = e; continue; } }
         if src[pos..].starts_with("/=") { st.emit(pos, pos + 2, 0, 14); pos += 2; continue; }
         if b[pos] == 47 { st.emit(pos, pos + 1, 0, 50); pos += 1; continue; }
                 }
                 b'0' => {
-        if true { let e = _m40(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 7, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m54(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 8, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m68(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 9, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m82(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 10, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m94(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 11, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_hex_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 7, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_octal_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 8, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_binary_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 9, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_big_int(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 10, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 11, lid_of(&src[pos..e])); pos = e; continue; } }
                 }
                 b'1'..=b'9' => {
-        if true { let e = _m82(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 10, lid_of(&src[pos..e])); pos = e; continue; } }
-        if true { let e = _m94(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 11, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_big_int(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 10, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_number(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 11, lid_of(&src[pos..e])); pos = e; continue; } }
                 }
                 b':' => {
         if b[pos] == 58 { st.emit(pos, pos + 1, 0, 39); pos += 1; continue; }
@@ -714,7 +1496,7 @@ fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid
         if b[pos] == 63 { st.emit(pos, pos + 1, 0, 38); pos += 1; continue; }
                 }
                 b'@' => {
-        if true { let e = _m251(src, pos as i64); if e > pos as i64 { let e = e as usize; st.emit(pos, e, 15, lid_of(&src[pos..e])); pos = e; continue; } }
+        { let e = lex_scan_decorator(src, pos as isize); if e >= 0 { let e = e as usize; st.emit(pos, e, 15, lid_of(&src[pos..e])); pos = e; continue; } }
                 }
                 91 => {
         if b[pos] == 91 { st.emit(pos, pos + 1, 0, 32); pos += 1; continue; }
