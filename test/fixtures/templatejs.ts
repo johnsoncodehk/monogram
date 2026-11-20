@@ -59,4 +59,5 @@ export default defineGrammar({
   tokens: { Ident, Number: Number_, Str, Template, LineComment },
   prec: jsPrec,
   rules: { Expr, Block, Stmt, Program },
+  expression: Expr,
 });

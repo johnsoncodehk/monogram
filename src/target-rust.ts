@@ -856,9 +856,9 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const preArms = r.prefix.map((p) => `${lidOf(ids, p.op)} => Some((${p.rbp}, ${p.requireTarget}, ${p.form}))`).join(', ');
   const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some((${p.lbp}, ${p.requireTarget}))`).join(', ');
   const atomArm = r.nudToks.map((k) => `${kidOf(ids, k)}`).join(' | ');
-  const tplNud = tpl && r.nudToks.includes(tpl.token)
+  const tplNud = r.nudTplHole !== undefined
     ? `        if t.kid == ${kidOf(ids, "$templateHead")} {
-            let n = match self.match_template(Self::parse_${r.name}) { Some(n) => n, None => return None };
+            let n = match self.match_template(Self::parse_${r.nudTplHole}) { Some(n) => n, None => return None };
             let sb = self.scratch.len();
             if n.present { self.scratch.push(n.h); }
             return Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize));
@@ -919,9 +919,8 @@ ${groups.map((g) => {
   const postfixTokMatch = (() => {
     if (r.postfixToks.length === 0) return '';
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
-    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
-    const tplPart = hasTpl ? `
-            if !tail_closed && t.kid == ${kidOf(ids, "$templateHead")} { if let Some(n) = self.match_template(Self::parse_${r.name}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = 0; continue; } }` : '';
+    const tplPart = r.postfixTplHole !== undefined ? `
+            if !tail_closed && t.kid == ${kidOf(ids, "$templateHead")} { if let Some(n) = self.match_template(Self::parse_${r.postfixTplHole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = 0; continue; } }` : '';
     return `            match t.kid {
 ${groups.map((g) => `                ${g.key} => { if !tail_closed { let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = 0; continue; } }`).join('\n')}
                 _ => {}
@@ -1734,9 +1733,8 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
     if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
     return rdRule(r, ids, ar);
   }).join('\n\n');
-  const matchTemplate = ir.tpl ? `    // interp: the Pratt rule to parse each \`\${…}\` hole — the CALLER's rule
-    // (Expr for expression templates, Type for template literal types), mirroring
-    // the reference parser's currentPrattContext ?? findExprRule().
+  const matchTemplate = ir.tpl ? `    // interp: the rule that parses each \`\${…}\` hole — the one the matching reference declares
+    // (the grammar's expression rule, or the rule a withHoles reference names).
     fn match_template(&mut self, interp: fn(&mut Parser<'a, B>) -> Option<Spanned<B::H>>) -> Option<Spanned<B::H>> {
         let t = self.peek()?;
         if t.kid != ${kidOf(ids, "$templateHead")} { return None; }
@@ -3293,25 +3291,20 @@ function emitRustPrattMethod(
     });
   };
 
-  /** Explicit pratt.template only — omitted keeps legacy `$template` + interpRule holes. */
+  /** Explicit pratt.template only — omitted keeps the `$template` node. */
   const templateSlot = ps.template as CustomShape | { kind: 'keep' } | undefined;
-  const hasTplNud = !!(tpl && rule.nudToks.includes(tpl.token));
-  const hasTplPostfix = !!(tpl && rule.postfixToks.includes(tpl.token));
+  const hasTplNud = rule.nudTplHole !== undefined;
+  const hasTplPostfix = rule.postfixTplHole !== undefined;
   const templateFinish = (kidsSlice: string, offExpr: string, endExpr: string): string => {
     if (!templateSlot || templateSlot.kind === 'keep') return keepFinishSlice(kidsSlice, '$template', offExpr, endExpr);
     return customCall(templateSlot.fn, kidsSlice, '[]', offExpr, endExpr, undefined, undefined, templateSlot.folds);
   };
-  // Template holes parse with the CALLER's rule (parse_ast_<rule>): an expression
-  // template's `${f(1)}` / `${b + 1}` are Exprs, a template literal type's
-  // `${A & B}` is a Type — mirroring the reference's currentPrattContext
-  // (currentPrattContext ?? EXPR_RULE; a template only appears inside a Pratt
-  // rule, so the current context is always the caller's rule). The old Type-first
-  // dual-parse mis-accepted `${f(1)}`: `f` is a valid Type reference, so Type
-  // consumed only `f`, the Expr re-parse's end differed, the fallback re-took the
-  // Type shape, and the leftover `(1)` killed the template.
-  const holeRule = rule.name;
-  const tplHelperCode = tpl && (hasTplNud || hasTplPostfix)
-    ? `    fn match_template_ast_${rule.name}(&mut self) -> Option<(Vec<SVal<'a>>, usize)> {
+  // Template holes parse with the rule the matching reference declares (PrattRule.nudTplHole /
+  // postfixTplHole): an expression template's `${f(1)}` / `${b + 1}` are Exprs, a template
+  // literal type's `${A & B}` is a Type. One helper per hole rule this Pratt rule uses.
+  const tplAstFn = (hole: string) => `match_template_ast_${rule.name}_holes_${hole}`;
+  const tplHoles = [...new Set([rule.nudTplHole, rule.postfixTplHole].filter((h): h is string => h !== undefined))];
+  const tplHelperCode = tplHoles.map((holeRule) => `    fn ${tplAstFn(holeRule)}(&mut self) -> Option<(Vec<SVal<'a>>, usize)> {
         let t = self.toks.get(self.pos).copied()?;
         if t.kid != ${kidOf(ids, '$templateHead')} { return None; }
         let save = self.pos;
@@ -3343,8 +3336,7 @@ function emitRustPrattMethod(
         }
         Some((kids, save))
     }
-`
-    : '';
+`).join('');
 
   // ── atom ──
   let atomCode = '';
@@ -3398,7 +3390,7 @@ function emitRustPrattMethod(
   // ── template NUD ──
   const tplNudCode = hasTplNud
     ? `if self.peek_kid() == Some(${kidOf(ids, '$templateHead')}) {
-            let (_tm_kids, _tm_save) = self.match_template_ast_${rule.name}()?;
+            let (_tm_kids, _tm_save) = self.${tplAstFn(rule.nudTplHole!)}()?;
             let _tm_off = self.toks[_tm_save].off as usize;
             let _tm_end = self.last_end(_tm_off);
             return Some(${templateFinish('&_tm_kids', '_tm_off', '_tm_end')});
@@ -3767,7 +3759,7 @@ function emitRustPrattMethod(
       tplPart = `
             if !tail_closed && self.peek_kid() == Some(${kidOf(ids, '$templateHead')}) {
                 let node_off = self.current_off();
-                if let Some((_tm_kids, _tm_save)) = self.match_template_ast_${rule.name}() {
+                if let Some((_tm_kids, _tm_save)) = self.${tplAstFn(rule.postfixTplHole!)}() {
                     let node_end = self.last_end(node_off);
                     #[allow(unused_mut)]
                     let mut node = ${templateFinish('&_tm_kids', 'node_off', 'node_end')};

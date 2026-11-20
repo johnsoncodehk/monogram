@@ -568,7 +568,7 @@ class Emitter {
     }
     if (expr.type === 'ref') {
       if (a.tokenNames.has(expr.name)) {
-        if (a.templateTokenNames.has(expr.name)) return null;   // two-branch (template) — not single-leaf
+        if (expr.hole !== undefined) return null;   // two-branch (template) — not single-leaf
         return `  return ${this.matchTokenCall(expr.name)};`;
       }
       // Rule ref: keep the FIRST-set guard, then the call.
@@ -597,9 +597,10 @@ class Emitter {
       }
       case 'ref': {
         if (a.tokenNames.has(expr.name)) {
-          // Template tokens: route to parseTemplateExpr first (interpolated templates).
-          if (a.templateTokenNames.has(expr.name)) {
-            return `if (!parseTemplateExpr() && !${this.matchTokenCall(expr.name)}) { ${onFail} }`;
+          // A template reference: parseTemplateExpr matches the token or an interpolated
+          // template whose holes are parsed by the rule the reference declares.
+          if (expr.hole !== undefined) {
+            return `if (!parseTemplateExpr(R_${sanitize(expr.hole)}) && !${this.matchTokenCall(expr.name)}) { ${onFail} }`;
           }
           return `if (!${this.matchTokenCall(expr.name)}) { ${onFail} }`;
         }
@@ -1293,13 +1294,6 @@ function emitJsParser(grammar: CstGrammar): string {
   // (recovery sync closers are threaded per-loop from the enclosing seq — see
   // quantFollowT; a global closer table froze top-level recovery at any ']'.)
   e.emit(`const prattRuleNames = new Set<string>(${J([...a.prattRules])});`);
-  // The expression rule the template-interpolation fallback (findExprRule) picks:
-  // first pratt rule that isn't Type, in declaration order. Bake the resolved name.
-  const exprRuleName = (() => {
-    for (const r of grammar.rules) if (a.prattRules.has(r.name) && r.name !== 'Type') return r.name;
-    return grammar.rules[0].name;
-  })();
-  e.emit(`const EXPR_RULE = ${J(exprRuleName)};`);
   e.emit(``);
   // Compound-matcher helper fns are spliced in here (after imports/tables).
   e.emit(`//\${HELPERS}`);
@@ -1658,7 +1652,6 @@ let parseLimit = -1;
 // cap = the exclusive lookahead bound: min(parseLimit-or-∞, tokN), maintained at the
 // parseLimit set/restore sites.
 let cap = 0;
-let currentPrattContext: string | null = null;
 let suppressNext: Set<string> | null = null;
 let suppressCur: Set<string> | null = null;
 
@@ -1712,7 +1705,8 @@ function matchTokK(nameKind: number) {
 // (First-token / FIRST-set gating is baked at emit time: per-set _qN byte-table fns
 // for rule/alt guards, and open-coded two-table loads for the LED dispatch — see
 // membershipFn / ftCond in the emitter.)
-function parseTemplateExpr() {
+// hole: the rule function that parses each interpolation hole (the rule the reference declares).
+function parseTemplateExpr(hole: () => boolean) {
   if (pos >= cap) return false;
   const k = tkK[pos];
   if (k === K_TPL_TOKEN) {
@@ -1725,12 +1719,11 @@ function parseTemplateExpr() {
     const save = pos;
     scPush(~(pos << 2));
     if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }
-    const interpRule = currentPrattContext ?? EXPR_RULE;
     // a head COMMITS to the full chain: every substitution must hold an
     // expression and every span must continue (middle) or close (tail) — an
     // unterminated template is a parse failure, not a shorter match
     while (true) {
-      if (!RULES[interpRule]() || pos >= cap) { pos = save; scn = mark; return false; }
+      if (!hole() || pos >= cap) { pos = save; scn = mark; return false; }
       const nk = tkK[pos];
       if (nk === K_TEMPLATE_MIDDLE) {
         scPush(~(pos << 2));
@@ -1766,7 +1759,7 @@ function emitRuleFns(e: Emitter, a: ReturnType<typeof analyze>) {
     else if (a.leftRecSet.has(rule.name)) emitLeftRecRule(e, a, rule);
     else emitNonRecRule(e, a, rule, spine.has(rule.name) && !a.prattRules.has(rule.name) && !a.leftRecSet.has(rule.name));
   }
-  // Dispatch table (string rule name → fn), for parseTemplateExpr's dynamic interp rule.
+  // Dispatch table (string rule name → fn), for entering the parse at a named rule.
   e.emit(`const RULES: Record<string, () => boolean> = {`);
   for (const rule of a.grammar.rules) e.emit(`  ${J(rule.name)}: ${ruleFn(rule.name)},`);
   e.emit(`};`);
@@ -1862,7 +1855,7 @@ function emitNonRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDec
   // push+boolean contract and the memo) and an id-returning core, exactly like the
   // pratt/left-rec rules.
   if (memoized) {
-    e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_core); }`);
+    e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${ruleFn}_core); }`);
     e.emit(`function ${ruleFn}_core(_minBp: number) {`);
   } else {
     e.emit(`function ${ruleFn}() {`);
@@ -1899,12 +1892,10 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   const sn = sanitize(rule.name);
   const { atoms, continuations, contNotLeftLeaf } = a.leftRecClassified.get(rule.name)!;
   const contMix = a.contMeta.get(rule.name)!;
-  // A left-rec rule, like a Pratt rule, goes through parseRule's memo + context +
-  // suppress wrapper in the interpreter — so currentPrattContext is set to this rule
-  // (the template-interpolation rule resolution depends on it: a `${…}` hole inside a
-  // template-literal TYPE must parse as Type, not the default expression rule).
+  // A left-rec rule, like a Pratt rule, goes through parseRule's memo + suppress wrapper
+  // in the interpreter.
   const rid = a.grammar.rules.indexOf(rule);
-  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_lr); }`);
+  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${ruleFn}_lr); }`);
   // notLeftLeaf head-leaf word sets (module-level, built once) for this rule's gated continuations.
   contNotLeftLeaf.forEach((words, i) => {
     if (words) e.emit(`const _NLLC_${sn}_${i} = new Set<string>(${J(words)});`);
@@ -1969,7 +1960,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
 
   // R_<rule>() wraps parseRule's memo/context handling, then calls the bp-taking core.
   const rid = a.grammar.rules.indexOf(rule);
-  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${J(rule.name)}, ${ruleFn}_pratt); }`);
+  e.emit(`function ${ruleFn}() { return parseRuleEntry(${e.memoIndex(rule.name)}, ${rid}, ${ruleFn}_pratt); }`);
   // notLeftLeaf head-leaf word sets (module-level, built once) for this rule's gated LED arms.
   meta.notLeftLeaf.forEach((words, i) => {
     if (words) e.emit(`const _NLL_${sn}_${i} = new Set<string>(${J(words)});`);
@@ -2257,7 +2248,7 @@ function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
 // and SECOND-token reads past it. Left-to-right parsing keeps the watermark near the
 // current frontier, so the value is tight on the dominant flow and only OVER-
 // invalidates (soundly) near big-backtrack clusters.
-function parseRuleEntry(idx: number, rid: number, name: string, core: (minBp: number) => number) {
+function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => number) {
   const mySup = suppressNext;
   suppressNext = null;
   const capped = parseLimit >= 0;
@@ -2364,8 +2355,6 @@ function parseRuleEntry(idx: number, rid: number, name: string, core: (minBp: nu
     mySerial = ++recSerial;
     recRunning.set(recKey, mySerial);
   }
-  const prevContext = currentPrattContext;
-  currentPrattContext = name;
   const prevSup = suppressCur;
   suppressCur = mySup;
   const fm0 = frameMax;
@@ -2376,7 +2365,6 @@ function parseRuleEntry(idx: number, rid: number, name: string, core: (minBp: nu
   try {
     result = core(0);
   } finally {
-    currentPrattContext = prevContext;
     suppressCur = prevSup;
     if (recKey >= 0) recRunning.delete(recKey);
   }
@@ -2465,7 +2453,6 @@ function runParse(entryRule?: string) {
   cycleMinSerial = 0x7fffffff;
   parseLimit = -1;
   cap = tokN;
-  currentPrattContext = null;
   suppressNext = null;
   suppressCur = null;
   scn = 0;
@@ -3051,7 +3038,7 @@ function trySurgery(dmgA: number, dmgB: number, tokD: number, chrD: number) {
     : dmgA;
   const s0 = pos;
   maxPos = pos; frameMax = pos; scn = 0; parseLimit = -1; cap = tokN;
-  currentPrattContext = null; suppressNext = null; suppressCur = null;
+  suppressNext = null; suppressCur = null;
   const genAt = memoGenCur;
   const fn = RULE_FN_BY_ID[elem];
   let j = Db, guard = 0;

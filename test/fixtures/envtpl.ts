@@ -26,5 +26,6 @@ export default defineGrammar({
   prec: [left('+')],
   rules: { Value, Stmt, Program },
   entry: Program,
+  expression: Value,
   newline,
 });

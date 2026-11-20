@@ -148,6 +148,10 @@ export type PrattRule = {
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
   postfix: Array<{ op: string; lbp: number; requireTarget: boolean }>;  // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
   postfixSameLine: boolean;                           // the postfix arm is `$ sameLine ++` (a restricted production): the operator binds only on its operand's line
+  // Present iff the template token is in nudToks / postfixToks: the rule that parses the
+  // `${…}` holes of a template matched there — the one that reference declares (RuleExpr ref.hole).
+  nudTplHole?: string;
+  postfixTplHole?: string;
 };
 // The assignment-target form of a Pratt node (the interpreter's notAssignTarget), decided by the
 // construct that builds it: an operator node is not a target, a prefix-unary one (`-x`, not
@@ -175,15 +179,27 @@ export type RegexCtx = {
 // span scanned to the next `${` (→ $templateHead) or closing `` ` `` (→ the whole token,
 // no substitution); a `}` that closes a hole resumes the span (→ $templateMiddle / Tail).
 // A `templateStack` of brace-depths tracks which `}` closes the hole vs. a nested `{…}`.
-// The parser assembles head·expr·(middle·expr)*·tail into a synthetic `$template` node.
+// The parser assembles head·hole·(middle·hole)*·tail into a synthetic `$template` node; the rule
+// that parses a hole is the matching reference's (PrattRule.nudTplHole / postfixTplHole).
 export type TplCfg = {
   token: string;        // the token flagged `template`; its NoSubstitution form is a plain leaf
   open: string;         // `` ` ``
   interpOpen: string;   // `${`
   interpClose: string;  // `}`
   braceOpen: string;    // `{` — a nested one deepens the hole, so its `}` is not the closer
-  interpRule: string;   // the rule that parses each `${…}` hole (the Pratt expression rule)
 };
+
+/** Every rule that parses template holes in `ir`, in first-use order: a target whose template
+ *  matcher cannot take the hole rule as an argument emits one matcher per entry. */
+export function tplHoleRules(ir: ParserIR): string[] {
+  const out = new Set<string>();
+  for (const r of ir.rules) {
+    if (r.kind !== 'pratt') continue;
+    if (r.nudTplHole !== undefined) out.add(r.nudTplHole);
+    if (r.postfixTplHole !== undefined) out.add(r.postfixTplHole);
+  }
+  return [...out];
+}
 
 // Newline-only mode (emit-lexer.ts): an engine-emitted NEWLINE token spanning every line break
 // outside flowOpen/flowClose.
@@ -393,20 +409,16 @@ function buildIR(grammar: CstGrammar): ParserIR {
     };
   }
 
-  // Template literals (only if the grammar declares a template token). The interpolation
-  // holes are parsed by the Pratt expression rule — the rule that carries operator leds.
+  // Template literals (only if the grammar declares a template token).
   let tpl: TplCfg | null = null;
   const tplTok = grammar.tokens.find((t) => t.template);
   if (tplTok && tplTok.template) {
-    const prattName = rules.find((r) => r.kind === 'pratt')?.name;
-    if (!prattName) throw new Error('portable: a template token needs a Pratt expression rule to parse its interpolations');
     tpl = {
       token: tplTok.name,
       open: tplTok.template.open,
       interpOpen: tplTok.template.interpOpen,
       interpClose: tplTok.template.interpClose,
       braceOpen: tplTok.template.interpOpen.slice(-1),
-      interpRule: prattName,
     };
   }
 
@@ -429,9 +441,10 @@ function buildIR(grammar: CstGrammar): ParserIR {
       r.nudSeqs.forEach((seq) => seq.forEach(sanStep));
       r.nudCapped.forEach((c) => c.steps.forEach(sanStep));
       r.leds.forEach((b) => b.steps.forEach(sanStep));
+      if (r.nudTplHole !== undefined) r.nudTplHole = san(r.nudTplHole);
+      if (r.postfixTplHole !== undefined) r.postfixTplHole = san(r.postfixTplHole);
     }
   }
-  if (tpl) tpl.interpRule = san(tpl.interpRule);
 
   let newlineCfg: NewlineCfg | null = null;
   if (grammar.newline) {
@@ -543,6 +556,14 @@ function buildPratt(
   const ledSameLine: boolean[] = [];
   const ledNotLeftLeaf: Array<string[] | null> = [];
   const postfixToks: string[] = [];
+  // The hole rule of the template reference in NUD / postfix position. One Pratt rule matches
+  // the template token there through ONE arm, so two references naming different hole rules
+  // cannot both be honoured: refuse the grammar instead of picking one.
+  let nudTplHole: string | undefined, postfixTplHole: string | undefined;
+  const oneHole = (where: string, prev: string | undefined, hole: string): string => {
+    if (prev !== undefined && prev !== hole) throw new Error(`portable: rule ${name} references its template token in ${where} position with two hole rules (${prev}, ${hole})`);
+    return hole;
+  };
   for (const alt of alts) {
     let items = alt.type === 'seq' ? alt.items : [alt];
     // A left-recursive continuation may carry a leading `notLeftLeaf(words)` head-leaf guard
@@ -554,7 +575,11 @@ function buildPratt(
     const startsSelf = items[0].type === 'ref' && items[0].name === name;
     if (!startsSelf) {
       // NUD
-      if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) { nudToks.push(items[0].name); continue; }
+      if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) {
+        nudToks.push(items[0].name);
+        if (items[0].hole !== undefined) nudTplHole = oneHole('NUD', nudTplHole, items[0].hole);
+        continue;
+      }
       if (items[0].type === 'prefix') { sawPrefix = true; continue; }
       // A capExpr (arrow function): an assignment-level group{capBelow}. ctxMode in its body
       // is treated as transparent (the await/yield fork is not modelled in the portable parser).
@@ -596,7 +621,11 @@ function buildPratt(
       ledNotLeftLeaf.push(nllWords);
       continue;
     }
-    if (rest.length === 1 && rest[0].type === 'ref' && a.tokenNames.has(rest[0].name)) { postfixToks.push(rest[0].name); continue; }  // postfix token (tagged template)
+    if (rest.length === 1 && rest[0].type === 'ref' && a.tokenNames.has(rest[0].name)) {   // postfix token (tagged template)
+      postfixToks.push(rest[0].name);
+      if (rest[0].hole !== undefined) postfixTplHole = oneHole('postfix', postfixTplHole, rest[0].hole);
+      continue;
+    }
     throw new Error(`portable: Pratt LED shape not in scope (rule ${name})`);
   }
   // a self-ref inside a NUD/LED sub-sequence is a fresh parse of this rule
@@ -631,7 +660,7 @@ function buildPratt(
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
   const ledClosesTail = leds.map((l, i) => !ledAccessTail[i] || l.steps[l.steps.length - 1]?.t === 'not');
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine };
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine, ...(nudTplHole !== undefined ? { nudTplHole } : {}), ...(postfixTplHole !== undefined ? { postfixTplHole } : {}) };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──

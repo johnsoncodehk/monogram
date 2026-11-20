@@ -51,6 +51,8 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
     switch (expr.type) {
       case 'ref':
         if (fam && byName.has(expr.name)) intoFamily(expr.name, fam);
+        // a template reference reaches its hole rule: the holes inherit the context
+        if (fam && expr.hole !== undefined) intoFamily(expr.hole, fam);
         return;
       case 'group':
         if (expr.ctxMode && expr.ctxMode !== 'reset') { walkExpr(expr.body, expr.ctxMode); return; }
@@ -81,6 +83,7 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
     switch (expr.type) {
       case 'ref': {
         if (fam && closure[fam].has(expr.name)) return { type: 'ref', name: expr.name + SUFFIX[fam] };
+        if (fam && expr.hole !== undefined && closure[fam].has(expr.hole)) return { type: 'ref', name: expr.name, hole: expr.hole + SUFFIX[fam] };
         return expr;
       }
       case 'group': {
@@ -150,7 +153,10 @@ export function dropForks(grammar: CstGrammar): CstGrammar {
   const reref = (e: RuleExpr): RuleExpr => {
     if (!e || typeof e !== 'object') return e;
     switch (e.type) {
-      case 'ref': return canonOf.has(e.name) ? { type: 'ref', name: canonOf.get(e.name)! } : e;
+      case 'ref':
+        if (canonOf.has(e.name)) return { type: 'ref', name: canonOf.get(e.name)! };
+        if (e.hole !== undefined && canonOf.has(e.hole)) return { type: 'ref', name: e.name, hole: canonOf.get(e.hole)! };
+        return e;
       case 'group': return { type: 'group', body: reref(e.body), ...(e.suppress !== undefined ? { suppress: e.suppress } : {}), ...(e.capBelow !== undefined ? { capBelow: e.capBelow } : {}) };
       case 'seq': return { type: 'seq', items: e.items.map(reref) };
       case 'alt': return { type: 'alt', items: e.items.map(reref) };

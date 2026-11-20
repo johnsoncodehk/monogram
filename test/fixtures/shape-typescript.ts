@@ -179,7 +179,7 @@ export const typescriptShape: ShapeSpec = {
         'Template literal kids are head, expr, optional middle/expr pairs, then tail ' +
         '(or a lone no-subst leaf). ESTree needs TemplateLiteral with quasis and ' +
         'expressions; keep would leave raw $template children. Hole accept/AST both ' +
-        'use the enclosing Pratt (≡ CST; reference currentPrattContext ?? EXPR_RULE).', { types: ['TemplateLiteral'] })
+        'use the rule the template reference declares (≡ CST).', { types: ['TemplateLiteral'] })
     },
 
     // Type system Pratt — no demo coverage; ESTree/TS uses different node set

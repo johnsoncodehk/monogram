@@ -477,7 +477,11 @@ export type RuleExpr =
   | { type: 'seq'; items: RuleExpr[] }
   | { type: 'alt'; items: RuleExpr[] }
   | { type: 'literal'; value: string }
-  | { type: 'ref'; name: string }
+  // `hole`: on a reference to a `template` token, and only there — the rule that parses each
+  // `${…}` hole of an interpolated template matched at THIS reference. defineGrammar resolves it
+  // (the grammar's `expression` rule, or the rule a `withHoles(token, rule)` reference names), so
+  // every consumer reads it from the reference and none infers it from the parse context.
+  | { type: 'ref'; name: string; hole?: string }
   | { type: 'quantifier'; body: RuleExpr; kind: '*' | '+' | '?' }
   // `ctxMode` marks a subtree as [Await]/[Yield] context (the spec's grammar parameter):
   // the await-yield-fork build transform reads it to name-fork the body-reachable rule
@@ -577,7 +581,7 @@ export interface CstGrammar {
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue); absent for token-stream languages
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML); absent → byte-identical token stream
   newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack): a NEWLINE token at every block-context line break
-  expressionRule?: string;  // name of the rule that produces an EXPRESSION; lets gen-tm derive a `#expression` sub-grammar (for expression-only embeds, e.g. Vue `{{ }}`)
+  expressionRule?: string;  // name of the rule that produces an EXPRESSION: the rule a template reference's `${…}` holes parse with unless the reference names another (RuleExpr ref.hole), and the rule gen-tm derives a `#expression` sub-grammar from (for expression-only embeds, e.g. Vue `{{ }}`)
   // Extra TextMate grammars that just RE-EXPOSE this one under another scopeName (thin
   // `{scopeName, patterns:[{include: <this.scopeName>}]}` wrappers). HTML declares
   // text.html.derivative this way — the embedded-fragment scope Vue/markdown/pug inject onto;

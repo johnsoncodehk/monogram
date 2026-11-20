@@ -103,6 +103,19 @@ export const CURATED_TS: string[] = [
   `const sigma = α + β; const n = "café — naïve ≡ x";`, // non-ASCII identifiers + string/punct
 ];
 
+// ── 1a) Valid snippets for the CST gates only ───────────────────────────────────────────
+// Parsed by the interpreter-vs-emitted parity gates like CURATED_TS, but kept out of it:
+// CURATED_TS also seeds the ESTree shape corpora (shape-parity / shape-rust), and the
+// hand-written Rust ESTree customs have no schema for these — their `$template` schema is one
+// `Type` hole between a head and a tail, and a type alias binds only a `Type` kid, so a
+// template-literal type with several holes, or standing alone as an annotation, has no Rust
+// tree to compare. The portable Rust parser itself is covered by portable-targets.
+export const CURATED_TS_CST: string[] = [
+  // a template's holes are parsed by the rule its reference declares: types in a
+  // template-literal type, expressions in a template-literal expression, at any nesting
+  `type TL = \`a\${T[]}b\${A | B}\`; const tl = \`a\${y as \`b\${T[]}\`}c\`;`,
+];
+
 // ── 1b) Deliberately malformed snippets ─────────────────────────────────────────────────
 // Syntax errors BOTH engines must reject WITH THE SAME error message — the coverage
 // emit-reject-messages.ts needs (the repo sources and valid snippets are all accepted, so
@@ -163,6 +176,7 @@ export function repoTsFiles(): string[] {
 export function inRepoCorpus(): { name: string; code: string }[] {
   const out = [
     ...CURATED_TS.map((code, i) => ({ name: `curated#${i}`, code })),
+    ...CURATED_TS_CST.map((code, i) => ({ name: `cst#${i}`, code })),
     ...CURATED_TS_INVALID.map((code, i) => ({ name: `invalid#${i}`, code })),
   ];
   for (const f of repoTsFiles()) {

@@ -336,6 +336,8 @@ const Regex = token(seq(
 });
 ```
 
+The template token says how a template is tokenized. Which rule parses its `${…}` holes is declared where the token is *referenced*, because one token can serve two productions: a bare reference takes the grammar's `expression` rule, and `withHoles(Template, rule)` names another (TypeScript's template-literal type writes `withHoles(Template, $)` inside `Type`). A template reference with neither is a `defineGrammar` error — no engine guesses the rule from where the reference was reached ([`test/template-holes.ts`](test/template-holes.ts)).
+
 [`test/agnostic.ts`](test/agnostic.ts) proves it directly — the same engine parses a toy grammar whose identifier token is `Word`, with no templates or regex. The deeper proof is [`html.ts`](html.ts): markup shares *nothing* with TypeScript's token stream, yet the same engine handles it.
 
 ### The emitted parser need not be JS — Go, Rust, native

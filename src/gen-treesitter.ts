@@ -274,6 +274,13 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext): string {
       return jsString(expr.value);
     }
     case 'ref': {
+      // A template reference is the template RULE of the hole rule it declares (see
+      // TemplatePlan.holes), aliased to the one `template` node kind.
+      if (expr.hole !== undefined && ctx.templatePlan) {
+        const tp = ctx.templatePlan;
+        const variant = tp.holes.find(h => h.rule === expr.hole)!;
+        return variant.ruleSnake === tp.ruleSnake ? `$.${tp.ruleSnake}` : `alias($.${variant.ruleSnake}, $.${tp.ruleSnake})`;
+      }
       // A token provided by the external scanner is referenced by its scanner
       // symbol name (e.g. `regex` → `regex_literal`), not its plain token snake.
       const scannerSym = ctx.scannerTokenFor.get(expr.name);
@@ -766,8 +773,9 @@ function deriveConflicts(ctx: GrammarJsContext): string[][] {
   //    all three are valid `$.<name>` conflict symbols. A name the grammar does not define is a
   //    declaration error, not a tuple to skip.
   const tokenSnakes = new Set(ctx.tokenSnake.values());
+  const templateRules = new Set((ctx.templatePlan?.holes ?? []).flatMap(h => [h.ruleSnake, h.substRuleSnake]));
   for (const tuple of g.treeSitterConflicts ?? []) {
-    const unknown = tuple.filter(r => !ruleSnakes.has(r) && !tokenSnakes.has(r) && !ctx.tsSharedRules.has(r));
+    const unknown = tuple.filter(r => !ruleSnakes.has(r) && !tokenSnakes.has(r) && !ctx.tsSharedRules.has(r) && !templateRules.has(r));
     if (unknown.length) throw new Error(`${g.name ?? 'grammar'}: treeSitterConflicts [${tuple.join(', ')}] names undefined symbol(s): ${unknown.join(', ')}`);
     push(tuple);
   }
@@ -818,20 +826,52 @@ interface TemplatePlan {
   open: string;        // starts AND ends the literal (e.g. '`')
   interpOpen: string;  // starts a hole (e.g. '${')
   interpClose: string; // ends a hole (e.g. '}')
+  /**
+   * One template rule per HOLE RULE the grammar's template references declare (RuleExpr
+   * ref.hole), in first-reference order: an LR rule cannot take the hole's rule as a parameter.
+   * The template whose holes are the grammar's `expression` rule is emitted under
+   * `ruleSnake` / `substRuleSnake`; every other one under those names prefixed with its hole
+   * rule (`type_template`), and referenced through `alias(…)` to the unprefixed names, so the
+   * tree and the highlight queries see one `template` / `template_substitution` node kind.
+   */
+  holes: Array<{ rule: string; ruleSnake: string; substRuleSnake: string }>;
 }
 
 function planTemplate(grammar: CstGrammar): TemplatePlan | null {
   const tok = grammar.tokens.find(t => t.template);
   if (!tok || !tok.template) return null;
   const ruleSnake = toSnake(tok.name);
+  const substRuleSnake = ruleSnake + '_substitution';
+  const holeRules = new Set<string>();
+  const walk = (e: RuleExpr): void => {
+    switch (e.type) {
+      case 'ref': if (e.hole !== undefined) holeRules.add(e.hole); return;
+      case 'seq': case 'alt': e.items.forEach(walk); return;
+      case 'quantifier': case 'not': walk(e.body); return;
+      case 'group': walk(e.body); if (e.tsRelaxed) walk(e.tsRelaxed); return;
+      case 'sep': walk(e.element); return;
+      default: return;
+    }
+  };
+  for (const r of grammar.rules) walk(r.body);
+  const taken = new Set([...grammar.rules.map(r => toSnake(r.name)), ...grammar.tokens.map(t => toSnake(t.name))]);
+  const holes = [...holeRules].map((rule) => {
+    if (rule === grammar.expressionRule) return { rule, ruleSnake, substRuleSnake };
+    const prefixed = `${toSnake(rule)}_${ruleSnake}`;
+    if (taken.has(prefixed) || taken.has(`${prefixed}_substitution`)) {
+      throw new Error(`${grammar.name ?? 'grammar'}: the tree-sitter rule for '${tok.name}' with '${rule}' holes would be named '${prefixed}', which the grammar already defines`);
+    }
+    return { rule, ruleSnake: prefixed, substRuleSnake: `${prefixed}_substitution` };
+  });
   return {
     tokenName: tok.name,
     ruleSnake,
-    substRuleSnake: ruleSnake + '_substitution',
+    substRuleSnake,
     charsSnake: ruleSnake + '_chars',
     open: tok.template.open,
     interpOpen: tok.template.interpOpen,
     interpClose: tok.template.interpClose,
+    holes,
   };
 }
 
@@ -1305,21 +1345,20 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   // `template_chars` token (the scanner stops it at a delimiter); the delimiters
   // and the brace are anonymous tokens. Delimiters all DERIVED from the hint.
   const tp = ctx.templatePlan;
-  if (tp) {
-    // The hole re-enters the expression rule (the first Pratt rule), matching the
-    // parser's parseExpr inside an interpolation.
-    const exprRuleName = [...ctx.prattRules][0];
-    const exprSnake = exprRuleName ? ctx.ruleSnake.get(exprRuleName)! : null;
-    const holeBody = exprSnake ? `$.${exprSnake}` : 'blank()';
+  for (const variant of tp ? tp.holes : []) {
+    // The hole re-enters the rule the template reference declares, as the parser does.
+    const substRef = variant.substRuleSnake === tp!.substRuleSnake
+      ? `$.${variant.substRuleSnake}`
+      : `alias($.${variant.substRuleSnake}, $.${tp!.substRuleSnake})`;
     ruleEntries.push(
-      `    ${tp.ruleSnake}: $ => seq(\n` +
-      `      ${jsString(tp.open)},\n` +
-      `      repeat(choice($.${tp.charsSnake}, $.${tp.substRuleSnake})),\n` +
-      `      ${jsString(tp.open)}\n` +
+      `    ${variant.ruleSnake}: $ => seq(\n` +
+      `      ${jsString(tp!.open)},\n` +
+      `      repeat(choice($.${tp!.charsSnake}, ${substRef})),\n` +
+      `      ${jsString(tp!.open)}\n` +
       `    )`,
     );
     ruleEntries.push(
-      `    ${tp.substRuleSnake}: $ => seq(${jsString(tp.interpOpen)}, ${holeBody}, ${jsString(tp.interpClose)})`,
+      `    ${variant.substRuleSnake}: $ => seq(${jsString(tp!.interpOpen)}, $.${ctx.ruleSnake.get(variant.rule)!}, ${jsString(tp!.interpClose)})`,
     );
   }
 
@@ -1567,7 +1606,8 @@ function buildHighlightsScm(
   // as punctuation — derived from the template hint, not hardcoded. Emitted as
   // anonymous-token captures scoped to inside the template rule so they don't grab
   // a stray `}`/backtick elsewhere.
-  if (ctx.templatePlan) {
+  if (ctx.templatePlan && ctx.templatePlan.holes.length > 0) {
+    // Every template rule is (or is aliased to) these two node kinds — see TemplatePlan.holes.
     const tpl = ctx.templatePlan;
     tokenNodeCaptures.push({ query: `(${tpl.ruleSnake} ${jsString(tpl.open)})`, capture: '@string' });
     tokenNodeCaptures.push({ query: `(${tpl.substRuleSnake} ${jsString(tpl.interpOpen)})`, capture: '@punctuation.special' });

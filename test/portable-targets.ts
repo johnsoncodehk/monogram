@@ -301,6 +301,10 @@ const CASES: Case[] = [
       'var x: this is this is T;', 'var x: asserts y is this is T;', 'function f(x: any): x is this is T { }',
       'function f(x: any): (this is T) { }', 'type F = (x: any) => x is T;', 'var v = (x: any): x is T => true;',
       'var x: this is\n string;', 'class C { p: this\n is: number }', 'class C { m(x): x\n is: string }', 'type A = this[];',
+      // A template's holes are parsed by the rule its reference declares: types in a
+      // template-literal type, expressions everywhere else.
+      'type X = `a${T[]}b`;', 'type X = `a${A | B}b${C["k"]}`;', 'type X = `${infer U extends string}x`;',
+      '`a${0}b`;', 'tag`a${1 + 1}b`;', 'x = `a${y as `b${T[]}`}c`;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -325,7 +329,9 @@ const CASES: Case[] = [
       'type A = this[] is T;', 'type A = (this) is T;', 'type A = void is T;', 'type A = this is T is U;',
       'function f(x: any): this is x is T { }', 'function f(x: any): x is y is T { }',
       'var x: this\n is string;', 'function f(): this\n is string { }', 'function f(x: any): x\n is string { }',
-      'class C { p: this is }', 'var v = y as this is;', 'function f(x: any): void is T { }', 'function f(x: any): class is T { }'],
+      'class C { p: this is }', 'var v = y as this is;', 'function f(x: any): void is T { }', 'function f(x: any): class is T { }',
+      // A hole holds what its template's reference declares, nothing else.
+      'x = `a${T[]}b`;', 'type X = `a${1 + 1}b`;'],
   },
 ];
 

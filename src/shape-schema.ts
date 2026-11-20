@@ -87,11 +87,11 @@ export type PrattShape = {
   postfixTok?: RuleShapeAtom;
   /**
    * Template literal product (subst `$templateHead`… or no-subst Template leaf).
-   * Not a new primitive — only custom|keep. Omitted → legacy `$template` keep with
-   * portable interpRule holes (CST-parity accept set). Declared → kids are
-   * head, expr, optional middle/expr pairs, then tail (or `[leaf]` for no-subst)
-   * finished by this slot; hole accept still uses portable interpRule, hole AST
-   * uses enclosing Pratt.
+   * Not a new primitive — only custom|keep. Omitted → the `$template` node is kept.
+   * Declared → kids are head, expr, optional middle/expr pairs, then tail (or
+   * `[leaf]` for no-subst) finished by this slot. Either way each hole is parsed,
+   * and its AST produced, by the rule the template reference declares (the grammar's
+   * `expression` rule, or the rule of a `withHoles` reference).
    */
   template?: CustomShape | KeepShape;
 };

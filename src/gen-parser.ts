@@ -372,8 +372,9 @@ export function createParser(grammar: CstGrammar) {
     let _prattCapped = false;
     // Packrat memo for pratt/left-recursive rules (Expr, Type, …): cache the
     // parse result + end position by start position, so backtracking doesn't
-    // re-parse the same rule at the same spot. Sound because those rules reset
-    // currentPrattContext (result is context-independent).
+    // re-parse the same rule at the same spot. Sound because a rule's result is
+    // a function of its start position alone (the suppressed and capped parses
+    // that are not bypass the memo — see parseRule).
     const memo = new Map<string, Map<number, { node: CstNode | null; end: number }>>();
 
     // Bounded-parse cap (token index). When >= 0, no token at index >= parseLimit
@@ -448,7 +449,6 @@ export function createParser(grammar: CstGrammar) {
       return null;
     }
 
-    let currentPrattContext: string | null = null;
     // LED-connector exclusion (no-`in`-style contexts). `suppressNext` is set by a
     // `group` node carrying `suppress`, then consumed by the NEXT pratt/left-rec
     // rule it wraps; `suppressCur` is that rule's active exclusion. Recursive
@@ -457,7 +457,10 @@ export function createParser(grammar: CstGrammar) {
     let suppressNext: Set<string> | null = null;
     let suppressCur: Set<string> | null = null;
 
-    function parseTemplateExpr(): CstChild | null {
+    // A reference to the template token, matched at the current position: the token itself (a
+    // template with no holes), or a head·hole·(middle·hole)*·tail chain whose holes are parsed
+    // by `hole` — the rule the reference declares (RuleExpr ref.hole).
+    function parseTemplateExpr(hole: string): CstChild | null {
       const tok = peek();
       if (!tok) return null;
       if (tok.type === templateTokenName) {
@@ -469,12 +472,11 @@ export function createParser(grammar: CstGrammar) {
         const save = pos;
         if (++pos > maxPos) maxPos = pos;
         children.push({ tokenType: '$templateHead', offset: tok.offset, end: tok.offset + tok.text.length });
-        const interpRule = currentPrattContext ?? findExprRule();
         // a head COMMITS to the full chain: every substitution must hold an
         // expression and every span must continue (middle) or close (tail) — an
         // unterminated template is a parse failure, not a shorter match
         while (true) {
-          const exprNode = parseRule(interpRule);
+          const exprNode = parseRule(hole);
           if (!exprNode) { pos = save; return null; }
           children.push(exprNode);
           const next = peek();
@@ -497,13 +499,6 @@ export function createParser(grammar: CstGrammar) {
         return { rule: '$template', children, offset: startOff, end: endOff };
       }
       return null;
-    }
-
-    function findExprRule(): string {
-      for (const r of grammar.rules) {
-        if (prattRules.has(r.name) && r.name !== 'Type') return r.name;
-      }
-      return grammar.rules[0].name;
     }
 
     // Parse a rule by name
@@ -534,15 +529,12 @@ export function createParser(grammar: CstGrammar) {
         if (hit !== undefined) { pos = hit.end; return hit.node; }
       }
 
-      const prevContext = currentPrattContext;
-      currentPrattContext = name;
       const prevSup = suppressCur;
       suppressCur = mySup;
       let result: CstNode | null;
       try {
         result = isPratt ? parsePratt(rule, 0) : parseLeftRec(rule);
       } finally {
-        currentPrattContext = prevContext;
         suppressCur = prevSup;
       }
       if (!mySup && !capped) {
@@ -907,9 +899,9 @@ export function createParser(grammar: CstGrammar) {
         }
         case 'ref': {
           if (tokenNames.has(expr.name)) {
-            // Template tokens: also handle interpolated templates
-            if (templateTokenNames.has(expr.name)) {
-              const tmpl = parseTemplateExpr();
+            // A template reference (it carries its hole rule): also an interpolated template
+            if (expr.hole !== undefined) {
+              const tmpl = parseTemplateExpr(expr.hole);
               if (tmpl) return [tmpl];
             }
             const leaf = matchToken(expr.name);
