@@ -230,9 +230,18 @@ const CASES: Case[] = [
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
       'for (1 of x);', 'for (a + b in x);', 'for (f() in x);',
+      // Postfix `++`/`--` is a restricted production (`LeftHandSideExpression [no LineTerminator
+      // here] ++`): after a line break the operator is the prefix of the NEXT statement.
+      'x\n++\ny;', 'x\n--\ny;', 'x ++\n++\ny;', 'x\n++y\n--\nz;', 'a = b\n++c;', 'f()\n++\ny.z;',
+      'var z =\nx\n++\ny;', 'function f() { return x\n++\ny; }', '{ x\n++\ny }', 'a[0]\n--\ny;',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       '1 + () => 2;', 'a++.b;', 'f(a, b,',
+      // … so nothing after a line break is a postfix operator: `x\n++\n++\ny` is `x; ++ ++y`,
+      // `x\n++` is `x; ++`, and `(x\n++)` leaves `++` with no operand.
+      'x\n++\n++\ny;', 'x\n++\n++y;', 'x\n--\n--\ny;', 'x\n++\n--\ny;', 'var z =\nx\n++\n++\ny;',
+      'function f() { return x\n++\n++\ny; }', 'f()\n++\n++\ny;', 'a[0]\n--\n--y;', '{ x\n++\n++\ny }',
+      'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
@@ -263,6 +272,10 @@ const CASES: Case[] = [
       // A typed call / instantiation is a LeftHandSideExpression: its `<` is not an operator.
       'f<T>() = 1;', 'x = B<C> = 1;', 'x = B<C> += 1;', 'f<T>`x` = 1;', 'f<T>()++;', 'f<T>().x = 1;',
       '++(-x);', '++x.y;', '++f<T>();',
+      // Postfix `++`/`--` is a restricted production: after a line break the operator is the
+      // prefix of the next statement (ASI), never the postfix of the previous operand.
+      'x\n++\ny;', 'x\n--\ny;', 'x ++\n++\ny;', 'x\n++y\n--\nz;', 'a = b\n++c;', 'f<T>()\n++\ny.z;', 'x!\n++\ny;',
+      'var z: number =\nx\n++\ny;', 'function f() { return x\n++\ny; }', '{ x\n++\ny }', 'a[0]\n--\ny;',
       // A parenthesized / argument arrow does not cap the operator chain around it.
       'a + f(() => 1) + c;', 'a && (() => 1) && c;', 'x = (a = () => 1) || y;',
       // A modifier word is a modifier only while a member name can still follow it; before
@@ -289,6 +302,9 @@ const CASES: Case[] = [
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
       'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
+      'x\n++\n++\ny;', 'x\n++\n++y;', 'x\n--\n--\ny;', 'x\n++\n--\ny;', 'var z =\nx\n++\n++\ny;',
+      'function f() { return x\n++\n++\ny; }', 'f()\n++\n++\ny;', 'a[0]\n--\n--y;', '{ x\n++\n++\ny }',
+      'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'x ++ ++\ny;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       // Only an access tail extends an access tail.
       'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;',
       'x = B<C> < 1;', 'x = B<C> >= 1;', 'x = B<C>!;', 'x = B<C> /re/;',

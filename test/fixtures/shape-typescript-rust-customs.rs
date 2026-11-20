@@ -1226,6 +1226,18 @@ const SC_UNARY: Schema = Schema {
     ],
 };
 
+// A prefix update (`++x`): operator first, like a unary — SC_UPDATE is the postfix form.
+const SC_UPDATE_PREFIX: Schema = Schema {
+    estree: "UpdateExpression", no_type: false,
+    kids: &["Identifier", "BinaryExpression", "CallExpression", "MemberExpression", "SequenceExpression", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TemplateLiteral", "MetaProperty", "ClassExpression", "FunctionExpression", "SpreadElement", "RestElement"],
+    any_kids: false,
+    fields: &[
+        FSpec { name: "operator", v: VSpec::LeafTok(0) },
+        FSpec { name: "argument", v: VSpec::LeafRest },
+        FSpec { name: "prefix", v: VSpec::Flag(true) },
+    ],
+};
+
 const SC_LOGICAL: Schema = Schema {
     estree: "LogicalExpression", no_type: false,
     kids: &["Identifier", "BinaryExpression", "CallExpression", "MemberExpression", "SequenceExpression", "TemplateLiteral", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TaggedTemplateExpression", "MetaProperty", "ClassExpression", "FunctionExpression", "SpreadElement", "RestElement"],
@@ -3442,6 +3454,12 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
     match (etype, alt) {
         ("Type", 0) => { if text.starts_with('<') || text.starts_with('(') { &SC_TYPE_FN } else if text.contains('<') { &SC_TSTYPEREF_LT } else { schema_for(etype, alt) } }
         ("Type", 2) => { if text.contains("keyof") { &SC_TYPE_KEYOF } else { schema_for(etype, alt) } }
+        // Prefix and postfix updates are both UpdateExpression events; the prefix one starts
+        // at its operator.
+        ("UpdateExpression", 0) => {
+            let ts = text.trim_start();
+            if ts.starts_with("++") || ts.starts_with("--") { &SC_UPDATE_PREFIX } else { schema_for(etype, alt) }
+        }
         ("Type", 5) => { if text.starts_with('(') { &SC_TYPE_PAREN } else { &SC_TSINDEXED5 } }
         ("Type", 6) => { if text.starts_with('[') { &SC_TYPE_TUPLE } else { &SC_TSTYPEREF_DOT } }
         ("Property", 1) => {

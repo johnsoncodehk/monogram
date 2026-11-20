@@ -686,7 +686,7 @@ export function createParser(grammar: CstGrammar) {
 
     // Pratt parser for rules with op/prefix/postfix
     function parsePratt(rule: RuleDecl, minBp: number): CstNode | null {
-      const { nuds, leds } = prattClassified.get(rule.name)!;
+      const { nuds, leds, postfixSameLine } = prattClassified.get(rule.name)!;
       const saved = pos;
       _prattCapped = false;   // reset; set true only on a capped (arrow) return
 
@@ -826,7 +826,10 @@ export function createParser(grammar: CstGrammar) {
         const info = opTable.get(tokKey);
         if (info && info.lbp > minBp) {
           if (info.position === 'postfix') {
-            if (!tailClosed) {                                   // can't postfix an update expr (`a++ --`)
+            // can't postfix an update expr (`a++ --`); a restricted postfix (`[$, sameLine,
+            // postfix]`) binds only on its operand's line — after a line break the operator
+            // is not this expression's (`x\n++\ny` is `x; ++y`).
+            if (!tailClosed && !(postfixSameLine && tok.newlineBefore)) {
               // A target-requiring postfix (`++`/`--`) operand must be a LeftHandSideExpression
               // (`++x++`, `x++ ++` are syntax errors). Fail hard like noUnaryLhs.
               if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
