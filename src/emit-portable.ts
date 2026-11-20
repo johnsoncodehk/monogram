@@ -147,6 +147,7 @@ export type PrattRule = {
   ledClosesTail: boolean[];                           // parallel to leds: not an access tail, or ends in a negative lookahead (`Foo<T>` then nothing)
   postfixToks: string[];                              // LED: a postfix token `$ X` (e.g. a tagged template), tried like a mixfix led (also an access tail)
   postfix: Array<{ op: string; lbp: number; requireTarget: boolean }>;  // LED: a postfix operator `$ ++` — binds iff lbp > minBp + !tailClosed, no rhs, closes the tail
+  postfixSameLine: boolean;                           // the postfix arm is `$ sameLine ++` (a restricted production): the operator binds only on its operand's line
 };
 // The assignment-target form of a Pratt node (the interpreter's notAssignTarget), decided by the
 // construct that builds it: an operator node is not a target, a prefix-unary one (`-x`, not
@@ -535,7 +536,7 @@ function buildPratt(
   const nudBrackets: Bracket[] = [];
   const nudSeqs: Step[][] = [];
   const nudCapped: Array<{ steps: Step[]; capBp: number }> = [];
-  let sawPrefix = false, sawBinary = false, sawPostfix = false;
+  let sawPrefix = false, sawBinary = false, sawPostfix = false, postfixSameLine = false;
   const leds: Bracket[] = [];
   const ledAccessTail: boolean[] = [];
   const ledLbp: Array<number | null> = [];
@@ -578,7 +579,7 @@ function buildPratt(
     const hasSameLine = restAll[0]?.type === 'sameLine';   // a TS type tail: `$ sameLine '<' …`
     const rest = hasSameLine ? restAll.slice(1) : restAll;
     if (!hasSameLine && rest[0].type === 'op') { sawBinary = true; continue; }
-    if (!hasSameLine && rest[0].type === 'postfix') { sawPostfix = true; continue; }   // postfix operator (`x++`)
+    if (rest[0].type === 'postfix') { sawPostfix = true; postfixSameLine = hasSameLine; continue; }   // postfix operator (`x++`), restricted when `$ sameLine ++`
     if (rest[0].type === 'literal') {
       const conn = rest[0].value;
       const prec = a.ledPrecByConnector.get(conn);   // { lbp, rhsBp } for ternary/in/instanceof
@@ -630,7 +631,7 @@ function buildPratt(
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
   const ledClosesTail = leds.map((l, i) => !ledAccessTail[i] || l.steps[l.steps.length - 1]?.t === 'not');
-  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix };
+  return { kind: 'pratt', name, cstName, nudToks, nudBrackets, nudSeqs, nudSeqFirst: [], nudSeqPredictive: false, nudBracketClosesTail, nudSeqClosesTail, nudCapped, nudCappedFirst: [], prefix, binary, leds, ledAccessTail, ledLbp, ledSameLine, ledNotLeftLeaf, ledForm, ledClosesTail, postfixToks, postfix, postfixSameLine };
 }
 
 // ── Lex integer ids (kid = kind index, lid = text/literal index) ──

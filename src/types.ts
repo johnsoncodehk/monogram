@@ -515,7 +515,8 @@ export type RuleExpr =
   // iff the NEXT token is on the same line (no preceding newline). Encodes
   // ECMAScript/TS restricted productions like an array/indexed-access type's `[`,
   // which must not follow a line terminator. Non-consuming → invisible to other
-  // generators (they treat it as a no-op marker).
+  // generators (they treat it as a no-op marker). In a Pratt rule's postfix arm
+  // (`$ sameLine postfix`) it restricts the ladder's postfix operators the same way.
   | { type: 'sameLine' }
   // Zero-width "no comment was skipped before the next token" assertion (indentation grammars):
   // matches (consuming nothing) iff the next token is not flagged `commentBefore`. Encodes YAML's

@@ -947,7 +947,7 @@ ${groups.map((g) => `                ${g.key} => { if !tail_closed { let sb = se
             let t = match self.peek() { Some(t) => t, None => break };
 ${ledMatch}
 ${postfixTokMatch}
-            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp { if ptgt && form != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); tail_closed = true; form = 1; continue; } }
+            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && form != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); tail_closed = true; form = 1; continue; } }
             let (op_lid, op_n, op_end) = self.op_read(t);
             let (lbp, rbp, tgt, no_unary) = match Self::${r.name}_bin(op_lid) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
@@ -3663,7 +3663,7 @@ function emitRustPrattMethod(
                     ${postArms}
                     _ => (-1, false),
                 };
-                if !tail_closed && post > min_bp {
+                if !tail_closed && post > min_bp${rule.postfixSameLine ? ' && !self.toks[self.pos].nl' : ''} {
                     if post_tgt && form != 0 { return None; }
                     let _op = self.current_span();
                     let _end_tok = self.toks[self.pos];
@@ -3683,7 +3683,7 @@ function emitRustPrattMethod(
                     ${postArms}
                     _ => (-1, false),
                 };
-                if !tail_closed && post > min_bp {
+                if !tail_closed && post > min_bp${rule.postfixSameLine ? ' && !self.toks[self.pos].nl' : ''} {
                     if post_tgt && form != 0 { return None; }
                     let _op = self.current_text();
                     self.pos += 1;
@@ -3699,7 +3699,7 @@ function emitRustPrattMethod(
                     ${postArms}
                     _ => (-1, false),
                 };
-                if !tail_closed && post > min_bp {
+                if !tail_closed && post > min_bp${rule.postfixSameLine ? ' && !self.toks[self.pos].nl' : ''} {
                     if post_tgt && form != 0 { return None; }
                     let _op = self.current_span();
                     self.pos += 1;

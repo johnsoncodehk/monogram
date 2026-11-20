@@ -53,6 +53,8 @@ export const CURATED_TS: string[] = [
   `delete obj.x; typeof x; void 0; !x; ~y; +z; -w; a in obj; a instanceof Y;`,
   `new Foo(); new Foo(1, 2); new foo.Bar(); new.target; import.meta.url;`,
   `(function () {})(); (() => {})(); (class {});`,
+  // — restricted productions: a line break before `++`/`--` ends the operand (ASI) —
+  `x\n++\ny; a = b\n--c\nd ++\n++\ne; f()\n++\ng.h; i /* c */ ++; j // c\n++\nk;`,
   // — control flow —
   `if (a) b(); else if (c) d(); else e();`,
   `for (let i = 0; i < 10; i++) {} for (const x of xs) {} for (const k in obj) {}`,
@@ -133,6 +135,10 @@ export const CURATED_TS_INVALID: string[] = [
   `new;`,
   `a.;`,
   `(a, , b)`,
+  `x\n++\n++\ny;`,
+  `(x\n++);`,
+  `var z =\nx\n--\n--y;`,
+  `x /*\n*/ ++;`,
 ];
 
 // ── 2) The repo's own hand-written .ts sources ──────────────────────────────────────────

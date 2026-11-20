@@ -1958,7 +1958,7 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
 function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl) {
   const ruleFn = `R_${sanitize(rule.name)}`;
   const sn = sanitize(rule.name);
-  const { nuds, leds } = a.prattClassified.get(rule.name)!;
+  const { nuds, leds, postfixSameLine } = a.prattClassified.get(rule.name)!;
   const meta = a.ledMeta.get(rule.name)!;
   const nudCap = a.nudCap.get(rule.name)!;
   const anyCapped = nudCap.some(c => c !== null);
@@ -2079,7 +2079,9 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`    const info = OP_BY_T[opT];`);
   e.emit(`    if (info && info.lbp > minBp) {`);
   e.emit(`      if (info.position === 'postfix') {`);
-  e.emit(`        if (!tailClosed) {`);
+  // A restricted postfix (`[$, sameLine, postfix]`) binds only on its operand's line: after
+  // a line break the operator is not this expression's (`x\n++\ny` is `x; ++y`).
+  e.emit(`        if (!tailClosed${postfixSameLine ? ' && (tkFl[pos] & 1) === 0' : ''}) {`);
   // A target-requiring postfix (`++`/`--`) may not apply to a unary/update operand
   // (`++x++`, `x++ ++`): its operand must be a LeftHandSideExpression. Fail hard (like
   // noUnaryLhs), so the expression can't reparse some other way.

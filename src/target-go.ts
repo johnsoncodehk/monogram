@@ -828,7 +828,7 @@ ${(r.leds.length > 0 || r.postfixToks.length > 0) ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp {
+\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 1; continue
@@ -1698,7 +1698,7 @@ ${needLedLoop ? 'LedLoop:\n' : ''}\tfor {
 \t\tif t == nil { break }
 ${ledSwitch}
 ${postfixTokSwitch}
-\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp {
+\t\tif post, ok := post_${r.name}[t.Lid]; ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif post.tgt && form != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = p.finishW(${rid}, sb, int(left.off), int(left.tokStart)); form = 1; continue

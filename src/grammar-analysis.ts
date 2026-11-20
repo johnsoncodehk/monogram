@@ -155,8 +155,18 @@ export function analyzeGrammar(grammar: CstGrammar) {
     const alts = rule.body.type === 'alt' ? rule.body.items : [rule.body];
     const nuds: RuleExpr[] = [];
     const leds: { expr: RuleExpr; items: RuleExpr[]; notLeftLeaf?: string[] }[] = [];
+    // The postfix-operator arm written `[$, sameLine, postfix]`: a restricted production
+    // (ECMAScript `LeftHandSideExpression [no LineTerminator here] ++`). The operator binds
+    // only on its operand's line; after a line break it is left to whatever follows the
+    // operand. The arm's `led.items` stay `[postfix]`, like the unrestricted `[$, postfix]`.
+    let postfixSameLine = false;
     for (const alt of alts) {
-      const items = alt.type === 'seq' ? alt.items : [alt];
+      let items = alt.type === 'seq' ? alt.items : [alt];
+      const self = items[0]?.type === 'notLeftLeaf' ? 1 : 0;
+      if (items[self + 1]?.type === 'sameLine' && items[self + 2]?.type === 'postfix') {
+        postfixSameLine = true;
+        items = [...items.slice(0, self + 1), ...items.slice(self + 2)];
+      }
       // A LED arm may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`
       // (`[notLeftLeaf('void',…), $, '.', Ident]`). Strip it into LED metadata; the self-ref is
       // the next item and `led.items` is everything after it — identical to a plain LED.
@@ -166,7 +176,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
         leds.push({ expr: alt, items: items.slice(head + 1), notLeftLeaf: guard });
       } else nuds.push(alt);
     }
-    return { nuds, leds };
+    return { nuds, leds, postfixSameLine };
   }
 
   // For non-Pratt left-recursive rules, split into atoms and continuations.
