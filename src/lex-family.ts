@@ -1,7 +1,8 @@
 // Lexer scan family: how far each token of a grammar extends from a position, authored once and
 // printed for each target through the `Lowering` it registers with `defineTarget`.
 //
-// Every scanner is `(s, p) -> end`, with end > p for a match and -1 for none. The token patterns
+// Every scanner is `(s, p) -> end`, with end > p for a match and -1 for none (a negative p never
+// matches). The token patterns
 // compile to backtracking-free matchers of the same shape: greedy `repeat`, ordered `alt`,
 // zero-width `lookahead` / `anchor`. Scanners only read the source; they never touch lexer state.
 //
@@ -132,7 +133,14 @@ class LexScan {
     return [let_('e', call(m, 'p')), if_(gt('e', 'p'), [ret('e')]), NONE];
   }
 
+  // A negative p is no position in s. Ruling it out first also tells native compilers that every
+  // index the scanner reads is non-negative, so they can drop per-character bounds checks.
   scanner(t: LexTok): Fn {
+    const f = this.scanBody(t);
+    return { ...f, body: [if_(lt('p', I(0)), [NONE]), ...f.body] };
+  }
+
+  private scanBody(t: LexTok): Fn {
     const name = scannerName(t.name);
     const first = (rs: CodeRange[], then: Stmt[]): Stmt[] => [if_(ge('p', len('s')), [NONE]), let_('c', code('p')), if_(not(inRanges('c', rs)), [NONE]), ...then];
     switch (t.kind) {

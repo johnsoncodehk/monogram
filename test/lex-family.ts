@@ -9,7 +9,7 @@
 //   3. the family, printed through the TS target and executed, scans a grammar covering every
 //      scanner kind (nested and flat block comments, line comments, escaping strings, char
 //      runs, seq / alt / repeat / negated-lookahead patterns) to the expected end — and to -1
-//      on unterminated or non-matching input;
+//      on unterminated or non-matching input, and at a negative position;
 //   4. the same cases pass through every scanner spliced by generation-time inlining;
 //   5. those cases catch defects: each mutant of the printed scanners, and of the splicing
 //      (a loop return that does not end the loop, a missing after-loop guard), fails a case.
@@ -129,6 +129,11 @@ const CASES: Case[] = [
   ['Ident', 'ab_9 ', 0, 4],
   ['Ident', '9a', 0, -1],
   ['Ident', ' z', 1, 2],
+  ['Ident', 'ab', -1, -1],
+  ['LineComment', '// x', -1, -1],
+  ['BlockComment', '/**/', -1, -1],
+  ['Str', '"a"', -1, -1],
+  ['Float', '1.5', -1, -1],
 ];
 
 const dir = mkdtempSync(join(tmpdir(), 'lex-family-'));
@@ -169,6 +174,7 @@ try {
     ['seq drops its last item', /const (q\d+): number = lexMatch\d+\(s, (q\d+)\);\n\s+if \(\1 < 0 \|\| \1 > s\.length\) return -1;\n\s+return \1;/, 'return $2;'],
     ['run stops after the first character', /while \(e < s\.length\) \{\n(\s+)const d/, 'while (false) {\n$1const d'],
     ['repeat ignores its minimum', /if \(n < 1\) return -1;/g, ''],
+    ['a negative position is scanned', /if \(p < 0\) return -1;/g, ''],
   ];
   for (const [what, re, by] of MUTANTS) {
     if (!re.test(printed)) { fail(`mutant "${what}": pattern not found in the printed family`); continue; }
