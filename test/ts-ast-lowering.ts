@@ -112,9 +112,9 @@ function lowerExpr(n: E): Ast {
       if (t === '!') return ast('NonNullExpression', off(n), end(n), [lowerExpr(lhs)]);
       if (t === '++' || t === '--') return ast('PostfixUnaryExpression', off(n), end(n), [lowerExpr(lhs)]);
     }
-    // Tagged template: [Expr, Template|$template]
-    if (c.length === 2 && (ruleIs(k1, 'Template') || ruleIs(k1, '$template'))) {
-      return ast('TaggedTemplateExpression', off(n), end(n), [lowerExpr(lhs), lowerTemplate(k1)]);
+    // Tagged template: [Expr, Template|$template] — a no-substitution template is a LEAF.
+    if (c.length === 2 && isTemplate(k1)) {
+      return ast('TaggedTemplateExpression', off(n), end(n), [lowerExpr(lhs), lowerTemplateChild(k1)]);
     }
 
     if (isLeaf(k1)) {
@@ -279,6 +279,13 @@ function lowerPrimaryLeaf(k: E): Ast {
   throw new Unlowered(`primary leaf ${tokTypeOf(k)} ${JSON.stringify(text(k))}`, off(k));
 }
 
+// A template in child position: the `$template` node of an interpolated template, or the
+// single `Template` token leaf of a no-substitution one.
+const isTemplate = (k: E | undefined): k is E =>
+  ruleIs(k, 'Template') || ruleIs(k, '$template') || (isLeaf(k) && tokTypeOf(k as E) === 'Template');
+const lowerTemplateChild = (k: E): Ast =>
+  isLeaf(k) ? ast('NoSubstitutionTemplateLiteral', off(k), end(k)) : lowerTemplate(k);
+
 function lowerTemplate(n: E): Ast {
   // $template node: head + (Expr middle)* tail; a no-substitution template is one leaf.
   // PAIN(11): tsc nests each (expression, middle/tail) pair in a TemplateSpan node with
@@ -299,6 +306,8 @@ function lowerTemplate(n: E): Ast {
 
 function lowerNewTarget(n: E): Ast {
   const c = kidsOf(n);
+  // template primary: `new `x``
+  if (c.length === 1 && isTemplate(c[0])) return lowerTemplateChild(c[0]);
   if (c.length === 1 && isLeaf(c[0])) return ast('Identifier', off(c[0]), end(c[0]));
   if (ruleIs(c[0], 'NewTarget') && c.length === 3 && isLeaf(c[2])) {
     return ast('PropertyAccessExpression', off(n), end(n), [lowerNewTarget(c[0]), ast('Identifier', off(c[2]), end(c[2]))]);
@@ -307,7 +316,18 @@ function lowerNewTarget(n: E): Ast {
   if (ruleIs(c[0], 'NewTarget') && c.length === 4 && leafIs(c[1], '[') && ruleIs(c[2], 'Expr')) {
     return ast('ElementAccessExpression', off(n), end(n), [lowerNewTarget(c[0]), lowerExpr(c[2])]);
   }
-  if (c.length === 1 && ruleIs(c[0], 'Expr')) return lowerExpr(c[0]);
+  // tagged form: NewTarget Template  (`new tag`x`()` — the template is part of the callee)
+  if (ruleIs(c[0], 'NewTarget') && c.length === 2 && isTemplate(c[1])) {
+    return ast('TaggedTemplateExpression', off(n), end(n), [lowerNewTarget(c[0]), lowerTemplateChild(c[1])]);
+  }
+  // paren form: '(' Expr ')'
+  if (c.length === 3 && leafIs(c[0], '(') && ruleIs(c[1], 'Expr') && leafIs(c[2], ')')) {
+    return ast('ParenthesizedExpression', off(n), end(n), [lowerExpr(c[1])]);
+  }
+  // nested new: 'new' NewTarget ('(' args ')')?  (`new new a()()` — the inner takes the first args)
+  if (leafIs(c[0], 'new') && ruleIs(c[1], 'NewTarget') && !c.some((k) => leafIs(k, '<'))) {
+    return ast('NewExpression', off(n), end(n), [lowerNewTarget(c[1]), ...rules(c, 'Expr').map(lowerExpr)]);
+  }
   throw new Unlowered('NewTarget shape', off(n));
 }
 

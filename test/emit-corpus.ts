@@ -52,6 +52,7 @@ export const CURATED_TS: string[] = [
   `const cond = a ? b : c ? d : e, cmp = a < b === c > d, seq = (a, b, c);`,
   `delete obj.x; typeof x; void 0; !x; ~y; +z; -w; a in obj; a instanceof Y;`,
   `new Foo(); new Foo(1, 2); new foo.Bar(); new.target; import.meta.url;`,
+  `new \`a\${0}b\`; new \`abc\`(1); new tag\`x\${y + 1}\`(); new a.b\`x\`(1); new \`x\`.y(); new a\`x\`.b\`y\`(1); new new a\`x\`()();`,
   `(function () {})(); (() => {})(); (class {});`,
   // — restricted productions: a line break before `++`/`--` ends the operand (ASI) —
   `x\n++\ny; a = b\n--c\nd ++\n++\ne; f()\n++\ng.h; i /* c */ ++; j // c\n++\nk;`,
@@ -101,6 +102,19 @@ export const CURATED_TS: string[] = [
   `const a =  1; const b = 2;`,           // U+00A0 nbsp, U+2003 em-space between tokens
   `const c = 3; const d = 4; const e = 5;`,    // U+2028 / U+2029 line separators
   `const sigma = α + β; const n = "café — naïve ≡ x";`, // non-ASCII identifiers + string/punct
+];
+
+// ── 1a) Valid snippets for the CST gates only ───────────────────────────────────────────
+// Parsed by the interpreter-vs-emitted parity gates like CURATED_TS, but kept out of it:
+// CURATED_TS also seeds the ESTree shape corpora (shape-parity / shape-rust), and the
+// hand-written Rust ESTree customs have no schema for these — their `$template` schema is one
+// `Type` hole between a head and a tail, and a type alias binds only a `Type` kid, so a
+// template-literal type with several holes, or standing alone as an annotation, has no Rust
+// tree to compare. The portable Rust parser itself is covered by portable-targets.
+export const CURATED_TS_CST: string[] = [
+  // a template's holes are parsed by the rule its reference declares: types in a
+  // template-literal type, expressions in a template-literal expression, at any nesting
+  `type TL = \`a\${T[]}b\${A | B}\`; const tl = \`a\${y as \`b\${T[]}\`}c\`; new \`x\${y as T[]}\`;`,
 ];
 
 // ── 1b) Deliberately malformed snippets ─────────────────────────────────────────────────
@@ -163,6 +177,7 @@ export function repoTsFiles(): string[] {
 export function inRepoCorpus(): { name: string; code: string }[] {
   const out = [
     ...CURATED_TS.map((code, i) => ({ name: `curated#${i}`, code })),
+    ...CURATED_TS_CST.map((code, i) => ({ name: `cst#${i}`, code })),
     ...CURATED_TS_INVALID.map((code, i) => ({ name: `invalid#${i}`, code })),
   ];
   for (const f of repoTsFiles()) {

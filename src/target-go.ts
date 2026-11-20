@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -736,9 +736,9 @@ function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaI
 }
 
 function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const tplNud = tpl && r.nudToks.includes(tpl.token)
+  const tplNud = r.nudTplHole !== undefined
     ? `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
-\t\tnode := p.matchTemplate()
+\t\tnode := p.matchTemplate_${r.nudTplHole}()
 \t\tif node < 0 { return -1 }
 \t\tsb := len(p.scratch); p.scratch = append(p.scratch, node)
 \t\treturn p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart))
@@ -790,10 +790,9 @@ ${groups.map((g) => {
   const postfixTokSwitch = (() => {
     if (r.postfixToks.length === 0) return '';
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
-    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
-    const tplPart = hasTpl ? `
+    const tplPart = r.postfixTplHole !== undefined ? `
 \t\tif !tailClosed && t.Kid == ${kidOf(ids, '$templateHead')} {
-\t\t\tnode := p.matchTemplate()
+\t\t\tnode := p.matchTemplate_${r.postfixTplHole}()
 \t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = p.finish(${ruleIdOf(ar, r.cstName)}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart)); form = 0; continue LedLoop }
 \t\t}` : '';
     return `\t\tswitch t.Kid {
@@ -1608,9 +1607,9 @@ function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: Arena
 
 function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   const rid = ruleIdOf(ar, r.cstName);
-  const tplNud = tpl && r.nudToks.includes(tpl.token)
+  const tplNud = r.nudTplHole !== undefined
     ? `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
-\t\tn, ok := p.matchTemplateW()
+\t\tn, ok := p.matchTemplateW_${r.nudTplHole}()
 \t\tif !ok { return spanned{}, false }
 \t\tsb := len(p.scratch)
 \t\tif n.present { p.scratch = append(p.scratch, n.h) }
@@ -1660,10 +1659,9 @@ ${groups.map((g) => {
   const postfixTokSwitch = (() => {
     if (r.postfixToks.length === 0) return '';
     const groups = groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok));
-    const hasTpl = !!(tpl && r.postfixToks.includes(tpl.token));
-    const tplPart = hasTpl ? `
+    const tplPart = r.postfixTplHole !== undefined ? `
 \t\tif !tailClosed && t.Kid == ${kidOf(ids, '$templateHead')} {
-\t\t\tif n, ok := p.matchTemplateW(); ok {
+\t\t\tif n, ok := p.matchTemplateW_${r.postfixTplHole}(); ok {
 \t\t\t\tsb := len(p.scratch)
 \t\t\t\tif left.present { p.scratch = append(p.scratch, left.h) }
 \t\t\t\tif n.present { p.scratch = append(p.scratch, n.h) }
@@ -1760,13 +1758,15 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
     if (reuse && r.name === ir.entry) return rdEntryWithReuseW(r, reuse, ids, ar, recv);
     return rdRuleW(r, ids, ar, recv);
   }).join('\n\n');
-  const matchTemplateW = ir.tpl ? `func (p *${recv}) matchTemplateW() (spanned, bool) {
+  // One template matcher per hole rule (tplHoleRules): the hole is parsed by the rule the
+  // matching reference declares, called directly.
+  const matchTemplateW = tplHoleRules(ir).map((hole) => `func (p *${recv}) matchTemplateW_${hole}() (spanned, bool) {
 \tt := p.peekW()
 \tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return spanned{}, false }
 \tsave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
 \tp.pushLeafW(${ttIdOf(ar, '$templateHead')}, uint32(p.pos), t.Off, t.End); p.pos++
 \tfor {
-\t\texpr, ok := p.parse${ir.tpl.interpRule}W()
+\t\texpr, ok := p.parse${hole}W()
 \t\tif !ok { p.pos = save; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return spanned{}, false }
 \t\tif expr.present { p.scratch = append(p.scratch, expr.h) }
 \t\tnext := p.peekW()
@@ -1777,7 +1777,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \t}
 \treturn p.finishW(${ruleIdOf(ar, '$template')}, sb, p.offAtW(save), save), true
 }
-` : '';
+`).join('');
   const cstDirect = recv === 'parserCst';
   // parserCst: Nodes/Kids embedded (Rust by-value layout). parserW: interface Builder.
   const pushLeafW = cstDirect ? `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
@@ -2933,13 +2933,15 @@ export const goTarget = defineTarget({
       if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
       return rdRule(r, ids, ar);
     }).join('\n\n');
-    const matchTemplate = ir.tpl ? `func (p *engine) matchTemplate() int32 {
+    // One template matcher per hole rule (tplHoleRules): the hole is parsed by the rule the
+    // matching reference declares, called directly.
+    const matchTemplate = tplHoleRules(ir).map((hole) => `func (p *engine) matchTemplate_${hole}() int32 {
 \tt := p.peek()
 \tif t == nil || t.Kid != ${kidOf(ids, '$templateHead')} { return -1 }
 \tsb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); save := p.pos
 \tp.pushLeaf(${ttIdOf(ar, '$templateHead')}, uint32(p.pos)); p.pos++
 \tfor {
-\t\texpr := p.parse${ir.tpl.interpRule}()
+\t\texpr := p.parse${hole}()
 \t\tif expr < 0 { p.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return -1 }
 \t\tp.scratch = append(p.scratch, expr)
 \t\tnext := p.peek()
@@ -2950,7 +2952,7 @@ export const goTarget = defineTarget({
 \t}
 \treturn p.finish(${ruleIdOf(ar, '$template')}, sb, int(t.Off), save)
 }
-` : '';
+`).join('');
     return `// GENERATED by emit-portable.ts (goTarget) — parser LIBRARY (package parser) for grammar "${ir.grammarName}".
 // Public API: Tokenize(src) []Token (the lexer alone, a fresh slice the caller owns), ParseWith /
 // NewDoc / NewDocWith (CST). The CLI runner (stdin → CST JSON) is goTarget.emitRunner(): the

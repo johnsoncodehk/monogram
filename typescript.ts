@@ -1,7 +1,7 @@
 import {
   rule, defineGrammar,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not, tsRelax, capExpr, notLeftLeaf,
+  sep, opt, many, many1, alt, exclude, not, tsRelax, capExpr, notLeftLeaf, withHoles,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
 } from './src/api.ts';
 
@@ -174,7 +174,7 @@ const Type = rule($ => {
     ['this', opt(sameLine, 'is', $)],
     ['unique', $],   // `unique` is a general prefix type operator (tsc parses `unique <Type>`); `unique symbol` is the checker-valid case
     ['import', '(', $, ')'],
-    Template,
+    withHoles(Template, $),   // template-literal type: its `${…}` holes are types
     [$, sameLine, '[', $, ']'],   // indexed access T[K] — `[` must be on the same line (no ASI)
     // qualified type name `A.B`: a TypeName's root is an IdentifierReference, so the
     // keyword/literal types `void`/`null`/`true`/`false`/`this` are NOT `.`-qualifiable
@@ -305,8 +305,13 @@ const NewTarget = rule($ => [
   // a `new` expression is itself a valid new-target (NewExpression : `new` NewExpression),
   // so `new new Foo()()` / `new new f` chain — mirrors the Expr `new` arm but recurses here.
   ['new', not('<'), $, opt(alt([...typeArgsInExpr(), opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')']))],
+  // A template is part of the callee (PrimaryExpression : TemplateLiteral, MemberExpression :
+  // MemberExpression TemplateLiteral — see javascript.ts), with tsc's type arguments on the tag.
+  Template,
   [$, '.', Ident],
   [$, '[', Expr, ']'],
+  [$, Template],
+  [$, ...typeArgsInExpr(), Template],
   ['(', Expr, ')'],
 ]);
 
@@ -940,6 +945,9 @@ export default defineGrammar({
     ['type_member', 'expr', 'prop', 'member_name'], ['type_fn_param', 'type'],
     ['type_fn_param', 'type', 'expr', 'param'], ['type_fn_param', 'expr', 'param'],
     ['type_fn_param', 'expr'], ['type_fn_param', 'param'],
+    // A template-literal type and a template-literal expression are the same tokens up to their
+    // first hole, wherever `<` or `(` leaves both a type and an expression possible.
+    ['template', 'type_template'],
   ],
 
   rules: {

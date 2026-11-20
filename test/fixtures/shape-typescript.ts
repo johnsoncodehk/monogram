@@ -179,7 +179,7 @@ export const typescriptShape: ShapeSpec = {
         'Template literal kids are head, expr, optional middle/expr pairs, then tail ' +
         '(or a lone no-subst leaf). ESTree needs TemplateLiteral with quasis and ' +
         'expressions; keep would leave raw $template children. Hole accept/AST both ' +
-        'use the enclosing Pratt (≡ CST; reference currentPrattContext ?? EXPR_RULE).', { types: ['TemplateLiteral'] })
+        'use the rule the template reference declares (≡ CST).', { types: ['TemplateLiteral'] })
     },
 
     // Type system Pratt — no demo coverage; ESTree/TS uses different node set
@@ -215,9 +215,17 @@ export const typescriptShape: ShapeSpec = {
       led: custom('estreeNewTargetLed',
         'NewTarget LEDs (`.` Ident / `[` Expr `]`) produce MemberExpression vs ' +
         'the `new.target` meta special-case when the left root is the `new` `.` `target` ' +
-        'NUD — detecting that root requires looking at left leaf text, not a fixed field bind.', {
-        types: ['MemberExpression', 'MemberExpression'],
-      })
+        'NUD — detecting that root requires looking at left leaf text, not a fixed field bind. ' +
+        'The typed tag `<T>` Template is a TaggedTemplateExpression with typeArguments.', {
+        types: ['MemberExpression', 'MemberExpression', 'TaggedTemplateExpression'],
+      }),
+      // A template in the callee is the same product as in Expr: `new tag`x`()` constructs a
+      // TaggedTemplateExpression, `new `x`()` a TemplateLiteral.
+      postfixTok: custom('estreeExprPostfixTok',
+        'postfixTok Template on NewTarget is TaggedTemplateExpression (tag=left, quasi=TemplateLiteral), ' +
+        'as on Expr.', { types: ['TaggedTemplateExpression'] }),
+      template: custom('estreeTemplateLiteral',
+        'A template callee is a TemplateLiteral with quasis and expressions, as on Expr.', { types: ['TemplateLiteral'] }),
     },
     ClassHeritage: {
       kind: 'pratt',
@@ -880,6 +888,10 @@ function estreeNewTargetLed(ctx: TsAstCustomCtx): unknown {
   }
   if (op === '.') return memberExpr(ctx.left, ctx.kids[0]);
   if (op === '[') return memberExpr(ctx.left, ctx.kids[0], true);
+  if (op === '<') {   // typed tag: kids are the type arguments, then the template
+    const slots = flatKids(ctx.kids);
+    return { type: 'TaggedTemplateExpression', tag: ctx.left, quasi: slots[slots.length - 1], typeArguments: slots.slice(0, -1) };
+  }
   return unhandledCustom('estreeNewTargetLed', ctx);
 }
 

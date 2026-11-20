@@ -48,6 +48,10 @@ interface TokenOptions {
   // can match a non-ASCII `prefix`-name (`#℘`, `#<ZWNJ>`) the ASCII token pattern misses —
   // the same fallback the bare `identifier` token gets, just behind the prefix.
   identifierPrefix?: string;
+  // A template-literal token: the engine tokenizes its `interpOpen … interpClose` holes. The rule
+  // that parses a hole belongs to each REFERENCE of the token, not to the token (TypeScript's
+  // template-literal type and its template-literal expression share one token): a bare reference
+  // takes the grammar's `expression` rule, `withHoles(token, rule)` names another.
   template?: { open: string; interpOpen: string; interpClose: string };
   regexContext?: {
     divisionAfterTypes?: string[];
@@ -298,7 +302,17 @@ class CapExprNode {
   constructor(below: string, items: Element[]) { this.below = below; this.items = items; }
 }
 
-type Combinator = SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode;
+class HolesNode {
+  // A reference to a `template` token whose `${…}` holes are parsed by `rule` instead of the
+  // grammar's `expression` rule. Lowers to the same `ref` a bare token reference does, with its
+  // `hole` set to this rule.
+  readonly __kind = 'holes' as const;
+  readonly token: TokenRef;
+  readonly rule: RuleRef;
+  constructor(token: TokenRef, rule: RuleRef) { this.token = token; this.rule = rule; }
+}
+
+type Combinator = HolesNode | SepNode | OptNode | ManyNode | Many1Node | AltNode | ExcludeNode | NotNode | CtxNode | RelaxNode | CapExprNode;
 
 export function sep(item: Element, delimiter: string): SepNode {
   return new SepNode(item, delimiter);
@@ -318,6 +332,14 @@ export function many1(...items: Element[]): Many1Node {
 
 export function alt(...items: Alternative[]): AltNode {
   return new AltNode(items);
+}
+
+// Reference the template token `token` with its `${…}` holes parsed by `rule`. A bare reference
+// to a template token parses its holes with the grammar's `expression` rule; this names another
+// one where the language has a second kind of template — `withHoles(Template, $)` inside
+// TypeScript's Type rule is the template-literal type, whose holes are types.
+export function withHoles(token: TokenRef, rule: RuleRef): HolesNode {
+  return new HolesNode(token, rule);
 }
 
 // Parse `items` with the given LED connector(s) disabled at the top level (a
@@ -407,14 +429,42 @@ export function none(...ops: OpSpec[]): PrecLevelDef {
 
 // ── AST conversion ──
 
-function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
+// What lowering a rule body reads besides the element itself: the declared name of every token
+// and rule, and the grammar's `expression` rule (the hole rule of a bare template reference).
+interface Lowering {
+  get(ref: object): string | undefined;
+  expression: RuleRef | undefined;
+}
+
+function toRuleExpr(el: Element, names: Lowering): RuleExpr {
   if (typeof el === 'string') {
     return { type: 'literal', value: el };
   }
   if (el instanceof TokenRef) {
     const name = names.get(el);
     if (!name) throw new Error('Token not registered in defineGrammar');
-    return { type: 'ref', name };
+    if (!el.opts.template) return { type: 'ref', name };
+    // A template reference carries the rule that parses its holes. Nothing stands in for a
+    // missing declaration: the parse context a reference happens to be reached from is not one.
+    if (!names.expression) {
+      throw new Error(
+        `Template token '${name}' is referenced without a rule for its \`${el.opts.template.interpOpen}…${el.opts.template.interpClose}\` holes: `
+        + `declare the grammar's \`expression\` rule (the hole rule of a bare reference), or reference the token as \`withHoles(${name}, rule)\`.`,
+      );
+    }
+    const hole = names.get(names.expression);
+    if (!hole) throw new Error('The `expression` rule is not registered in defineGrammar');
+    return { type: 'ref', name, hole };
+  }
+  if (el instanceof HolesNode) {
+    const name = names.get(el.token);
+    if (!name) throw new Error('Token not registered in defineGrammar');
+    if (!el.token.opts.template) {
+      throw new Error(`withHoles(${name}, …): '${name}' is not a template token (it declares no \`template\` delimiters), so it has no holes to parse`);
+    }
+    const hole = names.get(el.rule);
+    if (!hole) throw new Error(`withHoles(${name}, …): the hole rule is not registered in defineGrammar`);
+    return { type: 'ref', name, hole };
   }
   if (el instanceof RuleRef) {
     const name = names.get(el);
@@ -506,7 +556,7 @@ function toRuleExpr(el: Element, names: Map<object, string>): RuleExpr {
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
 }
 
-function convertAlternatives(alts: Alternative[], names: Map<object, string>): RuleExpr {
+function convertAlternatives(alts: Alternative[], names: Lowering): RuleExpr {
   const items: RuleExpr[] = alts.map(a => {
     if (Array.isArray(a)) {
       if (a.length === 1) return toRuleExpr(a[0], names);
@@ -535,7 +585,7 @@ interface GrammarConfig {
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML)
   newline?: NewlineConfig;  // opt-in NEWLINE-sensitive tokenization, independent of indent (no indent stack)
-  expression?: RuleRef;   // the rule that produces an EXPRESSION; enables a derived `#expression` sub-grammar (expression-only embeds)
+  expression?: RuleRef;   // the rule that produces an EXPRESSION: parses the `${…}` holes of every bare template-token reference (see withHoles), and enables a derived `#expression` sub-grammar (expression-only embeds)
   aliasScopes?: { scope: string; file: string }[];  // extra grammars re-exposing this one under another scopeName (e.g. text.html.derivative)
   canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-tm RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see CstGrammar.canonicalRepoNames)
   manifest?: import('./types.ts').ContributesManifest;  // VS Code `contributes` packaging (emits a pasteable snippet)
@@ -611,11 +661,12 @@ export function defineGrammar(config: GrammarConfig): CstGrammar & { name: strin
     operators: [...p.operators],
   }));
 
+  const lowering: Lowering = { get: (ref) => names.get(ref), expression: config.expression };
   const rules: RuleDecl[] = Object.entries(config.rules).map(([name, r]) => {
     const alts = r.def(r);
     return {
       name,
-      body: convertAlternatives(alts, names),
+      body: convertAlternatives(alts, lowering),
       flags: r.opts.type ? ['type'] : [],
       label: r.opts.label,
     };

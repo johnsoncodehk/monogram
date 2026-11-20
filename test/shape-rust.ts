@@ -9,7 +9,7 @@ import { emitRust } from '../src/target-rust.ts';
 import { emitTs } from '../src/target-ts.ts';
 import {
   token, rule, defineGrammar, left, op, seq, oneOf, range, star,
-  altPattern, noneOf, notFollowedBy,
+  altPattern, noneOf, notFollowedBy, withHoles,
 } from '../src/api.ts';
 import type { ShapeSpec } from '../src/shape-schema.ts';
 import { calcShape } from '../src/shape-calc.ts';
@@ -26,8 +26,9 @@ type Ast = Record<string, unknown>;
 const TMP = '/tmp/shape-rust-gate';
 mkdirSync(TMP, { recursive: true });
 
-// SH3-3 mini grammar: Type deliberately precedes Expr, so portable interpRule=Type.
-// Explicit Expr.template must therefore dual-parse each hole to obtain Expr products.
+// SH3-3 mini grammar: Type deliberately precedes Expr, and each rule's template declares its own
+// hole rule (Type's holes are Types, Expr's are the grammar's expression rule), so a hole's
+// product never depends on rule order.
 const tplDigit = range('0', '9');
 const tplIdentStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');
 const tplIdentPart = oneOf(tplIdentStart, tplDigit);
@@ -38,7 +39,7 @@ const TplTemplate = token(
   { template: { open: '`', interpOpen: '${', interpClose: '}' } },
 );
 const TplType = rule(($) => [
-  TplNumber, TplIdent, TplTemplate, ['(', $, ')'], [$, op, $], [$, TplTemplate],
+  TplNumber, TplIdent, withHoles(TplTemplate, $), ['(', $, ')'], [$, op, $], [$, withHoles(TplTemplate, $)],
 ]);
 const TplExpr = rule(($) => [
   TplNumber, TplIdent, TplTemplate, ['(', $, ')'], [$, op, $], [$, TplTemplate],
@@ -49,6 +50,7 @@ const templateMiniGrammar = defineGrammar({
   prec: [left('+', '-'), left('*', '/')],
   rules: { Type: TplType, Expr: TplExpr },
   entry: TplExpr,
+  expression: TplExpr,
 });
 const binaryNode = {
   kind: 'node' as const,

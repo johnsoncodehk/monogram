@@ -331,8 +331,8 @@ async function main(): Promise<void> {
     check(tsMod.shapeCoverage.unsupported.length === 0, 'typescript coverage unsupported=0');
     printCoverage('typescript', tsMod.shapeCoverage);
     const want: Record<string, number> = {
-      led: 116, nudSeq: 28, nudCapped: 16, postfix: 8, postfixTok: 4,
-      group: 216, prefix: 44, binary: 156, template: 4,
+      led: 120, nudSeq: 28, nudCapped: 16, postfix: 8, postfixTok: 8,
+      group: 216, prefix: 44, binary: 156, template: 8,
     };
     const got = tsMod.shapeCoverage.pratt;
     const prattOk = Object.keys(want).every((k) => got[k] === want[k]);

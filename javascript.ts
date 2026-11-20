@@ -313,10 +313,17 @@ const ClassHeritage = rule($ => [
   [$, '(', sep(Expr, ','), ')'],
 ]);
 
+// The callee of `new` is a MemberExpression, never a CallExpression (`new a.b()` constructs
+// `a.b`), so it has its own rule: Expr's call LED must not reach it. A template is part of it
+// twice over — `PrimaryExpression : TemplateLiteral` and `MemberExpression : MemberExpression
+// TemplateLiteral` — so in `new tag`x`()` the tagged template is the callee and `( )` are the
+// `new` Arguments.
 const NewTarget = rule($ => [
   Ident,
+  Template,
   [$, '.', Ident],
   [$, '[', Expr, ']'],
+  [$, Template],
   ['(', Expr, ')'],
 ]);
 

@@ -87,11 +87,11 @@ Unmapped IR brackets default to **keep**. Omitted slots follow the same keep/def
 rules as adjudication.
 
 **`template`** — template-literal product (`$templateHead`… or a no-subst Template
-leaf). Only `custom` | `keep`. Omitted → legacy `$template` keep with portable
-`interpRule` holes (CST-parity accept set). Declared → kids are head, expr,
-optional middle/expr pairs, then tail (or `[leaf]` for no-subst), finished by this
-slot; hole *accept* still uses portable `interpRule`, hole *AST* uses the
-enclosing Pratt.
+leaf). Only `custom` | `keep`. Omitted → the `$template` node is kept. Declared →
+kids are head, expr, optional middle/expr pairs, then tail (or `[leaf]` for
+no-subst), finished by this slot. Either way each hole is parsed, and its AST
+produced, by the rule the template reference declares: the grammar's `expression`
+rule, or the rule a `withHoles(token, rule)` reference names.
 
 ---
 
