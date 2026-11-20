@@ -808,7 +808,7 @@ function ${r.name}_bp(minBp: number): Node | null {
 ${ledSwitch}
 ${postfixTokSwitch}
     const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp) {
+    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const opLeaf: Leaf = { tokenType: '$operator', offset: t.off, end: t.end }; pos++; left = { rule: ${J(r.cstName)}, children: [left, opLeaf], offset: left.offset, end: t.end }; tailClosed = true; form = 1; continue;
     }
@@ -940,7 +940,7 @@ function ${r.name}_bpW(minBp: number): Frame | null {
 ${ledSwitch}
 ${postfixTokSwitch}
     const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp) {
+    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const lf = leafFrameW('$operator', t); pos++; left = joinFramesW(${cn}, left, lf); tailClosed = true; form = 1; continue;
     }
@@ -2971,7 +2971,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     if (postfixSlot.kind === 'node') {
       const node = postfixSlot as NodeShape;
       postfixCode = `    const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp) {
+    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const opText = _src.slice(t.off, t.end);
       pos++;
@@ -2984,7 +2984,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     }`;
     } else if (postfixSlot.kind === 'custom') {
       postfixCode = `    const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp) {
+    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const opText = _src.slice(t.off, t.end);
       const save = pos; pos++;
@@ -2994,7 +2994,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     }`;
     } else {
       postfixCode = `    const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp) {
+    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
       if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
       const opText = _src.slice(t.off, t.end);
       const save = pos; pos++;

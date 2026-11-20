@@ -131,7 +131,9 @@ type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMa
 
 export const op: OpMarker = { __kind: 'op' };
 
-// Zero-width "no LineTerminator here" assertion (see RuleExpr 'sameLine').
+// Zero-width "no LineTerminator here" assertion (see RuleExpr 'sameLine'). Before the postfix
+// slot — `[$, sameLine, postfix]` — it makes the rule's postfix operators a restricted
+// production: an operator after a line break is not the operand's (JS `x\n++\ny` is `x; ++y`).
 export const sameLine: SameLineMarker = { __kind: 'sameLine' };
 
 // Zero-width "no comment was skipped before the next token" assertion (indentation grammars). A

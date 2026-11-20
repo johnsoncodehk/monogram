@@ -354,7 +354,10 @@ const Expr = rule($ => [
   Regex_,
   [$, op, $],
   [prefix, $],
-  [$, postfix],
+  // Postfix `++`/`--` is a RESTRICTED production (`LeftHandSideExpression [no LineTerminator
+  // here] ++`): after a line break the operator is not this operand's — `x\n++\ny` is
+  // `x; ++y`, and `x\n++\n++\ny` is `x; ++ ++y` (rejected by the prefix target check).
+  [$, sameLine, postfix],
   ['...', $],
   // typed call / tagged template: f<T>(…) | f<T>`…` — a call/tag may itself be
   // continued by member access (`f<T>().x`), so this is an ordinary access tail.

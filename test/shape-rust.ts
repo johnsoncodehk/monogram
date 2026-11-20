@@ -793,7 +793,10 @@ async function main(): Promise<void> {
   // the shape parsers too, not only on the CST parser.
   // Likewise an access tail never extends a node whose tail is closed.
   const assignRejects = ['a + b = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
-    'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;'];
+    'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;',
+    // Postfix `++`/`--` is a restricted production: after a line break the operator is the
+    // next statement's prefix, so these are `x; ++ ++y`, `x; ++`, `(x ++)` with no operand.
+    'x\n++\n++\ny;', 'x\n--\n--y;', 'x\n++;', '(x\n++);', 'x\n++\ny++;'];
   const assignRejectLines = runBatch(tsBin, assignRejects, 600_000);
   const assignAccepted = assignRejects.filter((src, i) =>
     assignRejectLines[i] !== 'R'
@@ -809,6 +812,15 @@ async function main(): Promise<void> {
     || tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }) === null);
   check('typescript typed calls and instantiations are assignment targets on CST and TS shape',
     assignRejected.length === 0, JSON.stringify(assignRejected));
+  // … and `x\n++\ny` is `x; ++y` on every parser (the Rust shape parser included).
+  const lineBreakUpdates = ['x\n++\ny;', 'x\n--\ny;', 'x ++\n++\ny;', 'a = b\n++c;'];
+  const lineBreakLines = runBatch(tsBin, lineBreakUpdates, 600_000);
+  const lineBreakRejected = lineBreakUpdates.filter((src, i) =>
+    lineBreakLines[i] !== 'A'
+    || tsMod.parse(src) === null
+    || tsMod.parseAst(src, { customs: typescriptEstreeCustoms as ToyAstCustoms }) === null);
+  check('typescript update operators split at a line break accept on CST, TS shape and Rust shape',
+    lineBreakRejected.length === 0, JSON.stringify(lineBreakRejected));
 
   check('TS_GOLDEN size === 35', TS_GOLDEN.length === 35, `${TS_GOLDEN.length}`);
   const tsGoldenLines = runBatch(tsBin, TS_GOLDEN.map((g) => g.src), 600_000);
