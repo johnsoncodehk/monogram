@@ -259,6 +259,16 @@ const CASES: Case[] = [
       '++(-x);', '++x.y;', '++f<T>();',
       // A parenthesized / argument arrow does not cap the operator chain around it.
       'a + f(() => 1) + c;', 'a && (() => 1) && c;', 'x = (a = () => 1) || y;',
+      // A modifier word is a modifier only while a member name can still follow it; before
+      // `(` `=` `:` `;` `?` `!` `<` `,` `}` it is the member's NAME, whatever precedes it.
+      'class C { public static() {} }', 'class C { public static; }', 'class C { readonly static = 1; }',
+      'class C { declare public static: T; }', 'class C { abstract static?(): void; }', 'class C { private static<T>() {} }',
+      'class C { override static!: T; }', 'class C { public static }', 'class C { static static() {} }', 'class C { public public() {} }',
+      'class C { static() {} }', 'class C { static = 1; get = 2; async() {} }', 'class C { public static static() {} }',
+      'class C { public static x; static public y; public static { } }',
+      'x = { public static() {} };', 'x = { static public: 1 };', 'x = { readonly override<T>() {} };', 'x = { declare abstract?() {} };',
+      'x = { async static() {} };', 'x = { async public declare() {} };', 'x = { static, public };',
+      'x = { static: 1, public() {}, get: 2 };', 'x = { public static x() {}, static get y() { return 1; } };',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -266,7 +276,10 @@ const CASES: Case[] = [
       // Only an access tail extends an access tail.
       'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;',
       'x = B<C> < 1;', 'x = B<C> >= 1;', 'x = B<C>!;', 'x = B<C> /re/;',
-      'a > > b;', 'a >> = b;', 'a >\n= b;', 'a >>>>= b;'],
+      'a > > b;', 'a >> = b;', 'a >\n= b;', 'a >>>>= b;',
+      // Once a word is the member's name, nothing but the member's own tail may follow it.
+      'class C { static static x; }', 'class C { public static<T> x; }', 'class C { public static?!: T; }', 'class C { public static x y; }', 'class C { public static = ; }',
+      'x = { public static x y };', 'x = { public static: };', 'x = { public static() x };', 'x = { static public: 1 2 };'],
   },
 ];
 
