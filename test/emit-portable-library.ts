@@ -218,11 +218,8 @@ func main() {
   // A consumer Builder that calls back into the package from Leaf, under ParseWith and under a
   // DocWith edit: every public entry must run independently of the parse in progress, and the
   // outer tree must equal the same builder's tree without the nested calls.
-  const rdir = join(dir, 'go-reenter');
-  mkdirSync(join(rdir, 'parser'), { recursive: true });
-  writeFileSync(join(rdir, 'go.mod'), 'module consumer\n\ngo 1.21\n');
-  writeFileSync(join(rdir, 'parser', 'parser.go'), goSrc);
-  writeFileSync(join(rdir, 'main.go'), `package main
+  mkdirSync(join(gdir, 'reenter'));
+  writeFileSync(join(gdir, 'reenter', 'main.go'), `package main
 
 import (
 \t"encoding/json"
@@ -284,9 +281,9 @@ func main() {
 `);
   try {
     let race = true;
-    try { execFileSync('go', ['build', '-race', '-o', 'consumer', '.'], { cwd: rdir, stdio: 'pipe' }); }
-    catch { race = false; execFileSync('go', ['build', '-o', 'consumer', '.'], { cwd: rdir, stdio: 'pipe' }); }
-    const out = JSON.parse(execFileSync(join(rdir, 'consumer'), { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }));
+    try { execFileSync('go', ['build', '-race', '-o', 'reenter-consumer', './reenter'], { cwd: gdir, stdio: 'pipe' }); }
+    catch { race = false; execFileSync('go', ['build', '-o', 'reenter-consumer', './reenter'], { cwd: gdir, stdio: 'pipe' }); }
+    const out = JSON.parse(execFileSync(join(gdir, 'reenter-consumer'), { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }));
     check(`go: Tokenize / ParseWith / NewDoc+Edit from inside a Builder callback ≡ standalone (race detector ${race ? 'on' : 'unavailable'})`,
       out.outer === true && out.docOk === true && out.nParse > 0 && out.nEdit > 0 && out.bad === 0, json(out));
   } catch (e) {

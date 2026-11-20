@@ -690,6 +690,9 @@ if (!haveRustc()) {
       createHash('sha256').update(prefix).digest('hex').slice(0, 12));
   }
 
+  // One binary per grammar (library + rustHarness, every mode): the sections below run
+  // their modes on these same binaries.
+  const rustBins = new Map<string, string>();
   for (const c of CASES) {
     const grammar: CstGrammar = (await import(c.path)).default;
     const rfile = `${RUST_TMP}/${c.grammar}.rs`;
@@ -701,20 +704,22 @@ if (!haveRustc()) {
       check(`rustc ${c.grammar}`, false, String(e).slice(0, 200));
       continue;
     }
+    rustBins.set(c.grammar, bin);
     const inputs = variants(c.seeds, 300);
     const out = execFileSync(bin, ['eq-batch'], {
       input: JSON.stringify(inputs), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120_000,
     }).trim();
     check(`rust ${c.grammar} (${inputs.length} inputs)`, out.startsWith('ok '), out);
   }
+  const rustBin = (grammar: string): string => {
+    const bin = rustBins.get(grammar);
+    if (!bin) throw new Error(`rust ${grammar} binary was not built`);
+    return bin;
+  };
 
   // SlimBuilder smoke on javascript
   {
-    const grammar: CstGrammar = (await import('../javascript.ts')).default;
-    const rfile = `${RUST_TMP}/javascript-slim.rs`;
-    const bin = `${RUST_TMP}/javascript-slim`;
-    writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
-    execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 120_000 });
+    const bin = rustBin('javascript');
     const slimOut = execFileSync(bin, ['slim-demo'], { encoding: 'utf8' }).trim().split('\n');
     check('rust slim (1); → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t(1);\tNumber\t')));
     check('rust slim 1; → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t1;\tNumber\t')));
@@ -736,12 +741,7 @@ if (!haveRustc()) {
     }
     const corpus = readFileSync(corpusPath, 'utf8');
     check('2MB corpus present', Buffer.byteLength(corpus) >= 2_000_000, `${Buffer.byteLength(corpus)} bytes`);
-    const grammar: CstGrammar = (await import('../typescript.ts')).default;
-    const rfile = `${RUST_TMP}/typescript-2mb.rs`;
-    const bin = `${RUST_TMP}/typescript-2mb`;
-    writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
-    execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 180_000 });
-    const out = execFileSync(bin, ['eq-batch'], {
+    const out = execFileSync(rustBin('typescript'), ['eq-batch'], {
       input: JSON.stringify([corpus]), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 180_000,
     }).trim();
     check('rust 2MB corpus parse_with ≡ parse', out === 'ok 1', out);
@@ -750,11 +750,7 @@ if (!haveRustc()) {
   // Doc<B> + optional shift: CstBuilder / SlimBuilder / MirrorBuilder (third-party SUPPORTS_SHIFT)
   {
     console.log('ast-builder: rust Doc<B> edit contracts');
-    const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
-    const rfile = `${RUST_TMP}/calc-doc.rs`;
-    const bin = `${RUST_TMP}/calc-doc`;
-    writeFileSync(rfile, emitParser(grammar, rustTarget) + rustHarness);
-    execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe', timeout: 120_000 });
+    const bin = rustBin('calc');
 
     const cstOut = execFileSync(bin, ['doc-cst-edit'], { encoding: 'utf8', timeout: 30_000 }).trim().split('\n');
     const cstAlign = cstOut.find((l) => l.startsWith('ALIGN\t'));
@@ -1088,6 +1084,7 @@ if (!haveGo()) {
       createHash('sha256').update(prefix).digest('hex').slice(0, 12));
   }
 
+  const goBins = new Map<string, string>();
   for (const c of CASES) {
     const grammar: CstGrammar = (await import(c.path)).default;
     const gfile = `${GO_TMP}/${c.grammar}.go`;
@@ -1101,6 +1098,7 @@ if (!haveGo()) {
       check(`go build ${c.grammar}`, false, String(e).slice(0, 200));
       continue;
     }
+    goBins.set(c.grammar, bin);
     const inputs = variants(c.seeds, 300);
     const out = execFileSync(bin, ['eq-batch'], {
       input: JSON.stringify(inputs), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120_000,
@@ -1111,16 +1109,15 @@ if (!haveGo()) {
     }).trim();
     check(`go ${c.grammar} eq-mirror (${inputs.length} inputs)`, outM.startsWith('ok '), outM);
   }
+  const goBin = (grammar: string): string => {
+    const bin = goBins.get(grammar);
+    if (!bin) throw new Error(`go ${grammar} binary was not built`);
+    return bin;
+  };
 
   // SlimBuilder smoke on javascript
   {
-    const grammar: CstGrammar = (await import('../javascript.ts')).default;
-    const gfile = `${GO_TMP}/javascript-slim.go`;
-    const hfile = `${GO_TMP}/javascript-slim_harness.go`;
-    const bin = `${GO_TMP}/javascript-slim`;
-    writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
-    writeFileSync(hfile, goHarness);
-    execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 180_000 });
+    const bin = goBin('javascript');
     const slimOut = execFileSync(bin, ['slim-demo'], { encoding: 'utf8' }).trim().split('\n');
     check('go slim (1); → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t(1);\tNumber\t')));
     check('go slim 1; → Number leaf (splice)', slimOut.some((l) => l.startsWith('LEAF\t1;\tNumber\t')));
@@ -1141,13 +1138,7 @@ if (!haveGo()) {
     }
     const corpus = readFileSync(corpusPath, 'utf8');
     check('go 2MB corpus present', Buffer.byteLength(corpus) >= 2_000_000, `${Buffer.byteLength(corpus)} bytes`);
-    const grammar: CstGrammar = (await import('../typescript.ts')).default;
-    const gfile = `${GO_TMP}/typescript-2mb.go`;
-    const hfile = `${GO_TMP}/typescript-2mb_harness.go`;
-    const bin = `${GO_TMP}/typescript-2mb`;
-    writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
-    writeFileSync(hfile, goHarness);
-    execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 600_000 });
+    const bin = goBin('typescript');
     const out = execFileSync(bin, ['eq-batch'], {
       input: JSON.stringify([corpus]), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 600_000,
     }).trim();
@@ -1161,13 +1152,7 @@ if (!haveGo()) {
   // NewDocWith + optional Shifter: CstBuilder / SlimBuilder / MirrorBuilder
   {
     console.log('ast-builder: go NewDocWith edit contracts');
-    const grammar: CstGrammar = (await import('./fixtures/calc.ts')).default;
-    const gfile = `${GO_TMP}/calc-doc.go`;
-    const hfile = `${GO_TMP}/calc-doc_harness.go`;
-    const bin = `${GO_TMP}/calc-doc`;
-    writeFileSync(gfile, asGoMain(emitParser(grammar, goTarget)));
-    writeFileSync(hfile, goHarness);
-    execFileSync('go', ['build', '-o', bin, gfile, hfile], { stdio: 'pipe', timeout: 120_000 });
+    const bin = goBin('calc');
 
     const cstOut = execFileSync(bin, ['doc-cst-edit'], { encoding: 'utf8', timeout: 30_000 }).trim().split('\n');
     const cstAlign = cstOut.find((l) => l.startsWith('ALIGN\t'));

@@ -324,20 +324,33 @@ const CONTENT_OBLIGATION = new Set<Bucket>(['keyword', 'string', 'number', 'comm
 
 export interface CoverageResult { den: number; painted: number; uncovered: { text: string; want: string; ctx: string }[] }
 
-export function leafCoverage(grammar: CstGrammar, tm: vsctm.IGrammar, opts = GEN_OPTS): CoverageResult {
+// The obligation leaves depend only on the CST grammar and corpus, never on the TM grammar
+// under test — compute once, then check any number of TM grammars against them.
+export interface LeafObligations { text: string; leaves: { text: string; start: number; end: number; want: string }[] }
+
+export function contentObligations(grammar: CstGrammar, opts = GEN_OPTS): LeafObligations[] {
   const { parse } = createParser(grammar);
   const roleOf = buildRoleMap(grammar);
-  const inputs = generateInputs(grammar, opts);
-  let den = 0, painted = 0; const uncovered: CoverageResult['uncovered'] = [];
-  for (const inp of inputs) {
+  const out: LeafObligations[] = [];
+  for (const inp of generateInputs(grammar, opts)) {
     let cst; try { cst = parse(inp.text); } catch { continue; }   // only entry-rule (full-document) inputs
+    const leaves = leafRoles(grammar, cst, inp.text, roleOf)
+      .filter(lf => [...lf.expected].some(b => CONTENT_OBLIGATION.has(b)))   // bears a content/keyword obligation
+      .map(lf => ({ text: lf.text, start: lf.start, end: lf.end, want: [...lf.expected].join('|') }));
+    out.push({ text: inp.text, leaves });
+  }
+  return out;
+}
+
+export function leafCoverage(tm: vsctm.IGrammar, obligations: LeafObligations[]): CoverageResult {
+  let den = 0, painted = 0; const uncovered: CoverageResult['uncovered'] = [];
+  for (const inp of obligations) {
     let toks; try { toks = tmTokenize(tm, inp.text); } catch { continue; }
-    for (const lf of leafRoles(grammar, cst, inp.text, roleOf)) {
-      if (![...lf.expected].some(b => CONTENT_OBLIGATION.has(b))) continue;   // bears a content/keyword obligation
+    for (const lf of inp.leaves) {
       den++;
       const got = spanBuckets(toks, inp.text, lf.start, lf.end);
       if ([...got].some(b => b !== 'none')) painted++;                         // recognised + scoped
-      else if (uncovered.length < 20) uncovered.push({ text: lf.text, want: [...lf.expected].join('|'), ctx: inp.text.slice(Math.max(0, lf.start - 6), lf.end + 6).replace(/\n/g, '\\n') });
+      else if (uncovered.length < 20) uncovered.push({ text: lf.text, want: lf.want, ctx: inp.text.slice(Math.max(0, lf.start - 6), lf.end + 6).replace(/\n/g, '\\n') });
     }
   }
   return { den, painted, uncovered };
@@ -836,7 +849,7 @@ async function main(): Promise<void> {
     check(`literal-completeness(${cfg.name}): every keyword literal/operator is in a reachable keyword-scoped pattern`, ld.gaps.length === 0, `undischarged: ${ld.gaps.join(' ')}`);
     const tm = await loadTmFromFiles(cfg.scopeName, { [cfg.scopeName]: cfg.tm, ...(cfg.tmExtra ?? {}) });
     let cov: CoverageResult = { den: 0, painted: 0, uncovered: [] };
-    if (tm) cov = leafCoverage(g, tm);
+    if (tm) cov = leafCoverage(tm, contentObligations(g));
     check(`coverage cross-check(${cfg.name}): every content/keyword obligation leaf is painted`, cov.painted === cov.den,
       cov.uncovered.map(u => `"${u.text}"(${u.want})`).slice(0, 8).join(' '));
     rows.push(ledgerRow(cfg.name, g, r, tc, ld, cov));
