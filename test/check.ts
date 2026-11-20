@@ -40,6 +40,7 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'portable-targets', args: ['test/portable-targets.ts'] },
   { group: 'emit-parity', name: 'relex-family', args: ['test/relex-family.ts'] },
   { group: 'emit-parity', name: 'define-target', args: ['test/define-target.ts'] },
+  { group: 'emit-parity', name: 'lex-family', args: ['test/lex-family.ts'] },
   { group: 'emit-parity', name: 'syntax-agnostic', args: ['test/syntax-agnostic.ts'] },
   { group: 'emit-parity', name: 'unicode-parity', args: ['test/unicode-parity.ts'] },
   { group: 'emit-parity', name: 'ast-builder', args: ['test/ast-builder.ts'] },
