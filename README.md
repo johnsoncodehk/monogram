@@ -66,11 +66,9 @@ This matters because `tsc`'s *parser* is not the same thing as the language. It 
 | Input | Monogram | `tsc` parser | V8 / Babel | Why |
 |---|---|:--:|:--:|---|
 | `obj?.#field` | accept | reject | accept | A private member in an optional chain is valid current ECMAScript — V8 and Babel both accept it; `tsc`'s parser is the lone rejecter. |
-| `let v: void.x` | reject | accept | reject | A qualified type name's root is an `IdentifierReference`; `void` is a keyword type, so no production qualifies it. (`undefined.x` *is* valid — `undefined` is identifier-rooted.) |
 | `using {a} = b` | reject | accept | reject | A `using` binding is a `BindingIdentifier` (`BindingList[~Pattern]`); the object pattern has no production. `using [a] = b` *is* valid — there `using` is an identifier and `[a]` is an element access. |
-| `++ -x` | accept | reject | reject | `++ UnaryExpression` derives it; "operand must be a simple target" is a static-semantic early error, which the parser leaves to a consumer. |
 
-`tsc` rejecting the first and accepting the next two (its parser doesn't enforce those productions until the checker) is exactly why "match `tsc`" can't *be* the definition of correct — only the measurement oracle.
+`tsc` rejecting the first and accepting the second (its parser doesn't enforce that production until the checker) is exactly why "match `tsc`" can't *be* the definition of correct — only the measurement oracle.
 
 ### Broad agreement vs the official grammar
 
