@@ -11,8 +11,7 @@
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
 import { portableIR } from '../src/emit-portable.ts';
 import { emitRelexFamily, relexFamilyFns, relexMode, type RelexMode } from '../src/relex-family.ts';
-import type { Host } from '../src/algo-ir.ts';
-import type { Target } from '../src/emit.ts';
+import type { PortableTarget } from '../src/define-target.ts';
 
 const FIXTURES: Array<{ path: string; mode: string }> = [
   { path: './fixtures/calc.ts', mode: 'plain' },
@@ -29,7 +28,7 @@ const modeName = (m: RelexMode): string => {
   return parts.length ? parts.join('+') : 'plain';
 };
 
-const HOSTS: Array<{ host: Host; target: Target; def: (name: string) => RegExp }> = [
+const HOSTS: Array<{ host: string; target: PortableTarget; def: (name: string) => RegExp }> = [
   { host: 'ts', target: tsTarget, def: (n) => new RegExp(`^(function ${n}\\(|const ${n} =)`, 'gm') },
   { host: 'go', target: goTarget, def: (n) => new RegExp(`^func ${n}\\(`, 'gm') },
   { host: 'rust', target: rustTarget, def: (n) => new RegExp(`^fn ${n.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase())}\\(`, 'gm') },
@@ -52,7 +51,7 @@ for (const f of FIXTURES) {
   const expected = new Set(relexFamilyFns(mode).map((fn) => fn.name));
   for (const h of HOSTS) {
     const out = emitParser(grammar, h.target);
-    const family = emitRelexFamily(ir, h.host);
+    const family = emitRelexFamily(ir, h.target.lowering);
     const at = out.indexOf(family);
     if (at < 0) { fail(`${f.path}/${h.host}: output does not embed the generated family verbatim`); continue; }
     if (out.indexOf(family, at + 1) >= 0) fail(`${f.path}/${h.host}: family embedded twice`);

@@ -1,17 +1,18 @@
 // Relex / scanMeta algorithm family: the incremental token-stream algorithms of the
 // portable Doc (fresh meta scan, windowed relex with resync + suffix adoption, edit
-// application, stream equality) authored once and printed for TS / Go / Rust.
+// application, stream equality) authored once and printed for each target through the
+// `Lowering` it registers with `defineTarget`.
 //
-// Boundary: the lexer itself (`lex` / `lexFrom` / lexOne) is still emitted per target by
-// target-*.ts and is NOT part of this family. The family depends on it through exactly two
+// Boundary: the lexer itself (`lex` / `lexFrom` / lexOne) is still emitted by each target
+// module and is NOT part of this family. The family depends on it through exactly two
 // calls — `lex(text)` and one `lexFrom(text, pos, ...state, out, 1)` step — whose state
 // parameter order is `lexState(mode)` below; every target's lexFrom follows that order.
 //
-// Offsets are host-native string units (UTF-16 code units in TS, UTF-8 bytes in Go/Rust),
-// the same units the per-target lexer reports; the family only does arithmetic on them.
+// Offsets are in the target's native string units (whatever its lexer reports, e.g. UTF-16
+// code units or UTF-8 bytes); the family only does arithmetic on them.
 
 import { type ParserIR, buildLexIdPlan, kidOf, lidOf } from './emit-portable.ts';
-import { type Expr, type Fn, type Host, type ListTy, type MetaFlag, type MetaInt, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
+import { type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
 
 export interface RelexMode {
   // Windowed relex (resync + suffix adoption); otherwise every edit re-lexes the whole text.
@@ -431,7 +432,6 @@ export function relexFamilyFns(m: RelexMode): Fn[] {
   return fns;
 }
 
-export function emitRelexFamily(ir: ParserIR, host: Host): string {
-  const fns = relexFamilyFns(relexMode(ir));
-  return `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${printFns(host, fns)}\n`;
+export function emitRelexFamily(ir: ParserIR, lowering: Lowering): string {
+  return printFns(lowering, relexFamilyFns(relexMode(ir)));
 }

@@ -14,9 +14,9 @@
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
-import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
-import { emitRelexFamily } from './relex-family.ts';
+import { defineTarget, type SharedAlgorithms } from './define-target.ts';
+import { ATOM, CAST, PREC, UNARY, isList, isNum, type ListTy, type Lowering, type MetaInt, type MkMeta, type TokInt } from './algo-ir.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
   FieldBind, TokenLeafPolicy, CustomShape, ParentFold, StreamType, PrattShape, RuleShapeAtom,
@@ -1083,7 +1083,7 @@ ${r.nudSeqs.map((seq, si) => `        { let save = self.pos; let sb = self.scrat
 }
 
 
-function docEditBlockRust(ir: ParserIR): string {
+function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const topReuse = topReusePlan(ir);
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
@@ -1091,7 +1091,7 @@ function docEditBlockRust(ir: ParserIR): string {
   const entriesInit = topReuse ? ', entries: Vec::new()' : '';
   const segsInit = shapeB ? ', segs: Vec::new()' : '';
   const reuseInit = `${entriesInit}${segsInit}`;
-  const relexFamily = emitRelexFamily(ir, 'rust');
+  const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
   const editBody = `        let (text, toks, n) = relex_edits(&old_text, &old_toks, edits);
         self.text = text;
         self.toks = toks;
@@ -4839,17 +4839,92 @@ pub fn parse_ast(src: &str) -> Option<AstRoot<'_>> {
 `;
 }
 
-export const rustTarget: Target = {
-  name: 'rust',
-  ext: 'rs',
-  emitParser(grammar: CstGrammar): string {
-    const ir = portableIR(grammar);
-    return emitRustLibrary(ir, buildLexIdPlan(ir));
+const RS_ELEM: Record<ListTy, string> = { metas: 'AlignMeta', toks: 'Tok', bools: 'bool', depths: 'i64', edits: 'Edit' };
+const RS_SCALAR: Record<string, string> = { int: 'isize', lid: 'u16', depth: 'i64', bool: 'bool', meta: 'AlignMeta', tok: 'Tok' };
+const RS_META: Record<MetaInt, string> = { off: 'u32', end: 'u32', kid: 'u16', pd: 'u16', fd: 'u16', td: 'u8' };
+const RS_TOK: Record<TokInt, string> = { off: 'u32', end: 'u32', kid: 'u16', lid: 'u16' };
+const RS_MK: Record<keyof MkMeta, string> = { off: 'u32', end: 'u32', kid: 'u16', nl: 'bool', fd: 'u16', pd: 'u16', lc: 'bool', lb: 'bool', hd: 'bool', td: 'u8' };
+const snake = (s: string): string => s.replace(/[A-Z]/g, (m) => '_' + m.toLowerCase());
+
+// Shared-algorithm lowering: snake_case, `as` casts, owned String/Vec vs borrowed &str/&[T].
+// Growth estimates are not reserved (no GC to save; realloc growth matches the base allocation
+// pattern), so nothing is over-reserved and there is nothing to trim. Exact capacities are kept.
+const rustLowering: Lowering = {
+  indent: '    ',
+  stmtEnd: ';',
+  ident: snake,
+  num: { int: 'isize', lid: 'u16', depth: 'i64' },
+  index: 'usize',
+  type: (t, role, owned) => {
+    if (isList(t)) return role === 'param' ? `&[${RS_ELEM[t]}]` : `Vec<${RS_ELEM[t]}>`;
+    if (t === 'str') return role === 'param' || !owned ? '&str' : 'String';
+    if (t === 'edit') return '&Edit';
+    return RS_SCALAR[t];
   },
-  emitRunner,
+  cast: (cx, r, nat) => ({ ...r, c: `${cx.wrap(r, ATOM)} as ${nat}`, nat, prec: CAST }),
+  owns: true,
+  borrowStr: (r) => (!r.owned ? r.c : /^\w+$/.test(r.c) ? `${r.c}.as_str()` : `(${r.c}).as_str()`),
+  borrowList: (r) => (r.owned ? `&${r.c}` : r.c),
+  borrowVal: (r) => `&${r.c}`,
+  expr: {
+    len: (cx, l) => cx.atom(`${cx.wrap(l, ATOM)}.len()`, 'int', 'usize'),
+    metaInt: (cx, m, f) => cx.atom(`${cx.wrap(m, ATOM)}.${f}`, 'int', RS_META[f]),
+    metaFlag: (cx, m, f) => cx.atom(`am_${f}(${cx.ref(m)})`, 'bool', 'bool'),
+    tokInt: (cx, t, f) => cx.atom(`${cx.wrap(t, ATOM)}.${f}`, 'int', RS_TOK[f]),
+    tokNl: (cx, t) => cx.atom(`${cx.wrap(t, ATOM)}.nl`, 'bool', 'bool'),
+    editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'usize'),
+    editText: (cx, e) => cx.atom(`${e.c}.text.as_str()`, 'str', 'str', { owned: false }),
+    metaText: (cx, t, m) => cx.atom(`am_text(${cx.str(t)}, ${cx.ref(m)})`, 'str', 'str', { owned: false }),
+    substr: (cx, s, a, b) => ({ c: `&${cx.wrap(s, ATOM)}[${cx.coerce(a, 'usize')}..${cx.coerce(b, 'usize')}]`, ty: 'str', nat: 'str', prec: UNARY, owned: false }),
+    lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)})`, 'lid', cx.nat('lid')),
+    mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([f, r]) => cx.coerce(r, RS_MK[f])).join(', ')})`, 'meta', 'meta'),
+    shiftMeta: (cx, m, d) => cx.atom(`shift_align(${cx.ref(m)}, ${cx.coerce(d, 'isize')})`, 'meta', 'meta'),
+    metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: PREC['=='] }),
+    splice: (cx, s, a, b, ins) => cx.atom(`format!("{}{}{}", &${cx.wrap(s, ATOM)}[..${cx.coerce(a, 'usize')}], ${cx.str(ins)}, &${cx.wrap(s, ATOM)}[${cx.coerce(b, 'usize')}..])`, 'str', 'str', { owned: true }),
+    own: (cx, r) => {
+      if (r.ty === 'str') return cx.atom(`${cx.wrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
+      if (isList(r.ty)) return cx.atom(`${cx.wrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
+      return r;
+    },
+    newList: (cx, ty, cap) => cx.atom(cap ? `Vec::with_capacity(${cx.coerce(cap, 'usize')})` : 'Vec::new()', ty, ty, { owned: true }),
+    falses: (cx, n) => cx.atom(`vec![false; ${cx.coerce(n, 'usize')}]`, 'bools', 'bools', { owned: true }),
+    prefix: (cx, l, n) => cx.atom(`${cx.wrap(l, ATOM)}[..${cx.coerce(n, 'usize')}].to_vec()`, l.ty, l.ty, { owned: true }),
+  },
+  stmt: {
+    let: (cx, s) => `let ${s.mutable ? 'mut ' : ''}${s.id}: ${cx.type(s.ty, 'local', s.owned)} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`,
+    push: (_cx, l, r) => `${l}.push(${r.c});`,
+    ifHead: (c) => `if ${c}`,
+    inlineIf: (head, st) => `${head} { ${st} }`,
+    whileHead: (c) => `while ${c} {`,
+    forHead: (cx, v, from, to) => `for ${v} in ${cx.coerce(from, 'isize')}..${cx.coerce(to, 'isize')} {`,
+    forEachHead: (v, l) => `for ${v} in ${l} {`,
+    tuple: (vs) => `(${vs.join(', ')})`,
+    destructure: (_cx, s) => {
+      if (!s.declare) return `(${s.ids.join(', ')}) = ${s.call};`;
+      return `let (${s.names.map((n, i) => (n !== '_' && s.mutable(n) ? `mut ${s.ids[i]}` : s.ids[i])).join(', ')}) = ${s.call};`;
+    },
+    lexStep: (cx, s) => [
+      `let lexed = lex_from(${cx.str(s.text)}, ${s.pos} as usize, ${[...s.state, `&mut ${s.out}`].join(', ')}, 1);`,
+      `${s.pos} = lexed.0 as isize;`,
+      ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
+    ],
+    shrink: () => [],
+    fnHead: (name, ps, rets) => `fn ${name}(${ps.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${rets.length === 1 ? rets[0] : `(${rets.join(', ')})`} {`,
+  },
 };
 
-function emitRustLibrary(ir: ParserIR, ids: LexIdPlan): string {
+export const rustTarget = defineTarget({
+  name: 'rust',
+  ext: 'rs',
+  lowering: rustLowering,
+  emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
+    const ir = portableIR(grammar);
+    return emitRustLibrary(ir, buildLexIdPlan(ir), shared);
+  },
+  emitRunner,
+});
+
+function emitRustLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
     const ar = buildArenaIdPlan(ir, ids);
     const reuse = topReusePlan(ir);
     const shapeB = reuse?.kind === 'B';
@@ -4948,7 +5023,7 @@ fn parse<'a>(src: &'a str) -> Option<(Parser<'a>, i32)> {
     }
 }
 
-${docEditBlockRust(ir)}
+${docEditBlockRust(ir, shared)}
 ${emitParseWithHelpers(ir, shapeB)}
 `;
 }
@@ -5122,7 +5197,7 @@ fn main() {
 export function emitRust(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
   const ir = portableIR(grammar);
   const ids = buildLexIdPlan(ir);
-  const base = emitRustLibrary(ir, ids);
+  const base = emitRustLibrary(ir, ids, rustTarget.shared);
   if (!opts?.shape) return base;
   return base + emitRustShapeAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
 }

@@ -6,14 +6,14 @@
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
-import type { Target } from './emit.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
   RuleShape, TokenLeafPolicy, ShapeIRRule, CustomShape, KeepShape,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
-import { emitRelexFamily } from './relex-family.ts';
+import { defineTarget, type SharedAlgorithms } from './define-target.ts';
+import { ATOM, PREC, type Lowering, type Ty } from './algo-ir.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
@@ -1600,14 +1600,14 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
 `;
 }
 
-function docEditBlock(ir: ParserIR): { code: string; parts: DocEditParts } {
+function docEditBlock(ir: ParserIR, shared: SharedAlgorithms): { code: string; parts: DocEditParts } {
   const topReuse = topReusePlan(ir);
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse && topReuse.kind === 'B' && topReuse.hasHead);
   const entryRule = ir.rules.find((r) => r.name === ir.entry);
   const entryCst = entryRule && 'cstName' in entryRule ? entryRule.cstName : ir.entry;
-  const relexFamily = emitRelexFamily(ir, 'ts');
+  const relexFamily = `\n// ---- relex family: generated from src/relex-family.ts (shared by the TS / Go / Rust targets) ----\n${shared.relexFamily(ir)}\n`;
   const editBody = `      [text, prevToks, relexed] = relexEdits(oldText, oldToks, edits);`;
   const initToks = 'scanMeta(src)';
   // True fresh re-lex when window relex left a stale stream (unterminated → closed restore).
@@ -3459,15 +3459,74 @@ export function parseAst(src: string, opts?: { customs?: AstCustoms }): ${rootTy
 `;
 }
 
-export const tsTarget: Target = {
+const TS_TYPES: Record<Ty, string> = {
+  int: 'number', lid: 'number', depth: 'number', bool: 'boolean', str: 'string', meta: 'AlignMeta', tok: 'Tok', edit: 'Edit',
+  metas: 'AlignMeta[]', toks: 'Tok[]', bools: 'boolean[]', depths: 'number[]', edits: 'Edit[]',
+};
+
+// Shared-algorithm lowering: untyped numbers, GC-managed arrays (capacity is never reserved).
+const tsLowering: Lowering = {
+  indent: '  ',
+  stmtEnd: ';',
+  ident: (n) => n,
+  num: { int: 'number', lid: 'number', depth: 'number' },
+  index: 'number',
+  type: (t) => TS_TYPES[t],
+  ops: { '==': '===', '!=': '!==' },
+  owns: false,
+  expr: {
+    len: (cx, l) => cx.atom(`${cx.wrap(l, ATOM)}.length`, 'int', 'number'),
+    metaInt: (cx, m, f) => cx.atom(`${cx.wrap(m, ATOM)}.${f}`, 'int', 'number'),
+    metaFlag: (cx, m, f) => cx.atom(`am_${f}(${m.c})`, 'bool', 'bool'),
+    tokInt: (cx, t, f) => cx.atom(`${cx.wrap(t, ATOM)}.${f}`, 'int', 'number'),
+    tokNl: (cx, t) => cx.atom(`${cx.wrap(t, ATOM)}.nl`, 'bool', 'bool'),
+    editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'number'),
+    editText: (cx, e) => cx.atom(`${e.c}.text`, 'str', 'str'),
+    metaText: (cx, t, m) => cx.atom(`am_text(${t.c}, ${m.c})`, 'str', 'str'),
+    substr: (cx, s, a, b) => cx.atom(`${cx.wrap(s, ATOM)}.slice(${a.c}, ${b.c})`, 'str', 'str'),
+    lidOf: (cx, s) => cx.atom(`lid_of(${s.c})`, 'lid', cx.nat('lid')),
+    mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([, r]) => r.c).join(', ')})`, 'meta', 'meta'),
+    shiftMeta: (cx, m, d) => cx.atom(`shift_align(${m.c}, ${d.c})`, 'meta', 'meta'),
+    metaEq: (_cx, a, b) => ({
+      c: ['off', 'end', 'kid', 'pd', 'fd', 'flags', 'td'].map((f) => `${a.c}.${f} === ${b.c}.${f}`).join(' && '),
+      ty: 'bool', nat: 'bool', prec: PREC['&&'],
+    }),
+    splice: (cx, s, a, b, ins) => ({ c: `${cx.wrap(s, ATOM)}.slice(0, ${a.c}) + ${ins.c} + ${cx.wrap(s, ATOM)}.slice(${b.c})`, ty: 'str', nat: 'str', prec: PREC['+'] }),
+    own: (_cx, r) => r,
+    newList: (cx, ty) => cx.atom('[]', ty, ty, { owned: true }),
+    falses: (cx, n) => cx.atom(`new Array<boolean>(${n.c}).fill(false)`, 'bools', 'bools', { owned: true }),
+    prefix: (cx, l, n) => cx.atom(`${cx.wrap(l, ATOM)}.slice(0, ${n.c})`, l.ty, l.ty, { owned: true }),
+  },
+  stmt: {
+    let: (cx, s) => `${s.reassigned ? 'let' : 'const'} ${s.id}: ${cx.type(s.ty, 'local')} = ${s.r.c};`,
+    push: (_cx, l, r) => `${l}.push(${r.c});`,
+    ifHead: (c) => `if (${c})`,
+    inlineIf: (head, st) => `${head} ${st}`,
+    whileHead: (c) => `while (${c}) {`,
+    forHead: (_cx, v, from, to) => `for (let ${v} = ${from.c}; ${v} < ${to.c}; ${v}++) {`,
+    forEachHead: (v, l) => `for (const ${v} of ${l}) {`,
+    tuple: (vs) => `[${vs.join(', ')}]`,
+    destructure: (_cx, s) => {
+      const pat = `[${s.names.map((n) => (n === '_' ? '' : n)).join(', ').replace(/(, )+$/, '')}]`;
+      if (!s.declare) return `${pat} = ${s.call};`;
+      return `${s.names.some((n) => s.reassigned(n)) ? 'let' : 'const'} ${pat} = ${s.call};`;
+    },
+    lexStep: (_cx, s) => [`({ ${[s.posName === 'pos' ? 'pos' : `pos: ${s.posName}`, ...s.state].join(', ')} } = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, s.out].join(', ')}, 1));`],
+    shrink: () => [],
+    fnHead: (name, ps, rets) => `function ${name}(${ps.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${rets.length === 1 ? rets[0] : `[${rets.join(', ')}]`} {`,
+  },
+};
+
+export const tsTarget = defineTarget({
   name: 'typescript',
   ext: 'ts',
-  emitParser(grammar: CstGrammar): string {
+  lowering: tsLowering,
+  emitParser(grammar: CstGrammar, shared: SharedAlgorithms): string {
     const ir = portableIR(grammar);
-    return emitTsLibrary(ir, buildLexIdPlan(ir));
+    return emitTsLibrary(ir, buildLexIdPlan(ir), shared);
   },
   emitRunner,
-};
+});
 
 // '>'-led composite operators (ir.gtComps): the lexer scans every '>' alone. Where an operator or a
 // composite literal is read, a lone '>' extends over each adjacent single-character punct token
@@ -3506,7 +3565,7 @@ function _matchComp(lid: number): boolean {
 }`;
 }
 
-function emitTsLibrary(ir: ParserIR, ids: LexIdPlan): string {
+function emitTsLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
     const reuse = topReusePlan(ir);
     const ruleFns = ir.rules.map((r) => {
       if (r.kind === 'pratt') return prattRule(r, ir.tpl, ids);
@@ -3634,7 +3693,7 @@ function parseTokens(tokens: Tok[]): Cst | null {
   return root !== null && pos === toks.length ? root : null;
 }
 
-${(() => { const doc = docEditBlock(ir); return doc.code + '\n' + emitBuilderAddon(ir, ids, doc.parts); })()}
+${(() => { const doc = docEditBlock(ir, shared); return doc.code + '\n' + emitBuilderAddon(ir, ids, doc.parts); })()}
 `;
 }
 
@@ -3676,7 +3735,7 @@ if (_editFast || process.argv.includes('edit-session')) {
 export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
   const ir = portableIR(grammar);
   const ids = buildLexIdPlan(ir);
-  const base = emitTsLibrary(ir, ids);
+  const base = emitTsLibrary(ir, ids, tsTarget.shared);
   if (!opts?.shape) return base;
   return base + emitShapeAstAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
 }
