@@ -62,7 +62,7 @@
 
 ;; Builtin / global / constant identifier names.
 ((ident) @variable.builtin
-  (#any-of? @variable.builtin "console" "window" "document" "process" "require" "exports" "globalThis"))
+  (#any-of? @variable.builtin "module" "console" "window" "document" "process" "require" "exports" "global" "globalThis"))
 
 ;; Keyword, operator, and punctuation literals.
 [

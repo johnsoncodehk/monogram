@@ -94,22 +94,28 @@ export async function loadTreeSitter(): Promise<boolean> {
 // Shared capture→family reduction. Per captured node keep the family from the
 // HIGHEST pattern index — tree-sitter highlighting is "last matching pattern wins"
 // (e.g. the TS additions' capitalized-identifier `@type` overrides the ecma base `@variable`).
-function tsFamiliesWith(parser: any, query: any, code: string): Span[] {
+function tsCapturesWith(parser: any, query: any, code: string): CaptureSpan[] {
   const tree = parser.parse(code);
-  const best = new Map<string, { start: number; end: number; family: Family; pat: number }>();
+  const best = new Map<string, CaptureSpan & { pat: number }>();
   for (const m of query.matches(tree.rootNode)) {
     const pat = m.patternIndex ?? m.pattern ?? 0;
     for (const c of m.captures) {
-      const fam = tsCaptureToFamily(c.name);
-      if (!fam) continue;
+      const family = tsCaptureToFamily(c.name);
+      if (!family) continue;
       const start = c.node.startIndex, end = c.node.endIndex;
       const key = start + ':' + end;
       const prev = best.get(key);
-      if (!prev || pat >= prev.pat) best.set(key, { start, end, family: fam, pat });
+      if (!prev || pat >= prev.pat) best.set(key, { start, end, capture: c.name, family, pat });
     }
   }
   return [...best.values()].sort((a, b) => a.start - b.start || a.end - b.end);
 }
+function tsFamiliesWith(parser: any, query: any, code: string): Span[] {
+  return tsCapturesWith(parser, query, code).map(({ start, end, family }) => ({ start, end, family }));
+}
+
+/** The winning capture name of each captured node (same last-pattern-wins rule as the families). */
+export interface CaptureSpan extends Span { capture: string }
 
 export function treesitterFamilies(code: string): Span[] {
   if (!tsParser || !tsQuery) throw new Error('call loadTreeSitter() first');
@@ -139,6 +145,10 @@ export async function loadMonogramTreeSitter(wasmPath: string, queryPath: string
 export function monogramTreesitterFamilies(code: string): Span[] {
   if (!mtsParser || !mtsQuery) throw new Error('call loadMonogramTreeSitter() first');
   return tsFamiliesWith(mtsParser, mtsQuery, code);
+}
+export function monogramTreesitterCaptures(code: string): CaptureSpan[] {
+  if (!mtsParser || !mtsQuery) throw new Error('call loadMonogramTreeSitter() first');
+  return tsCapturesWith(mtsParser, mtsQuery, code);
 }
 
 // ─── self-test: dump families for a diagnostic snippet across all engines ───────

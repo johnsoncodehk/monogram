@@ -21,7 +21,7 @@ import ts from 'typescript';
 import { existsSync } from 'node:fs';
 import { oracle } from './oracle.ts';
 import { ROLE_SPEC, roleFamily, acceptableFamilies } from './scope-roles.ts';
-import { loadTreeSitter, treesitterFamilies, loadMonogramTreeSitter, monogramTreesitterFamilies, familyAt } from './highlight-engines.ts';
+import { loadTreeSitter, treesitterFamilies, loadMonogramTreeSitter, monogramTreesitterFamilies, monogramTreesitterCaptures, familyAt } from './highlight-engines.ts';
 import { tests as issueTests, multiLineTests as issueMultiLine } from './issue-cases.ts';
 
 const WASM = process.env.MONOGRAM_TS_WASM ?? 'tree-sitter/typescript/tree-sitter-typescript.wasm';
@@ -73,6 +73,31 @@ console.log(`  official tree-sitter  ${offPct.toFixed(1)}%  (${off.correct}/${of
 // Gate: a conservative floor (catch regressions) AND must still beat official.
 const FLOOR = 90;
 const fails: string[] = [];
+
+// Word roles. The family grade above cannot see a builtin name painted as a plain variable
+// (@variable.builtin and @variable are both 'value'), so the capture itself is checked here. A
+// `scopes` builtin name (support.variable) keeps @variable.builtin wherever the word is an
+// identifier, also when the grammar uses the same word as a keyword elsewhere (`module`,
+// `global`); where it IS the keyword, the keyword's own capture applies.
+const WORD_ROLES: { code: string; word: string; capture: string }[] = [
+  { code: 'x = console.log;', word: 'console', capture: 'variable.builtin' },   // a builtin that is no keyword
+  { code: 'x = module.exports;', word: 'module', capture: 'variable.builtin' },
+  { code: 'f(module);', word: 'module', capture: 'variable.builtin' },
+  { code: 'x = global.y;', word: 'global', capture: 'variable.builtin' },
+  { code: 'const x = require("y");', word: 'require', capture: 'variable.builtin' },
+  { code: 'declare module "m" {}', word: 'module', capture: 'keyword' },         // storage.type.namespace
+  { code: 'declare global {}', word: 'global', capture: 'variable.builtin' },    // its one scope, as the keyword token
+];
+console.log('── tree-sitter word roles (winning capture per word) ──');
+for (const r of WORD_ROLES) {
+  const at = r.code.indexOf(r.word);
+  const end = at + r.word.length;
+  const hit = monogramTreesitterCaptures(r.code).filter((s) => s.start === at && s.end === end).at(-1);
+  const got = hit?.capture ?? '(none)';
+  const ok = got === r.capture;
+  console.log(`  ${ok ? '✓' : '✗'} ${JSON.stringify(r.code).padEnd(28)} ${r.word.padEnd(8)} ${got}${ok ? '' : `  (want ${r.capture})`}`);
+  if (!ok) fails.push(`${JSON.stringify(r.code)}: \`${r.word}\` is @${got}, want @${r.capture}`);
+}
 if (monoPct < FLOOR) fails.push(`Monogram ${monoPct.toFixed(1)}% below floor ${FLOOR}%`);
 if (monoPct < offPct) fails.push(`Monogram ${monoPct.toFixed(1)}% no longer beats official ${offPct.toFixed(1)}%`);
 if (fails.length) {

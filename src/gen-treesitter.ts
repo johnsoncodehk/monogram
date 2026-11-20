@@ -1546,11 +1546,18 @@ function buildHighlightsScm(
     captureGroups.get(cap)!.add(lit);
   };
 
-  // From the scopes section first (authoritative). A `scopes` literal that is a
-  // real grammar token (appears in rules/precs) becomes an anonymous-token capture;
-  // one that is only an IDENTIFIER-NAME hint (a builtin/primitive/global — listed
-  // in `scopes` but never a grammar token) CANNOT be an anonymous token (tree-sitter
-  // would reject it as a bad node name), so it is matched on the identifier instead.
+  // From the scopes section first (authoritative). A word has up to two roles, each
+  // on its own node kind, so the two never compete for one node:
+  //  - as a real grammar token (appears in rules/precs) it is an anonymous-token
+  //    capture, from its first scope;
+  //  - as an IDENTIFIER-NAME hint (a `support.*` scope: a builtin/global name the
+  //    runtime provides) it is matched on the identifier, by text. tree-sitter lexes
+  //    a word that is also a keyword literal as the keyword only where that keyword
+  //    is valid and as the `word` identifier elsewhere (`declare module "m"` vs
+  //    `module.exports`), so a hint keeps its role wherever the word is an
+  //    identifier, whether or not the grammar also uses it as a keyword. A hint
+  //    that is never a grammar token could not be an anonymous token anyway
+  //    (tree-sitter rejects it as a bad node name).
   // Type-ness is POSITIONAL: a blanket @type/@type.builtin predicate would mis-paint
   // value-position uses (e.g. `Array.from`), so those are left to the structural
   // type-reference capture below; only position-independent vocabulary (globals,
@@ -1558,10 +1565,13 @@ function buildHighlightsScm(
   const identNameHints: { lit: string; cap: string }[] = [];
   for (const [lit, scopes] of scopeOverrides) {
     if (lit.startsWith('.')) continue; // property-name overrides handled separately
-    const cap = scopeToCapture(scopes[0]);
-    if (!cap) continue;
-    if (allLiterals.has(lit)) { add(cap, lit); continue; }      // real grammar token
-    if (cap !== '@type' && cap !== '@type.builtin') identNameHints.push({ lit, cap });
+    if (allLiterals.has(lit)) {                                  // real grammar token
+      const cap = scopeToCapture(scopes[0]);
+      if (cap) add(cap, lit);
+    }
+    const nameScope = scopes.find(s => s === 'support' || s.startsWith('support.'));
+    const nameCap = nameScope && scopeToCapture(nameScope);
+    if (nameCap && nameCap !== '@type' && nameCap !== '@type.builtin') identNameHints.push({ lit, cap: nameCap });
   }
   // Keyword literals with no scope override → @keyword.
   for (const lit of allLiterals) {
