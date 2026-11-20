@@ -451,6 +451,8 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: 'var q = `x${a/b}y`;', batches: [[[12, 13, 'c']]] },
     // predecessor peeked into second stmt (ext > tokEnd); editing that region must not keep stmt0
     { init: jsLookaheadInit, batches: [[[jsLookaheadEdit, jsLookaheadEdit + 1, '+']]], maxReused: 1 },
+    // Same-text token re-entering at template depth 1 must not resync (see templatejs).
+    { init: 'a = {b} // `\n;', batches: [[[4, 5, '`${']]] },
     // Edit inside a hole: regex/division state and template depth both resume from the anchor.
     { init: 'a; `b${x}c`; d / e / f;', batches: [[[7, 8, 'g / h']]] },
     // Division → regex flip far from the edit; suffix adoption needs equal prev-token/paren state.
@@ -468,6 +470,9 @@ const EDIT_SCENARIOS: Record<string, EditScenario[]> = {
     { init: '`a${x}b` + c + `d${y}e`;', batches: [[[2, 6, '']]] },
     // Adding a hole next to an existing one: template depth after the edit differs from the old stream.
     { init: 'f(`a${x}b`, c);', batches: [[[8, 8, '${y}']]] },
+    // `{` → `${`: the old `b` (td 0) reappears at the shifted offset inside a hole (td 1) with equal text —
+    // adopting it would keep `}` as a brace; the comment-swallowed backtick keeps both texts lexable.
+    { init: 'a = {b} // `\n;', batches: [[[4, 5, '`${']]] },
     // Edit inside the first hole: anchor search must back off to a td == 0 token, then resync.
     { init: tplLargeInit, batches: [[[3, 4, 'y']]], maxRelexed: 15 },
   ],
