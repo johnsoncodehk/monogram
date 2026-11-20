@@ -141,7 +141,7 @@ try {
     ['nested block depth never grows', /depth = depth \+ 1/, 'depth = depth'],
     ['string escape skips one character', /e = e \+ 2/, 'e = e + 1'],
     ['negated lookahead inverted', /if \(r < 0\) return p;/, 'if (r >= 0) return p;'],
-    ['seq drops its last item', /q = lexMatch\d+\(s, q\);\n\s+if \(q < 0\) return -1;\n(\s+)return q;/, 'return q;'],
+    ['seq drops its last item', /const (q\d+): number = lexMatch\d+\(s, (q\d+)\);\n\s+if \(\1 < 0 \|\| \1 > s\.length\) return -1;\n\s+return \1;/, 'return $2;'],
     ['run stops after the first character', /while \(e < s\.length\) \{\n(\s+)const d/, 'while (false) {\n$1const d'],
     ['repeat ignores its minimum', /if \(n < 1\) return -1;/g, ''],
   ];

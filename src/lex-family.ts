@@ -80,8 +80,16 @@ class LexScan {
         return [if_(ge('p', len('s')), [NONE]), let_('c', code('p')), if_(p.negate ? not(m) : m, [ret(add('p', I(1)))]), NONE];
       }
       case 'seq': {
+        // Each step's position is its own local, checked to be a position in s before the
+        // next step reads from it (a matcher returns -1 or a position in s).
         const ms = p.items.map((it) => this.pattern(it));
-        return [let_('q', 'p'), ...ms.flatMap((m) => [set('q', call(m, 'q')), if_(lt('q', I(0)), [NONE])]), ret('q')];
+        let at = 'p';
+        const steps = ms.flatMap((m, k): Stmt[] => {
+          const q = `q${k}`, from = at;
+          at = q;
+          return [let_(q, call(m, from)), if_(any([lt(q, I(0)), gt(q, len('s'))]), [NONE])];
+        });
+        return [...steps, ret(at)];
       }
       case 'alt': {
         const ms = p.items.map((it) => this.pattern(it));
