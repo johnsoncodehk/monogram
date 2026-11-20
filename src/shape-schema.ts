@@ -153,7 +153,7 @@ export const ADJUDICATIONS = {
 /** Emit-time static coverage of Shape AST step/pratt rendering. */
 export type ShapeStepKind =
   | 'lit' | 'tok' | 'rule' | 'ruleBp' | 'star' | 'opt' | 'sep'
-  | 'altlit' | 'alt' | 'not' | 'seq' | 'sameLine' | 'suppress';
+  | 'altlit' | 'alt' | 'not' | 'ahead' | 'seq' | 'sameLine' | 'suppress';
 export type ShapePrattKind =
   | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
   | 'led' | 'nudSeq' | 'nudCapped' | 'template';
@@ -166,7 +166,7 @@ export type ShapeCoverage = {
 
 export const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
   'lit', 'tok', 'rule', 'ruleBp', 'star', 'opt', 'sep',
-  'altlit', 'alt', 'not', 'seq', 'sameLine', 'suppress',
+  'altlit', 'alt', 'not', 'ahead', 'seq', 'sameLine', 'suppress',
 ] as const;
 export const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
   'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',
