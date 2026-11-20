@@ -11,7 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import type { CstGrammar } from './types.ts';
@@ -735,23 +735,30 @@ ${r.alts.map(arm).join('\n')}
         None
     }`;
   }
+  if (r.alts.length === 1) {   // nothing to choose among
+    return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
+        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+        if ${r.alts[0]!.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
+        self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);
+        None
+    }`;
+  }
+  // Longest match over the alternatives, in declaration order (emit-portable.ts, RdRule). The
+  // best node so far stays built: `ck` moves past it, so a later alternative that does not beat
+  // it is restored away and one that does leaves it unreferenced.
   const alt = (steps: Step[], i: number) => {
     const cond = steps.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const restore = `self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);`;
-    if (!isGuardable(r.altFirst[i], r.alts.length)) {
-      return `        if ${cond} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
-        ${restore}`;
-    }
-    return `        if let Some(t) = _ft { if ${firstCond(r.altFirst[i], 't', ids)} {
-            if ${cond} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
-            ${restore}
-        } }`;
+    const body = `{ if ${cond} && self.pos > best_pos { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos; ck = self.b.checkpoint(); } else { self.scratch.truncate(sb); self.b.restore(ck); } self.pos = save; }`;
+    if (!isGuardable(r.altFirst[i], r.alts.length)) return `        ${body}`;
+    return `        if let Some(t) = _ft { if ${firstCond(r.altFirst[i], 't', ids)} ${body} }`;
   };
   const needPeek = r.alts.some((_, i) => isGuardable(r.altFirst[i], r.alts.length));
   return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
-        let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
+        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
+        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;
 ${needPeek ? '        let _ft = self.peek();\n' : ''}${r.alts.map(alt).join('\n')}
-        None
+        self.pos = best_pos;
+        best
     }`;
 }
 
@@ -857,30 +864,58 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const binArms = r.binary.map((b) => `${lidOf(ids, b.op)} => Some((${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}))`).join(', ');
   const preArms = r.prefix.map((p) => `${lidOf(ids, p.op)} => Some((${p.rbp}, ${p.requireTarget}, ${p.form}))`).join(', ');
   const postArms = r.postfix.map((p) => `${lidOf(ids, p.op)} => Some((${p.lbp}, ${p.requireTarget}))`).join(', ');
-  const atomArm = r.nudToks.map((k) => `${kidOf(ids, k)}`).join(' | ');
-  const tplNud = r.nudTplHole !== undefined
-    ? `        if t.kid == ${kidOf(ids, "$templateHead")} {
-            let n = match self.match_template(Self::parse_${r.nudTplHole}) { Some(n) => n, None => return None };
-            let sb = self.scratch.len();
-            if n.present { self.scratch.push(n.h); }
-            return Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize));
-        }\n`
-    : '';
-  const bracketNudBody = (b: Bracket, closes: boolean) => `{
-            let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { ${closes ? '*pt = true; ' : ''}return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
-            self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);
+  // The NUD arms, each a longest-match candidate tried from `save` in declaration order
+  // (emit-portable.ts, PrattRule.nudOrder). `won` records the node just finished as the best so
+  // far and moves `ck` past it; `lost` drops what the arm built.
+  const won = (form: string, tail: boolean, capped: boolean) =>
+    `best_pos = self.pos; bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
+  const lost = `self.scratch.truncate(sb); self.b.restore(ck);`;
+  const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
+  const seqArm = (steps: Step[], tail: boolean, capped: boolean) =>
+    `{ if ${stepsCond(steps)} && self.pos > best_pos { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won('0', tail, capped)} } else { ${lost} } self.pos = save; }`;
+  const nudArm = (a: NudRef): string => {
+    switch (a.kind) {
+      case 'tok': {
+        const k = r.nudToks[a.index]!;
+        const leafArm = `        if t.kid == ${kidOf(ids, k)} && save + 1 > best_pos { self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won('0', false, false)} self.pos = save; }`;
+        if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
+        return `${leafArm}
+        if t.kid == ${kidOf(ids, "$templateHead")} {
+            match self.match_template(Self::parse_${r.nudTplHole}) {
+                Some(n) if self.pos > best_pos => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won('0', false, false)} }
+                _ => { ${lost} }
+            }
+            self.pos = save;
         }`;
-  const bracketNudMatch = (() => {
-    if (r.nudBrackets.length === 0) return '';
-    const groups = groupByPreserveOrder(r.nudBrackets, (b) => lidOf(ids, b.first));
-    return `        match t.lid {
-${groups.map((g) => `            ${g.key} => {
-${g.members.map(({ item: b, index: bi }) => `                ${bracketNudBody(b, r.nudBracketClosesTail[bi]!)}`).join('\n')}
-            }`).join('\n')}
-            _ => {}
+      }
+      case 'bracket': {
+        const b = r.nudBrackets[a.index]!;
+        return `        if t.lid == ${lidOf(ids, b.first)} ${seqArm(b.steps, r.nudBracketClosesTail[a.index]!, false)}`;
+      }
+      case 'seq': {
+        const f = r.nudSeqFirst[a.index] ?? null;
+        const body = seqArm(r.nudSeqs[a.index]!, r.nudSeqClosesTail[a.index]!, false);
+        return isGuardable(f) ? `        if ${firstCond(f, 't', ids)} ${body}` : `        ${body}`;
+      }
+      case 'capped': {
+        const c = r.nudCapped[a.index]!;
+        const f = r.nudCappedFirst[a.index] ?? null;
+        return `        if min_bp < ${c.capBp}${isGuardable(f) ? ` && ${firstCond(f, 't', ids)}` : ''} ${seqArm(c.steps, false, true)}`;
+      }
+      case 'prefix':
+        // An operand that parses but is not the target the operator requires fails the whole
+        // Pratt call, whatever another arm matched.
+        return `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
+            self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
+            match self.${r.name}_bp(pbp) {
+                Some(_) if ptgt && self.form != 0 => { self.pos = save; ${lost} self.capped = false; return None; }
+                Some(operand) if self.pos > best_pos => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won('pform', true, false)} }
+                _ => { ${lost} }
+            }
+            self.pos = save;
         }`;
-  })();
+    }
+  };
   const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
     const parts: string[] = [];
     if (accessTail) parts.push('!tail_closed');
@@ -938,7 +973,6 @@ ${groups.map((g) => `                ${g.key} => { if !tail_closed { let sb = se
     fn ${r.name}_bin(op: u16) -> Option<(i64, i64, bool, bool)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
     fn ${r.name}_pre(op: u16) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
     fn ${r.name}_post(op: u16) -> Option<(i64, bool)> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }
-    fn ${r.name}_atom(kid: u16) -> bool { matches!(kid, ${atomArm || '0'}) }
     fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
         let mut left = self.${r.name}_nud(min_bp)?;
         let mut form = self.form;
@@ -968,31 +1002,16 @@ ${postfixTokMatch}
     fn ${r.name}_nud(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
         self.capped = false;
         let t = self.peek()?;
-${r.nudCapped.map((c) => `        if min_bp < ${c.capBp} { let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint(); if ${c.steps.length ? c.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { self.capped = true; self.form = 0; return Some(self.finish(${rid}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); }`).join('\n')}
-        let (mut pf, mut pt) = (0u8, false);
-        let r = self.${r.name}_nud_rest(t, &mut pf, &mut pt);
-        self.capped = false;
-        self.form = pf;
-        self.tail = pt;
-        r
-    }
-    fn ${r.name}_nud_rest(&mut self, t: Tok, pf: &mut u8, pt: &mut bool) -> Option<Spanned<B::H>> {
-${tplNud}        if Self::${r.name}_atom(t.kid) {
-            let sb = self.scratch.len(); let ts = self.pos;
-            self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1;
-            return Some(self.finish(${rid}, sb, t.off as usize, ts));
-        }
-${bracketNudMatch}
-        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
-            let save = self.pos; let sb = self.scratch.len(); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
-            match self.${r.name}_bp(pbp) {
-                Some(_) if ptgt && self.form != 0 => { self.pos = save; self.scratch.truncate(sb); return None; }
-                Some(operand) => { *pf = pform; *pt = true; if operand.present { self.scratch.push(operand.h); } return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
-                None => { self.pos = save; self.scratch.truncate(sb); return None; }
-            }
-        }
-${r.nudSeqs.map((seq, si) => `        { let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint(); if ${seq.length ? seq.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'} { ${r.nudSeqClosesTail[si] ? '*pt = true; ' : ''}return Some(self.finish(${rid}, sb, self.off_at(save), save)); } self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); }`).join('\n')}
-        None
+        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
+        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;
+        let (mut bf, mut bt, mut bc) = (0u8, false, false);
+${r.nudOrder.map(nudArm).join('\n')}
+        // A sub-parse may leave self.capped set: only a capped arm that won makes THIS node capped.
+        self.capped = bc;
+        self.form = bf;
+        self.tail = bt;
+        self.pos = best_pos;
+        best
     }`;
 }
 
@@ -3114,6 +3133,55 @@ function emitRustRdMethod(
         }`;
   };
 
+  // parse_ast_<rule> chooses among the alternatives as parse_<rule> does: longest match in
+  // declaration order (emit-portable.ts, RdRule). Each alternative is `parse_ast_<rule>_alt(i)`;
+  // one that ends past the best so far becomes the best, any other is rolled back. An
+  // alternative's events are already in the stream when it returns, so when a later one
+  // SUPERSEDES an earlier best both are rolled back and the later one is built again from the
+  // clean state — the stream then holds the winner's events only.
+  const rdMethod = (tries: Array<{ altIdx: number; finish: string }>): string => {
+    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
+    const peek = needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : '';
+    if (rule.predictive || tries.length <= 1) {   // at most one alternative can match: nothing to choose
+      return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        ${peek}${tryAlts(tries)}
+        None
+    }`;
+    }
+    const ordered = [...tries].sort((x, y) => x.altIdx - y.altIdx);
+    const select = ordered.map((t) => `{
+            match self.parse_ast_${rule.name}_alt(${t.altIdx}) {
+                Some(_v) if self.pos > _best_pos => {
+                    let _end = self.pos;
+                    let _v = if _best.is_some() {
+                        self.shape_restore(_sel_ck0);
+                        match self.parse_ast_${rule.name}_alt(${t.altIdx}) { Some(v) => v, None => unreachable!("shape: a superseding alternative of ${rule.name} did not match again") }
+                    } else { _v };
+                    _best = Some(_v); _best_pos = _end; _sel_ck = self.shape_ck();
+                }
+                Some(_) => { self.shape_restore(_sel_ck); }
+                None => {}
+            }
+            self.pos = _sel_sp;
+        }`).join('\n        ');
+    return `    fn parse_ast_${rule.name}_alt(&mut self, _alt: usize) -> Option<${ret}> {
+        ${peek}match _alt {
+            ${ordered.map((t) => `${t.altIdx} => ${tryAlt(t.altIdx, t.finish, true)}`).join('\n            ')}
+            _ => {}
+        }
+        None
+    }
+    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
+        let _sel_sp = self.pos;
+        let _sel_ck0 = self.shape_ck();
+        let mut _sel_ck = _sel_ck0;
+        let mut _best: Option<${ret}> = None; let mut _best_pos = _sel_sp;
+        ${select}
+        self.pos = _best_pos;
+        _best
+    }`;
+  };
+
   if (sir.shape.kind === 'drop') {
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let sp = self.pos;
@@ -3136,11 +3204,7 @@ function emitRustRdMethod(
         folds: shape.folds,
       })} { SVal::Null => None, v => Some(v) }`,
     }));
-    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
-    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tryAlts(tries)}
-        None
-    }`;
+    return rdMethod(tries);
   }
   if (sir.shape.kind === 'inline') {
     return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
@@ -3177,11 +3241,7 @@ function emitRustRdMethod(
       altIdx: ai,
       finish: `Some(${rustStreamFinish(J(rule.cstName), '__SPOFF__', 'self.last_end(__SPOFF__)')})`,
     }));
-    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
-    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tryAlts(tries)}
-        None
-    }`;
+    return rdMethod(tries);
   }
   if (sir.shape.kind === 'choice') {
     const shape = sir.shape;
@@ -3213,11 +3273,7 @@ function emitRustRdMethod(
         armBlocks.push({ altIdx, finish });
       }
     }
-    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
-    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tryAlts(armBlocks)}
-        None
-    }`;
+    return rdMethod(armBlocks);
   }
   if (sir.shape.kind === 'node') {
     const node = sir.shape;
@@ -3238,11 +3294,7 @@ function emitRustRdMethod(
       altIdx: ai,
       finish: `Some(${finishNode(node, '__SK__', '__SPOFF__')})`,
     }));
-    const needPeek = rule.alts.some((_, i) => isGuardable(rule.altFirst[i] ?? null, rule.alts.length));
-    return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
-        ${needPeek && !rule.predictive ? 'let _ft = self.toks.get(self.pos).copied();\n        ' : ''}${tryAlts(tries)}
-        None
-    }`;
+    return rdMethod(tries);
   }
   return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let _ = self;
@@ -3366,54 +3418,38 @@ function emitRustPrattMethod(
     }
 `).join('');
 
-  // ── atom ──
-  let atomCode = '';
-  const atomKids = rule.nudToks.map((k) => kidOf(ids, k));
-  if (ps.atom?.kind === 'rule') {
-    atomCode = `if let Some(t) = self.toks.get(self.pos) {
-            if matches!(t.kid, ${atomKids.join(' | ') || 'u16::MAX'}) {
-                return self.parse_ast_${ps.atom.name}();
-            }
-        }`;
-  } else if (ps.atom?.kind === 'custom') {
-    const arms = rule.nudToks.map((tok) => {
-      const policy = leaves[tok] ?? { action: 'keep' as const };
-      return `if t.kid == ${kidOf(ids, tok)} { ${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')} }`;
-    }).join(' else ');
-    atomCode = `if let Some(t) = self.toks.get(self.pos).copied() {
-            if matches!(t.kid, ${atomKids.join(' | ') || 'u16::MAX'}) {
+  // ── atom: one arm per atom token (its place in PrattRule.nudOrder) ──
+  const atomArmOf = (tok: string): string => {
+    const k = kidOf(ids, tok);
+    const policy = leaves[tok] ?? { action: 'keep' as const };
+    if (ps.atom?.kind === 'rule') {
+      return `if self.peek_kid() == Some(${k}) { return self.parse_ast_${ps.atom.name}(); }`;
+    }
+    if (ps.atom?.kind === 'custom') {
+      return `if let Some(t) = self.toks.get(self.pos).copied() {
+            if t.kid == ${k} {
                 let sp_off = t.off as usize;
-                let _leaf = ${arms} else { SVal::Null };
+                let _leaf = ${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')};
                 self.pos += 1;
                 return Some(${customCall(ps.atom.fn, '&[_leaf]', '[]', 'sp_off', 't.end as usize', undefined, undefined, ps.atom.folds)});
             }
         }`;
-  } else if (!ps.atom || ps.atom.kind === 'keep' || (ps.atom as { kind: string }).kind === 'leafValue' || ps.atom.kind === undefined) {
-    if (rule.nudToks.length > 0) {
-      const arms = rule.nudToks.map((tok) => {
-        const policy = leaves[tok] ?? { action: 'keep' as const };
-        if (tpl && tok === tpl.token && templateSlot) {
-          return `${kidOf(ids, tok)} => {
-                let leaf = ${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')};
+    }
+    if (!ps.atom || ps.atom.kind === 'keep' || (ps.atom as { kind: string }).kind === 'leafValue' || ps.atom.kind === undefined) {
+      const body = tpl && tok === tpl.token && templateSlot
+        ? `let leaf = ${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')};
                 self.pos += 1;
-                return Some(${templateFinish('&[leaf]', 't.off as usize', 't.end as usize')});
-            }`;
-        }
-        return `${kidOf(ids, tok)} => {
-                self.pos += 1;
-                return Some(${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')});
-            }`;
-      }).join('\n            ');
-      atomCode = `if let Some(t) = self.toks.get(self.pos).copied() {
-            if matches!(t.kid, ${atomKids.join(' | ')}) {
-                match t.kid {
-                    ${arms}
-                    _ => {}
-                }
+                return Some(${templateFinish('&[leaf]', 't.off as usize', 't.end as usize')});`
+        : `self.pos += 1;
+                return Some(${rustShapeLeafAstExpr(policy, 't.off', 't.end - t.off')});`;
+      return `if let Some(t) = self.toks.get(self.pos).copied() {
+            if t.kid == ${k} {
+                ${body}
             }
         }`;
     }
-  }
+    return '';
+  };
 
   // ── template NUD ──
   const tplNudCode = hasTplNud
@@ -3427,12 +3463,11 @@ function emitRustPrattMethod(
     : '';
 
   // ── group (lid-grouped; RD steps; custom slot reserved but inventory fail-fast) ──
-  let groupCode = '';
+  let bracketArms: string[] = [];
   const groupSlot = slotOf(ps.group as { kind: string } | undefined, rule.nudBrackets.length > 0);
   if (groupSlot && rule.nudBrackets.length) {
-    const groups = groupByPreserveOrder(rule.nudBrackets, (b) => lidOf(ids, b.first));
-    for (const g of groups) {
-      const armBlocks = g.members.map(({ item: b, index: bi }) => {
+    {
+      bracketArms = rule.nudBrackets.map((b, bi) => {
         const st = emptySteps(b.steps);
         let finish: string;
         if (groupSlot.kind === 'inline') {
@@ -3445,7 +3480,7 @@ function emitRustPrattMethod(
         } else {
           finish = `return Some(${keepFinish('_sk_base', rule.cstName, 'save_off')});`;
         }
-        return `{
+        return `if self.peek_lid() == Some(${lidOf(ids, b.first)}) {
             let save = self.pos;
             let save_off = self.current_off();
             let _sk_base = self.vals.len();
@@ -3457,10 +3492,7 @@ function emitRustPrattMethod(
             }
             self.pos = save;
         }`;
-      }).join('\n            ');
-      groupCode += `if self.peek_lid() == Some(${g.key}) {
-            ${armBlocks}
-        }\n        `;
+      });
     }
   }
 
@@ -3478,7 +3510,8 @@ function emitRustPrattMethod(
             self.pos += 1;
             let _argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
                 Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
-                _ => { self.pos = save; return None; }
+                Some(_) => { *hard = true; self.pos = save; return None; }
+                None => { self.pos = save; return None; }
             };
             *pf = ${prefix.form}; *pt = true;
             let _ab = self.vals.len();
@@ -3494,7 +3527,8 @@ function emitRustPrattMethod(
             self.pos += 1;
             let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
                 Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
-                _ => { self.pos = save; return None; }
+                Some(_) => { *hard = true; self.pos = save; return None; }
+                None => { self.pos = save; return None; }
             };
             *pf = ${prefix.form}; *pt = true;
             return Some(${customCall(psCustom.fn, '&[argument]', '[]', '_off', 'self.last_end(_off)', undefined, '_op', psCustom.folds)});
@@ -3505,7 +3539,8 @@ function emitRustPrattMethod(
             self.pos += 1;
             match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
                 Some(v) if !${prefix.requireTarget} || self.form == 0 => { *pf = ${prefix.form}; *pt = true; return Some(v); }
-                _ => { self.pos = save; return None; }
+                Some(_) => { *hard = true; self.pos = save; return None; }
+                None => { self.pos = save; return None; }
             }
         }\n        `;
       } else {
@@ -3515,7 +3550,8 @@ function emitRustPrattMethod(
             self.pos += 1;
             let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
                 Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
-                _ => { self.pos = save; return None; }
+                Some(_) => { *hard = true; self.pos = save; return None; }
+                None => { self.pos = save; return None; }
             };
             *pf = ${prefix.form}; *pt = true;
             let _ab = self.vals.len();
@@ -3528,10 +3564,10 @@ function emitRustPrattMethod(
   }
 
   // ── nudSeq ──
-  let nudSeqCode = '';
+  let seqArms: string[] = [];
   const nudSeqSlot = slotOf(ps.nudSeq as { kind: string } | undefined, rule.nudSeqs.length > 0);
   if (nudSeqSlot && rule.nudSeqs.length) {
-    nudSeqCode = rule.nudSeqs.map((seq, si) => {
+    seqArms = rule.nudSeqs.map((seq, si) => {
       const st = emptySteps(seq, true);
       let finish: string;
       if (nudSeqSlot.kind === 'custom') {
@@ -3558,25 +3594,25 @@ function emitRustPrattMethod(
             }
             self.pos = save;
         }`;
-    }).join('\n        ');
+    });
   }
 
   // ── nudCapped ──
-  let nudCappedCode = '';
+  let cappedArms: string[] = [];
   const nudCappedSlot = slotOf(ps.nudCapped as { kind: string } | undefined, rule.nudCapped.length > 0);
   if (nudCappedSlot && rule.nudCapped.length) {
-    nudCappedCode = rule.nudCapped.map((c, ci) => {
+    cappedArms = rule.nudCapped.map((c, ci) => {
       const st = emptySteps(c.steps, true);
       let finish: string;
       if (nudCappedSlot.kind === 'custom') {
         const nc = nudCappedSlot as CustomShape;
-        finish = `self.capped = true; self.form = 0; return Some(${customCall(nc.fn, '_sk_base', `[${ci}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, nc.folds)});`;
+        finish = `*pc = true; return Some(${customCall(nc.fn, '_sk_base', `[${ci}]`, 'save_off', 'self.last_end(save_off)', undefined, undefined, nc.folds)});`;
       } else if (nudCappedSlot.kind === 'node') {
-        finish = `self.capped = true; self.form = 0; return Some(${nodeFinish(rustShapeNodeObjectExpr(nudCappedSlot as NodeShape, '_sk_base', '(0u32, 0u32)', shapeIR.spans, 'save_off', 'self.last_end(save_off)', undefined), '_sk_base')});`;
+        finish = `*pc = true; return Some(${nodeFinish(rustShapeNodeObjectExpr(nudCappedSlot as NodeShape, '_sk_base', '(0u32, 0u32)', shapeIR.spans, 'save_off', 'self.last_end(save_off)', undefined), '_sk_base')});`;
       } else if (nudCappedSlot.kind === 'inline') {
-        finish = `self.capped = true; self.form = 0; ${inlineFinishReturn('_sk_base')}`;
+        finish = `*pc = true; ${inlineFinishReturn('_sk_base')}`;
       } else {
-        finish = `self.capped = true; self.form = 0; return Some(${keepFinish('_sk_base', rule.cstName, 'save_off')});`;
+        finish = `*pc = true; return Some(${keepFinish('_sk_base', rule.cstName, 'save_off')});`;
       }
       return `if min_bp < ${c.capBp} {
             let save = self.pos;
@@ -3592,8 +3628,89 @@ function emitRustPrattMethod(
             }
             self.pos = save;
         }`;
-    }).join('\n        ');
+    });
   }
+
+  // ── NUD selection ──
+  // Longest match over the arms (emit-portable.ts, PrattRule.nudOrder), as the CST parser does:
+  // the arm that ends farthest wins, the earliest-declared one on a tie. Each arm is
+  // `parse_ast_<rule>_nud_arm(i, ..)`, `i` its declaration index; it returns its value when it
+  // matches. One that beats the best so far becomes the best; any other is rolled back.
+  // An arm's events are already in the stream when it returns, so when an arm SUPERSEDES a best
+  // found before it both are rolled back and the arm is built again from the clean state. That
+  // rebuild is why the arms are TRIED capped first, then atoms, brackets, sequences and the
+  // prefix arm (the comparison carries the declaration index, so the order tried cannot change
+  // the winner): the forms that usually end farthest come first and are rarely superseded.
+  // `hard` is the prefix arm's "operand is not the target the operator requires": the whole
+  // Pratt call fails.
+  const nudArmCode = (a: NudRef): { guard: string; code: string } => {
+    switch (a.kind) {
+      case 'tok': {
+        const tok = rule.nudToks[a.index]!;
+        const isTpl = !!(tpl && tok === tpl.token);
+        const kinds = [kidOf(ids, tok), ...(isTpl && hasTplNud ? [kidOf(ids, '$templateHead')] : [])];
+        return { guard: `matches!(t.kid, ${kinds.join(' | ')})`, code: [atomArmOf(tok), isTpl ? tplNudCode : ''].filter(Boolean).join('\n        ') };
+      }
+      case 'bracket': return { guard: `t.lid == ${lidOf(ids, rule.nudBrackets[a.index]!.first)}`, code: bracketArms[a.index] ?? '' };
+      case 'seq': {
+        const f = rule.nudSeqFirst[a.index] ?? null;
+        return { guard: isGuardable(f) ? firstCond(f, 't', ids) : 'true', code: seqArms[a.index] ?? '' };
+      }
+      case 'capped': {
+        const f = rule.nudCappedFirst[a.index] ?? null;
+        return { guard: `min_bp < ${rule.nudCapped[a.index]!.capBp}${isGuardable(f) ? ` && ${firstCond(f, 't', ids)}` : ''}`, code: cappedArms[a.index] ?? '' };
+      }
+      case 'prefix': return { guard: rule.prefix.length ? `matches!(t.lid, ${rule.prefix.map((p) => lidOf(ids, p.op)).join(' | ')})` : 'false', code: prefixCode };
+    }
+  };
+  const nudArms = rule.nudOrder.map(nudArmCode).map((x, i) => ({ ...x, i })).filter((x) => x.code.trim() !== '');
+  const tryRank = { capped: 0, tok: 1, bracket: 2, seq: 3, prefix: 4 };
+  const nudTried = [...nudArms].sort((x, y) => tryRank[rule.nudOrder[x.i]!.kind] - tryRank[rule.nudOrder[y.i]!.kind] || x.i - y.i);
+  const nudSelect = nudTried.map(({ guard, i }) => `if ${guard} {
+            let (mut pf, mut pt, mut pc, mut hard) = (0u8, false, false, false);
+            let _r = self.parse_ast_${rule.name}_nud_arm(${i}, min_bp, &mut pf, &mut pt, &mut pc, &mut hard);
+            if hard { self.shape_restore(_sel_ck0); self.capped = false; return None; }
+            match _r {
+                Some(_v) if self.pos > _best_pos || (self.pos == _best_pos && _best.is_some() && ${i} < _best_arm) => {
+                    let _end = self.pos;
+                    let _v = if _best.is_some() {
+                        self.shape_restore(_sel_ck0);
+                        match self.parse_ast_${rule.name}_nud_arm(${i}, min_bp, &mut pf, &mut pt, &mut pc, &mut hard) { Some(v) => v, None => unreachable!("shape: a superseding NUD arm of ${rule.name} did not match again") }
+                    } else { _v };
+                    _best = Some(_v); _best_pos = _end; _best_arm = ${i}; bf = pf; bt = pt; bc = pc; _sel_ck = self.shape_ck();
+                }
+                Some(_) => { self.shape_restore(_sel_ck); }
+                None => {}
+            }
+            self.pos = _sel_sp;
+        }`).join('\n        ');
+  const nudFns = `    fn parse_ast_${rule.name}_nud(&mut self, min_bp: i64) -> Option<${ret}> {
+        self.capped = false;
+        let t = match self.toks.get(self.pos).copied() { Some(t) => t, None => return None };
+        let _ = (min_bp, &t);
+        let _sel_sp = self.pos;
+        let _sel_ck0 = self.shape_ck();
+        let mut _sel_ck = _sel_ck0;
+        let mut _best: Option<${ret}> = None; let mut _best_pos = _sel_sp; let mut _best_arm = usize::MAX;
+        let (mut bf, mut bt, mut bc) = (0u8, false, false);
+        ${nudSelect}
+        // A sub-parse may leave self.capped set: only a capped arm that won makes THIS node capped.
+        self.pos = _best_pos;
+        self.capped = bc;
+        self.form = bf;
+        self.tail = bt;
+        _best
+    }
+    fn parse_ast_${rule.name}_nud_arm(&mut self, _arm: usize, min_bp: i64, pf: &mut u8, pt: &mut bool, pc: &mut bool, hard: &mut bool) -> Option<${ret}> {
+        let _ = (min_bp, &pf, &pt, &pc, &hard);
+        match _arm {
+            ${nudArms.map(({ code, i }) => `${i} => {
+        ${code}
+            }`).join('\n            ')}
+            _ => {}
+        }
+        None
+    }`;
 
   // ── binary ──
   let binaryBody = '';
@@ -3950,27 +4067,8 @@ function emitRustPrattMethod(
         self.form = form;
         Some(left)
     }
-    fn parse_ast_${rule.name}_nud(&mut self, min_bp: i64) -> Option<${ret}> {
-        self.capped = false;
-        ${nudCappedCode}
-        // Non-capped path in nud_rest; clear capped afterwards so a nested arrow
-        // inside grouping does not suppress the enclosing LED/binary loop (≡ TS/CST).
-        let (mut pf, mut pt) = (0u8, false);
-        let _r = self.parse_ast_${rule.name}_nud_rest(min_bp, &mut pf, &mut pt);
-        self.capped = false;
-        self.form = pf;
-        self.tail = pt;
-        _r
-    }
-    fn parse_ast_${rule.name}_nud_rest(&mut self, min_bp: i64, pf: &mut u8, pt: &mut bool) -> Option<${ret}> {
-        let _ = (min_bp, &pf, &pt);
-        ${tplNudCode}
-        ${atomCode}
-        ${groupCode}
-        ${nudSeqCode}
-        ${prefixCode}
-        None
-    }`;
+${nudFns}
+`;
 }
 
 function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: string; construct: string }> {
@@ -5140,6 +5238,34 @@ fn main() {
         let t = std::time::Instant::now();
         for _ in 0..iters { let s = std::hint::black_box(&src); if let Some((p, r)) = parse(s) { std::hint::black_box((&p.b.nodes[r as usize], p.pos)); } }
         println!("{:.4}", t.elapsed().as_secs_f64() * 1000.0 / iters as f64);
+        return;
+    }
+    // batch: NUL-separated inputs in, one line per input out — the CST JSON, "-" for an input
+    // the parser rejects, or "!" and the message for one that panicked (a lexer error panics).
+    // One process start for a whole corpus.
+    if args.get(1).map(|a| a.as_str()) == Some("batch") {
+        std::panic::set_hook(Box::new(|_| {}));
+        let mut out = String::new();
+        for s in src.split('\\0') {
+            let line = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut one = String::new();
+                match parse(s) {
+                    Some((p, root)) => write_json(&p, root, &mut one),
+                    None => one.push('-'),
+                }
+                one
+            }));
+            match line {
+                Ok(l) => out.push_str(&l),
+                Err(e) => {
+                    out.push('!');
+                    if let Some(m) = e.downcast_ref::<String>() { out.push_str(&m.replace('\\n', " ")); }
+                    else if let Some(m) = e.downcast_ref::<&str>() { out.push_str(&m.replace('\\n', " ")); }
+                }
+            }
+            out.push('\\n');
+        }
+        print!("{}", out);
         return;
     }
     if args.get(1).map(|a| a.as_str()) == Some("tok-spans") {
