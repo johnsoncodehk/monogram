@@ -225,7 +225,7 @@ export function scannedTokens(ir: ParserIR): LexTok[] {
 
 export function lexScanFamily(ir: ParserIR): { sets: CharSet[]; fns: Fn[] } {
   const b = new LexScan();
-  for (const t of scannedTokens(ir)) b.fns.push(b.scanner(t));
+  for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t), inline: true });
   return { sets: b.sets, fns: b.fns };
 }
 

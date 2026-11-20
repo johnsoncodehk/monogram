@@ -75,7 +75,9 @@ export type Stmt =
   | { k: 'comment'; text: string };
 
 export interface Param { name: string; ty: Ty }
-export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[] }
+// `inline`: called once per token from a lexer's dispatch loop; a lowering may ask its compiler
+// to inline it. Printing hint only.
+export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[]; inline?: boolean }
 export type CodeRange = [number, number];
 export interface CharSet { name: string; ranges: CodeRange[] }
 
@@ -144,7 +146,7 @@ export interface Lowering {
     while(c: string, body: Lines): Lines;
     break(): Lines;
     return(vals: string[]): Lines;
-    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines }): string;
+    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines; inline: boolean }): string;
   };
   // The token-stream constructs (metas, tokens, edits, lists) the relex family is written in.
   relex?: RelexLowering;
@@ -439,6 +441,7 @@ class Printer implements Cx {
       rets: f.ret.map((t) => this.type(t, 'ret')),
       doc: f.doc.split('\n'),
       body: this.block(f.body, 1),
+      inline: f.inline === true,
     });
   }
 }

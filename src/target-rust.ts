@@ -4820,6 +4820,7 @@ const rustLowering: Lowering = {
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `(${vals.join(', ')})`};`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
+      ...(f.inline ? ['#[inline(always)]'] : []),
       `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...rsBlock(f.body),
       '}',
