@@ -403,6 +403,10 @@ class Emitter {
   private id() { return `_t${this.tmp++}`; }
 
   emit(line = '') { this.buf.push(line); }
+  // The lines emitted since `from` (a previous `lineCount`) — for an emitter that checks what
+  // it just wrote.
+  get lineCount() { return this.buf.length; }
+  linesSince(from: number): string[] { return this.buf.slice(from); }
   // The compound-matcher helpers are function declarations (hoisted), but they must sit
   // BELOW the module's import statements. The header emits a `${HELPERS}` sentinel right
   // after the imports/tables; we splice the collected helpers there.
@@ -1970,8 +1974,16 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   meta.notLeftLeaf.forEach((words, i) => {
     if (words) e.emit(`const _NLL_${sn}_${i} = new Set<string>(${J(words)});`);
   });
+  // A failed parse leaves pos AND the scratch stack where it started — the contract every
+  // caller that goes on after a failure reads (the `?`/`sep` matchers and the single-leaf
+  // helpers restore nothing themselves, the memo stores the end position, recovery mints its
+  // $missing at pos). The function has ONE failing exit that keeps it: every failure inside
+  // — no NUD, or an operator check refusing an operand whose tokens were already read —
+  // leaves the `_fail` block, and nothing in it returns -1 (checked below).
+  const coreFrom = e.lineCount;
   e.emit(`function ${ruleFn}_pratt(minBp: number) {`);
   e.emit(`  const saved = pos; const mark = scn;`);
+  e.emit(`  _fail: {`);
   e.emit(`  let lhs = -1; let bestNudPos = saved; let nudClosed = false;`);
   // `capped` becomes true iff the winning NUD is a capped (assignment-level) expression —
   // an ArrowFunction. Such a NUD admits no led, so the led loop is skipped entirely.
@@ -2001,7 +2013,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       // (`++-x`, `++ ++x`, `++x--`, `++await x` are syntax errors). Fail hard like
       // noUnaryLhs. A recovery-synthesized $missing operand has no children, so
       // _notTarget returns false → recovery is not falsely rejected.
-      e.emit(`        if (rhs >= 0 && info.requireTarget && _notTarget(rhs)) return -1;`);
+      e.emit(`        if (rhs >= 0 && info.requireTarget && _notTarget(rhs)) break _fail;`);
       e.emit(`        if (rhs >= 0 && pos > bestNudPos) { scPush(rhs); lhs = finishNode(${rid}, mark); bestNudPos = pos; nudClosed = true; }`);
       e.emit(`      }`);
       e.emit(`    }`);
@@ -2018,7 +2030,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     e.emit(`  }`);
   });
   e.emit(`  scn = mark;`);
-  e.emit(`  if (lhs < 0) { pos = saved; return -1; }`);
+  e.emit(`  if (lhs < 0) break _fail;`);
   e.emit(`  pos = bestNudPos;`);
   // A capped NUD (assignment-level arrow) admits no led: return it as-is so a trailing
   // tighter operator stays unconsumed and the enclosing parse rejects (`() => {} || a`).
@@ -2085,7 +2097,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // A target-requiring postfix (`++`/`--`) may not apply to a unary/update operand
   // (`++x++`, `x++ ++`): its operand must be a LeftHandSideExpression. Fail hard (like
   // noUnaryLhs), so the expression can't reparse some other way.
-  e.emit(`          if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) return -1;`);
+  e.emit(`          if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) break _fail;`);
   e.emit(`          scPush(~((pos << 2) | 2));`);
   e.emit(`          if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
   e.emit(`          lhs = finishWrap(${rid}, lhs, ledMark);`);
@@ -2094,13 +2106,13 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`      } else {`);
   // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
   // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Like noUnaryLhs, fail hard.
-  e.emit(`        if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) return -1;`);
+  e.emit(`        if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) break _fail;`);
   e.emit(`        if (NOUNARY_T[opT] !== 0 && rowCount[lhs] > 0) {`);
   e.emit(`          const _h = kids[rowStart[lhs]];`);
   e.emit(`          if (_h < 0 && ((~_h) & 3) === 2) {`);
   e.emit(`            const _ht = absTok[lhs] + ((~_h) >>> 2);`);
   e.emit(`            const _htext = docText(toff(_ht), tend(_ht));`);
-  e.emit(`            if (prefixOps.has(_htext) && !postfixOpValues.has(_htext)) { return -1; }`);
+  e.emit(`            if (prefixOps.has(_htext) && !postfixOpValues.has(_htext)) break _fail;`);
   e.emit(`          }`);
   e.emit(`        }`);
   e.emit(`        scPush(~((pos << 2) | 2));`);
@@ -2128,6 +2140,11 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // capped returns above make THIS node capped.
   if (anyCapped) e.emit(`  _prattCapped = false;`);
   e.emit(`  return lhs;`);
+  e.emit(`  }`);
+  if (e.linesSince(coreFrom).some(l => /\breturn -1\b/.test(l))) {
+    throw new Error(`emit-parser: ${ruleFn}_pratt fails outside its one restoring exit (use 'break _fail')`);
+  }
+  e.emit(`  pos = saved; scn = mark; return -1;`);
   e.emit(`}`);
 
   // NUD arm matchers (skip prefix nuds — handled inline above).

@@ -684,8 +684,18 @@ export function createParser(grammar: CstGrammar) {
       return source.slice(cur.offset, cur.end);
     };
 
-    // Pratt parser for rules with op/prefix/postfix
+    // Pratt parser for rules with op/prefix/postfix.
+    // A failed parse leaves the position where it started — the contract every caller that
+    // goes on after a failure reads (`?`, a `sep` element, the packrat memo). It is kept HERE,
+    // once, for every way `prattCore` fails: an operator check refuses its operand after the
+    // operand's tokens were read, and nothing below has to remember to step back.
     function parsePratt(rule: RuleDecl, minBp: number): CstNode | null {
+      const saved = pos;
+      const node = prattCore(rule, minBp);
+      if (node === null) pos = saved;
+      return node;
+    }
+    function prattCore(rule: RuleDecl, minBp: number): CstNode | null {
       const { nuds, leds, postfixSameLine } = prattClassified.get(rule.name)!;
       const saved = pos;
       _prattCapped = false;   // reset; set true only on a capped (arrow) return
@@ -745,9 +755,8 @@ export function createParser(grammar: CstGrammar) {
           capped = capBp !== null;   // the LONGEST match wins; record whether it is capped
         }
       }
-      if (lhs) pos = bestNudPos;
-
-      if (!lhs) { pos = saved; return null; }
+      if (!lhs) return null;
+      pos = bestNudPos;
 
       // A capped NUD (assignment-level arrow) admits no led: return it as-is so a trailing
       // tighter operator stays unconsumed and the enclosing parse rejects (`() => {} || a`).

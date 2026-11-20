@@ -245,7 +245,10 @@ const CASES: Case[] = [
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
-      'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;'],
+      'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
+      // … wherever the expression is optional or repeated: a refused operand is not skipped.
+      'a = [++ ++y];', '[++-x];', '[++x++];', 'a = [1, ++-x];', 'f(++ ++y);', 'f(a, ++ ++y);', 'new A(++ ++y);',
+      '[x++ ++];', 'f(a, x++ --);', '[-x = 1];', 'f(a + b = 1);', '[-x ** 2];', 'f(a, typeof x ** 2);', 'x = { a: ++ ++y };'],
   },
   {
     // The real typescript.ts grammar — the second, most complex full language proving the
@@ -308,6 +311,9 @@ const CASES: Case[] = [
       // Only an access tail extends an access tail.
       'a = x++.y;', '-B<C>.d;', 'x as T (1);', 'x = B<C>.d;', 'x = B<C>?.d;',
       'x = B<C> < 1;', 'x = B<C> >= 1;', 'x = B<C>!;', 'x = B<C> /re/;',
+      // A refused operand is not skipped where the expression is optional or repeated.
+      'a = [++ ++y];', '[++-x];', '[++x++];', 'a = [1, ++-x];', 'f(++ ++y);', 'f(a, ++ ++y);', 'new A(++ ++y);', 'f<T>(++ ++y);',
+      '[x++ ++];', 'f(a, x++ --);', '[-x = 1];', 'f(a + b = 1);', '[-x ** 2];', 'f(a, typeof x ** 2);', 'x = { a: ++ ++y };', 'class C { p = ++ ++y }',
       'a > > b;', 'a >> = b;', 'a >\n= b;', 'a >>>>= b;',
       // Once a word is the member's name, nothing but the member's own tail may follow it.
       'class C { static static x; }', 'class C { public static<T> x; }', 'class C { public static?!: T; }', 'class C { public static x y; }', 'class C { public static = ; }',
