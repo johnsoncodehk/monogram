@@ -233,30 +233,24 @@ fn main() {
 `;
 
 /** M-A1.4-S5: streaming-only typescript harness — batch (stream + rebuild) |
- *  cst | ast(stream). The tree-era fail-loud mode (TsEstreeCustoms/ast_custom/
- *  FN_* consts) was deleted with tree mode. */
+ *  large (CST and stream accept on one large document). The tree-era fail-loud
+ *  mode (TsEstreeCustoms/ast_custom/FN_* consts) was deleted with tree mode. */
 const tsCustomsHarness = `
 fn main() {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "batch".to_owned());
-    if mode == "cst" || mode == "ast" {
+    if std::env::args().nth(1).as_deref() == Some("large") {
         let mut raw = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw).unwrap();
-        let is_cst = mode == "cst";
-        let t0 = std::time::Instant::now();
         std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
-                if is_cst {
-                    let _ = parse(&raw);
-                } else {
-                    let mut buf = Vec::new();
-                    let _ = parse_stream_buf(&raw, &mut buf, |_| true);
-                }
+                let cst_ok = parse(&raw).is_some();
+                let mut buf = Vec::new();
+                let stream_ok = parse_stream_buf(&raw, &mut buf, |_| true);
+                println!("cst={} stream={}", cst_ok, stream_ok);
             })
-            .expect("spawn bench thread")
+            .expect("spawn large thread")
             .join()
-            .expect("bench thread join");
-        println!("{:.6}", t0.elapsed().as_secs_f64() * 1000.0);
+            .expect("large thread join");
         return;
     }
     let mut raw = String::new();
@@ -299,7 +293,7 @@ function compileShape(name: string, source: string, main = harness, timeout = 30
   const rustFile = `${TMP}/${name}.rs`;
   const rustBin = `${TMP}/${name}`;
   writeFileSync(rustFile, source + main);
-  execFileSync('rustc', ['-O', '-A', 'warnings', rustFile, '-o', rustBin], {
+  execFileSync('rustc', ['-A', 'warnings', rustFile, '-o', rustBin], {
     stdio: 'pipe',
     timeout,
   });
@@ -433,7 +427,7 @@ async function main(): Promise<void> {
   );
 
   const calcBin = compileShape('calc-shape', generated);
-  check('rustc -O calc shape', true);
+  check('rustc calc shape', true);
 
   const rustLines = runBatch(calcBin, CORPUS);
   check('calc CST parse ≡ Rust parse_ast acceptance', rustLines.length === CORPUS.length, `${CORPUS.length} cases, 0 divergences`);
@@ -478,7 +472,7 @@ async function main(): Promise<void> {
   const toySrc = emitRust(toyGrammar, { shape: toyShape });
   check('toy shape emits (RD + toy-scale Pratt)', toySrc.includes('parse_ast_Transaction') && toySrc.includes('shape_ck'));
   const toyBin = compileShape('toy-shape', toySrc);
-  check('rustc -O toy shape', true);
+  check('rustc toy shape', true);
 
   const toyTsFile = `${TMP}/toy-shape.ts`;
   writeFileSync(toyTsFile, emitTs(toyGrammar, { shape: toyShape }));
@@ -744,7 +738,7 @@ async function main(): Promise<void> {
   const tsInjected = injectTypescriptRustCustoms(tsEmitSrc);
   writeFileSync(`${TMP}/typescript-shape-emit.rs`, tsInjected); // keep for debug; do not print
   const tsBin = compileShape('typescript-shape', tsInjected, tsCustomsHarness, 900_000);
-  check('rustc -O typescript shape (streaming rebuild)', true);
+  check('rustc typescript shape (streaming rebuild)', true);
 
   const tsTsFile = `${TMP}/typescript-shape.ts`;
   writeFileSync(tsTsFile, emitTs(typescriptGrammar, { shape: typescriptShape }));
@@ -858,8 +852,8 @@ async function main(): Promise<void> {
   // consts) was deleted with tree mode — customs are never invoked by the
   // streaming walk, so there is no altPath=[99] dispatch to fail loud on.
 
-  // Perf snapshot (not a gate): ≥4 paired cst vs stream on ≥2MB valid TS source.
-  const benchUnit = [
+  // A ≥2MB valid document: the streaming walk accepts what the CST parser accepts at size.
+  const largeUnit = [
     'const a: number = 1;',
     'function f<T>(x: T): T { return x; }',
     'class C { m() { return 1; } }',
@@ -869,31 +863,10 @@ async function main(): Promise<void> {
     'for (const k of xs) { y(k); }',
     'const t = `a${b}c`;',
   ].join('\n') + '\n';
-  let benchSrc = '';
-  while (Buffer.byteLength(benchSrc) < 2_000_000) benchSrc += benchUnit;
-  writeFileSync(`${TMP}/typescript-bench-2mb.ts`, benchSrc);
-  const ratios: number[] = [];
-  const pairLines: string[] = [];
-  for (let p = 0; p < 4; p++) {
-    const cstMs = Number(execFileSync(tsBin, ['cst'], {
-      input: benchSrc, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 120_000,
-    }).trim());
-    const streamMs = Number(execFileSync(tsBin, ['ast'], {
-      input: benchSrc, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 120_000,
-    }).trim());
-    const ratio = cstMs > 0 ? streamMs / cstMs : NaN;
-    ratios.push(ratio);
-    pairLines.push(`pair${p + 1} cst=${cstMs.toFixed(2)}ms stream=${streamMs.toFixed(2)}ms ratio=${ratio.toFixed(4)}`);
-  }
-  const sorted = [...ratios].sort((a, b) => a - b);
-  const median = sorted.length % 2
-    ? sorted[(sorted.length - 1) >> 1]!
-    : (sorted[sorted.length / 2 - 1]! + sorted[sorted.length / 2]!) / 2;
-  check(
-    'typescript 2MB cst/stream paired timing (≥4 pairs, report)',
-    ratios.length >= 4 && ratios.every((r) => Number.isFinite(r)),
-    `${pairLines.join('; ')}; median_stream/cst=${median.toFixed(4)} (${(Buffer.byteLength(benchSrc) / 1e6).toFixed(2)}MB)`,
-  );
+  const largeSrc = largeUnit.repeat(Math.ceil(2_000_000 / largeUnit.length));
+  const largeOut = execFileSync(tsBin, ['large'], { input: largeSrc, encoding: 'utf8', timeout: 300_000 }).trim();
+  check('typescript 2MB document: CST and streaming walk both accept', largeOut === 'cst=true stream=true',
+    `${largeOut} (${(largeSrc.length / 1e6).toFixed(2)}MB)`);
 
   const total = pass + fail;
   console.log(`shape-rust: ${pass}/${total} checks passed`);
