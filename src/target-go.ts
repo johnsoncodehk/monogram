@@ -13,6 +13,7 @@ import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, ty
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { Target } from './emit.ts';
 import type { TokenPattern, CstGrammar } from './types.ts';
+import { emitRelexFamily } from './relex-family.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
 const rangeCond = (v: string, rs: CharRange[]) =>
@@ -965,449 +966,16 @@ ${r.nudSeqs.map((seq, si) => `\t{ save := p.pos; sb := len(p.scratch); nb := len
 }`;
 }
 
+const goEditBody = '\td.text, d.toks, relexed = relexEdits(oldText, oldToks, edits)';
+
 function docEditBlockGo(ir: ParserIR): string {
-  const windowLex = (!ir.regexCtx && !ir.tpl) || !ir.newlineCfg;
-  const hasNewline = !!(ir.newlineCfg && !ir.regexCtx && !ir.tpl);
-  const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
-  const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
-  const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
   const topReuse = topReusePlan(ir);
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse.kind === 'B' && topReuse.hasHead);
-  const adoptSuffix = `\t\t\t\tfor j := oIdx + 1; j < len(oldToks); j++ {
-\t\t\t\t\tout = append(out, shiftAlign(oldToks[j], delta))
-\t\t\t\t}`;
-  const findTokAtOff = `
-func findTokAtOff(toks []alignMeta, off int) int {
-\tlo, hi := 0, len(toks)-1
-\tfor lo <= hi {
-\t\tmid := (lo + hi) >> 1
-\t\tif int(toks[mid].Off) < off { lo = mid + 1 } else if int(toks[mid].Off) > off { hi = mid - 1 } else { return mid }
-\t}
-\treturn -1
-}`;
-  const reconstructParens = `
-func reconstructParens(toks []alignMeta, text string, b int) []bool {
-\tneed := 0
-\tif b >= 0 { need = int(toks[b].Pd) }
-\tout := make([]bool, 0, need)
-\tfor i := b; i >= 0 && need > 0; i-- {
-\t\tt := toks[i]
-\t\tif amText(text, t) == "(" && int(t.Pd) == need {
-\t\t\tout = append([]bool{amHd(t)}, out...)
-\t\t\tneed--
-\t\t}
-\t}
-\treturn out
-}
-func parenStacksEq(a, b []bool) bool {
-\tif len(a) != len(b) { return false }
-\tfor i := range a { if a[i] != b[i] { return false } }
-\treturn true
-}`;
-  const tplAnchor = `\tmaxIdx := -1
-\tfor i := 0; i < len(oldToks); i++ {
-\t\tif int(oldToks[i].End) < start { maxIdx = i } else { break }
-\t}
-\trb0 := -1
-\tif maxIdx >= 0 { rb0 = maxIdx - 1 }
-\trb := -1
-\tif rb0 >= 0 {
-\t\tfor i := rb0; i < len(oldToks); i++ {
-\t\t\tif int(oldToks[i].End) > start { break }
-\t\t\tif oldToks[i].Td == 0 { rb = i; break }
-\t\t}
-\t}
-\tvar out []alignMeta
-\tif rb >= 0 { out = append(out, oldToks[:rb+1]...) }`;
-  const windowHelpers = windowLex ? (hasNewline ? `
-func findTokAtOffKind(toks []alignMeta, off int, kid uint16) int {
-\tlo, hi := 0, len(toks)-1
-\thit := -1
-\tfor lo <= hi {
-\t\tmid := (lo + hi) >> 1
-\t\tif int(toks[mid].Off) < off { lo = mid + 1 } else if int(toks[mid].Off) > off { hi = mid - 1 } else { hit = mid; break }
-\t}
-\tif hit < 0 { return -1 }
-\tstart := hit
-\tfor start > 0 && int(toks[start-1].Off) == off { start-- }
-\tfor i := start; i < len(toks) && int(toks[i].Off) == off; i++ {
-\t\tif toks[i].Kid == kid { return i }
-\t}
-\treturn -1
-}
-func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
-\tdelta := len(ins) - (end - start)
-\teditEnd := start + len(ins)
-\tmaxIdx := -1
-\tfor i := 0; i < len(oldToks); i++ {
-\t\tif int(oldToks[i].End) < start { maxIdx = i } else { break }
-\t}
-\trb := -1
-\tif maxIdx >= 0 { rb = maxIdx - 1 }
-\tvar out []alignMeta
-\tif rb >= 0 { out = append(out, oldToks[:rb+1]...) }
-\tvar scanOff int
-\tpendingNl := false
-\tvar flowDepth int
-\tif rb >= 0 { scanOff = int(oldToks[rb].End); flowDepth = int(oldToks[rb].Fd); pendingNl = oldToks[rb].Kid == ${kidOf(buildLexIdPlan(ir), ir.newlineCfg!.token)} }
-\tvar scratch []Tok
-\trelexed := 0
-\tfor scanOff < len(newText) {
-\t\tbefore := len(scratch)
-\t\tscanOff, pendingNl, flowDepth = lexFrom(newText, scanOff, pendingNl, flowDepth, &scratch, 1)
-\t\tif len(scratch) == before { break }
-\t\tt := scratch[len(scratch)-1]
-\t\tout = append(out, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, uint16(flowDepth), 0, false, false, false, 0))
-\t\trelexed++
-\t\tif int(t.Off) >= editEnd {
-\t\t\toIdx := findTokAtOffKind(oldToks, int(t.Off)-delta, t.Kid)
-\t\t\tif oIdx >= 0 {
-\t\t\t\to := oldToks[oIdx]
-\t\t\t\tif o.Kid == t.Kid && int(o.End) == int(t.End)-delta && amNl(o) == t.Nl && int(o.Fd) == flowDepth && amText(oldText, o) == newText[t.Off:t.End] {
-${adoptSuffix}
-\t\t\t\t\treturn out, relexed
-\t\t\t\t}
-\t\t\t}
-\t\t}
-\t}
-\treturn out, relexed
-}
-` : rxOnly ? `${findTokAtOff}${reconstructParens}
-func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
-\tdelta := len(ins) - (end - start)
-\teditEnd := start + len(ins)
-\tmaxIdx := -1
-\tfor i := 0; i < len(oldToks); i++ {
-\t\tif int(oldToks[i].End) < start { maxIdx = i } else { break }
-\t}
-\trb := -1
-\tif maxIdx >= 0 { rb = maxIdx - 1 }
-\tvar out []alignMeta
-\tif rb >= 0 { out = append(out, oldToks[:rb+1]...) }
-\tvar scanOff int
-\tpendingNl := false
-\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
-\thasPrev, hasPrev2 := false, false
-\tvar parenHead []bool
-\tlastClose, lastBang := false, false
-\tif rb >= 0 {
-\t\tanchor := oldToks[rb]
-\t\tscanOff = int(anchor.End)
-\t\tprevLid = lidOf(amText(oldText, anchor))
-\t\tprevKid = anchor.Kid
-\t\thasPrev = true
-\t\tif rb >= 1 {
-\t\t\tbpLid = lidOf(amText(oldText, oldToks[rb-1]))
-\t\t\thasPrev2 = true
-\t\t}
-\t\tlastClose = amLc(anchor)
-\t\tlastBang = amLb(anchor)
-\t\tparenHead = reconstructParens(oldToks, oldText, rb)
-\t}
-\tvar scratch []Tok
-\trelexed := 0
-\tfor scanOff < len(newText) {
-\t\tbefore := len(scratch)
-\t\tscanOff, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang = lexFrom(newText, scanOff, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, &scratch, 1)
-\t\tif len(scratch) == before { break }
-\t\tt := scratch[len(scratch)-1]
-\t\thd := false
-\t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tout = append(out, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, 0))
-\t\trelexed++
-\t\tif int(t.Off) >= editEnd {
-\t\t\toIdx := findTokAtOff(oldToks, int(t.Off)-delta)
-\t\t\tif oIdx >= 0 {
-\t\t\t\to := oldToks[oIdx]
-\t\t\t\tnewPrevText := ""
-\t\t\t\tif len(out) > 1 { newPrevText = amText(newText, out[len(out)-2]) }
-\t\t\t\toldPrevText := ""
-\t\t\t\tif oIdx >= 1 { oldPrevText = amText(oldText, oldToks[oIdx-1]) }
-\t\t\t\toldStack := reconstructParens(oldToks, oldText, oIdx)
-\t\t\t\tif int(o.Pd) == len(parenHead) && parenStacksEq(oldStack, parenHead) && amLc(o) == lastClose && amLb(o) == lastBang && newPrevText == oldPrevText && o.Kid == t.Kid && int(o.End) == int(t.End)-delta && amNl(o) == t.Nl && amText(oldText, o) == newText[t.Off:t.End] {
-${adoptSuffix}
-\t\t\t\t\treturn out, relexed
-\t\t\t\t}
-\t\t\t}
-\t\t}
-\t}
-\treturn out, relexed
-}
-` : rxTpl ? `${findTokAtOff}${reconstructParens}
-func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
-\tdelta := len(ins) - (end - start)
-\teditEnd := start + len(ins)
-${tplAnchor}
-\tvar scanOff int
-\tpendingNl := false
-\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
-\thasPrev, hasPrev2 := false, false
-\tvar parenHead []bool
-\tlastClose, lastBang := false, false
-\tvar templateStack []int
-\tif rb >= 0 {
-\t\tanchor := oldToks[rb]
-\t\tscanOff = int(anchor.End)
-\t\tprevLid = lidOf(amText(oldText, anchor))
-\t\tprevKid = anchor.Kid
-\t\thasPrev = true
-\t\tif rb >= 1 {
-\t\t\tbpLid = lidOf(amText(oldText, oldToks[rb-1]))
-\t\t\thasPrev2 = true
-\t\t}
-\t\tlastClose = amLc(anchor)
-\t\tlastBang = amLb(anchor)
-\t\tparenHead = reconstructParens(oldToks, oldText, rb)
-\t}
-\tvar scratch []Tok
-\trelexed := 0
-\tfor scanOff < len(newText) {
-\t\tbefore := len(scratch)
-\t\tscanOff, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack = lexFrom(newText, scanOff, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack, &scratch, 1)
-\t\tif len(scratch) == before { break }
-\t\tt := scratch[len(scratch)-1]
-\t\thd := false
-\t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tout = append(out, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, uint8(len(templateStack))))
-\t\trelexed++
-\t\tif int(t.Off) >= editEnd {
-\t\t\toIdx := findTokAtOff(oldToks, int(t.Off)-delta)
-\t\t\tif oIdx >= 0 {
-\t\t\t\to := oldToks[oIdx]
-\t\t\t\tnewPrevText := ""
-\t\t\t\tif len(out) > 1 { newPrevText = amText(newText, out[len(out)-2]) }
-\t\t\t\toldPrevText := ""
-\t\t\t\tif oIdx >= 1 { oldPrevText = amText(oldText, oldToks[oIdx-1]) }
-\t\t\t\toldStack := reconstructParens(oldToks, oldText, oIdx)
-\t\t\t\tif o.Td == 0 && len(templateStack) == 0 && int(o.Pd) == len(parenHead) && parenStacksEq(oldStack, parenHead) && amLc(o) == lastClose && amLb(o) == lastBang && newPrevText == oldPrevText && o.Kid == t.Kid && int(o.End) == int(t.End)-delta && amNl(o) == t.Nl && amText(oldText, o) == newText[t.Off:t.End] {
-${adoptSuffix}
-\t\t\t\t\treturn out, relexed
-\t\t\t\t}
-\t\t\t}
-\t\t}
-\t}
-\treturn out, relexed
-}
-` : tplOnly ? `${findTokAtOff}
-func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
-\tdelta := len(ins) - (end - start)
-\teditEnd := start + len(ins)
-${tplAnchor}
-\tscanOff := 0
-\tif rb >= 0 { scanOff = int(oldToks[rb].End) }
-\tpendingNl := false
-\tvar templateStack []int
-\tvar scratch []Tok
-\trelexed := 0
-\tfor scanOff < len(newText) {
-\t\tbefore := len(scratch)
-\t\tscanOff, pendingNl, templateStack = lexFrom(newText, scanOff, pendingNl, templateStack, &scratch, 1)
-\t\tif len(scratch) == before { break }
-\t\tt := scratch[len(scratch)-1]
-\t\tout = append(out, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, 0, false, false, false, uint8(len(templateStack))))
-\t\trelexed++
-\t\tif int(t.Off) >= editEnd {
-\t\t\toIdx := findTokAtOff(oldToks, int(t.Off)-delta)
-\t\t\tif oIdx >= 0 {
-\t\t\t\to := oldToks[oIdx]
-\t\t\t\tif o.Td == 0 && len(templateStack) == 0 && o.Kid == t.Kid && int(o.End) == int(t.End)-delta && amNl(o) == t.Nl && amText(oldText, o) == newText[t.Off:t.End] {
-${adoptSuffix}
-\t\t\t\t\treturn out, relexed
-\t\t\t\t}
-\t\t\t}
-\t\t}
-\t}
-\treturn out, relexed
-}
-` : `${findTokAtOff}
-func windowRelexStep(oldText string, oldToks []alignMeta, newText string, start, end int, ins string) ([]alignMeta, int) {
-\tdelta := len(ins) - (end - start)
-\teditEnd := start + len(ins)
-\tmaxIdx := -1
-\tfor i := 0; i < len(oldToks); i++ {
-\t\tif int(oldToks[i].End) < start { maxIdx = i } else { break }
-\t}
-\trb := -1
-\tif maxIdx >= 0 { rb = maxIdx - 1 }
-\tvar out []alignMeta
-\tif rb >= 0 { out = append(out, oldToks[:rb+1]...) }
-\tscanOff := 0
-\tif rb >= 0 { scanOff = int(oldToks[rb].End) }
-\tpendingNl := false
-\tvar scratch []Tok
-\trelexed := 0
-\tfor scanOff < len(newText) {
-\t\tbefore := len(scratch)
-\t\tscanOff, pendingNl = lexFrom(newText, scanOff, pendingNl, &scratch, 1)
-\t\tif len(scratch) == before { break }
-\t\tt := scratch[len(scratch)-1]
-\t\tout = append(out, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, 0, false, false, false, 0))
-\t\trelexed++
-\t\tif int(t.Off) >= editEnd {
-\t\t\toIdx := findTokAtOff(oldToks, int(t.Off)-delta)
-\t\t\tif oIdx >= 0 {
-\t\t\t\to := oldToks[oIdx]
-\t\t\t\tif o.Kid == t.Kid && int(o.End) == int(t.End)-delta && amNl(o) == t.Nl && amText(oldText, o) == newText[t.Off:t.End] {
-${adoptSuffix}
-\t\t\t\t\treturn out, relexed
-\t\t\t\t}
-\t\t\t}
-\t\t}
-\t}
-\treturn out, relexed
-}
-`) : '';
-  const editBody = windowLex
-    ? `\tcurText := d.text
-\tcurToks := d.toks
-\tfor _, e := range edits {
-\t\tstepOldText, stepOldToks := curText, curToks
-\t\tn := len(curText)
-\t\tstart, end := e.Start, e.End
-\t\tif start < 0 { start = 0 }
-\t\tif start > n { start = n }
-\t\tif end < start { end = start }
-\t\tif end > n { end = n }
-\t\tins := e.Text
-\t\tcurText = curText[:start] + ins + curText[end:]
-\t\tvar stepRelexed int
-\t\tcurToks, stepRelexed = windowRelexStep(stepOldText, stepOldToks, curText, start, end, ins)
-\t\trelexed += stepRelexed
-\t}
-\td.text = curText
-\td.toks = curToks`
-    : `\tfor _, e := range edits { d.text = applyEdit(d.text, e) }
-\tnewToks := lex(d.text)
-\td.toks = toMeta(newToks)
-\trelexed = len(d.toks)`;
-  const toMetaFn = hasNewline ? `
-func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
-func scanMetaToks(src string) ([]alignMeta, []Tok) {
-\ttoks := make([]Tok, 0, len(src)/2)
-\tmeta := make([]alignMeta, 0, len(src)/2)
-\tpos := 0
-\tpendingNl := false
-\tflowDepth := 0
-\tfor pos < len(src) {
-\t\tbefore := len(toks)
-\t\tpos, pendingNl, flowDepth = lexFrom(src, pos, pendingNl, flowDepth, &toks, 1)
-\t\tif len(toks) == before { break }
-\t\tt := toks[len(toks)-1]
-\t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, uint16(flowDepth), 0, false, false, false, 0))
-\t}
-\t// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
-\tif cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
-\tif cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
-\treturn meta, toks
-}
-func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for newline") }
-` : rxOnly ? `
-func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
-func scanMetaToks(src string) ([]alignMeta, []Tok) {
-\ttoks := make([]Tok, 0, len(src)/2)
-\tmeta := make([]alignMeta, 0, len(src)/2)
-\tpos := 0
-\tpendingNl := false
-\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
-\thasPrev, hasPrev2 := false, false
-\tvar parenHead []bool
-\tlastClose, lastBang := false, false
-\tfor pos < len(src) {
-\t\tbefore := len(toks)
-\t\tpos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang = lexFrom(src, pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, &toks, 1)
-\t\tif len(toks) == before { break }
-\t\tt := toks[len(toks)-1]
-\t\thd := false
-\t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, 0))
-\t}
-\t// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
-\tif cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
-\tif cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
-\treturn meta, toks
-}
-func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for regex") }
-` : rxTpl ? `
-func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
-func scanMetaToks(src string) ([]alignMeta, []Tok) {
-\ttoks := make([]Tok, 0, len(src)/2)
-\tmeta := make([]alignMeta, 0, len(src)/2)
-\tpos := 0
-\tpendingNl := false
-\tprevLid, prevKid, bpLid := uint16(0), uint16(0), uint16(0)
-\thasPrev, hasPrev2 := false, false
-\tvar parenHead []bool
-\tlastClose, lastBang := false, false
-\tvar templateStack []int
-\tfor pos < len(src) {
-\t\tbefore := len(toks)
-\t\tpos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack = lexFrom(src, pos, pendingNl, prevLid, prevKid, bpLid, hasPrev, hasPrev2, parenHead, lastClose, lastBang, templateStack, &toks, 1)
-\t\tif len(toks) == before { break }
-\t\tt := toks[len(toks)-1]
-\t\thd := false
-\t\tif t.Lid == lidLParen && len(parenHead) > 0 { hd = parenHead[len(parenHead)-1] }
-\t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, uint16(len(parenHead)), lastClose, lastBang, hd, uint8(len(templateStack))))
-\t}
-\t// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
-\tif cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
-\tif cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
-\treturn meta, toks
-}
-func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for rx+tpl") }
-` : tplOnly ? `
-func scanMeta(src string) []alignMeta { m, _ := scanMetaToks(src); return m }
-func scanMetaToks(src string) ([]alignMeta, []Tok) {
-\ttoks := make([]Tok, 0, len(src)/2)
-\tmeta := make([]alignMeta, 0, len(src)/2)
-\tpos := 0
-\tpendingNl := false
-\tvar templateStack []int
-\tfor pos < len(src) {
-\t\tbefore := len(toks)
-\t\tpos, pendingNl, templateStack = lexFrom(src, pos, pendingNl, templateStack, &toks, 1)
-\t\tif len(toks) == before { break }
-\t\tt := toks[len(toks)-1]
-\t\tmeta = append(meta, mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, 0, false, false, false, uint8(len(templateStack))))
-\t}
-\t// a sparse source (comments, long literals) gives back the len/2 reservation: a Doc keeps these
-\tif cap(toks) > 2*len(toks) { toks = append([]Tok(nil), toks...) }
-\tif cap(meta) > 2*len(meta) { meta = append([]alignMeta(nil), meta...) }
-\treturn meta, toks
-}
-func toMeta(_ []Tok) []alignMeta { panic("use scanMeta for tpl") }
-` : `
-func toMeta(toks []Tok) []alignMeta {
-\tout := make([]alignMeta, len(toks))
-\tfor i, t := range toks { out[i] = mkAlign(int32(t.Off), int32(t.End), t.Kid, t.Nl, 0, 0, false, false, false, 0) }
-\treturn out
-}
-func scanMetaToks(src string) ([]alignMeta, []Tok) { t := lex(src); return toMeta(t), t }`;
-  // Packed AlignMeta: full-field equality covers prior mode-specific checks
-  // (unused state fields are always zeroed by scanMeta / toMeta / windowRelex).
-  const checkStreamEqFn = (hasNewline || rxOnly || rxTpl || tplOnly) ? `
-func checkStreamEq(text string, meta []alignMeta) bool {
-\tfresh := scanMeta(text)
-\tif len(fresh) != len(meta) { return false }
-\tfor i := range fresh {
-\t\tif fresh[i] != meta[i] { return false }
-\t\tif amText(text, fresh[i]) != amText(text, meta[i]) { return false }
-\t}
-\treturn true
-}
-` : `
-func checkStreamEq(text string, meta []alignMeta) bool {
-\tfresh := toMeta(lex(text))
-\tif len(fresh) != len(meta) { return false }
-\tfor i := range fresh {
-\t\tif fresh[i] != meta[i] { return false }
-\t\tif amText(text, fresh[i]) != amText(text, meta[i]) { return false }
-\t}
-\treturn true
-}
-`;
-  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(d.text)' : 'toMeta(lex(d.text))';
+  const relexFamily = emitRelexFamily(ir, 'go');
+  const editBody = goEditBody;
+  const freshMeta = 'scanMeta(d.text)';
   const parseFreshRetry = `\td.root = p.parse(d.text, toksFromMeta(d.text, d.toks))
 \tif d.root < 0 { d.toks = ${freshMeta}; d.root = p.parse(d.text, toksFromMeta(d.text, d.toks)) }`;
   const reuseFns = topReuse ? `
@@ -1825,7 +1393,7 @@ type Align struct {
 	StreamEq *bool \`json:"streamEq,omitempty"\`
 	TreeEq   *bool \`json:"treeEq,omitempty"\`
 }
-${toMetaFn}
+${relexFamily}
 func computeAlignCore(oldText string, oldToks []alignMeta, newText string, newToks []alignMeta) (oldN, newN, prefix, suffix int) {
 	oldN, newN = len(oldToks), len(newToks)
 	for prefix < oldN && prefix < newN {
@@ -1852,7 +1420,7 @@ func toksFromMeta(text string, meta []alignMeta) []Tok {
 	}
 	return t
 }
-${checkStreamEqFn}${treeEqFn}${windowHelpers}${reuseFns}// A Doc owns its tree: its engine (e) keeps the arena, parse stream and reuse metadata across
+${treeEqFn}${reuseFns}// A Doc owns its tree: its engine (e) keeps the arena, parse stream and reuse metadata across
 // edits, and b (the caller's CstBuilder under NewDocWith) is pointed at that tree after each call.
 type Doc struct { text string; root int32; toks []alignMeta; align *Align; validate bool; b *CstBuilder; e engine${topReuse ? '; entries []EntryMeta' : ''} }
 func (d *Doc) publish() { d.b.Nodes, d.b.Kids, d.b.Toks = d.e.nodes, d.e.kids, d.e.toks }
@@ -1885,15 +1453,6 @@ func (d *Doc) SetValidate(v bool) { d.validate = v }
 func (d *Doc) Text() string { return d.text }
 func (d *Doc) Root() int32 { return d.root }
 func (d *Doc) Align() *Align { return d.align }
-func applyEdit(text string, e Edit) string {
-	n := len(text)
-	start, end := e.Start, e.End
-	if start < 0 { start = 0 }
-	if start > n { start = n }
-	if end < start { end = start }
-	if end > n { end = n }
-	return text[:start] + e.Text + text[end:]
-}
 func (d *Doc) Edit(edits []Edit) (ret int32) {
 	p := &d.e
 	defer d.publish()
@@ -1901,8 +1460,7 @@ func (d *Doc) Edit(edits []Edit) (ret int32) {
 	relexed := 0
 	defer func() {
 		if rec := recover(); rec != nil {
-			d.text = oldText
-			for _, e := range edits { d.text = applyEdit(d.text, e) }
+			d.text = applyEdits(oldText, edits)
 			func() {
 				defer func() {
 					if recover() != nil {
@@ -3041,10 +2599,7 @@ func (d *DocWith) Edit(edits []Edit) (ret int32) {
 	relexed := 0
 	defer func() {
 		if rec := recover(); rec != nil {
-			d.text = oldText
-			for _, e := range edits {
-				d.text = applyEdit(d.text, e)
-			}
+			d.text = applyEdits(oldText, edits)
 			func() {
 				defer func() {
 					if recover() != nil {
@@ -3105,36 +2660,9 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
   const shapeA = topReuse?.kind === 'A';
   const shapeB = topReuse?.kind === 'B';
   const hasHeadB = !!(shapeB && topReuse && topReuse.kind === 'B' && topReuse.hasHead);
-  const windowLex = (!ir.regexCtx && !ir.tpl) || !ir.newlineCfg;
-  const hasNewline = !!(ir.newlineCfg && !ir.regexCtx && !ir.tpl);
-  const rxOnly = !!(ir.regexCtx && !ir.tpl && !ir.newlineCfg);
-  const tplOnly = !!(ir.tpl && !ir.regexCtx && !ir.newlineCfg);
-  const rxTpl = !!(ir.regexCtx && ir.tpl && !ir.newlineCfg);
-  const initToks = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(src)' : 'toMeta(lex(src))';
-  const freshMeta = (hasNewline || rxOnly || tplOnly || rxTpl) ? 'scanMeta(d.text)' : 'toMeta(lex(d.text))';
-  const editBody = windowLex
-    ? `\tcurText := d.text
-\tcurToks := d.toks
-\tfor _, e := range edits {
-\t\tstepOldText, stepOldToks := curText, curToks
-\t\tn := len(curText)
-\t\tstart, end := e.Start, e.End
-\t\tif start < 0 { start = 0 }
-\t\tif start > n { start = n }
-\t\tif end < start { end = start }
-\t\tif end > n { end = n }
-\t\tins := e.Text
-\t\tcurText = curText[:start] + ins + curText[end:]
-\t\tvar stepRelexed int
-\t\tcurToks, stepRelexed = windowRelexStep(stepOldText, stepOldToks, curText, start, end, ins)
-\t\trelexed += stepRelexed
-\t}
-\td.text = curText
-\td.toks = curToks`
-    : `\tfor _, e := range edits { d.text = applyEdit(d.text, e) }
-\tnewToks := lex(d.text)
-\td.toks = toMeta(newToks)
-\trelexed = len(d.toks)`;
+  const initToks = 'scanMeta(src)';
+  const freshMeta = 'scanMeta(d.text)';
+  const editBody = goEditBody;
   const entryRule = ir.rules.find((r) => r.name === ir.entry);
   const entryCst = entryRule && 'cstName' in entryRule ? (entryRule as { cstName: string }).cstName : ir.entry;
   const entryRid = ruleIdOf(ar, entryCst);
