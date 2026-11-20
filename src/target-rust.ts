@@ -152,6 +152,10 @@ const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 }
 
 
+// The relex family steps `lex_from` one token at a time; out of line, every step rebuilds and
+// returns the whole lexer state through memory.
+const LEX_FROM_ATTR = '#[inline(always)]\n';
+
 // One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
 function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
@@ -497,7 +501,7 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -514,7 +518,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${tplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -531,7 +535,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxTplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -576,7 +580,7 @@ ${nlRs!.hooksFrom.replace(/flow_depth/g, 'self.flow_depth')}
         self.acc.push(mk_tok(off, end, self.pending_nl, kid, lid)); self.pending_nl = false;
     }
 }
-fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, flow_depth: i64, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, i64) {
+${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, flow_depth: i64, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, i64) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -592,7 +596,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
     toks
 }`;
   }
-  return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
+  return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
