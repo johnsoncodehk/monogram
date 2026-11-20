@@ -1,7 +1,7 @@
 // Gate: the shared algorithm core is target-language-agnostic and the portable targets register
 // themselves independently.
 //
-//   1. core modules (algo-ir / relex-family / define-target) import no target module, name no
+//   1. core modules (algo-ir / relex-family / lex-family / define-target) import no target module, name no
 //      target, keep no host switch, and none of their string literals carries punctuation —
 //      every operator, delimiter, comment marker and keyword comes from a target's Lowering
 //      (test/syntax-agnostic.ts prints the family through a non-C lowering);
@@ -21,7 +21,7 @@ const src = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url),
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 
-const CORE = ['algo-ir.ts', 'relex-family.ts', 'define-target.ts'];
+const CORE = ['algo-ir.ts', 'relex-family.ts', 'lex-family.ts', 'define-target.ts'];
 const TARGETS = [
   { file: 'target-ts.ts', target: tsTarget, name: 'typescript' },
   { file: 'target-go.ts', target: goTarget, name: 'go' },
@@ -33,7 +33,7 @@ const imports = (s: string) => [...s.matchAll(/^import [^;]*? from '([^']+)'/gms
 // String literals with interpolations removed; import paths and error messages skipped.
 const literals = (s: string) => [...s.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)]
   .map((m) => { let l = m[0]; while (/\$\{[^{}]*\}/.test(l)) l = l.replace(/\$\{[^{}]*\}/g, ''); return l; })
-  .filter((l) => !/^.\.\//.test(l) && !/^.(algo-ir|defineTarget|relex-family):/.test(l));
+  .filter((l) => !/^.\.\//.test(l) && !/^.(algo-ir|defineTarget|relex-family|lex-family):/.test(l));
 
 const TARGET_NAMES = /\b(ts|go|rust|typescript|golang|TS|Go|Rust|TypeScript|Golang)\b/;
 const HOST_SWITCH = /\b(host|Host|HOSTS)\b/;
@@ -65,9 +65,9 @@ for (const t of TARGETS) {
   if (!/^const \w+Lowering: Lowering = \{/m.test(s)) fail(`${t.file}: defines no Lowering of its own`);
   for (const i of imports(s)) {
     if (/\/target-/.test(i)) fail(`${t.file}: imports another target module ${i}`);
-    if (/relex-family/.test(i)) fail(`${t.file}: imports an algorithm family directly (${i}); use shared`);
+    if (/(relex|lex)-family/.test(i)) fail(`${t.file}: imports an algorithm family directly (${i}); use shared`);
   }
-  if (/\b(printFns|emitRelexFamily)\b/.test(s)) fail(`${t.file}: prints shared algorithms itself; use shared`);
+  if (/\b(printFns|emitRelexFamily|emitLexScan|lexScanFamily)\b/.test(s)) fail(`${t.file}: prints shared algorithms itself; use shared`);
 }
 for (const [f] of defineCalls) if (!TARGETS.some((t) => t.file === f)) fail(`${f}: defineTarget called outside a target module`);
 

@@ -1,5 +1,5 @@
 // Gate: the shared algorithm core carries no surface syntax. A test-only target registered with
-// `defineTarget` prints the relex family as S-expressions — prefix operators, no braces,
+// `defineTarget` prints the lex-scan and relex families as S-expressions — prefix operators, no braces,
 // semicolons, brackets, infix or C comments — for every lexer mode, and the printed forms
 // are counted against the IR: every statement, operator, index and negation the IR holds
 // reaches the lowering and comes out as its own form. Not a supported language; a proof that
@@ -9,6 +9,7 @@
 import { defineTarget } from '../src/define-target.ts';
 import { portableIR } from '../src/emit-portable.ts';
 import { relexFamilyFns, relexMode } from '../src/relex-family.ts';
+import { lexScanFamily } from '../src/lex-family.ts';
 import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt } from '../src/algo-ir.ts';
 
 const OP: Record<BinOp, string> = { add: '+', sub: '-', shr: 'shr', lt: '<', le: '<=', gt: '>', ge: '>=', eq: '=', ne: '/=', and: 'and', or: 'or' };
@@ -20,52 +21,31 @@ const at = (c: string) => ({ c, prec: ATOM });
 const sexpr: Lowering = {
   ident: kebab,
   num: { int: 'int', lid: 'lid', depth: 'int' },
-  index: 'int',
   type: (t) => t,
   cast: (_cx, r, nat) => ({ ...r, c: form('as', nat, r.c), nat, prec: ATOM }),
   owns: false,
+  charSet: (name, rs) => form('define-char-set', name, ...rs.map(([lo, hi]) => form(String(lo), String(hi)))),
   expr: {
     literal: (v) => at(typeof v === 'string' ? JSON.stringify(v) : typeof v === 'boolean' ? (v ? '#t' : '#f') : String(v)),
     not: (r) => at(form('not', r.c)),
     bin: (op, a, b) => at(form(OP[op], a.c, b.c)),
-    index: (l, i) => at(form('nth', l.c, i.c)),
     call: (name, args) => form(name, ...args),
     len: (cx, l) => cx.atom(form('length', l.c), 'int', 'int'),
-    metaInt: (cx, m, f) => cx.atom(form(`meta-${f}`, m.c), 'int', 'int'),
-    metaFlag: (cx, m, f) => cx.atom(form(`meta-${f}?`, m.c), 'bool', 'bool'),
-    tokInt: (cx, t, f) => cx.atom(form(`tok-${f}`, t.c), 'int', f === 'lid' ? 'lid' : 'int'),
-    tokNl: (cx, t) => cx.atom(form('tok-nl?', t.c), 'bool', 'bool'),
-    editInt: (cx, e, f) => cx.atom(form(`edit-${f}`, e.c), 'int', 'int'),
-    editText: (cx, e) => cx.atom(form('edit-text', e.c), 'str', 'str'),
-    metaText: (cx, t, m) => cx.atom(form('meta-text', t.c, m.c), 'str', 'str'),
-    substr: (cx, s, a, b) => cx.atom(form('substring', s.c, a.c, b.c), 'str', 'str'),
-    lidOf: (cx, s) => cx.atom(form('lid-of', s.c), 'lid', 'lid'),
-    mkMeta: (cx, fs) => cx.atom(form('make-meta', ...fs.map(([f, r]) => `#:${f} ${r.c}`)), 'meta', 'meta'),
-    shiftMeta: (cx, m, d) => cx.atom(form('shift-meta', m.c, d.c), 'meta', 'meta'),
-    metaEq: (cx, a, b) => cx.atom(form('meta=?', a.c, b.c), 'bool', 'bool'),
-    splice: (cx, s, a, b, ins) => cx.atom(form('string-splice', s.c, a.c, b.c, ins.c), 'str', 'str'),
     own: (_cx, r) => r,
-    newList: (cx, ty, cap, estimate) => cx.atom(form('make-list', ...(cap ? ['#:capacity', cap.c] : []), ...(estimate ? ['#:estimate', estimate.c] : [])), ty, ty, { owned: true }),
-    falses: (cx, n) => cx.atom(form('make-flags', n.c), 'bools', 'bools', { owned: true }),
-    prefix: (cx, l, n, estimate) => cx.atom(form('take', l.c, n.c, '#:estimate', estimate.c), l.ty, l.ty, { owned: true }),
+    code: (cx, s, i) => cx.atom(form('char-code', s.c, i.c), 'int', 'int'),
+    hasAt: (cx, s, i, lit) => cx.atom(form('starts-at?', s.c, i.c, JSON.stringify(lit)), 'bool', 'bool'),
+    inSet: (_cx, set, c) => at(form('in-set?', set, c.c)),
   },
   stmt: {
     comment: (text) => [`;; ${text}`],
     let: (_cx, s) => [form('define', s.id, s.r.c)],
     set: (id, val) => [form('set!', id, val)],
-    setAt: (id, i, val) => [form('set-nth!', id, i, val)],
-    push: (_cx, l, r) => [form('push!', l, r.c)],
     if: (s) => (s.else
       ? [`(if ${s.c}`, ...nest(['(begin', ...nest(s.then), ')', '(begin', ...nest(s.else), ')']), ')']
       : [`(when ${s.c}`, ...nest(s.then), ')']),
     while: (c, body) => [`(while ${c}`, ...nest(body), ')'],
-    for: (_cx, v, from, to, body) => [`(for (${v} ${from.c} ${to.c})`, ...nest(body), ')'],
-    forEach: (v, l, body) => [`(for-each (${v} ${l})`, ...nest(body), ')'],
     break: () => ['(break)'],
     return: (vals) => [form('return', ...vals)],
-    destructure: (_cx, s) => [form(s.declare ? 'define-values' : 'set-values!', form(...s.ids), s.call)],
-    lexStep: (_cx, s) => [form('lex-step!', s.text.c, s.pos, ...s.state, s.out)],
-    shrink: (_cx, l) => [form('shrink!', l)],
     fn: (f) => [
       ...f.doc.map((l) => `;; ${l}`),
       `(defn ${f.name} (${f.params.map((p) => form(p.name, p.type)).join(' ')}) (returns ${f.rets.join(' ')})`,
@@ -73,13 +53,44 @@ const sexpr: Lowering = {
       ')',
     ].join('\n'),
   },
+  relex: {
+    index: 'int',
+    expr: {
+      index: (l, i) => at(form('nth', l.c, i.c)),
+      metaInt: (cx, m, f) => cx.atom(form(`meta-${f}`, m.c), 'int', 'int'),
+      metaFlag: (cx, m, f) => cx.atom(form(`meta-${f}?`, m.c), 'bool', 'bool'),
+      tokInt: (cx, t, f) => cx.atom(form(`tok-${f}`, t.c), 'int', f === 'lid' ? 'lid' : 'int'),
+      tokNl: (cx, t) => cx.atom(form('tok-nl?', t.c), 'bool', 'bool'),
+      editInt: (cx, e, f) => cx.atom(form(`edit-${f}`, e.c), 'int', 'int'),
+      editText: (cx, e) => cx.atom(form('edit-text', e.c), 'str', 'str'),
+      metaText: (cx, t, m) => cx.atom(form('meta-text', t.c, m.c), 'str', 'str'),
+      substr: (cx, s, a, b) => cx.atom(form('substring', s.c, a.c, b.c), 'str', 'str'),
+      lidOf: (cx, s) => cx.atom(form('lid-of', s.c), 'lid', 'lid'),
+      mkMeta: (cx, fs) => cx.atom(form('make-meta', ...fs.map(([f, r]) => `#:${f} ${r.c}`)), 'meta', 'meta'),
+      shiftMeta: (cx, m, d) => cx.atom(form('shift-meta', m.c, d.c), 'meta', 'meta'),
+      metaEq: (cx, a, b) => cx.atom(form('meta=?', a.c, b.c), 'bool', 'bool'),
+      splice: (cx, s, a, b, ins) => cx.atom(form('string-splice', s.c, a.c, b.c, ins.c), 'str', 'str'),
+      newList: (cx, ty, cap, estimate) => cx.atom(form('make-list', ...(cap ? ['#:capacity', cap.c] : []), ...(estimate ? ['#:estimate', estimate.c] : [])), ty, ty, { owned: true }),
+      falses: (cx, n) => cx.atom(form('make-flags', n.c), 'bools', 'bools', { owned: true }),
+      prefix: (cx, l, n, estimate) => cx.atom(form('take', l.c, n.c, '#:estimate', estimate.c), l.ty, l.ty, { owned: true }),
+    },
+    stmt: {
+      setAt: (id, i, val) => [form('set-nth!', id, i, val)],
+      push: (_cx, l, r) => [form('push!', l, r.c)],
+      for: (_cx, v, from, to, body) => [`(for (${v} ${from.c} ${to.c})`, ...nest(body), ')'],
+      forEach: (v, l, body) => [`(for-each (${v} ${l})`, ...nest(body), ')'],
+      destructure: (_cx, s) => [form(s.declare ? 'define-values' : 'set-values!', form(...s.ids), s.call)],
+      lexStep: (_cx, s) => [form('lex-step!', s.text.c, s.pos, ...s.state, s.out)],
+      shrink: (_cx, l) => [form('shrink!', l)],
+    },
+  },
 };
 
 const target = defineTarget({
   name: 'sexpr-syntax-probe',
   ext: 'scm',
   lowering: sexpr,
-  emitParser: (grammar, shared) => shared.relexFamily(portableIR(grammar)),
+  emitParser: (grammar, shared) => { const ir = portableIR(grammar); return shared.lexScan(ir) + '\n' + shared.relexFamily(ir); },
 });
 
 // IR census: what the printed forms must account for.
@@ -95,6 +106,9 @@ function census(fns: Fn[]): Map<string, number> {
     if (e.k === 'bin') bump(OP[e.op]);
     if (e.k === 'not') bump('not');
     if (e.k === 'at') bump('nth');
+    if (e.k === 'code') bump('char-code');
+    if (e.k === 'hasAt') bump('starts-at?');
+    if (e.k === 'inSet') bump('in-set?');
     for (const v of Object.values(e)) {
       if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && 'k' in y && ex(y as Expr));
       else if (v && typeof v === 'object' && 'k' in v) ex(v as Expr);
@@ -149,7 +163,8 @@ const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 
 for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
-  const fns = relexFamilyFns(relexMode(portableIR(grammar)));
+  const lex = lexScanFamily(portableIR(grammar));
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(portableIR(grammar)))];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
@@ -157,10 +172,12 @@ for (const path of FIXTURES) {
   let heads: Map<string, number>;
   try { heads = read(out); } catch (e) { fail(`${path}: ${(e as Error).message}`); continue; }
   const want = census(fns);
+  want.set('define-char-set', lex.sets.length);
   for (const [k, n] of want) {
     const got = k.split('|').reduce((s, h) => s + (heads.get(h) ?? 0), 0);
     if (got !== n) fail(`${path}: ${k} printed ${got}×, IR holds ${n}`);
   }
+  if (!lex.fns.length) fail(`${path}: no token scanners printed`);
   console.log(`  ${path}: ${fns.length} functions, ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
 }
 
@@ -168,4 +185,4 @@ if (failures > 0) {
   console.error(`\n✗ syntax-agnostic: ${failures} problem(s)`);
   process.exit(1);
 }
-console.log('\n✓ syntax-agnostic: the relex family prints as S-expressions through defineTarget; every IR construct accounted for');
+console.log('\n✓ syntax-agnostic: the lex-scan and relex families print as S-expressions through defineTarget; every IR construct accounted for');

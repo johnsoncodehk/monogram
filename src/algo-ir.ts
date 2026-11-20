@@ -46,7 +46,13 @@ export type Expr =
   | { k: 'newList'; ty: ListTy; cap?: Expr; estimate?: Expr }
   | { k: 'falses'; n: Expr }
   | { k: 'prefix'; list: Expr; n: Expr; estimate: Expr }
-  | { k: 'lexAll'; text: Expr };
+  | { k: 'lexAll'; text: Expr }
+  // The code unit of s at i, 0 <= i < len(s), in the target's native string units.
+  | { k: 'code'; s: Expr; i: Expr }
+  // Whether the literal occurs in s at i, 0 <= i <= len(s).
+  | { k: 'hasAt'; s: Expr; i: Expr; lit: string }
+  // Whether c is a member of a declared CharSet (only ASCII codes are ever members).
+  | { k: 'inSet'; set: string; c: Expr };
 
 export type Stmt =
   | { k: 'let'; name: string; ty: Ty; init: Expr }
@@ -70,6 +76,8 @@ export type Stmt =
 
 export interface Param { name: string; ty: Ty }
 export interface Fn { name: string; doc: string; params: Param[]; ret: Ty[]; body: Stmt[] }
+export type CodeRange = [number, number];
+export interface CharSet { name: string; ranges: CodeRange[] }
 
 export const ELEM: Record<ListTy, Ty> = { metas: 'meta', toks: 'tok', bools: 'bool', depths: 'depth', edits: 'edit' };
 export const isNum = (t: Ty): t is Num => t === 'int' || t === 'lid' || t === 'depth';
@@ -105,7 +113,6 @@ type Lines = string[];
 export interface Lowering {
   ident(name: string): string;
   num: Record<Num, string>;
-  index: string;                                      // native type of list indices
   type(t: Ty, role: Role, owned: boolean): string;
   // Absent: numbers are untyped, so no conversions are printed.
   cast?(cx: Cx, r: R, nat: string): R;
@@ -114,13 +121,39 @@ export interface Lowering {
   borrowStr?(r: R): string;
   borrowList?(r: R): string;
   borrowVal?(r: R): string;
+  // A module-level membership table for `inSet`.
+  charSet(name: string, ranges: CodeRange[]): string;
   expr: {
     literal(v: number | boolean | string): Printed;
     not(r: R): Printed;
     bin(op: BinOp, a: R, b: R): Printed;
-    index(list: R, i: R): Printed;
     call(name: string, args: string[]): string;
     len(cx: Cx, l: R): R;
+    code(cx: Cx, s: R, i: R): R;
+    hasAt(cx: Cx, s: R, i: R, lit: string): R;
+    inSet(cx: Cx, set: string, c: R): R;
+    // Required when `owns`: an owned copy of a borrowed value.
+    own?(cx: Cx, r: R): R;
+  };
+  stmt: {
+    comment(text: string): Lines;
+    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean }): Lines;
+    set(id: string, val: string): Lines;
+    // `inline` is the sole statement of a branch-free `if` printed on one line, when it is short.
+    if(s: { c: string; then: Lines; else?: Lines; inline?: string; depth: number }): Lines;
+    while(c: string, body: Lines): Lines;
+    break(): Lines;
+    return(vals: string[]): Lines;
+    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines }): string;
+  };
+  // The token-stream constructs (metas, tokens, edits, lists) the relex family is written in.
+  relex?: RelexLowering;
+}
+
+export interface RelexLowering {
+  index: string;                                      // native type of list indices
+  expr: {
+    index(list: R, i: R): Printed;
     metaInt(cx: Cx, m: R, f: MetaInt): R;
     metaFlag(cx: Cx, m: R, f: MetaFlag): R;
     tokInt(cx: Cx, t: R, f: TokInt): R;
@@ -134,28 +167,18 @@ export interface Lowering {
     shiftMeta(cx: Cx, m: R, delta: R): R;
     metaEq(cx: Cx, a: R, b: R): R;
     splice(cx: Cx, s: R, a: R, b: R, ins: R): R;
-    own(cx: Cx, r: R): R;
     newList(cx: Cx, ty: ListTy, cap?: R, estimate?: R): R;
     falses(cx: Cx, n: R): R;
     prefix(cx: Cx, list: R, n: R, estimate: R): R;
   };
   stmt: {
-    comment(text: string): Lines;
-    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean }): Lines;
-    set(id: string, val: string): Lines;
     setAt(id: string, i: string, val: string): Lines;
     push(cx: Cx, list: string, r: R): Lines;
-    // `inline` is the sole statement of a branch-free `if` printed on one line, when it is short.
-    if(s: { c: string; then: Lines; else?: Lines; inline?: string; depth: number }): Lines;
-    while(c: string, body: Lines): Lines;
     for(cx: Cx, v: string, from: R, to: R, body: Lines): Lines;
     forEach(v: string, list: string, body: Lines): Lines;
-    break(): Lines;
-    return(vals: string[]): Lines;
     destructure(cx: Cx, s: { declare: boolean; names: string[]; ids: string[]; call: string; mutable: (n: string) => boolean; reassigned: (n: string) => boolean }): Lines;
     lexStep(cx: Cx, s: { text: R; posName: string; pos: string; out: string; state: string[] }): Lines;
     shrink(cx: Cx, list: string, ty: ListTy): Lines;
-    fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; doc: string[]; body: Lines }): string;
   };
 }
 
@@ -173,11 +196,18 @@ class Printer implements Cx {
   private mutable = new Set<string>();
   private reassigned = new Set<string>();
   private sigs: Map<string, Fn>;
+  private sets: Set<string>;
   private L: Lowering;
 
-  constructor(lowering: Lowering, fns: Fn[]) {
+  constructor(lowering: Lowering, fns: Fn[], sets: CharSet[]) {
     this.L = lowering;
     this.sigs = new Map(fns.map((f) => [f.name, f]));
+    this.sets = new Set(sets.map((c) => c.name));
+  }
+
+  private rx(): RelexLowering {
+    if (!this.L.relex) throw new Error('algo-ir: the lowering prints no token-stream constructs');
+    return this.L.relex;
   }
 
   private id(name: string): string { return name === '_' ? name : this.L.ident(name); }
@@ -197,6 +227,7 @@ class Printer implements Cx {
 
   expr(e: Expr): R {
     const X = this.L.expr;
+    const RX = (): RelexLowering['expr'] => this.rx().expr;
     switch (e.k) {
       case 'int': return { ...X.literal(e.v), ty: 'int', nat: this.nat('int'), lit: true };
       case 'bool': return { ...X.literal(e.v), ty: 'bool', nat: 'bool' };
@@ -213,37 +244,48 @@ class Printer implements Cx {
         const l = this.expr(e.list), i = this.expr(e.i);
         if (!isList(l.ty)) throw new Error('algo-ir: at() on non-list');
         const ty = ELEM[l.ty];
-        return { ...X.index(l, this.coerceR(i, this.L.index)), ty, nat: this.nat(ty) };
+        return { ...RX().index(l, this.coerceR(i, this.rx().index)), ty, nat: this.nat(ty) };
       }
-      case 'metaInt': return X.metaInt(this, this.expr(e.m), e.f);
-      case 'metaFlag': return X.metaFlag(this, this.expr(e.m), e.f);
-      case 'tokInt': return X.tokInt(this, this.expr(e.t), e.f);
-      case 'tokNl': return X.tokNl(this, this.expr(e.t));
-      case 'editInt': return X.editInt(this, this.expr(e.e), e.f);
-      case 'editText': return X.editText(this, this.expr(e.e));
-      case 'metaText': return X.metaText(this, this.expr(e.text), this.expr(e.m));
-      case 'substr': return X.substr(this, this.expr(e.s), this.expr(e.a), this.expr(e.b));
-      case 'lidOf': return X.lidOf(this, this.expr(e.s));
-      case 'mkMeta': return X.mkMeta(this, MK_META_ORDER.map((f) => [f, this.expr(e[f])]));
-      case 'shiftMeta': return X.shiftMeta(this, this.expr(e.m), this.expr(e.delta));
-      case 'metaEq': return X.metaEq(this, this.expr(e.a), this.expr(e.b));
+      case 'metaInt': return RX().metaInt(this, this.expr(e.m), e.f);
+      case 'metaFlag': return RX().metaFlag(this, this.expr(e.m), e.f);
+      case 'tokInt': return RX().tokInt(this, this.expr(e.t), e.f);
+      case 'tokNl': return RX().tokNl(this, this.expr(e.t));
+      case 'editInt': return RX().editInt(this, this.expr(e.e), e.f);
+      case 'editText': return RX().editText(this, this.expr(e.e));
+      case 'metaText': return RX().metaText(this, this.expr(e.text), this.expr(e.m));
+      case 'substr': return RX().substr(this, this.expr(e.s), this.expr(e.a), this.expr(e.b));
+      case 'lidOf': return RX().lidOf(this, this.expr(e.s));
+      case 'mkMeta': return RX().mkMeta(this, MK_META_ORDER.map((f) => [f, this.expr(e[f])]));
+      case 'shiftMeta': return RX().shiftMeta(this, this.expr(e.m), this.expr(e.delta));
+      case 'metaEq': return RX().metaEq(this, this.expr(e.a), this.expr(e.b));
       case 'call': {
         const fn = this.sigs.get(e.fn);
         if (!fn) throw new Error(`algo-ir: unknown function ${e.fn}`);
         if (fn.ret.length !== 1) throw new Error(`algo-ir: ${e.fn} returns a tuple; use letCall/setCall`);
         return this.atom(this.callCode(e), fn.ret[0], this.nat(fn.ret[0]), { owned: true });
       }
-      case 'splice': return X.splice(this, this.expr(e.s), this.expr(e.a), this.expr(e.b), this.expr(e.ins));
-      case 'own': return X.own(this, this.expr(e.e));
-      case 'newList': return X.newList(this, e.ty, e.cap && this.expr(e.cap), e.estimate && this.expr(e.estimate));
-      case 'falses': return X.falses(this, this.expr(e.n));
+      case 'splice': return RX().splice(this, this.expr(e.s), this.expr(e.a), this.expr(e.b), this.expr(e.ins));
+      case 'own': return this.own(this.expr(e.e));
+      case 'newList': return RX().newList(this, e.ty, e.cap && this.expr(e.cap), e.estimate && this.expr(e.estimate));
+      case 'falses': return RX().falses(this, this.expr(e.n));
       case 'prefix': {
         const l = this.expr(e.list);
         if (!isList(l.ty)) throw new Error('algo-ir: prefix() on non-list');
-        return X.prefix(this, l, this.expr(e.n), this.expr(e.estimate));
+        return RX().prefix(this, l, this.expr(e.n), this.expr(e.estimate));
       }
       case 'lexAll': return this.atom(X.call(this.id('lex'), [this.str(this.expr(e.text))]), 'toks', 'toks', { owned: true });
+      case 'code': return X.code(this, this.expr(e.s), this.expr(e.i));
+      case 'hasAt': return X.hasAt(this, this.expr(e.s), this.expr(e.i), e.lit);
+      case 'inSet': {
+        if (!this.sets.has(e.set)) throw new Error(`algo-ir: undeclared char set ${e.set}`);
+        return X.inSet(this, this.id(e.set), this.expr(e.c));
+      }
     }
+  }
+
+  private own(r: R): R {
+    if (!this.L.expr.own) throw new Error('algo-ir: an owning lowering needs own()');
+    return this.L.expr.own(this, r);
   }
 
   private bin(op: BinOp, a: R, b: R): R {
@@ -325,9 +367,9 @@ class Printer implements Cx {
         const elem = ELEM[v.ty as ListTy];
         const i = this.expr(s.i), r = this.expr(s.e);
         const val = isNum(elem) ? this.coerce(r, this.nat(elem)) : r.c;
-        return S.setAt(this.id(s.list), this.coerce(i, L.index), val);
+        return this.rx().stmt.setAt(this.id(s.list), this.coerce(i, this.rx().index), val);
       }
-      case 'push': return S.push(this, this.id(s.list), this.expr(s.e));
+      case 'push': return this.rx().stmt.push(this, this.id(s.list), this.expr(s.e));
       case 'if': {
         const c = this.expr(s.c).c;
         let inline: string | undefined;
@@ -342,13 +384,13 @@ class Printer implements Cx {
       case 'for': {
         const from = this.expr(s.from), to = this.expr(s.to);
         this.env.set(s.v, { ty: 'int', owned: false });
-        return S.for(this, this.id(s.v), from, to, this.block(s.body, d + 1));
+        return this.rx().stmt.for(this, this.id(s.v), from, to, this.block(s.body, d + 1));
       }
       case 'forEach': {
         const l = this.expr(s.list);
         if (!isList(l.ty)) throw new Error('algo-ir: forEach over non-list');
         this.env.set(s.v, { ty: ELEM[l.ty], owned: false });
-        return S.forEach(this.id(s.v), l.c, this.block(s.body, d + 1));
+        return this.rx().stmt.forEach(this.id(s.v), l.c, this.block(s.body, d + 1));
       }
       case 'break': return S.break();
       case 'return': {
@@ -360,7 +402,7 @@ class Printer implements Cx {
         const vals = s.es.map((e, i) => {
           const r = this.expr(e), t = fn.ret[i];
           if (isNum(t)) return this.coerce(r, this.nat(t));
-          if (L.owns && t === 'str' && !r.owned) return L.expr.own(this, r).c;
+          if (L.owns && t === 'str' && !r.owned) return this.own(r).c;
           if (L.owns && isList(t) && !r.owned) throw new Error(`algo-ir: return of borrowed list in ${fn.name}`);
           return r.c;
         });
@@ -372,13 +414,13 @@ class Printer implements Cx {
         const call = this.callCode(s.call);
         if (s.k === 'letCall') s.names.forEach((n, i) => { if (n !== '_') this.env.set(n, { ty: fn.ret[i], owned: true }); });
         else s.names.forEach((n, i) => { if (n !== '_' && this.env.get(n)?.ty !== fn.ret[i]) throw new Error(`algo-ir: setCall type of ${n}`); });
-        return S.destructure(this, {
+        return this.rx().stmt.destructure(this, {
           declare: s.k === 'letCall', names: s.names, ids: s.names.map((n) => this.id(n)), call,
           mutable: (n) => this.mutable.has(n), reassigned: (n) => this.reassigned.has(n),
         });
       }
-      case 'lexStep': return S.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)) });
-      case 'shrink': return S.shrink(this, this.id(s.list), this.env.get(s.list)!.ty as ListTy);
+      case 'lexStep': return this.rx().stmt.lexStep(this, { text: this.expr(s.text), posName: s.pos, pos: this.id(s.pos), out: this.id(s.out), state: s.state.map((n) => this.id(n)) });
+      case 'shrink': return this.rx().stmt.shrink(this, this.id(s.list), this.env.get(s.list)!.ty as ListTy);
     }
   }
 
@@ -401,7 +443,7 @@ class Printer implements Cx {
   }
 }
 
-export function printFns(lowering: Lowering, fns: Fn[]): string {
-  const p = new Printer(lowering, fns);
-  return fns.map((f) => p.fn(f)).join('\n');
+export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = []): string {
+  const p = new Printer(lowering, fns, sets);
+  return [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges)), ...fns.map((f) => p.fn(f))].join('\n');
 }

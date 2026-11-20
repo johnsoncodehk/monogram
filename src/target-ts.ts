@@ -4,8 +4,8 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
   ShapeSpec, ShapeIR, FieldBind, FieldDecl, NodeShape, ChoiceShape, ChoiceArm,
@@ -18,23 +18,6 @@ import { ATOM, COMPARISON, type BinOp, type Lowering, type R, type Ty } from './
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
-const rangeCond = (v: string, rs: CharRange[]) =>
-  '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} === ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
-
-/** Bail predicate: byte in bail set, or (bailNonAscii && ≥128). */
-function bailCondTS(v: string, bail: number[], bailNonAscii: boolean): string {
-  const parts = bail.map((c) => `${v} === ${c}`);
-  if (bailNonAscii) parts.push(`${v} >= 128`);
-  return parts.length ? parts.join(' || ') : 'false';
-}
-
-/** 256-entry Uint8Array FIRST/CONT table from ASCII-only ranges (codes >127 omitted). */
-function emitAsciiBoolTableTS(name: string, rs: CharRange[]): string {
-  const ranges = rs
-    .filter(([lo]) => lo <= 127)
-    .map(([lo, hi]) => `[${Math.max(0, lo)},${Math.min(127, hi)}]`);
-  return `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${ranges.join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`;
-}
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
@@ -71,109 +54,31 @@ function mk_tok(off: number, end: number, nl: boolean, kid: number, lid: number)
 `;
 }
 
-import type { TokenPattern } from './types.ts';
-
-// Compile a token-pattern AST to backtracking-free matcher functions `_mN(p): number`
-// (returns the new position, or -1 on no match). Greedy `repeat`, ordered `alt`,
-// zero-width `lookahead`/`anchor` — the regex-free token-matcher tier.
-function ccCond(p: Extract<TokenPattern, { type: 'charClass' }>): string {
-  const parts = p.items.map((it) =>
-    it.type === 'char' ? `cc === ${it.value.charCodeAt(0)}` : `cc >= ${it.from.charCodeAt(0)} && cc <= ${it.to.charCodeAt(0)}`);
-  const inSet = '(' + parts.join(' || ') + ')';
-  return p.negate ? `!${inSet}` : inSet;
-}
-function compilePat(p: TokenPattern, defs: string[]): string {
-  const name = `_m${defs.length}`;
-  defs.push('');   // reserve the slot (keeps numbering stable across recursion)
-  let body: string;
-  if (typeof p === 'string') {
-    body = `=> _s.startsWith(${J(p)}, p) ? p + ${p.length} : -1`;
-  } else switch (p.type) {
-    case 'anyChar': body = `=> p < _s.length ? p + 1 : -1`; break;
-    case 'charClass': body = `=> { if (p >= _s.length) return -1; const cc = _s.charCodeAt(p); return ${ccCond(p)} ? p + 1 : -1; }`; break;
-    case 'seq': { const ms = p.items.map((x) => compilePat(x, defs)); body = `=> { ${ms.map((m) => `p = ${m}(p); if (p < 0) return -1;`).join(' ')} return p; }`; break; }
-    case 'alt': { const ms = p.items.map((x) => compilePat(x, defs)); body = `=> { ${ms.map((m) => `{ const r = ${m}(p); if (r >= 0) return r; }`).join(' ')} return -1; }`; break; }
-    case 'repeat': { const m = compilePat(p.body, defs); const mx = p.max !== undefined ? `if (c >= ${p.max}) break;` : ''; body = `=> { let q = p, c = 0; for (;;) { const r = ${m}(q); if (r < 0 || r === q) break; q = r; c++; ${mx} } return c >= ${p.min} ? q : -1; }`; break; }
-    case 'lookahead': { const m = compilePat(p.body, defs); body = `=> { const r = ${m}(p); return ${p.negate ? 'r < 0' : 'r >= 0'} ? p : -1; }`; break; }
-    case 'anchor': body = p.kind === 'start' ? `=> p === 0 ? p : -1` : `=> p === _s.length ? p : -1`; break;
-    default: throw new Error(`portable TS lexer: pattern '${(p as { type: string }).type}' unsupported`);
-  }
-  defs[Number(name.slice(2))] = `const ${name} = (p: number): number ${body};`;
-  return name;
-}
-
-function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined, identLike: Set<string>): string {
-  const name = (t as { name: string }).name;
-  if (tplTok !== undefined && name === tplTok) return '';   // template token is scanned by the state machine
+// One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
+function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+  const name = t.name;
   // `emit(...)` threads the lexer state in stateful mode; a plain push otherwise. A skipped
   // token (comment) still records a newline it spans, so `sameLine` sees it.
   const kid = kidOf(ids, name);
-  const push = (endExpr: string) => (t.skip
-    ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, ${endExpr}))) pendingNl = true; `
-    : `${stateful ? 'emit' : 'push'}(pos, ${endExpr}, ${kid}, lid_of(src.slice(pos, ${endExpr}))); `);
-  const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
+  const push = t.skip
+    ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, e))) pendingNl = true; `
+    : `${stateful ? 'emit' : 'push'}(pos, e, ${kid}, lid_of(src.slice(pos, e))); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
-  const ext = (v: string) => (identLike.has(name) ? `${v} = lx_ext(src, ${v}); ` : '');
-  if (t.kind === 'run') return `    if (${gate}${rangeCond('c', t.first)}) {
-      let e = pos + 1;
-      while (e < n) { const cc = src.charCodeAt(e); if (!${rangeCond('cc', t.cont)}) break; e++; }
-      ${ext('e')}${push('e')}pos = e; continue;
-    }`;
-  if (t.kind === 'runBail') {
-    // Cont with non-ASCII: refuse tight loop (byte-index unsafe for multi-unit chars in other
-    // targets; keep three-target isomorphism — fall back to pattern cascade).
-    if (rangesHaveNonAscii(t.cont)) {
-      const m = compilePat(t.pattern, defs);
-      return `    if (${gate}true) { let e = ${m}(pos); if (e > pos) { ${ext('e')}${push('e')}pos = e; continue; } }`;
-    }
-    const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_');
-    const fTab = `_rbF_${tag}`, cTab = `_rbC_${tag}`;
-    defs.push(emitAsciiBoolTableTS(fTab, t.first));
-    defs.push(emitAsciiBoolTableTS(cTab, t.cont));
-    const m = compilePat(t.pattern, defs);
-    const bailAt = (v: string) => bailCondTS(v, t.bail, t.bailNonAscii);
-    // Entry fallback covers cont-bail chars AND complex-head entry chars (headBail).
-    const entryBail = bailCondTS('c', [...new Set([...t.bail, ...t.headBail])].sort((a, b) => a - b), t.bailNonAscii || t.headBailNonAscii);
-    return `    if (${gate}${fTab}[c]) {
-      let e = pos + 1;
-      while (e < n && ${cTab}[src.charCodeAt(e)]) e++;
-      if (e >= n || !(${bailAt('src.charCodeAt(e)')})) { ${ext('e')}${push('e')}pos = e; continue; }
-      { let e2 = ${m}(pos); if (e2 > pos) { ${ext('e2')}${push('e2')}pos = e2; continue; } }
-    } else if (${entryBail}) {
-      let e = ${m}(pos); if (e > pos) { ${ext('e')}${push('e')}pos = e; continue; }
-    }`;
-  }
-  if (t.kind === 'string') return `    if (${gate}c === ${t.delim.charCodeAt(0)}) {
-      let e = pos + 1, closed = false;
-      while (e < n) { const ch = src.charCodeAt(e); if (ch === 92) { e += 2; continue; } if (ch === ${t.delim.charCodeAt(0)}) { e++; closed = true; break; } e++; }
-      if (closed) { ${push('e')}pos = e; continue; }
-    }`;
-  if (t.kind === 'line') return `    if (${gate}src.startsWith(${J(t.prefix)}, pos)) {
-      let e = pos + ${t.prefix.length};
-      while (e < n && src.charCodeAt(e) !== 10) e++;
-      ${push('e')}pos = e; continue;
-    }`;
-  if (t.kind === 'block') return `    if (${gate}src.startsWith(${J(t.open)}, pos)) {
-      let e = pos + ${t.open.length};
-      while (e < n && !src.startsWith(${J(t.close)}, e)) e++;
-      if (e < n) { e += ${t.close.length}; ${push('e')}pos = e; continue; }
-    }`;
-  const m = compilePat(t.pattern, defs);
-  return `    if (${gate}true) { const e = ${m}(pos); if (e > pos) { ${push('e')}pos = e; continue; } }`;
+  const ext = identLike.has(name) ? 'e = lx_ext(src, e); ' : '';
+  const scan = `{ let e = ${shared.scanner(name)}(src, pos); if (e >= 0) { ${ext}${push}pos = e; continue; } }`;
+  return rxTok !== undefined && name === rxTok ? `    if (!prevIsValue()) ${scan}` : `    ${scan}`;
 }
 
 function buildLexCandidates(
-  ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
+  ir: ParserIR, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
-  for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok, identLike);
-    if (!code) continue;
-    codes.push(code);
+  for (const t of shared.scannedTokens(ir)) {
+    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -230,8 +135,9 @@ function tsFlagTable(name: string, flags: boolean[]): string {
   return `const ${name}: number[] = [${flags.map((b) => (b ? 1 : 0)).join(', ')}];`;
 }
 
-function lexer(ir: ParserIR, ids: LexIdPlan): string {
-  const defs: string[] = [];
+function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
+  const scanFns = shared.lexScan(ir);
+  const scans = scanFns ? scanFns + '\n' : '';
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
   const nl = ir.newlineCfg;
@@ -244,7 +150,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan): string {
   const pushFn = stateful ? 'emit' : 'push';
   const punctLine = (p: string) =>
     `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}(pos, pos + ${p.length}, 0, ${lidOf(ids, p)}); pos += ${p.length}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ');
   const rxBitTables = rx ? `${tsFlagTable('_divT', lidFlagTable(ids, rx.divisionTexts))}
 ${tsFlagTable('_divK', kidFlagTable(ids, rx.divisionTypes))}
@@ -390,10 +296,10 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackTs}    throw new Error('Unexpected character at offset ' + pos + ': \\'' + src[pos] + '\\'');`;
   if (rxOnly) {
-    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${scans}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean } {
   const n = src.length;
   const base = toks.length;
-${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${emitRxOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${rxStateFrom}${emitRxOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
   return { pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang };
@@ -405,10 +311,10 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${scans}function lexFrom(src: string, pos: number, pendingNl: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
-${defs.length ? '  _s = src;\n' : ''}${tplStateFrom}${emitTplOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${tplStateFrom}${emitTplOnly}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
   return { pos, pendingNl, templateStack };
@@ -420,10 +326,10 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${scans}function lexFrom(src: string, pos: number, pendingNl: boolean, prevLid: number, prevKid: number, bpLid: number, hasPrev: boolean, hasPrev2: boolean, parenHead: boolean[], lastClose: boolean, lastBang: boolean, templateStack: number[], toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; prevLid: number; prevKid: number; hasPrev: boolean; bpLid: number; hasPrev2: boolean; parenHead: boolean[]; lastClose: boolean; lastBang: boolean; templateStack: number[] } {
   const n = src.length;
   const base = toks.length;
-${defs.length ? '  _s = src;\n' : ''}${rxStateFrom}${tplStateFrom}${emitRxTpl}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${rxStateFrom}${tplStateFrom}${emitRxTpl}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
   return { pos, pendingNl, prevLid, prevKid, hasPrev, bpLid, hasPrev2, parenHead, lastClose, lastBang, templateStack };
@@ -435,22 +341,22 @@ function lex(src: string): Tok[] {
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lex(src: string): Tok[] {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}${scans}function lex(src: string): Tok[] {
   const toks: Tok[] = [];
   const n = src.length;
   let pos = 0;
   let pendingNl = false;
-${defs.length ? '  _s = src;\n' : ''}${rxState}${tplState}${nlState}${emitFn}  while (pos < n) {
+${rxState}${tplState}${nlState}${emitFn}  while (pos < n) {
 ${loopBody}
   }
   return toks;
 }`;
   }
   if (newlineOnly) {
-    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, flowDepth: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; flowDepth: number } {
+    return `${renderIdTablesTS(ids)}${lxUniIdentConst}${scans}function lexFrom(src: string, pos: number, pendingNl: boolean, flowDepth: number, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean; flowDepth: number } {
   const n = src.length;
   const base = toks.length;
-${defs.length ? '  _s = src;\n' : ''}${nlStateFrom}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${nlStateFrom}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
   return { pos, pendingNl, flowDepth };
@@ -461,10 +367,10 @@ function lex(src: string): Tok[] {
   return toks;
 }`;
   }
-  return `${renderIdTablesTS(ids)}${lxUniIdentConst}${defs.length ? 'let _s = "";\n' + defs.join('\n') + '\n' : ''}function lexFrom(src: string, pos: number, pendingNl: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean } {
+  return `${renderIdTablesTS(ids)}${lxUniIdentConst}${scans}function lexFrom(src: string, pos: number, pendingNl: boolean, toks: Tok[], limit?: number): { pos: number; pendingNl: boolean } {
   const n = src.length;
   const base = toks.length;
-${defs.length ? '  _s = src;\n' : ''}${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
+${pushFnDef}  while (pos < n && (limit === undefined || toks.length - base < limit)) {
 ${loopBody}
   }
   return { pos, pendingNl };
@@ -3475,9 +3381,9 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 const tsLowering: Lowering = {
   ident: (n) => n,
   num: { int: 'number', lid: 'number', depth: 'number' },
-  index: 'number',
   type: (t) => TS_TYPES[t],
   owns: false,
+  charSet: (name, rs) => `const ${name} = /*#__PURE__*/ (() => { const a = new Uint8Array(256); for (const [lo, hi] of [${rs.map(([lo, hi]) => `[${lo},${hi}]`).join(', ')}]) for (let i = lo; i <= hi; i++) a[i] = 1; return a; })();`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${tsWrap(r, ATOM)}`, prec: 90 }),
@@ -3487,59 +3393,69 @@ const tsLowering: Lowering = {
         (r.prec < p || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
-    index: (l, i) => ({ c: `${tsWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`${tsWrap(l, ATOM)}.length`, 'int', 'number'),
-    metaInt: (cx, m, f) => cx.atom(`${tsWrap(m, ATOM)}.${f}`, 'int', 'number'),
-    metaFlag: (cx, m, f) => cx.atom(`am_${f}(${m.c})`, 'bool', 'bool'),
-    tokInt: (cx, t, f) => cx.atom(`${tsWrap(t, ATOM)}.${f}`, 'int', 'number'),
-    tokNl: (cx, t) => cx.atom(`${tsWrap(t, ATOM)}.nl`, 'bool', 'bool'),
-    editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'number'),
-    editText: (cx, e) => cx.atom(`${e.c}.text`, 'str', 'str'),
-    metaText: (cx, t, m) => cx.atom(`am_text(${t.c}, ${m.c})`, 'str', 'str'),
-    substr: (cx, s, a, b) => cx.atom(`${tsWrap(s, ATOM)}.slice(${a.c}, ${b.c})`, 'str', 'str'),
-    lidOf: (cx, s) => cx.atom(`lid_of(${s.c})`, 'lid', cx.nat('lid')),
-    mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([, r]) => r.c).join(', ')})`, 'meta', 'meta'),
-    shiftMeta: (cx, m, d) => cx.atom(`shift_align(${m.c}, ${d.c})`, 'meta', 'meta'),
-    metaEq: (_cx, a, b) => ({
-      c: ['off', 'end', 'kid', 'pd', 'fd', 'flags', 'td'].map((f) => `${a.c}.${f} === ${b.c}.${f}`).join(' && '),
-      ty: 'bool', nat: 'bool', prec: TS_OPS.and[1],
-    }),
-    splice: (_cx, s, a, b, ins) => ({ c: `${tsWrap(s, ATOM)}.slice(0, ${a.c}) + ${ins.c} + ${tsWrap(s, ATOM)}.slice(${b.c})`, ty: 'str', nat: 'str', prec: TS_OPS.add[1] }),
+    code: (cx, s, i) => cx.atom(`${tsWrap(s, ATOM)}.charCodeAt(${i.c})`, 'int', 'number'),
+    hasAt: (cx, s, i, lit) => cx.atom(`${tsWrap(s, ATOM)}.startsWith(${J(lit)}, ${i.c})`, 'bool', 'bool'),
+    inSet: (_cx, set, c) => ({ c: `${set}[${c.c}] === 1`, ty: 'bool', nat: 'bool', prec: TS_OPS.eq[1] }),
     own: (_cx, r) => r,
-    newList: (cx, ty) => cx.atom('[]', ty, ty, { owned: true }),
-    falses: (cx, n) => cx.atom(`new Array<boolean>(${n.c}).fill(false)`, 'bools', 'bools', { owned: true }),
-    prefix: (cx, l, n) => cx.atom(`${tsWrap(l, ATOM)}.slice(0, ${n.c})`, l.ty, l.ty, { owned: true }),
   },
   stmt: {
     comment: (text) => [`// ${text}`],
     let: (cx, s) => [`${s.reassigned ? 'let' : 'const'} ${s.id}: ${cx.type(s.ty, 'local')} = ${s.r.c};`],
     set: (id, val) => [`${id} = ${val};`],
-    setAt: (id, i, val) => [`${id}[${i}] = ${val};`],
-    push: (_cx, l, r) => [`${l}.push(${r.c});`],
     if: (s) => {
       const head = `if (${s.c})`;
       if (s.inline !== undefined && TS_IND.length * s.depth + head.length + 1 + s.inline.length <= 110) return [`${head} ${s.inline}`];
       return [`${head} {`, ...tsBlock(s.then), ...(s.else ? ['} else {', ...tsBlock(s.else)] : []), '}'];
     },
     while: (c, body) => [`while (${c}) {`, ...tsBlock(body), '}'],
-    for: (_cx, v, from, to, body) => [`for (let ${v} = ${from.c}; ${v} < ${to.c}; ${v}++) {`, ...tsBlock(body), '}'],
-    forEach: (v, l, body) => [`for (const ${v} of ${l}) {`, ...tsBlock(body), '}'],
     break: () => ['break;'],
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `[${vals.join(', ')}]`};`],
-    destructure: (_cx, s) => {
-      const pat = `[${s.names.map((n) => (n === '_' ? '' : n)).join(', ').replace(/(, )+$/, '')}]`;
-      if (!s.declare) return [`${pat} = ${s.call};`];
-      return [`${s.names.some((n) => s.reassigned(n)) ? 'let' : 'const'} ${pat} = ${s.call};`];
-    },
-    lexStep: (_cx, s) => [`({ ${[s.posName === 'pos' ? 'pos' : `pos: ${s.posName}`, ...s.state].join(', ')} } = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, s.out].join(', ')}, 1));`],
-    shrink: () => [],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 1 ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
       ...tsBlock(f.body),
       '}',
     ].join('\n'),
+  },
+  relex: {
+    index: 'number',
+    expr: {
+      index: (l, i) => ({ c: `${tsWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
+      metaInt: (cx, m, f) => cx.atom(`${tsWrap(m, ATOM)}.${f}`, 'int', 'number'),
+      metaFlag: (cx, m, f) => cx.atom(`am_${f}(${m.c})`, 'bool', 'bool'),
+      tokInt: (cx, t, f) => cx.atom(`${tsWrap(t, ATOM)}.${f}`, 'int', 'number'),
+      tokNl: (cx, t) => cx.atom(`${tsWrap(t, ATOM)}.nl`, 'bool', 'bool'),
+      editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'number'),
+      editText: (cx, e) => cx.atom(`${e.c}.text`, 'str', 'str'),
+      metaText: (cx, t, m) => cx.atom(`am_text(${t.c}, ${m.c})`, 'str', 'str'),
+      substr: (cx, s, a, b) => cx.atom(`${tsWrap(s, ATOM)}.slice(${a.c}, ${b.c})`, 'str', 'str'),
+      lidOf: (cx, s) => cx.atom(`lid_of(${s.c})`, 'lid', cx.nat('lid')),
+      mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([, r]) => r.c).join(', ')})`, 'meta', 'meta'),
+      shiftMeta: (cx, m, d) => cx.atom(`shift_align(${m.c}, ${d.c})`, 'meta', 'meta'),
+      metaEq: (_cx, a, b) => ({
+        c: ['off', 'end', 'kid', 'pd', 'fd', 'flags', 'td'].map((f) => `${a.c}.${f} === ${b.c}.${f}`).join(' && '),
+        ty: 'bool', nat: 'bool', prec: TS_OPS.and[1],
+      }),
+      splice: (_cx, s, a, b, ins) => ({ c: `${tsWrap(s, ATOM)}.slice(0, ${a.c}) + ${ins.c} + ${tsWrap(s, ATOM)}.slice(${b.c})`, ty: 'str', nat: 'str', prec: TS_OPS.add[1] }),
+      newList: (cx, ty) => cx.atom('[]', ty, ty, { owned: true }),
+      falses: (cx, n) => cx.atom(`new Array<boolean>(${n.c}).fill(false)`, 'bools', 'bools', { owned: true }),
+      prefix: (cx, l, n) => cx.atom(`${tsWrap(l, ATOM)}.slice(0, ${n.c})`, l.ty, l.ty, { owned: true }),
+    },
+    stmt: {
+      setAt: (id, i, val) => [`${id}[${i}] = ${val};`],
+      push: (_cx, l, r) => [`${l}.push(${r.c});`],
+      for: (_cx, v, from, to, body) => [`for (let ${v} = ${from.c}; ${v} < ${to.c}; ${v}++) {`, ...tsBlock(body), '}'],
+      forEach: (v, l, body) => [`for (const ${v} of ${l}) {`, ...tsBlock(body), '}'],
+      destructure: (_cx, s) => {
+        const pat = `[${s.names.map((n) => (n === '_' ? '' : n)).join(', ').replace(/(, )+$/, '')}]`;
+        if (!s.declare) return [`${pat} = ${s.call};`];
+        return [`${s.names.some((n) => s.reassigned(n)) ? 'let' : 'const'} ${pat} = ${s.call};`];
+      },
+      lexStep: (_cx, s) => [`({ ${[s.posName === 'pos' ? 'pos' : `pos: ${s.posName}`, ...s.state].join(', ')} } = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, s.out].join(', ')}, 1));`],
+      shrink: () => [],
+    },
   },
 };
 
@@ -3632,7 +3548,7 @@ export type Leaf = { tokenType: string; offset: number; end: number };
 export type Node = { rule: string; children: Cst[]; offset: number; end: number };
 export type Cst = Node | Leaf;
 
-${lexer(ir, ids)}
+${lexer(ir, ids, shared)}
 
 let toks: Tok[] = [];
 let pos = 0;

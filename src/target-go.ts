@@ -9,29 +9,13 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
-import type { TokenPattern, CstGrammar } from './types.ts';
+import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
-const rangeCond = (v: string, rs: CharRange[]) =>
-  '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `${v} >= ${lo} && ${v} <= ${hi}`)).join(' || ') + ')';
-
-function bailCondGo(v: string, bail: number[], bailNonAscii: boolean): string {
-  const parts = bail.map((c) => `${v} == ${c}`);
-  if (bailNonAscii) parts.push(`${v} >= 128`);
-  return parts.length ? parts.join(' || ') : 'false';
-}
-
-function emitAsciiBoolTableGo(name: string, rs: CharRange[]): string {
-  const idxs: number[] = [];
-  for (const [lo, hi] of rs) {
-    for (let c = Math.max(0, lo); c <= Math.min(127, hi); c++) idxs.push(c);
-  }
-  return `var ${name} = [256]bool{${idxs.map((i) => `${i}: true`).join(', ')}}`;
-}
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
@@ -84,103 +68,29 @@ const TT_SKIP_PUNCT = ${TT_SKIP_PUNCT}
 `;
 }
 
-// Compile a token-pattern AST to backtracking-free package-level matcher funcs
-// `_mN(s string, p int) int` (new position in s, or -1).
-function ccCondGo(p: Extract<TokenPattern, { type: 'charClass' }>): string {
-  const parts = p.items.map((it) =>
-    it.type === 'char' ? `cc == ${it.value.charCodeAt(0)}` : `cc >= ${it.from.charCodeAt(0)} && cc <= ${it.to.charCodeAt(0)}`);
-  const inSet = '(' + parts.join(' || ') + ')';
-  return p.negate ? `!${inSet}` : inSet;
-}
-function compilePat(p: TokenPattern, defs: string[]): string {
-  const name = `_m${defs.length}`;
-  defs.push('');
-  let body: string;
-  if (typeof p === 'string') {
-    body = `{ if p <= len(s) && strings.HasPrefix(s[p:], ${J(p)}) { return p + ${p.length} }; return -1 }`;
-  } else switch (p.type) {
-    case 'anyChar': body = `{ if p < len(s) { return p + 1 }; return -1 }`; break;
-    case 'charClass': body = `{ if p >= len(s) { return -1 }; cc := int(s[p]); if ${ccCondGo(p)} { return p + 1 }; return -1 }`; break;
-    case 'seq': { const ms = p.items.map((x) => compilePat(x, defs)); body = `{ ${ms.map((m) => `p = ${m}(s, p); if p < 0 { return -1 }`).join('; ')}; return p }`; break; }
-    case 'alt': { const ms = p.items.map((x) => compilePat(x, defs)); body = `{ ${ms.map((m) => `if r := ${m}(s, p); r >= 0 { return r }`).join('; ')}; return -1 }`; break; }
-    case 'repeat': { const m = compilePat(p.body, defs); const mx = p.max !== undefined ? `; if c >= ${p.max} { break }` : ''; body = `{ q, c := p, 0; for { r := ${m}(s, q); if r < 0 || r == q { break }; q = r; c++${mx} }; if c >= ${p.min} { return q }; return -1 }`; break; }
-    case 'lookahead': { const m = compilePat(p.body, defs); body = `{ r := ${m}(s, p); if ${p.negate ? 'r < 0' : 'r >= 0'} { return p }; return -1 }`; break; }
-    case 'anchor': body = p.kind === 'start' ? `{ if p == 0 { return p }; return -1 }` : `{ if p == len(s) { return p }; return -1 }`; break;
-    default: throw new Error(`portable Go lexer: pattern '${(p as { type: string }).type}' unsupported`);
-  }
-  defs[Number(name.slice(2))] = `func ${name}(s string, p int) int ${body}`;
-  return name;
-}
-
-function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined, identLike: Set<string>): string {
-  const name = (t as { name: string }).name;
-  if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
+// One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
+function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+  const name = t.name;
   const kid = kidOf(ids, name);
-  const push = (endE: string) => (t.skip
-    ? `if strings.ContainsAny(src[pos:${endE}], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
-    : `${stateful ? 'emit' : 'pushTok'}(pos, ${endE}, ${kid}, lidOf(src[pos:${endE}])); `);
-  const gate = rxTok !== undefined && name === rxTok ? '!prevIsValue() && ' : '';
+  const push = t.skip
+    ? `if strings.ContainsAny(src[pos:e], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
+    : `${stateful ? 'emit' : 'pushTok'}(pos, e, ${kid}, lidOf(src[pos:e])); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
-  const ext = (v: string) => (identLike.has(name) ? `${v} = lxExt(src, ${v}); ` : '');
-  if (t.kind === 'run') return `\t\tif ${gate}${rangeCond('c', t.first)} {
-\t\t\te := pos + 1
-\t\t\tfor e < n { cc := int(src[e]); if !${rangeCond('cc', t.cont)} { break }; e++ }
-\t\t\t${ext('e')}${push('e')}pos = e; continue
-\t\t}`;
-  if (t.kind === 'runBail') {
-    if (rangesHaveNonAscii(t.cont)) {
-      const m = compilePat(t.pattern, defs);
-      return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(src, pos); e > pos { ${ext('e')}${push('e')}pos = e; continue } }`;
-    }
-    const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_');
-    const fTab = `_rbF_${tag}`, cTab = `_rbC_${tag}`;
-    defs.push(emitAsciiBoolTableGo(fTab, t.first));
-    defs.push(emitAsciiBoolTableGo(cTab, t.cont));
-    const m = compilePat(t.pattern, defs);
-    const bailAt = (v: string) => bailCondGo(v, t.bail, t.bailNonAscii);
-    // Entry fallback covers cont-bail chars AND complex-head entry chars (headBail).
-    const entryBail = bailCondGo('c', [...new Set([...t.bail, ...t.headBail])].sort((a, b) => a - b), t.bailNonAscii || t.headBailNonAscii);
-    return `\t\tif ${gate}${fTab}[c] {
-\t\t\te := pos + 1
-\t\t\tfor e < n && ${cTab}[src[e]] { e++ }
-\t\t\tif e >= n || !(${bailAt('int(src[e])')}) { ${ext('e')}${push('e')}pos = e; continue }
-\t\t\tif e2 := ${m}(src, pos); e2 > pos { ${ext('e2')}${push('e2')}pos = e2; continue }
-\t\t} else if ${entryBail} {
-\t\t\tif e := ${m}(src, pos); e > pos { ${ext('e')}${push('e')}pos = e; continue }
-\t\t}`;
-  }
-  if (t.kind === 'string') return `\t\tif ${gate}c == ${t.delim.charCodeAt(0)} {
-\t\t\te := pos + 1
-\t\t\tclosed := false
-\t\t\tfor e < n { ch := int(src[e]); if ch == 92 { e += 2; continue }; if ch == ${t.delim.charCodeAt(0)} { e++; closed = true; break }; e++ }
-\t\t\tif closed { ${push('e')}pos = e; continue }
-\t\t}`;
-  if (t.kind === 'line') return `\t\tif ${gate}strings.HasPrefix(src[pos:], ${J(t.prefix)}) {
-\t\t\te := pos + ${t.prefix.length}
-\t\t\tfor e < n && src[e] != 10 { e++ }
-\t\t\t${push('e')}pos = e; continue
-\t\t}`;
-  if (t.kind === 'block') return `\t\tif ${gate}strings.HasPrefix(src[pos:], ${J(t.open)}) {
-\t\t\te := pos + ${t.open.length}
-\t\t\tfor e < n && !strings.HasPrefix(src[e:], ${J(t.close)}) { e++ }
-\t\t\tif e < n { e += ${t.close.length}; ${push('e')}pos = e; continue }
-\t\t}`;
-  const m = compilePat(t.pattern, defs);
-  return `\t\tif ${gate ? gate + 'true' : 'true'} { if e := ${m}(src, pos); e > pos { ${push('e')}pos = e; continue } }`;
+  const ext = identLike.has(name) ? 'e = lxExt(src, e); ' : '';
+  const scan = `if e := ${shared.scanner(name)}(src, pos); e >= 0 { ${ext}${push}pos = e; continue }`;
+  return rxTok !== undefined && name === rxTok ? `\t\tif !prevIsValue() { ${scan} }` : `\t\t${scan}`;
 }
 
 function buildLexCandidates(
-  ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
+  ir: ParserIR, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
-  for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok, identLike);
-    if (!code) continue;
-    codes.push(code);
+  for (const t of shared.scannedTokens(ir)) {
+    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -236,8 +146,9 @@ ${flowSets}`,
   };
 }
 
-function lexer(ir: ParserIR, ids: LexIdPlan): string {
-  const defs: string[] = [];
+function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
+  const scanFns = shared.lexScan(ir);
+  const scans = scanFns ? scanFns + '\n' : '';
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
   const nl = ir.newlineCfg;
@@ -252,7 +163,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan): string {
     : (p: string) => `pushTok(pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`;
   const punctLine = (p: string) =>
     `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t');
   const goBoolArr = (name: string, flags: boolean[]) =>
     `var ${name} = []bool{${flags.map((b) => (b ? 'true' : 'false')).join(', ')}}`;
@@ -461,7 +372,7 @@ ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackGo}${loopPanicGo}`;
   const idTables = renderIdTablesGo(ids);
   if (rxOnly) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${defs.length ? defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool) {
 \tn := len(src)
 ${rxStateFrom}${emitRxOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -476,7 +387,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (tplOnly) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${defs.length ? defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, templateStack []int, acc *[]Tok, limit int) (int, bool, []int) {
 \tn := len(src)
 ${tplStateFrom}${emitTplOnly}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -491,7 +402,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (rxTpl) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${defs.length ? defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lexFrom(src string, pos int, pendingNl bool, prevLid, prevKid, bpLid uint16, hasPrev, hasPrev2 bool, parenHead []bool, lastClose, lastBang bool, templateStack []int, acc *[]Tok, limit int) (int, bool, uint16, uint16, uint16, bool, bool, []bool, bool, bool, []int) {
 \tn := len(src)
 ${rxStateFrom}${tplStateFrom}${emitRxTpl}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -506,7 +417,7 @@ func lex(src string) []Tok {
 }`;
   }
   if (rxOrTpl) {
-    return `${idTables}${lexGoHelpers}${rxModuleConsts}${defs.length ? defs.join('\n') + '\n' : ''}func lex(src string) []Tok {
+    return `${idTables}${lexGoHelpers}${rxModuleConsts}${scans}func lex(src string) []Tok {
 \tvar toks []Tok
 \tn := len(src)
 \tpos := 0
@@ -519,7 +430,7 @@ ${loopBody}
 }`;
   }
   if (newlineOnly) {
-    return `${idTables}${lexGoHelpers}${defs.length ? defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int) {
+    return `${idTables}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, flowDepth int, acc *[]Tok, limit int) (int, bool, int) {
 \tn := len(src)
 ${nlStateFrom}${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -533,7 +444,7 @@ func lex(src string) []Tok {
 \treturn out
 }`;
   }
-  return `${idTables}${lexGoHelpers}${defs.length ? defs.join('\n') + '\n' : ''}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
+  return `${idTables}${lexGoHelpers}${scans}func lexFrom(src string, pos int, pendingNl bool, acc *[]Tok, limit int) (int, bool) {
 \tn := len(src)
 ${pushTokAccFn}\tbase := len(*acc)
 \tfor pos < n && (limit <= 0 || len(*acc)-base < limit) {
@@ -2923,10 +2834,10 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 const goLowering: Lowering = {
   ident: (n) => n,
   num: { int: 'int', lid: 'uint16', depth: 'int' },
-  index: 'int',
   type: (t) => GO_TYPES[t],
   cast: (_cx, r, nat) => ({ ...r, c: `${nat}(${r.c})`, nat, prec: ATOM }),
   owns: false,
+  charSet: (name, rs) => `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${goWrap(r, ATOM)}`, prec: 90 }),
@@ -2936,29 +2847,12 @@ const goLowering: Lowering = {
         (r.prec < p || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
-    index: (l, i) => ({ c: `${goWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
-    metaInt: (cx, m, f) => cx.atom(`${goWrap(m, ATOM)}.${exported(f)}`, 'int', GO_META[f]),
-    metaFlag: (cx, m, f) => cx.atom(`am${exported(f)}(${m.c})`, 'bool', 'bool'),
-    tokInt: (cx, t, f) => cx.atom(`${goWrap(t, ATOM)}.${exported(f)}`, 'int', GO_TOK[f]),
-    tokNl: (cx, t) => cx.atom(`${goWrap(t, ATOM)}.Nl`, 'bool', 'bool'),
-    editInt: (cx, e, f) => cx.atom(`${e.c}.${exported(f)}`, 'int', 'int'),
-    editText: (cx, e) => cx.atom(`${e.c}.Text`, 'str', 'str'),
-    metaText: (cx, t, m) => cx.atom(`amText(${t.c}, ${m.c})`, 'str', 'str'),
-    substr: (cx, s, a, b) => cx.atom(`${goWrap(s, ATOM)}[${cx.coerce(a, 'int')}:${cx.coerce(b, 'int')}]`, 'str', 'str'),
-    lidOf: (cx, s) => cx.atom(`lidOf(${s.c})`, 'lid', cx.nat('lid')),
-    mkMeta: (cx, fs) => cx.atom(`mkAlign(${fs.map(([f, r]) => cx.coerce(r, GO_MK[f])).join(', ')})`, 'meta', 'meta'),
-    shiftMeta: (cx, m, d) => cx.atom(`shiftAlign(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
-    metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: GO_OPS.eq[1] }),
-    splice: (cx, s, a, b, ins) => ({ c: `${goWrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${goWrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: GO_OPS.add[1] }),
+    code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
+    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit)})`, 'bool', 'bool'),
+    inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
     own: (_cx, r) => r,
-    newList: (cx, ty, cap, estimate) => {
-      const c = cap ?? estimate;
-      return cx.atom(c ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(c, 'int')})` : 'nil', ty, ty, { owned: true });
-    },
-    falses: (cx, n) => cx.atom(`make([]bool, ${cx.coerce(n, 'int')})`, 'bools', 'bools', { owned: true }),
-    prefix: (cx, l, n, estimate) => cx.atom(`append(make(${GO_TYPES[l.ty]}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
   },
   stmt: {
     comment: (text) => [`// ${text}`],
@@ -2970,27 +2864,54 @@ const goLowering: Lowering = {
       return [`${s.id} := ${cx.coerce(s.r, nat)}`];
     },
     set: (id, val) => [`${id} = ${val}`],
-    setAt: (id, i, val) => [`${id}[${i}] = ${val}`],
-    push: (_cx, l, r) => [`${l} = append(${l}, ${r.c})`],
     if: (s) => {
       const head = `if ${s.c}`;
       if (s.inline !== undefined && GO_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
       return [`${head} {`, ...goBlock(s.then), ...(s.else ? ['} else {', ...goBlock(s.else)] : []), '}'];
     },
     while: (c, body) => [`for ${c} {`, ...goBlock(body), '}'],
-    for: (cx, v, from, to, body) => [`for ${v} := ${cx.coerce(from, 'int')}; ${v} < ${cx.coerce(to, 'int')}; ${v}++ {`, ...goBlock(body), '}'],
-    forEach: (v, l, body) => [`for _, ${v} := range ${l} {`, ...goBlock(body), '}'],
     break: () => ['break'],
     return: (vals) => [`return ${vals.join(', ')}`],
-    destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
-    lexStep: (_cx, s) => [`${[s.pos, ...s.state].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
-    shrink: (_cx, l, ty) => [`if cap(${l}) > 2*len(${l}) { ${l} = append(${GO_TYPES[ty]}(nil), ${l}...) }`],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       `func ${f.name}(${f.params.map((p) => `${p.name} ${p.type}`).join(', ')}) ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...goBlock(f.body),
       '}',
     ].join('\n'),
+  },
+  relex: {
+    index: 'int',
+    expr: {
+      index: (l, i) => ({ c: `${goWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
+      metaInt: (cx, m, f) => cx.atom(`${goWrap(m, ATOM)}.${exported(f)}`, 'int', GO_META[f]),
+      metaFlag: (cx, m, f) => cx.atom(`am${exported(f)}(${m.c})`, 'bool', 'bool'),
+      tokInt: (cx, t, f) => cx.atom(`${goWrap(t, ATOM)}.${exported(f)}`, 'int', GO_TOK[f]),
+      tokNl: (cx, t) => cx.atom(`${goWrap(t, ATOM)}.Nl`, 'bool', 'bool'),
+      editInt: (cx, e, f) => cx.atom(`${e.c}.${exported(f)}`, 'int', 'int'),
+      editText: (cx, e) => cx.atom(`${e.c}.Text`, 'str', 'str'),
+      metaText: (cx, t, m) => cx.atom(`amText(${t.c}, ${m.c})`, 'str', 'str'),
+      substr: (cx, s, a, b) => cx.atom(`${goWrap(s, ATOM)}[${cx.coerce(a, 'int')}:${cx.coerce(b, 'int')}]`, 'str', 'str'),
+      lidOf: (cx, s) => cx.atom(`lidOf(${s.c})`, 'lid', cx.nat('lid')),
+      mkMeta: (cx, fs) => cx.atom(`mkAlign(${fs.map(([f, r]) => cx.coerce(r, GO_MK[f])).join(', ')})`, 'meta', 'meta'),
+      shiftMeta: (cx, m, d) => cx.atom(`shiftAlign(${m.c}, ${cx.coerce(d, 'int')})`, 'meta', 'meta'),
+      metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: GO_OPS.eq[1] }),
+      splice: (cx, s, a, b, ins) => ({ c: `${goWrap(s, ATOM)}[:${cx.coerce(a, 'int')}] + ${ins.c} + ${goWrap(s, ATOM)}[${cx.coerce(b, 'int')}:]`, ty: 'str', nat: 'str', prec: GO_OPS.add[1] }),
+      newList: (cx, ty, cap, estimate) => {
+        const c = cap ?? estimate;
+        return cx.atom(c ? `make(${GO_TYPES[ty]}, 0, ${cx.coerce(c, 'int')})` : 'nil', ty, ty, { owned: true });
+      },
+      falses: (cx, n) => cx.atom(`make([]bool, ${cx.coerce(n, 'int')})`, 'bools', 'bools', { owned: true }),
+      prefix: (cx, l, n, estimate) => cx.atom(`append(make(${GO_TYPES[l.ty]}, 0, ${cx.coerce(estimate, 'int')}), ${goWrap(l, ATOM)}[:${cx.coerce(n, 'int')}]...)`, l.ty, l.ty, { owned: true }),
+    },
+    stmt: {
+      setAt: (id, i, val) => [`${id}[${i}] = ${val}`],
+      push: (_cx, l, r) => [`${l} = append(${l}, ${r.c})`],
+      for: (cx, v, from, to, body) => [`for ${v} := ${cx.coerce(from, 'int')}; ${v} < ${cx.coerce(to, 'int')}; ${v}++ {`, ...goBlock(body), '}'],
+      forEach: (v, l, body) => [`for _, ${v} := range ${l} {`, ...goBlock(body), '}'],
+      destructure: (_cx, s) => [`${s.ids.join(', ')} ${s.declare ? ':=' : '='} ${s.call}`],
+      lexStep: (_cx, s) => [`${[s.pos, ...s.state].join(', ')} = lexFrom(${s.text.c}, ${s.pos}, ${[...s.state, `&${s.out}`].join(', ')}, 1)`],
+      shrink: (_cx, l, ty) => [`if cap(${l}) > 2*len(${l}) { ${l} = append(${GO_TYPES[ty]}(nil), ${l}...) }`],
+    },
   },
 };
 
@@ -3080,7 +3001,7 @@ const arenaCompactK = 4
 
 ${renderArenaTablesGo(ar)}
 
-${lexer(ir, ids)}
+${lexer(ir, ids, shared)}
 
 // Public token (the tokenizer's output model).
 type Token struct {

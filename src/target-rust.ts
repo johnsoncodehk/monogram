@@ -11,10 +11,10 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type CharRange, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, rangesHaveNonAscii, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder } from './emit-portable.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
-import type { TokenPattern, CstGrammar } from './types.ts';
+import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import type {
@@ -26,8 +26,6 @@ import { validateShapeOrThrow } from './shape-validate.ts';
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
-const rangeCond = (v: string, rs: CharRange[]) =>
-  '(' + rs.map(([lo, hi]) => (lo === hi ? `${v} == ${lo}` : `(${lo}..=${hi}).contains(&${v})`)).join(' || ') + ')';
 
 /** `starts_with` on a single ASCII byte collapses to a direct byte compare (no slice/bounds). */
 const startByteEq = (posExpr: string, s: string): string => {
@@ -37,20 +35,6 @@ const startByteEq = (posExpr: string, s: string): string => {
   }
   return `src[${posExpr}..].starts_with(${J(s)})`;
 };
-
-function bailCondRs(v: string, bail: number[], bailNonAscii: boolean): string {
-  const parts = bail.map((c) => `${v} == ${c}`);
-  if (bailNonAscii) parts.push(`${v} >= 128`);
-  return parts.length ? parts.join(' || ') : 'false';
-}
-
-function emitAsciiBoolTableRs(name: string, rs: CharRange[]): string {
-  const a = Array<boolean>(256).fill(false);
-  for (const [lo, hi] of rs) {
-    for (let c = Math.max(0, lo); c <= Math.min(127, hi); c++) a[c] = true;
-  }
-  return `const ${name}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
-}
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 // null FirstSig → 'false' (never matched here; predictive alts have all-non-null FIRSTs).
@@ -168,95 +152,21 @@ const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 }
 
 
-// Compile a token-pattern AST to backtracking-free matcher fns `_mN(s, p) -> i64`
-// (new position, or -1). Named functions (Rust closures can't recurse); the source is
-// threaded as a param (Rust has no convenient module-level mutable string).
-function ccCondRs(p: Extract<TokenPattern, { type: 'charClass' }>): string {
-  const parts = p.items.map((it) =>
-    it.type === 'char' ? `cc == ${it.value.charCodeAt(0)}` : `(${it.from.charCodeAt(0)}..=${it.to.charCodeAt(0)}).contains(&cc)`);
-  const inSet = '(' + parts.join(' || ') + ')';
-  return p.negate ? `!${inSet}` : inSet;
-}
-function compilePat(p: TokenPattern, defs: string[]): string {
-  const name = `_m${defs.length}`;
-  defs.push('');
-  let body: string;
-  if (typeof p === 'string') {
-    body = `if (p as usize) <= s.len() && s[p as usize..].starts_with(${J(p)}) { p + ${p.length} } else { -1 }`;
-  } else switch (p.type) {
-    case 'anyChar': body = `if (p as usize) < s.len() { p + 1 } else { -1 }`; break;
-    case 'charClass': body = `let u = p as usize; if u >= s.len() { return -1; } let cc = s.as_bytes()[u] as u32; if ${ccCondRs(p)} { p + 1 } else { -1 }`; break;
-    case 'seq': { const ms = p.items.map((x) => compilePat(x, defs)); body = `let mut p = p; ${ms.map((m) => `p = ${m}(s, p); if p < 0 { return -1; }`).join(' ')} p`; break; }
-    case 'alt': { const ms = p.items.map((x) => compilePat(x, defs)); body = `${ms.map((m) => `{ let r = ${m}(s, p); if r >= 0 { return r; } }`).join(' ')} -1`; break; }
-    case 'repeat': { const m = compilePat(p.body, defs); const mx = p.max !== undefined ? ` if c >= ${p.max} { break; }` : ''; body = `let mut q = p; let mut c = 0i64; loop { let r = ${m}(s, q); if r < 0 || r == q { break; } q = r; c += 1;${mx} } if c >= ${p.min} { q } else { -1 }`; break; }
-    case 'lookahead': { const m = compilePat(p.body, defs); body = `let r = ${m}(s, p); if ${p.negate ? 'r < 0' : 'r >= 0'} { p } else { -1 }`; break; }
-    case 'anchor': body = p.kind === 'start' ? `if p == 0 { p } else { -1 }` : `if p as usize == s.len() { p } else { -1 }`; break;
-    default: throw new Error(`portable Rust lexer: pattern '${(p as { type: string }).type}' unsupported`);
-  }
-  defs[Number(name.slice(2))] = `fn ${name}(s: &str, p: i64) -> i64 { ${body} }`;
-  return name;
-}
-
-function scanTok(t: LexTok, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined, identLike: Set<string>): string {
-  const name = (t as { name: string }).name;
-  if (tplTok !== undefined && name === tplTok) return '';   // template token scanned by the state machine
+// One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
+function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
+  const name = t.name;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const kid = kidOf(ids, name);
-  const push = (endE: string) => (t.skip
-    ? `if src[pos..${endE}].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
+  const push = t.skip
+    ? `if src[pos..e].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
     : stateful
-      ? `st.emit(pos, ${endE}, ${kid}, lid_of(&src[pos..${endE}])); `
-      : `toks.push(mk_tok(pos, ${endE}, pending_nl, ${kid}, lid_of(&src[pos..${endE}]))); pending_nl = false; `);
-  const gate = rxTok !== undefined && name === rxTok ? '!st.prev_is_value() && ' : '';
+      ? `st.emit(pos, e, ${kid}, lid_of(&src[pos..e])); `
+      : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&src[pos..e]))); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
-  const ext = (v: string) => (identLike.has(name) ? `let ${v} = if ${v} < b.len() && b[${v}] >= 0x80 { _lx_ext(b, ${v}) } else { ${v} }; ` : '');
-  if (t.kind === 'run') return `        if ${gate}${rangeCond('c', t.first)} {
-            let mut e = pos + 1;
-            while e < n { let cc = b[e] as u32; if !${rangeCond('cc', t.cont)} { break } e += 1; }
-            ${ext('e')}${push('e')}pos = e; continue;
-        }`;
-  if (t.kind === 'runBail') {
-    if (rangesHaveNonAscii(t.cont)) {
-      const m = compilePat(t.pattern, defs);
-      return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${ext('e')}${push('e')}pos = e; continue; } }`;
-    }
-    const tag = t.name.replace(/[^A-Za-z0-9_]/g, '_').toUpperCase();
-    const fTab = `_RB_F_${tag}`, cTab = `_RB_C_${tag}`;
-    defs.push(emitAsciiBoolTableRs(fTab, t.first));
-    defs.push(emitAsciiBoolTableRs(cTab, t.cont));
-    const m = compilePat(t.pattern, defs);
-    const bailAt = (v: string) => bailCondRs(v, t.bail, t.bailNonAscii);
-    // Entry fallback covers cont-bail chars AND complex-head entry chars (headBail).
-    const entryBail = bailCondRs('c', [...new Set([...t.bail, ...t.headBail])].sort((a, b) => a - b), t.bailNonAscii || t.headBailNonAscii);
-    return `        if ${gate}${fTab}[c as usize] {
-            let mut e = pos + 1;
-            while e < n && ${cTab}[b[e] as usize] { e += 1; }
-            if e >= n || !(${bailAt('b[e] as u32')}) { ${ext('e')}${push('e')}pos = e; continue; }
-            { let e2 = ${m}(src, pos as i64); if e2 > pos as i64 { let e2 = e2 as usize; ${ext('e2')}${push('e2')}pos = e2; continue; } }
-        } else if ${entryBail} {
-            let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${ext('e')}${push('e')}pos = e; continue; }
-        }`;
-  }
-  if (t.kind === 'string') return `        if ${gate}c == ${t.delim.charCodeAt(0)} {
-            let mut e = pos + 1;
-            let mut closed = false;
-            while e < n { let ch = b[e] as u32; if ch == 92 { e += 2; continue } if ch == ${t.delim.charCodeAt(0)} { e += 1; closed = true; break } e += 1; }
-            if closed { ${push('e')}pos = e; continue; }
-        }`;
-  if (t.kind === 'line') return `        if ${gate}src[pos..].starts_with(${J(t.prefix)}) {
-            let mut e = pos + ${t.prefix.length};
-            while e < n && b[e] != 10 { e += 1; }
-            ${push('e')}pos = e; continue;
-        }`;
-  if (t.kind === 'block') return `        if ${gate}src[pos..].starts_with(${J(t.open)}) {
-            let mut e = pos + ${t.open.length};
-            // Byte-step + &str slice panics mid multi-byte char; match close on bytes.
-            while e < n && !b[e..].starts_with(${J(t.close)}.as_bytes()) { e += 1; }
-            if e < n { e += ${t.close.length}; ${push('e')}pos = e; continue; }
-        }`;
-  const m = compilePat(t.pattern, defs);
-  return `        if ${gate}true { let e = ${m}(src, pos as i64); if e > pos as i64 { let e = e as usize; ${push('e')}pos = e; continue; } }`;
+  const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
+  const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
+  return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
 
 function rustByteLit(b: number): string {
@@ -283,16 +193,14 @@ function rustMatchLabels(bytes: number[]): string {
 }
 
 function buildLexCandidates(
-  ir: ParserIR, defs: string[], stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, tplTok: string | undefined,
+  ir: ParserIR, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined,
   punctLine: (p: string) => string,
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const identLike = new Set(ir.identLike);
   const codes: string[] = [];
   const firsts: (LexFirstBytes | null)[] = [];
-  for (const t of ir.tokens) {
-    const code = scanTok(t, defs, stateful, ids, rxTok, tplTok, identLike);
-    if (!code) continue;
-    codes.push(code);
+  for (const t of shared.scannedTokens(ir)) {
+    codes.push(scanTok(t, shared, stateful, ids, rxTok, identLike));
     firsts.push(lexTokFirstBytes(t));
   }
   for (const p of ir.puncts) {
@@ -367,8 +275,9 @@ function rsLidAny(ids: LexIdPlan, texts: readonly string[], idExpr: string): str
   return ls.map((l) => `${idExpr} == ${l}`).join(' || ');
 }
 
-function lexer(ir: ParserIR, ids: LexIdPlan): string {
-  const defs: string[] = [];
+function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
+  const scanFns = shared.lexScan(ir);
+  const scans = scanFns ? scanFns + '\n' : '';
   const rx = ir.regexCtx;
   const tpl = ir.tpl;
   const nl = ir.newlineCfg;
@@ -410,7 +319,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan): string {
 ${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${p.length}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${p.length}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${p.length}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, defs, stateful, ids, rx?.regexToken, tpl?.token, punctLine);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
@@ -588,7 +497,7 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -605,7 +514,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${tplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${tplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -622,7 +531,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${rxTplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${rxTplScanImpl}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, mut prev_lid: u16, mut prev_kid: u16, mut bp_lid: u16, mut has_prev: bool, mut has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -639,7 +548,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
 }`;
   }
   if (rxOrTpl) {
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}${stateImpl}fn lex<'a>(src: &'a str) -> Vec<Tok> {
     let b = src.as_bytes();
     let n = b.len();
 ${open}
@@ -660,7 +569,7 @@ ${loopBody}
     const nlLoopBody = `        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
 ${nlUniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, flow_depth: i64 }
+    return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}struct NlScan<'a> { acc: &'a mut Vec<Tok>, pending_nl: bool, flow_depth: i64 }
 impl<'a> NlScan<'a> {
     fn push_tok(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${nlRs!.hooksFrom.replace(/flow_depth/g, 'self.flow_depth')}
@@ -683,7 +592,7 @@ fn lex<'a>(src: &'a str) -> Vec<Tok> {
     toks
 }`;
   }
-  return `${renderIdTablesRust(ids)}${defs.length ? defs.join('\n') + '\n' : ''}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
+  return `${renderIdTablesRust(ids)}${scans}${rxConsts}${tplFn}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -4861,7 +4770,6 @@ const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
 const rustLowering: Lowering = {
   ident: snake,
   num: { int: 'isize', lid: 'u16', depth: 'i64' },
-  index: 'usize',
   type: (t, role, owned) => {
     if (isList(t)) return role === 'param' ? `&[${RS_ELEM[t]}]` : `Vec<${RS_ELEM[t]}>`;
     if (t === 'str') return role === 'param' || !owned ? '&str' : 'String';
@@ -4873,6 +4781,11 @@ const rustLowering: Lowering = {
   borrowStr: (r) => (!r.owned ? r.c : /^\w+$/.test(r.c) ? `${r.c}.as_str()` : `(${r.c}).as_str()`),
   borrowList: (r) => (r.owned ? `&${r.c}` : r.c),
   borrowVal: (r) => `&${r.c}`,
+  charSet: (name, rs) => {
+    const a = Array<boolean>(256).fill(false);
+    for (const [lo, hi] of rs) for (let c = lo; c <= hi; c++) a[c] = true;
+    return `const ${name.toUpperCase()}: [bool; 256] = [${a.map((b) => (b ? 'true' : 'false')).join(', ')}];`;
+  },
   expr: {
     literal: (v) => ({ c: typeof v === 'string' ? JSON.stringify(v) : String(v), prec: typeof v === 'number' && v < 0 ? 7 : ATOM }),
     not: (r) => ({ c: `!${rsWrap(r, ATOM)}`, prec: 90 }),
@@ -4882,63 +4795,73 @@ const rustLowering: Lowering = {
         (r.prec < p || r.prec === RS_CAST || (right && r.prec === p) || (op === 'shr' && r.prec < ATOM) || (COMPARISON.has(op) && r.prec >= 3 && r.prec <= 4) ? `(${r.c})` : r.c);
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
-    index: (l, i) => ({ c: `${rsWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
-    metaInt: (cx, m, f) => cx.atom(`${rsWrap(m, ATOM)}.${f}`, 'int', RS_META[f]),
-    metaFlag: (cx, m, f) => cx.atom(`am_${f}(${cx.ref(m)})`, 'bool', 'bool'),
-    tokInt: (cx, t, f) => cx.atom(`${rsWrap(t, ATOM)}.${f}`, 'int', RS_TOK[f]),
-    tokNl: (cx, t) => cx.atom(`${rsWrap(t, ATOM)}.nl`, 'bool', 'bool'),
-    editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'usize'),
-    editText: (cx, e) => cx.atom(`${e.c}.text.as_str()`, 'str', 'str', { owned: false }),
-    metaText: (cx, t, m) => cx.atom(`am_text(${cx.str(t)}, ${cx.ref(m)})`, 'str', 'str', { owned: false }),
-    substr: (cx, s, a, b) => ({ c: `&${rsWrap(s, ATOM)}[${cx.coerce(a, 'usize')}..${cx.coerce(b, 'usize')}]`, ty: 'str', nat: 'str', prec: 90, owned: false }),
-    lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)})`, 'lid', cx.nat('lid')),
-    mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([f, r]) => cx.coerce(r, RS_MK[f])).join(', ')})`, 'meta', 'meta'),
-    shiftMeta: (cx, m, d) => cx.atom(`shift_align(${cx.ref(m)}, ${cx.coerce(d, 'isize')})`, 'meta', 'meta'),
-    metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: RS_OPS.eq[1] }),
-    splice: (cx, s, a, b, ins) => cx.atom(`format!("{}{}{}", &${rsWrap(s, ATOM)}[..${cx.coerce(a, 'usize')}], ${cx.str(ins)}, &${rsWrap(s, ATOM)}[${cx.coerce(b, 'usize')}..])`, 'str', 'str', { owned: true }),
+    code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
+    hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
+    inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
       if (isList(r.ty)) return cx.atom(`${rsWrap(r, ATOM)}.to_vec()`, r.ty, r.ty, { owned: true });
       return r;
     },
-    newList: (cx, ty, cap) => cx.atom(cap ? `Vec::with_capacity(${cx.coerce(cap, 'usize')})` : 'Vec::new()', ty, ty, { owned: true }),
-    falses: (cx, n) => cx.atom(`vec![false; ${cx.coerce(n, 'usize')}]`, 'bools', 'bools', { owned: true }),
-    prefix: (cx, l, n) => cx.atom(`${rsWrap(l, ATOM)}[..${cx.coerce(n, 'usize')}].to_vec()`, l.ty, l.ty, { owned: true }),
   },
   stmt: {
     comment: (text) => [`// ${text}`],
     let: (cx, s) => [`let ${s.mutable ? 'mut ' : ''}${s.id}: ${cx.type(s.ty, 'local', s.owned)} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`],
     set: (id, val) => [`${id} = ${val};`],
-    setAt: (id, i, val) => [`${id}[${i}] = ${val};`],
-    push: (_cx, l, r) => [`${l}.push(${r.c});`],
     if: (s) => {
       const head = `if ${s.c}`;
       if (s.inline !== undefined && RS_IND.length * s.depth + head.length + s.inline.length + 5 <= 110) return [`${head} { ${s.inline} }`];
       return [`${head} {`, ...rsBlock(s.then), ...(s.else ? ['} else {', ...rsBlock(s.else)] : []), '}'];
     },
     while: (c, body) => [`while ${c} {`, ...rsBlock(body), '}'],
-    for: (cx, v, from, to, body) => [`for ${v} in ${cx.coerce(from, 'isize')}..${cx.coerce(to, 'isize')} {`, ...rsBlock(body), '}'],
-    forEach: (v, l, body) => [`for ${v} in ${l} {`, ...rsBlock(body), '}'],
     break: () => ['break;'],
     return: (vals) => [`return ${vals.length === 1 ? vals[0] : `(${vals.join(', ')})`};`],
-    destructure: (_cx, s) => {
-      if (!s.declare) return [`(${s.ids.join(', ')}) = ${s.call};`];
-      return [`let (${s.names.map((n, i) => (n !== '_' && s.mutable(n) ? `mut ${s.ids[i]}` : s.ids[i])).join(', ')}) = ${s.call};`];
-    },
-    lexStep: (cx, s) => [
-      `let lexed = lex_from(${cx.str(s.text)}, ${s.pos} as usize, ${[...s.state, `&mut ${s.out}`].join(', ')}, 1);`,
-      `${s.pos} = lexed.0 as isize;`,
-      ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
-    ],
-    shrink: () => [],
     fn: (f) => [
       ...f.doc.map((l) => `// ${l}`),
       `fn ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}) -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`} {`,
       ...rsBlock(f.body),
       '}',
     ].join('\n'),
+  },
+  relex: {
+    index: 'usize',
+    expr: {
+      index: (l, i) => ({ c: `${rsWrap(l, ATOM)}[${i.c}]`, prec: ATOM }),
+      metaInt: (cx, m, f) => cx.atom(`${rsWrap(m, ATOM)}.${f}`, 'int', RS_META[f]),
+      metaFlag: (cx, m, f) => cx.atom(`am_${f}(${cx.ref(m)})`, 'bool', 'bool'),
+      tokInt: (cx, t, f) => cx.atom(`${rsWrap(t, ATOM)}.${f}`, 'int', RS_TOK[f]),
+      tokNl: (cx, t) => cx.atom(`${rsWrap(t, ATOM)}.nl`, 'bool', 'bool'),
+      editInt: (cx, e, f) => cx.atom(`${e.c}.${f}`, 'int', 'usize'),
+      editText: (cx, e) => cx.atom(`${e.c}.text.as_str()`, 'str', 'str', { owned: false }),
+      metaText: (cx, t, m) => cx.atom(`am_text(${cx.str(t)}, ${cx.ref(m)})`, 'str', 'str', { owned: false }),
+      substr: (cx, s, a, b) => ({ c: `&${rsWrap(s, ATOM)}[${cx.coerce(a, 'usize')}..${cx.coerce(b, 'usize')}]`, ty: 'str', nat: 'str', prec: 90, owned: false }),
+      lidOf: (cx, s) => cx.atom(`lid_of(${cx.str(s)})`, 'lid', cx.nat('lid')),
+      mkMeta: (cx, fs) => cx.atom(`mk_align(${fs.map(([f, r]) => cx.coerce(r, RS_MK[f])).join(', ')})`, 'meta', 'meta'),
+      shiftMeta: (cx, m, d) => cx.atom(`shift_align(${cx.ref(m)}, ${cx.coerce(d, 'isize')})`, 'meta', 'meta'),
+      metaEq: (_cx, a, b) => ({ c: `${a.c} == ${b.c}`, ty: 'bool', nat: 'bool', prec: RS_OPS.eq[1] }),
+      splice: (cx, s, a, b, ins) => cx.atom(`format!("{}{}{}", &${rsWrap(s, ATOM)}[..${cx.coerce(a, 'usize')}], ${cx.str(ins)}, &${rsWrap(s, ATOM)}[${cx.coerce(b, 'usize')}..])`, 'str', 'str', { owned: true }),
+      newList: (cx, ty, cap) => cx.atom(cap ? `Vec::with_capacity(${cx.coerce(cap, 'usize')})` : 'Vec::new()', ty, ty, { owned: true }),
+      falses: (cx, n) => cx.atom(`vec![false; ${cx.coerce(n, 'usize')}]`, 'bools', 'bools', { owned: true }),
+      prefix: (cx, l, n) => cx.atom(`${rsWrap(l, ATOM)}[..${cx.coerce(n, 'usize')}].to_vec()`, l.ty, l.ty, { owned: true }),
+    },
+    stmt: {
+      setAt: (id, i, val) => [`${id}[${i}] = ${val};`],
+      push: (_cx, l, r) => [`${l}.push(${r.c});`],
+      for: (cx, v, from, to, body) => [`for ${v} in ${cx.coerce(from, 'isize')}..${cx.coerce(to, 'isize')} {`, ...rsBlock(body), '}'],
+      forEach: (v, l, body) => [`for ${v} in ${l} {`, ...rsBlock(body), '}'],
+      destructure: (_cx, s) => {
+        if (!s.declare) return [`(${s.ids.join(', ')}) = ${s.call};`];
+        return [`let (${s.names.map((n, i) => (n !== '_' && s.mutable(n) ? `mut ${s.ids[i]}` : s.ids[i])).join(', ')}) = ${s.call};`];
+      },
+      lexStep: (cx, s) => [
+        `let lexed = lex_from(${cx.str(s.text)}, ${s.pos} as usize, ${[...s.state, `&mut ${s.out}`].join(', ')}, 1);`,
+        `${s.pos} = lexed.0 as isize;`,
+        ...s.state.map((n, i) => `${n} = lexed.${i + 1};`),
+      ],
+      shrink: () => [],
+    },
   },
 };
 
@@ -4982,7 +4905,7 @@ const _: () = assert!(std::mem::size_of::<Tok>() == 16);
 struct Node { rule_id: u16, kid_start: u32, kid_count: u32, offset: u32, end: u32, tok_start: u32, tok_end: u32, ext: u32 }
 const _: () = assert!(std::mem::size_of::<Node>() == 32);
 ${entryMetaStruct}${segStruct}
-${lexer(ir, ids)}
+${lexer(ir, ids, shared)}
 
 ${arenaIdTables}
 const ARENA_COMPACT_K: usize = 4;
