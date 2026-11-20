@@ -6,24 +6,35 @@ No repo checkout.
 
     ./run.sh /path/to/in.ts 7      # serial; then send results.tgz
 
-| dir  | source                                                                                  |
-|------|-----------------------------------------------------------------------------------------|
-| base | master 02d8827 (Go parser.go byte-identical to the earlier `cand`, sha256 1fb7d7b0…)     |
-| fam  | branch `cursor/relex-scanmeta-family-016d` @ ac70b67 — relex/scanMeta family generated  |
+| dir  | commit (johnsoncodehk/monogram)                         | what                                   |
+|------|---------------------------------------------------------|----------------------------------------|
+| base | `02d8827` master                                        | before the relex family                |
+| fam  | `ac70b67` PR #78 (first Linux run: Rust Doc::new +15.6%) | relex/scanMeta family generated        |
+| fix  | `3c1a1ad` PR #78                                        | Rust no longer reserves growth estimates |
 
-All files are `emitParser(typescript.ts, target)` outputs; see SHA256SUMS.
+Every `parser.go` / `parser.ts` and the parser part of `bench.rs` is `emitParser(typescript.ts, target)`
+from that commit; `bench.rs` appends `bench-tail.rs`. Reproduce and verify against `SHA256SUMS`:
+
+    ./gen.sh /path/to/monogram-clone   # git archive <commit> per VARIANTS → node gen.ts → sha256 -c
+
+`base/` and `fam/` are byte-identical to the previous package (artifact commit 395feaf), and the
+harness files (`main-*.go`, `tsbench.ts`, `bench-tail.rs`) are unchanged, so timing semantics match
+the first Linux run. `fix` changes only Rust output versus `fam`: `scan_meta_toks` uses
+`Vec::new()` without the trim (the same allocation pattern as base), and the relex prefix is
+`old_toks[..n].to_vec()`. Go output is identical to `fam` apart from two comment lines.
 
 Rows: `gobench` = the original harness (ParseWith / NewDoc / 200-edit loop); `goprof` = 300 NewDoc
 with per-NewDoc alloc + GC cycles; `goedit` = 2000 edits at semicolons spread over the file with
-per-Edit alloc; `rust` / `ts` = Doc creation + 400-edit median.
+per-Edit alloc; `rust` / `ts` = Doc creation + 400-edit median. `results/rust-alloc.log` is a
+diagnostic (counting allocator around 25 `Doc::new`, plus minor faults when GNU time exists); the
+env file records glibc and THP settings.
 
-Mac evidence only (Apple M2, go1.26.3, 5 alternating serial rounds, medians; not a Linux result):
+Mac evidence only (Apple M2, not a Linux result; the regression does not reproduce on macOS):
 
-| row                  | base     | fam      |
-|----------------------|----------|----------|
-| Go NewDoc median     | 6.169 ms | 6.165 ms |
-| Go NewDoc alloc / GC | 10.89 MB / 1.00 | 10.89 MB / 1.00 |
-| Go Edit median       | 2372 µs  | 2233 µs  |
-| Go Edit alloc        | 9239 KB  | 4718 KB  |
-| Rust Doc::new / edit | 4.685 / 1.779 ms | 4.644 / 1.707 ms |
-| TS createDoc / edit  | 54.02 / 6.14 ms  | 54.09 / 6.19 ms  |
+| row                                 | base            | fam             | fix             |
+|-------------------------------------|-----------------|-----------------|-----------------|
+| Rust Doc::new median                | 4.675 ms        | 4.637 ms        | 4.691 ms        |
+| Rust edit median                    | 1.762 ms        | 1.688 ms        | 1.717 ms        |
+| Rust Doc::new allocs/reallocs/bytes | 11 / 70 / 23.51 MB | 11 / 40 / 19.45 MB | 11 / 70 / 23.51 MB |
+| Go NewDoc alloc / GC                | 10.89 MB / 1.00 | 10.89 MB / 1.00 | 10.89 MB / 1.00 |
+| Go Edit median / alloc              | 2354 µs / 9239 KB | 2213 µs / 4718 KB | 2214 µs / 4718 KB |

@@ -1,0 +1,12 @@
+{
+  "repo": "johnsoncodehk/monogram",
+  "input": { "file": "in.ts", "bytes": 270780, "sha256": "65f5f596db0eaeb5d12e3992cd150c9afbd16945e385edb2843dc2a5758eef1d" },
+  "variants": {
+    "base": { "commit": "02d8827", "ref": "master" },
+    "fam":  { "commit": "ac70b67", "ref": "PR #78 (first Linux run)" },
+    "fix":  { "commit": "3c1a1ad", "ref": "PR #78 head" }
+  },
+  "generate": "./gen.sh <monogram clone>  # per variant: git archive <commit> | tar -x; node gen.ts <tree> <variant>; sha256 -c SHA256SUMS",
+  "run": "./run.sh <in.ts> 7",
+  "hashes": "SHA256SUMS"
+}
