@@ -3,7 +3,8 @@
 # same inputs, same machine, same job. Usage (from the repo root, full history fetched):
 #   test/bench-rust-oxc/run.sh [rounds=9]
 # Variants: A = cbb58a0 (master before the 2026-11-20 work), P = 0990a37 (#89's parent),
-#           Q = 103b396 (#89, longest match), B = origin/master, C = oxc (test/oxc-parse-bench).
+#           Q = 103b396 (#89, longest match), B = 2632c2c (master when this measurement was asked
+#           for), D = origin/master at run time if it moved past B, C = oxc (test/oxc-parse-bench).
 set -euo pipefail
 ROUNDS=${1:-9}
 REPO=$(pwd)
@@ -13,14 +14,16 @@ TS_REPO_SHA=6fbce89821d93a5b761581d9ac540455f38e9acb
 rm -rf "$W"; mkdir -p "$W/inputs" "$W/logs"
 
 git fetch -q origin master
-B_SHA=$(git rev-parse origin/master)
+B_SHA=$(git rev-parse 2632c2c)
+D_SHA=$(git rev-parse origin/master)
 VARIANTS="A:cbb58a0 P:0990a37 Q:103b396 B:$B_SHA"
+[ "$D_SHA" != "$B_SHA" ] && VARIANTS="$VARIANTS D:$D_SHA"
 
 echo "=== environment"
 lscpu | grep -E '^(Model name|Architecture|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|Socket\(s\)|L2 cache|L3 cache|CPU max MHz)' || true
 nproc; uname -a; cat /proc/loadavg
 rustc -vV; cargo -V; node --version
-echo "B = origin/master = $B_SHA"
+echo "origin/master = $D_SHA"
 for kv in $VARIANTS; do echo "${kv%%:*} = $(git log -1 --format='%h %ad %s' --date=iso "${kv#*:}")"; done
 
 echo "=== emit monogram Rust parsers"
@@ -74,12 +77,12 @@ done
 accepted() { grep -qF "ACCEPT $2 " "$W/logs/check-$1.txt"; }
 
 echo "=== timing: $ROUNDS rounds; within a round each input runs every parser back to back, order rotated per round"
-ORDER=(A P Q B C)
+ORDER=(C); for kv in $VARIANTS; do ORDER+=("${kv%%:*}"); done; NV=${#ORDER[@]}
 for r in $(seq 1 "$ROUNDS"); do
   for f in $INPUTS; do
     accepted C "$f" && accepted B "$f" || continue
-    for i in 0 1 2 3 4; do
-      v=${ORDER[$(( (i + r) % 5 ))]}
+    for i in $(seq 0 $((NV - 1))); do
+      v=${ORDER[$(( (i + r) % NV ))]}
       accepted "$v" "$f" || continue
       line=$("${BIN[$v]}" "$f" 2>&1) || line="FAIL x FAIL x FAIL x FAIL"
       echo "ROW $r $v $f $(echo "$line" | awk '{print $3, $5, $7}')"
