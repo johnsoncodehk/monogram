@@ -12,6 +12,11 @@
 //   • no SECOND guard where a one-token match exists: `[Ident, opt('!', Ident)]` matches `x`
 //     alone, so a guard on its second token (`!`) would refuse `{x}` (`[Ident, '?']` shares its
 //     first token, so the alternatives are longest-match candidates, not a predictive switch).
+//   • a candidate that repeats an earlier one behind optional steps is tried only where one of
+//     those steps can begin: `[many('@', Ident), opt('pub'), 'emit', Name, ';']` after
+//     `['emit', Name, ';']` is refused at `emit` and tried at `@` and at `pub` (a guard built
+//     from one of the two optional steps alone would refuse `@a emit x;` or `pub emit x;`). The
+//     same in a Pratt rule: `[opt('#'), '(', $, ')']` after `['(', $, ')']` is tried only at `#`.
 import { token, rule, defineGrammar, left, op, seq, oneOf, range, star, opt, many, not } from '../../src/api.ts';
 
 const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');
@@ -26,6 +31,7 @@ const Expr = rule(($) => [
   'self',
   Number_,
   ['(', $, ')'],
+  [opt('#'), '(', $, ')'],
   [$, op, $],
 ]);
 const Atom = rule(() => [
@@ -39,6 +45,8 @@ const Stmt = rule(($) => [
   ['go', ';'],
   [Ident, ':', $],
   ['{', Atom, '}'],
+  ['emit', Name, ';'],
+  [many('@', Ident), opt('pub'), 'emit', Name, ';'],
   [not('go'), not('stop'), Expr, ';'],
 ]);
 const Program = rule(() => [many(Stmt)]);

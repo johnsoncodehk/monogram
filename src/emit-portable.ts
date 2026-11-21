@@ -188,12 +188,42 @@ export function dispatchOf(keys: ReadonlyArray<TokenSet | null>): Dispatch {
   const ranked = tried.filter((x, n) => tried.slice(0, n).some((y) => y.i > x.i && mayShare(x, y))).map((x) => x.i).sort((a, b) => a - b);
   return { sections, ranked };
 }
+// The tokens outside which a candidate only repeats an earlier candidate of its list (null: it
+// never does, as far as this can tell). A candidate that opens with optional steps (`?` / `*`)
+// and continues exactly as an earlier candidate is written — `[many(Decorator), 'export', X]`
+// after `['export', X]` — runs that candidate's own steps from the same token wherever none of
+// its optional steps can begin: each of them matches nothing there, so it ends where the earlier
+// one ends, and the tie goes to the earlier one. It can therefore win only at a token that begins
+// one of those optional steps, and that set is the result. Without this the two candidates each
+// parse the whole construct, and a construct nested in itself costs 2^depth parses.
+// `earlier` are the candidates declared before `e` that are tried wherever they can match; a
+// step's FIRST comes from `first` (null: not known, so nothing is concluded).
+export function sameAsEarlierOutside(e: RuleExpr, earlier: readonly RuleExpr[], first: (e: RuleExpr) => Set<string> | null): Set<string> | null {
+  const itemsOf = (x: RuleExpr): RuleExpr[] => (x.type === 'seq' ? x.items : [x]);
+  const written = new Set(earlier.map((x) => JSON.stringify(itemsOf(x))));
+  const items = itemsOf(e);
+  const lead = new Set<string>();
+  for (let k = 0; k < items.length - 1; k++) {
+    const opt = items[k]!;
+    if (opt.type !== 'quantifier' || opt.kind === '+') return null;
+    const f = first(opt);
+    if (f === null) return null;
+    for (const key of f) lead.add(key);
+    if (written.has(JSON.stringify(items.slice(k + 1)))) return lead;
+  }
+  return null;
+}
 // When a longest-match candidate is tried: only when the token at the candidate's start is in
 // ParserIR.tokenSets[first] and, if `second` is set, the token after it is in tokenSets[second]
 // (no token there refuses). `null` = always tried. From the grammar's own facts — the FIRST and
 // SECOND sets of grammar-analysis.ts (exprFirst / exprSecond), the sets the interpreter prunes its
 // candidates with — so a refused candidate cannot match non-empty at that token, and an empty match
 // never wins a longest match. Each set is one table test in every target, whatever its size.
+// `first` is narrower than FIRST for a candidate that repeats an earlier one of its list behind
+// optional steps (see sameAsEarlierOutside): where none of those steps can begin, it would run the
+// earlier candidate's steps again, end where that one ends and lose the tie, so it is refused
+// there. A token so refused is one the earlier candidate's guard admits: the union of a list's
+// `first` sets is still every token a match of the list can begin with.
 export type Guard = { first: GuardSet; second: GuardSet | null } | null;
 /** A member of ParserIR.tokenSets, by its index and its members. */
 export type GuardSet = TokenSet & { id: number };
@@ -461,8 +491,10 @@ function buildIR(grammar: CstGrammar): ParserIR {
     return { lits, toks };
   };
   const guardSet = (m: TokenSet): GuardSet => { const id = tokenSetOf(m); return { id, ...tokenSets[id]! }; };
-  const altGuard = (e: RuleExpr): Guard => {
-    const f = a.exprFirst(e);
+  // earlier: the candidates declared before `e` in its list, tried wherever they can match.
+  const altGuard = (e: RuleExpr, earlier: readonly RuleExpr[]): Guard => {
+    const all = a.exprFirst(e), lead = sameAsEarlierOutside(e, earlier, a.exprFirst);
+    const f = lead === null ? all : all === null ? lead : new Set([...all].filter((k) => lead.has(k)));
     if (f === null || f.size === 0) return null;
     const oneToken = [...f].every((k) => !templateTokens.has(k));
     const sec = oneToken && !a.exprNullable(e) ? a.exprSecond(e) : null;
@@ -477,7 +509,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     // left-recursive rules through it avoids the infinite left-recursion a plain rd rule would hit.
     if (a.prattRules.has(r.name) || a.leftRecSet.has(r.name)) return buildPratt(r.name, cstName, r.body, a, stepOf, notOf, litTtype, altGuard, templateTokens);
     const items = r.body.type === 'alt' ? r.body.items : [r.body];
-    return { kind: 'rd', name: r.name, cstName, alts: items.map(altSteps), altFirst: [], predictive: false, altGuard: items.map(altGuard), altDispatch: { sections: [], ranked: [] } };
+    return { kind: 'rd', name: r.name, cstName, alts: items.map(altSteps), altFirst: [], predictive: false, altGuard: items.map((e, i) => altGuard(e, items.slice(0, i))), altDispatch: { sections: [], ranked: [] } };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
   // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
@@ -745,7 +777,7 @@ function buildPratt(
   name: string, cstName: string, body: RuleExpr, a: ReturnType<typeof analyzeGrammar>,
   stepOf: (e: RuleExpr) => Step, notOf: (steps: Step[]) => Step,
   litTtype: (v: string) => '$keyword' | '$punct',
-  altGuard: (e: RuleExpr) => Guard, templateTokens: ReadonlySet<string>,
+  altGuard: (e: RuleExpr, earlier: readonly RuleExpr[]) => Guard, templateTokens: ReadonlySet<string>,
 ): PrattRule {
   const alts = body.type === 'alt' ? body.items : [body];
   const nudToks: string[] = [];
@@ -755,6 +787,10 @@ function buildPratt(
   const nudSeqGuard: Guard[] = [];
   const nudCappedGuard: Guard[] = [];
   const nudOrder: NudRef[] = [];
+  // The NUD alternatives so far that are candidates at every binding power (a token, a bracket
+  // or a sequence: a capped one is not, and the prefix arm is no written sequence) — what a later
+  // sequence may only repeat (altGuard).
+  const nudWritten: RuleExpr[] = [];
   let sawPrefix = false, sawBinary = false, sawPostfix = false, postfixSameLine = false;
   const leds: Bracket[] = [];
   const ledAccessTail: boolean[] = [];
@@ -784,6 +820,7 @@ function buildPratt(
       if (items.length === 1 && items[0].type === 'ref' && a.tokenNames.has(items[0].name)) {
         nudOrder.push({ kind: 'tok', index: nudToks.length });
         nudToks.push(items[0].name);
+        nudWritten.push(alt);
         if (items[0].hole !== undefined) nudTplHole = oneHole('NUD', nudTplHole, items[0].hole);
         continue;
       }
@@ -795,18 +832,19 @@ function buildPratt(
         if (capBp === null) throw new Error(`portable: capBelow connector '${items[0].capBelow}' has no binding power (rule ${name})`);
         const b = items[0].body;
         nudOrder.push({ kind: 'capped', index: nudCapped.length });
-        nudCappedGuard.push(altGuard(alt));
+        nudCappedGuard.push(altGuard(alt, []));
         nudCapped.push({ steps: (b.type === 'seq' ? b.items : [b]).map((it) => stepOfPratt(it)), capBp });
         continue;
       }
-      if (items[0].type === 'literal') { nudOrder.push({ kind: 'bracket', index: nudBrackets.length }); nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); continue; }
+      if (items[0].type === 'literal') { nudOrder.push({ kind: 'bracket', index: nudBrackets.length }); nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); nudWritten.push(alt); continue; }
       // A single transparent (non-suppress) group unwraps to its body (an explicit grouping).
       let nudItems = items;
       if (items.length === 1 && items[0].type === 'group' && !items[0].suppress) {
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
       }
       nudOrder.push({ kind: 'seq', index: nudSeqs.length });
-      nudSeqGuard.push(altGuard(alt));
+      nudSeqGuard.push(altGuard(alt, nudWritten));
+      nudWritten.push(alt);
       nudSeqs.push(nudItems.map((it) => stepOfPratt(it)));   // general NUD sequence (guarded ident, class expr)
       continue;
     }
