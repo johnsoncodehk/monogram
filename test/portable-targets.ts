@@ -134,6 +134,13 @@ const CASES: Case[] = [
     reject: ['{a:};', '{: 1};', '{a 1};', '{a: 1,, b: 2};'],
   },
   {
+    // A word is lexed as the identifier token: an alternative led by the word does not
+    // exclude one led by an identifier (inline alt and rule alternatives alike).
+    grammar: 'wordjs', path: './fixtures/wordjs.ts',
+    accept: ['let get x;', 'let get = 1;', 'let x = 2;', 'do get x();', 'do get();', 'do x();', 'let get get; do get get();'],
+    reject: ['let get;', 'let get x = 1;', 'let = 1;', 'do get x;', 'do get;', 'do ();'],
+  },
+  {
     // General Pratt NUD sequences: a reserved-word-guarded identifier (`not(kw)… Ident`,
     // a zero-width negative lookahead) and a quantifier-first class expression.
     grammar: 'nudjs', path: './fixtures/nudjs.ts',
@@ -380,6 +387,9 @@ const CASES: Case[] = [
       // `async` is a modifier like the others, so it also precedes a field; the line rule holds for it too.
       'class C { async x; }', 'class C { static async x = 1; }', 'class C { async public\nx() {} }', 'class C { static async static\nx = 1; }',
       'x = { static: 1, public() {}, get: 2 };', 'x = { public static x() {}, static get y() { return 1; } };',
+      // `defer` leads the deferred import and is a default import's name (the emitted parsers
+      // rejected these while ImportClause's alternatives were dispatched on the word; see wordjs).
+      'import defer from "m";', 'import defer, { a } from "m";', 'import defer, * as ns from "m";', 'import defer * as ns from "m";',
       // `default` is a modifier when `class`, `function`, `interface`, or `abstract` / `async` then
       // `class` / `function` on their line follows (line breaks before them allowed); `export` is
       // one before such a `default`, and before `type` only when a member start other than `as` /
@@ -483,6 +493,7 @@ const CASES: Case[] = [
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
+      'import defer * from "m";', 'import defer * as from "m";',
       'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
       'x\n++\n++\ny;', 'x\n++\n++y;', 'x\n--\n--\ny;', 'x\n++\n--\ny;', 'var z =\nx\n++\n++\ny;',
       'function f() { return x\n++\n++\ny; }', 'f()\n++\n++\ny;', 'a[0]\n--\n--y;', '{ x\n++\n++\ny }',
