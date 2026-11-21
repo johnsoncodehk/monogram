@@ -307,22 +307,32 @@ const Prop = rule($ => {
   const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out', 'const', 'default'], { treeSitterOmits: ['const'] });
   const propMod = mods.any;
   const asyncMod = modifierWord(['async']);
+  // accessor (get/set); the body is optional: `{ get foo() }` is a tsc-clean (error-recovery) parse
+  const accessor = (ctx) => [alt('get', 'set'), MemberName, '(', opt(sep(ctx(Param), ',')), ')', opt(":", ReturnType), opt(ctx(Block))];
+  // method: any member name (incl `#x`, computed `[e]`), then ( … ) { … }
+  const method = (ctx) => [MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(ctx)];
+  // Branched, as ClassMember is: a modifier run is parsed ONCE, then the member kind is decided
+  // after it. The inner alt() is first-match; its branches part at one token (`get`/`set` then a
+  // name, `*`, or a name then `?`/`!`/`<`/`(`/`:`), so the first that matches is the only one.
+  // A `*` method after a modifier run is the one kind whose shape depends on the run being
+  // there: its body resets, where the run-less `*` arm below yields. `not('*')` states it: a
+  // member that starts with `*` has no run, so the `*` branch is reached only past one.
   return [
     ['...', Expr],                                                     // spread
-    // accessor (get/set), with any modifier soup (lenient, tsc-shaped) — body resets
-    [mods.run, alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), opt(resetCtx(Block))],  // body optional: `{ get foo() }` is a tsc-clean (error-recovery) parse
-    // method: modifiers?/generator?, any member name (incl `#x`, computed `[e]`), then ( … ) { … }
-    [mods.run1, opt('*'), MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(resetCtx)],
-    // async/generator method, 4-way split (each routes params+body to its family).
-    // async carries its own modifier run (order-free, like the class member arms).
-    [asyncMod, many(propMod), '*', MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(asyncGenCtx)],
-    [asyncMod, many(propMod), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), opt(awaitCtx(Block))],  // async accessor (semantic error; parses)
-    [asyncMod, many(propMod), MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(awaitCtx)],
-    ['*', MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(yieldCtx)],
-    [MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(resetCtx)],
-    // value property — any member name incl computed `[e]: v` (MemberName covers `[Expr]`)
-    [mods.run1, MemberName, opt('?'), opt('!'), ':', Expr],
-    [MemberName, opt('?'), opt('!'), ':', Expr],
+    [not('*'), mods.run, alt(
+      accessor(resetCtx),
+      ['*', ...method(resetCtx)],
+      // method or value property; the value's name may be computed (`[e]: v`)
+      [MemberName, opt('?'), opt('!'), alt([opt(TypeParams), ...propTail(resetCtx)], [':', Expr])],
+    )],
+    // async/generator method (each routes params+body to its family). async carries its own
+    // modifier run (order-free, like the class member arms).
+    [asyncMod, many(propMod), alt(
+      ['*', ...method(asyncGenCtx)],
+      accessor(awaitCtx),   // async accessor (semantic error; parses)
+      method(awaitCtx),
+    )],
+    ['*', ...method(yieldCtx)],
     ['[', Expr, many(',', Expr), ']', ':', Expr],                      // computed comma list (lenient)
     // shorthand (Ident only): x | x = v | x? | x! | x?! — a reserved word here is
     // invalid (`var v = { class }`); a reserved word as a property KEY (`{ class: 1 }`)
