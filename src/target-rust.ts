@@ -660,7 +660,7 @@ function topReusePlan(ir: ParserIR): ReusePlan | null {
       }
       const tries = step.branches.map((br) => {
         const name = (br[0] as { t: 'rule'; name: string }).name;
-        return `        { let sp = self.pos; if let Some(n) = self.parse_${name}() { return Some(n); } self.pos = sp; }`;
+        return `        { let sp = self.pos; if let Some(n) = self.parse_${name}() { return Some(n); } self.back(sp); }`;
       }).join('\n');
       return { kind: 'A', topOneBody: `${tries}\n        None` };
     }
@@ -726,7 +726,7 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
   const needPeek = branches.some((_, i) => isGuardable(fs[i] ?? null, nAlts));
   const peekInit = needPeek ? `let _ft = p.peek(); ` : '';
   const tries = branches.map((br, i) => {
-    const body = `{ let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); }`;
+    const body = `{ let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'} { return true; } p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); }`;
     const f = fs[i] ?? null;
     if (!isGuardable(f, nAlts)) return body;
     return `if let Some(t) = _ft { if ${firstCond(f, 't', ids)} ${body} }`;
@@ -735,13 +735,13 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
 }
 // ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
 function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); m }\n`).join('');
+  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); m }\n`).join('');
 }
 function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
   // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
   const arms = branches.map((br, i) => {
     const steps = br.length ? br.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true';
-    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${steps} { return true; } p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); }`;
+    return `        ${i === 0 ? 'if' : 'else if'} ${firstCond(firsts![i], 't', ids)} { let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); if ${steps} { return true; } p.back(sp); p.scratch.truncate(sb); p.b.restore(ck); }`;
   }).join('\n');
   return `let t = match p.peek() { Some(t) => t, None => return false };\n${arms}\n        false`;
 }
@@ -754,7 +754,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
         let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
         let t = match self.peek() { Some(t) => t, None => return None };
 ${r.alts.map(arm).join('\n')}
-        self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);
+        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);
         None
     }`;
   }
@@ -762,7 +762,7 @@ ${r.alts.map(arm).join('\n')}
     return `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
         if ${r.alts[0]!.map((x) => stepCond(x, ids, ar)).join(' && ')} { return Some(self.finish(${rid}, sb, self.off_at(save), save)); }
-        self.pos = save; self.scratch.truncate(sb); self.b.restore(ck);
+        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);
         None
     }`;
   }
@@ -772,7 +772,7 @@ ${r.alts.map(arm).join('\n')}
   // The alternatives are reached through the rule's Dispatch (emit-portable.ts, RdRule.altDispatch).
   const alt = (i: number, keyed: boolean) => {
     const cond = r.alts[i]!.map((x) => stepCond(x, ids, ar)).join(' && ');
-    const body = `{ if ${cond} && ${beatsRs(r.altDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint(); } else { self.scratch.truncate(sb); self.b.restore(ck); } self.pos = save; }`;
+    const body = `{ if ${cond} && ${beatsRs(r.altDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); best_pos = self.pos;${markRs(r.altDispatch, i)} ck = self.b.checkpoint(); } else { self.scratch.truncate(sb); self.b.restore(ck); } self.back(save); }`;
     const g = guardCond(r.altGuard[i]!, 't', keyed);
     return g.length && !keyed ? `        if let Some(t) = _ft { if ${g.join(' && ')} ${body} }` : ifRs(g, body);
   };
@@ -794,7 +794,8 @@ ${plan.topOneBody}
     }
     #[inline(always)]
     fn push_entry_from_h(&mut self, h: B::H) {
-        let meta = self.b.entry_meta(h, self.max_look as u32, &self.toks);
+        let look = self.look_end() as u32;
+        let meta = self.b.entry_meta(h, look, &self.toks);
         self.entries.push(meta);
     }
     fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
@@ -803,9 +804,9 @@ ${plan.topOneBody}
         self.entries.reserve((self.toks.len().saturating_sub(self.pos) / 2).max(8));
         loop {
             let sp = self.pos;
-            self.max_look = 0;
+            self.look_reset();
             match self.parse_top_one() {
-                None => { self.pos = sp; break; }
+                None => { self.back(sp); break; }
                 Some(fr) => {
                     if fr.present {
                         // Engine-side side table (decision input). CstBuilder.entry_meta also stamps Node.ext.
@@ -823,14 +824,15 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
   const rid = ruleIdOf(ar, r.cstName);
   const headFn = plan.hasHead && plan.headRule
     ? `    fn parse_head_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
-        self.max_look = 0;
+        self.look_reset();
         let before = self.scratch.len();
         self.opt(|p| p.call_rule(Parser::parse_${plan.headRule}));
         if self.scratch.len() == before { return None; }
         let n = self.scratch[before];
         let (tok_start, tok_end) = self.b.tok_range(n);
         let mut ext = tok_end;
-        if (self.max_look as u32) > ext { ext = self.max_look as u32; }
+        let look = self.look_end() as u32;
+        if look > ext { ext = look; }
         let (off, end) = self.b.span_of(n, &self.toks);
         let kid_start = (before - sb) as u32;
         let meta = EntryMeta { tok_start: tok_start as u32, tok_end: tok_end as u32, ext: ext as u32, off, end, kid_start, kid_count: 1 };
@@ -844,9 +846,9 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
     : '';
   return `${headFn}    fn parse_loop_seg(&mut self, sb: usize) -> Option<(Seg, EntryMeta)> {
         let sp = self.pos; let before = self.scratch.len(); let ck = self.b.checkpoint();
-        self.max_look = 0;
+        self.look_reset();
         if !self.match_tok(${kidOf(ids, plan.loopTok)}, ${ttIdOf(ar, plan.loopTok)}) {
-            self.pos = sp; self.scratch.truncate(before); self.b.restore(ck);
+            self.back(sp); self.scratch.truncate(before); self.b.restore(ck);
             return None;
         }
         self.opt(|p| p.call_rule(Parser::parse_${plan.loopRule}));
@@ -855,7 +857,8 @@ function rdEntryWithReuseB(r: RdRule, plan: ReusePlanB, ids: LexIdPlan, ar: Aren
         let count = self.scratch.len() - before;
         if count > 1 { tok_end = self.b.tok_range(self.scratch[before + 1]).1; }
         let mut ext = tok_end;
-        if (self.max_look as u32) > ext { ext = self.max_look as u32; }
+        let look = self.look_end() as u32;
+        if look > ext { ext = look; }
         let (off, mut end) = self.b.span_of(leaf, &self.toks);
         if count > 1 { end = self.b.span_of(self.scratch[before + 1], &self.toks).1; }
         let kid_start = (before - sb) as u32;
@@ -896,13 +899,13 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   const lost = `self.scratch.truncate(sb); self.b.restore(ck);`;
   const stepsCond = (steps: Step[]) => (steps.length ? steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true');
   const seqArm = (i: number, steps: Step[], tail: boolean, capped: boolean) =>
-    `{ if ${stepsCond(steps)} && ${beatsRs(r.nudDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)} } else { ${lost} } self.pos = save; }`;
+    `{ if ${stepsCond(steps)} && ${beatsRs(r.nudDispatch, 'self.pos', i)} { best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, '0', tail, capped)} } else { ${lost} } self.back(save); }`;
   const nudArm = (i: number, keyed: boolean): string => {
     const a = r.nudOrder[i]!;
     switch (a.kind) {
       case 'tok': {
         const k = r.nudToks[a.index]!;
-        const leafArm = ifRs([...(keyed ? [] : [`t.kid == ${kidOf(ids, k)}`]), beatsRs(r.nudDispatch, 'save + 1', i)], `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won(i, '0', false, false)} self.pos = save; }`);
+        const leafArm = ifRs([...(keyed ? [] : [`t.kid == ${kidOf(ids, k)}`]), beatsRs(r.nudDispatch, 'save + 1', i)], `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${rid}, sb, t.off as usize, save)); ${won(i, '0', false, false)} self.back(save); }`);
         if (r.nudTplHole === undefined || !tpl || k !== tpl.token) return leafArm;
         return `${leafArm}
         if t.kid == ${kidOf(ids, "$templateHead")} {
@@ -910,7 +913,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
                 Some(n) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${rid}, sb, n.off as usize, n.tok_start as usize)); ${won(i, '0', false, false)} }
                 _ => { ${lost} }
             }
-            self.pos = save;
+            self.back(save);
         }`;
       }
       case 'bracket': {
@@ -929,11 +932,11 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
         return `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
-                Some(_) if ptgt && self.form != 0 => { self.pos = save; ${lost} self.capped = false; return None; }
+                Some(_) if ptgt && self.form != 0 => { self.back(save); ${lost} self.capped = false; return None; }
                 Some(operand) if ${beatsRs(r.nudDispatch, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${rid}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
                 _ => { ${lost} }
             }
-            self.pos = save;
+            self.back(save);
         }`;
     }
   };
@@ -958,7 +961,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
                 let led_save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
                 self.scratch.push(left.h);
                 if ${b.steps.map((x) => stepCond(x, ids, ar)).join(' && ')} { left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize); form = ${form};${closes ? ' tail_closed = true;' : ''} continue; }
-                self.pos = led_save; self.scratch.truncate(sb); self.b.restore(ck);${hasBin ? '' : isLast ? ' break;' : ''}
+                self.back(led_save); self.scratch.truncate(sb); self.b.restore(ck);${hasBin ? '' : isLast ? ' break;' : ''}
             }`;
   const ledMatch = (() => {
     if (r.leds.length === 0) return '';
@@ -1012,7 +1015,7 @@ ${postfixTokMatch}
             let sb = self.scratch.len(); self.scratch.push(left.h);
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, op_end);
             self.pos += op_n;
-            let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.pos = led_save; self.scratch.truncate(sb); break; } };
+            let rhs = match self.${r.name}_bp(rbp) { Some(r) => r, None => { self.back(led_save); self.scratch.truncate(sb); break; } };
             if rhs.present { self.scratch.push(rhs.h); }
             left = self.finish(${rid}, sb, left.off as usize, left.tok_start as usize);
             form = 1; tail_closed = true;
@@ -1057,7 +1060,7 @@ function docEditBlockRust(ir: ParserIR, shared: SharedAlgorithms): string {
             let text = self.text.clone();
             let meta = self.toks.clone();
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1231,11 +1234,12 @@ fn assert_entries_vs_nodes(entries: &[EntryMeta], nodes: &[Node], kids: &[i32], 
                 }
                 return try_hit(self, &mid, &mid_meta);
             }
-            self.max_look = 0;
+            self.look_reset();
             let sp = self.pos;
-            let fr = match self.parse_top_one() { Some(fr) => fr, None => { self.pos = sp; return None; } };
-            if !fr.present { self.pos = sp; return None; }
-            let em = self.b.entry_meta(fr.h, self.max_look as u32, &self.toks);
+            let fr = match self.parse_top_one() { Some(fr) => fr, None => { self.back(sp); return None; } };
+            if !fr.present { self.back(sp); return None; }
+            let look = self.look_end() as u32;
+            let em = self.b.entry_meta(fr.h, look, &self.toks);
             mid_meta.push(em);
             mid.push(fr.h);
             if let Some(hit) = try_hit(self, &mid, &mid_meta) { return Some(hit); }
@@ -1472,7 +1476,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             let scratch = std::mem::take(&mut self.scratch);
             let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.take().unwrap();
-            let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch, entries: Vec::new() };
+            let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch, entries: Vec::new() };
             if let Some((root, n)) = p.try_reuse_top(old_root, &old_entries, toks_from_meta(&text, &meta), byte_delta, old_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
@@ -1480,7 +1484,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
                 self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks); self.entries = p.entries;
             } else {
                 let ntoks = toks_from_meta(&text, &meta);
-                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
+                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
                 match p.parse_${ir.entry}() {
                     Some(fr) if p.pos == p.toks.len() && fr.present => {
                         self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1494,7 +1498,7 @@ fn check_tree_eq_arena(text: &str, toks_a: &[Tok], nodes: &[Node], kids: &[i32],
             }
         } else {
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new() };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1527,7 +1531,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             let old_segs = std::mem::take(&mut self.segs);
             let old_entries = std::mem::take(&mut self.entries);
             let old_root = self.root.take().unwrap();
-            let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch, entries: Vec::new(), segs: Vec::new() };
+            let mut p = Parser { toks: Vec::new(), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch, entries: Vec::new(), segs: Vec::new() };
             if let Some((root, n)) = p.try_reuse_seg(old_root, &old_segs, &old_entries, toks_from_meta(&text, &meta), byte_delta, old_n, prefix, suffix, self.validate) {
                 self.root = Some(root);
                 reused = n;
@@ -1535,7 +1539,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
                 self.b = p.b; self.scratch = p.scratch; self.keep_toks(p.toks); self.segs = p.segs; self.entries = p.entries;
             } else {
                 let ntoks = toks_from_meta(&text, &meta);
-                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
+                let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
                 match p.parse_${ir.entry}() {
                     Some(fr) if p.pos == p.toks.len() && fr.present => {
                         self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1549,7 +1553,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
             }
         } else {
             let ntoks = toks_from_meta(&text, &meta);
-            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
+            let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new(), entries: Vec::new(), segs: Vec::new() };
             match p.parse_${ir.entry}() {
                 Some(fr) if p.pos == p.toks.len() && fr.present => {
                     self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1578,7 +1582,7 @@ ${freshRetryRs}        let stream_eq = if self.validate { Some(check_stream_eq(&
     : `        let text = self.text.clone();
         let meta = self.toks.clone();
         let ntoks = toks_from_meta(&text, &meta);
-        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => {
                 self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1674,7 +1678,7 @@ impl<B: Builder + Default> Doc<B> {
         let meta = self.toks.clone();
         let ntoks = toks_from_meta(&text, &meta);
         let b = std::mem::take(&mut self.b);
-        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b, scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => {
                 self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1719,7 +1723,7 @@ ${editParse.replace(/self\./g, 'd.')}
                     let text = self.text.clone();
                     let meta = self.toks.clone();
                     let ntoks = toks_from_meta(&text, &meta);
-                    let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
+                    let mut p = Parser { toks: ntoks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &text, b: B::default(), scratch: Vec::new()${topReuse ? (shapeB ? ', entries: Vec::new(), segs: Vec::new()' : ', entries: Vec::new()') : ''} };
                     match p.parse_${ir.entry}() {
                         Some(fr) if p.pos == p.toks.len() && fr.present => {
                             self.root = Some(fr.h); self.baseline = p.b.arena_len(); self.last_pos = p.pos;
@@ -1754,7 +1758,7 @@ impl Doc<CstBuilder> {
         // Fresh independent parse (does not touch Doc arena) — used by non-edit callers.
         let toks = toks_from_meta(&self.text, &self.toks);
         let n = toks.len();
-        let mut p = Parser { toks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
+        let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src: &self.text, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
         match p.parse_${ir.entry}() {
             Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
             _ => None,
@@ -1802,12 +1806,12 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
         let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
         self.push_leaf(${ttIdOf(ar, '$templateHead')}, self.pos as u32, t.off, t.end); self.pos += 1;
         loop {
-            let expr = match interp(self) { Some(e) => e, None => { self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); return None; } };
+            let expr = match interp(self) { Some(e) => e, None => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); return None; } };
             if expr.present { self.scratch.push(expr.h); }
-            let next = match self.peek() { Some(x) => x, None => { self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); return None; } };
+            let next = match self.peek() { Some(x) => x, None => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); return None; } };
             if next.kid == ${kidOf(ids, "$templateMiddle")} { self.push_leaf(${ttIdOf(ar, '$templateMiddle')}, self.pos as u32, next.off, next.end); self.pos += 1; continue; }
             if next.kid == ${kidOf(ids, "$templateTail")} { self.push_leaf(${ttIdOf(ar, '$templateTail')}, self.pos as u32, next.off, next.end); self.pos += 1; break; }
-            self.pos = save; self.scratch.truncate(sb); self.b.restore(ck); return None;
+            self.back(save); self.scratch.truncate(sb); self.b.restore(ck); return None;
         }
         Some(self.finish(${ruleIdOf(ar, '$template')}, sb, self.off_at(save), save))
     }
@@ -2160,7 +2164,13 @@ impl Builder for SlimBuilder {
 struct Parser<'a, B: Builder = CstBuilder> {
     toks: Vec<Tok>,
     pos: usize,
+    /// One past the furthest token the current entry's parse has examined, as far as recorded:
+    /// a read past the current token (second_in, a composed '>') records here at once; a peek
+    /// records in peek_end, which back() and look_end() fold in.
     max_look: usize,
+    /// One past the token of the latest peek. Between two moves back the position only grows,
+    /// so the latest peek is the furthest one since the last move back.
+    peek_end: usize,
     capped: bool,
     /// Assignment-target form of the node the last nud/bp call returned.
     form: u8,
@@ -2177,9 +2187,23 @@ ${tokenSetRuntimeRust(ir, ids)}
 impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     fn peek(&mut self) -> Option<Tok> {
-        if self.pos + 1 > self.max_look { self.max_look = self.pos + 1; }
+        self.peek_end = self.pos + 1;
         if self.pos < self.toks.len() { Some(self.toks[self.pos]) } else { None }
     }
+    /// Move the position back to sp (sp <= pos), first folding the stretch being abandoned into
+    /// max_look: the furthest token it peeked at is the latest peek.
+    #[inline(always)]
+    fn back(&mut self, sp: usize) {
+        if self.peek_end > self.max_look { self.max_look = self.peek_end; }
+        self.pos = sp;
+    }
+    /// One past the furthest token the current entry examined: max_look and the stretch since
+    /// the last move back.
+    #[inline(always)]
+    fn look_end(&self) -> usize { if self.peek_end > self.max_look { self.peek_end } else { self.max_look } }
+    /// Start recording an entry's extent.
+    #[inline(always)]
+    fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }
     #[inline(always)]
     #[allow(dead_code)]
     fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
@@ -2259,25 +2283,25 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn star(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop {
             let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if !once(self) { self.pos = sp; self.scratch.truncate(sb); self.b.restore(ck); break; }
+            if !once(self) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); break; }
         }
         true
     }
     #[inline(always)]
     fn opt(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-        if !body(self) { self.pos = sp; self.scratch.truncate(sb); self.b.restore(ck); }
+        if !body(self) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); }
         true
     }
     #[inline(always)]
     fn sep_by(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         let sp0 = self.pos; let sb0 = self.scratch.len(); let ck0 = self.b.checkpoint();
-        if !elem(self) { self.pos = sp0; self.scratch.truncate(sb0); self.b.restore(ck0); return true; }
+        if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); self.b.restore(ck0); return true; }
         loop {
             let sp = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
-            if !self.match_lit(delim, ${punctId}) { self.pos = sp; self.scratch.truncate(sb); self.b.restore(ck); break; }
+            if !self.match_lit(delim, ${punctId}) { self.back(sp); self.scratch.truncate(sb); self.b.restore(ck); break; }
             let sp2 = self.pos; let sb2 = self.scratch.len(); let ck2 = self.b.checkpoint();
-            if !elem(self) { self.pos = sp2; self.scratch.truncate(sb2); self.b.restore(ck2); break; }
+            if !elem(self) { self.back(sp2); self.scratch.truncate(sb2); self.b.restore(ck2); break; }
         }
         true
     }
@@ -2300,7 +2324,7 @@ pub fn parse_with<'a, B: Builder + Default>(src: &'a str, b: &mut B) -> Option<B
     let toks = lex(src);
     let n = toks.len();
     let owned = std::mem::take(b);
-    let mut p = Parser { toks, pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: owned, scratch: Vec::new()${reuseInit} };
+    let mut p = Parser { toks, pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: owned, scratch: Vec::new()${reuseInit} };
     let root = match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() && fr.present => Some(fr.h),
         _ => None,
@@ -5125,7 +5149,7 @@ pub fn tokenize<'a>(src: &'a str) -> Vec<Token<'a>> {
 // The CST over a fresh arena that lives in the returned Parser (serialize with write_json).
 // Library callers use parse_with / Doc.
 fn parse<'a>(src: &'a str) -> Option<(Parser<'a>, i32)> {
-    let mut p = Parser { toks: lex(src), pos: 0, max_look: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
+    let mut p = Parser { toks: lex(src), pos: 0, max_look: 0, peek_end: 0, capped: false, form: 0, tail: false, suppress_next: Vec::new(), suppress_cur: Vec::new(), src, b: CstBuilder::default(), scratch: Vec::new()${reuseInit} };
     match p.parse_${ir.entry}() {
         Some(fr) if p.pos == p.toks.len() && fr.present => Some((p, fr.h)),
         _ => None,
