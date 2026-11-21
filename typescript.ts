@@ -286,55 +286,57 @@ const modifierRun = (words: string[], opts: { sameLineConst?: boolean; treeSitte
   };
 };
 
+// An object-literal member is tsc's parseObjectLiteralElement: a spread, or a modifier run
+// (parseModifiers) and then one member. The run is one list in which `async` is a word like the
+// others (`{ static async m() {} }`, `{ async static m() {} }`, `{ async async m() {} }`,
+// `{ async x: 1 }`, `{ static x }` all parse; which modifiers a member may carry is the
+// checker's question) and `static` comes at most once (tsc stops taking `static` as a modifier
+// once it has one, so a second one is the member's name: `{ static async static m() {} }`
+// rejects). Every member may follow every run:
+//   accessor     `get` / `set`, a name, type parameters, ( … ): T, then a body or none
+//   `*` method   a name, `?`, `!`, type parameters, ( … ): T, then a body or none
+//   method       a name, `?`, `!`, type parameters, ( … ): T, then a body or none
+//   value        a name, `?`, `!`, `: v`
+//   shorthand    an identifier that is not a reserved word, `?`, `!`, `= v`
+//                (`{ class }` and `{ static class }` reject; `{ class: 1 }` is a value)
+// A method's body is a function declaration's (parseFunctionBlockOrSemicolon): a block, or none,
+// and then the member ends as a statement does (`{ m() }`, `{ m(); }`, `{ m()⏎, n }` parse;
+// `{ m(), n }` rejects). What the run decides is the body's context: params and body are
+// [Await] after a run that holds `async`, [Yield] after a `*`, both for both, and reset
+// otherwise (parseMethodDeclaration); an accessor's are reset after any run
+// (parseAccessorDeclaration takes no `async`). The name and return type stay outside the family
+// (a computed key inherits the enclosing context, type positions are not parameterized).
+//   A word is a modifier only where `modifierWord` says so; otherwise it is the member's name
+// (`{ static: 1 }`, `{ async }`, `{ get: 1 }`, `{ public static() {} }`).
+//   The run is parsed ONCE and the member decided after it, so its shape carries what the
+// member needs to know: whether an `async` has been read (the body's context), and whether a
+// `static` has (whether another may come). Those are the four places a run can stop at, and
+// the members are `members(…)` at each, under the context its `async` gives. tree-sitter has no
+// [Await] context, and renders the plain repetition of `modifierRun` for the run (tsRelax).
+// The inner alt() is first-match; its branches part at one token (`get`/`set` then a name, `*`,
+// a name then `?`/`!`/`<`/`(`/`:`, or a name alone), so the first that matches is the only one.
 const Prop = rule($ => {
-  // ( … ): T { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
-  // MemberName and return type stay outside it (a computed key inherits the enclosing
-  // context, type positions are not parameterized).
-  const propTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), ctx(Block)];
-  // tsc parses a full modifier soup before ANY object-literal member and a `?` then
-  // `!` after its name (`{ static m() {} }`, `{ export p: 1 }`, `{ a! }`, `{ a?() {} }`
-  // are all parse-clean — rejecting them is the checker's job). `const` and `default` are
-  // in the soup only before `enum` / a declaration keyword (`{ const enum: 1 }`,
-  // `{ default class() {} }`; see `modifierWord`).
-  // A member NAMED like a modifier (`{ static: 1 }`, `{ public static() {} }`) is told
-  // apart by `modifierWord`; `{ async }` / `{ get: 1 }` fall through to the plain shapes.
-  // `async` is pulled out of the soup into the dedicated async method arms below (so the
-  // body gets its [Await] context); `static`/`get`/… stay lenient modifiers.
   const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out', 'const', 'default'], { treeSitterOmits: ['const'] });
-  const propMod = mods.any;
   const asyncMod = modifierWord(['async']);
-  // accessor (get/set); the body is optional: `{ get foo() }` is a tsc-clean (error-recovery) parse
-  const accessor = (ctx) => [alt('get', 'set'), MemberName, '(', opt(sep(ctx(Param), ',')), ')', opt(":", ReturnType), opt(ctx(Block))];
-  // method: any member name (incl `#x`, computed `[e]`), then ( … ) { … }
-  const method = (ctx) => [MemberName, opt('?'), opt('!'), opt(TypeParams), ...propTail(ctx)];
-  // Branched, as ClassMember is: a modifier run is parsed ONCE, then the member kind is decided
-  // after it. The inner alt() is first-match; its branches part at one token (`get`/`set` then a
-  // name, `*`, or a name then `?`/`!`/`<`/`(`/`:`), so the first that matches is the only one.
-  // A `*` method after a modifier run is the one kind whose shape depends on the run being
-  // there: its body resets, where the run-less `*` arm below yields. `not('*')` states it: a
-  // member that starts with `*` has no run, so the `*` branch is reached only past one.
+  const sig = (ctx) => [opt(TypeParams), '(', sep(ctx(Param), ','), ')', opt(':', ReturnType), ctx(fnBodyOrAsi())];
+  const members = (generator, method) => alt(
+    [alt('get', 'set'), MemberName, ...sig(resetCtx)],
+    ['*', MemberName, opt('?'), opt('!'), ...sig(generator)],
+    [MemberName, opt('?'), opt('!'), alt(sig(method), [':', Expr])],
+    [notReserved, Ident, opt('?'), opt('!'), opt('=', Expr)],
+  );
+  const plain = members(yieldCtx, resetCtx), withAsync = members(asyncGenCtx, awaitCtx);
+  const words = many(mods.rest), asyncWords = many(alt(mods.rest, asyncMod));
   return [
     ['...', Expr],                                                     // spread
-    [not('*'), mods.run, alt(
-      accessor(resetCtx),
-      ['*', ...method(resetCtx)],
-      // method or value property; the value's name may be computed (`[e]: v`)
-      [MemberName, opt('?'), opt('!'), alt([opt(TypeParams), ...propTail(resetCtx)], [':', Expr])],
-    )],
-    // async/generator method (each routes params+body to its family). async carries its own
-    // modifier run (order-free, like the class member arms).
-    [asyncMod, many(propMod), alt(
-      ['*', ...method(asyncGenCtx)],
-      accessor(awaitCtx),   // async accessor (semantic error; parses)
-      method(awaitCtx),
-    )],
-    ['*', ...method(yieldCtx)],
-    ['[', Expr, many(',', Expr), ']', ':', Expr],                      // computed comma list (lenient)
-    // shorthand (Ident only): x | x = v | x? | x! | x?! — a reserved word here is
-    // invalid (`var v = { class }`); a reserved word as a property KEY (`{ class: 1 }`)
-    // is fine, already handled by the value-property branch above. tsc parses `?` then
-    // `!` (that order) after the name; `{ a!? }` is a tsc parse error and stays one.
-    [notReserved, Ident, opt('?'), opt('!'), opt('=', Expr)],
+    tsRelax(
+      [words, alt(
+        [mods.stat, words, alt([asyncMod, asyncWords, withAsync], plain)],
+        [asyncMod, asyncWords, opt(mods.stat, asyncWords), withAsync],
+        plain,
+      )],
+      [many(alt(mods.any, asyncMod)), plain],
+    ),
   ];
 });
 
@@ -733,6 +735,9 @@ const TypeMember = rule($ => {
   ];
 });
 
+// A computed name holds an Expression, a comma list included (tsc's parseComputedPropertyName;
+// `{ [a, b]: 1 }` is a checker error). Where an index signature may stand, a bracket that starts
+// one is no name (`propertyOrMethodName`).
 const MemberName = rule($ => [
   Ident,
   PrivateField,
@@ -742,7 +747,7 @@ const MemberName = rule($ => [
   OctalNumber,
   BinaryNumber,
   BigInt_,
-  ['[', Expr, ']'],
+  ['[', Expr, many(',', Expr), ']'],
 ]);
 
 // An index signature is one form wherever a member may be one: parseTypeMember and

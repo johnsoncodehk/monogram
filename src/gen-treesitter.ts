@@ -1984,8 +1984,9 @@ function angleTypeRules(grammar: CstGrammar): Set<string> {
 /** A single "name form": a token ref or a computed `[ Expr ]`. */
 function isNameForm(item: RuleExpr, tokenNames: Set<string>): boolean {
   if (item.type === 'ref' && tokenNames.has(item.name)) return true;
-  if (item.type === 'seq' && item.items.length === 3) {
-    const [a, , c] = item.items;
+  // a computed name: whatever the brackets hold (`[ Expr ]`, `[ Expr , … ]`)
+  if (item.type === 'seq' && item.items.length >= 3) {
+    const a = item.items[0], c = item.items[item.items.length - 1];
     return a.type === 'literal' && a.value === '[' && c.type === 'literal' && c.value === ']';
   }
   return false;
