@@ -984,7 +984,9 @@ function estreeDecorator(ctx: TsAstCustomCtx): unknown {
 
 function estreeClassMember(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
-  if (arm === 0) return null;
+  // An empty class element (`;`, also the one after a block-bodied member) has no ESTree
+  // node: an empty kid list, which the ClassBody's flatKids drops (null would fail the member).
+  if (arm === 0) return [];
   if (arm === 1) return { type: 'MethodDefinition', kind: 'constructor', key: I('constructor'), value: { type: 'FunctionExpression', params: flatKids(ctx.kids[0] ?? []), body: ctx.kids[1] }, static: false };
   if (arm === 2) return { type: 'StaticBlock', body: ctx.kids[0] };
   if (arm !== 3) return unhandledCustom('estreeClassMember', ctx);

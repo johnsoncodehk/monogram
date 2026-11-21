@@ -27,6 +27,9 @@ const asi = () => alt([';'], [not(sameLine)], [not(not('}'))]);
 // A function declaration's body: a block, or none (an overload or ambient signature), and a
 // declaration without a body ends as a statement does (tsc's parseFunctionBlockOrSemicolon).
 const fnBodyOrAsi = () => alt(Block, [not('{'), asi()]);
+// A type member (and a class index signature) ends as tsc's parseTypeMemberSemicolon: a `,`,
+// or as a statement does. Each member carries its own end, so two members on one line need one.
+const typeMemberEnd = () => alt([','], asi());
 // JavaScript is the SUBSET / base of the ECMAScript family; TypeScript is the
 // SUPERSET (JS + a type layer). The shared, type-free vocabulary — token consts,
 // the `notReserved`/`notReservedExpr` reserved-word guards, the precedence ladder
@@ -154,11 +157,10 @@ const Type = rule($ => {
     // separate tuple members), while the LAST element needs none (`]`-ahead). Trailing
     // comma is covered by the `,` arm before the closing-`]` iteration fails to start.
     ['[', many(opt('...'), opt(Ident, opt('?'), ':'), opt('...'), $, opt('?'), alt([','], [not(not(']'))])), ']'],
-    // object type literal: members are SEPARATED by `;` / `,` / a newline (the type
-    // analog of statement ASI) — two members on one line with no separator reject
-    // (`{ a: T b: U }` is tsc's "';' expected"). The `}`-ahead arm lets the last member
-    // need no trailing separator; `;`/`,` also cover an explicit trailing delimiter.
-    ['{', many(TypeMember, alt([';'], [','], [not(sameLine)], [not(not('}'))])), '}'],
+    // object type literal: each member ends in `typeMemberEnd` (`,`, `;`, a line break, or
+    // a following `}`), so two members on one line with no separator reject (`{ a: T b: U }`
+    // is tsc's "';' expected").
+    ['{', many(TypeMember, typeMemberEnd()), '}'],
     ['asserts', Ident, opt('is', $)],
     [$, 'extends', $, '?', $, ':', $],
     // infer U | infer U extends T | infer U extends T ? X : Y (conditional binds to the infer)
@@ -679,13 +681,20 @@ const TypeParams = rule($ => [
 
 // ── Declarations ──
 
+// The modifiers of a type member (tsc's parseTypeMember: parseModifiers without decorators,
+// after the call / construct signatures and before an accessor, index signature, property or
+// method). `const` and `default` are never modifiers before a member name here (tsc takes them
+// only before `enum` / a declaration keyword), so they are names.
+const typeMemberMods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'async']);
 const InterfaceMember = rule($ => {
   const callSig = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
   const propOrMethod = alt(callSig, [opt(':', Type)]);  // after a name: method | property (bare = implicit any)
   return [
     // call / construct signature (construct = call sig with a leading `new`)
     [opt('new'), ...callSig],
-    // getter / setter (`get`/`set` as a member NAME falls through to the named branch)
+    // getter / setter (`get`/`set` as a member NAME falls through to the named branch). No
+    // modifier before it: tsc's isTypeMemberStart reads `get` after a modifier as the member's
+    // name, so `readonly get x(): T` is not a member start.
     [alt('get', 'set'), MemberName, '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)],
     // mapped type: static? (+/-)? readonly? [ K in T (as U)? ] (+/-)? ?? : T
     [opt('static'), opt(alt('+', '-')), opt('readonly'), '[', Ident, 'in', Type, opt('as', Type), ']', opt(alt('+', '-')), opt('?'), ':', Type],
@@ -694,11 +703,11 @@ const InterfaceMember = rule($ => {
     // named / computed member (MemberName includes `[Expr]`) — branch property | method.
     // Placed before the index signature so a bare `[expr]` parses as a computed
     // property (TS: `[p]` is a computed property, not an indexer).
-    [MemberName, opt('?'), propOrMethod],
-    // index signature: static? readonly? [ Param,* ] (: T)?  — TS parses the brackets
+    [typeMemberMods.run, MemberName, opt('?'), propOrMethod],
+    // index signature: modifiers [ Param,* ] (: T)?  — TS parses the brackets
     // as a full parameter list, so `[]`, `[a?]`, `[public a]`, `[a: T, b: U]` all parse
     // (the extra forms are grammar-errors TS reports post-parse, but the parser accepts).
-    [opt('static'), opt('readonly'), '[', sep(typeFnParam(), ','), ']', opt(':', Type)],
+    [typeMemberMods.run, '[', sep(typeFnParam(), ','), ']', opt(':', Type)],
   ];
 });
 
@@ -738,21 +747,24 @@ const accessorMod = modifierWord(['get', 'set']);
 // line (past a line break it is a field name, which parses). Owed: `async` as a word of the
 // run itself, which states this by shape alone.
 const staticTwice = [many(alt(classMods.rest, asyncMod)), classMods.stat, many(alt(classMods.rest, asyncMod)), 'static', sameLine, memberAhead];
-// field (all-optional → catch-all). A field NOT ended by ';' must not be followed by a
-// SAME-LINE decorator: tsc reads that '@' as belonging to THIS property ("Decorators must
-// precede the name and all keywords") — `x @dec y()` and `x = 1 @dec y()` reject, `x; @dec`
-// and newline accept. The `!` sits on the name's line (tsc takes it only without a line break).
-const fieldTail = [opt(sameLine, '!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])];
-const callTail = ['(', sep(Param, ','), ')', opt(":", ReturnType), opt(Block), opt(';')] as const;
+// field (all-optional → catch-all). A field ends as a statement does (tsc's
+// parseSemicolonAfterPropertyName), so a SAME-LINE decorator after it rejects: tsc reads that
+// '@' as belonging to THIS property ("Decorators must precede the name and all keywords") —
+// `x @dec y()` and `x = 1 @dec y()` reject, `x; @dec` and newline accept. The `!` sits on the
+// name's line (tsc takes it only without a line break).
+const fieldTail = [opt(sameLine, '!'), opt('?'), opt(':', Type), opt('=', resetCtx(Expr)), asi()];
 // Class member ( params ): T body, params+body routed to a [Await]/[Yield] family:
 // plain methods reset (a method body has its OWN, non-inherited context — the spec's
 // implicit function boundary), generators yield, async await, async-generators both.
 // MemberName, type params, and the return type stay OUTSIDE the family (a computed key
 // `[e]` is evaluated in the ENCLOSING context, and type positions are not parameterized).
-const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), opt(ctx(Block)), opt(';')];
+// The body is a function declaration's (tsc's parseFunctionBlockOrSemicolon): a block, after
+// which nothing is needed (a `;` there is an empty class element of its own), or none, and
+// then the member ends as a statement does.
+const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), ctx(fnBodyOrAsi())];
 const ClassMember = rule($ => [
   ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
-  ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block), opt(';')],
+  ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block)],
   [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
   // `public @dec method()` ("Decorators are not valid here") and an orphan
@@ -766,12 +778,12 @@ const ClassMember = rule($ => [
       // validates), so it carries its own inner modifier run and an async member's
       // body is [+Await]/[+Await,+Yield].
       [asyncMod, many(Modifier), '*', MemberName, opt('?'), opt(TypeParams), ...memTail(asyncGenCtx)],   // async generator method
-      [asyncMod, many(Modifier), accessorMod, MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), opt(awaitCtx(Block)), opt(';')],  // async accessor (semantic error; parses)
+      [asyncMod, many(Modifier), accessorMod, MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), awaitCtx(fnBodyOrAsi())],  // async accessor (semantic error; parses)
       [asyncMod, many(Modifier), 'static', awaitCtx(Block)],                              // `async static { }` (semantic error; parses)
       [asyncMod, many(Modifier), not(accessorMod), MemberName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],   // async method
       ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
-      [accessorMod, MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), opt(resetCtx(Block)), opt(';')],  // accessor (type params parse; semantic error)
-      ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), asi()],          // index signature; member separator = ; / newline / }
+      [accessorMod, MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), resetCtx(fnBodyOrAsi())],  // accessor (type params parse; semantic error)
+      ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), typeMemberEnd()],   // index signature: ends as a type member does (tsc's parseIndexSignatureDeclaration)
       // a bare identifier `constructor` member MUST be a call signature — tsc rejects a
       // `constructor` field/property ("'(' expected"): `constructor;`, `constructor = 1`,
       // `constructor: T`, even modified (`public constructor;`). TypeParams parse; `?`/`!`
@@ -867,7 +879,7 @@ const Decl = rule($ => [
   // tsc parses REPEATED `extends` clauses on an interface (`interface I extends A
   // extends B`) — the parser accepts them and the checker reports the duplicate;
   // mirror with many() rather than a single opt() clause.
-  ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, opt(alt(';', ','))), '}'],   // shared heritage: repeated/order-free extends+implements, `extends Foo?.Bar`, empty `extends {`
+  ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, typeMemberEnd()), '}'],   // shared heritage: repeated/order-free extends+implements, `extends Foo?.Bar`, empty `extends {`
   ['type', notReserved, Ident, opt(TypeParams), '=', Type, asi()],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
   // class decl: optional decorators + optional `abstract`. gen-tm expands the
   // opt()/many() to recover the `class Ident … { … }` shape for highlighting.
@@ -927,7 +939,7 @@ const Decl = rule($ => [
     ...tsFnArms([opt(notReserved, Ident)], fnBodyOrAsi()),  // function
     [many(DecoratorExpr), opt('abstract'), 'class', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named class
     [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous class
-    ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, opt(alt(';', ','))), '}'],   // export default interface (interface is not an Expr)
+    ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, typeMemberEnd()), '}'],   // export default interface (interface is not an Expr)
     [Expr, asi()],   // catch-all: export default <expr>
   )],
   ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', String_, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName

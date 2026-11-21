@@ -386,6 +386,19 @@ const CASES: Case[] = [
       'export = a\nb;', 'import "m"\nfoo();', 'export { a }; b();', 'export * from "m"\nfoo();', 'export as namespace N\nfoo();',
       'namespace N { export * from "m" }', 'declare module "m" { export default a }', 'function w() { type A = B }',
       'import r = a.b\nfoo();', 'import r = require("x")\n(g);', '@dec using x = y\nfoo();', 'type A = B;;',
+      // A class member without a body ends as a statement does (a `;`, a line break, a `}`); one
+      // with a block needs nothing, and a `;` after it is an empty class element of its own. A
+      // type member (and a class index signature) may also end in `,`.
+      'class C { m(); n() {} }', 'class C { m()\nn() {} }', 'class C { m() }', 'class C { m() {} n() {} }', 'class C { m() {}; }',
+      'class C { m() {} ;; }', 'class C { get g()\nset s(v) {} }', 'class C { constructor()\nx }', 'class C { constructor() {} x }',
+      'class C { static {} x }', 'class C { m(): void\nm() {} }', 'declare class C { m()\nn() }', 'class C { [k: string]: T, x }',
+      'class C { [k: string]: T\nx }', 'class C { x // c\ny }', '(class { *g()\nh() {} })',
+      'interface I { a\nb }', 'interface I { a, b }', 'interface I { a; b }', 'interface I { a: T, }', 'interface I { (): void\nx }',
+      'interface I { new (): T, x }', 'interface I { [k: string]: T\nx }',
+      'type A = { a\nb }', 'type A = { a, b; c }',
+      // An interface member takes tsc's type-member modifiers (one member, not a word of its own).
+      'interface I { public a: T }', 'interface I { static m(): void, x }', 'interface I { readonly [k: string]: T }',
+      'interface I { private a\nb }', 'interface I { public\na }', 'interface I { readonly a }', 'interface I { static [e]: T }',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -434,7 +447,16 @@ const CASES: Case[] = [
       'class C { public @dec x() {} }', 'class C { export @dec x() {} }', 'class C { default x() {} }',
       // One `static` per member, on either side of `async`; a field's `!` sits on its line.
       'class C { static\nstatic x = 1; }', 'class C { static async static x = 1; }', 'class C { async static static x() {} }',
-      'x = { static static x: 1 };', 'class C { x\n!: T; }', 'class C { async public\n!: T; }'],
+      'x = { static static x: 1 };', 'class C { x\n!: T; }', 'class C { async public\n!: T; }',
+      // Two members on one line need a separator: a body-less method, accessor or constructor
+      // ends as a statement does; a type member ends in `,`, `;`, a line break or `}`.
+      'class C { m() n() }', 'class C { foo() x; }', 'class C { m(): void m() {} }', 'class C { get g() set s(v) {} }',
+      'class C { constructor() x }', 'declare class C { m() n() }', 'abstract class C { abstract m() n() }',
+      '(class { *g() h() {} })', 'class C { async m() x }', 'class C { m() /* c */ n() }', 'class C { x, y }',
+      'interface I { a b }', 'interface I { a: B c: D }', 'interface I { const private; }', 'interface I { p: x is T q: U }',
+      'interface I { (): void x }', 'interface I { m(): void n(): void }', 'interface I { [k: string]: T x }',
+      'interface I { a: T;; }', 'interface I { a,, }', 'type A = { a b }', 'type A = { a: T;; }',
+      'interface I { public a b }', 'interface I { readonly get g(): T }', 'interface I { const a }', 'interface I { static static a }'],
   },
 ];
 
