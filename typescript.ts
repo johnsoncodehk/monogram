@@ -803,7 +803,6 @@ const fieldTail = [opt(sameLine, '!'), opt('?'), opt(':', Type), opt('=', resetC
 const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), ctx(fnBodyOrAsi())];
 const ClassMember = rule($ => [
   ';',   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
-  ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block)],
   [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
   // `public @dec method()` ("Decorators are not valid here") and an orphan
@@ -830,6 +829,8 @@ const ClassMember = rule($ => [
       // `constructor: T`, even modified (`public constructor;`). TypeParams parse; `?`/`!`
       // do not. A string / #private / computed name `constructor` is NOT the identifier,
       // so it stays a valid field (the `not('constructor')` generic arm below covers it).
+      // Every constructor is this branch: bare (`constructor() {}`), decorated, modified or an
+      // overload without a body.
       ['constructor', opt(TypeParams), ...memTail(resetCtx)],
       // `get` / `set` before an accessor name IS the accessor keyword (tsc commits to the
       // accessor), so it is not available as a field name there: `get⏎x = 1` rejects.
@@ -907,6 +908,18 @@ const ModuleReference = rule($ => [
   [notReserved, Ident, many('.', notReserved, Ident)],
 ]);
 
+// A class declaration from its `class` keyword on, named or NAMELESS: tsc parses `class { … }` at
+// statement level cleanly ("a class declaration without 'default' must have a name" is a checker
+// error). The two part at the token after `class` (a name, or `<` / a heritage clause / `{`),
+// mirroring the class-expression pair. Decl writes them once bare and once after a declaration's
+// prefix (below); gen-tm expands them to recover the `class Ident … { … }` shape for highlighting.
+const classDecls = [
+  ['class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
+  ['class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
+];
+// The modifier words tsc's parser takes before any declaration (the `declare`, `export` and `async`
+// prefixes have arms of their own).
+const declMod = alt('abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor');
 // How a declaration ends is tsc's: one that ends in a block (`{ … }` of a function, class,
 // interface, enum, namespace or module) needs nothing after it; every other one ends as a
 // statement does, at `asi()` (tsc's parseSemicolon). An arm that wraps another declaration or
@@ -926,13 +939,7 @@ const Decl = rule($ => [
   // mirror with many() rather than a single opt() clause.
   ['interface', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(TypeMember), '}'],   // shared heritage: repeated/order-free extends+implements, `extends Foo?.Bar`, empty `extends {`
   ['type', ...bindingIdentifier, opt(TypeParams), '=', Type, asi()],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
-  // class decl: optional decorators + optional `abstract`. gen-tm expands the
-  // opt()/many() to recover the `class Ident … { … }` shape for highlighting.
-  [many(DecoratorExpr), opt('abstract'), 'class', ...bindingIdentifier, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
-  // NAMELESS class declaration: tsc parses `class { … }` at statement level cleanly
-  // ("a class declaration without 'default' must have a name" is a checker error).
-  // Named/anonymous are separate arms, mirroring the class-expression pair above.
-  [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],
+  ...classDecls,   // a class with no decorator or modifier; with them, the prefix arm below
   ['enum', ...bindingIdentifier, '{', sep(EnumMember, ','), '}'],
   ['declare', 'function', opt('*'), ...bindingIdentifier, opt(TypeParams), '(', sep(Param, ','), ')', opt(":", ReturnType), asi()],
   // ambient module shorthand `declare module "foo";` (no body — the module arm below
@@ -941,43 +948,34 @@ const Decl = rule($ => [
   ['declare', 'module', String_, asi()],
   ['declare', 'global', '{', many(Stmt), '}'],
   ['declare', alt($, Stmt)],
-  // A leading `async`/`abstract` modifier before any declaration: tsc's parser
-  // accepts it (the checker rejects invalid combinations like `async class`); the
-  // dedicated arms above (function's async arm, class's opt('abstract')) match
-  // valid combinations first and keep their flat shape, so only otherwise-invalid
-  // pairings fall to this modifier-prefix arm. `async` is split out with a
-  // `not('function')` guard: `async function` MUST take the async-function arm so
-  // its params/body carry the [Await] context — otherwise this lenient prefix would
-  // catch the async arm's await-context rejections (e.g. `async function f(a=await)`)
-  // and re-accept them as a plain function with a stray `async` modifier.
-  // A leading modifier soup before a declaration — mirrors the decorator-prefix arm
-  // below (var/let/const/using are Stmt-level forms `$`=Decl alone can't reach). tsc
-  // parses the soup before any of these (`accessor var x`, `public using y`); invalid
-  // combinations are the checker's line. Restricted to Decl + var/let/const + using —
-  // NOT an arbitrary expression statement (`public someExpr;` must stay a reject).
-  [many1(alt('abstract', 'public', 'private', 'protected', 'readonly', 'static', 'override', 'accessor')), alt(
+  // A declaration's prefix: decorators, then modifier words, parsed ONCE; the declaration it
+  // prefixes is chosen after it (tsc's parseDeclaration: decorators, modifiers, then the keyword).
+  // A class takes the prefix as its own (`@dec abstract class C {}` is one declaration); any other
+  // declaration is `$`, which also takes a prefix written in another order (`public @dec class C
+  // {}`, `@dec export class C {}`, the prefix arm again past `export`). tsc parses the soup before
+  // any declaration and before var/let/const and `using` statements, which `$` alone can't reach
+  // (`accessor var x`, `public using y`, `@dec var x`); which combinations are valid is the
+  // checker's line ("decorators are not valid here", `async class`). Not before an arbitrary
+  // statement (`public someExpr;`, `@dec if (…)` are tsc parse errors). `using` requires a real
+  // binding here: `@dec using x` is parse-clean but `using 1` is a tsc parse error (zero-binding
+  // `var;` by contrast is clean, so var/let/const keep the lenient sep()). The branches part at
+  // the token after the prefix, so the first that matches is the only one.
+  [alt([many1(DecoratorExpr), many(declMod)], many1(declMod)), alt(
+    ...classDecls,
     $,
     [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
     [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
   )],
+  // A leading `async` before a declaration other than a function: tsc's parser accepts it (the
+  // checker rejects `async class`). `async function` MUST take the async-function arm so its
+  // params/body carry the [Await] context — otherwise this lenient prefix would catch the async
+  // arm's await-context rejections (e.g. `async function f(a=await)`) and re-accept them as a
+  // plain function with a stray `async` modifier.
   ['async', not('function'), $],
   ['namespace', ...bindingIdentifier, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([...bindingIdentifier, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
   ['export', 'as', 'namespace', ...bindingIdentifier, asi()],   // UMD NamespaceExportDeclaration — BEFORE the lenient `export alt($, Stmt)` (else `as` wraps as an expr-statement)
   ['export', alt($, Stmt)],
-  // decorators before export/default/etc. — tsc allows either order. The variable-
-  // statement alternates mirror tsc's parseDeclaration surface: after decorators it
-  // accepts var/let/const and `using` statements too (`@dec var x` is parse-clean,
-  // "decorators are not valid here" is the checker's line), but NOT arbitrary
-  // statements (`@dec if (…)` is a tsc parse error).
-  [many1(DecoratorExpr), alt(
-    $,
-    [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
-    // `using` requires a real binding here: `@dec using x` is parse-clean but
-    // `using 1` is a tsc parse error (zero-binding `var;` by contrast is clean,
-    // so the var/let/const alternative above keeps the lenient sep()).
-    [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
-  )],
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error).
   ['export', many(DecoratorExpr), 'default', alt(
@@ -999,7 +997,6 @@ const Decl = rule($ => [
     [...bindingIdentifier, '=', ModuleReference],            // import x = require(…) / = ns.Foo  (also `import type = …` where `type` is the binding name)
     String_,                                  // import "m"
   ), asi()],
-  [many(DecoratorExpr), 'export', alt($, Stmt)],
 ]);
 
 // ── Entry ──
