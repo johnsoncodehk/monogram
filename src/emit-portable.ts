@@ -582,9 +582,16 @@ function buildIR(grammar: CstGrammar): ParserIR {
       if (!same) { ruleLead.set(r.name, next); changed = true; }
     }
   }
-  // Two signatures are disjoint iff they share no literal text and no token kind.
+  // Two signatures are disjoint iff no token can begin both: they share no literal text and no
+  // token kind, and neither begins with a word literal where the other begins with the
+  // identifier token (a word such as `get` is lexed as that token, so `alt(['get', …], [Ident,
+  // …])` must try the second branch when the first fails on `get`).
+  const identKind = grammar.tokens.find((t) => t.identifier)?.name;
+  const wordVsIdent = (a: NonNullable<FirstSig>, b: NonNullable<FirstSig>): boolean =>
+    identKind !== undefined && a.lits.some(isKeywordLiteral) && b.toks.includes(identKind);
   const disjoint = (a: FirstSig, b: FirstSig): boolean =>
-    a !== null && b !== null && a.lits.every((x) => !b.lits.includes(x)) && a.toks.every((x) => !b.toks.includes(x));
+    a !== null && b !== null && a.lits.every((x) => !b.lits.includes(x)) && a.toks.every((x) => !b.toks.includes(x))
+    && !wordVsIdent(a, b) && !wordVsIdent(b, a);
   const allDisjoint = (fs: FirstSig[]): boolean => {
     for (let i = 0; i < fs.length; i++) if (fs[i] === null) return false;
     for (let i = 0; i < fs.length; i++) for (let j = i + 1; j < fs.length; j++) if (!disjoint(fs[i], fs[j])) return false;
