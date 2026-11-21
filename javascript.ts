@@ -380,7 +380,7 @@ const Expr = rule($ => [
   // (tsc + V8 + babel all reject). `not('?.')` guards the no-call exit; `new a()?.b` chains via
   // the outer `?.` LED unchanged.
   ['new', not('<'), NewTarget, alt(['(', sep($, ','), ')'], not('?.'))],
-  ['new', 'class', Ident, opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
+  ['new', 'class', ...bindingIdentifier, opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['new', 'class', opt('extends', ClassHeritage), '{', many(ClassMember), '}', alt(['(', sep($, ','), ')'], not('?.'))],
   ['[', many(opt($), ','), opt($), ']'],
   ['{', sep(Prop, ','), '}'],
@@ -409,10 +409,10 @@ const Expr = rule($ => [
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
   // function expression, 4-way split on async × generator (see fnArms).
-  ...fnArms([opt(Ident)], Block),
+  ...fnArms([opt(...bindingIdentifier)], Block),
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
   // `extends`); decorator dimension collapsed via opt(DecoratorExpr).
-  [opt(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
+  [opt(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
   [opt(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
 ]);
 
@@ -603,10 +603,14 @@ const ClassMember = rule($ => [
 ]);
 
 const ImportSpecifier = rule($ => [
-  [Ident, opt('as', Ident)],
+  // The spec's two arms: ModuleExportName `as` ImportedBinding | ImportedBinding. The local name
+  // is a BindingIdentifier; the name read from the module, before `as`, is an IdentifierName:
+  // `import { if as x }`, not `import { if }` / `{ x as if }`.
+  [Ident, 'as', ...bindingIdentifier],
+  bindingIdentifier,
   // arbitrary module namespace identifier (ES2022): `import { "str" as x }` — the
   // string form requires the rename (the local binding must be an identifier).
-  [String_, 'as', Ident],
+  [String_, 'as', ...bindingIdentifier],
 ]);
 
 // Export specifiers are WIDER than import ones: a ModuleExportName (identifier or
@@ -618,9 +622,9 @@ const ExportSpecifier = rule($ => [
 
 const ImportClause = rule($ => [
   // default import, optionally followed by named `{…}` or namespace `* as x`
-  [Ident, opt(',', alt(['{', sep(ImportSpecifier, ','), '}'], ['*', 'as', Ident]))],
+  [...bindingIdentifier, opt(',', alt(['{', sep(ImportSpecifier, ','), '}'], ['*', 'as', ...bindingIdentifier]))],
   ['{', sep(ImportSpecifier, ','), '}'],
-  ['*', 'as', Ident],
+  ['*', 'as', ...bindingIdentifier],
 ]);
 
 const Decl = rule($ => [
@@ -628,21 +632,21 @@ const Decl = rule($ => [
   // leading `function` is preferred as a declaration over an IIFE expression-
   // statement: Program tries Decl before Stmt, so `function f(){}\n()=>{}` parses
   // as a declaration + arrow rather than longest-matching `function f(){}()` (IIFE).
-  ...fnArms([Ident], Block),
+  ...fnArms(bindingIdentifier, Block),
   // class decl: optional decorators. gen-tm expands the opt()/many() to recover
   // the `class Ident … { … }` shape for highlighting.
-  [many(DecoratorExpr), 'class', Ident, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
+  [many(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
   ['export', alt($, Stmt)],
   [many1(DecoratorExpr), $],   // decorators before export/default/etc.
   ['export', 'default', alt(
-    ...fnArms([opt(Ident)], Block),  // function
+    ...fnArms([opt(...bindingIdentifier)], Block),  // function
     [Expr, opt(';')],   // catch-all: export default <expr>
   )],
   ['export', '*', alt(['from', String_, opt(';')], ['as', Ident, 'from', String_, opt(';')])],
   ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), opt(';')],
   ['import', alt(
     [ImportClause, 'from', String_, opt(';')],          // import X from "m"
-    [Ident, '=', Expr, opt(';')],                       // import x = expr
+    [...bindingIdentifier, '=', Expr, opt(';')],        // import x = expr
     [String_, opt(';')],                                // import "m"
   )],
   [many(DecoratorExpr), 'export', alt($, Stmt)],

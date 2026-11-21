@@ -101,6 +101,11 @@ const validJs: string[] = [
   `export { a } from "m";`,
   `export * from "m";`,
   `export * as ns from "m";`,
+  // a specifier's module-side name and an export's own name are IdentifierNames
+  `import { if as x, default as y } from "m";`,
+  `export { x as if };`,
+  `export { if } from "m";`,
+  `export * as if from "m";`,
   // misc real-world
   `const p = new Promise((resolve, reject) => { resolve(1); });`,
   `arr.map(x => x * 2).filter(x => x > 0).reduce((a, b) => a + b, 0);`,
@@ -121,6 +126,7 @@ const tsOnly: [string, string][] = [
   ['typed binding', `let v: string;`],
   ['optional param', `function h(x?) {}`],
   ['this parameter', `function h(this) {}`],
+  ['nameless class declaration', `class extends B {}`],
 ];
 
 let v_ok = 0;

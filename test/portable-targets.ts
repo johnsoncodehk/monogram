@@ -292,6 +292,13 @@ const CASES: Case[] = [
       // default's value, and as a prefix of a longer name.
       'function f(yield, await, let, static, of, async, get, set) {}', 'class C { m(implements, package, interface) {} }',
       'x = (let, of) => 1;', 'function f(inx, iff, newer) {}', 'function f({ in: a, if: b }, [c]) {}', 'function f(a = this, b = null) {}',
+      // A function, class or import binding name is a BindingIdentifier too; the names an
+      // import or export specifier reads from a module, an export's own names and member names
+      // are IdentifierNames, where a reserved word is fine.
+      'function of() {} class async {} x = class await {};', 'function iff() {} class inx {} import newer from "m";',
+      'import let, { yield as static } from "m";', 'import type from "m";', 'import * as from from "m";',
+      'import { if as x, default as y } from "m";', 'export { x as if, y as default };', 'export { if } from "m";',
+      'export * as if from "m";', 'class C { if() {} static in = 1 }', 'x = { if() {}, in: 1 };',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
@@ -299,6 +306,12 @@ const CASES: Case[] = [
       'function f(in) {}', 'function f(if, b) {}', 'x = function (a, while) {};', 'class C { m(in) {} }', 'x = { m(class) {} };',
       'class C { set s(this) {} }', 'function f(this) {}', 'x = (in) => 1;', 'x = async (for) => 1;', 'function* g(new = 1) {}',
       'class C { constructor(true) {} }', 'function f(null) {}', 'function f(...in) {}',
+      // ... nor does a function, class or import binding name.
+      'function if() {}', 'function* in() {}', 'async function new() {}', 'x = async function* this() {};',
+      'x = function while() {};', 'export function var() {}', 'export default function if() {}', 'class while {}',
+      'x = class do {};', 'export default class true {}', 'export class const {}', 'x = new class do {}();',
+      'import if from "m";', 'import { a as if } from "m";', 'import { if } from "m";', 'import * as do from "m";',
+      'import a, * as for from "m";', 'import { "a" as class } from "m";',
       // A `new` with no Arguments is not an optional-chain base, template callee or not.
       'new a`x`?.b;', 'new `x`?.b;', 'new a?.`x`;', 'new `a${}b`;', 'async function f() { new a`x${await}`(); }',
       // … and on a tie the earliest-declared: `yield x++` is the prefix operator's node, which no
@@ -461,6 +474,12 @@ const CASES: Case[] = [
       'class C { constructor(private yield, protected await) {} }', 'type F = (yield: T, await: U, let: V, type: W) => X;',
       'interface I { [out: T]: U }', 'function f(in x) {}', 'function f(declare: T) {}', 'type F = new (inx: T, iff: U) => V;',
       'type F = function (in): U;', 'type F = function (this: T, string): U;', 'class C { [true]: T }',
+      // An import, `infer` or mapped-type name is a binding identifier; an import
+      // specifier's module-side name, a nested namespace name and an enum member are names.
+      'import type { if as x } from "m";', 'import { type if as x } from "m";', 'import type = require("m");',
+      'import defer * as async from "m";', 'type T = A extends infer string ? 1 : 0;',
+      'namespace A.if {}', 'module A.in {}', 'enum E { if, in }',
+      'type T = { [this in K]: 1 };', 'type T = { readonly [K in U]: 1 };',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -566,7 +585,13 @@ const CASES: Case[] = [
       // A JSDoc function type's list holds types: no name, annotation, default, decorator or
       // modifier, and a `this` / `new` label takes its `:`.
       'type F = function (a: T): U;', 'type F = function (a = 1): U;', 'type F = function (@d a): U;',
-      'type F = function (public a): U;', 'type F = function (this): U;'],
+      'type F = function (public a): U;', 'type F = function (this): U;',
+      // No import binding, `infer` or mapped-type name is a reserved word.
+      'import if from "m";', 'import type in from "m";', 'import * as do from "m";', 'import type * as do from "m";',
+      'import { a as if } from "m";', 'import { type a as if } from "m";', 'import { type if } from "m";',
+      'import { if } from "m";', 'import type do = require("m");', 'import defer * as in from "m";',
+      'import while = require("m");', 'type T = A extends infer if ? 1 : 0;', 'type T = A extends [infer in extends string] ? 1 : 0;',
+      'type T = { [if in K]: 1 };'],
   },
 ];
 

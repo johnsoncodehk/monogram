@@ -375,22 +375,34 @@ export const typescriptShape: ShapeSpec = {
       kind: 'choice',
       arms: [
         {
-          // opt(type) Ident opt(as Ident) → after drops: Ident, opt(Ident)
-          name: 'ident',
+          // opt(type) Ident as Ident → after drops: Ident, Ident
+          name: 'identAs',
           altIndices: [0],
           shape: {
             kind: 'node',
             type: 'ImportSpecifier',
             fields: [
               { name: 'imported', bind: { at: 0 }, typeHint: 'Identifier' },
-              { name: 'local', bind: { from: 'opt', at: 1 }, optional: true, typeHint: 'Identifier' },
+              { name: 'local', bind: { at: 1 }, typeHint: 'Identifier' },
+            ],
+          },
+        },
+        {
+          // opt(type) Ident → Ident (the local name alone)
+          name: 'ident',
+          altIndices: [1],
+          shape: {
+            kind: 'node',
+            type: 'ImportSpecifier',
+            fields: [
+              { name: 'imported', bind: { at: 0 }, typeHint: 'Identifier' },
             ],
           },
         },
         {
           // opt(type) String as Ident → String, Ident (as dropped)
           name: 'stringAs',
-          altIndices: [1],
+          altIndices: [2],
           shape: {
             kind: 'node',
             type: 'ImportSpecifier',
