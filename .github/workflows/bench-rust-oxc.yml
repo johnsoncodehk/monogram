@@ -30,5 +30,5 @@ jobs:
       # BENCH_EXTRA: 0807b8143ad160773842ef67bb3faea730ff28a6
       - run: test/bench-rust-oxc/run.sh 9
         env:
-          BENCH_EXTRA: a6221237e9a1636b49a5b6f1ff3007d32d227eaa
+          BENCH_EXTRA: ed544eb5d6e54d4084dfd8ad2ae898e2d4a47ce8
           BENCH_ONLY: '1'
