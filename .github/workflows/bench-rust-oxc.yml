@@ -27,8 +27,8 @@ jobs:
 
       - run: npm ci
 
-      # BENCH_EXTRA: a commit to time as variant E against D (origin/master); edit per measurement.
+      # BENCH_EXTRA: c65e2a2bfabdf6c6d350b5d99ec1ca2e3585e852
       - run: test/bench-rust-oxc/run.sh 9
         env:
-          BENCH_EXTRA: 943c305d5688ac32a5731495c9be2e2b972986a1
+          BENCH_EXTRA: c65e2a2bfabdf6c6d350b5d99ec1ca2e3585e852
           BENCH_ONLY: '1'
