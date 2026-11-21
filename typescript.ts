@@ -101,30 +101,6 @@ const DecoratorExpr = rule($ => [
 // annotation stays a nested `type` node (→ `T` still @type).
 const typeFnParam = () => tsRelax(Param, [opt('...'), Ident, opt('?'), opt(':', Type)], 'type_fn_param');
 
-const TypeMember = rule($ => {
-  const callSig = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
-  const propOrMethod = alt(callSig, [opt(':', Type)]);  // after a name: method (callSig) | property
-  return [
-    // call / construct signature (no member name): a construct sig is just a
-    // call sig with an optional leading `new`.
-    [opt('new'), ...callSig],
-    // index signature | mapped type | computed member — share `(+/-)? readonly? [`,
-    // then (for index/mapped) share the leading `Ident` and branch on `in` vs `:`.
-    [opt(alt('+', '-')), opt('readonly'), '[', alt(
-      [Ident, alt(
-        ['in', Type, opt('as', Type), ']', opt(alt('+', '-')), opt('?'), ':', Type],  // mapped: K in T (as U)?
-        [':', Type, opt(','), ']', opt(':', Type)],                                    // index:  k: T  (trailing comma tolerated)
-      )],
-      [Expr, ']', opt('?'), propOrMethod],                                            // computed: expr
-      [']', opt(':', Type)],                                                          // empty index sig: []  /  []: T
-    )],
-    // readonly property (the readonly index signature is the bracketed branch above)
-    ['readonly', Ident, opt('?'), ':', Type],
-    // named member — share the name + `?`, then branch property | method
-    [alt(Ident, Number_, String_, PrivateField), opt('?'), propOrMethod],
-  ];
-});
-
 const Type = rule($ => {
   const fnType = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', '=>', ReturnType];  // (a: T) => R  /  <T>(…) => R (the return may be a type predicate)
   return [
@@ -157,10 +133,11 @@ const Type = rule($ => {
     // separate tuple members), while the LAST element needs none (`]`-ahead). Trailing
     // comma is covered by the `,` arm before the closing-`]` iteration fails to start.
     ['[', many(opt('...'), opt(Ident, opt('?'), ':'), opt('...'), $, opt('?'), alt([','], [not(not(']'))])), ']'],
-    // object type literal: each member ends in `typeMemberEnd` (`,`, `;`, a line break, or
-    // a following `}`), so two members on one line with no separator reject (`{ a: T b: U }`
-    // is tsc's "';' expected").
-    ['{', many(TypeMember, typeMemberEnd()), '}'],
+    // object type literal (tsc's parseTypeLiteral): the members of an object type, as in an
+    // interface body. It is the literal only where a mapped type does not start (see the mapped
+    // type arm, last below): tsc chooses between the two by that lookahead, so
+    // `{ [K in T]: U, }` is a mapped type missing its `;`, not a computed member `[K in T]`.
+    ['{', not(mappedTypeStart), many(TypeMember), '}'],
     ['asserts', Ident, opt('is', $)],
     [$, 'extends', $, '?', $, ':', $],
     // infer U | infer U extends T | infer U extends T ? X : Y (conditional binds to the infer)
@@ -206,8 +183,23 @@ const Type = rule($ => {
     // still fail on, e.g. `x as T ? new X : y`). No line break before postfix (tsc).
     [$, sameLine, '?', not(alt('new', $))],
     [$, sameLine, '!'],   // postfix non-nullable: T!
+    // mapped type (tsc's parseMappedType): `{`, an optional `readonly` (or `+readonly` /
+    // `-readonly`), the type parameter `[K in T]` with an optional `as` clause, an optional `?`
+    // (or `+?` / `-?`), an optional `: T`, then a statement end, and then the members of an
+    // object type (tsc parses them; the checker rejects them). A different TYPE from the object
+    // type literal, not a member of one: in a member list `[K in T]` is a computed name. Last
+    // among the arms so the shape layers' arm indices of the others stay as they were.
+    // tsRelax: tree-sitter renders no members after the mapped one (only an optional `;`). Its
+    // statement end is a blank there, so `: T` would run straight into a following member
+    // (`: T [k…`, `: T <U>(…`) and each such pair is an LR conflict; a highlighter missing
+    // members the checker rejects anyway is harmless.
+    ['{', opt(opt(alt('+', '-')), 'readonly'), '[', Ident, 'in', $, opt('as', $), ']', opt(opt(alt('+', '-')), '?'), opt(':', $), tsRelax([asi(), many(TypeMember)], [opt(';')]), '}'],
   ];
 }, { type: true });
+
+// tsc's isStartOfMappedType, read after the `{`: `+readonly` / `-readonly`, or `readonly`? then
+// `[ identifier in`.
+const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', Ident, 'in']);
 
 // ── Expressions ──
 
@@ -218,21 +210,24 @@ const Type = rule($ => {
 // starts with either, so the word rejects under both readings). What differs per word is one
 // further condition, held in `modifierExtra`:
 //   static              none                                (`static⏎x` is a static `x`)
-//   export              the start is not `as` or `*`
+//   export              the start is not `as`, `*` or `default` (`export default: T` is
+//                       a member `export`, then a stray `default`)
 //   get / set           the start is not `*`                (`get⏎x() {}` is a getter)
 //   every other word    the start is on the word's own line (`public⏎x` is two members)
-// Every modifier run of class and object-literal members is built from `modifierWord`, so
-// no word is consumed as a modifier unchecked.
+// Every modifier run of class, object-literal and type members is built from `modifierWord`,
+// so no word is consumed as a modifier unchecked.
 // Not modelled, all three artifacts of tsc sharing this lookahead with statements:
-// `default` as a member modifier before a declaration keyword (`default class() {}`), the
-// further look of `export default` / `export type`, and `const` before `enum` in an object
-// literal. Each needs a keyword literal (`class`, `interface`, `type`, `enum`, …) in a
-// member-position lookahead, which the highlighter generators read as that keyword
-// occurring there (it costs `interface` / `type` their declaration-only scope).
+// `default` as a member modifier before a declaration keyword (`default class() {}`,
+// `export default class: T`), the further look of `export type` (tsc takes `export` as a
+// modifier there only when a member start follows `type`, so `{ export type: T }` rejects),
+// and `const` before `enum` (`{ const enum: T }`). Each needs a keyword literal (`class`,
+// `interface`, `type`, `enum`, …) in a member-position lookahead, which the highlighter
+// generators read as that keyword occurring there (it costs `interface` / `type` their
+// declaration-only scope; measured again for `export type` when type literals took modifiers).
 const memberAhead = not(not(alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*')));
 const modifierExtra: Record<string, unknown[]> = {
   static: [],
-  export: [not(alt('as', '*'))],
+  export: [not(alt('as', '*')), not('default')],
   get: [not('*')],
   set: [not('*')],
 };
@@ -681,33 +676,43 @@ const TypeParams = rule($ => [
 
 // ── Declarations ──
 
+// The members of an object type: an interface body, a type literal, and the members after a
+// mapped type's own. tsc parses all of them with one routine, parseTypeMember (reached through
+// parseObjectTypeMembers and parseMappedType), so they are one rule.
 // The modifiers of a type member (tsc's parseTypeMember: parseModifiers without decorators,
 // after the call / construct signatures and before an accessor, index signature, property or
 // method). `const` and `default` are never modifiers before a member name here (tsc takes them
 // only before `enum` / a declaration keyword), so they are names.
 const typeMemberMods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'async']);
-const InterfaceMember = rule($ => {
-  const callSig = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
-  const propOrMethod = alt(callSig, [opt(':', Type)]);  // after a name: method | property (bare = implicit any)
+// tsc's isTypeMemberStart, which its member list tests before each member: past every word that
+// can be a modifier (tsc's isModifierKind; line breaks included), a property name must be
+// followed by `(`, `<`, `?`, `:`, `,` or a statement end. Only a member made of such words
+// alone can fail it here, when an accessor follows it after a line break: `public⏎get g(): T`
+// rejects, though `public` alone and `get g(): T` alone each parse.
+const modifierKindWord = alt('abstract', 'accessor', 'async', 'const', 'declare', 'default', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static');
+const notTypeMemberStart = [many1(modifierKindWord), not(modifierKindWord), alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_), sameLine, not(alt('(', '<', '?', ':', ',', ';', '}'))];
+const TypeMember = rule($ => {
+  const sig = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
+  // Every member but a block-bodied accessor ends as tsc's parseTypeMemberSemicolon: a `,`, or
+  // as a statement does. So two members on one line need a separator between them.
   return [
     // call / construct signature (construct = call sig with a leading `new`)
-    [opt('new'), ...callSig],
-    // getter / setter (`get`/`set` as a member NAME falls through to the named branch). No
-    // modifier before it: tsc's isTypeMemberStart reads `get` after a modifier as the member's
-    // name, so `readonly get x(): T` is not a member start.
-    [alt('get', 'set'), MemberName, '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)],
-    // mapped type: static? (+/-)? readonly? [ K in T (as U)? ] (+/-)? ?? : T
-    [opt('static'), opt(alt('+', '-')), opt('readonly'), '[', Ident, 'in', Type, opt('as', Type), ']', opt(alt('+', '-')), opt('?'), ':', Type],
-    // readonly property (readonly index sig is the bracketed branch below)
-    ['readonly', MemberName, opt('?'), ':', Type],
-    // named / computed member (MemberName includes `[Expr]`) — branch property | method.
-    // Placed before the index signature so a bare `[expr]` parses as a computed
-    // property (TS: `[p]` is a computed property, not an indexer).
-    [typeMemberMods.run, MemberName, opt('?'), propOrMethod],
+    [opt('new'), ...sig, typeMemberEnd()],
+    // getter / setter (tsc's parseAccessorDeclaration): type parameters parse, and the body is
+    // a block, after which nothing is needed, or none, and then the member ends as the others
+    // do (parseFunctionBlockOrSemicolon). No modifier before it: tsc's isTypeMemberStart reads
+    // `get` after a modifier as the member's name, so `readonly get x(): T` is not a member start.
+    [accessorMod, MemberName, ...sig, alt(resetCtx(Block), [not('{'), typeMemberEnd()])],
+    // named / computed member (MemberName includes `[Expr]`) — branch method | property
+    // (bare = implicit any). `get` / `set` before a member name is the accessor keyword (tsc
+    // commits to the accessor), so it is not a name there: `get⏎x: T` rejects. Placed before
+    // the index signature so a bare `[expr]` parses as a computed property (TS: `[p]` is a
+    // computed property, not an indexer; so is `[K in T]`: a member is never a mapped type).
+    [not(notTypeMemberStart), typeMemberMods.run, not(accessorMod), MemberName, opt('?'), alt(sig, [opt(':', Type)]), typeMemberEnd()],
     // index signature: modifiers [ Param,* ] (: T)?  — TS parses the brackets
     // as a full parameter list, so `[]`, `[a?]`, `[public a]`, `[a: T, b: U]` all parse
     // (the extra forms are grammar-errors TS reports post-parse, but the parser accepts).
-    [typeMemberMods.run, '[', sep(typeFnParam(), ','), ']', opt(':', Type)],
+    [typeMemberMods.run, '[', sep(typeFnParam(), ','), ']', opt(':', Type), typeMemberEnd()],
   ];
 });
 
@@ -879,7 +884,7 @@ const Decl = rule($ => [
   // tsc parses REPEATED `extends` clauses on an interface (`interface I extends A
   // extends B`) — the parser accepts them and the checker reports the duplicate;
   // mirror with many() rather than a single opt() clause.
-  ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, typeMemberEnd()), '}'],   // shared heritage: repeated/order-free extends+implements, `extends Foo?.Bar`, empty `extends {`
+  ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(TypeMember), '}'],   // shared heritage: repeated/order-free extends+implements, `extends Foo?.Bar`, empty `extends {`
   ['type', notReserved, Ident, opt(TypeParams), '=', Type, asi()],   // type-alias name can't be a reserved word (`type void = …`); contextual type keywords (`string`/`any`/…) stay valid
   // class decl: optional decorators + optional `abstract`. gen-tm expands the
   // opt()/many() to recover the `class Ident … { … }` shape for highlighting.
@@ -939,7 +944,7 @@ const Decl = rule($ => [
     ...tsFnArms([opt(notReserved, Ident)], fnBodyOrAsi()),  // function
     [many(DecoratorExpr), opt('abstract'), 'class', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],  // named class
     [many(DecoratorExpr), opt('abstract'), 'class', opt(TypeParams), heritageClauses, '{', many(ClassMember), '}'],          // anonymous class
-    ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(InterfaceMember, typeMemberEnd()), '}'],   // export default interface (interface is not an Expr)
+    ['interface', notReserved, Ident, opt(TypeParams), heritageClauses, '{', many(TypeMember), '}'],   // export default interface (interface is not an Expr)
     [Expr, asi()],   // catch-all: export default <expr>
   )],
   ['export', opt('type'), '*', opt('as', alt(Ident, String_)), 'from', String_, asi()],   // export (type)? * (as ns)? from "m" — alias is a ModuleExportName
@@ -1001,12 +1006,12 @@ export default defineGrammar({
     ['type', 'binding_element'], ['type_member', 'binding_property'], ['type_member', 'expr'],
     ['expr', 'array_binding_element'], ['expr', 'binding_property'], ['prop', 'member_name'],
     ['type_member', 'class_member'], ['type_member', 'member_name'], ['type', 'binding'],
-    ['interface_member'], ['type', 'decl'], ['typeof_ref', 'expr'], ['type', 'expr', 'param'],
+    ['type', 'decl'], ['typeof_ref', 'expr'], ['type', 'expr', 'param'],
     ['type_member', 'prop'], ['type', 'array_binding_element'], ['type', 'type_member'],
     ['prop', 'member_name', 'binding_property'], ['type', 'class_member'], ['stmt', 'param'],
-    ['expr', 'interface_member'], ['type', 'expr', 'binding_pattern'],
+    ['type', 'expr', 'binding_pattern'],
     ['type', 'expr', 'binding_element'], ['type_member', 'prop', 'binding_property'],
-    ['type_member', 'member_name', 'binding_property'], ['type', 'interface_member'],
+    ['type_member', 'member_name', 'binding_property'],
     ['type', 'expr', 'array_binding_element'], ['type_member', 'prop', 'member_name'],
     ['type', 'expr', 'block'], ['type_member', 'expr', 'member_name'],
     ['type_member', 'expr', 'prop'], ['type_member', 'member_name', 'stmt'],
@@ -1024,6 +1029,15 @@ export default defineGrammar({
     // parseModuleSpecifier); the `not(String_)` that keeps the two apart has no tree-sitter
     // counterpart, so `require("m")` is both until the `)`.
     ['expr', 'module_reference'],
+    // `{ readonly [` starts a mapped type, a type member with a `readonly` modifier, or (after a
+    // `<` that may open type arguments or compare) an object literal's member, until `in` / `:`.
+    ['type', 'type_member', 'prop'],
+    // A modifier run opens a type-literal member (in a type argument / arrow return), an
+    // object-literal member or a declaration in a block alike.
+    ['type_member', 'prop', 'decl'], ['type_member', 'decl'],
+    // After `implements {` a type-literal index signature's parameter list and a class index
+    // signature's `[k: T,` are the same tokens.
+    ['type_fn_param', 'class_member'],
   ],
 
   rules: {
@@ -1033,7 +1047,7 @@ export default defineGrammar({
     BindingProperty, BindingElement, ArrayBindingElement, BindingPattern,
     Binding, ForBinding, Param, ForHead, SwitchCase,
     TypeParams, TypeParam,
-    Decl, InterfaceMember, ClassMember, EnumMember,
+    Decl, ClassMember, EnumMember,
     ImportClause, ImportSpecifier, ExportSpecifier, ModuleReference,
     Program,
   },

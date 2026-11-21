@@ -402,6 +402,17 @@ const CASES: Case[] = [
       // An interface member takes tsc's type-member modifiers (one member, not a word of its own).
       'interface I { public a: T }', 'interface I { static m(): void, x }', 'interface I { readonly [k: string]: T }',
       'interface I { private a\nb }', 'interface I { public\na }', 'interface I { readonly a }', 'interface I { static [e]: T }',
+      // A type literal's members are an interface body's (tsc's one parseTypeMember): modifiers,
+      // get / set with or without a body (after which nothing is needed), in every type position.
+      'var x: { private y: string };', 'type X = { public x: T };', 'type A = { readonly a };', 'type A = { static m(): T; declare d: T, export e: T }',
+      'function f(p: { protected a: T }): { readonly [k: string]: T } { return p }', 'type A = B<{ override a: T }> | { accessor b };',
+      'type A = { get g(): T; set s(v: T) };', 'type A = { get g() {} y: T }', 'type A = { get g<U>(): U }', 'type A = { get\ng(): T }',
+      'interface I { get g() { return 1 } set s(v) {} }', 'interface I { get g<U>(): U }', 'var x: { set s(v = 1) {} get [e](): T }',
+      'type A = { public;\nget g(): T }', 'type A = { public\nin: T }', 'type A = { export type\nx: T }', 'type A = { f(): x is T }',
+      // A mapped type is a type of its own, chosen where it starts; in a member list `[K in T]` is
+      // a computed name.
+      'type A = { -readonly [K in T]-?: U };', 'type A = { +readonly [K in T as U]+?: V; a: T }', 'type A = { [K in T] }',
+      'type A = { readonly [K in T]\na: T }', 'interface I { [K in T]: U }', 'type A = { a: T; [K in T]?: U }', 'interface I { readonly [K in T]?: U }',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -459,7 +470,19 @@ const CASES: Case[] = [
       'interface I { a b }', 'interface I { a: B c: D }', 'interface I { const private; }', 'interface I { p: x is T q: U }',
       'interface I { (): void x }', 'interface I { m(): void n(): void }', 'interface I { [k: string]: T x }',
       'interface I { a: T;; }', 'interface I { a,, }', 'type A = { a b }', 'type A = { a: T;; }',
-      'interface I { public a b }', 'interface I { readonly get g(): T }', 'interface I { const a }', 'interface I { static static a }'],
+      'interface I { public a b }', 'interface I { readonly get g(): T }', 'interface I { const a }', 'interface I { static static a }',
+      // ... in a type literal as in an interface body. A block-bodied accessor needs nothing after
+      // it, and a `;` there is no member; `get` before a name is the accessor keyword; past the
+      // modifier words before it (line breaks included) an accessor is no member start.
+      'type A = { public a b }', 'type A = { readonly get g(): T }', 'type A = { static static a }', 'var x: { const a };',
+      'type A = { get g() {}; }', 'type A = { get g() {}, }', 'type A = { get\nx: T }', 'type A = { get g }',
+      'type A = { public\nget g(): T }', 'interface I { public\nget g(): T }', 'interface I { readonly public\nget g(): T }',
+      'type A = { export default: T }', 'interface I { export default: T }', 'class C { export default: T }', 'x = { export default: 1 };',
+      // A mapped type ends in a statement end, not a `,`, and takes no other `+` / `-`; a member
+      // takes neither.
+      'type A = { [K in T]: U, }', 'type A = { -[K in T]: U }', 'type A = { [K in T]-: U }', 'type A = { +readonly [k: string]: T }',
+      'interface I { -readonly [K in T]-?: U }', 'type A = { a: T; -readonly [K in T]: U }', 'interface I { static [K in T]-?: U }',
+      'type A = { [K in T]: U a: T }', 'type A = { p: x is T }', 'interface I { p: x is T; q: U }'],
   },
 ];
 

@@ -1713,8 +1713,13 @@ function buildHighlightsScm(
     // member-key (property-name) rules → @property
     const propRules = propertyNameRules(grammar, identName, tokenNames);
     for (const n of propRules) { const s = snake(n); if (s) struct.push(`(${s} (${identSnake}) @property)`); }
-    // type-object member keys → @property
-    for (const n of typeMemberRules(grammar)) { const s = snake(n); if (s) struct.push(`(${s} (${identSnake}) @property)`); }
+    // type-object member keys → @property. Only where the identifier is a direct child of the
+    // member's node: a pattern naming a child the node cannot have is a query error, and a key
+    // held by a member-name rule is already captured through that rule above.
+    for (const n of typeMemberRules(grammar)) {
+      const s = snake(n);
+      if (s && refsDirectly(grammar.rules.find(r => r.name === n)!.body, identName)) struct.push(`(${s} (${identSnake}) @property)`);
+    }
     // property-access tail: obj.prop → @property (only when the grammar has `.` access)
     const exprRuleName = [...ctx.prattRules][0];
     const exprSnake = exprRuleName ? snake(exprRuleName) : null;
@@ -1998,6 +2003,19 @@ function propertyNameRules(grammar: CstGrammar, identName: string, tokenNames: S
 /** Rule(s) that are the member-list element inside a `{ … }` within a `type`-flagged
  *  rule → type-object member keys. Members may be placed by `sep`, a `*`/`+` repetition,
  *  or a bare ref, so collect the list element(s) directly between the braces. */
+// Does this rule body reference `name` itself (not through another rule), in its tree-sitter
+// rendering (a tsRelaxed group renders its relaxed form)?
+function refsDirectly(e: RuleExpr, name: string): boolean {
+  switch (e.type) {
+    case 'ref': return e.name === name;
+    case 'seq': case 'alt': return e.items.some(i => refsDirectly(i, name));
+    case 'quantifier': return refsDirectly(e.body, name);
+    case 'group': return e.tsRuleName ? false : refsDirectly(e.tsRelaxed ?? e.body, name);   // a named tsRelaxed group is its own node
+    case 'sep': return refsDirectly(e.element, name);
+    default: return false;
+  }
+}
+
 function typeMemberRules(grammar: CstGrammar): Set<string> {
   const ruleNames = new Set(grammar.rules.map(r => r.name));
   const typeFlagged = new Set(grammar.rules.filter(r => r.flags.includes('type')).map(r => r.name));

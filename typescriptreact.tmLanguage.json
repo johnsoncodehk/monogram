@@ -184,10 +184,10 @@
       "include": "#scope-keyword-control-loop"
     },
     {
-      "include": "#scope-keyword-control-flow"
+      "include": "#scope-keyword-control-export"
     },
     {
-      "include": "#scope-keyword-control-export"
+      "include": "#scope-keyword-control-flow"
     },
     {
       "include": "#scope-keyword-control-conditional"
@@ -217,10 +217,10 @@
       "include": "#scope-storage-type-function"
     },
     {
-      "include": "#scope-storage-type-class"
+      "include": "#scope-storage-type-property"
     },
     {
-      "include": "#scope-storage-type-property"
+      "include": "#scope-storage-type-class"
     },
     {
       "include": "#scope-storage-type"
@@ -368,7 +368,7 @@
           "name": "punctuation.bracket.angle.open.tsx"
         }
       },
-      "end": "(>)(?=\\s*[\\(`>])|(>)(?=\\s*$)|(>)|(?=[=\\^+/%~;])",
+      "end": "(>)(?=\\s*[\\(`>])|(>)(?=\\s*$)|(>)|(?=[=\\^/%~;])",
       "endCaptures": {
         "1": {
           "name": "punctuation.definition.typeparameters.end.tsx"
@@ -402,7 +402,7 @@
     },
     "angle-bracket-continuation": {
       "begin": "(?=\\s*$)",
-      "end": "(?=>)|(?=[=\\^+/%~;])",
+      "end": "(?=>)|(?=[=\\^/%~;])",
       "patterns": [
         {
           "include": "#generic-type"
@@ -952,7 +952,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\bexport)|(?<=\\bstatic)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\boverride)|(?<=\\babstract)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\bget)|(?<=\\bset)|(?<=\\bstatic)|(?<=\\bexport)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\boverride)|(?<=\\babstract)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.tsx"
@@ -2998,7 +2998,7 @@
           "name": "keyword.operator.type.annotation.tsx"
         }
       },
-      "end": "(?=[;,]|=(?!>))|^\\s*(?=(?:if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)",
+      "end": "(?=[;,]|=(?!>))|^\\s*(?=(?:if|else|switch|case|default|for|while|do|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -3045,7 +3045,7 @@
       "name": "keyword.operator.expression.tsx"
     },
     "scope-storage-modifier": {
-      "match": "\\b(readonly|abstract|async|public|private|protected|override|accessor|declare|static)\\b",
+      "match": "\\b(readonly|abstract|public|private|protected|override|accessor|declare|async|static)\\b",
       "name": "storage.modifier.tsx"
     },
     "scope-keyword-other-extends": {
@@ -3069,7 +3069,7 @@
       "name": "support.type.primitive.tsx"
     },
     "scope-keyword-other": {
-      "match": "\\b(unique|@new|target|meta|out)\\b",
+      "match": "\\b(unique|out|@new|target|meta)\\b",
       "name": "keyword.other.tsx"
     },
     "scope-keyword-control-import": {
@@ -3084,6 +3084,14 @@
       "match": "\\b(in|for|while|do|break|continue|of)\\b",
       "name": "keyword.control.loop.tsx"
     },
+    "scope-storage-type-property": {
+      "match": "\\b(get|set)\\b",
+      "name": "storage.type.property.tsx"
+    },
+    "scope-keyword-control-export": {
+      "match": "\\b(export)\\b",
+      "name": "keyword.control.export.tsx"
+    },
     "scope-storage-type-class": {
       "match": "\\b(class)\\b",
       "name": "storage.type.class.tsx"
@@ -3091,14 +3099,6 @@
     "scope-keyword-control-flow": {
       "match": "\\b(yield|await|return)\\b",
       "name": "keyword.control.flow.tsx"
-    },
-    "scope-keyword-control-export": {
-      "match": "\\b(export)\\b",
-      "name": "keyword.control.export.tsx"
-    },
-    "scope-storage-type-property": {
-      "match": "\\b(get|set)\\b",
-      "name": "storage.type.property.tsx"
     },
     "scope-storage-type": {
       "match": "\\b(let|const|var|using)\\b",
@@ -3751,7 +3751,7 @@
     },
     "regex": {
       "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{;.])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\bget)|(?<=\\bset)|(?<=\\bexport)|(?<=\\bstatic)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\boverride)|(?<=\\babstract)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\bget)|(?<=\\bset)|(?<=\\bstatic)|(?<=\\bexport)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\boverride)|(?<=\\babstract)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.tsx"
@@ -3895,7 +3895,7 @@
           "include": "$self"
         }
       ],
-      "while": "^(?=\\s*(?:[<,\\[|&(...?:{;\\-.!*]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{;\\-.!*=])|(?!(?:if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
+      "while": "^(?=\\s*(?:[<,\\[|&(...?:{\\-.!*+;]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|in|as)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{\\-.!*+;=])|(?!(?:if|else|switch|case|default|for|while|do|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
     },
     "type-object": {
       "name": "meta.object-type.tsx",

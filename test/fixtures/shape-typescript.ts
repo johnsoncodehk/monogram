@@ -188,11 +188,13 @@ export const typescriptShape: ShapeSpec = {
       atom: { kind: 'keep' },
       // IR encodes `| Type` / `& Type` as nudBrackets (not binary ops) — verified via dump.
       group: custom('tsTypeLed',
-        'Type group identities are heterogeneous; object-type group 7 lowers to TSTypeLiteral, ' +
+        'Type group identities are heterogeneous; object-type group 7 lowers to TSTypeLiteral and ' +
+        'mapped-type group 24 to TSMappedType, ' +
         'while other groups retain their explicit Type wrapper. C7 dispatches group vs LED ' +
         'by whether opText is present.', {
         types: ['Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type',
-                'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type'],
+                'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type', 'Type',
+                'Type'],
       }),
       led: custom('tsTypeLed',
         'Type LEDs include conditional/indexed/keyof-style continuations with ' +
@@ -416,10 +418,6 @@ export const typescriptShape: ShapeSpec = {
       'alt[3] alone is a giant nested alt of async/generator/get/set/index/constructor/' +
       'method/field — tens of ESTree ClassBody element types. choice() would need recursive ' +
       'nested choice (forbidden) or an explosion of arms; custom is the honest escape.', { types: ['UnknownClassMember', 'MethodDefinition', 'StaticBlock', 'MethodDefinition'] }),
-    InterfaceMember: custom('tsInterfaceMember',
-      '6 alts (call/construct signature, get/set, mapped type member, readonly prop, ' +
-      'method/prop, index signature) — each a different TS-ESTree node. Same argument as ' +
-      'ClassMember: heterogeneous products + dropped modifier keywords.', { types: ['TSCallSignatureDeclaration', 'TSMethodSignature', 'TSMappedType', 'TSPropertySignature', 'TSPropertySignature', 'TSIndexSignature'] }),
     EnumMember: {
       kind: 'node',
       type: 'TSEnumMember',
@@ -429,9 +427,10 @@ export const typescriptShape: ShapeSpec = {
       ],
     },
     TypeMember: custom('tsTypeMember',
-      '4 alts of object-type members (prop/call/construct/index-like). Heterogeneous ' +
-      'TS-ESTree products + optional modifiers; choice would work for naming but field ' +
-      'binds fight optional `?`/`readonly` dropped leaves — custom recovers flags.', { types: ['TSCallSignatureDeclaration', 'TSMethodSignature', 'TSMappedType', 'TSPropertySignature'] }),
+      '4 alts of object-type members, in interfaces and type literals alike (call/construct ' +
+      'signature, get/set, method/prop, index signature) — each a different TS-ESTree node. ' +
+      'Same argument as ClassMember: heterogeneous products + dropped modifier keywords; ' +
+      'custom recovers the `?` / `readonly` flags.', { types: ['TSCallSignatureDeclaration', 'TSMethodSignature', 'TSPropertySignature', 'TSIndexSignature'] }),
     MemberName: {
       kind: 'choice',
       arms: [
@@ -462,12 +461,12 @@ export const typescriptShape: ShapeSpec = {
   },
 };
 
-/** Helper: assert we listed all 31 cstNames (used by runner). */
+/** Helper: assert we listed all 30 cstNames (used by runner). */
 export const EXPECTED_CST_NAMES = [
   'Type', 'TypeMember', 'DecoratorExpr', 'TypeofRef', 'Expr', 'Prop', 'MemberName',
   'NewTarget', 'ClassHeritage', 'Stmt', 'Block', 'BindingProperty', 'BindingElement',
   'ArrayBindingElement', 'BindingPattern', 'Binding', 'ForBinding', 'Param', 'ForHead',
-  'SwitchCase', 'TypeParams', 'TypeParam', 'Decl', 'InterfaceMember', 'ClassMember',
+  'SwitchCase', 'TypeParams', 'TypeParam', 'Decl', 'ClassMember',
   'EnumMember', 'ImportClause', 'ImportSpecifier', 'ExportSpecifier', 'ModuleReference', 'Program',
 ] as const;
 
@@ -862,6 +861,9 @@ function tsTypeLed(ctx: TsAstCustomCtx): unknown {
   if (ctx.opText === undefined) {
     const arm = ctx.altPath[0];
     if (arm === 7) return { type: 'TSTypeLiteral', members: flatKids(ctx.kids) };
+    // the mapped type (the last group): its key, then its constraint, `as` type, annotation and
+    // trailing members, in order
+    if (arm === 24) return { type: 'TSMappedType', key: ctx.kids[0], parts: flatKids(ctx.kids.slice(1)) };
     if (arm === undefined || arm < 0 || arm > 20) {
       return unhandledCustom('tsTypeLed', ctx, `group altPath=${JSON.stringify(ctx.altPath)}`);
     }
@@ -1015,28 +1017,14 @@ function estreeClassMember(ctx: TsAstCustomCtx): unknown {
   return unhandledCustom('estreeClassMember', ctx);
 }
 
-function tsInterfaceMember(ctx: TsAstCustomCtx): unknown {
-  const arm = ctx.altPath[0];
-  if (arm === 0) {
-    const construct = ctx.src.slice(ctx.off, ctx.end).trimStart().startsWith('new');
-    return {
-      type: construct ? 'TSConstructSignatureDeclaration' : 'TSCallSignatureDeclaration',
-      typeParameters: ctx.kids[0] ?? null,
-      params: flatKids(ctx.kids[1] ?? []),
-      returnType: ctx.kids[2] ?? null,
-    };
-  }
-  if (arm === 1) return { type: 'TSMethodSignature', kind: ctx.src.slice(ctx.off, ctx.off + 3), key: ctx.kids[0], params: flatKids(ctx.kids[1] ?? []), returnType: ctx.kids[2] ?? null };
-  if (arm === 2) return { type: 'TSMappedType', key: ctx.kids[0], constraint: ctx.kids[1], typeAnnotation: ctx.kids[ctx.kids.length - 1] };
-  if (arm === 3) return { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly: true };
-  if (arm === 4) {
-    const method = Array.isArray(ctx.kids[2]);
-    return method
-      ? { type: 'TSMethodSignature', key: ctx.kids[0], params: flatKids(ctx.kids[2]), returnType: ctx.kids[3] ?? null, optional: ctx.src.includes('?') }
-      : { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly: false };
-  }
-  if (arm === 5) return { type: 'TSIndexSignature', parameters: flatKids(ctx.kids[0] ?? []), typeAnnotation: ctx.kids[1] ?? null };
-  return unhandledCustom('tsInterfaceMember', ctx);
+// A type member's modifier words: the words its text starts with, but the last when it is the
+// member's name (followed by `?`, `:`, `(`, `<`, a separator or the end).
+function typeMemberModifiers(text: string): string[] {
+  const toks = text.match(/[A-Za-z_$][\w$]*|\S/g) ?? [];
+  let i = 0;
+  while (i < toks.length && /^[A-Za-z_$]/.test(toks[i]!)) i++;
+  const nameIsWord = i > 0 && (i === toks.length || '?:(<,;}'.includes(toks[i]![0]!));
+  return toks.slice(0, nameIsWord ? i - 1 : i);
 }
 
 function tsTypeMember(ctx: TsAstCustomCtx): unknown {
@@ -1050,14 +1038,16 @@ function tsTypeMember(ctx: TsAstCustomCtx): unknown {
       returnType: ctx.kids[2] ?? null,
     };
   }
-  if (arm === 1) return { type: 'TSIndexSignature', parameters: ctx.kids[0], typeAnnotation: ctx.kids[ctx.kids.length - 1] ?? null };
-  if (arm === 2) return { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly: true };
-  if (arm === 3) {
+  // get / set: [name, type params?, params, return type?, body?]
+  if (arm === 1) return { type: 'TSMethodSignature', kind: ctx.src.slice(ctx.off, ctx.off + 3), key: ctx.kids[0], params: flatKids(ctx.kids[2] ?? []), returnType: ctx.kids[3] ?? null };
+  if (arm === 2) {
     const method = Array.isArray(ctx.kids[2]);
+    const readonly = typeMemberModifiers(ctx.src.slice(ctx.off, ctx.end)).includes('readonly');
     return method
       ? { type: 'TSMethodSignature', key: ctx.kids[0], params: flatKids(ctx.kids[2]), returnType: ctx.kids[3] ?? null, optional: ctx.src.includes('?') }
-      : { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly: false };
+      : { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly };
   }
+  if (arm === 3) return { type: 'TSIndexSignature', parameters: flatKids(ctx.kids[0] ?? []), typeAnnotation: ctx.kids[1] ?? null };
   return unhandledCustom('tsTypeMember', ctx);
 }
 
@@ -1096,7 +1086,6 @@ export const typescriptEstreeCustoms: TsAstCustoms = {
   estreeSwitchCase,
   estreeDecorator,
   estreeClassMember,
-  tsInterfaceMember,
   tsTypeMember,
   estreeProp,
 };
