@@ -684,13 +684,20 @@ const TypeParams = rule($ => [
 // method). `const` and `default` are never modifiers before a member name here (tsc takes them
 // only before `enum` / a declaration keyword), so they are names.
 const typeMemberMods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'async']);
-// tsc's isTypeMemberStart, which its member list tests before each member: past every word that
-// can be a modifier (tsc's isModifierKind; line breaks included), a property name must be
-// followed by `(`, `<`, `?`, `:`, `,` or a statement end. Only a member made of such words
-// alone can fail it here, when an accessor follows it after a line break: `public⏎get g(): T`
-// rejects, though `public` alone and `get g(): T` alone each parse.
+// tsc's isTypeMemberStart, which its member list tests before each member. A leading `(`, `<`,
+// `get` or `set` starts a member, and so does a `[` past the words that can be a modifier (tsc's
+// isModifierKind; line breaks included). Otherwise, past those words and a property name, the
+// next token must be `(`, `<`, `?`, `:`, `,` or a statement end, so a member made of those words
+// fails it when a name follows on their line (`public⏎get g(): T`), and a member whose name is
+// followed on its line by `=` fails it (`a = 1`, `static a = 1`, `public get = 1`, `readonly = 1`),
+// though `a?: T = 1`, `[e] = 1`, `get = 1` and `a⏎= 1` start one and take an initializer.
 const modifierKindWord = alt('abstract', 'accessor', 'async', 'const', 'declare', 'default', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static');
-const notTypeMemberStart = [many1(modifierKindWord), not(modifierKindWord), alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_), sameLine, not(alt('(', '<', '?', ':', ',', ';', '}'))];
+const literalPropertyName = alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_);
+const notTypeMemberStart = [
+  not(alt('get', 'set')),
+  many(modifierKindWord), not(modifierKindWord), not('['), opt(literalPropertyName),
+  sameLine, not(alt('(', '<', '?', ':', ',', ';', '}')),
+];
 const TypeMember = rule($ => {
   const sig = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
   // Every member but a block-bodied accessor ends as tsc's parseTypeMemberSemicolon: a `,`, or
@@ -708,7 +715,9 @@ const TypeMember = rule($ => {
     // commits to the accessor), so it is not a name there: `get⏎x: T` rejects. Placed before
     // the index signature so a bare `[expr]` parses as a computed property (TS: `[p]` is a
     // computed property, not an indexer; so is `[K in T]`: a member is never a mapped type).
-    [not(notTypeMemberStart), typeMemberMods.run, not(accessorMod), MemberName, opt('?'), alt(sig, [opt(':', Type)]), typeMemberEnd()],
+    // A property signature may have an initializer (tsc's parsePropertyOrMethodSignature reads
+    // one at a `=`; that an object type's property cannot have one is a checker error).
+    [not(notTypeMemberStart), typeMemberMods.run, not(accessorMod), MemberName, opt('?'), alt(sig, [opt(':', Type), opt('=', Expr)]), typeMemberEnd()],
     // index signature: modifiers [ Param,* ] (: T)?  — TS parses the brackets
     // as a full parameter list, so `[]`, `[a?]`, `[public a]`, `[a: T, b: U]` all parse
     // (the extra forms are grammar-errors TS reports post-parse, but the parser accepts).

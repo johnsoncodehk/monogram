@@ -413,6 +413,15 @@ const CASES: Case[] = [
       // a computed name.
       'type A = { -readonly [K in T]-?: U };', 'type A = { +readonly [K in T as U]+?: V; a: T }', 'type A = { [K in T] }',
       'type A = { readonly [K in T]\na: T }', 'interface I { [K in T]: U }', 'type A = { a: T; [K in T]?: U }', 'interface I { readonly [K in T]?: U }',
+      // A property signature may have an initializer (tsc's parsePropertyOrMethodSignature; "an
+      // interface property cannot have an initializer" is a checker error), an assignment
+      // expression, after which the member ends as any other does. The member must still start
+      // as tsc's isTypeMemberStart reads one: after a `?`, a `: T`, a computed name, a line
+      // break, or a leading `get` / `set`.
+      'interface I { a: T = 1 }', 'type A = { a?: T = f() }', 'var x: { a?: T = f() };', 'type A = { a? = 1 }', 'type A = { [e] = 1; b: T }',
+      'type A = { get = 1, set = 2 }', 'type A = { public [e] = 1 }', 'type A = { readonly a: T = x => x, b: U }', "type A = { 's': T = a ? b : c\n}",
+      'type A = { a\n= 1 }', 'type A = { public\n= 1 }', 'type A = { #p\n= 1 }', 'type A = { 0?: T = 1, 1n: U = 2 }', 'type A = { a: T = x\n.y }',
+      'type A = { [K in T]: U; a: T = 1 }', 'function f(p: { a: T = 1 }): { b?: U = 2 } { return p }', 'type A = B<{ a: () => T = b = c }>;',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -482,7 +491,15 @@ const CASES: Case[] = [
       // takes neither.
       'type A = { [K in T]: U, }', 'type A = { -[K in T]: U }', 'type A = { [K in T]-: U }', 'type A = { +readonly [k: string]: T }',
       'interface I { -readonly [K in T]-?: U }', 'type A = { a: T; -readonly [K in T]: U }', 'interface I { static [K in T]-?: U }',
-      'type A = { [K in T]: U a: T }', 'type A = { p: x is T }', 'interface I { p: x is T; q: U }'],
+      'type A = { [K in T]: U a: T }', 'type A = { p: x is T }', 'interface I { p: x is T; q: U }',
+      // Only a property signature takes an initializer, and only one that starts as a member: a
+      // bare name followed on its line by `=` does not; nor does a method, call / construct or
+      // index signature, accessor or mapped type. The initializer is one assignment expression.
+      'type A = { a = 1 }', "type A = { 's' = 1 }", 'type A = { 0 = 1 }', 'type A = { #p = 1 }', 'type A = { static a = 1 }',
+      'type A = { readonly = 1 }', 'type A = { public get = 1 }', 'interface I { a = 1, b: T }', 'type A = { a; b = 1 }',
+      'type A = { m(): T = 1 }', 'type A = { (): T = 1 }', 'type A = { new (): T = 1 }', 'interface I { [k: string]: T = 1 }',
+      'type A = { get g(): T = 1 }', 'type A = { get a = 1 }', 'type A = { [K in T]: U = 1 }', 'type A = { a: T = }',
+      'type A = { a: T = 1 b: U }', 'interface I { a: T == 1 }', 'type A = { a: T = 1 = }', 'type A = { a: T = x\n++y }'],
   },
 ];
 

@@ -353,6 +353,7 @@ pub enum VSpec {
     QuestionFlag,               // span contains '?' → true, else false (TS property optional)
     ReadonlyMod,                // a type member's modifier words include `readonly` (the last leading word is the name when a `?`, `:`, `(`, `<`, separator or the end follows it)
     LeafAfter(&'static str),    // leaf of the token right after the first token with this text, else null
+    TypeMemberInit,             // a property signature's initializer: past its first `=` outside brackets, the pool kid starting there, else the leaf of the token after it; null without one
 }
 #[derive(Clone, Copy)]
 pub struct FSpec { pub name: &'static str, pub v: VSpec }
@@ -1847,13 +1848,15 @@ const SC_TSACCESSORSIG: Schema = Schema {
     ],
 };
 
+// A property signature: its key, `: T` and `= initializer` (any expression).
 const SC_TSPROPSIG: Schema = Schema {
     estree: "TSPropertySignature", no_type: false,
-    kids: &["MemberName", "Type"],
+    kids: &["MemberName", "Type", "Identifier", "BinaryExpression", "CallExpression", "MemberExpression", "SequenceExpression", "TemplateLiteral", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TaggedTemplateExpression", "MetaProperty", "ClassExpression", "FunctionExpression", "TSTypeReference", "UnknownKid", "Property"],
     any_kids: false,
     fields: &[
         FSpec { name: "key", v: VSpec::KidByTag("MemberName") },
         FSpec { name: "typeAnnotation", v: VSpec::Opt("Type") },
+        FSpec { name: "initializer", v: VSpec::TypeMemberInit },
         FSpec { name: "optional", v: VSpec::QuestionFlag },
         FSpec { name: "readonly", v: VSpec::ReadonlyMod },
     ],
@@ -2223,6 +2226,24 @@ fn leaf_eq(src: &str, off: u32, end: u32) -> String {
 /// Byte offset just after the first separator token (`:` / `=`) of a node span,
 /// or None. Used to decide whether a pool kid is a VALUE (after the separator)
 /// rather than a key/decorator (before it).
+/// Whether a property-or-method type member is a method signature: its first token outside its
+/// computed name (`[` ... `]`) and past its modifiers, name and `?` is `(` or `<`, where a
+/// property's is `:`, `=` or its end.
+fn type_member_is_sig(src: &str, off: u32, end: u32) -> bool {
+    let text = &src[off as usize..end as usize];
+    let mut depth = 0i32;
+    for t in lex(text) {
+        match &text[t.off as usize..t.end as usize] {
+            "[" => depth += 1,
+            "]" => depth -= 1,
+            "(" | "<" if depth == 0 => return true,
+            ":" | "=" | "," | ";" | "}" if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn sep_after(src: &str, off: u32, end: u32, sep: &str) -> Option<u32> {
     let toks = lex(&src[off as usize..end as usize]);
     for t in toks {
@@ -3189,6 +3210,31 @@ fn eval_spec(v: VSpec, pool: &mut Vec<(&'static str, u32, u32, String)>, off: u3
             }
             "null".to_string()
         }
+        VSpec::TypeMemberInit => {
+            // The `=` of a type annotation's own (a function type's parameter default) sits
+            // inside brackets; the initializer's is the first one outside them.
+            let text = &src[off as usize..end as usize];
+            let toks = lex(text);
+            let mut depth = 0i32;
+            for (i, t) in toks.iter().enumerate() {
+                match &text[t.off as usize..t.end as usize] {
+                    "(" | "[" | "{" | "<" => depth += 1,
+                    ")" | "]" | "}" | ">" => depth -= 1,
+                    "=" if depth == 0 => {
+                        let after = off + t.end as u32;
+                        if let Some(idx) = pool.iter().rposition(|(_, ko, _, _)| *ko >= after) {
+                            return pool.remove(idx).3;
+                        }
+                        return match toks.get(i + 1) {
+                            Some(t2) => leaf_json(&text[t2.off as usize..t2.end as usize]),
+                            None => "null".to_string(),
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            "null".to_string()
+        }
         VSpec::EqLeaf => {
             let toks = lex(&src[off as usize..end as usize]);
             for (i, t) in toks.iter().enumerate() {
@@ -3553,7 +3599,7 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
             if text.trim_start().starts_with("new") { &SC_TSCONSTRUCTSIG } else { &SC_TSCALLSIG }
         }
         ("TSPropertySignature", 2) => {
-            if text.contains('(') { &SC_TSPROPSIG_METHOD } else { schema_for(etype, alt) }
+            if type_member_is_sig(src, off, end) { &SC_TSPROPSIG_METHOD } else { schema_for(etype, alt) }
         }
         // ForStatement dispatch is alt-driven (see rebuild_estree: the ForHead
         // event's alt is stashed and re-encoded here): 100/101 = classic ForHead
