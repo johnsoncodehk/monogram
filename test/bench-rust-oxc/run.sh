@@ -4,7 +4,8 @@
 #   test/bench-rust-oxc/run.sh [rounds=9]
 # Variants: A = cbb58a0 (master before the 2026-11-20 work), P = 0990a37 (#89's parent),
 #           Q = 103b396 (#89, longest match), B = 2632c2c (master when this measurement was asked
-#           for), D = origin/master at run time if it moved past B, C = oxc (test/oxc-parse-bench).
+#           for), D = origin/master at run time if it moved past B, E = BENCH_EXTRA,
+#           C = oxc (test/oxc-parse-bench).
 set -euo pipefail
 ROUNDS=${1:-9}
 REPO=$(pwd)
@@ -69,7 +70,8 @@ done
 cp "$W/src-B/src/gen-tm.ts" "$W/inputs/gen-tm.ts"
 cp "$W/src-B/typescript.ts" "$W/inputs/typescript.ts"
 node "$H/synth2mb.ts" "$W/inputs/synth2mb.ts"
-INPUTS="typescript.js checker.ts synth2mb.ts typescript.d.ts parser.ts gen-tm.ts typescript.ts"
+node "$H/exportnest.ts" "$W/inputs/exportnest.ts"
+INPUTS="typescript.js checker.ts synth2mb.ts typescript.d.ts parser.ts gen-tm.ts typescript.ts exportnest.ts"
 (cd "$W/inputs" && wc -c $INPUTS && sha256sum $INPUTS)
 
 echo "=== acceptance (one untimed parse per input per parser)"

@@ -11,7 +11,7 @@ for (const line of readFileSync(process.argv[2], 'utf8').split('\n')) {
 const med = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); const n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
 const VS = ['A', 'P', 'Q', 'B', 'D', 'E', 'C'];
 // time ratio X/Y: > 1 means X takes longer than Y.
-const RATIOS: [string, string][] = [['B', 'A'], ['B', 'C'], ['A', 'C'], ['Q', 'P'], ['B', 'Q'], ['D', 'B'], ['D', 'C'], ['E', 'D'], ['E', 'C']];
+const RATIOS: [string, string][] = [['B', 'A'], ['B', 'C'], ['A', 'C'], ['Q', 'P'], ['B', 'Q'], ['D', 'B'], ['D', 'C'], ['E', 'D'], ['E', 'C'], ['E', 'P'], ['E', 'A'], ['E', 'Q'], ['D', 'P']];
 const files = [...new Set(rows.map((x) => x.f))];
 const summary: string[] = [];
 for (const f of files) {
