@@ -126,14 +126,15 @@ for (const name of GRAMMARS) {
     else { checkText(emTree, toks, src, `${tag} emitted (recovered)`); recovered++; }
   };
 
-  let nMut = 0, nCur = 0;
-  const TAG = { generated: name, mutant: `${name} mutant`, 'refused-operand': `${name} refused-operand` };
+  let nMut = 0, nCur = 0, nEdge = 0;
+  const TAG = { generated: name, mutant: `${name} mutant`, 'refused-operand': `${name} refused-operand`, 'token-edge': `${name} token-edge` };
   for (const { src, kind, toks } of parityInputs(grammar, tokenize, { refusedOperands: name !== 'yaml' && name !== 'html' })) {
     if (kind === 'mutant') nMut++;
     if (kind === 'refused-operand') nCur++;
+    if (kind === 'token-edge') nEdge++;
     if (toks !== null) run(src, TAG[kind], toks);   // not lexable: no token stream to hold
   }
-  console.log(`${name.padEnd(18)} accepted: ${parsed}  recovered: ${recovered}  (mutants tried: ${nMut}, refused-operand inputs: ${nCur})`);
+  console.log(`${name.padEnd(18)} accepted: ${parsed}  recovered: ${recovered}  (mutants tried: ${nMut}, refused-operand inputs: ${nCur}, token edges: ${nEdge})`);
 }
 
 // Real-world TS sample (optional corpus).

@@ -11,11 +11,13 @@
 // guards against accidental semantic drift within a single target run.
 //
 // Each grammar is checked twice: on its hand-written accept/reject lists below, and on the
-// PARITY CORPUS (test/parity-corpus.ts — the generated inputs, their one-token mutants and the
-// refused-operand matrix that cst-text-invariant.ts runs the interpreter and the emitted parser
-// on). A hand-written list holds the inputs someone thought of; the corpus holds the ones the
-// grammar derives, and every engine must give each of them the oracle's verdict and, when it
-// accepts, the oracle's rule skeleton.
+// PARITY CORPUS (test/parity-corpus.ts — the generated inputs, their one-token mutants, the
+// refused-operand matrix and the token edges that cst-text-invariant.ts runs the interpreter and
+// the emitted parser on). A hand-written list holds the inputs someone thought of; the corpus
+// holds the ones the grammar derives, and every engine must give each of them the oracle's
+// verdict and, when it accepts, the oracle's rule skeleton — and every lexer must give each of
+// them the oracle lexer's token stream (kind, text, newline-before; text rather than offsets,
+// whose units differ by target), or fail on it as the oracle lexer does.
 //
 //   - calc:   operator precedence/associativity, prefix unary, nested grouping.
 //   - minijs: a real JavaScript SUBSET — a string/comment lexer, the full operator ladder,
@@ -539,7 +541,7 @@ function runEditSession(cmd: string, args: string[], json: string): EditOutcome 
 // The ts target's library runs in this process: one module load per grammar instead of one
 // node start per input. Go/Rust run their emitted CLI runner per input (a native start is ~1 ms).
 type TsDoc = { edit(edits: { start: number; end: number; text: string }[]): unknown; align(): unknown; root(): unknown };
-type TsLib = { parse(src: string): unknown; createDoc(src: string, opts: { validate: boolean }): TsDoc };
+type TsLib = { parse(src: string): unknown; tokenize(src: string): { kind: string; text: string; nl: boolean }[]; createDoc(src: string, opts: { validate: boolean }): TsDoc };
 const errText = (e: unknown) => String((e as Error)?.message ?? e);
 function tsRun(lib: TsLib, src: string): Outcome {
   try {
@@ -563,11 +565,33 @@ function tsEditSession(lib: TsLib, json: string, fast: boolean): EditOutcome {
   } catch (e) { return { ok: false, align, err: errText(e) }; }
 }
 
+// A token stream as JSON rows [kind, text, newline-before], or null for a lexer error.
+type TokStream = string | null;
+function tokBatch(cmd: string, srcs: string[]): TokStream[] {
+  const sent = srcs.filter((s) => !s.includes('\0'));
+  const r = spawnSync(cmd, ['batch-tokens'], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
+  const lines = (r.stdout ?? '').split('\n');
+  if (r.status !== 0 || lines.length !== sent.length + 1) {
+    throw new Error(`${cmd} batch-tokens: exit ${r.status}, ${lines.length - 1} lines for ${sent.length} inputs\n${(r.stderr ?? '').slice(0, 2000)}`);
+  }
+  let li = 0;
+  return srcs.map((src): TokStream => {
+    if (src.includes('\0')) return 'NUL';
+    const line = lines[li++];
+    return line.startsWith('!') ? null : JSON.stringify(JSON.parse(line));
+  });
+}
+const tsTokens = (lib: TsLib, src: string): TokStream => {
+  try { return JSON.stringify(lib.tokenize(src).map((t) => [t.kind, t.text, t.nl])); } catch { return null; }
+};
+
 type Runner = {
   label: string;
   run: (src: string) => Outcome;
   /** `run` over a whole corpus: one outcome per input, in order. */
   batch: (srcs: string[]) => Outcome[];
+  /** The lexer alone over a whole corpus. */
+  tokens: (srcs: string[]) => TokStream[];
   edit: (json: string, fast: boolean) => EditOutcome;
   spans: { cmd: string; args: string[] };
   /** Doc.edit offsets are UTF-8 bytes (go/rust), not UTF-16 units (ts). */
@@ -951,7 +975,30 @@ const ECMASCRIPT = new Set(['javascript', 'typescript']);
 // parsers are known to disagree with the oracle, by cause. Each entry is owed as its own fix;
 // when none of an entry's inputs disagrees any more the gate fails until the entry is removed.
 // A disagreement on any input not listed here fails the gate.
-const CORPUS_EXPECTED_FAIL: { grammar: string; reason: string; inputs: string[] }[] = [];
+// An entry names its inputs, or the oracle lexer error that selects them (`oracleLexError`),
+// and the targets it holds for (all when absent).
+type ExpectedFail = { grammars: string[]; reason: string; inputs?: string[]; oracleLexError?: RegExp; targets?: string[] };
+const CORPUS_EXPECTED_FAIL: ExpectedFail[] = [
+  {
+    // Owed: the rule lives in the interpreter's lexer alone (emit-lexer.ts lexIdentValid); a
+    // portable lexer would need each target's Unicode ID_Start / ID_Continue tables to decode
+    // and test the escape.
+    grammars: ['javascript', 'typescript', 'richtokens'],
+    reason: 'an identifier escape that decodes to no identifier character (\\u0000, a\\uF000) is refused only by the interpreter\'s lexer',
+    oracleLexError: /^Invalid identifier escape/,
+  },
+  {
+    // Owed: the interpreter's Unicode identifier fallback (LX_UNI_IDENT, and the TS target's copy)
+    // starts with [$_\p{ID_Start}], so an ASCII `$` the grammar's identifier pattern excludes is
+    // an identifier there; Go and Rust enter the fallback only at a non-ASCII byte. Go / Rust
+    // follow the identifier pattern; aligning the interpreter changes its lexing of every grammar
+    // whose identifier pattern lacks `$` or `_` (envspec, html), which is the maintainer's call.
+    grammars: ['envspec', 'envtpl'],
+    reason: 'an ASCII `$` outside the identifier pattern is an identifier to the interpreter\'s Unicode fallback only',
+    inputs: ['#\n$ x #\n$ x'],
+    targets: ['go', 'rust'],
+  },
+];
 let corpusMs = 0, corpusInputs = 0;
 
 let failures = 0;
@@ -978,7 +1025,7 @@ for (const c of CASES) {
   writeFileSync(`${dir}/lib.ts`, tsLibSrc);
   const tsLib = await import(`${dir}/lib.ts`) as TsLib;
   runners.push({
-    label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), edit: (json, fast) => tsEditSession(tsLib, json, fast),
+    label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), tokens: (srcs) => srcs.map((src) => tsTokens(tsLib, src)), edit: (json, fast) => tsEditSession(tsLib, json, fast),
     spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false,
   });
 
@@ -990,7 +1037,7 @@ for (const c of CASES) {
     goBuild(['-o', `${gdir}/p`, '.'], { cwd: gdir });
     const bin = `${gdir}/p`;
     runners.push({
-      label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+      label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
     });
   }
@@ -1000,7 +1047,7 @@ for (const c of CASES) {
     writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
     execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe' });
     runners.push({
-      label: 'rust', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+      label: 'rust', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
     });
   }
@@ -1237,11 +1284,17 @@ for (const c of CASES) {
     const tokenize = compileTokenizer(lexSpecOf(grammar)) as (s: string) => Tok[];
     const inputs = [...parityInputs(grammar, tokenize, { refusedOperands: ECMASCRIPT.has(c.grammar) })];
     const want = inputs.map((i) => oracleOut(i.src));
-    const known = CORPUS_EXPECTED_FAIL.filter((e) => e.grammar === c.grammar);
+    const wantToks = inputs.map((i): TokStream => {
+      try { return JSON.stringify(tokenize(i.src).map((t) => [t.type, t.text, (t as unknown as { newlineBefore: boolean }).newlineBefore])); } catch { return null; }
+    });
+    const known = CORPUS_EXPECTED_FAIL.filter((e) => e.grammars.includes(c.grammar));
+    const lexErr = inputs.map((i): string => { try { tokenize(i.src); return ''; } catch (e) { return errText(e); } });
     for (const r of runners) {
       const got = r.batch(inputs.map((i) => i.src));
+      const gotToks = r.tokens(inputs.map((i) => i.src));
       const by = new Map<string, number>();
       const samples: string[] = [];
+      const mine = known.map((e) => !e.targets || e.targets.includes(r.label));
       const knownHits = known.map(() => 0);
       let bad = 0;
       inputs.forEach((input, i) => {
@@ -1252,17 +1305,19 @@ for (const c of CASES) {
         // A target that died in its lexer agrees with the oracle only when the oracle's
         // rejection is a lexer error too (its parser's own rejections all begin `Parse error`).
         else if (!w.ok && !g.ok && g.err !== undefined && g.err !== '' && r.label !== 'typescript' && (w.err ?? '').startsWith('Parse error')) what = `oracle rejects in its parser, ${r.label} failed before parsing (${g.err})`;
+        else if (gotToks[i] !== 'NUL' && wantToks[i] !== gotToks[i]) what = wantToks[i] === null ? `oracle lexer fails, ${r.label} lexes` : gotToks[i] === null ? `oracle lexes, ${r.label} lexer fails` : 'token streams differ';
         if (!what) return;
-        const k = known.findIndex((e) => e.inputs.includes(input.src));
+        const k = known.findIndex((e, j) => mine[j] && (e.inputs ? e.inputs.includes(input.src) : e.oracleLexError!.test(lexErr[i])));
         if (k >= 0) { knownHits[k]++; return; }
         bad++;
         const key = `${input.kind}: ${what}`;
         by.set(key, (by.get(key) ?? 0) + 1);
         if (samples.length < 12) samples.push(`${key} — ${JSON.stringify(input.src.length > 100 ? input.src.slice(0, 100) + '…' : input.src)}`);
       });
-      console.log(`  ${c.grammar}/${r.label}: corpus ${inputs.length - bad}/${inputs.length} ≡ oracle (verdict + rule skeleton)`);
+      console.log(`  ${c.grammar}/${r.label}: corpus ${inputs.length - bad}/${inputs.length} ≡ oracle (verdict + rule skeleton + token stream)`);
       known.forEach((e, k) => {
-        console.log(`      expected-fail: ${knownHits[k]}/${e.inputs.length} listed inputs disagree — ${e.reason}`);
+        if (!mine[k]) return;
+        console.log(`      expected-fail: ${knownHits[k]} inputs disagree${e.inputs ? ` (of ${e.inputs.length} listed)` : ''} — ${e.reason}`);
         if (knownHits[k] === 0) { failures++; console.log(`  ${c.grammar}/${r.label}: no listed input disagrees any more: remove this CORPUS_EXPECTED_FAIL entry (${e.reason})`); }
       });
       for (const [key, n] of by) console.log(`      ${String(n).padStart(5)}  ${key}`);

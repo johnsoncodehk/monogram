@@ -8,7 +8,7 @@ import type { Lowering } from './algo-ir.ts';
 import type { Target } from './emit.ts';
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
-import { emitLexScan, emitScanInline, scannedTokens, scannerName } from './lex-family.ts';
+import { TPL_SPAN, emitLexScan, emitScanInline, scannedTokens, scannerName } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 
 // The shared algorithm families, printed for the defining target.
@@ -21,6 +21,9 @@ export interface SharedAlgorithms {
   scannedTokens(ir: ParserIR): LexTok[];
   scanner(token: string): string;
   scanInline(ir: ParserIR, token: string, at: { s: string; p: string; out: string }): string[];
+  // The printed name of the template span scanner, `(s, p, strict) -> int`: the position of the
+  // delimiter that ends the span, -1 when unterminated, -2 - q for a malformed escape at q.
+  tplSpan(): string;
 }
 
 export interface TargetDefinition {
@@ -56,6 +59,7 @@ export function defineTarget(def: TargetDefinition): PortableTarget {
       return lowering().ident(scannerName(token));
     },
     scanInline: (ir, token, at) => emitScanInline(ir, lowering(), token, at),
+    tplSpan: () => lowering().ident(TPL_SPAN),
   };
   const target: PortableTarget = {
     name: def.name,

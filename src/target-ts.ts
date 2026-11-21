@@ -201,17 +201,16 @@ const LID_INTERP_CLOSE = ${lidOf(ids, tpl.interpClose)};
     return !isExprKw && !isParenHead && (!!_divK[prevKid] || !!_divT[prevLid]);
   }
 ` : '';
-  const tplState = tpl ? `  const templateStack: number[] = [];
-  function scanTplSpan(p: number): { interp: boolean; end: number } {
-    while (p < n) {
-      if (src.startsWith(${J(tpl.interpOpen)}, p)) return { interp: true, end: p + ${tpl.interpOpen.length} };
-      if (src.charCodeAt(p) === 92) { p += 2; continue; }
-      if (src.startsWith(${J(tpl.open)}, p)) return { interp: false, end: p + ${tpl.open.length} };
-      p++;
-    }
-    throw new Error('Unterminated template literal at offset ' + p);
+  // The span itself is the shared family's scanner; this reads which delimiter ended it.
+  const tplSpanFn = tpl ? `  function scanTplSpan(p: number, strict: boolean): { interp: boolean; end: number } {
+    const q = ${shared.tplSpan()}(src, p, strict);
+    if (q === -1) throw new Error('Unterminated template literal at offset ' + n);
+    if (q < -1) throw new Error('Invalid escape sequence in template at offset ' + (-2 - q));
+    return src.startsWith(${J(tpl.interpOpen)}, q) ? { interp: true, end: q + ${tpl.interpOpen.length} } : { interp: false, end: q + ${tpl.open.length} };
   }
 ` : '';
+  const tplState = tpl ? `  const templateStack: number[] = [];
+${tplSpanFn}` : '';
   const emitHooks = [
     rx ? `    if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
     else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false; }
@@ -233,16 +232,7 @@ ${emitHooks}
     return !isExprKw && !isParenHead && (!!_divK[prevKid] || !!_divT[prevLid]);
   }
 ` : '';
-  const tplStateFrom = tpl ? `  function scanTplSpan(p: number): { interp: boolean; end: number } {
-    while (p < n) {
-      if (src.startsWith(${J(tpl.interpOpen)}, p)) return { interp: true, end: p + ${tpl.interpOpen.length} };
-      if (src.charCodeAt(p) === 92) { p += 2; continue; }
-      if (src.startsWith(${J(tpl.open)}, p)) return { interp: false, end: p + ${tpl.open.length} };
-      p++;
-    }
-    throw new Error('Unterminated template literal at offset ' + p);
-  }
-` : '';
+  const tplStateFrom = tplSpanFn;
   const emitRxOnly = rx ? `  function emit(off: number, end: number, kid: number, lid: number): void {
     if (lid === LID_LPAREN) { const isMember = hasPrev2 && !!_mem[bpLid]; parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid]); }
     else if (lid === LID_RPAREN) { lastClose = parenHead.pop() ?? false; }
@@ -268,13 +258,13 @@ ${emitHooks}
   // Template dispatch runs at the top of the loop, before token/punct scanning.
   const tplDispatch = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
       templateStack.pop();
-      const sp = scanTplSpan(pos + ${tpl.interpClose.length});
+      const sp = scanTplSpan(pos + ${tpl.interpClose.length}, false);
       if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateMiddle')}, lid_of(_tx)); templateStack.push(0); }
       else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateTail')}, lid_of(_tx)); }
       pos = sp.end; continue;
     }
     if (src.startsWith(${J(tpl.open)}, pos)) {
-      const sp = scanTplSpan(pos + ${tpl.open.length});
+      const sp = scanTplSpan(pos + ${tpl.open.length}, ${rx ? '!prevIsValue()' : 'true'});
       if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateHead')}, lid_of(_tx)); templateStack.push(0); }
       else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, tpl.token)}, lid_of(_tx)); }
       pos = sp.end; continue;

@@ -2,9 +2,13 @@
 // printed for each target through the `Lowering` it registers with `defineTarget`.
 //
 // Every scanner is `(s, p) -> end`, with end > p for a match and -1 for none (a negative p never
-// matches). The token patterns
-// compile to backtracking-free matchers of the same shape: greedy `repeat`, ordered `alt`,
-// zero-width `lookahead` / `anchor`. Scanners only read the source; they never touch lexer state.
+// matches). A token pattern means what its regex means (the interpreter's lexer runs that regex):
+// the end of the first match in the regex's order of choices, where a choice that leaves the rest
+// of the pattern unmatched is given up for the next one. Where committing to the first choice is
+// that answer (src/lex-match-plan.ts decides it per node), a pattern compiles to a matcher of its
+// own shape — greedy `repeat`, ordered `alt`, zero-width `lookahead` / `anchor` — that never
+// backs up; elsewhere the node's matcher carries the rest of the pattern and tries it after each
+// choice in turn. Scanners only read the source; they never touch lexer state.
 //
 // Boundary: the dispatch loop stays with each target — whitespace, punctuation, the first-byte
 // arms (buildLexDispatchPlan), lexer-mode state (regex / template / newline), token storage, and
@@ -16,6 +20,7 @@
 import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
 import { type CharSet, type CodeRange, type Expr, type Fn, type Lowering, type Stmt, inlineFn, printFns, printStmts } from './algo-ir.ts';
+import { ACCEPT, committed, contOf, exitsWhereBodyStops, info, oneChar, oneEnd } from './lex-match-plan.ts';
 
 type Ex = Expr | string;
 const x = (e: Ex): Expr => (typeof e === 'string' ? { k: 'var', name: e } : e);
@@ -40,14 +45,27 @@ const BREAK: Stmt = { k: 'break' };
 const NONE = ret(I(-1));
 
 const inRanges = (v: Ex, rs: CodeRange[]): Expr => any(rs.map(([lo, hi]) => (lo === hi ? eq(v, I(lo)) : and(ge(v, I(lo)), le(v, I(hi))))));
-const classRanges = (items: TokenCharClassItem[]): CodeRange[] =>
-  items.map((it) => (it.type === 'char' ? [it.value.charCodeAt(0), it.value.charCodeAt(0)] : [it.from.charCodeAt(0), it.to.charCodeAt(0)]));
+// A class's ASCII ranges, compared with one code unit, and its non-ASCII characters, matched as
+// literals: a non-ASCII character is more than one unit in a UTF-8 target, so no single unit is
+// it. A non-ASCII range has no such spelling; it is refused rather than compared unit by unit.
+function classParts(items: TokenCharClassItem[]): { narrow: CodeRange[]; wide: string[] } {
+  const narrow: CodeRange[] = [], wide: string[] = [];
+  for (const it of items) {
+    if (it.type === 'char') { if (it.value.charCodeAt(0) <= 127) narrow.push([it.value.charCodeAt(0), it.value.charCodeAt(0)]); else wide.push(it.value); continue; }
+    const lo = it.from.charCodeAt(0), hi = it.to.charCodeAt(0);
+    if (hi > 127) throw new Error(`lex-family: a character class range ${JSON.stringify(it.from)}-${JSON.stringify(it.to)} beyond ASCII has no scanner in every target's units`);
+    narrow.push([lo, hi]);
+  }
+  return { narrow, wide };
+}
 const isAscii = (t: string): boolean => /^[\x00-\x7f]*$/.test(t);
 // A literal's length in native units: a number for ASCII, otherwise measured by the target.
 const litLen = (t: string): Expr => (isAscii(t) ? I(t.length) : len({ k: 'str', v: t }));
 const ident = (t: string): string => t.replace(/[^A-Za-z0-9]/g, '_');
 
 export const scannerName = (tok: string): string => `lexScan${ident(tok)}`;
+/** The template span scanner (see `tplSpan`). */
+export const TPL_SPAN = 'lexTplSpan';
 
 const sig = (name: string, doc: string, body: Stmt[]): Fn => ({ name, doc, params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }], ret: ['int'], body });
 
@@ -78,8 +96,11 @@ class LexScan {
     switch (p.type) {
       case 'anyChar': return [if_(lt('p', len('s')), [ret(add('p', I(1)))]), NONE];
       case 'charClass': {
-        const m = inRanges('c', classRanges(p.items));
-        return [if_(ge('p', len('s')), [NONE]), let_('c', code('p')), if_(p.negate ? not(m) : m, [ret(add('p', I(1)))]), NONE];
+        const { narrow, wide } = classParts(p.items);
+        const m = inRanges('c', narrow);
+        const head = [if_(ge('p', len('s')), [NONE]), let_('c', code('p'))];
+        if (p.negate) return [...head, if_(m, [NONE]), ...wide.map((ch) => if_(hasAt('p', ch), [NONE])), ret(add('p', I(1)))];
+        return [...head, if_(m, [ret(add('p', I(1)))]), ...wide.map((ch) => if_(hasAt('p', ch), [ret(add('p', litLen(ch)))])), NONE];
       }
       case 'seq': {
         // Each step's position is its own local, checked to be a position in s before the
@@ -104,8 +125,8 @@ class LexScan {
         const tail = counted ? [if_(lt('n', I(p.min)), [NONE])] : [];
         const step = [set('q', add('q', I(1))), ...(counted ? [set('n', add('n', I(1)))] : [])];
         const cap = p.max !== undefined ? [if_(ge('n', I(p.max)), [BREAK])] : [];
-        if (typeof b !== 'string' && b.type === 'charClass') {
-          const m = inRanges('c', classRanges(b.items));
+        if (typeof b !== 'string' && b.type === 'charClass' && classParts(b.items).wide.length === 0) {
+          const m = inRanges('c', classParts(b.items).narrow);
           return [
             let_('q', 'p'), ...(counted ? [let_('n', I(0))] : []),
             while_(lt('q', len('s')), [...cap, let_('c', code('q')), if_(b.negate ? m : not(m), [BREAK]), ...step]),
@@ -126,6 +147,122 @@ class LexScan {
       case 'anchor': return [if_(eq('p', p.kind === 'start' ? I(0) : len('s')), [ret('p')]), NONE];
       default: throw new Error(`lex-family: pattern '${(p as { type: string }).type}' unsupported`);
     }
+  }
+
+  // The matcher for p followed by the continuation k: the end of the first match of p then k in
+  // the regex's order of choices, or -1. Where committing is that answer it is p's own matcher.
+  exact(p: TokenPattern, k: TokenPattern[] = []): string {
+    const c = contOf(k, ACCEPT);
+    if (committed(p, c)) {
+      const m = this.pattern(p);
+      return k.length === 0 ? m : this.fnFor(['then', p, k], () => [let_('e', call(m, 'p')), if_(lt('e', I(0)), [NONE]), ret(this.kAt(k, 'e'))]);
+    }
+    if (typeof p === 'string') throw new Error('lex-family: unreachable');
+    switch (p.type) {
+      case 'seq':
+        return p.items.length === 0 ? this.exact('', k) : this.exact(p.items[0], [...p.items.slice(1), ...k]);
+      case 'alt': {
+        const ms = p.items.map((it) => this.exact(it, k));
+        return this.fnFor(['alt', p, k], () => [let_('r', I(-1)), ...ms.flatMap((m) => [set('r', call(m, 'p')), if_(ge('r', I(0)), [ret('r')])]), NONE]);
+      }
+      case 'lookahead': {
+        const m = this.exact(p.body);
+        const rest = k.length ? this.exact(k[0], k.slice(1)) : null;
+        return this.fnFor(['look', p, k], () => [let_('r', call(m, 'p')), if_(p.negate ? ge('r', I(0)) : lt('r', I(0)), [NONE]), ret(rest ? call(rest, 'p') : x('p'))]);
+      }
+      case 'repeat': return this.exactRepeat(p, k, c);
+      default: throw new Error(`lex-family: pattern '${p.type}' unsupported`);
+    }
+  }
+
+  private exactRepeat(p: Extract<TokenPattern, { type: 'repeat' }>, k: TokenPattern[], c: ReturnType<typeof contOf>): string {
+    const b = info(p.body);
+    const where = `repeat of ${JSON.stringify(p.body).slice(0, 80)}`;
+    if (b.nullable) throw new Error(`lex-family: a ${where} that can match empty, where the pattern must back up into it`);
+    if (p.min > 0) return this.exact(p.body, [{ ...p, min: p.min - 1, max: p.max === undefined ? undefined : p.max - 1 }, ...k]);
+    if (p.max === 0) return this.exact('', k);
+    const m = this.exact(p.body);
+    const counted = p.max !== undefined;
+    const capped = counted ? [if_(ge('n', I(p.max!)), [BREAK])] : [];
+    if (!p.greedy) {
+      // Lazy: the continuation first, one more repeat only when it fails.
+      if (!oneChar(p.body) && !oneEnd(p.body)) throw new Error(`lex-family: a lazy ${where} whose body can end in more than one place`);
+      return this.fnFor(['lazy', p, k], () => [
+        let_('q', 'p'), let_('n', I(0)),
+        while_({ k: 'bool', v: true }, [
+          let_('r', this.kAt(k, 'q')), if_(ge('r', I(0)), [ret('r')]),
+          ...(counted ? [if_(ge('n', I(p.max!)), [NONE])] : []),
+          let_('e', call(m, 'q')), if_(le('e', 'q'), [NONE]), set('q', 'e'), set('n', add('n', I(1))),
+        ]),
+        NONE,
+      ]);
+    }
+    // Every repeat ends where the body cannot go on, and only that end can let the rest match.
+    if (oneEnd(p.body) && exitsWhereBodyStops(p.body, c)) {
+      return this.fnFor(['run', p, k], () => [
+        let_('q', 'p'), let_('n', I(0)), let_('r', call(m, 'q')),
+        while_(and(ge('r', I(0)), ne('r', 'q')), [set('q', 'r'), set('n', add('n', I(1))), ...capped, set('r', call(m, 'q'))]),
+        ret(this.kAt(k, 'q')),
+      ]);
+    }
+    // A one-character body: the repeats end at consecutive positions; try the rest from the most.
+    if (oneChar(p.body)) {
+      return this.fnFor(['back', p, k], () => [
+        let_('q', 'p'), let_('n', I(0)), let_('r', call(m, 'q')),
+        while_(ge('r', I(0)), [set('q', 'r'), set('n', add('n', I(1))), ...capped, set('r', call(m, 'q'))]),
+        while_(ge('q', 'p'), [set('r', this.kAt(k, 'q')), if_(ge('r', I(0)), [ret('r')]), set('q', sub('q', I(1)))]),
+        NONE,
+      ]);
+    }
+    // A bounded repeat: one more repeat, else the rest.
+    if (counted) return this.exact({ type: 'alt', items: [{ type: 'seq', items: [p.body, { ...p, max: p.max! - 1 }] }, ''] }, k);
+    throw new Error(`lex-family: a ${where} the pattern must back up into, whose body is longer than one character`);
+  }
+
+  private kAt(k: TokenPattern[], at: string): Expr {
+    return k.length === 0 ? x(at) : call(this.exact(k[0], k.slice(1)), at);
+  }
+
+  private fnFor(key: unknown[], body: () => Stmt[]): string {
+    const id = JSON.stringify(key);
+    const known = this.pats.get(id);
+    if (known) return known;
+    const b = body();
+    const name = `lexMatch${this.pats.size}`;
+    this.pats.set(id, name);
+    this.fns.push(sig(name, 'A token-pattern matcher followed by the rest of its pattern: the position after both, or -1.', b));
+    return name;
+  }
+
+  // A template literal's text from p (after its opener or a hole's closer) to the delimiter that
+  // ends it: the position of that `interpOpen` or closing `open`, -1 when the source ends first,
+  // or -2 - q when `strict` and the backslash at q begins no well-formed escape. A backslash
+  // otherwise takes the next character.
+  tplSpan(t: { open: string; interpOpen: string; escapeValid: TokenPattern | null }): Fn {
+    const esc = t.escapeValid === null ? null : this.exact(t.escapeValid);
+    const skip = set('q', add('q', I(2)));
+    const escape = esc === null ? [skip] : [if_('strict', [
+      let_('e', call(esc, 'q')),
+      if_(lt('e', I(0)), [ret(sub(I(-2), 'q'))]),
+      set('q', 'e'),
+    ], [skip])];
+    return {
+      name: TPL_SPAN,
+      doc: 'A template span: the position of the delimiter ending it, -1 when unterminated, -2 - q for a malformed escape at q (strict).',
+      params: [{ name: 's', ty: 'str' }, { name: 'p', ty: 'int' }, { name: 'strict', ty: 'bool' }],
+      ret: ['int'],
+      body: [
+        let_('q', 'p'),
+        while_(lt('q', len('s')), [
+          if_(hasAt('q', t.interpOpen), [ret('q')]),
+          if_(eq(code('q'), I(92)), escape, [
+            if_(hasAt('q', t.open), [ret('q')]),
+            set('q', add('q', I(1))),
+          ]),
+        ]),
+        NONE,
+      ],
+    };
   }
 
   // A pattern match that consumed nothing is no token.
@@ -151,7 +288,7 @@ class LexScan {
           ret('e'),
         ]));
       case 'runBail': {
-        const m = this.pattern(t.pattern);
+        const m = this.exact(t.pattern);
         // A run that may not stop at a non-ASCII character goes to the matcher alone.
         if (t.cont.some(([, hi]) => hi > 127)) return sig(name, `${t.name} is scanned by its token pattern alone.`, this.nonEmpty(m));
         const tag = ident(t.name);
@@ -195,33 +332,18 @@ class LexScan {
           while_(lt('e', len('s')), [if_(eq(code('e'), I(10)), [BREAK]), set('e', add('e', I(1)))]),
           ret('e'),
         ]);
-      case 'block':
-        if (t.nested) {
-          return sig(name, `${t.name}: ${t.open}..${t.close}, nested openers each closed in turn.`, [
-            if_(not(hasAt('p', t.open)), [NONE]),
-            let_('e', add('p', litLen(t.open))),
-            let_('depth', I(1)),
-            while_(lt('e', len('s')), [
-              if_(hasAt('e', t.close), [
-                set('e', add('e', litLen(t.close))),
-                if_(le('depth', I(1)), [ret('e')]),
-                set('depth', sub('depth', I(1))),
-              ], [
-                // Every opener consumes source, so the depth stays below the source length.
-                if_(hasAt('e', t.open), [set('e', add('e', litLen(t.open))), if_(lt('depth', len('s')), [set('depth', add('depth', I(1)))])], [set('e', add('e', I(1)))]),
-              ]),
-            ]),
-            NONE,
-          ]);
-        }
-        return sig(name, `${t.name} runs from ${t.open} to the first ${t.close} after it.`, [
+      case 'block': {
+        const guard = t.guard === null ? [] : [let_('g', call(this.exact(t.guard), 'e')), if_(lt('g', I(0)), [NONE])];
+        return sig(name, `${t.name} runs from ${t.open}${t.guard === null ? '' : ' (where its guard holds)'} to the first ${t.close} after it.`, [
           if_(not(hasAt('p', t.open)), [NONE]),
           let_('e', add('p', litLen(t.open))),
+          ...guard,
           while_(lt('e', len('s')), [if_(hasAt('e', t.close), [ret(add('e', litLen(t.close)))]), set('e', add('e', I(1)))]),
           NONE,
         ]);
+      }
       case 'pattern':
-        return sig(name, `${t.name} is scanned by its token pattern.`, this.nonEmpty(this.pattern(t.pattern)));
+        return sig(name, `${t.name} is scanned by its token pattern.`, this.nonEmpty(this.exact(t.pattern)));
     }
   }
 }
@@ -238,6 +360,7 @@ export function lexScanFamily(ir: ParserIR): { sets: CharSet[]; fns: Fn[] } {
   if (!f) {
     const b = new LexScan();
     for (const t of scannedTokens(ir)) b.fns.push({ ...b.scanner(t), inline: true });
+    if (ir.tpl) b.fns.push(b.tplSpan(ir.tpl));
     f = { sets: b.sets, fns: b.fns };
     families.set(ir, f);
   }

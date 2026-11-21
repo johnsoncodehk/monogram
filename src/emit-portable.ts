@@ -25,10 +25,7 @@ import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
-import {
-  tokenPatternCharLoop, tokenPatternQuoteDelimAndEscape,
-  tokenPatternBlockDelimiters, tokenPatternLiteralPrefix,
-} from './token-pattern.ts';
+import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
 
 // ── Intermediate representation (plain data; every Target renders THIS) ──
 
@@ -45,8 +42,8 @@ export type LexTok =
       pattern: TokenPattern; skip: boolean }
   | { kind: 'string'; name: string; delim: string; skip: boolean }                        // delim..delim, `\` escapes next
   | { kind: 'line'; name: string; prefix: string; skip: boolean }                         // prefix..end-of-line
-  // open..close; `nested`: the body admits the opener again, so openers and closers pair up.
-  | { kind: 'block'; name: string; open: string; close: string; nested: boolean; skip: boolean }
+  // open..the first close after it; `guard`: zero-width tests right after the opener.
+  | { kind: 'block'; name: string; open: string; close: string; guard: TokenPattern | null; skip: boolean }
   // The general case: the raw token-pattern AST, compiled to a backtracking-free matcher
   // by the target (no regex engine). Subsumes the fast paths above; used for the token
   // shapes they don't cleanly recognise (escaped identifiers, the number family, …).
@@ -279,6 +276,9 @@ export type TplCfg = {
   interpOpen: string;   // `${`
   interpClose: string;  // `}`
   braceOpen: string;    // `{` — a nested one deepens the hole, so its `}` is not the closer
+  // One well-formed escape (the token's `escapeValid`): an untagged template's opening span
+  // rejects a `\` that does not begin one. Null when the token declares none.
+  escapeValid: TokenPattern | null;
 };
 
 /** Every rule that parses template holes in `ir`, in first-use order: a target whose template
@@ -597,6 +597,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       interpOpen: tplTok.template.interpOpen,
       interpClose: tplTok.template.interpClose,
       braceOpen: tplTok.template.interpOpen.slice(-1),
+      escapeValid: tplTok.escapeValidPattern ?? null,
     };
   }
 
@@ -642,26 +643,17 @@ function buildIR(grammar: CstGrammar): ParserIR {
   return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, tokenSets, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
-// Whether `lit` occurs in pattern p anywhere but as the leading item of the top-level sequence.
-function mentionsLiteral(p: TokenPattern, lit: string, top: boolean): boolean {
-  if (typeof p === 'string') return !top && p === lit;
-  switch (p.type) {
-    case 'seq': return p.items.some((it, i) => mentionsLiteral(it, lit, top && i === 0));
-    case 'alt': return p.items.some((it) => mentionsLiteral(it, lit, false));
-    case 'repeat': case 'lookahead': case 'lookbehind': return mentionsLiteral(p.body, lit, false);
-    default: return false;
-  }
-}
-
-// Classify a token: a fast-path shape (run/string/line/block) when one cleanly matches,
-// otherwise the general `pattern` matcher. The fast paths keep the common simple tokens
-// (and the calc/minijs grammars) on tight, readable scan code in every target.
+// Classify a token: a fast-path shape (run/string/line/block) when the pattern IS that shape,
+// otherwise the general `pattern` matcher. A fast path scans its shape's language, so it is
+// taken only for a pattern of exactly that language; a pattern that merely begins and ends like
+// a string or a comment is scanned by its own matcher. The fast paths keep the common simple
+// tokens (and the calc/minijs grammars) on tight, readable scan code in every target.
 function lexTok(t: TokenDecl): LexTok {
   const skip = t.flags.includes('skip');
-  const qs = tokenPatternQuoteDelimAndEscape(t);
-  if (qs) return { kind: 'string', name: t.name, delim: qs.delim, skip };
-  const bd = tokenPatternBlockDelimiters(t);
-  if (bd) return { kind: 'block', name: t.name, open: bd[0], close: bd[1], nested: mentionsLiteral(t.pattern, bd[0], true), skip };
+  const delim = stringShape(t.pattern);
+  if (delim !== null) return { kind: 'string', name: t.name, delim, skip };
+  const bd = blockShape(t.pattern);
+  if (bd) return { kind: 'block', name: t.name, ...bd, skip };
   const loop = tokenPatternCharLoop(t);
   // Plain `run` only when NOTHING needs the general matcher: no cont-stop bails AND no
   // complex head alternative (`run` has no fallback path — a headBail entry char would
@@ -681,6 +673,47 @@ function lexTok(t: TokenDecl): LexTok {
   const line = lineCommentShape(t.pattern);   // PRECISE: prefix-literal then star(non-newline)
   if (line) return { kind: 'line', name: t.name, prefix: line, skip };
   return { kind: 'pattern', name: t.name, pattern: t.pattern, skip };
+}
+
+const isLit = (p: TokenPattern | undefined, len?: number): p is string => typeof p === 'string' && p.length > 0 && (len === undefined || p.length === len);
+const isAny = (p: TokenPattern): boolean => typeof p !== 'string' && p.type === 'anyChar';
+const notAhead = (p: TokenPattern, lit: string): boolean => typeof p !== 'string' && p.type === 'lookahead' && p.negate && p.body === lit;
+
+// `d ([^d\\] | \\ anyChar)* d`, the alternatives in either order: the delimiter, then a run in
+// which a backslash takes the next character, then the delimiter.
+function stringShape(p: TokenPattern): string | null {
+  if (typeof p === 'string' || p.type !== 'seq' || p.items.length !== 3) return null;
+  const [open, body, close] = p.items;
+  if (!isLit(open, 1) || close !== open) return null;
+  if (typeof body === 'string' || body.type !== 'repeat' || body.min !== 0 || body.max !== undefined || !body.greedy) return null;
+  const alt = body.body;
+  if (typeof alt === 'string' || alt.type !== 'alt' || alt.items.length !== 2) return null;
+  const plain = (q: TokenPattern): boolean => {
+    if (typeof q === 'string' || q.type !== 'charClass' || !q.negate || q.items.length !== 2) return false;
+    const cs = q.items.map((it) => (it.type === 'char' ? it.value : null));
+    return cs.includes(open) && cs.includes('\\');
+  };
+  const escaped = (q: TokenPattern): boolean => typeof q !== 'string' && q.type === 'seq' && q.items.length === 2 && q.items[0] === '\\' && isAny(q.items[1]);
+  const [a, b] = alt.items;
+  return (plain(a) && escaped(b)) || (escaped(a) && plain(b)) ? open : null;
+}
+
+// `open guard* body close` where the body runs to the first close: a lazy `anyChar*`, or a repeat
+// of `(?!close) anyChar` (which stops at the first close, greedy or not). The guards are
+// zero-width tests right after the opener.
+function blockShape(p: TokenPattern): { open: string; close: string; guard: TokenPattern | null } | null {
+  if (typeof p === 'string' || p.type !== 'seq' || p.items.length < 3) return null;
+  const items = p.items;
+  const open = items[0], close = items[items.length - 1], body = items[items.length - 2];
+  const guards = items.slice(1, -2);
+  if (!isLit(open) || !isLit(close)) return null;
+  if (!guards.every((g) => typeof g !== 'string' && g.type === 'lookahead')) return null;
+  if (typeof body === 'string' || body.type !== 'repeat' || body.min !== 0 || body.max !== undefined) return null;
+  const step = body.body;
+  const toClose = (isAny(step) && !body.greedy)
+    || (typeof step !== 'string' && step.type === 'seq' && step.items.length === 2 && notAhead(step.items[0], close) && isAny(step.items[1]));
+  if (!toClose) return null;
+  return { open, close, guard: guards.length === 0 ? null : guards.length === 1 ? guards[0] : { type: 'seq', items: guards } };
 }
 
 // A token is a line comment iff its pattern is `seq(<literal>, star(charClass excluding \n))`.
