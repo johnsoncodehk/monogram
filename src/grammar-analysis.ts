@@ -553,6 +553,37 @@ export function analyzeGrammar(grammar: CstGrammar) {
     }
   }
 
+  // ── Suppress sets ──
+  // The LED connectors a `suppress` group disables (`exclude('in', Expr)`: no `in` in a for-head)
+  // are a constant of the grammar at each site, so a compiled parser never builds one at run time:
+  // each distinct set is kept once here, sorted, in first-occurrence order over the rules; set 0 is
+  // the empty set, the state outside every suppress group. A compiled parser holds the index of the
+  // set in force, and which sets disable a led is decided here too (suppressedIn), so it tests an
+  // index, never a set.
+  const suppressSets: string[][] = [[]];
+  const suppressSetIds = new Map<string, number>([['[]', 0]]);
+  const suppressKey = (connectors: readonly string[]) => JSON.stringify([...new Set(connectors)].sort());
+  const collectSuppress = (e: RuleExpr): void => {
+    if (e.type === 'group' && e.suppress && e.suppress.length) {
+      const key = suppressKey(e.suppress);
+      if (!suppressSetIds.has(key)) { suppressSetIds.set(key, suppressSets.length); suppressSets.push(JSON.parse(key)); }
+    }
+    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(collectSuppress);
+    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') collectSuppress(e.body);
+    else if (e.type === 'sep') collectSuppress(e.element);
+  };
+  for (const rule of grammar.rules) collectSuppress(rule.body);
+  // The index of a suppress group's connector set.
+  const suppressSetOf = (connectors: readonly string[]): number => {
+    const id = suppressSetIds.get(suppressKey(connectors));
+    if (id === undefined) throw new Error(`suppress set ${suppressKey(connectors)} is not a group of this grammar`);
+    return id;
+  };
+  // The sets that disable a led whose first literal is `connector` (none for a led without one):
+  // the led is tried only while the set in force is none of them.
+  const suppressedIn = (connector: string | null): number[] =>
+    connector === null ? [] : suppressSets.flatMap((set, i) => (set.includes(connector) ? [i] : []));
+
   return {
     tokenNames,
     opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
@@ -563,5 +594,6 @@ export function analyzeGrammar(grammar: CstGrammar) {
     maxBp, ruleByName, leftRecSet, prattClassified, leftRecClassified,
     templateTokenName, templateTokenNames,
     firstSets, exprFirst, ruleSecond, exprSecond,
+    suppressSets, suppressSetOf, suppressedIn,
   };
 }
