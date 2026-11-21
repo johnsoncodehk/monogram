@@ -55,13 +55,13 @@ const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
 function renderIdTablesGo(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
-  const pf = buildLidPrefilter(ids);
+  const pf = buildLidPrefilter(ids, 'utf8');
   const bitsLit = [...pf.firstByLenBits].join(', ');
   return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
 var _kidMap = map[string]uint16{}
 var _lidMap = map[string]uint16{}
-const _lidMaxLen = ${pf.maxByteLen}
+const _lidMaxLen = ${pf.maxLen}
 var _lidFirstBits = [...]byte{${bitsLit}}
 
 func init() {
@@ -72,11 +72,9 @@ func kidOf(kind string) uint16 { if v, ok := _kidMap[kind]; ok { return v }; ret
 func lidOf(text string) uint16 {
 \tn := len(text)
 \tif n == 0 || n > _lidMaxLen { return 0 }
+\t// No literal has this (length, first byte) key ⇒ lid 0 (the bits hold every literal's key).
 \tb0 := text[0]
-\t// Ident/@-keyword shape: O(1) length×first-byte miss ⇒ lid 0. Punct first bytes skip the probe.
-\tif (b0 >= 'A' && b0 <= 'Z') || (b0 >= 'a' && b0 <= 'z') || b0 == '_' || b0 == '$' || b0 == '@' {
-\t\tif _lidFirstBits[n*32+(int(b0)>>3)]&(1<<(b0&7)) == 0 { return 0 }
-\t}
+\tif _lidFirstBits[n*32+(int(b0)>>3)]&(1<<(b0&7)) == 0 { return 0 }
 \tif v, ok := _lidMap[text]; ok { return v }
 \treturn 0
 }
@@ -3358,15 +3356,43 @@ func main() {
 \t\tos.Stdout.WriteString(b.String())
 \t\treturn
 \t}
+\t// batch-doc: as batch, but each input is typed into an empty Doc (one edit), so the whole text
+\t// is parsed from tokens the Doc rebuilds from its metadata — the CST JSON, or "-" when that
+\t// Doc rejects. batch-doc-builder: the same through a builder Doc (DocWith), "+" or "-".
+\tif len(os.Args) > 1 && (os.Args[1] == "batch-doc" || os.Args[1] == "batch-doc-builder") {
+\t\tvar b strings.Builder
+\t\tfor _, s := range strings.Split(src, "\\x00") {
+\t\t\tfill := []Edit{{Start: 0, End: 0, Text: s}}
+\t\t\tif os.Args[1] == "batch-doc" {
+\t\t\t\td := NewDoc("")
+\t\t\t\td.Edit(fill)
+\t\t\t\tif d.Root() < 0 { b.WriteString("-\\n") } else { b.WriteString(d.CstJSON()); b.WriteByte('\\n') }
+\t\t\t} else {
+\t\t\t\td := newDocWith("", docProbeBuilder{&CstBuilder{}})
+\t\t\t\td.Edit(fill)
+\t\t\t\tif d.Root() < 0 { b.WriteString("-\\n") } else { b.WriteString("+\\n") }
+\t\t\t}
+\t\t}
+\t\tos.Stdout.WriteString(b.String())
+\t\treturn
+\t}
+\t// lid-of: NUL-separated texts in, one line per text out — lidOf(text), the literal id the Doc
+\t// gives a token of that text when it rebuilds the token from its metadata.
+\tif len(os.Args) > 1 && os.Args[1] == "lid-of" {
+\t\tvar b strings.Builder
+\t\tfor _, s := range strings.Split(src, "\\x00") { b.WriteString(strconv.Itoa(int(lidOf(s)))); b.WriteByte('\\n') }
+\t\tos.Stdout.WriteString(b.String())
+\t\treturn
+\t}
 \t// batch-tokens: NUL-separated inputs in, one line per input out — the token stream as a JSON
-\t// array of [kind, text, newline-before], or "!" and the message for a lexer error.
+\t// array of [kind, text, newline-before, lid], or "!" and the message for a lexer error.
 \tif len(os.Args) > 1 && os.Args[1] == "batch-tokens" {
 \t\tvar b strings.Builder
 \t\tfor _, s := range strings.Split(src, "\\x00") {
 \t\t\ttoks, err := Tokenize(s)
 \t\t\tif err != nil { b.WriteString("!" + strings.ReplaceAll(err.Error(), "\\n", " ") + "\\n"); continue }
-\t\t\trows := make([][3]interface{}, len(toks))
-\t\t\tfor i, t := range toks { rows[i] = [3]interface{}{t.Kind, t.Text, t.Nl} }
+\t\t\trows := make([][4]interface{}, len(toks))
+\t\t\tfor i, t := range toks { rows[i] = [4]interface{}{t.Kind, t.Text, t.Nl, t.Lid} }
 \t\t\tj, _ := json.Marshal(rows)
 \t\t\tb.Write(j); b.WriteByte('\\n')
 \t\t}
@@ -3404,6 +3430,9 @@ func main() {
 \tp.writeJSON(root, &b)
 \tos.Stdout.WriteString(b.String())
 }
+
+// The CST builder behind another type, so NewDocWith takes the builder (parserW) Doc.
+type docProbeBuilder struct{ *CstBuilder }
 `;
   },
 });

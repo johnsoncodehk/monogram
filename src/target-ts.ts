@@ -52,23 +52,21 @@ const astGuard = (r: RdRule, i: number): string => { const c = guardCond(r.altGu
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesTS(ids: LexIdPlan): string {
-  const pf = buildLidPrefilter(ids);
+  const pf = buildLidPrefilter(ids, 'utf16');
   const bitsLit = [...pf.firstByLenBits].join(', ');
   return `const KIND_STR: string[] = ${J(ids.kids)};
 const _LIDS: string[] = ${J(ids.lids)};
 const _KID_MAP = new Map<string, number>(KIND_STR.map((k, i) => [k, i]));
 const _LID_MAP = new Map<string, number>(_LIDS.map((t, i) => [t, i]));
-const _LID_MAX_LEN = ${pf.maxByteLen};
+const _LID_MAX_LEN = ${pf.maxLen};
 const _LID_FIRST_BITS = new Uint8Array([${bitsLit}]);
 function kid_of(kind: string): number { return _KID_MAP.get(kind) ?? 0; }
 function lid_of(text: string): number {
   const n = text.length;
   if (n === 0 || n > _LID_MAX_LEN) return 0;
-  const b0 = text.charCodeAt(0);
-  // Ident/@-keyword shape: O(1) length×first-byte miss ⇒ lid 0. Punct first bytes skip the probe.
-  if ((b0 >= 65 && b0 <= 90) || (b0 >= 97 && b0 <= 122) || b0 === 95 || b0 === 36 || b0 === 64) {
-    if ((_LID_FIRST_BITS[n * 32 + (b0 >> 3)]! & (1 << (b0 & 7))) === 0) return 0;
-  }
+  // No literal has this (length, first unit) key ⇒ lid 0 (the bits hold every literal's key).
+  const b0 = text.charCodeAt(0) & 255;
+  if ((_LID_FIRST_BITS[n * 32 + (b0 >> 3)]! & (1 << (b0 & 7))) === 0) return 0;
   return _LID_MAP.get(text) ?? 0;
 }
 function tok_kind(t: Tok): string { return KIND_STR[t.kid]!; }

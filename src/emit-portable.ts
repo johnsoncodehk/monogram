@@ -1075,57 +1075,50 @@ export function lidOf(plan: LexIdPlan, text: string): number {
 }
 
 /**
- * O(1) early-exit prefilter for runtime `lid_of` on Ident-shaped texts.
+ * O(1) early exit for runtime `lid_of`: a text whose key (length, first unit) no literal has is
+ * no literal (lid 0), found without the table lookup.
  *
- * - `maxByteLen` spans ALL literals (so oversize still ⇒ lid 0, puncts included).
- * - `firstByLenBits` is filled only from `isKeywordLiteral` texts (Ident / `@kw` shapes).
- * Runtime applies the bit probe only when the first byte is Ident-start or `@`; punct first
- * bytes skip the probe and go straight to the slow path — no tax on the punct hot path.
- * Conservatively correct: every keyword-shaped literal hits; non-keywords may fall through.
+ * Sound by construction: the bits are set from EVERY literal of the table, under the key
+ * (`lidKey`) the emitted `lid_of` computes for any text it is given, and `lid_of` probes them for
+ * every text. No literal can be filtered out, whatever its shape.
  *
- * Layout: `(maxByteLen + 1)` rows × 32 bytes (256 bits).
+ * Layout: `(maxLen + 1)` rows × 32 bytes (256 bits), row = key length, bit = key first unit.
  */
 export type LidPrefilterPlan = {
-  maxByteLen: number;
-  /** Flat bit table, length `(maxByteLen + 1) * 32` — keyword-shaped (len × first) only. */
+  /** The longest literal in the target's string units; a longer text is no literal. */
+  maxLen: number;
+  /** Flat bit table, length `(maxLen + 1) * 32`: bit `first` of row `len` is set iff a literal has that key. */
   firstByLenBits: Uint8Array;
 };
 
-/** True if first byte is Ident-start (`A-Za-z_$`) or `@` (decorator-keyword shape). */
-export function lidPrefilterAppliesToFirst(b0: number): boolean {
-  return (b0 >= 65 && b0 <= 90) || (b0 >= 97 && b0 <= 122) || b0 === 95 || b0 === 36 || b0 === 64;
+/**
+ * The units a target's strings are measured in: UTF-8 bytes (Go, Rust) or UTF-16 code units (TS).
+ * `lid_of` keys a text by its length in those units and the low byte of its first unit — the one
+ * definition the emitted `lid_of` of each target computes.
+ */
+export type LidUnits = 'utf8' | 'utf16';
+export function lidKey(text: string, units: LidUnits): { len: number; first: number } {
+  if (units === 'utf16') return { len: text.length, first: text.charCodeAt(0) & 255 };
+  const buf = Buffer.from(text, 'utf8');
+  return { len: buf.length, first: buf[0]! };
 }
 
-/** Build length×first-byte prefilter: maxLen from all lids; bits from keyword-shaped lids only. */
-export function buildLidPrefilter(plan: LexIdPlan): LidPrefilterPlan {
-  let maxByteLen = 0;
-  const kw: { len: number; first: number }[] = [];
-  for (let i = 1; i < plan.lids.length; i++) {
-    const text = plan.lids[i]!;
-    const buf = Buffer.from(text, 'utf8');
-    if (buf.length === 0) continue;
-    maxByteLen = Math.max(maxByteLen, buf.length);
-    if (isKeywordLiteral(text)) kw.push({ len: buf.length, first: buf[0]! });
-  }
-  const firstByLenBits = new Uint8Array((maxByteLen + 1) * 32);
-  for (const { len, first } of kw) {
-    firstByLenBits[len * 32 + (first >> 3)] |= 1 << (first & 7);
-  }
-  return { maxByteLen, firstByLenBits };
+/** The length × first-unit prefilter over every literal of the table. */
+export function buildLidPrefilter(plan: LexIdPlan, units: LidUnits): LidPrefilterPlan {
+  const keys = plan.lids.slice(1).map((t) => lidKey(t, units));
+  const maxLen = Math.max(0, ...keys.map((k) => k.len));
+  const firstByLenBits = new Uint8Array((maxLen + 1) * 32);
+  for (const { len, first } of keys) firstByLenBits[len * 32 + (first >> 3)] |= 1 << (first & 7);
+  return { maxLen, firstByLenBits };
 }
 
 /**
- * Probe the prefilter (mirrors emitted runtime).
- * Non-Ident-shaped texts are never rejected here (punct path).
- * True ⇒ may be a literal (must consult slow path); false ⇒ definite lid 0 for Ident-shaped.
+ * The first-byte class by which a target that splits its literal table in two (Rust: words and
+ * the rest, so an identifier is compared with words only) splits it, and by which its `lid_of`
+ * routes a text: the table half a literal is in is the half `lid_of` looks in for that text.
  */
-export function lidPrefilterMayHit(pf: LidPrefilterPlan, text: string): boolean {
-  const buf = Buffer.from(text, 'utf8');
-  const n = buf.length;
-  if (n === 0 || n > pf.maxByteLen) return false;
-  const b0 = buf[0]!;
-  if (!lidPrefilterAppliesToFirst(b0)) return true; // punct-shaped — defer to slow path
-  return (pf.firstByLenBits[n * 32 + (b0 >> 3)]! & (1 << (b0 & 7))) !== 0;
+export function lidWordByte(b: number): boolean {
+  return (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b === 95 || b === 36 || b === 64;
 }
 
 /** Resolve kid for a known kind; 0 if not in the plan. */
