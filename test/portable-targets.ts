@@ -33,7 +33,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
-import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { emitParser, jsTarget, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { objectify } from './emitted-obj.ts';
 import { buildLexIdPlan, portableIR } from '../src/emit-portable.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
@@ -1398,6 +1399,34 @@ for (const c of CASES) {
       }
     }
     console.log(`  ${c.grammar}: tok-spans checked on ${cases.length} accept case(s)${c.grammar === 'calc' ? ' + trailing-punct probe' : ''}`);
+  }
+
+  // The jsTarget parser (emit-parser.ts, not built from the portable IR) on the same hand-written
+  // lists: the oracle's verdict on each, and on each accepted input the oracle's CST byte for byte
+  // (its contract, emit-parser-verify.ts). Its suppress gates (the no-`in` for-heads of
+  // NO_IN_HEADS) are compiled from the grammar analysis like the portable targets', by a
+  // different emitter, so they are checked here too.
+  {
+    const jsFile = `${dir}/js.mts`;
+    writeFileSync(jsFile, emitParser(grammar, jsTarget));
+    const js = await import(jsFile);
+    const jsOut = (src: string): Outcome => {
+      try { const r = js.parse(src); return { ok: true, cst: canon(objectify(js.tree, (fns) => js.visit(r, fns))) }; } catch (e) { return { ok: false, err: errText(e) }; }
+    };
+    let acc = 0, rej = 0;
+    for (const src of c.accept) {
+      const want = oracleOut(src), got = jsOut(src);
+      if (want.ok === got.ok && (!want.ok || want.cst === (got as { cst: string }).cst)) { acc++; continue; }
+      failures++;
+      console.log(`  ${c.grammar}/js: ACCEPT ${want.ok === got.ok ? 'CST' : 'verdict'} mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, js ok=${got.ok})`);
+    }
+    for (const src of c.reject) {
+      const want = oracleOut(src), got = jsOut(src);
+      if (!want.ok && !got.ok) { rej++; continue; }
+      failures++;
+      console.log(`  ${c.grammar}/js: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, js ok=${got.ok})`);
+    }
+    console.log(`  ${c.grammar}/js: ${acc}/${c.accept.length} accept ≡ oracle CST · ${rej}/${c.reject.length} reject ≡ oracle`);
   }
 
   for (const r of runners) {

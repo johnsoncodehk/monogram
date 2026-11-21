@@ -116,10 +116,10 @@ export type Step =
   | { t: 'suppress'; set: number; steps: Step[] };             // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
 export type Alt = Step[];
 // The LED connectors a `suppress` step disables (`exclude('in', Expr)`: no `in` in a for-head) are
-// a constant of the grammar at each site, so a parser never builds one at run time. buildIR keeps
-// each distinct set once in ParserIR.suppressSets, sorted; set 0 is the empty set, the state
-// outside every suppress step. A parser holds the index of the set in force, and which sets disable
-// a led is decided here too (PrattRule.ledSuppressedIn), so a target tests an index, never a set.
+// a constant of the grammar at each site, so a parser never builds one at run time. The grammar
+// analysis keeps each distinct set once (ParserIR.suppressSets, sorted; set 0 is the empty set, the
+// state outside every suppress step) and decides which sets disable a led (PrattRule.ledSuppressedIn),
+// so a parser holds the index of the set in force and a target tests an index, never a set.
 // One token, tested without consuming it: a member is a literal text (the token's lid) or a token
 // kind (its kid). A lookahead whose body reads exactly one token — `not(alt('(', '=', …))`, or
 // `not(not(alt(Ident, String, '[')))` — is this test, so buildIR lowers it to an `ahead` step over
@@ -440,15 +440,10 @@ function buildIR(grammar: CstGrammar): ParserIR {
     if (id === undefined) { id = lookaheads.length; lookaheads.push(steps); lookaheadIds.set(key, id); }
     return id;
   };
-  const suppressSets: string[][] = [[]];
-  const suppressSetIds = new Map<string, number>([['[]', 0]]);
-  const suppressOf = (connectors: string[], steps: Step[]): Step => {
-    const set = [...new Set(connectors)].sort();
-    const key = JSON.stringify(set);
-    let id = suppressSetIds.get(key);
-    if (id === undefined) { id = suppressSets.length; suppressSets.push(set); suppressSetIds.set(key, id); }
-    return { t: 'suppress', set: id, steps };
-  };
+  // The suppress sets and which of them disable a led are the grammar analysis's (one definition,
+  // shared with the jsTarget parser of emit-parser.ts).
+  const { suppressSets } = a;
+  const suppressOf = (connectors: string[], steps: Step[]): Step => ({ t: 'suppress', set: a.suppressSetOf(connectors), steps });
   // A negative lookahead. Over a one-token body it is the `ahead` test of that token's set, over
   // any other body the `look` test of that body; over an `ahead` or a `look` it is the same test
   // negated (so `not(not(x))` is a positive test).
@@ -640,7 +635,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       r.nudCapped.forEach((c) => annotateSteps(c.steps));
       r.nudBrackets.forEach((b) => annotateSteps(b.steps));
       r.leds.forEach((b) => annotateSteps(b.steps));
-      r.ledSuppressedIn = r.leds.map((b) => suppressSets.flatMap((set, i) => (set.includes(b.first) ? [i] : [])));
+      r.ledSuppressedIn = r.leds.map((b) => a.suppressedIn(b.first));
     }
   }
   lookaheads.forEach(annotateSteps);

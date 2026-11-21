@@ -47,7 +47,7 @@ function analyze(grammar: CstGrammar) {
     ledPrecByConnector, binaryConnectors, connectorLbp,
     prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
-    exprSecond,
+    exprSecond, suppressSetOf, suppressedIn,
   } = analyzeGrammar(grammar);
 
   // First-token dispatch.
@@ -353,7 +353,7 @@ function analyze(grammar: CstGrammar) {
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nudCap, nullableRules, firstSets, symtab, qualKeys,
-    exprFirst, exprNullable,
+    exprFirst, exprNullable, suppressSetOf, suppressedIn,
     markupContainer: markupContainerOf(grammar),
   };
 }
@@ -651,9 +651,10 @@ class Emitter {
         }
       case 'group': {
         // A suppress-carrying group stages the LED-connector exclusion for the next
-        // parseRule, then matches its body (same as matchExpr 'group').
+        // parseRule (the index of its connector set, grammar-analysis suppressSets), then
+        // matches its body (same as matchExpr 'group').
         const pre = (expr.suppress && expr.suppress.length)
-          ? `suppressNext = new Set<string>(${J(expr.suppress)});`
+          ? `suppressNext = ${this.a.suppressSetOf(expr.suppress)};`
           : ``;
         return [pre, this.matchInto(expr.body, onFail)].filter(Boolean).join('\n');
       }
@@ -1725,8 +1726,10 @@ let parseLimit = -1;
 // cap = the exclusive lookahead bound: min(parseLimit-or-∞, tokN), maintained at the
 // parseLimit set/restore sites.
 let cap = 0;
-let suppressNext: Set<string> | null = null;
-let suppressCur: Set<string> | null = null;
+// Indices into the grammar's suppress sets (grammar-analysis suppressSets; 0 = none): the set a
+// suppress group stages for the next pratt/left-rec parseRule, and the set in force in the current one.
+let suppressNext = 0;
+let suppressCur = 0;
 
 function offset() {
   if (pos < cap) return toff(pos);
@@ -2122,14 +2125,14 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       // notLeftLeaf head-leaf gate: skip the arm when the LEFT node's outermost (head) leaf text
       // is in the arm's word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
       if (meta.notLeftLeaf[i]) conds.push(`!_NLL_${sn}_${i}.has(_headLeafText(lhs))`);
-      // suppress: skip a LED whose first literal connector is in suppressCur.
-      const firstLit = (led.items[0]?.type === 'literal') ? led.items[0].value : null;
-      if (firstLit !== null) conds.push(`!(suppressCur && suppressCur.has(${J(firstLit)}))`);
       if (ledMask) conds.push(ledMask.bit(j));
       else {
         const ftc = e.ftCond(meta.first[i], 'pos');   // pos < cap here (the loop breaks above)
         if (ftc) conds.push(ftc);
       }
+      // suppress: skip a LED while the set in force holds its first literal connector (tested
+      // once the next token is that connector); no gate for a led no set holds.
+      for (const set of a.suppressedIn(led.items[0]?.type === 'literal' ? led.items[0].value : null)) conds.push(`suppressCur !== ${set}`);
       e.emit(`    // led ${i}`);
       e.emit(`    if (${['!matched', ...conds].join(' && ')}) {`);
       e.emit(`      pos = ledSaved; scn = ledMark;`);
@@ -2367,7 +2370,7 @@ function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
 // invalidates (soundly) near big-backtrack clusters.
 function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => number) {
   const mySup = suppressNext;
-  suppressNext = null;
+  suppressNext = 0;
   const capped = parseLimit >= 0;
   const start = pos;
   let me = memoEnd[idx];
@@ -2379,7 +2382,7 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
   // only, and whoever reuses it inherits the taint), or — across recovery attempts
   // of one sequence — any earlier attempt's entry whose probe window is bar-free
   // (strict, context-free behavior; see memoRecFloor) and untainted.
-  if (!mySup && !capped && me !== undefined && (mgs === memoGenCur
+  if (mySup === 0 && !capped && me !== undefined && (mgs === memoGenCur
     || (recovering && (mgs === -memoGenCur
       || (mgs >= memoRecFloor && mgs < memoGenCur && !recoverFree && barFreeWin(start, mx[start])))))) {
     const e = me[start];
@@ -2412,7 +2415,7 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
       return false;
     }
   }
-  if (!mySup && !capped && adoptRoot >= 0) {
+  if (mySup === 0 && !capped && adoptRoot >= 0) {
     // map the new position into OLD token coordinates; inside the damage = no mapping
     const q = start < adoptDmgStart ? start
       : start >= adoptDmgOldEnd + adoptDelta ? start - adoptDelta : -1;
@@ -2494,7 +2497,7 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
     if (cm0 < cycleMinSerial) cycleMinSerial = cm0;
   }
   if (result < 0 && recovering) result = missRule(rid);
-  if (!mySup && !capped) {
+  if (mySup === 0 && !capped) {
     if (me === undefined || me.length < tokN + 1) {
       me = new Array(tokN + 1);
       mn = new Array(tokN + 1);
@@ -2570,8 +2573,8 @@ function runParse(entryRule?: string) {
   cycleMinSerial = 0x7fffffff;
   parseLimit = -1;
   cap = tokN;
-  suppressNext = null;
-  suppressCur = null;
+  suppressNext = 0;
+  suppressCur = 0;
   scn = 0;
   const entry = entryRule ?? ENTRY;
   if (tokN === 0) {
@@ -3155,7 +3158,7 @@ function trySurgery(dmgA: number, dmgB: number, tokD: number, chrD: number) {
     : dmgA;
   const s0 = pos;
   maxPos = pos; frameMax = pos; scn = 0; parseLimit = -1; cap = tokN;
-  suppressNext = null; suppressCur = null;
+  suppressNext = 0; suppressCur = 0;
   const genAt = memoGenCur;
   const fn = RULE_FN_BY_ID[elem];
   let j = Db, guard = 0;
