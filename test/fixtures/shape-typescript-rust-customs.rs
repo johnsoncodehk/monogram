@@ -466,10 +466,7 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("MemberName", 3, &SC_MEMBERNAME3),
         ("MemberName", 8, &SC_MEMBERNAME8),
         ("Property", 0, &SC_PROP0),
-        ("Property", 7, &SC_PROP7),
-        ("Property", 9, &SC_PROP9),
-        ("Property", 11, &SC_PROP11),
-        ("Property", 1, &SC_PROP_SHORTHAND),
+        ("Property", 5, &SC_PROP11),
         ("FunctionExpression", 0, &SC_FUNCEXPR),
         ("ArrayPattern", 1, &SC_ARRAYPATTERN),
         ("ObjectPattern", 0, &SC_OBJECTPATTERN),
@@ -2244,6 +2241,39 @@ fn type_member_is_sig(src: &str, off: u32, end: u32) -> bool {
     false
 }
 
+enum PropRunMember { Accessor, Generator, Method, Value, BindingShorthand }
+/// Which member a `(Property, 1)` event holds, from its tokens outside a computed name
+/// (`[` ... `]`). Two rules share the key: Prop's modifier-run arm, where a `:` before any
+/// `(` / `<` is a value property's, a `*` a generator's, and a `get` / `set` that a name follows
+/// an accessor's (`get x()`, `get [k]()`, where `get()`, `get<T>()` and `get?()` are methods
+/// named `get`); and BindingProperty's shorthand (`a`, `a = f(x)`), which has none of these
+/// before its `=` or its end.
+fn prop_run_member(text: &str) -> PropRunMember {
+    let mut depth = 0i32;
+    let mut after_get_set = false;
+    for t in lex(text) {
+        let tok = &text[t.off as usize..t.end as usize];
+        if depth == 0 {
+            match tok {
+                "=" => return PropRunMember::BindingShorthand,
+                ":" => return PropRunMember::Value,
+                "*" => return PropRunMember::Generator,
+                "(" | "<" => return PropRunMember::Method,
+                "?" | "!" => {}
+                _ if after_get_set => return PropRunMember::Accessor,
+                _ => {}
+            }
+            after_get_set = tok == "get" || tok == "set";
+        }
+        match tok {
+            "[" => depth += 1,
+            "]" => depth -= 1,
+            _ => {}
+        }
+    }
+    PropRunMember::BindingShorthand
+}
+
 fn sep_after(src: &str, off: u32, end: u32, sep: &str) -> Option<u32> {
     let toks = lex(&src[off as usize..end as usize]);
     for t in toks {
@@ -3555,10 +3585,15 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
         }
         ("Type", 5) => { if text.starts_with('(') { &SC_TYPE_PAREN } else { &SC_TSINDEXED5 } }
         ("Type", 6) => { if text.starts_with('[') { &SC_TYPE_TUPLE } else { &SC_TSTYPEREF_DOT } }
-        ("Property", 1) => {
-            let ts = text.trim_start();
-            if ts.starts_with("get") || ts.starts_with("set") { &SC_PROP_GETSET } else { &SC_PROP_SHORTHAND }
-        }
+        // Prop's modifier-run arm (an accessor, a `*` method, a method or a value property) or
+        // BindingProperty's shorthand.
+        ("Property", 1) => match prop_run_member(text) {
+            PropRunMember::Accessor => &SC_PROP_GETSET,
+            PropRunMember::Method => &SC_PROP7,
+            PropRunMember::Value => &SC_PROP9,
+            PropRunMember::BindingShorthand => &SC_PROP_SHORTHAND,
+            PropRunMember::Generator => panic!("no schema for (Property, 1) `*` method"),
+        },
         ("MethodDefinition", 3) => {
             let ts = text.trim_start();
             if ts.starts_with("abstract") || ts.starts_with("protected") || ts.starts_with("private") || ts.starts_with("async") || ts.starts_with("accessor") || ts.starts_with("static") { &SC_METHODDEF_MOD }

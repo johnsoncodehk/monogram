@@ -467,9 +467,9 @@ export const typescriptShape: ShapeSpec = {
 
     // ─── Prop ─────────────────────────────────────────────────────────
     Prop: custom('estreeProp',
-      '12 alts covering object literal props (key:value, method, get/set, spread, ' +
-      'shorthand, computed). Shorthand vs keyed distinguished only by alt; spread is ' +
-      '`...` Expr. Same “alt → flag / product type” gap as BindingProperty.', { types: ['Property', 'Property', 'Property', 'Property', 'Property', 'Property', 'Property', 'Property', 'SpreadElement', 'Property', 'Property', 'Property'] }),
+      '6 alts covering object literal props (spread, modifier run then accessor / method / ' +
+      'key:value, async, generator, computed list, shorthand). Shorthand vs keyed distinguished ' +
+      'only by alt; spread is `...` Expr. Same “alt → flag / product type” gap as BindingProperty.', { types: ['Property', 'Property', 'Property', 'Property', 'Property', 'Property'] }),
   },
 };
 
@@ -1068,16 +1068,31 @@ function tsTypeMember(ctx: TsAstCustomCtx): unknown {
   return unhandledCustom('tsTypeMember', ctx);
 }
 
+// Prop's arms: 0 spread, 1 modifier run then accessor | `*` method | method | value, 2 async
+// then `*` method | accessor | method, 3 `*` method, 4 computed list, 5 shorthand. An arm that
+// branches holds its branch's kids as one pack (kids[0]), told apart by its length (an
+// accessor's 4, a `*` method's 5, a method's or value's 2: the name, then a method's 4-kid
+// tail or the value). Owed: these products are not ESTree's (a getter is a computed init, a
+// method a `set`, a shorthand a keyed property); they are kept as they were before the arms
+// were merged, the unmodified form's where a modified and an unmodified arm merged.
 function estreeProp(ctx: TsAstCustomCtx): unknown {
   const arm = ctx.altPath[0];
   const k = ctx.kids;
-  if (arm === 4 || arm === 5) return { type: 'Property', key: I(String(k[0])), value: I(String(k[0])), kind: 'init', shorthand: true, computed: false, method: false };
-  if (arm === 8) return { type: 'SpreadElement', argument: k[0] };
-  if (arm === 6 || arm === 7) return { type: 'Property', key: k[0], value: k[1], kind: arm === 6 ? 'get' : 'set', shorthand: false, computed: false, method: false };
-  if (arm === 2 || arm === 3) return { type: 'Property', key: k[0], value: { type: 'FunctionExpression', params: flatKids(k[1] ?? []), body: k[2] }, kind: 'init', method: true, shorthand: false, computed: false };
-  if (arm === 0 || arm === 1 || (arm >= 9 && arm <= 11)) {
-    return { type: 'Property', key: typeof k[0] === 'string' ? I(k[0]) : k[0], value: k[1], kind: 'init', shorthand: false, computed: arm === 1, method: false };
+  const keyed = (kk: readonly unknown[], computed: boolean) => ({ type: 'Property', key: typeof kk[0] === 'string' ? I(kk[0]) : kk[0], value: kk[1], kind: 'init', shorthand: false, computed, method: false });
+  const fn = (kk: readonly unknown[]) => ({ type: 'Property', key: kk[0], value: { type: 'FunctionExpression', params: flatKids(kk[1] ?? []), body: kk[2] }, kind: 'init', method: true, shorthand: false, computed: false });
+  const pack = Array.isArray(k[0]) ? k[0] as unknown[] : [];
+  if (arm === 0 || arm === 4 || arm === 5) return keyed(k, false);
+  if (arm === 3) return { type: 'Property', key: k[0], value: k[1], kind: 'get', shorthand: false, computed: false, method: false };
+  if (arm === 1 && pack.length === 4) return keyed(pack, true);
+  if (arm === 1 && pack.length === 5) return fn(pack);
+  if (arm === 1 && pack.length === 2) {
+    const tail = pack[1];
+    return Array.isArray(tail) && tail.length === 4 && Array.isArray(tail[1])
+      ? { type: 'Property', key: pack[0], value: tail[0], kind: 'set', shorthand: false, computed: false, method: false }
+      : keyed(pack, false);
   }
+  if (arm === 2 && pack.length === 4) return { type: 'Property', key: I(String(pack[0])), value: I(String(pack[0])), kind: 'init', shorthand: true, computed: false, method: false };
+  if (arm === 2 && pack.length === 5) return fn(pack);
   return unhandledCustom('estreeProp', ctx);
 }
 
