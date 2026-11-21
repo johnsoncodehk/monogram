@@ -14,8 +14,12 @@ import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, bu
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isNum, type BinOp, type Lowering, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
+import { type TextUnits, unitLen } from './text-units.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
+// Go strings are indexed by UTF-8 byte: every offset and length printed here is in bytes.
+const UNITS: TextUnits = 'utf8';
+const tlen = (text: string): number => unitLen(text, UNITS);
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
@@ -55,7 +59,7 @@ const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
 function renderIdTablesGo(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
-  const pf = buildLidPrefilter(ids, 'utf8');
+  const pf = buildLidPrefilter(ids, UNITS);
   const bitsLit = [...pf.firstByLenBits].join(', ');
   return `var kindStr = []string{${kidsLit}}
 var _lids = []string{${lidsLit}}
@@ -186,10 +190,10 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const stateful = !!(rx || tpl);
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushPunct = stateful
-    ? (p: string) => `emit(pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`
-    : (p: string) => `pushTok(pos, pos + ${p.length}, 0, ${lidOf(ids, p)})`;
+    ? (p: string) => `emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)})`
+    : (p: string) => `pushTok(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)})`;
   const punctLine = (p: string) =>
-    `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${p.length}; continue }`;
+    `\t\tif strings.HasPrefix(src[pos:], ${J(p)}) { ${pushPunct(p)}; pos += ${tlen(p)}; continue }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const cascade = renderLexByteDispatchGo(lexCodes, lexFirsts, '\t');
   const goBoolArr = (name: string, flags: boolean[]) =>
@@ -225,8 +229,8 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \t\tq := ${shared.tplSpan()}(src, p, strict)
 \t\tif q == -1 { panic(&LexError{Off: n, Msg: fmt.Sprintf("Unterminated template literal at offset %d", n)}) }
 \t\tif q < -1 { panic(&LexError{Off: -2 - q, Msg: fmt.Sprintf("Invalid escape sequence in template at offset %d", -2 - q)}) }
-\t\tif strings.HasPrefix(src[q:], ${J(tpl.interpOpen)}) { return true, q + ${tpl.interpOpen.length} }
-\t\treturn false, q + ${tpl.open.length}
+\t\tif strings.HasPrefix(src[q:], ${J(tpl.interpOpen)}) { return true, q + ${tlen(tpl.interpOpen)} }
+\t\treturn false, q + ${tlen(tpl.open)}
 \t}
 \t_ = scanTplSpan
 ` : '';
@@ -294,12 +298,12 @@ ${emitHooks}
 ` : '';
   const tplDispatch = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
 \t\t\ttemplateStack = templateStack[:len(templateStack)-1]
-\t\t\tinterp, e := scanTplSpan(pos + ${tpl.interpClose.length}, false)
+\t\t\tinterp, e := scanTplSpan(pos + ${tlen(tpl.interpClose)}, false)
 \t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, lidOf(src[pos:e])) }
 \t\t\tpos = e; continue
 \t\t}
 \t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
-\t\t\tinterp, e := scanTplSpan(pos + ${tpl.open.length}, ${rx ? '!prevIsValue()' : 'true'})
+\t\t\tinterp, e := scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'})
 \t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateHead')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, tpl.token)}, lidOf(src[pos:e])) }
 \t\t\tpos = e; continue
 \t\t}
@@ -506,7 +510,9 @@ func (p *${recv}) lookReset() { p.maxLook = 0; p.peekEnd = 0 }`;
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gtOp reads the
 // operator at ts[i]: a lone '>' extends over each adjacent single-character punct token after it
-// while the text stays a composite (gtStep: prefix lid × next character lid → composite lid).
+// while the text stays a composite (gtStep: prefix lid × next character lid → composite lid). A
+// punct token (kid 0) is the text of its lid, and gtStep names only one-character lids, so no
+// length (which is in bytes here, not characters) is compared.
 // leafEnd is a leaf's end offset: an operator leaf at a '>' spans the composite read there.
 function gtRuntimeGo(ids: LexIdPlan, ar: ArenaIdPlan): string {
   if (ids.gtComps.length === 0) {
@@ -530,7 +536,7 @@ func gtOp(ts []Tok, i int) (lid uint16, n int, end uint32) {
 \tif lid != ${lidOf(ids, '>')} { return }
 \tfor j := i + 1; j < len(ts); j++ {
 \t\tu := &ts[j]
-\t\tif u.Kid != 0 || u.Off != end || u.End != end+1 { break }
+\t\tif u.Kid != 0 || u.Off != end { break }
 \t\tc := gtStep(lid, u.Lid)
 \t\tif c == 0 { break }
 \t\tlid, n, end = c, n+1, u.End
@@ -2923,6 +2929,7 @@ const goBlock = (lines: string[]): string[] => lines.map((l) => GO_IND + l);
 // Shared-algorithm lowering: explicit conversions, slices; growth estimates are reserved up front
 // (GC churn from append doubling is the cost they avoid) and over-reserved slices are trimmed.
 const goLowering: Lowering = {
+  units: UNITS,
   ident: (n) => n,
   num: { int: 'int', lid: 'uint16', depth: 'int' },
   type: (t) => GO_TYPES[t],
