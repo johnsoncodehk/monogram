@@ -328,20 +328,20 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
 `;
   const tplOpenByte = tpl && tpl.open.length === 1 && tpl.open.charCodeAt(0) < 128 ? tpl.open.charCodeAt(0) : null;
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl!.open.length});
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl!.open.length}, ${rx ? '!st.prev_is_value()' : 'true'});
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length});
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length}, ${rx ? '!st.prev_is_value()' : 'true'});
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
 ` : '';
   const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length});
+            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length}, false);
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
@@ -421,18 +421,14 @@ fn _lx_ext(b: &[u8], e: usize) -> usize {
   const needIn = !!(nlRs); // newline flow still uses string _in
   const rxConsts = `${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${needIn ? `fn _in(set: &[&str], x: &str) -> bool { set.iter().any(|s| *s == x) }\n` : ''}${nlRs ? nlRs.consts : ''}`;
   const pavHot = rx ? rsLidAny(ids, rx.postfixAfterValue, 'lid') : 'false';
-  const tplFn = tpl ? `fn _scan_tpl_span(s: &str, mut p: usize) -> (bool, usize) {
-    let b = s.as_bytes();
-    let n = b.len();
-    // Scan on bytes: p may land mid multi-byte UTF-8 after escape (+2) or byte-step;
-    // &str[p..] would panic on char-boundary. ASCII delimiters match equivalently.
-    while p < n {
-        if b[p..].starts_with(${J(tpl.interpOpen)}.as_bytes()) { return (true, p + ${tpl.interpOpen.length}); }
-        if b[p] == 92 { p += 2; continue; }
-        if b[p..].starts_with(${J(tpl.open)}.as_bytes()) { return (false, p + ${tpl.open.length}); }
-        p += 1;
-    }
-    panic!("Unterminated template literal at offset {}", p);
+  // The span itself is the shared family's scanner; this reads which delimiter ended it.
+  const tplFn = tpl ? `fn _scan_tpl_span(s: &str, p: usize, strict: bool) -> (bool, usize) {
+    let q = ${shared.tplSpan()}(s, p as isize, strict);
+    if q == -1 { panic!("Unterminated template literal at offset {}", s.len()); }
+    if q < -1 { panic!("Invalid escape sequence in template at offset {}", -2 - q); }
+    let q = q as usize;
+    if s.as_bytes()[q..].starts_with(${J(tpl.interpOpen)}.as_bytes()) { return (true, q + ${tpl.interpOpen.length}); }
+    (false, q + ${tpl.open.length})
 }
 ` : '';
   const fields = ['toks: Vec<Tok>', 'pending_nl: bool',
@@ -5293,6 +5289,46 @@ fn main() {
                 }
             }
             out.push('\\n');
+        }
+        print!("{}", out);
+        return;
+    }
+    // batch-tokens: NUL-separated inputs in, one line per input out — the token stream as a JSON
+    // array of [kind, text, newline-before], or "!" and the message for a lexer error.
+    if args.get(1).map(|a| a.as_str()) == Some("batch-tokens") {
+        std::panic::set_hook(Box::new(|_| {}));
+        let js = |t: &str, out: &mut String| {
+            out.push('"');
+            for ch in t.chars() {
+                match ch {
+                    '"' => out.push_str("\\\\\\""),
+                    '\\\\' => out.push_str("\\\\\\\\"),
+                    c if (c as u32) < 0x20 => out.push_str(&format!("\\\\u{:04x}", c as u32)),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+        };
+        let mut out = String::new();
+        for s in src.split('\0') {
+            let line = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut one = String::from("[");
+                for (i, t) in tokenize(s).iter().enumerate() {
+                    if i > 0 { one.push(','); }
+                    one.push('['); js(t.kind, &mut one); one.push(','); js(t.text, &mut one); one.push_str(if t.nl { ",true]" } else { ",false]" });
+                }
+                one.push(']');
+                one
+            }));
+            match line {
+                Ok(l) => out.push_str(&l),
+                Err(e) => {
+                    out.push('!');
+                    if let Some(m) = e.downcast_ref::<String>() { out.push_str(&m.replace('\n', " ")); }
+                    else if let Some(m) = e.downcast_ref::<&str>() { out.push_str(&m.replace('\n', " ")); }
+                }
+            }
+            out.push('\n');
         }
         print!("{}", out);
         return;

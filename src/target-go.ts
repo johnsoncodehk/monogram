@@ -222,18 +222,18 @@ const lidInterpClose uint16 = ${lidOf(ids, tpl.interpClose)}
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
 ` : '';
-  const tplState = tpl ? `\ttemplateStack := []int{}
-\tscanTplSpan := func(p int) (bool, int) {
-\t\tfor p < n {
-\t\t\tif strings.HasPrefix(src[p:], ${J(tpl.interpOpen)}) { return true, p + ${tpl.interpOpen.length} }
-\t\t\tif src[p] == 92 { p += 2; continue }
-\t\t\tif strings.HasPrefix(src[p:], ${J(tpl.open)}) { return false, p + ${tpl.open.length} }
-\t\t\tp++
-\t\t}
-\t\tpanic(&LexError{Off: p, Msg: fmt.Sprintf("Unterminated template literal at offset %d", p)})
+  // The span itself is the shared family's scanner; this reads which delimiter ended it.
+  const tplSpanFn = tpl ? `\tscanTplSpan := func(p int, strict bool) (bool, int) {
+\t\tq := ${shared.tplSpan()}(src, p, strict)
+\t\tif q == -1 { panic(&LexError{Off: n, Msg: fmt.Sprintf("Unterminated template literal at offset %d", n)}) }
+\t\tif q < -1 { panic(&LexError{Off: -2 - q, Msg: fmt.Sprintf("Invalid escape sequence in template at offset %d", -2 - q)}) }
+\t\tif strings.HasPrefix(src[q:], ${J(tpl.interpOpen)}) { return true, q + ${tpl.interpOpen.length} }
+\t\treturn false, q + ${tpl.open.length}
 \t}
 \t_ = scanTplSpan
 ` : '';
+  const tplState = tpl ? `\ttemplateStack := []int{}
+${tplSpanFn}` : '';
   const emitHooks = [
     rx ? `\t\tif lid == lidLParen {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
@@ -260,17 +260,7 @@ ${emitHooks}
 \t\treturn !isExprKw && !isParenHead && (_divK[prevKid] || _divT[prevLid])
 \t}
 ` : '';
-  const tplStateFrom = tpl ? `\tscanTplSpan := func(p int) (bool, int) {
-\t\tfor p < n {
-\t\t\tif strings.HasPrefix(src[p:], ${J(tpl.interpOpen)}) { return true, p + ${tpl.interpOpen.length} }
-\t\t\tif src[p] == 92 { p += 2; continue }
-\t\t\tif strings.HasPrefix(src[p:], ${J(tpl.open)}) { return false, p + ${tpl.open.length} }
-\t\t\tp++
-\t\t}
-\t\tpanic(&LexError{Off: p, Msg: fmt.Sprintf("Unterminated template literal at offset %d", p)})
-\t}
-\t_ = scanTplSpan
-` : '';
+  const tplStateFrom = tplSpanFn;
   const emitRxOnly = rx ? `\temit := func(off, end int, kid, lid uint16) {
 \t\tif lid == lidLParen {
 \t\t\tisMember := hasPrev2 && _mem[bpLid]
@@ -306,12 +296,12 @@ ${emitHooks}
 ` : '';
   const tplDispatch = tpl ? `\t\tif len(templateStack) > 0 && strings.HasPrefix(src[pos:], ${J(tpl.interpClose)}) && templateStack[len(templateStack)-1] == 0 {
 \t\t\ttemplateStack = templateStack[:len(templateStack)-1]
-\t\t\tinterp, e := scanTplSpan(pos + ${tpl.interpClose.length})
+\t\t\tinterp, e := scanTplSpan(pos + ${tpl.interpClose.length}, false)
 \t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateMiddle')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, '$templateTail')}, lidOf(src[pos:e])) }
 \t\t\tpos = e; continue
 \t\t}
 \t\tif strings.HasPrefix(src[pos:], ${J(tpl.open)}) {
-\t\t\tinterp, e := scanTplSpan(pos + ${tpl.open.length})
+\t\t\tinterp, e := scanTplSpan(pos + ${tpl.open.length}, ${rx ? '!prevIsValue()' : 'true'})
 \t\t\tif interp { emit(pos, e, ${kidOf(ids, '$templateHead')}, lidOf(src[pos:e])); templateStack = append(templateStack, 0) } else { emit(pos, e, ${kidOf(ids, tpl.token)}, lidOf(src[pos:e])) }
 \t\t\tpos = e; continue
 \t\t}
@@ -3337,6 +3327,21 @@ func main() {
 \t\t\t\tif root < 0 || p.pos != len(p.toks) { b.WriteString("-\\n"); return }
 \t\t\t\tp.writeJSON(root, &b); b.WriteByte('\\n')
 \t\t\t}()
+\t\t}
+\t\tos.Stdout.WriteString(b.String())
+\t\treturn
+\t}
+\t// batch-tokens: NUL-separated inputs in, one line per input out — the token stream as a JSON
+\t// array of [kind, text, newline-before], or "!" and the message for a lexer error.
+\tif len(os.Args) > 1 && os.Args[1] == "batch-tokens" {
+\t\tvar b strings.Builder
+\t\tfor _, s := range strings.Split(src, "\\x00") {
+\t\t\ttoks, err := Tokenize(s)
+\t\t\tif err != nil { b.WriteString("!" + strings.ReplaceAll(err.Error(), "\\n", " ") + "\\n"); continue }
+\t\t\trows := make([][3]interface{}, len(toks))
+\t\t\tfor i, t := range toks { rows[i] = [3]interface{}{t.Kind, t.Text, t.Nl} }
+\t\t\tj, _ := json.Marshal(rows)
+\t\t\tb.Write(j); b.WriteByte('\\n')
 \t\t}
 \t\tos.Stdout.WriteString(b.String())
 \t\treturn
