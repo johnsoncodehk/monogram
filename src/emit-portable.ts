@@ -1032,29 +1032,33 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
 }
 
 /**
- * ParserIR.tokenSets as bit rows, the one table every target prints for its `ahead` test. A token
- * t is in set k iff bit `t.lid` or bit `kidBase + t.kid` of row k is set (lid 0, "no literal", is
- * never a member). Row k is `words[k * stride .. (k + 1) * stride)`, 32 bits per word, low bit first.
+ * ParserIR.tokenSets as bit rows, the one table every target prints for its `ahead` test. There is
+ * one row per token key: row `lid` for each lid, then row `kidBase + kid` for each kid; bit k of a
+ * row says whether that key is a member of set k. A token t is in set k iff bit k of row `t.lid` or
+ * of row `kidBase + t.kid` is set (lid 0, "no literal", and kid 0 are never members). Row r is
+ * `words[r * width .. (r + 1) * width)`, 32 bits per word, low bit first, so a test reads word
+ * `k >> 5` of the token's two rows: at a call site k is a constant, so that word's offset and the
+ * mask `1 << (k & 31)` are constants and the test is two loads keyed by the token's own ids.
  */
-export type TokenSetBits = { stride: number; kidBase: number; words: number[] };
+export type TokenSetBits = { width: number; kidBase: number; words: number[] };
 export function tokenSetBits(plan: LexIdPlan, sets: readonly TokenSet[]): TokenSetBits {
   const kidBase = plan.lids.length;
-  const stride = Math.ceil((kidBase + plan.kids.length) / 32);
-  const words = new Array<number>(sets.length * stride).fill(0);
-  const put = (k: number, bit: number) => { words[k * stride + (bit >>> 5)] = (words[k * stride + (bit >>> 5)] | (1 << (bit & 31))) >>> 0; };
+  const width = Math.max(1, Math.ceil(sets.length / 32));
+  const words = new Array<number>((kidBase + plan.kids.length) * width).fill(0);
+  const put = (row: number, k: number) => { words[row * width + (k >>> 5)] = (words[row * width + (k >>> 5)] | (1 << (k & 31))) >>> 0; };
   sets.forEach((s, k) => {
     for (const l of s.lits) {
       const lid = plan.lids.indexOf(l);
       if (lid <= 0) throw new Error(`tokenSetBits: literal ${JSON.stringify(l)} has no lid`);
-      put(k, lid);
+      put(lid, k);
     }
     for (const t of s.toks) {
       const kid = plan.kids.indexOf(t);
       if (kid <= 0) throw new Error(`tokenSetBits: token kind ${JSON.stringify(t)} has no kid`);
-      put(k, kidBase + kid);
+      put(kidBase + kid, k);
     }
   });
-  return { stride, kidBase, words };
+  return { width, kidBase, words };
 }
 
 /** Resolve lid for a known text; 0 if not in the plan (matches runtime lid_of). */

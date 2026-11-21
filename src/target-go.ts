@@ -2615,12 +2615,13 @@ ${editReuse}
 // The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
 function tokenSetRuntimeGo(ir: ParserIR, ids: LexIdPlan): string {
   const b = tokenSetBits(ids, ir.tokenSets);
-  return `const _tokenSetStride = ${b.stride}
-const _tokenSetKid = ${b.kidBase}
-var _tokenSets = [...]uint32{${b.words.join(', ')}}
+  const rows: string[] = [];
+  for (let r = 0; r * b.width < b.words.length; r++) rows.push(`{${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}}`);
+  return `const _tokenSetKid = ${b.kidBase}
+var _tokenSets = [...][${b.width}]uint32{${rows.join(', ')}}
 func inTokenSet(k int, t *Tok) bool {
-\tr, l, c := k*_tokenSetStride, uint(t.Lid), uint(_tokenSetKid)+uint(t.Kid)
-\treturn ((_tokenSets[r+int(l>>5)]>>(l&31))|(_tokenSets[r+int(c>>5)]>>(c&31)))&1 != 0
+\tw := k >> 5
+\treturn (_tokenSets[t.Lid][w]|_tokenSets[_tokenSetKid+int(t.Kid)][w])&(1<<(k&31)) != 0
 }`;
 }
 
