@@ -27,8 +27,8 @@ jobs:
 
       - run: npm ci
 
-      # BENCH_EXTRA: c65e2a2bfabdf6c6d350b5d99ec1ca2e3585e852
+      # BENCH_EXTRA: 0807b8143ad160773842ef67bb3faea730ff28a6
       - run: test/bench-rust-oxc/run.sh 9
         env:
-          BENCH_EXTRA: c65e2a2bfabdf6c6d350b5d99ec1ca2e3585e852
+          BENCH_EXTRA: 0807b8143ad160773842ef67bb3faea730ff28a6
           BENCH_ONLY: '1'
