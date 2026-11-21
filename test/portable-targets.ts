@@ -287,8 +287,18 @@ const CASES: Case[] = [
       // `yield` form over the prefix operator when it reaches farther.
       'export default function () {}', 'export default function f() {}', 'export default class {}',
       'export default 1 + 2;', 'let * aa;', 'let => aa;', 'function* g() { yield a + b; yield; yield* o; yield x++; }',
+      // A parameter name is a BindingIdentifier: any identifier but a reserved word. Contextual
+      // and strict-mode-only words stay names; a reserved word is fine as a pattern's key or a
+      // default's value, and as a prefix of a longer name.
+      'function f(yield, await, let, static, of, async, get, set) {}', 'class C { m(implements, package, interface) {} }',
+      'x = (let, of) => 1;', 'function f(inx, iff, newer) {}', 'function f({ in: a, if: b }, [c]) {}', 'function f(a = this, b = null) {}',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
+      // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
+      // parameter is TypeScript's).
+      'function f(in) {}', 'function f(if, b) {}', 'x = function (a, while) {};', 'class C { m(in) {} }', 'x = { m(class) {} };',
+      'class C { set s(this) {} }', 'function f(this) {}', 'x = (in) => 1;', 'x = async (for) => 1;', 'function* g(new = 1) {}',
+      'class C { constructor(true) {} }', 'function f(null) {}', 'function f(...in) {}',
       // A `new` with no Arguments is not an optional-chain base, template callee or not.
       'new a`x`?.b;', 'new `x`?.b;', 'new a?.`x`;', 'new `a${}b`;', 'async function f() { new a`x${await}`(); }',
       // … and on a tie the earliest-declared: `yield x++` is the prefix operator's node, which no
@@ -431,6 +441,13 @@ const CASES: Case[] = [
       'class C { [a, b] }', 'class C { [a,]: T\nx }', 'declare class C { [k: T, ]: U; [a?] }', 'class C { [public: T]: U }',
       'class C { [e]: T; [e]() {} [e] = 1; [public]: T }', 'class C { [async (x) => x]: T }', 'type A = { [async (x) => x]: T }',
       'class C { async\n[k: T]: U }', 'class C { [a = 1]: T }',
+      // A parameter name is a binding identifier in every parameter list, value or type: `this`
+      // takes its own form, a modifier word before a name is a modifier and one alone is a name,
+      // and a JSDoc function type's parameters are types (tsc's parseJSDocParameter).
+      'function f(this: T, a) {}', 'type F = (this: T) => U;', 'function f(public a, readonly b: T) {}',
+      'class C { constructor(private yield, protected await) {} }', 'type F = (yield: T, await: U, let: V, type: W) => X;',
+      'interface I { [out: T]: U }', 'function f(in x) {}', 'function f(declare: T) {}', 'type F = new (inx: T, iff: U) => V;',
+      'type F = function (in): U;', 'type F = function (this: T, string): U;', 'class C { [true]: T }',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -515,7 +532,19 @@ const CASES: Case[] = [
       'class C { [a, b](): T }', 'class C { [a?](): T }', 'class C { [k: T]() {} }', 'class C { async [k: T]() {} }',
       'class C { [a: T] = 1 }', 'class C { [a, b] = 1 }', 'class C { [k: T]!: U }', 'class C { [k: T]?: U }', 'class C { async [k: T]: U x }',
       'class C { [async x => x]: T }', 'class C { async [async x => x]() {} }', 'interface I { [async x => x]: T }', 'type A = { [async x => x](): T }',
-      'class C { get [k: T]: U }', 'class C { [{ a }: T]: U }', 'interface I { [{ a }: T]: U }', 'class C { [k: T] {} }', 'class C { [k: T]<U>(): V }'],
+      'class C { get [k: T]: U }', 'class C { [{ a }: T]: U }', 'interface I { [{ a }: T]: U }', 'class C { [k: T] {} }', 'class C { [k: T]<U>(): V }',
+      // No parameter list takes a reserved word as a name: not a function's, method's, accessor's
+      // or constructor's, not a function or constructor type's, not a call, construct, method or
+      // index signature's, nor after a modifier or decorator.
+      'function f(in) {}', 'function f(if: T) {}', 'class C { m(in) {} }', 'type F = (in: T) => U;', 'type F = (typeof: T) => U;',
+      'type F = new (class: T) => U;', 'interface I { [in: T]: U }', 'class C { async [in: T]: U }', 'interface I { (in: T): U }',
+      'interface I { new (var: T): U }', 'interface I { m(do?: T): U }', 'class C { [const: T]: U }', 'declare function f(in: T): void;',
+      'class C { constructor(readonly default: T) {} }', 'function f(@d if) {}', 'type F = (a: T, delete: U) => V;',
+      'abstract class C { abstract m(super: T): void }', 'x = (in: T) => 1;', 'class C { set s(null) {} }',
+      // A JSDoc function type's list holds types: no name, annotation, default, decorator or
+      // modifier, and a `this` / `new` label takes its `:`.
+      'type F = function (a: T): U;', 'type F = function (a = 1): U;', 'type F = function (@d a): U;',
+      'type F = function (public a): U;', 'type F = function (this): U;'],
   },
 ];
 

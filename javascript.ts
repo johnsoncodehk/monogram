@@ -202,6 +202,13 @@ export const notReserved = not(alt(
   'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with',
 ));
 
+// A BindingIdentifier: the name a binding introduces (a parameter, a variable, a destructured
+// or rest name) is an identifier that is not a reserved word. This is the one definition every
+// binding position spreads in; tsc's parser decides it once too (parseBindingIdentifier, which
+// takes an identifier or any keyword after LastReservedWord, in every context), so contextual
+// and strict-mode-only words stay names (`function f(yield, let, of) {}`).
+export const bindingIdentifier = [notReserved, Ident];
+
 // A NARROWER guard for the *expression* identifier-NUD only. The full `notReserved`
 // set can NOT be used at expression position: most always-reserved words legitimately
 // begin an expression via their own dedicated forms (`new`/`new.target`, `class`/
@@ -423,18 +430,18 @@ const BindingProperty = rule($ => [
   [Ident, ':', BindingElement],
   // shorthand `a` / shorthand-with-default `a = 1` — the name is a BindingIdentifier,
   // so a reserved word is invalid (`{ while }`, `{ class }`).
-  [notReserved, Ident, opt('=', Expr)],
+  [...bindingIdentifier, opt('=', Expr)],
   [alt(String_, Number_, ['[', Expr, ']']), ':', BindingElement],  // "s"/0/[e]: elem
-  ['...', alt([notReserved, Ident], BindingPattern)],    // ...rest | ...{ a }
+  ['...', alt(bindingIdentifier, BindingPattern)],    // ...rest | ...{ a }
 ]);
 
 const BindingElement = rule($ => [
-  [alt([notReserved, Ident], BindingPattern), opt('=', Expr)],  // a | { a }  (optionally = default)
+  [alt(bindingIdentifier, BindingPattern), opt('=', Expr)],  // a | { a }  (optionally = default)
 ]);
 
 const ArrayBindingElement = rule($ => [
   BindingElement,
-  ['...', alt([notReserved, Ident], BindingPattern)],    // [...rest] | [...{ a }]
+  ['...', alt(bindingIdentifier, BindingPattern)],    // [...rest] | [...{ a }]
 ]);
 
 const BindingPattern = rule($ => [
@@ -445,22 +452,23 @@ const BindingPattern = rule($ => [
 // ── Bindings & Parameters ──
 
 const Binding = rule($ => [
-  [alt([notReserved, Ident], BindingPattern), opt('=', Expr)],
+  [alt(bindingIdentifier, BindingPattern), opt('=', Expr)],
 ]);
 
 // A binding in a for-head: identical to Binding except the initializer is a
 // no-`in` expression, so `for (var a = 1 in xs)` reads `a = 1` then the for-in
 // `in` (TS's [~In] grammar), rather than greedily parsing `1 in xs`.
 const ForBinding = rule($ => [
-  [alt([notReserved, Ident], BindingPattern), opt('=', exclude('in', Expr))],
+  [alt(bindingIdentifier, BindingPattern), opt('=', exclude('in', Expr))],
 ]);
 
+// A parameter (FormalParameter) is a binding element: its name is a BindingIdentifier, so no
+// reserved word names a parameter (`function f(in) {}`, `(class) => 1`), `this` included (a
+// `this` parameter is TypeScript's).
 const Param = rule($ => {
   const body = alt(
-    [Ident, opt('=', Expr)],
-    [BindingPattern, opt('=', Expr)],
-    // a rest element can never validly be a reserved word (`...while`), so guarding it is FN-safe.
-    ['...', alt([notReserved, Ident], BindingPattern), opt('=', Expr)],   // rest (an initializer is a CHECKER error in tsc, not a parse error)
+    [alt(bindingIdentifier, BindingPattern), opt('=', Expr)],
+    ['...', alt(bindingIdentifier, BindingPattern), opt('=', Expr)],   // rest (an initializer is a CHECKER error in tsc, not a parse error)
   );
   return [
     [opt(DecoratorExpr), body],

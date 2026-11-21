@@ -120,6 +120,7 @@ const tsOnly: [string, string][] = [
   ['function return type', `function g(): void {}`],
   ['typed binding', `let v: string;`],
   ['optional param', `function h(x?) {}`],
+  ['this parameter', `function h(this) {}`],
 ];
 
 let v_ok = 0;

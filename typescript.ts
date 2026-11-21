@@ -41,7 +41,7 @@ import {
   Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
+  notReserved, notReservedExpr, bindingIdentifier, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -175,7 +175,14 @@ const Type = rule($ => {
     ['!', $],    // prefix non-nullable: !string
     '?',         // JSDocUnknownType: a bare `?` (when no type follows)
     '*',         // JSDocAllType
-    ['function', '(', sep(Param, ','), ')', opt(':', $)],   // function(this: T, string): U
+    // JSDoc function type `function(this: T, string): U`. Its list holds TYPES, not parameters
+    // (tsc's parseJSDocParameter): each is an optional `this:` / `new:` label, then tsc's
+    // parseJSDocType — an optional `...`, then a type or type predicate (parseTypeOrTypePredicate,
+    // as a return type). A `this` / `new` there is the label, so it needs its `:`. Not modelled:
+    // parseJSDocType's trailing `=` (`function(string=)`) and its `module` name path, and the
+    // list's start test (isStartOfParameter), which stops the list at a reserved word that
+    // starts no type (`function(if)`).
+    ['function', '(', sep(alt([alt([alt('this', 'new'), ':'], not(alt('this', 'new'))), opt('...'), ReturnType]), ','), ')', opt(':', $)],
     // postfix nullable `T?`: tsc takes the `?` only when the NEXT token cannot start
     // a type — otherwise the `?` belongs to a conditional type / an expression-level
     // ternary after `as T`. tsc tests token-level isStartOfType; `not(alt('new', $))`
@@ -506,21 +513,21 @@ const BindingProperty = rule($ => [
   [Ident, ':', BindingElement],
   // shorthand `a` / shorthand-with-default `a = 1` — the name is a BindingIdentifier,
   // so a reserved word is invalid (`{ while }`, `{ class }`).
-  [notReserved, Ident, opt('=', Expr)],
+  [...bindingIdentifier, opt('=', Expr)],
   [alt(String_, Number_, ['[', Expr, ']']), ':', BindingElement],  // "s"/0/[e]: elem
   // rest: ...r | ...{ a } — tsc also parses `...r: name` and `...r = init` (the
   // object-binding-element shape is uniform; "rest can't have a property name /
   // initializer" are checker errors, both parse-clean).
-  ['...', alt([notReserved, Ident], BindingPattern), opt(':', BindingElement), opt('=', Expr)],
+  ['...', alt(bindingIdentifier, BindingPattern), opt(':', BindingElement), opt('=', Expr)],
 ]);
 
 const BindingElement = rule($ => [
-  [alt([notReserved, Ident], BindingPattern), opt('=', Expr)],  // a | { a }  (optionally = default)
+  [alt(bindingIdentifier, BindingPattern), opt('=', Expr)],  // a | { a }  (optionally = default)
 ]);
 
 const ArrayBindingElement = rule($ => [
   BindingElement,
-  ['...', alt([notReserved, Ident], BindingPattern)],    // [...rest] | [...{ a }]
+  ['...', alt(bindingIdentifier, BindingPattern)],    // [...rest] | [...{ a }]
 ]);
 
 const BindingPattern = rule($ => [
@@ -531,32 +538,27 @@ const BindingPattern = rule($ => [
 // ── Bindings & Parameters ──
 
 const Binding = rule($ => [
-  [alt([notReserved, Ident, opt('!')], BindingPattern), opt(':', Type), opt('=', Expr)],
+  [alt([...bindingIdentifier, opt('!')], BindingPattern), opt(':', Type), opt('=', Expr)],
 ]);
 
 // A binding in a for-head: identical to Binding except the initializer is a
 // no-`in` expression, so `for (var a = 1 in xs)` reads `a = 1` then the for-in
 // `in` (TS's [~In] grammar), rather than greedily parsing `1 in xs`.
 const ForBinding = rule($ => [
-  [alt([notReserved, Ident, opt('!')], BindingPattern), opt(':', Type), opt('=', exclude('in', Expr))],
+  [alt([...bindingIdentifier, opt('!')], BindingPattern), opt(':', Type), opt('=', exclude('in', Expr))],
 ]);
 
 
 const Param = rule($ => {
   const tail = [opt('?'), opt(':', Type), opt('=', Expr)];   // ?  : T  = E
   const body = alt(
-    // The plain-name arm EXCLUDES `this`: tsc's parser treats `this` as a special
-    // parameter form accepting ONLY bare `this` or `this: T` (the dedicated arm below)
-    // — `this?`, `this = 1`, `this: T = 1`, and any decorated/modified `this`
-    // (`@dec this`, `public this`) are parse errors there. Letting `this` match as a
-    // plain Ident here would re-open that whole class via the tail/decorator/modifier
-    // paths. (A truly reserved param name like `function f(while)` stays an accepted
-    // over-accept; it's out of this gap's scope.)
-    [not('this'), Ident, ...tail],
-    [BindingPattern, ...tail],
-    // a rest element, by contrast, can never validly be a reserved word (`...while`),
-    // and `...this` is invalid too, so guarding the rest name is FN-safe.
-    ['...', alt([notReserved, Ident], BindingPattern), opt('?'), opt(':', Type), opt('=', Expr)],   // rest (`?`/initializer are CHECKER errors in tsc, not parse errors)
+    // The name is a BindingIdentifier (tsc's parseNameOfParameter → parseBindingIdentifier),
+    // in every parameter list, value or type: no reserved word, and so not `this`, which tsc
+    // treats as a special parameter form accepting ONLY bare `this` or `this: T` (the
+    // dedicated arm below) — `this?`, `this = 1`, `this: T = 1`, and any decorated/modified
+    // `this` (`@dec this`, `public this`) are parse errors there.
+    [alt(bindingIdentifier, BindingPattern), ...tail],
+    ['...', alt(bindingIdentifier, BindingPattern), opt('?'), opt(':', Type), opt('=', Expr)],   // rest (`?`/initializer are CHECKER errors in tsc, not parse errors)
   );
   return [
     // `this`-param: bare `this` or `this: T` ONLY — no `?`, no default, no decorator,
