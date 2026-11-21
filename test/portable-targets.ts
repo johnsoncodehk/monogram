@@ -41,6 +41,21 @@ import { goBuild, scratchDir } from './scratch.ts';
 import type { CstGrammar } from '../src/types.ts';
 
 type Case = { grammar: string; path: string; accept: string[]; reject: string[]; tsOnly?: boolean };
+// A for-head's no-`in` region (`exclude('in', Expr)`, a `suppress` step): it holds for the Pratt call
+// it wraps, a nested call (parentheses, arguments, an object, array or template, a function or arrow
+// block body) has `in` again, and every alternative of the head that fails inside or after it backs
+// out of it. Each verdict is tsc's parser's too.
+const NO_IN_HEADS = {
+  accept: [
+    'for (var a = (b in c) in d);', 'for (a = (b in c) in d);', 'for (x = (y = (a in b)) in c);',
+    'for (x = () => { a in b; } in c);', 'for (x = function () { return a in b; } in c);',
+    'for (var a = f(b in c) in d);', 'for (x = () => { for (a in b); } in c);',
+    'for (var a = () => { for (b in c) d in e; } in f);', 'for (var a = (b, c in d) in e);',
+    'for (let [a = b in c] of d);', 'for (var a = { b: c in d } in e);', 'for (var a = `${b in c}` in d);',
+    'for (x = (() => a in b);;);', 'for (x = (a in b) in c in d);',
+  ],
+  reject: ['for (var a = b in c;;);', 'for (var a = b in c in d;;);', 'for (var a = b, c = d in e;;);'],
+};
 const CASES: Case[] = [
   {
     grammar: 'calc', path: './fixtures/calc.ts',
@@ -286,6 +301,7 @@ const CASES: Case[] = [
       'for (a in b) { d = c in e; }',
       'new a.b();', '((((x))));',
       'for (a = x + y in b) c;',
+      ...NO_IN_HEADS.accept,
       // An assignment / update operand needs only a LeftHandSideExpression's shape; target validity is a consumer's.
       '-x++;', '(a) = 1;', 'a = b = c;', '1 = 2;', '1++;', '++1;', 'f() = 1;', 'f()++;', '++f();', 'this = 1;',
       '(a + b) = c;', '(a, b) = 1;', 'a?.b = 1;', 'a?.b++;', '[a + b] = c;', '({a: 1} = c);', 'new.target = 1;',
@@ -343,6 +359,7 @@ const CASES: Case[] = [
       'x\n++;', 'x\n--', '(x\n++);', 'a = [x\n++];', 'x\n++\n-y;', 'x\n++\ny++;', 'x\n++ ++y;', 'class C { p = x\n++ }', 'class C { p = x\n++\ny }',
       'for (a = (x in b)) c;',
       'for (a = b ? x in c : y in d) e;',
+      ...NO_IN_HEADS.reject,
       // An assignment / update operand (prefix ++/-- included) without a LeftHandSideExpression's shape has no parse.
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
       // … wherever the expression is optional or repeated: a refused operand is not skipped.
@@ -354,6 +371,7 @@ const CASES: Case[] = [
     // agnostic emitter (types, generics, interfaces, enums, assertions, variance). ASCII.
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
+      ...NO_IN_HEADS.accept,
       'const a: number = 1;', 'let s: string;', 'type Alias = { a: number; b?: string };',
       'type U = "a" | "b" | "c";', 'function gen2<T, U extends T>(x: T, y: U): T { return x; }',
       'interface I<T> extends A<T> { m(x: T): T; }', 'const c = x as const;',
@@ -503,7 +521,7 @@ const CASES: Case[] = [
       'type T = { [this in K]: 1 };', 'type T = { readonly [K in U]: 1 };',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
-    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
+    reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;', ...NO_IN_HEADS.reject,
       'import defer * from "m";', 'import defer * as from "m";',
       'a + b = 1;', 'a < b = 1;', 'a in b = 1;', 'a as T = 1;', '-x = 1;', 'x++ = 1;', '++x++;', '++-x;', '++ ++x;', '-x ** 2;', 'typeof x ** 2;', 'm > B<C> >>= 1;',
       'x\n++\n++\ny;', 'x\n++\n++y;', 'x\n--\n--\ny;', 'x\n++\n--\ny;', 'var z =\nx\n++\n++\ny;',
