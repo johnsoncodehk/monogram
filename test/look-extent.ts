@@ -264,18 +264,7 @@ const countEnts = (s: string) => (s === '-' || s === '' ? 0 : s.split(';').lengt
 
 // Expected failures: a Doc that rejects after an edit where a fresh parse accepts, for a reason
 // that is not the extent. Each must still happen (else the entry is stale and the gate fails).
-const EXPECTED_FAIL: { grammar: string; reason: string; applies: (text: string) => boolean }[] = [
-  {
-    // Owed: the Doc rebuilds tokens from its metadata through lid_of, whose keyword prefilter
-    // treats a leading `@` as an identifier-shaped word and so returns lid 0 for the `@` literal
-    // the lexer gives a lid; every reparse after an edit then fails at `@` (TS / Go / Rust Doc;
-    // the Go builder Doc and the Rust Doc already at their first parse, which also read tokens
-    // from metadata).
-    grammar: 'guardjs',
-    reason: 'lid_of returns 0 for the `@` literal (Doc tokens rebuilt from metadata lose its lid)',
-    applies: (text) => text.includes('@'),
-  },
-];
+const EXPECTED_FAIL: { grammar: string; reason: string; applies: (text: string) => boolean }[] = [];
 
 // The comparison itself must see an extent one short: a self-check on a recorded list.
 {

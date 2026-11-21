@@ -12,8 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
-import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
-import { isKeywordLiteral } from './grammar-utils.ts';
+import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidWordByte, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
@@ -109,14 +108,15 @@ function renderIdTablesRust(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
   const kidArms = ids.kids.map((k, i) => `${J(k)} => ${i}`).join(', ');
-  // Group lids[1..] by UTF-8 byte length; split keyword-shaped vs punct for separate match tables.
+  // Group lids[1..] by UTF-8 byte length, in two match tables split by the first-byte class
+  // lid_of routes a text by (lidWordByte), so each literal is in the table its own text reaches.
   const byLenKw = new Map<number, { text: string; id: number }[]>();
   const byLenPu = new Map<number, { text: string; id: number }[]>();
   for (let i = 1; i < ids.lids.length; i++) {
     const text = ids.lids[i]!;
     const blen = Buffer.byteLength(text);
     const ent = { text, id: i };
-    const map = isKeywordLiteral(text) ? byLenKw : byLenPu;
+    const map = lidWordByte(Buffer.from(text, 'utf8')[0]!) ? byLenKw : byLenPu;
     const arr = map.get(blen) ?? [];
     arr.push(ent);
     map.set(blen, arr);
@@ -128,29 +128,34 @@ function renderIdTablesRust(ids: LexIdPlan): string {
     }).join('\n');
   const kwArms = lenArmsOf(byLenKw);
   const puArms = lenArmsOf(byLenPu);
-  const pf = buildLidPrefilter(ids);
+  const pf = buildLidPrefilter(ids, 'utf8');
   const bitsLit = [...pf.firstByLenBits].join(', ');
+  // The byte pattern of lidWordByte, from the function itself (ranges of consecutive bytes).
+  const wordBytes: string[] = [];
+  for (let b = 0; b < 256; b++) {
+    if (!lidWordByte(b) || lidWordByte(b - 1)) continue;
+    let e = b;
+    while (e < 255 && lidWordByte(e + 1)) e++;
+    wordBytes.push(e === b ? `${b}` : `${b}..=${e}`);
+  }
   return `${gtRuntimeRust(ids)}
 const KIND_STR: &[&str] = &[${kidsLit}];
 const _LIDS: &[&str] = &[${lidsLit}];
-const _LID_MAX_LEN: usize = ${pf.maxByteLen};
+const _LID_MAX_LEN: usize = ${pf.maxLen};
 const _LID_FIRST_BITS: &[u8] = &[${bitsLit}];
 #[inline(always)] fn tok_kind(t: &Tok) -> &'static str { KIND_STR[t.kid as usize] }
 #[inline(always)] fn tok_text<'a>(src: &'a str, t: &Tok) -> &'a str { &src[t.off as usize..t.end as usize] }
 #[inline(always)] fn mk_tok(off: usize, end: usize, nl: bool, kid: u16, lid: u16) -> Tok { Tok { off: off as u32, end: end as u32, kid, lid, nl } }
 fn kid_of(kind: &str) -> u16 { match kind { ${kidArms}, _ => 0 } }
-/// Ident/@-keyword: O(1) length×first-byte prefilter, then keyword-only match (no punct arms).
+/// O(1) length×first-byte prefilter (its bits hold every literal's key), then the match table of
+/// the text's first-byte class: a word is compared with word literals only.
 #[inline(always)]
 fn lid_of(text: &str) -> u16 {
     let n = text.len();
     if n == 0 || n > _LID_MAX_LEN { return 0; }
-    let b0 = text.as_bytes()[0];
-    if matches!(b0, b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'$' | b'@') {
-        let b0u = b0 as usize;
-        if (_LID_FIRST_BITS[n * 32 + (b0u >> 3)] & (1u8 << (b0u & 7))) == 0 { return 0; }
-        return lid_of_kw(text, n);
-    }
-    lid_of_punct(text, n)
+    let b0 = text.as_bytes()[0] as usize;
+    if (_LID_FIRST_BITS[n * 32 + (b0 >> 3)] & (1u8 << (b0 & 7))) == 0 { return 0; }
+    if matches!(b0, ${wordBytes.join(' | ')}) { lid_of_kw(text, n) } else { lid_of_punct(text, n) }
 }
 #[inline(never)]
 fn lid_of_kw(text: &str, n: usize) -> u16 {
@@ -5326,8 +5331,34 @@ fn main() {
         print!("{}", out);
         return;
     }
+    // batch-doc: as batch, but each input is typed into an empty Doc (one edit), so the whole text
+    // is parsed from tokens the Doc rebuilds from its metadata — the CST JSON, or "-" when that
+    // Doc rejects (a lexer error included).
+    if args.get(1).map(|a| a.as_str()) == Some("batch-doc") {
+        std::panic::set_hook(Box::new(|_| {}));
+        let mut out = String::new();
+        for s in src.split('\\0') {
+            let line = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut doc: Doc<CstBuilder> = Doc::new(String::new());
+                doc.edit(&[Edit { start: 0, end: 0, text: s.to_string() }]);
+                doc.cst_json()
+            }));
+            match line { Ok(Some(l)) => out.push_str(&l), _ => out.push('-') }
+            out.push('\\n');
+        }
+        print!("{}", out);
+        return;
+    }
+    // lid-of: NUL-separated texts in, one line per text out — lid_of(text), the literal id the Doc
+    // gives a token of that text when it rebuilds the token from its metadata.
+    if args.get(1).map(|a| a.as_str()) == Some("lid-of") {
+        let mut out = String::new();
+        for s in src.split('\\0') { out.push_str(&lid_of(s).to_string()); out.push('\\n'); }
+        print!("{}", out);
+        return;
+    }
     // batch-tokens: NUL-separated inputs in, one line per input out — the token stream as a JSON
-    // array of [kind, text, newline-before], or "!" and the message for a lexer error.
+    // array of [kind, text, newline-before, lid], or "!" and the message for a lexer error.
     if args.get(1).map(|a| a.as_str()) == Some("batch-tokens") {
         std::panic::set_hook(Box::new(|_| {}));
         let js = |t: &str, out: &mut String| {
@@ -5348,7 +5379,7 @@ fn main() {
                 let mut one = String::from("[");
                 for (i, t) in tokenize(s).iter().enumerate() {
                     if i > 0 { one.push(','); }
-                    one.push('['); js(t.kind, &mut one); one.push(','); js(t.text, &mut one); one.push_str(if t.nl { ",true]" } else { ",false]" });
+                    one.push('['); js(t.kind, &mut one); one.push(','); js(t.text, &mut one); one.push_str(if t.nl { ",true," } else { ",false," }); one.push_str(&t.lid.to_string()); one.push(']');
                 }
                 one.push(']');
                 one

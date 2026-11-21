@@ -34,6 +34,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { createParser } from '../src/gen-parser.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { buildLexIdPlan, portableIR } from '../src/emit-portable.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { goBuild, scratchDir } from './scratch.ts';
@@ -251,6 +252,16 @@ const CASES: Case[] = [
       'emit x;', '@a emit x;', 'pub emit x;', '@a @b pub emit x;', '(x);', '#(x);', '#(1 + x) + 2;', '(#(x));',
     ],
     reject: ['x y;', 'x:', 'x: ;', '{}', '{x!}', 'go', '{x', ': x;', '@ emit x;', 'pub x;', '@a pub;', 'pub pub emit x;', '#x;', '##(x);'],
+  },
+  {
+    // Literals of every shape lid_of looks a text up by (see the fixture): a token of each must
+    // get its literal id from the lexer and from lid_of alike, on a fresh parse and in a Doc.
+    grammar: 'lidshapes', path: './fixtures/lidshapes.ts',
+    accept: [
+      '', '@ a;', '@@ a;', 'café a;', '$x a;', '_ a;', 'at a;', 'ate atom;', 'at ate;', '@ café;',
+      '@ a; @@ b; café c; $x f; _ g; at h; ate i;', '@a;@@b;$x c;',
+    ],
+    reject: ['a;', '@;', '@ a', '@@@ a;', '@ @@;', 'caf a;', 'cafe a;', '$ a;', '$xy a;', '__ a;', 'a t;', 'atom a;', 'atea;'],
   },
   {
     // The REAL javascript.ts grammar (89 rules after the [Await]/[Yield] fork) — the proof
@@ -687,7 +698,17 @@ function runEditSession(cmd: string, args: string[], json: string): EditOutcome 
 // The ts target's library runs in this process: one module load per grammar instead of one
 // node start per input. Go/Rust run their emitted CLI runner per input (a native start is ~1 ms).
 type TsDoc = { edit(edits: { start: number; end: number; text: string }[]): unknown; align(): unknown; root(): unknown };
-type TsLib = { parse(src: string): unknown; tokenize(src: string): { kind: string; text: string; nl: boolean }[]; createDoc(src: string, opts: { validate: boolean }): TsDoc };
+type TsLib = {
+  parse(src: string): unknown; tokenize(src: string): { kind: string; text: string; nl: boolean; lid: number }[];
+  createDoc(src: string, opts: { validate?: boolean; builder?: unknown }): TsDoc;
+  /** The library's lid_of, exported by the gate (TS_LID_OF) — the id a Doc gives a rebuilt token. */
+  __lid_of(text: string): number;
+};
+// The gate's one addition to the imported ts library: its lid_of, which the runners' lid-of mode
+// exposes for go / rust.
+const TS_LID_OF = '\nexport const __lid_of = lid_of;\n';
+// A builder that keeps nothing but shifts, so a ts Doc given it takes the builder engine.
+const TS_PROBE_BUILDER = { leaf: () => 1, node: () => 1, shift: (h: number) => h };
 const errText = (e: unknown) => String((e as Error)?.message ?? e);
 function tsRun(lib: TsLib, src: string): Outcome {
   try {
@@ -711,8 +732,10 @@ function tsEditSession(lib: TsLib, json: string, fast: boolean): EditOutcome {
   } catch (e) { return { ok: false, align, err: errText(e) }; }
 }
 
-// A token stream as JSON rows [kind, text, newline-before], or null for a lexer error.
+// A token stream as JSON rows [kind, text, newline-before, lid], or null for a lexer error.
 type TokStream = string | null;
+/** The rows without their lid: what the oracle lexer (which has no literal ids) also gives. */
+const unLid = (t: TokStream): TokStream => (t === null || t === 'NUL' ? t : JSON.stringify((JSON.parse(t) as unknown[][]).map((r) => r.slice(0, 3))));
 function tokBatch(cmd: string, srcs: string[]): TokStream[] {
   const sent = srcs.filter((s) => !s.includes('\0'));
   const r = spawnSync(cmd, ['batch-tokens'], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
@@ -728,8 +751,36 @@ function tokBatch(cmd: string, srcs: string[]): TokStream[] {
   });
 }
 const tsTokens = (lib: TsLib, src: string): TokStream => {
-  try { return JSON.stringify(lib.tokenize(src).map((t) => [t.kind, t.text, t.nl])); } catch { return null; }
+  try { return JSON.stringify(lib.tokenize(src).map((t) => [t.kind, t.text, t.nl, t.lid])); } catch { return null; }
 };
+// The Doc path: each input typed into an empty Doc in one edit, so the whole text is parsed from
+// tokens the Doc rebuilds from its metadata. One outcome per input (a rejection carries no message).
+function docBatch(cmd: string, mode: string, srcs: string[]): (string | null)[] {
+  const sent = srcs.filter((s) => !s.includes('\0'));
+  const r = spawnSync(cmd, [mode], { input: sent.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
+  const lines = (r.stdout ?? '').split('\n');
+  if (r.status !== 0 || lines.length !== sent.length + 1) {
+    throw new Error(`${cmd} ${mode}: exit ${r.status}, ${lines.length - 1} lines for ${sent.length} inputs\n${(r.stderr ?? '').slice(0, 2000)}`);
+  }
+  let li = 0;
+  return srcs.map((src) => (src.includes('\0') ? 'NUL' : lines[li++]!));
+}
+const docOutcomes = (lines: (string | null)[]): Outcome[] => lines.map((l) => (l === '-' || l === null ? { ok: false } : l === 'NUL' ? { ok: false, err: 'NUL' } : { ok: true, cst: canon(JSON.parse(l)) }));
+const verdicts = (lines: (string | null)[]): (boolean | null)[] => lines.map((l) => (l === 'NUL' ? null : l === '+'));
+function lidBatch(cmd: string, texts: string[]): number[] {
+  const r = spawnSync(cmd, ['lid-of'], { input: texts.join('\0'), encoding: 'utf8', maxBuffer: 1 << 30 });
+  const lines = (r.stdout ?? '').split('\n');
+  if (r.status !== 0 || lines.length !== texts.length + 1) throw new Error(`${cmd} lid-of: exit ${r.status}, ${lines.length - 1} lines for ${texts.length} texts\n${(r.stderr ?? '').slice(0, 2000)}`);
+  return lines.slice(0, -1).map(Number);
+}
+function tsDoc(lib: TsLib, src: string, builder: boolean): { ok: boolean; cst?: string } {
+  try {
+    const doc = builder ? lib.createDoc('', { builder: TS_PROBE_BUILDER }) : lib.createDoc('');
+    doc.edit([{ start: 0, end: 0, text: src }]);
+    const root = doc.root();
+    return root === null ? { ok: false } : builder ? { ok: true } : { ok: true, cst: canon(root) };
+  } catch { return { ok: false }; }
+}
 
 type Runner = {
   label: string;
@@ -738,6 +789,12 @@ type Runner = {
   batch: (srcs: string[]) => Outcome[];
   /** The lexer alone over a whole corpus. */
   tokens: (srcs: string[]) => TokStream[];
+  /** Each input typed into an empty CST Doc ("-" rejected, else its CST JSON). */
+  doc: (srcs: string[]) => Outcome[];
+  /** The same through the builder Doc, where the target has one apart from the CST Doc: accepted or not. */
+  docBuilder?: (srcs: string[]) => (boolean | null)[];
+  /** The target's lid_of over texts. */
+  lidOf: (texts: string[]) => number[];
   edit: (json: string, fast: boolean) => EditOutcome;
   spans: { cmd: string; args: string[] };
   /** Doc.edit offsets are UTF-8 bytes (go/rust), not UTF-16 units (ts). */
@@ -1168,10 +1225,12 @@ for (const c of CASES) {
   const tsLibSrc = emitParser(grammar, tsTarget);
   const tsFile = `${dir}/p.ts`;
   writeFileSync(tsFile, tsLibSrc + (tsTarget.emitRunner?.() ?? ''));
-  writeFileSync(`${dir}/lib.ts`, tsLibSrc);
+  writeFileSync(`${dir}/lib.ts`, tsLibSrc + TS_LID_OF);
   const tsLib = await import(`${dir}/lib.ts`) as TsLib;
   runners.push({
-    label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), tokens: (srcs) => srcs.map((src) => tsTokens(tsLib, src)), edit: (json, fast) => tsEditSession(tsLib, json, fast),
+    label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), tokens: (srcs) => srcs.map((src) => tsTokens(tsLib, src)),
+    doc: (srcs) => srcs.map((src) => tsDoc(tsLib, src, false) as Outcome), docBuilder: (srcs) => srcs.map((src) => tsDoc(tsLib, src, true).ok), lidOf: (texts) => texts.map((t) => tsLib.__lid_of(t)),
+    edit: (json, fast) => tsEditSession(tsLib, json, fast),
     spans: { cmd: 'node', args: [tsFile, 'tok-spans'] }, utf8Edits: false,
   });
 
@@ -1183,7 +1242,9 @@ for (const c of CASES) {
     goBuild(['-o', `${gdir}/p`, '.'], { cwd: gdir });
     const bin = `${gdir}/p`;
     runners.push({
-      label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+      label: 'go', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs),
+      doc: (srcs) => docOutcomes(docBatch(bin, 'batch-doc', srcs)), docBuilder: (srcs) => verdicts(docBatch(bin, 'batch-doc-builder', srcs)), lidOf: (texts) => lidBatch(bin, texts),
+      edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
     });
   }
@@ -1193,7 +1254,9 @@ for (const c of CASES) {
     writeFileSync(rfile, emitParser(grammar, rustTarget) + (rustTarget.emitRunner?.() ?? ''));
     execFileSync('rustc', ['-A', 'warnings', rfile, '-o', bin], { stdio: 'pipe' });
     runners.push({
-      label: 'rust', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs), edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
+      label: 'rust', run: (src) => runProc(bin, [], src), batch: (srcs) => runBatch(bin, srcs), tokens: (srcs) => tokBatch(bin, srcs),
+      doc: (srcs) => docOutcomes(docBatch(bin, 'batch-doc', srcs)), lidOf: (texts) => lidBatch(bin, texts),
+      edit: (json, fast) => runEditSession(bin, [fast ? 'edit-session-fast' : 'edit-session'], json),
       spans: { cmd: bin, args: ['tok-spans'] }, utf8Edits: true,
     });
   }
@@ -1434,6 +1497,10 @@ for (const c of CASES) {
       try { return JSON.stringify(tokenize(i.src).map((t) => [t.type, t.text, (t as unknown as { newlineBefore: boolean }).newlineBefore])); } catch { return null; }
     });
     const known = CORPUS_EXPECTED_FAIL.filter((e) => e.grammars.includes(c.grammar));
+    // The grammar's literal table: lids[i] is the text of literal id i (lids[0] = '', no literal).
+    const lids = buildLexIdPlan(portableIR(grammar)).lids;
+    const lidIndex = new Map(lids.map((t, i) => [t, i]));
+    const lidOfText = (t: string) => lidIndex.get(t) ?? 0;
     const lexErr = inputs.map((i): string => { try { tokenize(i.src); return ''; } catch (e) { return errText(e); } });
     for (const r of runners) {
       const got = r.batch(inputs.map((i) => i.src));
@@ -1451,7 +1518,7 @@ for (const c of CASES) {
         // A target that died in its lexer agrees with the oracle only when the oracle's
         // rejection is a lexer error too (its parser's own rejections all begin `Parse error`).
         else if (!w.ok && !g.ok && g.err !== undefined && g.err !== '' && r.label !== 'typescript' && (w.err ?? '').startsWith('Parse error')) what = `oracle rejects in its parser, ${r.label} failed before parsing (${g.err})`;
-        else if (gotToks[i] !== 'NUL' && wantToks[i] !== gotToks[i]) what = wantToks[i] === null ? `oracle lexer fails, ${r.label} lexes` : gotToks[i] === null ? `oracle lexes, ${r.label} lexer fails` : 'token streams differ';
+        else if (gotToks[i] !== 'NUL' && wantToks[i] !== unLid(gotToks[i]!)) what = wantToks[i] === null ? `oracle lexer fails, ${r.label} lexes` : gotToks[i] === null ? `oracle lexes, ${r.label} lexer fails` : 'token streams differ';
         if (!what) return;
         const k = known.findIndex((e, j) => mine[j] && (e.inputs ? e.inputs.includes(input.src) : e.oracleLexError!.test(lexErr[i])));
         if (k >= 0) { knownHits[k]++; return; }
@@ -1469,6 +1536,42 @@ for (const c of CASES) {
       for (const [key, n] of by) console.log(`      ${String(n).padStart(5)}  ${key}`);
       for (const smp of samples) console.log(`      ${smp}`);
       failures += bad;
+
+      // One literal id per text: the id the lexer gives a token, and the one lid_of gives the
+      // same text when a Doc rebuilds that token from its metadata, are both the text's index in
+      // the grammar's literal table (0: no literal) — for every token of the corpus and for
+      // every literal of the table.
+      const lidBad: string[] = [];
+      const texts = new Set<string>(lids.slice(1));
+      inputs.forEach((input, i) => {
+        if (gotToks[i] === null || gotToks[i] === 'NUL') return;
+        for (const [kind, text, , lid] of JSON.parse(gotToks[i]!) as [string, string, boolean, number][]) {
+          texts.add(text);
+          if (lid !== lidOfText(text)) lidBad.push(`lexer gives ${kind} ${JSON.stringify(text)} lid ${lid}, the table ${lidOfText(text)} — in ${JSON.stringify(input.src.slice(0, 80))}`);
+        }
+      });
+      const textList = [...texts].filter((t) => !t.includes('\0'));
+      r.lidOf(textList).forEach((got, j) => { if (got !== lidOfText(textList[j]!)) lidBad.push(`lid_of(${JSON.stringify(textList[j])}) = ${got}, the table ${lidOfText(textList[j]!)}`); });
+      console.log(`  ${c.grammar}/${r.label}: literal ids ${lidBad.length ? `${lidBad.length} MISMATCH` : `≡ the table`} (the lexer's on every corpus token, lid_of's on ${textList.length} texts: every token text and every literal)`);
+      for (const smp of [...new Set(lidBad)].slice(0, 8)) console.log(`      ${smp}`);
+      failures += lidBad.length;
+
+      // The Doc path ≡ a fresh parse: the verdict, and the CST when both accept.
+      const srcs = inputs.map((i) => i.src);
+      const docs = r.doc(srcs), builders = r.docBuilder?.(srcs);
+      const docBad: string[] = [];
+      inputs.forEach((input, i) => {
+        const f = got[i]!, d = docs[i]!;
+        if (d.ok === false && d.err === 'NUL') return;
+        const at = JSON.stringify(input.src.length > 100 ? input.src.slice(0, 100) + '…' : input.src);
+        if (f.ok !== d.ok) docBad.push(`fresh parse ${f.ok ? 'accepts' : 'rejects'}, Doc ${d.ok ? 'accepts' : 'rejects'} — ${at}`);
+        else if (f.ok && d.ok && f.cst !== d.cst) docBad.push(`both accept, CSTs differ — ${at}`);
+        const b = builders?.[i];
+        if (b !== undefined && b !== null && b !== f.ok) docBad.push(`fresh parse ${f.ok ? 'accepts' : 'rejects'}, builder Doc ${b ? 'accepts' : 'rejects'} — ${at}`);
+      });
+      console.log(`  ${c.grammar}/${r.label}: Doc ${docBad.length ? `${docBad.length} MISMATCH` : '≡ fresh parse'} (each input typed into an empty ${builders ? 'CST and builder Doc' : 'Doc'}: verdict${builders ? 's' : ''} + CST)`);
+      for (const smp of docBad.slice(0, 8)) console.log(`      ${smp}`);
+      failures += docBad.length;
     }
     corpusMs += Date.now() - t0;
     corpusInputs += inputs.length;
