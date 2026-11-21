@@ -274,6 +274,26 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     }
   }
   console.log(`  every portable grammar: ${checked} token-edge texts scan to their token regex's end`);
+
+  // ── 7. the Rust / Go sources hold no raw control character a literal may not hold ──
+  // A TS template literal that prints `'\n'` without doubling the backslash hands rustc / go a
+  // character literal holding a real line feed (or NUL), which neither compiler accepts; only
+  // CI has rustc. Every emitted library and runner is read here instead: no control character
+  // but LF and TAB anywhere, and no character literal that is a raw LF (Go, Rust) or TAB (Rust).
+  let sources = 0;
+  for (const path of PORTABLE) {
+    const g = (await import(path)).default as CstGrammar;
+    for (const [lang, target, charLit] of [['rust', rustTarget, /'[\n\t]'/], ['go', goTarget, /'\n'/]] as const) {
+      for (const [part, src] of [['library', target.emitParser(g)], ['runner', target.emitRunner?.() ?? '']] as const) {
+        sources++;
+        const ctl = src.search(/[\x00-\x08\x0b-\x1f\x7f]/);
+        if (ctl >= 0) fail(`${g.name}/${lang} ${part}: raw control character U+${src.charCodeAt(ctl).toString(16).padStart(4, '0')} near ${JSON.stringify(src.slice(Math.max(0, ctl - 40), ctl + 10))}`);
+        const m = charLit.exec(src);
+        if (m) fail(`${g.name}/${lang} ${part}: a character literal holding a raw ${JSON.stringify(m[0])} near ${JSON.stringify(src.slice(Math.max(0, m.index - 40), m.index + 10))}`);
+      }
+    }
+  }
+  console.log(`  ${sources} emitted Rust / Go sources hold no raw control character in a literal`);
 }
 
 if (failures > 0) {

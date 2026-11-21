@@ -5310,7 +5310,7 @@ fn main() {
             out.push('"');
         };
         let mut out = String::new();
-        for s in src.split('\0') {
+        for s in src.split('\\0') {
             let line = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut one = String::from("[");
                 for (i, t) in tokenize(s).iter().enumerate() {
@@ -5324,11 +5324,11 @@ fn main() {
                 Ok(l) => out.push_str(&l),
                 Err(e) => {
                     out.push('!');
-                    if let Some(m) = e.downcast_ref::<String>() { out.push_str(&m.replace('\n', " ")); }
-                    else if let Some(m) = e.downcast_ref::<&str>() { out.push_str(&m.replace('\n', " ")); }
+                    if let Some(m) = e.downcast_ref::<String>() { out.push_str(&m.replace('\\n', " ")); }
+                    else if let Some(m) = e.downcast_ref::<&str>() { out.push_str(&m.replace('\\n', " ")); }
                 }
             }
-            out.push('\n');
+            out.push('\\n');
         }
         print!("{}", out);
         return;
