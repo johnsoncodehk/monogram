@@ -221,9 +221,9 @@ const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', 
 // `export default class: T`), the further look of `export type` (tsc takes `export` as a
 // modifier there only when a member start follows `type`, so `{ export type: T }` rejects),
 // and `const` before `enum` (`{ const enum: T }`). Each needs a keyword literal (`class`,
-// `interface`, `type`, `enum`, …) in a member-position lookahead, which the highlighter
-// generators read as that keyword occurring there (it costs `interface` / `type` their
-// declaration-only scope; measured again for `export type` when type literals took modifiers).
+// `interface`, `type`, `enum`, …) in a member-position lookahead. Such a lookahead only
+// conditions what follows the modifier, and the highlighter generators read it so (a word in it
+// is not reserved: test/tm-lookahead-words.ts), so the three are owed to this grammar alone.
 const memberAhead = not(not(alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*')));
 const modifierExtra: Record<string, unknown[]> = {
   static: [],

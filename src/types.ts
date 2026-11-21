@@ -509,7 +509,12 @@ export type RuleExpr =
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
   // list in expression position is only a bare instantiation when it isn't
   // followed by something that starts an expression). Non-consuming → invisible
-  // to highlighting / AST shape / other generators.
+  // to highlighting / AST shape / other generators: no analysis that reads what a
+  // rule matches descends into `body`. Generators read a lookahead only for what it
+  // says about what FOLLOWS: the words a guard rejects alone right before the
+  // identifier token are reserved (gen-tm collectReservedWords), the `>`-led
+  // punctuators it tests (grammar-utils gtComposites), a `not(L)` before an
+  // optional `L…` (gen-treesitter's lowering).
   // `reservable`: this is the bare-identifier reserved-word guard (notReservedExpr).
   // The await-yield-fork transform, when cloning a rule into the $A/$Y/$AY family,
   // adds that family's context keyword(s) to the inner alt — so `await`/`yield` lose
