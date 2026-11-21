@@ -433,7 +433,7 @@ function stepCond(s: Step, ids: LexIdPlan, w = false): string {
     case 'ahead': return `ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
-    case 'suppress': return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = null; return _r; })()`;
+    case 'suppress': return `(() => { _suppressNext = ${s.set}; const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = 0; return _r; })()`;
   }
 }
 
@@ -801,14 +801,14 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
   };
   const BIN = `{ ${r.binary.map((b) => `${lidOf(ids, b.op)}: { lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.requireTarget}, noUnary: ${b.noUnaryLhs} }`).join(', ')} }`;
   const PRE = `{ ${r.prefix.map((p) => `${lidOf(ids, p.op)}: ${p.rbp}`).join(', ')} }`;
-  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
     const parts: string[] = [];
     if (accessTail) parts.push('!tailClosed');
     if (lbp !== null) parts.push(`${lbp} > minBp`);
     if (sameLine) parts.push('!t.nl');
     if (nll) parts.push(`!${J(nll)}.includes(headLeafText(left))`);
-    parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
-    return parts.join(' && ');
+    for (const set of suppressedIn) parts.push(`_suppressCur !== ${set}`);
+    return parts.length ? `if (${parts.join(' && ')}) ` : '';   // the `if` before the led's block; none when nothing gates it
   };
   // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the
   // relational operator) must not `break` the Pratt loop when its LED arms
@@ -830,7 +830,7 @@ ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }, j) =>
-    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
+    `      ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -854,7 +854,7 @@ const ${r.name}_PRE_TGT = new Set<number>([${r.prefix.filter((p) => p.requireTar
 const ${r.name}_POST: Record<number, number> = ${POST};
 const ${r.name}_POST_TGT = new Set<number>([${r.postfix.filter((p) => p.requireTarget).map((p) => lidOf(ids, p.op)).join(', ')}]);
 function parse${r.name}(): Node | null {
-  const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = null;
+  const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = 0;
   const r = ${r.name}_bp(0);
   _suppressCur = prev;
   return r;
@@ -949,14 +949,14 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan): string {
     } }`;
     }
   };
-  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
     const parts: string[] = [];
     if (accessTail) parts.push('!tailClosed');
     if (lbp !== null) parts.push(`${lbp} > minBp`);
     if (sameLine) parts.push('!t.nl');
     if (nll) parts.push(`!${J(nll)}.includes(headLeafTextW(left))`);
-    parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
-    return parts.join(' && ');
+    for (const set of suppressedIn) parts.push(`_suppressCur !== ${set}`);
+    return parts.length ? `if (${parts.join(' && ')}) ` : '';   // the `if` before the led's block; none when nothing gates it
   };
   // See prattRule: a lid that is BOTH a LED first-token and a binary op must
   // fall through to the binary check on LED failure instead of breaking.
@@ -977,7 +977,7 @@ ${groups.map((g) => {
   const lid = g.key as number;
   const hasBin = binLids.has(lid);
   const arms = g.members.map(({ item: b, index: i }, j) =>
-    `      if (${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)}) ${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
+    `      ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!, hasBin, j === g.members.length - 1)}`);
   return `      case ${lid}:\n${arms.join('\n')}\n        break;`;
 }).join('\n')}
     }`;
@@ -994,7 +994,7 @@ ${groups.map((g) => `      case ${g.key}:
     }${tplPart}`;
   })();
   return `function parse${r.name}W(): Frame | null {
-  const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = null;
+  const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = 0;
   const r = ${r.name}_bpW(0);
   _suppressCur = prev;
   return r;
@@ -2244,7 +2244,7 @@ function emitAstRdAltSteps(
         return `(() => { const ${nv}: unknown[] = []; return ${s.is ? '' : '!'}_shapeProbe(${nv}, _ap, () => ${emitSteps(ctx.look[s.id]!, nv)}); })()`;
       }
       case 'suppress':
-        return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${emitSteps(s.steps, sink)}); _suppressNext = null; return _r; })()`;
+        return `(() => { _suppressNext = ${s.set}; const _r = (${emitSteps(s.steps, sink)}); _suppressNext = 0; return _r; })()`;
       case 'altlit': {
         const arms = s.opts.map((o) =>
           `if (t.lid === ${lidOf(ids, o.value)}) { pos++; ${visible(s) ? `${sink}.push(${leafDropped(o.ttype, leaves) ? 'null' : J(o.value)});` : ''} return true; }`,
@@ -2923,14 +2923,14 @@ ${code}
   const ledSlot = slotOf(ps.led as { kind: string } | undefined, r.leds.length > 0);
   if (ledSlot) ctx.pratt.led += r.leds.length;
 
-  const ledGuard = (i: number, lid: number) => {
+  const ledGuard = (i: number) => {
     const parts: string[] = [];
     if (r.ledAccessTail[i]) parts.push('!tailClosed');
     if (r.ledLbp[i] !== null && r.ledLbp[i] !== undefined) parts.push(`${r.ledLbp[i]} > minBp`);
     if (r.ledSameLine[i]) parts.push('!t.nl');
     if (r.ledNotLeftLeaf[i]) parts.push(`!${J(r.ledNotLeftLeaf[i])}.includes(_shapeHeadText(left))`);
-    parts.push(`(_suppressCur === null || !_suppressCur.has(${lid}))`);
-    return parts.join(' && ');
+    for (const set of r.ledSuppressedIn[i]!) parts.push(`_suppressCur !== ${set}`);
+    return parts.length ? `if (${parts.join(' && ')}) ` : '';   // the `if` before the led's block; none when nothing gates it
   };
   // A lid that ALSO has a binary entry (`<` is both a type-arg LED and the
   // relational operator) must fall through to the binary check on LED failure
@@ -2962,7 +2962,7 @@ ${code}
         } else {
           finish = `{ const _kids = [left, ..._sk]; left = ${keepFinish('_kids', 'ledSave')} as ${retType}; leftEnd = pos > 0 ? toks[pos - 1]!.end : leftOff; }`;
         }
-        return `      if (${ledGuard(i, lid)}) {
+        return `      ${ledGuard(i)}{
         const ledSave = pos;
         const opText = _src.slice(t.off, t.end);
         const _cappedSave = _capped;
@@ -3158,7 +3158,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
   return finalize(`function parseAst${r.name}(): ${retType} | null {
   const prev = _suppressCur;
   _suppressCur = _suppressNext;
-  _suppressNext = null;
+  _suppressNext = 0;
   const r = parseAst${r.name}_bp(0);
   _suppressCur = prev;
   return r;
@@ -3207,10 +3207,10 @@ function emitShapeParseHelpers(ir: ParserIR, ids: LexIdPlan): string {
   // Shape template kids helper. CST matchTemplate is untouched (byte-identical).
   // interp: the rule that parses each hole and yields its AST — the one the matching
   // reference declares (≡ CST matchTemplate).
-  const tplHelper = tpl ? `function _shapeTplSnap(): { pos: number; capped: boolean; sn: Set<number> | null; sc: Set<number> | null } {
+  const tplHelper = tpl ? `function _shapeTplSnap(): { pos: number; capped: boolean; sn: number; sc: number } {
   return { pos, capped: _capped, sn: _suppressNext, sc: _suppressCur };
 }
-function _shapeTplRestore(s: { pos: number; capped: boolean; sn: Set<number> | null; sc: Set<number> | null }): void {
+function _shapeTplRestore(s: { pos: number; capped: boolean; sn: number; sc: number }): void {
   pos = s.pos; _capped = s.capped; _suppressNext = s.sn; _suppressCur = s.sc;
 }
 function matchTemplateAstKids(interp: () => unknown | null): { kids: unknown[]; save: number } | null {
@@ -3658,8 +3658,10 @@ let peekEnd = 0;
 let _capped = false;
 let _form = 0;   // assignment-target form of the node the last _nud/_bp call returned
 let _tail = false;   // whether the node the last _nud call returned closes the access tail
-let _suppressNext: Set<number> | null = null;
-let _suppressCur: Set<number> | null = null;
+// Indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none): the set a \`suppress\`
+// step stages for the next Pratt call, and the set in force in the current one.
+let _suppressNext = 0;
+let _suppressCur = 0;
 let _src = '';
 function peek(): Tok | null { peekEnd = pos + 1; return pos < toks.length ? toks[pos] : null; }
 // Move the position back to sp (sp <= pos), first folding the abandoned stretch's furthest peek into maxLook.

@@ -577,7 +577,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { p.suppressNext = map[uint16]bool{${s.connectors.map((c) => `${lidOf(ids, c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = nil; return _r }()`;
+    case 'suppress': return `func() bool { p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = 0; return _r }()`;
   }
 }
 
@@ -833,14 +833,14 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
   };
   const bin = r.binary.map((b) => `${lidOf(ids, b.op)}: {${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}}`).join(', ');
   const pre = r.prefix.map((p) => `${lidOf(ids, p.op)}: {${p.rbp}, ${p.requireTarget}, ${p.form}}`).join(', ');
-  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
     const parts: string[] = [];
     if (accessTail) parts.push('!tailClosed');
     if (lbp !== null) parts.push(`${lbp} > minBp`);
     if (sameLine) parts.push('!t.Nl');
     if (nll) parts.push(`!_inW([]string{${nll.map(J).join(', ')}}, p.headLeafText(left))`);
-    parts.push(`!p.suppressCur[${lid}]`);
-    return parts.join(' && ');
+    for (const set of suppressedIn) parts.push(`p.suppressCur != ${set}`);
+    return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
   };
   const ledBody = (b: Bracket, form: number, closes: boolean) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
@@ -855,7 +855,7 @@ function prattRule(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaId
 ${groups.map((g) => {
   const lid = g.key as number;
   const arms = g.members.map(({ item: b, index: i }) =>
-    `\t\t\tif ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!)}`);
+    `\t\t\t${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!)}`);
   return `\t\tcase ${lid}:\n${arms.join('\n')}`;
 }).join('\n')}
 \t\t}`;
@@ -883,7 +883,7 @@ var post_${r.name} = map[uint16]postOp{${post}}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
-\tp.suppressNext = nil
+\tp.suppressNext = 0
 \tr := p.bp_${r.name}(0)
 \tp.suppressCur = prev
 \treturn r
@@ -1501,7 +1501,7 @@ function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peekW(); return t != nil && !t.Nl }()`;
-    case 'suppress': return `func() bool { p.suppressNext = map[uint16]bool{${s.connectors.map((c) => `${lidOf(ids, c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = nil; return _r }()`;
+    case 'suppress': return `func() bool { p.suppressNext = ${s.set}; _r := (${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}); p.suppressNext = 0; return _r }()`;
   }
 }
 function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
@@ -1719,14 +1719,14 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
 \t}`;
     }
   };
-  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, lid: number) => {
+  const ledGuard = (accessTail: boolean, lbp: number | null, sameLine: boolean, nll: string[] | null, suppressedIn: number[]) => {
     const parts: string[] = [];
     if (accessTail) parts.push('!tailClosed');
     if (lbp !== null) parts.push(`${lbp} > minBp`);
     if (sameLine) parts.push('!t.Nl');
     if (nll) parts.push(`!p.nllBlockedW([]string{${nll.map(J).join(', ')}}, left)`);
-    parts.push(`!p.suppressCur[${lid}]`);
-    return parts.join(' && ');
+    for (const set of suppressedIn) parts.push(`p.suppressCur != ${set}`);
+    return parts.length ? `if ${parts.join(' && ')} ` : '';   // the `if` before the led's block; none when nothing gates it
   };
   const ledBody = (b: Bracket, form: number, closes: boolean) => `{
 \t\t\tledSave := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}
@@ -1741,7 +1741,7 @@ function prattRuleW(r: PrattRule, tpl: TplCfg | null, ids: LexIdPlan, ar: ArenaI
 ${groups.map((g) => {
   const lid = g.key as number;
   const arms = g.members.map(({ item: b, index: i }) =>
-    `\t\t\tif ${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, lid)} ${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!)}`);
+    `\t\t\t${ledGuard(r.ledAccessTail[i]!, r.ledLbp[i]!, r.ledSameLine[i]!, r.ledNotLeftLeaf[i]!, r.ledSuppressedIn[i]!)}${ledBody(b, r.ledForm[i]!, r.ledClosesTail[i]!)}`);
   return `\t\tcase ${lid}:\n${arms.join('\n')}`;
 }).join('\n')}
 \t\t}`;
@@ -1770,7 +1770,7 @@ ${groups.map((g) => `\t\tcase ${g.key}:
   return `func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
-\tp.suppressNext = nil
+\tp.suppressNext = 0
 \tr, ok := p.bpW_${r.name}(0)
 \tp.suppressCur = prev
 \treturn r, ok
@@ -1918,7 +1918,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
-\tsuppressNext, suppressCur map[uint16]bool
+\tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
 \tsrc string
 \tNodes []Node
 \tKids []int32
@@ -1929,7 +1929,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \tcapped bool
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
-\tsuppressNext, suppressCur map[uint16]bool
+\tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
 \tsrc string
 \tb Builder
 \tscratch []int32${entriesField}`;
@@ -3093,7 +3093,7 @@ type engine struct {
 \tform uint8 // assignment-target form of the node the last nud_/bp_ call returned
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsrc string
-\tsuppressNext, suppressCur map[uint16]bool
+\tsuppressNext, suppressCur uint16 // indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none)
 \tnodes []Node
 \tkids []int32
 \tscratch []int32
