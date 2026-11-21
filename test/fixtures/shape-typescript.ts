@@ -1043,6 +1043,11 @@ function tsTypeMember(ctx: TsAstCustomCtx): unknown {
   if (arm === 2) {
     const method = Array.isArray(ctx.kids[2]);
     const readonly = typeMemberModifiers(ctx.src.slice(ctx.off, ctx.end)).includes('readonly');
+    // a property's tail (inner branch 1): an optional `: T`, then an optional `= initializer`
+    if (ctx.altPath[1] === 1) {
+      const [typeAnnotation, initializer] = ctx.kids[1] as unknown[];
+      return { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: typeAnnotation ?? null, initializer: initializer ?? null, optional: ctx.src.includes('?'), readonly };
+    }
     return method
       ? { type: 'TSMethodSignature', key: ctx.kids[0], params: flatKids(ctx.kids[2]), returnType: ctx.kids[3] ?? null, optional: ctx.src.includes('?') }
       : { type: 'TSPropertySignature', key: ctx.kids[0], typeAnnotation: ctx.kids[1], optional: ctx.src.includes('?'), readonly };

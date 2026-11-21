@@ -479,14 +479,15 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
   // intervening optional `?`/group) by a literal `:` then a type-rule ref — the
   // `key (?) : Type` member shape. Those refs name the rules that occupy a key slot.
   const memberNameRules = new Set<string>();
-  // The member shape `key (?) (signature | (: Type)?)`: an alternation one of whose branches
-  // is a (possibly optional) `: <typeRef>` annotation. Only an alternation counts, so a lone
-  // optional annotation (a binding pattern's `{ a }: T`) does not make its ref a member key.
+  // The member shape `key (?) (signature | (: Type)? (= Expr)?)`: an alternation one of whose
+  // branches leads with a (possibly optional) `: <typeRef>` annotation. Only an alternation
+  // counts, so a lone optional annotation (a binding pattern's `{ a }: T`) does not make its ref
+  // a member key.
   const isAnnotation = (e: RuleExpr): boolean => {
     if (e.type === 'seq') {
       const [c, t] = e.items;
       return c?.type === 'literal' && (c as { value: string }).value === ':' && t?.type === 'ref' && typeRuleNames.has((t as { name: string }).name)
-        || (e.items.length === 1 && isAnnotation(c));
+        || (c !== undefined && isAnnotation(c));
     }
     if (e.type === 'quantifier' || e.type === 'group') return isAnnotation((e as { body: RuleExpr }).body);
     return false;
