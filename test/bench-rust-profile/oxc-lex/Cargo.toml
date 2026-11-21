@@ -1,0 +1,14 @@
+# oxc's lexer alone (oxc_parser's `benchmarking` feature makes `lexer` public). A separate crate so
+# the feature does not touch the profiled parser build. Same release profile as the profiled build.
+[package]
+name = "oxc-lex"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxc_parser = { version = "0.126.0", features = ["regular_expression", "benchmarking"] }
+oxc_allocator = "0.126.0"
+oxc_span = "0.126.0"
+
+[profile.release]
+debug = true

@@ -1,0 +1,44 @@
+name: bench rust profile
+
+# One-off profile: where monogram's emitted Rust TypeScript parser spends its instructions, next to
+# oxc (test/bench-rust-profile/run.sh; Callgrind, one parse per process). Runs only on pushes to its
+# own branch; never on master or pull requests.
+on:
+  push:
+    branches: [bench/rust-profile]
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: sudo apt-get update -q && sudo apt-get install -y -q valgrind
+
+      # perf is optional: run.sh skips it when the kernel or package does not allow it.
+      - run: sudo apt-get install -y -q linux-tools-common "linux-tools-$(uname -r)" || echo "perf not installable"
+
+      - run: npm ci
+
+      - run: test/bench-rust-profile/run.sh
+        env:
+          PROFILE_WORK: ${{ runner.temp }}/prof-work
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-profile
+          path: ${{ runner.temp }}/prof-work/out
+          if-no-files-found: warn
