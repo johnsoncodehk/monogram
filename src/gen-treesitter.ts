@@ -205,7 +205,6 @@ function collectTsSharedRules(grammar: CstGrammar): Map<string, RuleExpr> {
       case 'seq': case 'alt': e.items.forEach(walk); break;
       case 'quantifier': walk(e.body); break;
       case 'sep': walk(e.element); break;
-      case 'not': walk(e.body); break;
     }
   };
   for (const r of grammar.rules) walk(r.body);
@@ -847,7 +846,7 @@ function planTemplate(grammar: CstGrammar): TemplatePlan | null {
     switch (e.type) {
       case 'ref': if (e.hole !== undefined) holeRules.add(e.hole); return;
       case 'seq': case 'alt': e.items.forEach(walk); return;
-      case 'quantifier': case 'not': walk(e.body); return;
+      case 'quantifier': walk(e.body); return;
       case 'group': walk(e.body); if (e.tsRelaxed) walk(e.tsRelaxed); return;
       case 'sep': walk(e.element); return;
       default: return;
@@ -1969,7 +1968,7 @@ function angleTypeRules(grammar: CstGrammar): Set<string> {
       }
       e.items.forEach(walk);
     } else if (e.type === 'alt') e.items.forEach(walk);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
     else if (e.type === 'sep') walk(e.element);
   };
   for (const r of grammar.rules) walk(r.body);
@@ -2040,7 +2039,7 @@ function typeMemberRules(grammar: CstGrammar): Set<string> {
       }
       e.items.forEach(walk);
     } else if (e.type === 'alt') e.items.forEach(walk);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
     else if (e.type === 'sep') walk(e.element);
   };
   for (const r of grammar.rules) if (typeFlagged.has(r.name)) walk(r.body);
@@ -2081,7 +2080,7 @@ function hasPropertyAccess(grammar: CstGrammar, identName: string): boolean {
       }
       e.items.forEach(walk);
     } else if (e.type === 'alt') e.items.forEach(walk);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
     else if (e.type === 'sep') walk(e.element);
   };
   for (const r of grammar.rules) walk(r.body);

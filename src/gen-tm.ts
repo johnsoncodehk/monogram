@@ -1,5 +1,6 @@
 import type { CstGrammar, RuleExpr, RuleDecl, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { analyzeGrammar } from './grammar-analysis.ts';
 import {
   tokenEscapePatternSource,
   tokenBlockPatternSource,
@@ -420,7 +421,7 @@ function deriveBindingCloseBrackets(grammar: CstGrammar, identName: string | und
     if (!expr) return false;
     if (expr.type === 'ref') return expr.name === name;
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(i => directRef(i, name));
-    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'sameLine') {
       return directRef((expr as { body?: RuleExpr }).body, name);
     }
     if (expr.type === 'sep') return directRef((expr as { element: RuleExpr }).element, name);
@@ -435,7 +436,7 @@ function deriveBindingCloseBrackets(grammar: CstGrammar, identName: string | und
       for (const it of expr.items) if (it.type === 'ref') nameSubstitutes.add(it.name);
     }
     if (expr.type === 'seq' || expr.type === 'alt') for (const i of expr.items) scan(i);
-    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'sameLine') {
       scan((expr as { body?: RuleExpr }).body);
     }
     if (expr.type === 'sep') scan((expr as { element: RuleExpr }).element);
@@ -521,7 +522,7 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
     if (!expr) return;
     if (expr.type === 'seq') scanSeq(expr.items);
     if (expr.type === 'seq' || expr.type === 'alt') for (const i of expr.items) walk(i);
-    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'sameLine') {
       walk((expr as { body?: RuleExpr }).body);
     }
     if (expr.type === 'sep') walk((expr as { element: RuleExpr }).element);
@@ -536,7 +537,7 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
     if (!expr) return false;
     if (expr.type === 'ref') return !typeRuleNames.has(expr.name);
     if (expr.type === 'seq' || expr.type === 'alt') return expr.items.some(wrapsExpr);
-    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'not' || expr.type === 'sameLine') {
+    if (expr.type === 'quantifier' || expr.type === 'group' || expr.type === 'sameLine') {
       return wrapsExpr((expr as { body?: RuleExpr }).body);
     }
     if (expr.type === 'sep') return wrapsExpr((expr as { element: RuleExpr }).element);
@@ -722,25 +723,51 @@ function findTypeKeywordPatterns(
 // ── Contextual operator keyword detection ──
 
 /**
- * Collect the grammar's "always-reserved" words: the union of all literals
- * forbidden by a `not(...)` zero-width guard. These guards encode positions
- * where a reserved word may not stand in for an identifier (binding name,
- * shorthand property, expression NUD). A word that appears in NO such guard is
- * never reserved by the grammar, i.e. it is a valid identifier somewhere.
+ * Collect the grammar's reserved words: the words some `not(...)` guard excludes from the
+ * identifier token (`[not(alt('class', …)), Ident]` — binding name, shorthand property,
+ * expression NUD). A word no guard excludes from it is never reserved by the grammar, i.e. it
+ * is a valid identifier somewhere.
+ *
+ * A lookahead consumes nothing: what it holds says what may FOLLOW its position, not what is
+ * matched there. So a guard excludes a word from the identifier only when both hold:
+ *   - it rejects the one token `w` whatever comes after it: `w` is the guard's body or an
+ *     alternative of it. `not(['type', not(Ident)])` rejects `type` only before a non-name,
+ *     and `not(not(w))` requires `w`, so neither excludes `type` / `w`;
+ *   - what follows the guard can begin with the identifier token (its FIRST set, read from
+ *     grammar-analysis; a continuation that can end the rule counts as reaching it, since the
+ *     caller's next item is not looked at). `'export' not('default') '{'` only says which
+ *     token follows `export`.
+ * Guards nested in a guard's body are conditions of that lookahead, never exclusions at a
+ * consumed position, so they are not visited.
  *
  * Language-agnostic: reads only the `not` AST nodes, never specific words.
  */
 function collectReservedWords(grammar: CstGrammar): Set<string> {
   const reserved = new Set<string>();
-  // Only a literal under an ODD number of guards is forbidden: `not(… not(w) …)` requires `w`.
-  function walk(e: RuleExpr, forbidden: boolean): void {
-    if (e.type === 'literal') { if (forbidden && isKeywordLiteral(e.value)) reserved.add(e.value); return; }
-    if (e.type === 'seq' || e.type === 'alt') e.items.forEach(i => walk(i, forbidden));
-    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body, forbidden);
-    else if (e.type === 'not') walk(e.body, !forbidden);
-    else if (e.type === 'sep') walk(e.element, forbidden);
+  const identToken = grammar.tokens.find(t => t.identifier);
+  if (!identToken) return reserved;
+  const ident = identToken.name;
+  const { exprFirst, exprNullable } = analyzeGrammar(grammar);
+  const rejectedAlone = (e: RuleExpr): void => {
+    if (e.type === 'literal') { if (isKeywordLiteral(e.value)) reserved.add(e.value); }
+    else if (e.type === 'alt') e.items.forEach(rejectedAlone);
+    else if (e.type === 'group') rejectedAlone(e.body);
+    else if (e.type === 'seq' && e.items.length === 1) rejectedAlone(e.items[0]);
+  };
+  // `next`: the items that follow `e` inside its rule, in order.
+  function walk(e: RuleExpr, next: RuleExpr[]): void {
+    if (e.type === 'seq') e.items.forEach((item, i) => walk(item, [...e.items.slice(i + 1), ...next]));
+    else if (e.type === 'alt') e.items.forEach(i => walk(i, next));
+    else if (e.type === 'quantifier') walk(e.body, e.kind === '?' ? next : [{ type: 'quantifier', kind: '*', body: e.body }, ...next]);
+    else if (e.type === 'group') walk(e.body, next);
+    else if (e.type === 'sep') walk(e.element, next);
+    else if (e.type === 'not') {
+      const rest: RuleExpr = { type: 'seq', items: next };
+      const first = exprFirst(rest);
+      if (first === null || first.has(ident) || exprNullable(rest)) rejectedAlone(e.body);
+    }
   }
-  for (const rule of grammar.rules) walk(rule.body, false);
+  for (const rule of grammar.rules) walk(rule.body, []);
   return reserved;
 }
 
@@ -839,7 +866,7 @@ function findContextualAccessibilityModifiers(grammar: CstGrammar): Set<string> 
       }
       e.items.forEach(walk);
     } else if (e.type === 'alt') e.items.forEach(walk);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
     else if (e.type === 'sep') walk(e.element);
   };
   for (const r of grammar.rules) walk(r.body);
@@ -957,7 +984,7 @@ function detectJsx(grammar: CstGrammar): JsxInfo | null {
       }
     }
     if (e.type === 'seq' || e.type === 'alt') e.items.forEach(walk);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
     else if (e.type === 'sep') walk(e.element);
   };
   for (const rule of grammar.rules) walk(rule.body);
@@ -3446,7 +3473,7 @@ export function valuePositions(grammar: CstGrammar): ValuePosition[] | null {
     const containsAlt = (x: RuleExpr, vseen: Set<string>): boolean =>
       x.type === 'alt' ? true
       : x.type === 'seq' ? x.items.some(it => containsAlt(it, vseen))
-      : x.type === 'quantifier' || x.type === 'group' || x.type === 'not' ? containsAlt(x.body, vseen)
+      : x.type === 'quantifier' || x.type === 'group' ? containsAlt(x.body, vseen)
       : x.type === 'sep' ? containsAlt(x.element, vseen)
       : x.type === 'ref' ? (vseen.has(x.name) ? false : (vseen.add(x.name), (() => { const r = ruleByName.get(x.name); return r ? containsAlt(r.body, vseen) : false; })()))
       : false;
@@ -3459,7 +3486,7 @@ export function valuePositions(grammar: CstGrammar): ValuePosition[] | null {
         return x.items.some(walk);
       }
       if (x.type === 'alt') return x.items.some(walk);
-      if (x.type === 'quantifier' || x.type === 'group' || x.type === 'not') return walk(x.body);
+      if (x.type === 'quantifier' || x.type === 'group') return walk(x.body);
       if (x.type === 'sep') return walk(x.element);
       if (x.type === 'ref') { if (seen.has(x.name)) return false; seen.add(x.name); const r = ruleByName.get(x.name); return r ? walk(r.body) : false; }
       return false;
@@ -3479,7 +3506,7 @@ export function valuePositions(grammar: CstGrammar): ValuePosition[] | null {
       }
       e.items.forEach(visit);
     } else if (e.type === 'alt') e.items.forEach(visit);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') visit(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') visit(e.body);
     else if (e.type === 'sep') visit(e.element);
   };
   for (const r of grammar.rules) visit(r.body);
@@ -3535,7 +3562,7 @@ function detectFold(grammar: CstGrammar): { hasDeeper: boolean; hasSameColumn: b
   const refsLeaf = (e: RuleExpr): boolean =>
     e.type === 'ref' ? leafNames.has(e.name)
     : e.type === 'seq' || e.type === 'alt' ? e.items.some(refsLeaf)
-    : e.type === 'quantifier' || e.type === 'group' || e.type === 'not' ? refsLeaf(e.body)
+    : e.type === 'quantifier' || e.type === 'group' ? refsLeaf(e.body)
     : e.type === 'sep' ? refsLeaf(e.element)
     : false;
   const isRefTo = (e: RuleExpr, name: string): boolean => e.type === 'ref' && e.name === name;
@@ -3548,7 +3575,7 @@ function detectFold(grammar: CstGrammar): { hasDeeper: boolean; hasSameColumn: b
       }
       e.items.forEach(visit);
     } else if (e.type === 'alt') e.items.forEach(visit);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') visit(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') visit(e.body);
     else if (e.type === 'sep') visit(e.element);
   };
   for (const r of grammar.rules) visit(r.body);
@@ -3578,7 +3605,7 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
       }
       e.items.forEach(visit);
     } else if (e.type === 'alt') e.items.forEach(visit);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') visit(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') visit(e.body);
     else if (e.type === 'sep') visit(e.element);
   };
   for (const r of grammar.rules) visit(r.body);
@@ -3634,7 +3661,7 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
   const containsAlt = (e: RuleExpr): boolean =>
     e.type === 'alt' ? true
     : e.type === 'seq' ? e.items.some(containsAlt)
-    : e.type === 'quantifier' || e.type === 'group' || e.type === 'not' ? containsAlt(e.body)
+    : e.type === 'quantifier' || e.type === 'group' ? containsAlt(e.body)
     : e.type === 'sep' ? containsAlt(e.element)
     : false;
   const seqHasAltLater = (items: RuleExpr[], from: number): boolean => {
@@ -3654,7 +3681,7 @@ function detectExplicitKey(grammar: CstGrammar): { indicator: string; keyScope: 
       }
       e.items.forEach(findPrefix);
     } else if (e.type === 'alt') e.items.forEach(findPrefix);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') findPrefix(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') findPrefix(e.body);
     else if (e.type === 'sep') findPrefix(e.element);
   };
   for (const r of grammar.rules) findPrefix(r.body);
@@ -3711,7 +3738,7 @@ function detectBlockSequence(grammar: CstGrammar): { indicator: string } | null 
       }
       e.items.forEach(visit);
     } else if (e.type === 'alt') e.items.forEach(visit);
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') visit(e.body);
+    else if (e.type === 'quantifier' || e.type === 'group') visit(e.body);
     else if (e.type === 'sep') visit(e.element);
   };
   for (const r of grammar.rules) visit(r.body);
@@ -3770,7 +3797,7 @@ function detectFlowCollections(grammar: CstGrammar): {
   const allRefs = (e: RuleExpr, out: Set<string>): void => {
     if (e.type === 'ref') out.add(e.name);
     else if (e.type === 'seq' || e.type === 'alt') e.items.forEach(x => allRefs(x, out));
-    else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') allRefs(e.body, out);
+    else if (e.type === 'quantifier' || e.type === 'group') allRefs(e.body, out);
     else if (e.type === 'sep') allRefs(e.element, out);
   };
   const ruleByName = new Map(grammar.rules.map(r => [r.name, r] as const));
@@ -6293,7 +6320,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
       switch (e.type) {
         case 'ref': if (literalTokenNames.has(e.name)) found = true; return;
         case 'seq': case 'alt': e.items.forEach(walk); return;
-        case 'quantifier': case 'group': case 'not': walk(e.body); return;
+        case 'quantifier': case 'group': walk(e.body); return;
         case 'sep': walk(e.element); return;
       }
     };
@@ -6446,7 +6473,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         }
       } else if (e.type === 'alt') {
         for (const it of e.items) walk(it, underBracket);
-      } else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') {
+      } else if (e.type === 'quantifier' || e.type === 'group') {
         walk(e.body, underBracket);
       } else if (e.type === 'sep') {
         walk(e.element, underBracket);
@@ -7392,7 +7419,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
           walk(it);
         }
       } else if (e.type === 'alt') e.items.forEach(walk);
-      else if (e.type === 'quantifier' || e.type === 'group' || e.type === 'not') walk(e.body);
+      else if (e.type === 'quantifier' || e.type === 'group') walk(e.body);
       else if (e.type === 'sep') walk(e.element);
     };
     for (const r of grammar.rules) walk(r.body);

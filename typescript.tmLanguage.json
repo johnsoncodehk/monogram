@@ -178,6 +178,9 @@
       "include": "#scope-keyword-control-loop"
     },
     {
+      "include": "#scope-keyword-control-loop-of"
+    },
+    {
       "include": "#scope-keyword-control-export"
     },
     {
@@ -2576,7 +2579,11 @@
       "name": "storage.type.function.ts"
     },
     "scope-keyword-control-loop": {
-      "match": "\\b(in|for|while|do|break|continue|of)\\b",
+      "match": "\\b(in|for|while|do|break|continue)\\b",
+      "name": "keyword.control.loop.ts"
+    },
+    "scope-keyword-control-loop-of": {
+      "match": "\\b(of)\\b(?=\\s+[[:alpha:][:digit:]_$\"`({\\[\\-]|\\s*$|\\s*[({\\[\"`/\\-])",
       "name": "keyword.control.loop.ts"
     },
     "scope-storage-type-property": {
