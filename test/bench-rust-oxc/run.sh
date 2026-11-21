@@ -18,6 +18,12 @@ B_SHA=$(git rev-parse 2632c2c)
 D_SHA=$(git rev-parse origin/master)
 VARIANTS="A:cbb58a0 P:0990a37 Q:103b396 B:$B_SHA"
 [ "$D_SHA" != "$B_SHA" ] && VARIANTS="$VARIANTS D:$D_SHA"
+# BENCH_EXTRA=<commit>: one more variant E (e.g. a pull request's head, to compare with D = master);
+# BENCH_ONLY=1 then drops A/P/Q so the job is shorter.
+if [ -n "${BENCH_EXTRA:-}" ]; then
+  [ -n "${BENCH_ONLY:-}" ] && VARIANTS="B:$B_SHA D:$D_SHA"
+  VARIANTS="$VARIANTS E:$(git rev-parse "$BENCH_EXTRA")"
+fi
 
 echo "=== environment"
 lscpu | grep -E '^(Model name|Architecture|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|Socket\(s\)|L2 cache|L3 cache|CPU max MHz)' || true
