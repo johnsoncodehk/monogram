@@ -463,6 +463,18 @@ const CASES: Case[] = [
       // `async` is a modifier like the others, so it also precedes a field; the line rule holds for it too.
       'class C { async x; }', 'class C { static async x = 1; }', 'class C { async public\nx() {} }', 'class C { static async static\nx = 1; }',
       'x = { static: 1, public() {}, get: 2 };', 'x = { public static x() {}, static get y() { return 1; } };',
+      // An object-literal member's run is one list, `async` one of its words, and every member
+      // follows every run: an accessor, a `*` method, a method, a value, a shorthand. A method or
+      // accessor ends as a function declaration does, with a block or none. An accessor's body
+      // is never [Await], a method's is after a run that holds `async`.
+      'x = { static async m() {} };', 'x = { static async *g() {} };', 'x = { async static *g() {} };', 'x = { async async m() {} };',
+      'x = { public async static m() {} };', 'x = { async x: 1 };', 'x = { async x };', 'x = { static async };', 'x = { async async };',
+      'x = { static x };', 'x = { static x = 1 };', 'x = { static x? };', 'x = { static x! };', 'x = { public x?! = 1 };',
+      'x = { m() };', 'x = { m(): T };', 'x = { m(); };', 'x = { m();, n: 1 };', 'x = { m()\n, n: 1 };', 'x = { static async m(): T\n};',
+      'x = { *g() };', 'x = { get x() };', 'x = { get x<T>() {} };', 'x = { async get x() { await = 1 } };', 'x = { static m() { await = 1 } };',
+      // A computed name holds an Expression, a comma list included, in every member list.
+      'x = { static [a, b]: 1 };', 'x = { [a, b]() {} };', 'x = { static *[a, b]() {} };', 'x = { get [a, b]() {} };',
+      'class C { [1, 2]() {} }', 'interface I { [a.b, c](): T }', 'enum E { [1, 2] = 1 }',
       // `defer` leads the deferred import and is a default import's name (the emitted parsers
       // rejected these while ImportClause's alternatives were dispatched on the word; see wordjs).
       'import defer from "m";', 'import defer, { a } from "m";', 'import defer, * as ns from "m";', 'import defer * as ns from "m";',
@@ -617,6 +629,15 @@ const CASES: Case[] = [
       // One `static` per member, on either side of `async`; a field's `!` sits on its line.
       'class C { static\nstatic x = 1; }', 'class C { static async static x = 1; }', 'class C { async static static x() {} }',
       'x = { static static x: 1 };', 'class C { x\n!: T; }', 'class C { async public\n!: T; }',
+      'x = { static async static m() {} };', 'x = { async static static m() {} };', 'x = { static static async m() {} };',
+      // An object-literal member: `async` on its line before the name; a shorthand is a
+      // non-reserved identifier, alone; a method or accessor without a body ends as a statement
+      // does, before a `,` only past a line break; `await` is the operator in an async method.
+      'x = { static async\nm() {} };', 'x = { async\nx: 1 };', 'x = { async *g };', 'x = { static class };', 'x = { async class };',
+      'x = { static [a, b] };', 'x = { [a, b] };', 'x = { [a,]: 1 };', 'x = { a!? };', 'x = { static a!? };', 'x = { static async x y };',
+      'x = { m(), n: 1 };', 'x = { m(); n: 1 };', 'x = { get x(), y: 1 };', 'x = { m() n() };',
+      'x = { static async m() { await; } };', 'x = { async static m() { await = 1 } };', 'x = { static async *g() { await; } };',
+      'x = { public async m() { await = 1 } };',
       // Two members on one line need a separator: a body-less method, accessor or constructor
       // ends as a statement does; a type member ends in `,`, `;`, a line break or `}`.
       'class C { m() n() }', 'class C { foo() x; }', 'class C { m(): void m() {} }', 'class C { get g() set s(v) {} }',

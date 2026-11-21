@@ -65,6 +65,8 @@ const CONSTRUCTS: Record<string, (d: number) => string> = {
   'object property function': (d) => nest(d, (i) => `const o${i} = { m${i}: function () {`, '} };'),
   'object property arrow': (d) => nest(d, (i) => `const o${i} = { m${i}: () => {`, '} };'),
   'object literal': (d) => `const o = ${wrap(d, '{ a: ', ' }', '1')};\n`,
+  'object computed key': (d) => `const o = ${wrap(d, '{ [k]: ', ' }', '1')};\n`,
+  'object modified async method': (d) => nest(d, (i) => `const o${i} = { public static async m${i}() {`, '} };'),
   'array literal': (d) => `const o = ${wrap(d, '[', ']', '1')};\n`,
   'parentheses': (d) => `const o = ${wrap(d, '(', ')', '1')};\n`,
   'call arguments': (d) => `${wrap(d, 'f(', ')', '1')};\n`,

@@ -886,7 +886,7 @@ async function main(): Promise<void> {
     if (bindAlt('estreeBindingProperty', 'const { a } = o;', [1], [0])) altNegOk++;
     if (bindAlt('estreeBindingProperty', 'const { x: y } = o;', [0], [1])) altNegOk++;
     if (bindAlt('estreeSwitchCase', 'switch(0){case 1:x;}', [0], [1])) altNegOk++;
-    if (bindAlt('estreeProp', '({ a, b: 1 });', [5], [3])) altNegOk++;
+    if (bindAlt('estreeProp', '({ a, b: 1 });', [1], [0])) altNegOk++;
     check(altNegOk >= 4, `typescript alt identity counterexamples ${altNegOk}/4`);
     let ledNegOk = 0;
     if (bindAlt('estreeExprLed', 'a.b;', [3], [2])) ledNegOk++;

@@ -465,7 +465,7 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("MemberName", 3, &SC_MEMBERNAME3),
         ("MemberName", 8, &SC_MEMBERNAME8),
         ("Property", 0, &SC_PROP0),
-        ("Property", 5, &SC_PROP11),
+        ("Property", 1, &SC_PROP_SHORTHAND),
         ("FunctionExpression", 0, &SC_FUNCEXPR),
         ("ArrayPattern", 1, &SC_ARRAYPATTERN),
         ("ObjectPattern", 0, &SC_OBJECTPATTERN),
@@ -553,7 +553,7 @@ const SC_VARDECL: Schema = Schema {
 
 const SC_VARDECLARATOR: Schema = Schema {
     estree: "VariableDeclarator", no_type: false,
-    kids: &["Type", "Identifier", "BinaryExpression", "CallExpression", "MemberExpression", "SequenceExpression", "TemplateLiteral", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TaggedTemplateExpression", "MetaProperty", "ClassExpression", "FunctionExpression", "SpreadElement", "RestElement", "Type", "TSTypeReference", "TSTypeParameterDeclaration", "ObjectPattern", "ArrayPattern", "UnknownKid", "Property", "AssignmentPatternOrId"],
+    kids: &["Type", "Identifier", "BinaryExpression", "CallExpression", "MemberExpression", "SequenceExpression", "TemplateLiteral", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TaggedTemplateExpression", "MetaProperty", "ClassExpression", "FunctionExpression", "SpreadElement", "RestElement", "Type", "TSTypeReference", "TSTypeParameterDeclaration", "ObjectPattern", "ArrayPattern", "UnknownKid", "Property", "ObjectMember", "AssignmentPatternOrId"],
     any_kids: false,
     fields: &[
         FSpec { name: "id", v: VSpec::DeclaratorId },
@@ -605,7 +605,7 @@ const SC_TYPE: Schema = Schema {
 
 const SC_FUNCDECL: Schema = Schema {
     estree: "FunctionDeclaration", no_type: false,
-    kids: &["TSTypeParameterDeclaration", "Identifier", "BlockStatement", "Type", "TSTypeReference", "BinaryExpression", "CallExpression", "SequenceExpression", "MemberExpression", "ArrowFunctionExpression", "IfStatement", "ForStatement", "ForOfStatement", "AssignmentExpression", "LogicalExpression", "UnaryExpression", "UpdateExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "TaggedTemplateExpression", "TemplateLiteral", "ClassExpression", "FunctionExpression", "Property", "SpreadElement", "MetaProperty", "RestElement", "ObjectPattern", "ArrayPattern", "AssignmentPatternOrId", "UnknownKid", "ExpressionStatement"],
+    kids: &["TSTypeParameterDeclaration", "Identifier", "BlockStatement", "Type", "TSTypeReference", "BinaryExpression", "CallExpression", "SequenceExpression", "MemberExpression", "ArrowFunctionExpression", "IfStatement", "ForStatement", "ForOfStatement", "AssignmentExpression", "LogicalExpression", "UnaryExpression", "UpdateExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "TaggedTemplateExpression", "TemplateLiteral", "ClassExpression", "FunctionExpression", "Property", "ObjectMember", "SpreadElement", "MetaProperty", "RestElement", "ObjectPattern", "ArrayPattern", "AssignmentPatternOrId", "UnknownKid", "ExpressionStatement"],
     any_kids: false,
     fields: &[
         FSpec { name: "async", v: VSpec::Flag(false) },
@@ -728,7 +728,7 @@ const SC_CLASSBODY: Schema = Schema {
 
 const SC_METHODDEF: Schema = Schema {
     estree: "MethodDefinition", no_type: false,
-    kids: &["MemberName", "FunctionExpression", "BlockStatement", "Identifier", "Type", "Decorator", "UnknownKid", "SequenceExpression", "BinaryExpression", "CallExpression", "MemberExpression", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TaggedTemplateExpression", "TemplateLiteral", "MetaProperty", "ClassExpression", "SpreadElement", "RestElement", "ObjectPattern", "ArrayPattern", "AssignmentPatternOrId", "Property"],
+    kids: &["MemberName", "FunctionExpression", "BlockStatement", "Identifier", "Type", "Decorator", "UnknownKid", "SequenceExpression", "BinaryExpression", "CallExpression", "MemberExpression", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TaggedTemplateExpression", "TemplateLiteral", "MetaProperty", "ClassExpression", "SpreadElement", "RestElement", "ObjectPattern", "ArrayPattern", "AssignmentPatternOrId", "Property", "ObjectMember"],
     any_kids: false,
     fields: &[
         FSpec { name: "kind", v: VSpec::Const("method") },
@@ -1004,7 +1004,7 @@ const SC_DEBUGGER: Schema = Schema {
 
 const SC_FUNCDECL_GEN: Schema = Schema {
     estree: "FunctionDeclaration", no_type: false,
-    kids: &["TSTypeParameterDeclaration", "Identifier", "BlockStatement", "Type", "TSTypeReference", "BinaryExpression", "CallExpression", "SequenceExpression", "MemberExpression", "ArrowFunctionExpression", "IfStatement", "ForStatement", "ForOfStatement", "AssignmentExpression", "LogicalExpression", "UnaryExpression", "UpdateExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "TaggedTemplateExpression", "TemplateLiteral", "ClassExpression", "FunctionExpression", "Property", "SpreadElement", "MetaProperty", "RestElement", "UnknownKid", "ExpressionStatement"],
+    kids: &["TSTypeParameterDeclaration", "Identifier", "BlockStatement", "Type", "TSTypeReference", "BinaryExpression", "CallExpression", "SequenceExpression", "MemberExpression", "ArrowFunctionExpression", "IfStatement", "ForStatement", "ForOfStatement", "AssignmentExpression", "LogicalExpression", "UnaryExpression", "UpdateExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "TaggedTemplateExpression", "TemplateLiteral", "ClassExpression", "FunctionExpression", "Property", "ObjectMember", "SpreadElement", "MetaProperty", "RestElement", "UnknownKid", "ExpressionStatement"],
     any_kids: false,
     fields: &[
         FSpec { name: "async", v: VSpec::Flag(true) },
@@ -1019,7 +1019,7 @@ const SC_FUNCDECL_GEN: Schema = Schema {
 
 const SC_FUNCDECL_AG: Schema = Schema {
     estree: "FunctionDeclaration", no_type: false,
-    kids: &["TSTypeParameterDeclaration", "Identifier", "BlockStatement", "Type", "TSTypeReference", "BinaryExpression", "CallExpression", "SequenceExpression", "MemberExpression", "ArrowFunctionExpression", "IfStatement", "ForStatement", "ForOfStatement", "AssignmentExpression", "LogicalExpression", "UnaryExpression", "UpdateExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "TaggedTemplateExpression", "TemplateLiteral", "ClassExpression", "FunctionExpression", "Property", "SpreadElement", "MetaProperty", "RestElement", "UnknownKid", "ExpressionStatement"],
+    kids: &["TSTypeParameterDeclaration", "Identifier", "BlockStatement", "Type", "TSTypeReference", "BinaryExpression", "CallExpression", "SequenceExpression", "MemberExpression", "ArrowFunctionExpression", "IfStatement", "ForStatement", "ForOfStatement", "AssignmentExpression", "LogicalExpression", "UnaryExpression", "UpdateExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "TaggedTemplateExpression", "TemplateLiteral", "ClassExpression", "FunctionExpression", "Property", "ObjectMember", "SpreadElement", "MetaProperty", "RestElement", "UnknownKid", "ExpressionStatement"],
     any_kids: false,
     fields: &[
         FSpec { name: "async", v: VSpec::Flag(true) },
@@ -1337,7 +1337,7 @@ const SC_SEQ11: Schema = Schema {
 
 const SC_SEQ14: Schema = Schema {
     estree: "__parengroup__", no_type: false,
-    kids: &["BlockStatement", "ArrowFunctionExpression", "ClassExpression", "SequenceExpression", "FunctionExpression", "Identifier", "CallExpression", "MemberExpression", "BinaryExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "UnaryExpression", "UpdateExpression", "TemplateLiteral", "TSAsExpression", "TSNonNullExpression", "TSInstantiationExpression", "TSSatisfiesExpression", "UnknownKid", "Property", "TaggedTemplateExpression", "MetaProperty", "SpreadElement", "RestElement"],
+    kids: &["BlockStatement", "ArrowFunctionExpression", "ClassExpression", "SequenceExpression", "FunctionExpression", "Identifier", "CallExpression", "MemberExpression", "BinaryExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "UnaryExpression", "UpdateExpression", "TemplateLiteral", "TSAsExpression", "TSNonNullExpression", "TSInstantiationExpression", "TSSatisfiesExpression", "UnknownKid", "Property", "ObjectMember", "TaggedTemplateExpression", "MetaProperty", "SpreadElement", "RestElement"],
     any_kids: false,
     fields: &[],
 };
@@ -1643,7 +1643,7 @@ const SC_ARRAYPATTERN: Schema = Schema {
 
 const SC_OBJECTPATTERN: Schema = Schema {
     estree: "ObjectPattern", no_type: false,
-    kids: &["Property", "RestElement", "AssignmentPatternOrId"],
+    kids: &["Property", "ObjectMember", "RestElement", "AssignmentPatternOrId"],
     any_kids: false,
     fields: &[
         FSpec { name: "properties", v: VSpec::Kids },
@@ -1847,7 +1847,7 @@ const SC_TSACCESSORSIG: Schema = Schema {
 // A property signature: its key, `: T` and `= initializer` (any expression).
 const SC_TSPROPSIG: Schema = Schema {
     estree: "TSPropertySignature", no_type: false,
-    kids: &["MemberName", "Type", "Identifier", "BinaryExpression", "CallExpression", "MemberExpression", "SequenceExpression", "TemplateLiteral", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TaggedTemplateExpression", "MetaProperty", "ClassExpression", "FunctionExpression", "TSTypeReference", "UnknownKid", "Property"],
+    kids: &["MemberName", "Type", "Identifier", "BinaryExpression", "CallExpression", "MemberExpression", "SequenceExpression", "TemplateLiteral", "UnaryExpression", "UpdateExpression", "LogicalExpression", "AssignmentExpression", "ConditionalExpression", "TSAsExpression", "TSNonNullExpression", "TSSatisfiesExpression", "TSInstantiationExpression", "ArrowFunctionExpression", "TaggedTemplateExpression", "MetaProperty", "ClassExpression", "FunctionExpression", "TSTypeReference", "UnknownKid", "Property", "ObjectMember"],
     any_kids: false,
     fields: &[
         FSpec { name: "key", v: VSpec::KidByTag("MemberName") },
@@ -1898,7 +1898,7 @@ const SC_UNKNOWNKID13: Schema = Schema {
 
 const SC_UNKNOWNKID12: Schema = Schema {
     estree: "SequenceExpression", no_type: false,
-    kids: &["Property", "MemberName", "BlockStatement", "AssignmentPatternOrId"],
+    kids: &["Property", "ObjectMember", "MemberName", "BlockStatement", "AssignmentPatternOrId"],
     any_kids: false,
     fields: &[
         FSpec { name: "expressions", v: VSpec::Kids },
@@ -2240,13 +2240,12 @@ fn type_member_is_sig(src: &str, off: u32, end: u32) -> bool {
     false
 }
 
-enum PropRunMember { Accessor, Generator, Method, Value, BindingShorthand }
-/// Which member a `(Property, 1)` event holds, from its tokens outside a computed name
-/// (`[` ... `]`). Two rules share the key: Prop's modifier-run arm, where a `:` before any
-/// `(` / `<` is a value property's, a `*` a generator's, and a `get` / `set` that a name follows
-/// an accessor's (`get x()`, `get [k]()`, where `get()`, `get<T>()` and `get?()` are methods
-/// named `get`); and BindingProperty's shorthand (`a`, `a = f(x)`), which has none of these
-/// before its `=` or its end.
+enum PropRunMember { Accessor, Generator, Method, Value, Shorthand }
+/// Which member an `(ObjectMember, 1)` event (Prop's modifier-run arm) holds, from its tokens
+/// outside a computed name (`[` ... `]`): a `:` before any `(` / `<` is a value property's, a `*`
+/// a generator's, and a `get` / `set` that a name follows an accessor's (`get x()`, `get [k]()`,
+/// where `get()`, `get<T>()` and `get?()` are methods named `get`); a shorthand (`a`, `a = f(x)`)
+/// has none of these before its `=` or its end.
 fn prop_run_member(text: &str) -> PropRunMember {
     let mut depth = 0i32;
     let mut after_get_set = false;
@@ -2254,7 +2253,7 @@ fn prop_run_member(text: &str) -> PropRunMember {
         let tok = &text[t.off as usize..t.end as usize];
         if depth == 0 {
             match tok {
-                "=" => return PropRunMember::BindingShorthand,
+                "=" => return PropRunMember::Shorthand,
                 ":" => return PropRunMember::Value,
                 "*" => return PropRunMember::Generator,
                 "(" | "<" => return PropRunMember::Method,
@@ -2270,7 +2269,7 @@ fn prop_run_member(text: &str) -> PropRunMember {
             _ => {}
         }
     }
-    PropRunMember::BindingShorthand
+    PropRunMember::Shorthand
 }
 
 fn sep_after(src: &str, off: u32, end: u32, sep: &str) -> Option<u32> {
@@ -3635,14 +3634,14 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
         }
         ("Type", 5) => { if text.starts_with('(') { &SC_TYPE_PAREN } else { &SC_TSINDEXED5 } }
         ("Type", 6) => { if text.starts_with('[') { &SC_TYPE_TUPLE } else { &SC_TSTYPEREF_DOT } }
-        // Prop's modifier-run arm (an accessor, a `*` method, a method or a value property) or
-        // BindingProperty's shorthand.
-        ("Property", 1) => match prop_run_member(text) {
+        // Prop's modifier-run arm: an accessor, a `*` method, a method, a value property or a
+        // shorthand.
+        ("ObjectMember", 1) => match prop_run_member(text) {
             PropRunMember::Accessor => &SC_PROP_GETSET,
             PropRunMember::Method => &SC_PROP7,
             PropRunMember::Value => &SC_PROP9,
-            PropRunMember::BindingShorthand => &SC_PROP_SHORTHAND,
-            PropRunMember::Generator => panic!("no schema for (Property, 1) `*` method"),
+            PropRunMember::Shorthand => &SC_PROP11,
+            PropRunMember::Generator => panic!("no schema for (ObjectMember, 1) `*` method"),
         },
         ("MethodDefinition", 2) => {
             let ts = text.trim_start();
