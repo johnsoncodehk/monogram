@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # Before / after of perf/lexer-char-decode-linear: A = origin/master 36287f5, M = its head.
-          PROFILE_A: 36287f59f681b88567af2b315e5ac00a2e45ed6c
-          PROFILE_M: 1ffd0c54281ac792ef13ccde5225f081249c17f2
+          # Before / after of perf/lexer-char-decode-linear: A = origin/master ed23c51, M = its head.
+          PROFILE_A: ed23c51f694c79bf46978c5459590eea94f947a2
+          PROFILE_M: a88c486c28c7dd2430d2f4bb577f11345b457a2d
 
       - uses: actions/upload-artifact@v4
         if: always()
