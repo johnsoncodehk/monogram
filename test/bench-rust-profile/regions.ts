@@ -24,13 +24,17 @@ let total = 0;
 {
   let ob = '', fl = '', fi = '', fn = '';
   let callPending = false;
+  // REGIONS_EVENT (e.g. Bcm, D1mr) selects another event column of a simulation profile; default Ir.
+  const want = process.env.REGIONS_EVENT || 'Ir';
+  let col = 0;
   const agg = new Map<string, Cost>();
   for (const raw of readFileSync(cgFile, 'utf8').split('\n')) {
     const line = raw.trimEnd();
     if (!line) continue;
     const c0 = line.charCodeAt(0);
     if (c0 >= 48 && c0 <= 57) {
-      const [pos, ir] = line.split(' ').map(Number);
+      const parts = line.split(' ');
+      const pos = Number(parts[0]), ir = Number(parts[1 + col] || 0);
       if (callPending) { callPending = false; continue; } // inclusive cost of a call, not self
       const file = fi || fl;
       const key = ob + '\0' + fn + '\0' + file + '\0' + pos;
@@ -38,9 +42,14 @@ let total = 0;
       if (e) e.ir += ir || 0; else agg.set(key, { obj: ob, fn, file, line: pos, ir: ir || 0 });
       continue;
     }
+    if (line.startsWith('events:')) {
+      col = line.slice(7).trim().split(/\s+/).indexOf(want);
+      if (col < 0) throw new Error(`event ${want} not in ${line}`);
+      continue;
+    }
     const eq = line.indexOf('=');
     if (eq < 0) {
-      if (line.startsWith('totals:') || line.startsWith('summary:')) total = Math.max(total, Number(line.split(/\s+/)[1]));
+      if (line.startsWith('totals:') || line.startsWith('summary:')) total = Math.max(total, Number(line.split(/\s+/)[1 + col] || 0));
       continue;
     }
     const k = line.slice(0, eq), v = line.slice(eq + 1);
@@ -210,7 +219,11 @@ for (const c of costs) {
   if (lc && !isStd(c.file) && !/main\.rs$/.test(c.file)) { add(phase, lc, c.ir); add(srcFn, `[libc] ${c.fn}`, c.ir); continue; }
   if (kind === 'mono') {
     const sc = monoSymClass(c.fn);
-    if (c.file.endsWith(mainBase)) {
+    if (c.file.endsWith(mainBase) && c.line === 0) {
+      // DWARF line 0: compiler-generated code with no source line (spills, moves, merged tails).
+      add(phase, `main.rs line 0 (no source line) in ${sc}`, c.ir);
+      add(srcFn, `[line 0] in ${sc}`, c.ir);
+    } else if (c.file.endsWith(mainBase)) {
       const o = owners[c.line] || { fn: '?', ctx: '' };
       const cl = monoClass(o, c.line, lexEnd);
       add(phase, cl, c.ir);
@@ -242,7 +255,7 @@ for (const c of costs) {
   }
 }
 console.log(`REGIONS ${kind} ${cgFile}`);
-console.log(`total Ir (callgrind totals) ${fmt(total)}; sum of self costs read ${fmt(selfSum)}`);
+console.log(`event ${process.env.REGIONS_EVENT || 'Ir'}: total (callgrind totals) ${fmt(total)}; sum of self costs read ${fmt(selfSum)}`);
 table('Ir by phase (self cost by source location; inlined code counted where it was written)', phase, 100);
 table(`top ${TOP} source-level owners (self cost, inlined code included)`, srcFn);
 table(`top ${TOP} symbols (machine-code functions, self cost)`, sym);

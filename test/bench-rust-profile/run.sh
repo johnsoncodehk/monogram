@@ -147,6 +147,34 @@ for f in $MAIN; do
   done
 done
 
+echo "=== callgrind cache and branch simulation (same entry points; explains instructions that do not cost the same time)"
+# Valgrind's simulated caches (sized from the host) and branch predictor, not the hardware's:
+# counts to compare between parsers, not cycle predictions.
+mkdir -p "$OUT/sim"
+for f in $MAIN; do
+  for tag in "C.parse.$f:*oxc_prof_parse*:$OXC/oxc-once --once" \
+             "A.parse.$f:*mono_prof_parse*:$W/mono-prof-A/target/release/mono-prof-A --once" \
+             "M.parse.$f:*mono_prof_parse*:$W/mono-prof-M/target/release/mono-prof-M --once" \
+             "A.lex.$f:*mono_prof_lex*:$W/mono-prof-A/target/release/mono-prof-A --lex-once" \
+             "M.lex.$f:*mono_prof_lex*:$W/mono-prof-M/target/release/mono-prof-M --lex-once"; do
+    t=${tag%%:*}; rest=${tag#*:}; tog=${rest%%:*}; cmd=${rest#*:}
+    out=$OUT/sim/$t.out
+    if "${CG[@]}" --cache-sim=yes --branch-sim=yes --toggle-collect="$tog" --callgrind-out-file="$out" $cmd "$f" > /dev/null 2> "$OUT/sim/$t.log"; then
+      echo "SIM $t $(grep '^events:' "$out" | head -1) | $(grep -E '^(totals|summary):' "$out" | head -1)" | tee -a "$R"
+      for ev in Bcm Bim D1mr D1mw DLmr DLmw; do
+        case $t in
+          C.*) REGIONS_EVENT=$ev node "$H/regions.ts" oxc "$out" > "$OUT/sim/$t.$ev.txt" 2>&1 || true ;;
+          A.*) REGIONS_EVENT=$ev node "$H/regions.ts" mono "$out" "$OUT/main-A.rs" > "$OUT/sim/$t.$ev.txt" 2>&1 || true ;;
+          M.*) REGIONS_EVENT=$ev node "$H/regions.ts" mono "$out" "$OUT/main-M.rs" > "$OUT/sim/$t.$ev.txt" 2>&1 || true ;;
+        esac
+      done
+    else
+      echo "SIM $t FAILED"; tail -5 "$OUT/sim/$t.log"
+    fi
+  done
+done
+grep -h '^desc:' "$OUT/sim/C.parse.checker.ts.out" || true; grep -h 'warning' "$OUT"/sim/*.log | sort | uniq -c | head -5 || true
+
 echo "=== perf (if the runner allows it): instructions and cycles per parse, whole process minus --noop"
 if command -v perf >/dev/null && sudo sysctl -q kernel.perf_event_paranoid=1 && perf stat -e instructions:u true >/dev/null 2>&1; then
   pst() { perf stat -x, -r 5 -e instructions:u,cycles:u,branch-misses:u "$@" 2>&1 >/dev/null | awk -F, '{print $3 "=" $1}' | tr '\n' ' '; }
@@ -164,7 +192,11 @@ if command -v perf >/dev/null && sudo sysctl -q kernel.perf_event_paranoid=1 && 
   rm -f "$OUT"/perf/*.data
   for x in "$OUT"/perf/*.report.txt; do echo "---- $(basename "$x") (cycles by symbol, bench loop)"; head -25 "$x" | cut -c1-200; done
 else
-  echo "perf not usable on this runner; skipped"
+  echo "perf not usable on this runner; skipped. Diagnostics:"
+  command -v perf || echo "no perf binary"
+  sudo sysctl kernel.perf_event_paranoid || true
+  perf stat -e instructions:u true 2>&1 | tail -5 || true
+  ls /sys/bus/event_source/devices/ 2>&1 || true
 fi
 
 echo "=== summary"
