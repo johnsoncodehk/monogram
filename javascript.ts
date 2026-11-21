@@ -47,6 +47,13 @@ function fnArms(nameParts, body) {
   ];
 }
 
+// How a statement ends (ECMAScript 12.10, Automatic Semicolon Insertion; tsc's parseSemicolon):
+// a `;`, or nothing when the next token is on a later line, is `}`, or is the end of the input
+// (`not(sameLine)` holds there too). A same-line token can not end it, so two statements on one
+// line need a `;` between them. A statement or declaration that ends in a block needs nothing.
+// The one definition, for both grammars: TypeScript's declarations and members end this way too.
+export const asi = () => alt([';'], [not(sameLine)], [not(not('}'))]);
+
 // ── Tokens ──
 
 // IdentifierName, ASCII + `\u`-escape forms. The `\uXXXX` / `\u{cp}` alternatives let an
@@ -534,25 +541,29 @@ const SwitchCase = rule($ => [
 
 const Stmt = rule($ => [
   Block,
-  [alt('let', 'const', 'var'), sep(Binding, ','), opt(';')],
+  [alt('let', 'const', 'var'), sep(Binding, ','), asi()],
   ['if', '(', Expr, many(',', Expr), ')', $, opt('else', $)],
   ['for', opt('await'), '(', ForHead, ')', $],
   ['while', '(', Expr, many(',', Expr), ')', $],
+  // A do-while's `;` is optional even on its line (12.10.1: a `;` is inserted after the `)`
+  // that ends it), so `do x; while (y) z` is two statements.
   ['do', $, 'while', '(', Expr, many(',', Expr), ')', opt(';')],
   ['switch', '(', Expr, many(',', Expr), ')', '{', many(SwitchCase), '}'],
-  ['return', opt(Expr, many(',', Expr)), opt(';')],
-  ['throw', Expr, many(',', Expr), opt(';')],
+  // The expression is a RESTRICTED production (`return [no LineTerminator here] Expression`):
+  // after a line break it starts the next statement, so `return` ⏎ `var b` is two.
+  ['return', opt(sameLine, Expr, many(',', Expr)), asi()],
+  ['throw', Expr, many(',', Expr), asi()],
   // The label is a RESTRICTED production (`break [no LineTerminator here] Label`)
   // and a label can't be a reserved word — without both, `break` ⏎ `case "X":`
   // inside a switch eats `case` as the label and the whole switch cascades.
-  ['break', opt(sameLine, notReserved, Ident), opt(';')],
-  ['continue', opt(sameLine, notReserved, Ident), opt(';')],
+  ['break', opt(sameLine, notReserved, Ident), asi()],
+  ['continue', opt(sameLine, notReserved, Ident), asi()],
   ['try', Block, opt('catch', opt('(', alt(Param, BindingPattern), ')'), Block), opt('finally', Block)],
   [notReserved, Ident, ':', $],
   ';',
-  ['debugger', opt(';')],
+  ['debugger', asi()],
   ['with', '(', Expr, ')', $],
-  [opt('await'), 'using', sep(Binding, ','), opt(';')],
+  [opt('await'), 'using', sep(Binding, ','), asi()],
   Decl,
   // ExpressionStatement lookahead restriction (ES2023 §14.5): a statement may not
   // begin with `function` / `async function` — those are declarations at statement
@@ -564,7 +575,7 @@ const Stmt = rule($ => [
   // (extends-expression heritage, bare `;` class elements, decorator placements), so
   // 31 tsc-valid corpus files still rely on the class-EXPRESSION fallback — widen the
   // declaration arm first, then guard.
-  [not(alt('function', 'class', ['async', 'function'], ['let', '['])), Expr, many(',', Expr), opt(';')],
+  [not(alt('function', 'class', ['async', 'function'], ['let', '['])), Expr, many(',', Expr), asi()],
 ]);
 
 // ── Declarations ──
@@ -596,10 +607,12 @@ const Modifier = alt([alt('static', 'accessor'), not(alt('(', '=', '{', '}'))]);
 // implicit function boundary), generators yield, async await, async-generators both.
 // The MemberName stays OUTSIDE the family: a computed key `[e]` is evaluated in the
 // ENCLOSING context, so it must inherit, not reset.
-const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(ctx(Block)), opt(';')];
+// A method, accessor or constructor has a body (MethodDefinition), after which nothing is
+// needed: a `;` there is an empty class element of its own. A field ends as a statement does.
+const memTail = (ctx) => ['(', sep(ctx(Param), ','), ')', ctx(Block)];
 const ClassMember = rule($ => [
   ';',   // SemicolonClassElement: `class C { ; }`
-  ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block), opt(';')],
+  ['constructor', '(', sep(resetCtx(Param), ','), ')', resetCtx(Block)],
   [many(DecoratorExpr), many(Modifier), 'static', awaitCtx(Block)],   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier (see typescript.ts)
   [
@@ -609,23 +622,23 @@ const ClassMember = rule($ => [
       // `async` is order-free among modifiers (tsc parses any order), so it carries
       // its own inner modifier run and an async member's body is [+Await]/[+Await,+Yield].
       ['async', many(Modifier), '*', MemberName, ...memTail(asyncGenCtx)],      // async generator method
-      ['async', many(Modifier), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', opt(awaitCtx(Block)), opt(';')],  // async accessor (semantic error; parses)
+      ['async', many(Modifier), alt('get', 'set'), MemberName, '(', opt(sep(awaitCtx(Param), ',')), ')', awaitCtx(Block)],  // async accessor (semantic error; parses)
       ['async', many(Modifier), 'static', awaitCtx(Block)],                     // `async static { }` (semantic error; parses)
       ['async', many(Modifier), MemberName, ...memTail(awaitCtx)],             // async method
       ['*', MemberName, ...memTail(yieldCtx)],                                  // generator method
-      [alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', opt(resetCtx(Block)), opt(';')],  // accessor
+      [alt('get', 'set'), MemberName, '(', opt(sep(resetCtx(Param), ',')), ')', resetCtx(Block)],  // accessor
       [MemberName, alt(
         [...memTail(resetCtx)],                                                 // method (requires `(`)
         // field catch-all; a ';'-less field must not be followed by a same-line
         // decorator (see typescript.ts)
-        [opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
+        [opt('=', resetCtx(Expr)), asi()],
       )],
     ),
   ],
   // Fallbacks for a member NAMED like a modifier (`static = 1`, `get = 1`, `async() {}`):
   // many(Modifier) would eat the name, so the member kind alt fails and we land here.
-  [MemberName, opt('=', resetCtx(Expr)), alt([';'], [not(sameLine)], [not(not('}'))])],
-  [MemberName, '(', sep(resetCtx(Param), ','), ')', opt(resetCtx(Block)), opt(';')],
+  [MemberName, opt('=', resetCtx(Expr)), asi()],
+  [MemberName, ...memTail(resetCtx)],
 ]);
 
 const ImportSpecifier = rule($ => [
@@ -664,17 +677,23 @@ const Decl = rule($ => [
   [many(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],
   ['export', alt($, Stmt)],
   [many1(DecoratorExpr), $],   // decorators before export/default/etc.
+  // A declaration that ends in a block needs nothing after it; every other one ends as a
+  // statement does. After `default`, `function` and `class` start a declaration
+  // (`export default [lookahead ∉ { function, async function, class }] AssignmentExpression`;
+  // the inline alt is ordered, so their arms come first), so `export default class {} g()` is two.
   ['export', 'default', alt(
     ...fnArms([opt(...bindingIdentifier)], Block),  // function
-    [Expr, opt(';')],   // catch-all: export default <expr>
+    [many(DecoratorExpr), 'class', ...bindingIdentifier, many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],  // named class
+    [many(DecoratorExpr), 'class', many('extends', sep(alt([not('extends'), ClassHeritage]), ',')), '{', many(ClassMember), '}'],                          // anonymous class
+    [Expr, asi()],   // catch-all: export default <expr>
   )],
-  ['export', '*', alt(['from', String_, opt(';')], ['as', Ident, 'from', String_, opt(';')])],
-  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), opt(';')],
+  ['export', '*', alt(['from', String_], ['as', Ident, 'from', String_]), asi()],
+  ['export', '{', sep(ExportSpecifier, ','), '}', opt('from', String_), asi()],
   ['import', alt(
-    [ImportClause, 'from', String_, opt(';')],          // import X from "m"
-    [...bindingIdentifier, '=', Expr, opt(';')],        // import x = expr
-    [String_, opt(';')],                                // import "m"
-  )],
+    [ImportClause, 'from', String_],          // import X from "m"
+    [...bindingIdentifier, '=', Expr],        // import x = expr
+    String_,                                  // import "m"
+  ), asi()],
   [many(DecoratorExpr), 'export', alt($, Stmt)],
 ]);
 

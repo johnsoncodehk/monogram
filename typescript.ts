@@ -20,10 +20,6 @@ function tsFnArms(nameParts, body) {
   ];
 }
 
-// Statement ASI terminator: a `;`, OR a line-terminator before the next token (newline
-// ASI), OR the next token is `}` (block end). A same-line non-`;`/`}` token can NOT end
-// the statement, so a mid-line split (`var x = a[]`) stays one statement (tsc-shaped).
-const asi = () => alt([';'], [not(sameLine)], [not(not('}'))]);
 // A function declaration's body: a block, or none (an overload or ambient signature), and a
 // declaration without a body ends as a statement does (tsc's parseFunctionBlockOrSemicolon).
 const fnBodyOrAsi = () => alt(Block, [not('{'), asi()]);
@@ -32,7 +28,7 @@ const fnBodyOrAsi = () => alt(Block, [not('{'), asi()]);
 const typeMemberEnd = () => alt([','], asi());
 // JavaScript is the SUBSET / base of the ECMAScript family; TypeScript is the
 // SUPERSET (JS + a type layer). The shared, type-free vocabulary — token consts,
-// the `notReserved`/`notReservedExpr` reserved-word guards, the precedence ladder
+// the `notReserved`/`notReservedExpr` reserved-word guards, the statement end (`asi`), the precedence ladder
 // (`ecmaPrec`), and the JS scope map (`jsScopes`) — is OWNED by javascript.ts and
 // imported here, then extended below with the type layer. Rules are NOT shared
 // either direction (combinator rules bind their references at definition time), so
@@ -41,7 +37,7 @@ import {
   Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr, bindingIdentifier, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
+  notReserved, notReservedExpr, bindingIdentifier, asi, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -627,7 +623,9 @@ const Stmt = rule($ => [
   ['while', '(', Expr, many(',', Expr), ')', $],
   ['do', $, 'while', '(', Expr, many(',', Expr), ')', opt(';')],
   ['switch', '(', Expr, many(',', Expr), ')', '{', many(SwitchCase), '}'],
-  ['return', opt(Expr, many(',', Expr)), asi()],
+  // `return [no LineTerminator here] Expression`: after a line break the expression starts the
+  // next statement (tsc's parseReturnStatement parses one only where no `;` could be inserted).
+  ['return', opt(sameLine, Expr, many(',', Expr)), asi()],
   ['throw', Expr, many(',', Expr), asi()],
   // The label is a RESTRICTED production (`break [no LineTerminator here] Label`)
   // and a label can't be a reserved word — without both, `break` ⏎ `case "X":`

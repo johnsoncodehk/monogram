@@ -108,6 +108,36 @@ const validJs: string[] = [
   `const { default: d } = await import("m");`,
 ];
 
+// ── Statement ends (ECMAScript 12.10, Automatic Semicolon Insertion) ──
+// A statement that does not end in a block ends at a `;`, before a token on a later line,
+// before `}`, or at the end of the input; a do-while also ends at its `)`. A restricted
+// production (`return`/`break`/`continue` [no LineTerminator here] …) ends at a line break.
+// Each case is checked against tsc's JS-mode parser too, so the expectation is the oracle's.
+const statementEnds: { accept: string[]; reject: string[] } = {
+  accept: [
+    'a\nb', 'a = 1\nb = 2', 'var a = 1\nvar b = 2', 'let a\nconst b = 1', '{ a }', 'a', 'a;b',
+    'a\n(b)', 'a\n[b]', 'a\n.b', 'a\n+b', 'a /* c\n */ b', 'a // c\nb', 'x = function () {}\n(b)',
+    'do x; while (y) z', 'do {} while (y) z', 'do ; while (y) x', 'do x\nwhile (y)', 'if (a) b\nelse c',
+    'function f() { return\nvar b }', 'function f() { return\nlet\nx = 1 }', 'function f() { return a; b }',
+    'L: for (;;) { break\nL }', 'L: for (;;) { continue\nL }', 'debugger\nx', 'throw a\nb',
+    'function f() {} g()', 'class A {} g()', 'if (a) {} b', 'try {} catch {} b', 'switch (a) {} b',
+    'import "m"\nx', 'import a from "m"\nx', 'export { a }\nx', 'export * from "m"\nx',
+    'export default a\nb', 'export default class {} g()', 'export default class C {} g()',
+    'export default function () {} g()', 'export var a = 1\nb',
+    'class C { a\nb }', 'class C { a = 1\nb() {} }', 'class C { m() {} n() {} }', 'class C { m() {}; n() {} }',
+    'class C { get g() {} set s(v) {} }', 'class C { static {} a }', 'class C { a; b }',
+  ],
+  reject: [
+    'a b', 'a = 1 b = 2', 'var a = 1 var b = 2', 'let a const b = 1', 'function f() { return a b }',
+    'throw a b', 'debugger x', 'L: for (;;) { break L x }', 'L: for (;;) { continue L x }', 'a /* c */ b',
+    'if (a) b else c', 'do x while (y)', 'while (a) b c', 'for (;;) a b', 'M: a b',
+    'import in from "m"', 'x = function this() {}', 'import "m" x', 'import a from "m" x',
+    'export { a } from "m" x', 'export * from "m" x', 'export * as a from "m" x', 'export default a b',
+    'export var a = 1 b',
+    'class C { a b }', 'class C { a = 1 b }', 'class C { m() n() {} }', 'class C { get g() set s(v) {} }',
+  ],
+};
+
 // ── Corpus 2: TS-only syntax that has NO production here — must all reject ──
 // (TS's .js parser leniently accepts most of these; we are correctly stricter.)
 const tsOnly: [string, string][] = [
@@ -123,6 +153,9 @@ const tsOnly: [string, string][] = [
   ['optional param', `function h(x?) {}`],
   ['this parameter', `function h(this) {}`],
   ['nameless class declaration', `class extends B {}`],
+  // a method has a body (MethodDefinition); one without is an overload signature
+  ['bodiless method', `class C { m(); }`],
+  ['bodiless accessor', `class C { get g() }`],
 ];
 
 let v_ok = 0;
@@ -150,3 +183,17 @@ if (r_leak.length) {
   console.log('  LENIENTLY ACCEPTED (contextual-keyword over-accept class):');
   for (const c of r_leak) console.log('    - ' + c);
 }
+
+const s_fail: string[] = [];
+for (const [want, codes] of [[true, statementEnds.accept], [false, statementEnds.reject]] as const) {
+  for (const code of codes) {
+    if (jsAccepts(code) !== want) s_fail.push(`tsc JS-mode does not ${want ? 'accept' : 'reject'} ${JSON.stringify(code)}: fix the case`);
+    if (weAccept(code) !== want) s_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+  }
+}
+console.log('\n── Statement ends (ASI) ──');
+console.log(`  ${statementEnds.accept.length + statementEnds.reject.length - s_fail.length}/${statementEnds.accept.length + statementEnds.reject.length} as the spec and tsc`);
+for (const c of s_fail) console.log('    - ' + c);
+// Corpora 1, 2 and the statement ends are hard gates.
+const gateFailed = v_fail.length + r_leak.length + s_fail.length > 0;
+if (gateFailed) process.exit(1);

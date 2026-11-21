@@ -310,7 +310,7 @@ const CASES: Case[] = [
       'do { x(); } while (y);', 'function* gen() { yield* o(); }', 'const { a, b: c, ...r } = o;',
       'const [p, , q, ...z] = arr;', 'label: for (;;) { break label; }', 'async function h() { await x; }',
       '(() => {})();', '(() => {})() + 1;', 'f(() => a, () => b);', 'let g = () => x => x + 1;',
-      'x.y.z++;', '(a++).b;', 'a++ instanceof B;', 'a++(x);',
+      'x.y.z++;', '(a++).b;', 'a++ instanceof B;', 'a++\n(x);',
       'for (a in b) c;',
       'for (a = x in b) c;',
       'for (a in b) { d = c in e; }',
@@ -356,6 +356,14 @@ const CASES: Case[] = [
       'f(class extends (a ? b : c) {});', 'f(class extends (a, b) {});', 'f(class extends a?.b {});', 'f(class extends a?.b() {});',
       'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a.b(c).d {});', 'class A extends (B) {}',
       'f(new new Foo()());', 'f(new new Foo());', 'f(new new Foo().b());', 'f(new new new A()()());',
+      // A statement ends at `;`, before a token on a later line, before `}` or at the end of the
+      // input (ASI); one that ends in a block needs nothing more, and a do-while also ends at
+      // its `)`. `return` takes an expression only on its own line.
+      'a\nb', 'var a = 1\nvar b = 2', '{ a }', 'a\n(b)', 'do x; while (y) z', 'do {} while (y) z', 'if (a) b\nelse c',
+      'function f() { return\nvar b }', 'function f() { return\nlet\nx = 1 }', 'L: for (;;) { break\nL }',
+      'function f() {} g()', 'if (a) {} b', 'import a from "m"\nx', 'export { a }\nx', 'export default a\nb',
+      'export default class {} g()', 'export default class C {} g()', 'class C { a\nb }', 'class C { m() {} n() {} }',
+      'class C { m() {}; n() {} }', 'class C { get g() {} set s(v) {} }',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
@@ -391,7 +399,14 @@ const CASES: Case[] = [
       // … but not an operator expression, and a class expression base still needs its body.
       'f(class extends a + b {});', 'f(class extends void a {});', 'f(class extends a = b {});', 'f(class extends typeof a {});',
       'f(class extends a => b {});', 'f(class extends class {});', 'f(class extends if {});', 'f(class extends class extends {} {});',
-      'f(new new Foo()?.b);'],
+      'f(new new Foo()?.b);',
+      // … so two statements on one line need a `;` between them, and a method has a body.
+      'a b', 'a = 1 b = 2', 'var a = 1 var b = 2', 'function f() { return a b }', 'throw a b', 'debugger x',
+      'L: for (;;) { break L x }', 'a /* c */ b', 'if (a) b else c', 'do x while (y)', 'import in from "m"',
+      'x = function this() {}', 'import "m" x', 'export * from "m" x', 'export default a b', 'export var a = 1 b',
+      'class C { a b }', 'class C { m() n() {} }', 'class C { get g() set s(v) {} }', 'class C { m(); }',
+      // an update expression is no callee: `a++(x)` is `a++` and `(x)` with nothing between them
+      'a++(x);'],
   },
   {
     // The real typescript.ts grammar — the second, most complex full language proving the
@@ -401,6 +416,9 @@ const CASES: Case[] = [
       ...NO_IN_HEADS.accept,
       // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
       'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
+      // `return` takes an expression only on its own line (a restricted production), so a
+      // reserved word after the line break starts the next statement.
+      'function f() { return\nvar b }', 'function f() { return\nlet\nx = 1 }',
       'const a: number = 1;', 'let s: string;', 'type Alias = { a: number; b?: string };',
       'type U = "a" | "b" | "c";', 'function gen2<T, U extends T>(x: T, y: U): T { return x; }',
       'interface I<T> extends A<T> { m(x: T): T; }', 'const c = x as const;',
