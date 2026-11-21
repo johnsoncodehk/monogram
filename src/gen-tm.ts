@@ -2458,7 +2458,11 @@ function detectRegexLiteral(grammar: CstGrammar, tokenNames: Set<string>): Regex
   function checkSeq(items: RuleExpr[]) {
     for (let i = 0; i < items.length - 1; i++) {
       const a = items[i];
-      const b = unwrapRef(items[i + 1]);
+      // `sameLine` matches no token, so it does not separate a keyword from the expression after
+      // it (`return [no LineTerminator here] Expression`): skip it to find the next item.
+      let j = i + 1;
+      while (j < items.length - 1 && items[j].type === 'sameLine') j++;
+      const b = unwrapRef(items[j]);
       // keyword Ref → keyword can precede an expression (and thus regex)
       if (a.type === 'literal' && isKeywordLiteral(a.value) &&
           b.type === 'ref' && exprRuleNames.has(b.name) &&

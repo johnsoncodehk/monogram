@@ -11,24 +11,26 @@ this record is stale, so every file that moves between cells shows in its diff.
 
 Corpus: `microsoft/TypeScript@6fbce89821d93a5b761581d9ac540455f38e9acb` `tests/cases/conformance` · oracle: `typescript@5.9.3`
 
-**4462 files measured**, 4303 agree (96.44%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
+**4462 files measured**, 4441 agree (99.53%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
 
 | cell (tsc / monogram) | files | |
 |---|---:|---|
-| `js/accept` | 1181 | agree: valid JavaScript per tsc, accepted |
-| `js/reject` | 6 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
-| `ts-only/reject` | 2579 | agree: TypeScript-only syntax per tsc, rejected |
-| `ts-only/accept` | 134 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
+| `js/accept` | 1179 | agree: valid JavaScript per tsc, accepted |
+| `js/reject` | 8 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
+| `ts-only/reject` | 2706 | agree: TypeScript-only syntax per tsc, rejected |
+| `ts-only/accept` | 7 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
 | `js-error/reject` | 0 | agree: a JS-only syntactic error per tsc, rejected |
 | `js-error/accept` | 1 | **disagree**: a JS-only syntactic error per tsc, accepted: over-acceptance |
-| `reject/reject` | 543 | agree: a tsc parse error, rejected |
-| `reject/accept` | 18 | **disagree**: a tsc parse error, accepted: over-acceptance |
+| `reject/reject` | 556 | agree: a tsc parse error, rejected |
+| `reject/accept` | 5 | **disagree**: a tsc parse error, accepted: over-acceptance |
 | `monogram-crash` | 0 | **disagree**: monogram threw something other than an input error: a bug |
 
-## `js/reject` (6)
+## `js/reject` (8)
 
 Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 
+- `async/es5/asyncClass_es5.ts`
+- `async/es6/asyncClass_es6.ts`
 - `classes/classStaticBlock/classStaticBlock20.ts`
 - `esDecorators/esDecorators-arguments.ts`
 - `parser/ecmascript5/ConstructorDeclarations/parserConstructorDeclaration3.ts`
@@ -36,144 +38,17 @@ Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 - `parser/ecmascript5/MemberFunctionDeclarations/parserMemberFunctionDeclaration4.ts`
 - `parser/ecmascript6/ShorthandPropertyAssignment/parserShorthandPropertyAssignment5.ts`
 
-## `ts-only/accept` (134)
+## `ts-only/accept` (7)
 
 TypeScript-only syntax per tsc, accepted: over-acceptance.
 
-- `ambient/ambientDeclarationsPatterns_tooManyAsterisks.ts`
-- `ambient/ambientExternalModuleInsideNonAmbient.ts`
-- `ambient/ambientExternalModuleInsideNonAmbientExternalModule.ts`
-- `ambient/ambientShorthand_declarationEmit.ts`
-- `async/es5/asyncInterface_es5.ts`
-- `async/es5/asyncModule_es5.ts`
-- `async/es6/asyncInterface_es6.ts`
-- `async/es6/asyncModule_es6.ts`
-- `classes/classDeclarations/classAbstractKeyword/classAbstractImportInstantiation.ts`
-- `classes/classDeclarations/classAbstractKeyword/classAbstractInAModule.ts`
-- `classes/classDeclarations/classAbstractKeyword/classAbstractMergedDeclaration.ts`
-- `classes/classDeclarations/classAbstractKeyword/classAbstractSingleLineDecl.ts`
-- `classes/classDeclarations/classAbstractKeyword/classAbstractWithInterface.ts`
-- `classes/classDeclarations/mergeClassInterfaceAndModule.ts`
-- `classes/classExpression.ts`
-- `classes/classStaticBlock/classStaticBlockUseBeforeDef3.ts`
-- `classes/members/privateNames/privateNameAmbientNoImplicitAny.ts`
-- `classes/propertyMemberDeclarations/accessorsOverrideProperty5.ts`
-- `es2018/es2018IntlAPIs.ts`
-- `es2019/globalThisGlobalExportAsGlobal.ts`
-- `es2019/globalThisReadonlyProperties.ts`
-- `es2022/es2022IntlAPIs.ts`
-- `es6/Symbols/symbolProperty48.ts`
-- `es6/Symbols/symbolProperty49.ts`
-- `es6/Symbols/symbolProperty50.ts`
-- `es6/Symbols/symbolProperty51.ts`
-- `es6/Symbols/symbolProperty58.ts`
-- `es6/Symbols/symbolType20.ts`
-- `es6/classDeclaration/superCallFromClassThatHasNoBaseTypeButWithSameSymbolInterface.ts`
-- `es6/computedProperties/computedPropertyNames19_ES5.ts`
-- `es6/computedProperties/computedPropertyNames19_ES6.ts`
-- `es6/destructuring/declarationInAmbientContext.ts`
-- `es6/destructuring/destructuringObjectBindingPatternAndAssignment4.ts`
-- `es6/modules/defaultExportsCannotMerge04.ts`
-- `es6/shorthandPropertyAssignment/objectLiteralShorthandPropertiesWithModule.ts`
-- `es6/shorthandPropertyAssignment/objectLiteralShorthandPropertiesWithModuleES6.ts`
-- `expressions/asOperator/asOperator2.ts`
-- `expressions/asOperator/asOperatorNames.ts`
-- `expressions/functionCalls/forgottenNew.ts`
-- `expressions/typeAssertions/duplicatePropertiesInTypeAssertions02.ts`
-- `expressions/typeSatisfaction/typeSatisfaction_asConstArrays.ts`
-- `externalModules/es6/es6modulekindWithES5Target10.ts`
-- `externalModules/es6/es6modulekindWithES5Target7.ts`
-- `externalModules/esnext/esnextmodulekindWithES5Target10.ts`
-- `externalModules/esnext/esnextmodulekindWithES5Target7.ts`
-- `externalModules/exportAmbientClassNameWithObject.ts`
-- `externalModules/exportNonLocalDeclarations.ts`
-- `externalModules/verbatimModuleSyntaxInternalImportEquals.ts`
-- `interfaces/interfaceDeclarations/interfaceExtendingOptionalChain.ts`
-- `interfaces/interfaceDeclarations/interfaceThatHidesBaseProperty.ts`
-- `interfaces/interfaceDeclarations/interfaceThatHidesBaseProperty2.ts`
-- `interfaces/interfaceDeclarations/interfaceThatInheritsFromItself.ts`
-- `interfaces/interfaceDeclarations/interfaceWithAccessibilityModifiers.ts`
-- `internalModules/moduleDeclarations/asiPreventsParsingAsNamespace05.ts`
-- `jsdoc/seeTag1.ts`
-- `parser/ecmascript5/Accessors/parserAccessors5.ts`
-- `parser/ecmascript5/Accessors/parserAccessors6.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration10.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration11.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration12.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration13.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration14.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration15.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration16.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration19.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration20.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration21.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration22.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration7.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration8.ts`
-- `parser/ecmascript5/ClassDeclarations/parserClassDeclaration9.ts`
-- `parser/ecmascript5/ComputedPropertyNames/parserES5ComputedPropertyName11.ts`
-- `parser/ecmascript5/ComputedPropertyNames/parserES5ComputedPropertyName5.ts`
-- `parser/ecmascript5/ErrorRecovery/ExtendsOrImplementsClauses/parserErrorRecovery_ExtendsOrImplementsClause6.ts`
-- `parser/ecmascript5/ErrorRecovery/parserModifierOnPropertySignature1.ts`
-- `parser/ecmascript5/ErrorRecovery/parserModifierOnPropertySignature2.ts`
-- `parser/ecmascript5/ErrorRecovery/parserModifierOnStatementInBlock2.ts`
 - `parser/ecmascript5/ExportAssignments/parserExportAssignment1.ts`
 - `parser/ecmascript5/ExportAssignments/parserExportAssignment2.ts`
-- `parser/ecmascript5/ExportAssignments/parserExportAssignment5.ts`
-- `parser/ecmascript5/ExportAssignments/parserExportAssignment6.ts`
 - `parser/ecmascript5/ExportAssignments/parserExportAssignment7.ts`
 - `parser/ecmascript5/ExportAssignments/parserExportAssignment8.ts`
-- `parser/ecmascript5/ExportAssignments/parserExportAssignment9.ts`
-- `parser/ecmascript5/FunctionDeclarations/parserFunctionDeclaration2.ts`
-- `parser/ecmascript5/IndexSignatures/parserIndexSignature1.ts`
-- `parser/ecmascript5/IndexSignatures/parserIndexSignature10.ts`
-- `parser/ecmascript5/IndexSignatures/parserIndexSignature4.ts`
-- `parser/ecmascript5/IndexSignatures/parserIndexSignature5.ts`
-- `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration1.ts`
-- `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration2.ts`
-- `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration3.ts`
-- `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration4.ts`
-- `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration5.ts`
-- `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration6.ts`
-- `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration7.ts`
-- `parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration8.ts`
-- `parser/ecmascript5/MethodSignatures/parserMethodSignature1.ts`
-- `parser/ecmascript5/MethodSignatures/parserMethodSignature5.ts`
-- `parser/ecmascript5/MethodSignatures/parserMethodSignature9.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration1.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration12.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration2.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration3.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration4.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration5.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration6.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration7.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration8.ts`
-- `parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration9.ts`
-- `parser/ecmascript5/ParameterLists/parserParameterList16.ts`
-- `parser/ecmascript5/ParameterLists/parserParameterList17.ts`
-- `parser/ecmascript5/PropertySignatures/parserPropertySignature1.ts`
-- `parser/ecmascript5/PropertySignatures/parserPropertySignature3.ts`
-- `parser/ecmascript5/PropertySignatures/parserPropertySignature5.ts`
-- `parser/ecmascript5/PropertySignatures/parserPropertySignature9.ts`
-- `parser/ecmascript5/Protected/Protected1.ts`
-- `parser/ecmascript5/Protected/Protected2.ts`
-- `parser/ecmascript5/Protected/Protected8.ts`
-- `parser/ecmascript5/RegressionTests/parser509618.ts`
-- `parser/ecmascript5/RegularExpressions/parserRegularExpression6.ts`
-- `parser/ecmascript5/VariableDeclarations/parserVariableDeclaration4.ts`
 - `parser/ecmascript5/parserImportDeclaration1.ts`
-- `parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName11.ts`
-- `parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName21.ts`
 - `scanner/ecmascript5/scannerImportDeclaration1.ts`
-- `statements/VariableStatements/usingDeclarations/usingDeclarations.1.ts`
-- `statements/VariableStatements/usingDeclarations/usingDeclarationsDeclarationEmit.2.ts`
 - `statements/VariableStatements/usingDeclarations/usingDeclarationsTopLevelOfModule.2.ts`
-- `types/never/neverUnionIntersection.ts`
-- `types/tuple/emptyTuples/emptyTuplesTypeAssertion02.ts`
-- `types/typeAliases/asiPreventsParsingAsTypeAlias02.ts`
-- `types/typeAliases/typeAliasesDoNotMerge.ts`
-- `types/typeRelationships/recursiveTypes/infiniteExpansionThroughInstantiation2.ts`
 
 ## `js-error/accept` (1)
 
@@ -181,27 +56,14 @@ A JS-only syntactic error per tsc, accepted: over-acceptance.
 
 - `classes/classStaticBlock/classStaticBlock19.ts`
 
-## `reject/accept` (18)
+## `reject/accept` (5)
 
 A tsc parse error, accepted: over-acceptance.
 
-- `classes/classDeclarations/classAbstractKeyword/classAbstractManyKeywords.ts`
-- `classes/members/privateNames/privateNameNotAllowedOutsideClass.ts`
-- `classes/members/privateNames/privateNamesNotAllowedInVariableDeclarations.ts`
-- `es6/templates/templateStringInModuleName.ts`
-- `es6/templates/templateStringInModuleNameES6.ts`
-- `interfaces/interfaceDeclarations/interfacesWithPredefinedTypesAsNames.ts`
-- `parser/ecmascript5/ErrorRecovery/parserErrantAccessibilityModifierInModule1.ts`
-- `parser/ecmascript5/ErrorRecovery/parserPublicBreak1.ts`
 - `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration8.ts`
 - `parser/ecmascript5/MemberFunctionDeclarations/parserMemberFunctionDeclaration2.ts`
 - `parser/ecmascript5/MemberVariableDeclarations/parserMemberVariableDeclaration2.ts`
 - `parser/ecmascript5/RegressionTests/parser519458.ts`
-- `parser/ecmascript5/RegressionTests/parser521128.ts`
-- `parser/ecmascript5/RegularExpressions/parserRegularExpressionDivideAmbiguity7.ts`
-- `parser/ecmascript5/parserObjectCreationArrayLiteral1.ts`
-- `parser/ecmascript5/parserObjectCreationArrayLiteral3.ts`
-- `scanner/ecmascript5/scannerUnicodeEscapeInKeyword1.ts`
 - `statements/VariableStatements/usingDeclarations/awaitUsingDeclarations.4.ts`
 
 ## `monogram-crash` (0)
