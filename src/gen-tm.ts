@@ -478,6 +478,19 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
   // intervening optional `?`/group) by a literal `:` then a type-rule ref — the
   // `key (?) : Type` member shape. Those refs name the rules that occupy a key slot.
   const memberNameRules = new Set<string>();
+  // The member shape `key (?) (signature | (: Type)?)`: an alternation one of whose branches
+  // is a (possibly optional) `: <typeRef>` annotation. Only an alternation counts, so a lone
+  // optional annotation (a binding pattern's `{ a }: T`) does not make its ref a member key.
+  const isAnnotation = (e: RuleExpr): boolean => {
+    if (e.type === 'seq') {
+      const [c, t] = e.items;
+      return c?.type === 'literal' && (c as { value: string }).value === ':' && t?.type === 'ref' && typeRuleNames.has((t as { name: string }).name)
+        || (e.items.length === 1 && isAnnotation(c));
+    }
+    if (e.type === 'quantifier' || e.type === 'group') return isAnnotation((e as { body: RuleExpr }).body);
+    return false;
+  };
+  const isMemberTail = (e: RuleExpr): boolean => e.type === 'alt' && e.items.some(isAnnotation);
   const scanSeq = (items: RuleExpr[]): void => {
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
@@ -485,7 +498,8 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
       // happens to sit before a `:` in a type-internal construct — a conditional
       // type `T extends U ? X : Y`, a mapped-type `[K in T]: U`, etc.).
       if (it.type !== 'ref' || typeRuleNames.has(it.name)) continue;
-      // look ahead for `… : <typeRef>` after this ref (skip an optional `?`/group)
+      // look ahead for `… : <typeRef>`, or the member tail above, after this ref (skip an
+      // optional `?`/group)
       for (let j = i + 1; j < items.length; j++) {
         const nx = items[j];
         if (nx.type === 'literal' && (nx as { value: string }).value === ':') {
@@ -495,6 +509,7 @@ function deriveComputedMemberCloseBrackets(grammar: CstGrammar, typeRuleNames: S
           }
           break;
         }
+        if (isMemberTail(nx)) { memberNameRules.add((it as { name: string }).name); break; }
         // allow an optional `?` or a small group/quantifier to sit between key and `:`
         if (nx.type === 'literal' && (nx as { value: string }).value === '?') continue;
         if (nx.type === 'quantifier' || nx.type === 'group') continue;
@@ -6402,8 +6417,8 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
   // rule's `,`/`}` end leaking across tuple elements.)
   // Mapped-type connector keyword(s) — the `in` of `{ [K in T]: V }`. Derived from
   // the grammar's own shape: a `[`-bracketed clause whose body is an identifier
-  // immediately followed by an alternation that branches on a RESERVED keyword
-  // (`[Ident, alt(['in', Type, …], [':', Type, …])]` in the type-member rule). In a
+  // immediately followed by a RESERVED keyword, or by an alternation that branches on one
+  // (`'[', Ident, 'in', Type, …` in the mapped-type arm of the type rule). In a
   // type-context `[…]` this keyword would otherwise be eaten by #simple-type and
   // mis-painted entity.name.type (it is a value-position operator, so it carries no
   // type-context keyword include); a head match restores its keyword scope and
@@ -6418,9 +6433,9 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         const hasBracket = underBracket || e.items.some(it => it.type === 'literal' && it.value === '[');
         for (let i = 0; i < e.items.length; i++) {
           const a = e.items[i], b = e.items[i + 1];
-          // Ident-ref directly followed by an alt whose a branch starts with a keyword
-          if (hasBracket && a && a.type === 'ref' && a.name === mtIdentName && b && b.type === 'alt') {
-            for (const branch of b.items) {
+          // Ident-ref directly followed by a keyword, or by an alt whose a branch starts with one
+          if (hasBracket && a && a.type === 'ref' && a.name === mtIdentName && b) {
+            for (const branch of b.type === 'alt' ? b.items : [b]) {
               const head = branch.type === 'seq' ? branch.items[0] : branch;
               if (head && head.type === 'literal' && isKeywordLiteral(head.value)) {
                 mappedTypeConnectors.add(head.value);

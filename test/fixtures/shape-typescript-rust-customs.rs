@@ -351,6 +351,8 @@ pub enum VSpec {
     BinOp,                      // binary/logical/assign operator: token right after the left operand / right before the right operand
     SwitchDiscriminant,         // last non-SwitchCase pool kid, else leaf of token 1 (switch discriminant)
     QuestionFlag,               // span contains '?' → true, else false (TS property optional)
+    ReadonlyMod,                // a type member's modifier words include `readonly` (the last leading word is the name when a `?`, `:`, `(`, `<`, separator or the end follows it)
+    LeafAfter(&'static str),    // leaf of the token right after the first token with this text, else null
 }
 #[derive(Clone, Copy)]
 pub struct FSpec { pub name: &'static str, pub v: VSpec }
@@ -495,8 +497,8 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("Identifier", 17, &SC_IDENT17),
         ("Type", 1, &SC_TSINDEXED1),
         ("Type", 7, &SC_TYPE7),
-        ("TSMappedType", 2, &SC_TSMAPPEDTYPE2),
-        ("TSMethodSignature", 1, &SC_TSMETHODSIG1),
+        ("Type", 24, &SC_TSMAPPEDTYPE),
+        ("TSMethodSignature", 1, &SC_TSACCESSORSIG),
         ("UnknownKid", 12, &SC_UNKNOWNKID12),
         ("UnknownKid", 15, &SC_UNKNOWNKID15),
         ("UnknownKid", 5, &SC_UNKNOWNKID5),
@@ -513,8 +515,8 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("TSNamespaceExportDeclaration", 25, &SC_TSNS_EXPORT),
         ("TSEnumMember", 0, &SC_TSENUMMEMBER),
         ("TSInterfaceDeclaration", 4, &SC_TSINTERFACEDECL),
-        ("TSPropertySignature", 3, &SC_TSPROPSIG3),
-        ("TSPropertySignature", 4, &SC_TSPROPSIG4),
+        ("TSPropertySignature", 2, &SC_TSPROPSIG),
+        ("TSIndexSignature", 3, &SC_TSINDEXSIG),
         ("SequenceExpression", 4, &SC_SEQ4),
         ("SequenceExpression", 0, &SC_SEQ4),
         ("SequenceExpression", 1, &SC_SEQ4),
@@ -1799,7 +1801,7 @@ const SC_TSENUMMEMBER: Schema = Schema {
 
 const SC_TSINTERFACEDECL: Schema = Schema {
     estree: "TSInterfaceDeclaration", no_type: false,
-    kids: &["TSPropertySignature", "MemberName", "Type", "TSTypeParameterDeclaration", "TSTypeReference", "ClassHeritage"],
+    kids: &["TSPropertySignature", "TSMethodSignature", "TSIndexSignature", "TSCallSignatureDeclaration", "MemberName", "Type", "TSTypeParameterDeclaration", "TSTypeReference", "ClassHeritage"],
     any_kids: false,
     fields: &[
         FSpec { name: "id", v: VSpec::LeafTok(1) },
@@ -1809,39 +1811,73 @@ const SC_TSINTERFACEDECL: Schema = Schema {
     ],
 };
 
-const SC_TSPROPSIG3: Schema = Schema {
-    estree: "TSPropertySignature", no_type: false,
-    kids: &["Type"],
+// The members of an object type (one rule, TypeMember, in interfaces and type literals alike):
+// arm 0 call / construct signature, arm 1 get/set, arm 2 property / method, arm 3 index signature.
+const SC_TSCALLSIG: Schema = Schema {
+    estree: "TSCallSignatureDeclaration", no_type: false,
+    kids: &["TSTypeParameterDeclaration", "Identifier", "Type"],
     any_kids: false,
     fields: &[
-        FSpec { name: "key", v: VSpec::LeafTok(0) },
-        FSpec { name: "typeAnnotation", v: VSpec::Opt("Type") },
-        FSpec { name: "optional", v: VSpec::QuestionFlag },
-        FSpec { name: "readonly", v: VSpec::Flag(false) },
+        FSpec { name: "typeParameters", v: VSpec::Opt("TSTypeParameterDeclaration") },
+        FSpec { name: "params", v: VSpec::KidList("Identifier") },
+        FSpec { name: "returnType", v: VSpec::Opt("Type") },
     ],
 };
 
-const SC_TSPROPSIG4: Schema = Schema {
+const SC_TSCONSTRUCTSIG: Schema = Schema {
+    estree: "TSConstructSignatureDeclaration", no_type: false,
+    kids: &["TSTypeParameterDeclaration", "Identifier", "Type"],
+    any_kids: false,
+    fields: &[
+        FSpec { name: "typeParameters", v: VSpec::Opt("TSTypeParameterDeclaration") },
+        FSpec { name: "params", v: VSpec::KidList("Identifier") },
+        FSpec { name: "returnType", v: VSpec::Opt("Type") },
+    ],
+};
+
+const SC_TSACCESSORSIG: Schema = Schema {
+    estree: "TSMethodSignature", no_type: false,
+    kids: &["MemberName", "TSTypeParameterDeclaration", "Identifier", "Type", "BlockStatement"],
+    any_kids: false,
+    fields: &[
+        FSpec { name: "kind", v: VSpec::LeafTok(0) },
+        FSpec { name: "key", v: VSpec::KidByTag("MemberName") },
+        FSpec { name: "params", v: VSpec::KidList("Identifier") },
+        FSpec { name: "returnType", v: VSpec::Opt("Type") },
+    ],
+};
+
+const SC_TSPROPSIG: Schema = Schema {
     estree: "TSPropertySignature", no_type: false,
     kids: &["MemberName", "Type"],
     any_kids: false,
     fields: &[
         FSpec { name: "key", v: VSpec::KidByTag("MemberName") },
         FSpec { name: "typeAnnotation", v: VSpec::Opt("Type") },
-        FSpec { name: "optional", v: VSpec::Flag(false) },
-        FSpec { name: "readonly", v: VSpec::Flag(false) },
+        FSpec { name: "optional", v: VSpec::QuestionFlag },
+        FSpec { name: "readonly", v: VSpec::ReadonlyMod },
     ],
 };
 
-const SC_TSPROPSIG4_METHOD: Schema = Schema {
+const SC_TSPROPSIG_METHOD: Schema = Schema {
     estree: "TSPropertySignature", no_type: false,
     kids: &["MemberName", "Type", "Identifier", "TSTypeParameterDeclaration"],
     any_kids: false,
     fields: &[
         FSpec { name: "key", v: VSpec::KidByTag("MemberName") },
         FSpec { name: "typeAnnotation", v: VSpec::Seq(&[SeqPart::Opt("TSTypeParameterDeclaration"), SeqPart::KidList("Identifier"), SeqPart::Opt("Type")]) },
-        FSpec { name: "optional", v: VSpec::Flag(false) },
-        FSpec { name: "readonly", v: VSpec::Flag(false) },
+        FSpec { name: "optional", v: VSpec::QuestionFlag },
+        FSpec { name: "readonly", v: VSpec::ReadonlyMod },
+    ],
+};
+
+const SC_TSINDEXSIG: Schema = Schema {
+    estree: "TSIndexSignature", no_type: false,
+    kids: &["Identifier", "Type"],
+    any_kids: false,
+    fields: &[
+        FSpec { name: "parameters", v: VSpec::KidList("Identifier") },
+        FSpec { name: "typeAnnotation", v: VSpec::Opt("Type") },
     ],
 };
 
@@ -2042,32 +2078,22 @@ const SC_TSTYPEREF_Q: Schema = Schema {
 
 const SC_TYPE7: Schema = Schema {
     estree: "TSTypeLiteral", no_type: false,
-    kids: &["TSPropertySignature", "TSMethodSignature", "TSMappedType", "TSTypeReference", "MemberName", "Type"],
+    kids: &["TSPropertySignature", "TSMethodSignature", "TSIndexSignature", "TSCallSignatureDeclaration", "TSTypeReference", "MemberName", "Type"],
     any_kids: false,
     fields: &[
         FSpec { name: "members", v: VSpec::Kids },
     ],
 };
 
-const SC_TSMAPPEDTYPE2: Schema = Schema {
-    estree: "TSPropertySignature", no_type: false,
-    kids: &["Type"],
+// A mapped type (Type group 24): the key after `[`, then every child in order (constraint,
+// `as` type, annotation, trailing members).
+const SC_TSMAPPEDTYPE: Schema = Schema {
+    estree: "TSMappedType", no_type: false,
+    kids: &["Type", "TSIndexedAccessType", "$template", "TSTypeReference", "TSPropertySignature", "TSMethodSignature", "TSIndexSignature", "TSCallSignatureDeclaration"],
     any_kids: false,
     fields: &[
-        FSpec { name: "key", v: VSpec::LeafTok(1) },
-        FSpec { name: "typeAnnotation", v: VSpec::Opt("Type") },
-        FSpec { name: "optional", v: VSpec::QuestionFlag },
-        FSpec { name: "readonly", v: VSpec::Flag(true) },
-    ],
-};
-
-const SC_TSMETHODSIG1: Schema = Schema {
-    estree: "TSIndexSignature", no_type: false,
-    kids: &["Type", "TSIndexedAccessType", "$template"],
-    any_kids: false,
-    fields: &[
-        FSpec { name: "parameters", v: VSpec::TSIndexParams },
-        FSpec { name: "typeAnnotation", v: VSpec::TSIndexParams },
+        FSpec { name: "key", v: VSpec::LeafAfter("[") },
+        FSpec { name: "parts", v: VSpec::Kids },
     ],
 };
 
@@ -3138,9 +3164,30 @@ fn eval_spec(v: VSpec, pool: &mut Vec<(&'static str, u32, u32, String)>, off: u3
             }
         }
         VSpec::QuestionFlag => {
-            // Tree quirk: ts_type_member/ts_interface_member set `optional` from
+            // Tree quirk: ts_type_member sets `optional` from
             // src.contains('?') over the WHOLE source, not the member span.
             if src.contains('?') { "true".to_string() } else { "false".to_string() }
+        }
+        VSpec::ReadonlyMod => {
+            let toks = lex(&src[off as usize..end as usize]);
+            let texts: Vec<&str> = toks.iter().map(|t| &src[off as usize + t.off as usize..off as usize + t.end as usize]).collect();
+            let is_word = |s: &str| s.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_' || c == '$');
+            let mut i = 0;
+            while i < texts.len() && is_word(texts[i]) { i += 1; }
+            let name_is_word = i > 0 && (i == texts.len() || texts[i].starts_with(|c: char| "?:(<,;}".contains(c)));
+            let n = if name_is_word { i - 1 } else { i };
+            if texts[..n].iter().any(|t| *t == "readonly") { "true".to_string() } else { "false".to_string() }
+        }
+        VSpec::LeafAfter(s) => {
+            let toks = lex(&src[off as usize..end as usize]);
+            for (i, t) in toks.iter().enumerate() {
+                let text = &src[off as usize + t.off as usize..off as usize + t.end as usize];
+                if text == s && i + 1 < toks.len() {
+                    let t2 = toks[i + 1];
+                    return leaf_json(&src[off as usize + t2.off as usize..off as usize + t2.end as usize]);
+                }
+            }
+            "null".to_string()
         }
         VSpec::EqLeaf => {
             let toks = lex(&src[off as usize..end as usize]);
@@ -3502,8 +3549,11 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
                 if b[0] == b'"' || b[0] == b'\'' || b[0].is_ascii_digit() { &SC_SEQ11_LEAF } else { schema_for(etype, alt) }
             } else { schema_for(etype, alt) }
         }
-        ("TSPropertySignature", 4) => {
-            if text.contains('(') { &SC_TSPROPSIG4_METHOD } else { schema_for(etype, alt) }
+        ("TSCallSignatureDeclaration", 0) => {
+            if text.trim_start().starts_with("new") { &SC_TSCONSTRUCTSIG } else { &SC_TSCALLSIG }
+        }
+        ("TSPropertySignature", 2) => {
+            if text.contains('(') { &SC_TSPROPSIG_METHOD } else { schema_for(etype, alt) }
         }
         // ForStatement dispatch is alt-driven (see rebuild_estree: the ForHead
         // event's alt is stashed and re-encoded here): 100/101 = classic ForHead

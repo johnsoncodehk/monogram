@@ -37,6 +37,9 @@ export function buildTsCorpus(): { src: string; source: string }[] {
     'x => x + 1;', 'a ? b : c;', 'a.b.c();', 'f(g(1, 2), 3);', 'a++; b--;',
     'typeof x; void 0;', 'new Foo(1, 2);', 'a ?? b; a?.b?.c;', 'class C { m() {} }',
     'const n = maybe!;', 'enum E { A, B }', 'interface I { x: number }',
+    'interface J { get g(): T; set s(v: T) {} (): T; new (x: U): T; [k: string]: T; readonly r?: T }',
+    'type L = { public a: T; get g(): T; m?(): void; 0: T }', 'type N = { -readonly [K in T]-?: T[K]; a: T };',
+    'let v: { get g(): T, [k: number]: U } = x;', 'interface K { a: T }', 'interface P { readonly [k: string]: T; static m(): void }',
   ];
   const pads = ['', ' ', '  ', '\n', ' \n ', '\t'];
   const out: { src: string; source: string }[] = seeds.map((src) => ({ src, source: 'seed' }));
@@ -68,8 +71,8 @@ export const TS_GOLDEN: { label: string; src: string; expect: unknown }[] = [
       { label: 'C13 multi-case fold', src: 'switch (x) { case 1: case 2: y; break; default: z; }', expect: { type: 'Program', body: [{ type: 'SwitchStatement', discriminant: { type: 'Identifier', name: 'x' }, cases: [{ type: 'SwitchCase', test: 1, consequent: [] }, { type: 'SwitchCase', test: 2, consequent: [{ type: 'ExpressionStatement', expression: { type: 'Identifier', name: 'y' } }, { type: 'BreakStatement', label: null }] }, { type: 'SwitchCase', test: null, consequent: [{ type: 'ExpressionStatement', expression: { type: 'Identifier', name: 'z' } }] }] }] } },
       { label: 'C14 estreeDecorator', src: '@Dec class C {}', expect: { type: 'Program', body: [{ type: 'ClassDeclaration', decorators: [{ type: 'Decorator', expression: { type: 'Identifier', name: 'Dec' } }], id: 'C', superClass: null, body: { type: 'ClassBody', body: [] } }] } },
       { label: 'C15 estreeClassMember body kids', src: 'class C { m() { 1; } }', expect: { type: 'Program', body: [{ type: 'ClassDeclaration', decorators: [], id: 'C', superClass: null, body: { type: 'ClassBody', body: [{ type: 'MethodDefinition', kind: 'method', key: { type: 'MemberName', children: ['m'], arm: 'passthrough', alt: 0 }, value: { type: 'FunctionExpression', params: [], body: { type: 'BlockStatement', body: [{ type: 'ExpressionStatement', expression: 1 }] }, async: false, generator: false }, static: false, computed: false }] } }] } },
-      { label: 'C16 tsInterfaceMember', src: 'interface I { x: number; }', expect: { type: 'Program', body: [{ type: 'TSInterfaceDeclaration', id: 'I', typeParameters: null, extends: [], body: { type: 'TSInterfaceBody', body: [{ type: 'TSPropertySignature', key: { type: 'MemberName', children: ['x'], arm: 'passthrough', alt: 0 }, typeAnnotation: { type: 'Type', children: ['number'], headText: 'number' }, optional: false, readonly: false }] } }] } },
-      { label: 'C17 tsTypeMember + object TSTypeLiteral', src: 'type T = { x: number };', expect: { type: 'Program', body: [{ type: 'TSTypeAliasDeclaration', id: 'T', typeParameters: null, typeAnnotation: { type: 'TSTypeLiteral', members: [{ type: 'TSPropertySignature', key: 'x', typeAnnotation: { type: 'Type', children: ['number'], headText: 'number' }, optional: false, readonly: false }] } }] } },
+      { label: 'C16 tsTypeMember in an interface body', src: 'interface I { x: number; }', expect: { type: 'Program', body: [{ type: 'TSInterfaceDeclaration', id: 'I', typeParameters: null, extends: [], body: { type: 'TSInterfaceBody', body: [{ type: 'TSPropertySignature', key: { type: 'MemberName', children: ['x'], arm: 'passthrough', alt: 0 }, typeAnnotation: { type: 'Type', children: ['number'], headText: 'number' }, optional: false, readonly: false }] } }] } },
+      { label: 'C17 tsTypeMember + object TSTypeLiteral', src: 'type T = { x: number };', expect: { type: 'Program', body: [{ type: 'TSTypeAliasDeclaration', id: 'T', typeParameters: null, typeAnnotation: { type: 'TSTypeLiteral', members: [{ type: 'TSPropertySignature', key: { type: 'MemberName', children: ['x'], arm: 'passthrough', alt: 0 }, typeAnnotation: { type: 'Type', children: ['number'], headText: 'number' }, optional: false, readonly: false }] } }] } },
       { label: 'C18 estreeProp object', src: '({ a: 1, b });', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'SequenceExpression', expressions: [{ type: 'Property', key: { type: 'MemberName', children: ['a'], arm: 'passthrough', alt: 0 }, value: 1, kind: 'init', shorthand: false, computed: false, method: false }, { type: 'Property', key: { type: 'Identifier', name: 'b' }, value: null, kind: 'init', shorthand: false, computed: false, method: false }] } }] } },
       { label: 'new.target MetaProperty', src: 'new.target;', expect: { type: 'Program', body: [{ type: 'ExpressionStatement', expression: { type: 'MetaProperty', meta: { type: 'Identifier', name: 'new' }, property: { type: 'Identifier', name: 'target' } } }] } },
       // SH2-4d TemplateLiteral quasis/expressions (hole = enclosing Pratt, not global Type)
@@ -331,7 +334,7 @@ export const FAIL_LOUD_RD_FNS = [
   'estreeExprNudSeq', 'estreeArrow', 'tsTypeLed', 'estreeNewTargetLed',
   'estreeArrayPattern', 'estreeBindingProperty', 'estreeParam', 'estreeForHead',
   'estreeSwitchCase', 'estreeDecorator', 'estreeClassMember',
-  'tsInterfaceMember', 'tsTypeMember', 'estreeProp',
+  'tsTypeMember', 'estreeProp',
 ] as const;
 
 export const FAIL_LOUD_PRATT_FNS = [

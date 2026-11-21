@@ -719,7 +719,7 @@ function lowerDecl(n: E): Ast {
     if (t === 'class') return lowerClassLike(n, c.slice(i), 'ClassDeclaration', mods);
     if (t === 'interface') {
       const name = c[i + 1] as E;
-      const members = rules(c, 'InterfaceMember').map((m) => ast('PropertySignature', off(m), end(m)));
+      const members = rules(c, 'TypeMember').map((m) => ast('PropertySignature', off(m), end(m)));
       return ast('InterfaceDeclaration', off(n), end(n), [...mods, ast('Identifier', off(name), end(name)), ...members]);
     }
     if (t === 'type') {

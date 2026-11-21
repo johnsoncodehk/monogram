@@ -30,7 +30,6 @@
 (type_param (ident) @type)
 (jsxtag_name (ident) @type)
 (member_name (ident) @property)
-(type_member (ident) @property)
 (expr (expr) (ident) @property)
 (binding_property (ident) @property (binding_element))
 

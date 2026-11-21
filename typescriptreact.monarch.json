@@ -376,16 +376,8 @@
             "function": "keyword",
             "in": "keyword",
             "as": "operator",
-            "@new": "keyword",
-            "super": "keyword",
-            "instanceof": "operator",
-            "target": "keyword",
-            "class": "keyword",
-            "implements": "keyword",
-            "async": "keyword",
-            "yield": "keyword",
-            "satisfies": "operator",
-            "meta": "keyword",
+            "get": "keyword",
+            "set": "keyword",
             "export": "keyword",
             "public": "keyword",
             "private": "keyword",
@@ -394,9 +386,17 @@
             "accessor": "keyword",
             "declare": "keyword",
             "out": "keyword",
+            "async": "keyword",
             "static": "keyword",
-            "get": "keyword",
-            "set": "keyword",
+            "@new": "keyword",
+            "super": "keyword",
+            "instanceof": "operator",
+            "target": "keyword",
+            "class": "keyword",
+            "implements": "keyword",
+            "yield": "keyword",
+            "satisfies": "operator",
+            "meta": "keyword",
             "let": "keyword",
             "const": "keyword",
             "var": "keyword",
@@ -669,43 +669,11 @@
               "token": "operator",
               "switchTo": "@root"
             },
-            "@new": {
+            "get": {
               "token": "keyword",
               "switchTo": "@root"
             },
-            "super": {
-              "token": "keyword",
-              "switchTo": "@value"
-            },
-            "instanceof": {
-              "token": "operator",
-              "switchTo": "@root"
-            },
-            "target": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "class": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "implements": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "async": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "yield": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "satisfies": {
-              "token": "operator",
-              "switchTo": "@root"
-            },
-            "meta": {
+            "set": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -741,15 +709,47 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "async": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "static": {
               "token": "keyword",
               "switchTo": "@root"
             },
-            "get": {
+            "@new": {
               "token": "keyword",
               "switchTo": "@root"
             },
-            "set": {
+            "super": {
+              "token": "keyword",
+              "switchTo": "@value"
+            },
+            "instanceof": {
+              "token": "operator",
+              "switchTo": "@root"
+            },
+            "target": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "class": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "implements": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "yield": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "satisfies": {
+              "token": "operator",
+              "switchTo": "@root"
+            },
+            "meta": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -1026,7 +1026,7 @@
         }
       ],
       [
-        "\\.\\.\\.|\\?\\.|,|\\?|:|;|\\.",
+        "\\.\\.\\.|\\?\\.|,|\\?|:|\\.|;",
         {
           "token": "delimiter",
           "switchTo": "@root"
@@ -1167,16 +1167,8 @@
             "function": "keyword",
             "in": "keyword",
             "as": "operator",
-            "@new": "keyword",
-            "super": "keyword",
-            "instanceof": "operator",
-            "target": "keyword",
-            "class": "keyword",
-            "implements": "keyword",
-            "async": "keyword",
-            "yield": "keyword",
-            "satisfies": "operator",
-            "meta": "keyword",
+            "get": "keyword",
+            "set": "keyword",
             "export": "keyword",
             "public": "keyword",
             "private": "keyword",
@@ -1185,9 +1177,17 @@
             "accessor": "keyword",
             "declare": "keyword",
             "out": "keyword",
+            "async": "keyword",
             "static": "keyword",
-            "get": "keyword",
-            "set": "keyword",
+            "@new": "keyword",
+            "super": "keyword",
+            "instanceof": "operator",
+            "target": "keyword",
+            "class": "keyword",
+            "implements": "keyword",
+            "yield": "keyword",
+            "satisfies": "operator",
+            "meta": "keyword",
             "let": "keyword",
             "const": "keyword",
             "var": "keyword",
@@ -1262,7 +1262,7 @@
         "operator"
       ],
       [
-        "\\.\\.\\.|\\?\\.|,|\\?|:|;|\\.",
+        "\\.\\.\\.|\\?\\.|,|\\?|:|\\.|;",
         "delimiter"
       ],
       [
