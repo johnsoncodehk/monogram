@@ -30,5 +30,5 @@ jobs:
       # BENCH_EXTRA: a commit to time as variant E against D (origin/master); edit per measurement.
       - run: test/bench-rust-oxc/run.sh 9
         env:
-          BENCH_EXTRA: 469ae350317c8001a15ff6bf8052739f0018f1c6
+          BENCH_EXTRA: 9c2b277065fefe1de2f026f7f01dd51108381570
           BENCH_ONLY: '1'
