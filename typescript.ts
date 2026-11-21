@@ -41,7 +41,7 @@ import {
   Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr, bindingIdentifier, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
+  notReserved, notReservedExpr, bindingIdentifier, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -356,29 +356,12 @@ const Prop = rule($ => {
 // its general type instead), so adding ReturnType to ~18 slots doesn't inflate its GLR table.
 const ReturnType = tsRelax(alt([notReserved, Ident, sameLine, 'is', Type], Type), Type);
 
-const ClassHeritage = rule($ => [
-  // Non-constructor primaries: tsc PARSES `extends undefined/true/42/"x"` cleanly
-  // (rejecting them is the CHECKER's job), so the heritage grammar must too. The
-  // identifier-reference head is reserved-guarded (notReservedExpr, the same guard the
-  // expression NUD uses): a prefix-operator / statement keyword with NO bare-expression
-  // role — `void`, `typeof`, `delete`, `enum`, `case`, `throw`, … — is not a valid base
-  // (tsc parses `extends void {}` as "Expression expected"), while `this`/`await`/`yield`/
-  // `async`/plain identifiers are. Literals stay listed first so they keep their leaf scope.
-  // (leds below also cover `A?.B` — tsc parses optional chains in heritage cleanly)
-  Number_, String_, 'true', 'false', 'null', 'undefined',
-  [notReservedExpr, Ident],
-  // The heritage clause is a LeftHandSideExpression, not just a dotted name: a
-  // parenthesized expression (`extends (B)`, `extends (cond ? A : B)`) and a class
-  // EXPRESSION (`extends class {}`, `extends class Q extends P {}`) are both valid
-  // bases. (Before, only `Ident` was a base, so `extends (B)` was rejected and
-  // `extends class {}` only "worked" by mis-reading `class` as the superclass name.)
-  ['(', Expr, ')'],
+// The heritage forms are JavaScript's (`classHeritageArms`, javascript.ts); TypeScript's class
+// expression carries type parameters and an `implements` clause, and a base may take type
+// arguments (`extends Base<T>`, tsc's ExpressionWithTypeArguments).
+const ClassHeritage = rule($ => classHeritageArms($, Expr,
   ['class', opt(...bindingIdentifier), opt(TypeParams), opt('extends', $), opt('implements', sep(Type, ',')), '{', many(ClassMember), '}'],
-  [$, '.', Ident],
-  [$, '?.', Ident],
-  [$, '<', sep(Type, ','), '>'],
-  [$, '(', sep(Expr, ','), ')'],
-]);
+  [[$, '<', sep(Type, ','), '>']]));
 
 // Heritage clauses, shared by every class shape: tsc parses REPEATED and order-free
 // `extends`/`implements` clauses (`class D extends A extends B implements I`), each a
@@ -389,20 +372,11 @@ const heritageClauses = many(alt(
   ['implements', sep(alt([not(alt('extends', 'implements')), ClassHeritage]), ',')],
 ));
 
-const NewTarget = rule($ => [
-  Ident,
-  // a `new` expression is itself a valid new-target (NewExpression : `new` NewExpression),
-  // so `new new Foo()()` / `new new f` chain — mirrors the Expr `new` arm but recurses here.
-  ['new', not('<'), $, opt(alt([...typeArgsInExpr(), opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')']))],
-  // A template is part of the callee (PrimaryExpression : TemplateLiteral, MemberExpression :
-  // MemberExpression TemplateLiteral — see javascript.ts), with tsc's type arguments on the tag.
-  Template,
-  [$, '.', Ident],
-  [$, '[', Expr, ']'],
-  [$, Template],
-  [$, ...typeArgsInExpr(), Template],
-  ['(', Expr, ')'],
-]);
+// The `new` callee forms are JavaScript's (`newTargetArms`, javascript.ts); a TypeScript `new`
+// may take type arguments, and so may a template's tag.
+const NewTarget = rule($ => newTargetArms($, Expr,
+  opt(alt([...typeArgsInExpr(), opt('(', sep(Expr, ','), ')')], ['(', sep(Expr, ','), ')'])),
+  [[$, ...typeArgsInExpr(), Template]]));
 
 // Expression type arguments `<T, U>` (tsc's parseTypeArgumentsInExpression): tsc rescans the
 // closing token, so a `>>`/`>=`/`>>=`/`>>>`/`>>>=` there is not a closing `>` — `a < b >> c` is a

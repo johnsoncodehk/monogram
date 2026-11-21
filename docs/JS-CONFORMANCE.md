@@ -11,30 +11,25 @@ this record is stale, so every file that moves between cells shows in its diff.
 
 Corpus: `microsoft/TypeScript@6fbce89821d93a5b761581d9ac540455f38e9acb` `tests/cases/conformance` · oracle: `typescript@5.9.3`
 
-**4462 files measured**, 4297 agree (96.30%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
+**4462 files measured**, 4303 agree (96.44%) · 1196 multi-file cases skipped · 1 excluded as oracle crashes (`ORACLE_CRASHES` in the test, by name).
 
 | cell (tsc / monogram) | files | |
 |---|---:|---|
-| `js/accept` | 1176 | agree: valid JavaScript per tsc, accepted |
-| `js/reject` | 11 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
+| `js/accept` | 1181 | agree: valid JavaScript per tsc, accepted |
+| `js/reject` | 6 | **disagree**: valid JavaScript per tsc, rejected: candidate gaps (read each derivation) |
 | `ts-only/reject` | 2579 | agree: TypeScript-only syntax per tsc, rejected |
 | `ts-only/accept` | 134 | **disagree**: TypeScript-only syntax per tsc, accepted: over-acceptance |
 | `js-error/reject` | 0 | agree: a JS-only syntactic error per tsc, rejected |
 | `js-error/accept` | 1 | **disagree**: a JS-only syntactic error per tsc, accepted: over-acceptance |
-| `reject/reject` | 542 | agree: a tsc parse error, rejected |
-| `reject/accept` | 19 | **disagree**: a tsc parse error, accepted: over-acceptance |
+| `reject/reject` | 543 | agree: a tsc parse error, rejected |
+| `reject/accept` | 18 | **disagree**: a tsc parse error, accepted: over-acceptance |
 | `monogram-crash` | 0 | **disagree**: monogram threw something other than an input error: a bug |
 
-## `js/reject` (11)
+## `js/reject` (6)
 
 Valid JavaScript per tsc, rejected: candidate gaps (read each derivation).
 
-- `classes/classDeclarations/classExtendingNull.ts`
 - `classes/classStaticBlock/classStaticBlock20.ts`
-- `es6/classDeclaration/emitClassDeclarationWithPropertyAccessInHeritageClause1.ts`
-- `es6/yieldExpressions/generatorTypeCheck40.ts`
-- `es6/yieldExpressions/generatorTypeCheck55.ts`
-- `es6/yieldExpressions/generatorTypeCheck60.ts`
 - `esDecorators/esDecorators-arguments.ts`
 - `parser/ecmascript5/ConstructorDeclarations/parserConstructorDeclaration3.ts`
 - `parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration10.ts`
@@ -186,12 +181,11 @@ A JS-only syntactic error per tsc, accepted: over-acceptance.
 
 - `classes/classStaticBlock/classStaticBlock19.ts`
 
-## `reject/accept` (19)
+## `reject/accept` (18)
 
 A tsc parse error, accepted: over-acceptance.
 
 - `classes/classDeclarations/classAbstractKeyword/classAbstractManyKeywords.ts`
-- `classes/classDeclarations/classHeritageSpecification/classExtendingPrimitive2.ts`
 - `classes/members/privateNames/privateNameNotAllowedOutsideClass.ts`
 - `classes/members/privateNames/privateNamesNotAllowedInVariableDeclarations.ts`
 - `es6/templates/templateStringInModuleName.ts`
