@@ -21,6 +21,7 @@ import type { LexTok, ParserIR } from './emit-portable.ts';
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
 import { type CharSet, type CodeRange, type Expr, type Fn, type Lowering, type Stmt, inlineFn, printFns, printStmts } from './algo-ir.ts';
 import { ACCEPT, committed, contOf, exitsWhereBodyStops, info, oneChar, oneEnd } from './lex-match-plan.ts';
+import { oneUnit } from './text-units.ts';
 
 type Ex = Expr | string;
 const x = (e: Ex): Expr => (typeof e === 'string' ? { k: 'var', name: e } : e);
@@ -51,16 +52,18 @@ const inRanges = (v: Ex, rs: CodeRange[]): Expr => any(rs.map(([lo, hi]) => (lo 
 function classParts(items: TokenCharClassItem[]): { narrow: CodeRange[]; wide: string[] } {
   const narrow: CodeRange[] = [], wide: string[] = [];
   for (const it of items) {
-    if (it.type === 'char') { if (it.value.charCodeAt(0) <= 127) narrow.push([it.value.charCodeAt(0), it.value.charCodeAt(0)]); else wide.push(it.value); continue; }
+    if (it.type === 'char') { if (oneUnit(it.value)) narrow.push([it.value.charCodeAt(0), it.value.charCodeAt(0)]); else wide.push(it.value); continue; }
     const lo = it.from.charCodeAt(0), hi = it.to.charCodeAt(0);
-    if (hi > 127) throw new Error(`lex-family: a character class range ${JSON.stringify(it.from)}-${JSON.stringify(it.to)} beyond ASCII has no scanner in every target's units`);
+    if (!oneUnit(it.to)) throw new Error(`lex-family: a character class range ${JSON.stringify(it.from)}-${JSON.stringify(it.to)} beyond ASCII has no scanner in every target's units`);
     narrow.push([lo, hi]);
   }
   return { narrow, wide };
 }
-const isAscii = (t: string): boolean => /^[\x00-\x7f]*$/.test(t);
-// A literal's length in native units: a number for ASCII, otherwise measured by the target.
-const litLen = (t: string): Expr => (isAscii(t) ? I(t.length) : len({ k: 'str', v: t }));
+// A literal's length in the target's units.
+const litLen = (lit: string): Expr => ({ k: 'litLen', lit });
+// The units every match of p takes, where that is one width: a literal's length, one unit for a
+// pattern every path of which takes one unit in every target's units; null otherwise.
+const width = (p: TokenPattern): Expr | null => (typeof p === 'string' && p !== '' ? litLen(p) : oneChar(p) ? I(1) : null);
 const ident = (t: string): string => t.replace(/[^A-Za-z0-9]/g, '_');
 
 export const scannerName = (tok: string): string => `lexScan${ident(tok)}`;
@@ -205,18 +208,19 @@ class LexScan {
         ret(this.kAt(k, 'q')),
       ]);
     }
-    // A one-character body: the repeats end at consecutive positions; try the rest from the most.
-    if (oneChar(p.body)) {
+    // A body of one width: the repeats end that far apart; try the rest from the most.
+    const w = width(p.body);
+    if (w !== null) {
       return this.fnFor(['back', p, k], () => [
         let_('q', 'p'), let_('n', I(0)), let_('r', call(m, 'q')),
         while_(ge('r', I(0)), [set('q', 'r'), set('n', add('n', I(1))), ...capped, set('r', call(m, 'q'))]),
-        while_(ge('q', 'p'), [set('r', this.kAt(k, 'q')), if_(ge('r', I(0)), [ret('r')]), set('q', sub('q', I(1)))]),
+        while_(ge('q', 'p'), [set('r', this.kAt(k, 'q')), if_(ge('r', I(0)), [ret('r')]), set('q', sub('q', w))]),
         NONE,
       ]);
     }
     // A bounded repeat: one more repeat, else the rest.
     if (counted) return this.exact({ type: 'alt', items: [{ type: 'seq', items: [p.body, { ...p, max: p.max! - 1 }] }, ''] }, k);
-    throw new Error(`lex-family: a ${where} the pattern must back up into, whose body is longer than one character`);
+    throw new Error(`lex-family: a ${where} the pattern must back up into, whose matches are not all one width`);
   }
 
   private kAt(k: TokenPattern[], at: string): Expr {

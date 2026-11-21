@@ -14,10 +14,14 @@ import type {
 import { validateShapeOrThrow } from './shape-validate.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
+import { type TextUnits, unitLen } from './text-units.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
+// TS strings are indexed by UTF-16 code unit: every offset and length printed here is in those units.
+const UNITS: TextUnits = 'utf16';
+const tlen = (text: string): number => unitLen(text, UNITS);
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
@@ -52,7 +56,7 @@ const astGuard = (r: RdRule, i: number): string => { const c = guardCond(r.altGu
 
 /** Emit kid/lid lookup tables into generated lexer source. */
 function renderIdTablesTS(ids: LexIdPlan): string {
-  const pf = buildLidPrefilter(ids, 'utf16');
+  const pf = buildLidPrefilter(ids, UNITS);
   const bitsLit = [...pf.firstByLenBits].join(', ');
   return `const KIND_STR: string[] = ${J(ids.kids)};
 const _LIDS: string[] = ${J(ids.lids)};
@@ -170,7 +174,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const newlineOnly = !!(nl && !rx && !tpl);
   const pushFn = stateful ? 'emit' : 'push';
   const punctLine = (p: string) =>
-    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}(pos, pos + ${p.length}, 0, ${lidOf(ids, p)}); pos += ${p.length}; continue; }`;
+    `    if (src.startsWith(${J(p)}, pos)) { ${pushFn}(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)}); pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const cascade = renderLexByteDispatchTS(lexCodes, lexFirsts, '    ');
   const rxBitTables = rx ? `${tsFlagTable('_divT', lidFlagTable(ids, rx.divisionTexts))}
@@ -204,7 +208,7 @@ const LID_INTERP_CLOSE = ${lidOf(ids, tpl.interpClose)};
     const q = ${shared.tplSpan()}(src, p, strict);
     if (q === -1) throw new Error('Unterminated template literal at offset ' + n);
     if (q < -1) throw new Error('Invalid escape sequence in template at offset ' + (-2 - q));
-    return src.startsWith(${J(tpl.interpOpen)}, q) ? { interp: true, end: q + ${tpl.interpOpen.length} } : { interp: false, end: q + ${tpl.open.length} };
+    return src.startsWith(${J(tpl.interpOpen)}, q) ? { interp: true, end: q + ${tlen(tpl.interpOpen)} } : { interp: false, end: q + ${tlen(tpl.open)} };
   }
 ` : '';
   const tplState = tpl ? `  const templateStack: number[] = [];
@@ -256,13 +260,13 @@ ${emitHooks}
   // Template dispatch runs at the top of the loop, before token/punct scanning.
   const tplDispatch = tpl ? `    if (templateStack.length > 0 && src.startsWith(${J(tpl.interpClose)}, pos) && templateStack[templateStack.length - 1] === 0) {
       templateStack.pop();
-      const sp = scanTplSpan(pos + ${tpl.interpClose.length}, false);
+      const sp = scanTplSpan(pos + ${tlen(tpl.interpClose)}, false);
       if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateMiddle')}, lid_of(_tx)); templateStack.push(0); }
       else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateTail')}, lid_of(_tx)); }
       pos = sp.end; continue;
     }
     if (src.startsWith(${J(tpl.open)}, pos)) {
-      const sp = scanTplSpan(pos + ${tpl.open.length}, ${rx ? '!prevIsValue()' : 'true'});
+      const sp = scanTplSpan(pos + ${tlen(tpl.open)}, ${rx ? '!prevIsValue()' : 'true'});
       if (sp.interp) { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, '$templateHead')}, lid_of(_tx)); templateStack.push(0); }
       else { const _tx = src.slice(pos, sp.end); emit(pos, sp.end, ${kidOf(ids, tpl.token)}, lid_of(_tx)); }
       pos = sp.end; continue;
@@ -3449,6 +3453,7 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 
 // Shared-algorithm lowering: untyped numbers, GC-managed arrays (capacity is never reserved).
 const tsLowering: Lowering = {
+  units: UNITS,
   ident: (n) => n,
   num: { int: 'number', lid: 'number', depth: 'number' },
   type: (t) => TS_TYPES[t],

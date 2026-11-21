@@ -4,6 +4,7 @@
 // construct — literals, operators, grouping, calls, indexing, statements, blocks, comments,
 // function shells — to the lowering as already-printed children. Every branch and loop of the
 // algorithm comes from the IR; a lowering only spells it.
+import { type TextUnits, unitLen } from './text-units.ts';
 
 export type Num = 'int' | 'lid' | 'depth';
 export type ListTy = 'metas' | 'toks' | 'bools' | 'depths' | 'edits';
@@ -51,6 +52,8 @@ export type Expr =
   | { k: 'code'; s: Expr; i: Expr }
   // Whether the literal occurs in s at i, 0 <= i <= len(s).
   | { k: 'hasAt'; s: Expr; i: Expr; lit: string }
+  // The literal's length in the target's native string units (an int constant).
+  | { k: 'litLen'; lit: string }
   // Whether c is a member of a declared CharSet (only ASCII codes are ever members).
   | { k: 'inSet'; set: string; c: Expr };
 
@@ -113,6 +116,8 @@ type Lines = string[];
 // What a target supplies to print the IR: its complete surface syntax plus its type, ownership,
 // storage and capacity decisions. None may add control flow the IR does not contain.
 export interface Lowering {
+  // The units the target's strings are indexed in: every offset and length it prints is in them.
+  units: TextUnits;
   ident(name: string): string;
   num: Record<Num, string>;
   type(t: Ty, role: Role, owned: boolean): string;
@@ -281,6 +286,7 @@ class Printer implements Cx {
       case 'lexAll': return this.atom(X.call(this.id('lex'), [this.str(this.expr(e.text))]), 'toks', 'toks', { owned: true });
       case 'code': return X.code(this, this.expr(e.s), this.expr(e.i));
       case 'hasAt': return X.hasAt(this, this.expr(e.s), this.expr(e.i), e.lit);
+      case 'litLen': return this.expr({ k: 'int', v: unitLen(e.lit, this.L.units) });
       case 'inSet': {
         if (!this.sets.has(e.set)) throw new Error(`algo-ir: undeclared char set ${e.set}`);
         return X.inSet(this, this.id(e.set), this.expr(e.c));

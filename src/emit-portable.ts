@@ -26,6 +26,7 @@ import { withAwaitYield } from './await-yield-fork.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
+import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
 
 // ── Intermediate representation (plain data; every Target renders THIS) ──
 
@@ -733,16 +734,17 @@ function lexTok(t: TokenDecl): LexTok {
   return { kind: 'pattern', name: t.name, pattern: t.pattern, skip };
 }
 
-const isLit = (p: TokenPattern | undefined, len?: number): p is string => typeof p === 'string' && p.length > 0 && (len === undefined || p.length === len);
+const isLit = (p: TokenPattern | undefined): p is string => typeof p === 'string' && p.length > 0;
 const isAny = (p: TokenPattern): boolean => typeof p !== 'string' && p.type === 'anyChar';
 const notAhead = (p: TokenPattern, lit: string): boolean => typeof p !== 'string' && p.type === 'lookahead' && p.negate && p.body === lit;
 
 // `d ([^d\\] | \\ anyChar)* d`, the alternatives in either order: the delimiter, then a run in
-// which a backslash takes the next character, then the delimiter.
+// which a backslash takes the next character, then the delimiter. The string scanner compares
+// one unit with the delimiter, so the delimiter is one unit in every target's units.
 function stringShape(p: TokenPattern): string | null {
   if (typeof p === 'string' || p.type !== 'seq' || p.items.length !== 3) return null;
   const [open, body, close] = p.items;
-  if (!isLit(open, 1) || close !== open) return null;
+  if (!isLit(open) || !oneUnit(open) || close !== open) return null;
   if (typeof body === 'string' || body.type !== 'repeat' || body.min !== 0 || body.max !== undefined || !body.greedy) return null;
   const alt = body.body;
   if (typeof alt === 'string' || alt.type !== 'alt' || alt.items.length !== 2) return null;
@@ -1092,19 +1094,15 @@ export type LidPrefilterPlan = {
 };
 
 /**
- * The units a target's strings are measured in: UTF-8 bytes (Go, Rust) or UTF-16 code units (TS).
- * `lid_of` keys a text by its length in those units and the low byte of its first unit — the one
- * definition the emitted `lid_of` of each target computes.
+ * `lid_of` keys a text by its length in the target's units (text-units.ts) and the low byte of its
+ * first unit — the one definition the emitted `lid_of` of each target computes.
  */
-export type LidUnits = 'utf8' | 'utf16';
-export function lidKey(text: string, units: LidUnits): { len: number; first: number } {
-  if (units === 'utf16') return { len: text.length, first: text.charCodeAt(0) & 255 };
-  const buf = Buffer.from(text, 'utf8');
-  return { len: buf.length, first: buf[0]! };
+export function lidKey(text: string, units: TextUnits): { len: number; first: number } {
+  return { len: unitLen(text, units), first: firstUnit(text, units) & 255 };
 }
 
 /** The length × first-unit prefilter over every literal of the table. */
-export function buildLidPrefilter(plan: LexIdPlan, units: LidUnits): LidPrefilterPlan {
+export function buildLidPrefilter(plan: LexIdPlan, units: TextUnits): LidPrefilterPlan {
   const keys = plan.lids.slice(1).map((t) => lidKey(t, units));
   const maxLen = Math.max(0, ...keys.map((k) => k.len));
   const firstByLenBits = new Uint8Array((maxLen + 1) * 32);

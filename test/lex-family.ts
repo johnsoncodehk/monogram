@@ -24,7 +24,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { token, rule, defineGrammar, many, seq, plus, star, oneOf, noneOf, range, repeat, altPattern, anyChar, notFollowedBy } from '../src/api.ts';
 import { portableIR, type ParserIR } from '../src/emit-portable.ts';
-import { tsTarget, goTarget, rustTarget } from '../src/emit.ts';
+import { tsTarget, goTarget, rustTarget, type Target } from '../src/emit.ts';
+import { type TextUnits, unitLen } from '../src/text-units.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { tokenPatternToRegex } from '../src/token-pattern.ts';
 import { scratchDir } from './scratch.ts';
@@ -247,7 +248,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
 // scanner must end where that regex's match ends, on the token's edge texts (test/token-edges.ts)
 // and on each of them followed by more source.
 {
-  const PORTABLE = ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs'].map((f) => `./fixtures/${f}.ts`)];
+  const PORTABLE = ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs', 'unilits'].map((f) => `./fixtures/${f}.ts`)];
   let checked = 0;
   for (const path of PORTABLE) {
     const g = (await import(path)).default as CstGrammar;
@@ -294,6 +295,33 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     }
   }
   console.log(`  ${sources} emitted Rust / Go sources hold no raw control character in a literal`);
+
+  // ── 8. a lexer advances past a literal by its length in the target's units ──
+  // Go and Rust index by UTF-8 byte, TS by UTF-16 unit; a length measured with JavaScript's
+  // `.length` is right in TS only. Each emitted lexer is read: wherever it tests for a literal
+  // (a punctuator, a template delimiter) and advances on the same line, the advance must be that
+  // literal's length in the target's units. This sees only lengths printed next to their literal;
+  // a length inside a shared scanner, a composed operator's read or a decision such as "one
+  // unit" is checked by running the parsers (test/portable-targets.ts, the unilits fixture).
+  const LIT = '("(?:[^"\\\\]|\\\\.)*")';
+  const ADVANCE: [string, Target, TextUnits, RegExp][] = [
+    ['typescript', tsTarget, 'utf16', new RegExp(`src\\.startsWith\\(${LIT}, (?:pos|q)\\)[^\\n]*?(?:pos \\+=|end: q \\+) (\\d+)`, 'g')],
+    ['go', goTarget, 'utf8', new RegExp(`strings\\.HasPrefix\\(src\\[(?:pos|q):\\], ${LIT}\\)[^\\n]*?(?:pos \\+=|return true, q \\+) (\\d+)`, 'g')],
+    ['rust', rustTarget, 'utf8', new RegExp(`(?:src\\[pos\\.\\.\\]\\.starts_with\\(${LIT}\\)|starts_with\\(${LIT}\\.as_bytes\\(\\)\\))[^\\n]*?(?:pos \\+=|return \\(true, q \\+) (\\d+)`, 'g')],
+  ];
+  let advances = 0;
+  for (const path of PORTABLE) {
+    const g = (await import(path)).default as CstGrammar;
+    for (const [lang, target, units, re] of ADVANCE) {
+      for (const m of target.emitParser(g).matchAll(re)) {
+        const lit = JSON.parse(m[1] ?? m[2]!) as string, n = Number(m[m.length - 1]);
+        advances++;
+        if (n !== unitLen(lit, units)) fail(`${g.name}/${lang}: advances ${n} past ${JSON.stringify(lit)}, its length in ${units} is ${unitLen(lit, units)}`);
+      }
+    }
+  }
+  if (advances === 0) fail('no literal advance found in any emitted lexer (the spellings this check reads have changed)');
+  console.log(`  ${advances} literal advances in the emitted lexers are their literal's length in the target's units`);
 }
 
 if (failures > 0) {

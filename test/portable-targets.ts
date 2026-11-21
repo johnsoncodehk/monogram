@@ -264,6 +264,20 @@ const CASES: Case[] = [
     reject: ['a;', '@;', '@ a', '@@@ a;', '@ @@;', 'caf a;', 'cafe a;', '$ a;', '$xy a;', '__ a;', 'a t;', 'atom a;', 'atea;'],
   },
   {
+    // Literals and delimiters beyond ASCII (see the fixture): every length a lexer advances by,
+    // or a composed operator is measured by, is in the target's units (UTF-8 bytes in Go / Rust).
+    grammar: 'unilits', path: './fixtures/unilits.ts',
+    accept: [
+      '', '1 → 2;', 'a ≠ b;', 'a ≠= b;', 'a ± b ± c;', 'a 🜂 b;', 'a 🜂= b;', '§ x;', '→→ a → b;', '-→ x;', '> a;', 'a > b;', 'a >→ b;',
+      'a→b≠c±d🜂e;', 'a-b→c;', '-a → -b;', '¬a 🜂 ¬b;', '(a → b) ≠ c;', 'let x = a 🜂 ¬b;', '§x;§y;→→a;-→z;',
+      '¦str¦ → x;', '¦a\\¦b¦;', '¦é→🜂¦;', 'a ※ comment → 🜂\n→ b;', '« block → » a;', '«é»a«»;',
+      '‖tpl‖;', '‖a¤⟨x⟩b‖;', '‖¤⟨‖¤⟨a⟩‖⟩‖;', '‖é¤x¤⟨a → b⟩🜂‖;',
+      '^°;', '^°°;', '^°°°;', '^°° ;', '^ ;', '^ °;', 'a° → ^°;', '^°° → b°;',
+    ],
+    reject: ['→;', 'a →;', 'a ≠≠ b;', '§;', '§ x', '→ a;', 'a -→ b;', 'a > → b;', 'a ≠ = b;', '🜂 a;', 'a 🜂🜂 b;', 'a ¬ b;', 'a →→ b;',
+      '¦unterminated;', '«open a;', '‖a¤⟨x‖;', '^;', '^°°;;', '°;', '^° °° ;'],
+  },
+  {
     // The REAL javascript.ts grammar (89 rules after the [Await]/[Yield] fork) — the proof
     // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
     // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's

@@ -13,6 +13,7 @@
 // when proven, and a false answer costs a continuation-carrying matcher, never a wrong one.
 
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
+import { oneUnit } from './text-units.ts';
 
 // A set of characters as sorted disjoint inclusive code ranges. -1 is the end of input.
 export type CSet = [number, number][];
@@ -250,12 +251,13 @@ export function oneEnd(p: TokenPattern, c: Cont = ANY): boolean {
   }
 }
 
-/** Whether every path of p consumes exactly one character. */
+/** Whether every path of p consumes exactly one unit, in every target's units. */
 export function oneChar(p: TokenPattern): boolean {
-  if (typeof p === 'string') return p.length === 1;
+  // A literal or class member beyond ASCII is more than one unit in a UTF-8 target.
+  if (typeof p === 'string') return oneUnit(p);
   if (p.type === 'anyChar') return true;
-  // A negated class takes one unit; a non-ASCII member is more than one in a UTF-8 target.
-  if (p.type === 'charClass') return p.negate || p.items.every((it) => (it.type === 'char' ? it.value : it.to).charCodeAt(0) <= 127);
+  // A negated class takes one unit.
+  if (p.type === 'charClass') return p.negate || p.items.every((it) => oneUnit(it.type === 'char' ? it.value : it.to));
   if (p.type === 'alt') return p.items.every(oneChar);
   if (p.type === 'seq') {
     const consuming = p.items.filter((it) => typeof it === 'string' ? it.length > 0 : !(it.type === 'lookahead' || it.type === 'anchor'));

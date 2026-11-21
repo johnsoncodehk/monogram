@@ -16,6 +16,7 @@ import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, bu
 import type { CstGrammar } from './types.ts';
 import { defineTarget, type SharedAlgorithms } from './define-target.ts';
 import { ATOM, COMPARISON, isList, isNum, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
+import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
   FieldBind, TokenLeafPolicy, CustomShape, ParentFold, StreamType, PrattShape, RuleShapeAtom,
@@ -25,15 +26,13 @@ import { validateShapeOrThrow } from './shape-validate.ts';
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
 const J = (v: unknown) => JSON.stringify(v);
+// Rust strings are indexed by UTF-8 byte: every offset and length printed here is in bytes.
+const UNITS: TextUnits = 'utf8';
+const tlen = (text: string): number => unitLen(text, UNITS);
 
-/** `starts_with` on a single ASCII byte collapses to a direct byte compare (no slice/bounds). */
-const startByteEq = (posExpr: string, s: string): string => {
-  if (s.length === 1) {
-    const c = s.charCodeAt(0);
-    if (c < 128) return `b[${posExpr}] == ${c}`;
-  }
-  return `src[${posExpr}..].starts_with(${J(s)})`;
-};
+/** `starts_with` on a single byte collapses to a direct byte compare (no slice/bounds). */
+const startByteEq = (posExpr: string, s: string): string =>
+  tlen(s) === 1 ? `b[${posExpr}] == ${firstUnit(s, UNITS)}` : `src[${posExpr}..].starts_with(${J(s)})`;
 
 // Boolean expr testing whether the buffered token t starts branch i (FIRST set membership).
 // null FirstSig → 'false' (never matched here; predictive alts have all-non-null FIRSTs).
@@ -77,7 +76,9 @@ function gtCompLit(ids: LexIdPlan, s: { value: string; ttype: string }): boolean
 }
 // '>'-led composite operators (LexIdPlan.gtComps): the lexer scans every '>' alone. gt_op reads the
 // operator at toks[i]: a lone '>' extends over each adjacent single-character punct token after it
-// while the text stays a composite (gt_step: prefix lid × next character lid → composite lid).
+// while the text stays a composite (gt_step: prefix lid × next character lid → composite lid). A
+// punct token (kid 0) is the text of its lid, and gt_step names only one-character lids, so no
+// length (which is in bytes here, not characters) is compared.
 function gtRuntimeRust(ids: LexIdPlan): string {
   const arms = ids.gtComps.map((c) => {
     const a = lidOf(ids, c.slice(0, -1)), b = lidOf(ids, c.slice(-1)), r = lidOf(ids, c);
@@ -94,7 +95,7 @@ fn gt_op(toks: &[Tok], i: usize) -> (u16, usize, u32) {
     let mut j = i + 1;
     while j < toks.len() {
         let u = toks[j];
-        if u.kid != 0 || u.off != end || u.end != end + 1 { break; }
+        if u.kid != 0 || u.off != end { break; }
         let c = gt_step(lid, u.lid);
         if c == 0 { break; }
         lid = c; n += 1; end = u.end; j += 1;
@@ -108,15 +109,15 @@ function renderIdTablesRust(ids: LexIdPlan): string {
   const kidsLit = ids.kids.map(J).join(', ');
   const lidsLit = ids.lids.map(J).join(', ');
   const kidArms = ids.kids.map((k, i) => `${J(k)} => ${i}`).join(', ');
-  // Group lids[1..] by UTF-8 byte length, in two match tables split by the first-byte class
+  // Group lids[1..] by byte length, in two match tables split by the first-byte class
   // lid_of routes a text by (lidWordByte), so each literal is in the table its own text reaches.
   const byLenKw = new Map<number, { text: string; id: number }[]>();
   const byLenPu = new Map<number, { text: string; id: number }[]>();
   for (let i = 1; i < ids.lids.length; i++) {
     const text = ids.lids[i]!;
-    const blen = Buffer.byteLength(text);
+    const blen = tlen(text);
     const ent = { text, id: i };
-    const map = lidWordByte(Buffer.from(text, 'utf8')[0]!) ? byLenKw : byLenPu;
+    const map = lidWordByte(firstUnit(text, UNITS)) ? byLenKw : byLenPu;
     const arr = map.get(blen) ?? [];
     arr.push(ent);
     map.set(blen, arr);
@@ -128,7 +129,7 @@ function renderIdTablesRust(ids: LexIdPlan): string {
     }).join('\n');
   const kwArms = lenArmsOf(byLenKw);
   const puArms = lenArmsOf(byLenPu);
-  const pf = buildLidPrefilter(ids, 'utf8');
+  const pf = buildLidPrefilter(ids, UNITS);
   const bitsLit = [...pf.firstByLenBits].join(', ');
   // The byte pattern of lidWordByte, from the function itself (ranges of consecutive bytes).
   const wordBytes: string[] = [];
@@ -331,28 +332,28 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; continue; }
         10 | 13 => { ${nlVar} = true; pos += 1; continue; }
 `;
-  const tplOpenByte = tpl && tpl.open.length === 1 && tpl.open.charCodeAt(0) < 128 ? tpl.open.charCodeAt(0) : null;
+  const tplOpenByte = tpl && tlen(tpl.open) === 1 ? firstUnit(tpl.open, UNITS) : null;
   const tplOpenArm = tplOpenByte !== null ? `        ${tplOpenByte} => {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl!.open.length}, ${rx ? '!st.prev_is_value()' : 'true'});
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl!.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl!.token)}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
 ` : '';
   const tplOpenPreCheck = tpl && tplOpenByte === null ? `        if ${startByteEq('pos', tpl.open)} {
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.open.length}, ${rx ? '!st.prev_is_value()' : 'true'});
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.open)}, ${rx ? '!st.prev_is_value()' : 'true'});
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateHead")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, tpl.token)}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
 ` : '';
   const tplDispatch = tpl ? `        if !st.template_stack.is_empty() && ${startByteEq('pos', tpl.interpClose)} && *st.template_stack.last().unwrap() == 0 {
             st.template_stack.pop();
-            let (interp, e) = _scan_tpl_span(src, pos + ${tpl.interpClose.length}, false);
+            let (interp, e) = _scan_tpl_span(src, pos + ${tlen(tpl.interpClose)}, false);
             if interp { st.emit(pos, e, ${kidOf(ids, "$templateMiddle")}, lid_of(&src[pos..e])); st.template_stack.push(0); } else { st.emit(pos, e, ${kidOf(ids, "$templateTail")}, lid_of(&src[pos..e])); }
             pos = e; continue;
         }
 ${tplOpenPreCheck}` : '';
   const punctLine = (p: string) =>
-    `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${p.length}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${p.length}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${p.length}; continue; }`;
+    `        if ${startByteEq('pos', p)} { ${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
   const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine);
   const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiWsCheck);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
@@ -433,8 +434,8 @@ fn _lx_ext(s: &str, e: usize) -> usize {
     if q == -1 { panic!("Unterminated template literal at offset {}", s.len()); }
     if q < -1 { panic!("Invalid escape sequence in template at offset {}", -2 - q); }
     let q = q as usize;
-    if s.as_bytes()[q..].starts_with(${J(tpl.interpOpen)}.as_bytes()) { return (true, q + ${tpl.interpOpen.length}); }
-    (false, q + ${tpl.open.length})
+    if s.as_bytes()[q..].starts_with(${J(tpl.interpOpen)}.as_bytes()) { return (true, q + ${tlen(tpl.interpOpen)}); }
+    (false, q + ${tlen(tpl.open)})
 }
 ` : '';
   const fields = ['toks: Vec<Tok>', 'pending_nl: bool',
@@ -4953,6 +4954,7 @@ const rsBlock = (lines: string[]): string[] => lines.map((l) => RS_IND + l);
 // Growth estimates are not reserved (no GC to save; realloc growth matches the base allocation
 // pattern), so nothing is over-reserved and there is nothing to trim. Exact capacities are kept.
 const rustLowering: Lowering = {
+  units: UNITS,
   ident: snake,
   num: { int: 'isize', lid: 'u16', depth: 'i64' },
   type: (t, role, owned) => {
