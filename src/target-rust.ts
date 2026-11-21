@@ -11,7 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import type { CstGrammar } from './types.ts';
@@ -692,7 +692,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': return s.predictive
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
-    case 'not': return `(|p: &mut Parser<'a, B>| -> bool { ${notBody(s.steps, ids, ar)} })(self)`;
+    case 'look': return `${s.is ? '' : '!'}self.look_${s.id}()`;
     case 'ahead': return `self.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
@@ -712,7 +712,7 @@ function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': return s.predictive
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(p)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(p)`;
-    case 'not': return `(|p: &mut Parser<'a, B>| -> bool { ${notBody(s.steps, ids, ar)} })(p)`;
+    case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
@@ -732,8 +732,9 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
   }).join(' ');
   return `${peekInit}${tries} false`;
 }
-function notBody(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return `let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${steps.length ? steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); !m`;
+// ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
+function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); m }\n`).join('');
 }
 function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
   // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
@@ -2283,7 +2284,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         false
     }
 
-${matchTemplate}${ruleFns}
+${matchTemplate}${lookFns(ir, ids, ar)}${ruleFns}
 }
 `;
 }
@@ -2478,7 +2479,7 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
       }
       case 'seq':
       case 'suppress': return walkSeq(s.steps);
-      case 'not':
+      case 'look':
       case 'ahead':
       case 'sameLine': return 'nullable'; // zero-width: consumes nothing
       case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
@@ -2747,6 +2748,7 @@ function emitRustAstRdAltSteps(
   steps: Step[],
   ids: LexIdPlan,
   leaves: Record<string, TokenLeafPolicy>,
+  look: readonly Alt[],   // ParserIR.lookaheads: the body a `look` step runs
   selfRule?: string,
   selfRuleUseBp?: boolean,
 ): { ok: string; okVar: string } {
@@ -2763,14 +2765,14 @@ function emitRustAstRdAltSteps(
       case 'sep': return visible(s.elem);
       case 'altlit': return s.opts.some((o) => !rustLeafDropped(o.ttype, leaves));
       case 'alt': return s.branches.some((b) => b.some(visible));
-      case 'not':
+      case 'look':
       case 'ahead':
       case 'sameLine': return false;
     }
   };
   /** M18: txn purity — true when the step's OUTER trace is confined to
    *  pos/vals (so a surrounding txn can use the 2-field light snapshot).
-   *  lit/tok/altlit touch pos + vals only; sameLine is read-only; not is
+   *  lit/tok/altlit touch pos + vals only; sameLine is read-only; look is
    *  self-restoring (full ck/restore inside) and externally transparent;
    *  suppress self-restores suppress_next. Visible star/opt/sep/alt write
    *  the arena via shape_pack_range/shape_list_from on success paths —
@@ -2783,7 +2785,7 @@ function emitRustAstRdAltSteps(
       case 'altlit': return true;
       case 'sameLine': return true;
       case 'ahead': return true;
-      case 'not': return true;
+      case 'look': return true;
       case 'suppress': return s.steps.every(pure);
       case 'seq': return s.steps.every(pure);
       case 'star': return !visible(s.step) && pure(s.step);
@@ -2842,19 +2844,20 @@ function emitRustAstRdAltSteps(
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
       case 'ahead':
         return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t)) != ${s.is} { ${okVar} = false; }`;
-      case 'not': {
+      case 'look': {
         // Gate on okVar to match TS `&&` short-circuit — otherwise probe still
         // runs after a failed predecessor and can re-enter recursive rules.
         const poke = local('probe');
-        const body = emitSteps(s.steps, poke);
-        const light = s.steps.every(pure);
+        const steps = look[s.id]!;
+        const body = emitSteps(steps, poke);
+        const light = steps.every(pure);
         return `if ${okVar} {
             ${txnCk('_ck', light)}
             let mut ${poke} = true;
             ${body}
             let _probe_hit = ${poke};
             ${txnRestore('_ck', light)}
-            if _probe_hit { ${okVar} = false; }
+            if _probe_hit != ${s.is} { ${okVar} = false; }
         }`;
       }
       case 'suppress': {
@@ -3085,6 +3088,7 @@ function emitRustRdMethod(
   sir: ShapeIRRule,
   ids: LexIdPlan,
   shapeIR: ShapeIR,
+  ir: ParserIR,
 ): string {
   const leaves = shapeIR.leaves;
   const ret = "SVal<'a>";
@@ -3096,7 +3100,7 @@ function emitRustRdMethod(
     const alt = rule.alts[altIdx]!;
     const g = guardFirst ? astGuardRs(rule.altGuard[altIdx]!, 't') : null;
     const guardExpr = g !== null ? `_ft.is_some() && { let t = _ft.unwrap(); ${g} }` : 'true';
-    const steps = emitRustAstRdAltSteps(alt, ids, leaves);
+    const steps = emitRustAstRdAltSteps(alt, ids, leaves, ir.lookaheads);
     const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk_base').replaceAll('__SPOFF__', 'sp_off');
     return `{
             let sp = self.pos;
@@ -3134,7 +3138,7 @@ function emitRustRdMethod(
         ...f.toks.map((k) => `Some((_, ${kidOf(ids, k)}))`),
       ].join(' | ');
       const alt = rule.alts[altIdx]!;
-      const steps = emitRustAstRdAltSteps(alt, ids, leaves);
+      const steps = emitRustAstRdAltSteps(alt, ids, leaves, ir.lookaheads);
       const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk_base').replaceAll('__SPOFF__', 'sp_off');
       return `${pats} => {
                 let _sk_base = self.vals.len();
@@ -3305,7 +3309,7 @@ function emitRustRdMethod(
   if (sir.shape.kind === 'node') {
     const node = sir.shape;
     if (rule.alts.length === 1) {
-      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves);
+      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves, ir.lookaheads);
       return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let sp = self.pos;
         let sp_off = self.current_off();
@@ -3348,7 +3352,7 @@ function emitRustPrattMethod(
   const ret = "SVal<'a>";
   const tpl = ir.tpl;
   const emptySteps = (steps: Step[], selfBp = false) =>
-    emitRustAstRdAltSteps(steps, ids, leaves, selfBp ? rule.name : undefined, selfBp);
+    emitRustAstRdAltSteps(steps, ids, leaves, ir.lookaheads, selfBp ? rule.name : undefined, selfBp);
 
   /** Missing Pratt slot → keep (positional), matching TS emitAstPrattRule. */
   const slotOf = (declared: { kind: string } | undefined, present: boolean): { kind: string } | null => {
@@ -4111,8 +4115,10 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
       if (!supportedLeaf(step.name) || shapeIR.leaves[step.name]?.action === 'drop') note(rule, `step:tok-policy:${step.name}`);
     } else if (step.t === 'alt') {
       for (const branch of step.branches) for (const s of branch) walkStep(rule, s);
-    } else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress' || step.t === 'not') {
+    } else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress') {
       for (const s of step.steps) walkStep(rule, s);
+    } else if (step.t === 'look') {
+      for (const s of ir.lookaheads[step.id]!) walkStep(rule, s);
     } else if (step.t === 'star') walkStep(rule, step.step);
     else if (step.t === 'sep') walkStep(rule, step.elem);
     // rule/ruleBp/altlit/sameLine: ok
@@ -4367,7 +4373,7 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
     const rule = ir.rules.find((r) => r.name === sir.name)!;
     return rule.kind === 'pratt'
       ? emitRustPrattMethod(rule, sir, ids, shapeIR, ir)
-      : emitRustRdMethod(rule, sir, ids, shapeIR);
+      : emitRustRdMethod(rule, sir, ids, shapeIR, ir);
   }).join('\n\n');
   _rustShapeRuleFirst = null;
   return `

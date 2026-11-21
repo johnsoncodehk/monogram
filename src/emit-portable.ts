@@ -108,7 +108,7 @@ export type Step =
   | { t: 'sep'; elem: Step; delim: string }                     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][]; firsts?: FirstSig[]; predictive?: boolean }                            // inline alternation of sub-sequences (backtracking unless predictive)
-  | { t: 'not'; steps: Step[] }                                 // zero-width negative lookahead (consumes nothing)
+  | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
   | { t: 'ahead'; set: number; is: boolean }                    // zero-width: whether the next token is (is) or is not (!is) in ParserIR.tokenSets[set]
   | { t: 'seq'; steps: Step[] }                                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
@@ -120,6 +120,13 @@ export type Alt = Step[];
 // one shared set instead of a body every target prints at every site. Members are sorted; each
 // distinct set appears once in ParserIR.tokenSets.
 export type TokenSet = { lits: string[]; toks: string[] };
+// A lookahead over more than one token — `not(['[', alt(...), ...])` — runs its body and then
+// undoes everything the body did: the position, the children it appended and the nodes it built.
+// What it decides is a function of the body and the parser's state alone, so two lookaheads with
+// the same body are one computation, wherever they stand and in whichever [Await]/[Yield] fork
+// of a rule (a body that calls a forked rule names the fork, so its body differs). buildIR keeps
+// each distinct body once in ParserIR.lookaheads and a `look` step names it; every target prints
+// one function per body (per parse mode it emits), called from each site.
 
 // ── How a rule chooses among its alternatives: LONGEST MATCH ──
 // A rule's alternatives (an rd rule's `alts`, a Pratt rule's NUD arms) are all candidates at a
@@ -341,6 +348,7 @@ export type ParserIR = {
   gtComps: string[];
   rules: RuleIR[];
   tokenSets: TokenSet[];       // the sets `ahead` steps test, indexed by Step.set
+  lookaheads: Alt[];           // the bodies `look` steps run, indexed by Step.id; a body names only lower ids
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
   newlineCfg: NewlineCfg | null;  // null unless the grammar declares `newline`
@@ -416,16 +424,25 @@ function buildIR(grammar: CstGrammar): ParserIR {
     if (id === undefined) { id = tokenSets.length; tokenSets.push(set); tokenSetIds.set(key, id); }
     return id;
   };
-  // A negative lookahead. Over a one-token body it is the `ahead` test of that token's set; over
-  // an `ahead` it is the same test negated (so `not(not(x))` is a positive test).
+  const lookaheads: Alt[] = [];
+  const lookaheadIds = new Map<string, number>();
+  const lookaheadOf = (steps: Step[]): number => {
+    const key = JSON.stringify(steps);
+    let id = lookaheadIds.get(key);
+    if (id === undefined) { id = lookaheads.length; lookaheads.push(steps); lookaheadIds.set(key, id); }
+    return id;
+  };
+  // A negative lookahead. Over a one-token body it is the `ahead` test of that token's set, over
+  // any other body the `look` test of that body; over an `ahead` or a `look` it is the same test
+  // negated (so `not(not(x))` is a positive test).
   const notOf = (steps: Step[]): Step => {
     if (steps.length === 1) {
       const s = steps[0];
-      if (s.t === 'ahead') return { t: 'ahead', set: s.set, is: !s.is };
+      if (s.t === 'ahead' || s.t === 'look') return { ...s, is: !s.is };
       const m = oneTokenOf(s);
       if (m !== null) return { t: 'ahead', set: tokenSetOf(m), is: false };
     }
-    return { t: 'not', steps };
+    return { t: 'look', id: lookaheadOf(steps), is: false };
   };
 
   // RuleExpr → Step. `selfName` (when set) maps a self-ref to a fresh rule call.
@@ -543,7 +560,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       }
       case 'seq': return seqFirst(s.steps);
       case 'suppress': return seqFirst(s.steps);
-      case 'not': case 'ahead': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
+      case 'look': case 'ahead': case 'sameLine': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
     }
     return null;
   };
@@ -578,7 +595,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const annotateSteps = (steps: Step[]): void => {
     for (const s of steps) {
       if (s.t === 'star') annotateSteps([s.step]);
-      else if (s.t === 'opt' || s.t === 'not' || s.t === 'seq' || s.t === 'suppress') annotateSteps(s.steps);
+      else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress') annotateSteps(s.steps);
       else if (s.t === 'sep') annotateSteps([s.elem]);
       else if (s.t === 'alt') {
         s.firsts = s.branches.map((b) => seqFirst(b));
@@ -601,6 +618,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       r.leds.forEach((b) => annotateSteps(b.steps));
     }
   }
+  lookaheads.forEach(annotateSteps);
 
   // Regex-vs-division context (only if the grammar declares a regex token + config).
   let regexCtx: RegexCtx | null = null;
@@ -640,7 +658,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
   const sanStep = (s: Step): void => {
     if (s.t === 'rule' || s.t === 'ruleBp') s.name = san(s.name);
     else if (s.t === 'star') sanStep(s.step);
-    else if (s.t === 'opt' || s.t === 'not' || s.t === 'seq' || s.t === 'suppress') s.steps.forEach(sanStep);
+    else if (s.t === 'opt' || s.t === 'seq' || s.t === 'suppress') s.steps.forEach(sanStep);
     else if (s.t === 'sep') sanStep(s.elem);
     else if (s.t === 'alt') s.branches.forEach((b) => b.forEach(sanStep));
   };
@@ -656,6 +674,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
       if (r.postfixTplHole !== undefined) r.postfixTplHole = san(r.postfixTplHole);
     }
   }
+  lookaheads.forEach((body) => body.forEach(sanStep));
 
   let newlineCfg: NewlineCfg | null = null;
   if (grammar.newline) {
@@ -672,7 +691,7 @@ function buildIR(grammar: CstGrammar): ParserIR {
     ...(identToken ? [identToken] : []),
     ...grammar.tokens.filter((t) => t.identifierPrefix).map((t) => t.name),
   ];
-  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, tokenSets, regexCtx, tpl, newlineCfg, identToken, identLike };
+  return { grammarName: grammar.name ?? 'grammar', entry: san(findEntryRule(grammar)), tokens, puncts, gtComps, rules, tokenSets, lookaheads, regexCtx, tpl, newlineCfg, identToken, identLike };
 }
 
 // Classify a token: a fast-path shape (run/string/line/block) when the pattern IS that shape,
@@ -908,7 +927,7 @@ function buildPratt(
   const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
   const nudSeqClosesTail = nudSeqs.map(endsInOperand);
-  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'not' || last === 'ahead'; });
+  const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]?.t; return !ledAccessTail[i] || last === 'look' || last === 'ahead'; });
   // A template token arm also matches an interpolated template (its head token), so it is in `rest`.
   const nudDispatch = dispatchOf(nudOrder.map((a): TokenSet | null => {
     switch (a.kind) {
@@ -943,7 +962,7 @@ function collectStepLitTexts(steps: Step[], out: Set<string>): void {
       case 'sep': out.add(s.delim); collectStepLitTexts([s.elem], out); break;
       case 'suppress': for (const c of s.connectors) out.add(c); collectStepLitTexts(s.steps, out); break;
       case 'star': collectStepLitTexts([s.step], out); break;
-      case 'opt': case 'not': case 'seq': collectStepLitTexts(s.steps, out); break;
+      case 'opt': case 'seq': collectStepLitTexts(s.steps, out); break;
       case 'alt': for (const b of s.branches) collectStepLitTexts(b, out); break;
       default: break;
     }
@@ -985,6 +1004,7 @@ export function buildLexIdPlan(ir: ParserIR): LexIdPlan {
       for (const nll of r.ledNotLeftLeaf) if (nll) for (const x of nll) litTexts.add(x);
     }
   }
+  for (const body of ir.lookaheads) collectStepLitTexts(body, litTexts);
   for (const s of ir.tokenSets) for (const x of s.lits) litTexts.add(x);
   if (ir.regexCtx) {
     for (const x of ir.regexCtx.divisionTexts) litTexts.add(x);
@@ -1153,7 +1173,7 @@ function collectStepTtypes(steps: Step[], out: Set<string>): void {
       case 'sep': collectStepTtypes([s.elem], out); break;
       case 'suppress': collectStepTtypes(s.steps, out); break;
       case 'star': collectStepTtypes([s.step], out); break;
-      case 'opt': case 'not': case 'seq': collectStepTtypes(s.steps, out); break;
+      case 'opt': case 'seq': collectStepTtypes(s.steps, out); break;
       case 'alt': for (const b of s.branches) collectStepTtypes(b, out); break;
       default: break;
     }
@@ -1185,6 +1205,7 @@ export function buildArenaIdPlan(ir: ParserIR, lexIds: LexIdPlan): ArenaIdPlan {
       for (const t of r.postfixToks) fromSteps.add(t);
     }
   }
+  for (const body of ir.lookaheads) collectStepTtypes(body, fromSteps);
   if (ir.newlineCfg) fromSteps.add(ir.newlineCfg.token);
   for (const s of fromSteps) addTt(s);
 

@@ -261,7 +261,7 @@ async function main(): Promise<void> {
 
   const requiredRdKinds = [
     'lit', 'tok', 'rule', 'star', 'opt', 'sep', 'altlit', 'alt',
-    'not', 'seq', 'sameLine', 'suppress',
+    'look', 'seq', 'sameLine', 'suppress',
   ];
   check(
     requiredRdKinds.every((k) => toyMod.shapeCoverage.step[k] > 0)

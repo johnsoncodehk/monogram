@@ -4,7 +4,7 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -427,14 +427,20 @@ function stepCond(s: Step, ids: LexIdPlan, w = false): string {
       }).join(' ');
       return `(() => { ${peekInit}${tries} return false; })()`;
     }
-    case 'not': return w
-      ? `(() => { const sp = pos; const bk = kids.length; const bs = spans.length; const m = ${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}; pos = sp; kids.length = bk; spans.length = bs; return !m; })()`
-      : `(() => { const sp = pos; const bk = kids.length; const m = ${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}; pos = sp; kids.length = bk; return !m; })()`;
+    case 'look': return `${s.is ? '' : '!'}look${s.id}${S}(${ks})`;
     case 'ahead': return `ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'})`;
     case 'sameLine': return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
     case 'suppress': return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${s.steps.length ? s.steps.map(sc).join(' && ') : 'true'}); _suppressNext = null; return _r; })()`;
   }
+}
+
+// ParserIR.lookaheads, one function each: whether the body matches here, undoing all it did.
+// It appends to the caller's children (and spans), as the step it stands for would.
+function lookFns(ir: ParserIR, ids: LexIdPlan, w = false): string {
+  return ir.lookaheads.map((body, id) => w
+    ? `function look${id}W(kids: any[], spans: BWSpan[]): boolean { const sp = pos; const bk = kids.length; const bs = spans.length; const m = ${body.map((x) => stepCond(x, ids, true)).join(' && ')}; pos = sp; kids.length = bk; spans.length = bs; return m; }\n`
+    : `function look${id}(kids: Cst[]): boolean { const sp = pos; const bk = kids.length; const m = ${body.map((x) => stepCond(x, ids)).join(' && ')}; pos = sp; kids.length = bk; return m; }\n`).join('');
 }
 
 function predAltBody(branches: Step[][], ids: LexIdPlan, firsts?: FirstSig[], w = false): string {
@@ -1196,7 +1202,7 @@ function altLitW(opts: [number, string][], kids: any[], spans: BWSpan[]): boolea
   for (const [lid, tt] of opts) if (matchLitW(lid, tt, kids, spans)) return true;
   return false;
 }
-${matchTemplateW}${ruleFnsW}
+${matchTemplateW}${lookFns(ir, ids, true)}${ruleFnsW}
 
 /** Default CST builder — same object shape as parse(). */
 export const cstBuilder: Builder<Cst> = {
@@ -1986,7 +1992,7 @@ ${editParse}
 
 type ShapeStepKind =
   | 'lit' | 'tok' | 'rule' | 'ruleBp' | 'star' | 'opt' | 'sep'
-  | 'altlit' | 'alt' | 'not' | 'ahead' | 'seq' | 'sameLine' | 'suppress';
+  | 'altlit' | 'alt' | 'look' | 'ahead' | 'seq' | 'sameLine' | 'suppress';
 type ShapePrattKind =
   | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
   | 'led' | 'nudSeq' | 'nudCapped' | 'template';
@@ -1994,7 +2000,7 @@ type ShapeUnsupported = { rule: string; construct: string };
 
 const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
   'lit', 'tok', 'rule', 'ruleBp', 'star', 'opt', 'sep',
-  'altlit', 'alt', 'not', 'ahead', 'seq', 'sameLine', 'suppress',
+  'altlit', 'alt', 'look', 'ahead', 'seq', 'sameLine', 'suppress',
 ];
 const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
   'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',
@@ -2003,18 +2009,20 @@ const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
 
 type ShapeEmitCtx = {
   rule: string;
+  look: readonly Alt[];   // ParserIR.lookaheads: the body a `look` step runs
   step: Record<ShapeStepKind, number>;
   pratt: Record<ShapePrattKind, number>;
   unsupported: ShapeUnsupported[];
   note: (construct: string) => void;
 };
 
-function newShapeEmitCtx(rule: string): ShapeEmitCtx {
+function newShapeEmitCtx(rule: string, look: readonly Alt[]): ShapeEmitCtx {
   const step = Object.fromEntries(SHAPE_STEP_KINDS.map((k) => [k, 0])) as Record<ShapeStepKind, number>;
   const pratt = Object.fromEntries(SHAPE_PRATT_KINDS.map((k) => [k, 0])) as Record<ShapePrattKind, number>;
   const unsupported: ShapeUnsupported[] = [];
   return {
     rule,
+    look,
     step,
     pratt,
     unsupported,
@@ -2191,7 +2199,7 @@ function emitAstRdAltSteps(
       case 'sep': return visible(s.elem);
       case 'altlit': return s.opts.some((o) => !leafDropped(o.ttype, leaves));
       case 'alt': return s.branches.some((b) => b.some(visible));
-      case 'not':
+      case 'look':
       case 'ahead':
       case 'sameLine': return false;
     }
@@ -2229,9 +2237,9 @@ function emitAstRdAltSteps(
         return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
       case 'ahead':
         return `ahead(${s.set}, ${s.is})`;
-      case 'not': {
+      case 'look': {
         const nv = local('Not');
-        return `(() => { const ${nv}: unknown[] = []; return !_shapeProbe(${nv}, _ap, () => ${emitSteps(s.steps, nv)}); })()`;
+        return `(() => { const ${nv}: unknown[] = []; return ${s.is ? '' : '!'}_shapeProbe(${nv}, _ap, () => ${emitSteps(ctx.look[s.id]!, nv)}); })()`;
       }
       case 'suppress':
         return `(() => { _suppressNext = new Set([${s.connectors.map((c) => lidOf(ids, c)).join(', ')}]); const _r = (${emitSteps(s.steps, sink)}); _suppressNext = null; return _r; })()`;
@@ -2404,7 +2412,7 @@ const astBestInit = (r: RdRule): string => (r.alts.length > 1 ? 'save' : 'save -
 const AST_NOT_BETTER = 'if (pos <= bestPos) return null;';
 
 function emitAstRdRule(r: RdRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: ShapeIR, parentCtx: ShapeEmitCtx): string {
-  const ctx = newShapeEmitCtx(r.name);
+  const ctx = newShapeEmitCtx(r.name, parentCtx.look);
   const leaves = shapeIR.leaves;
   const spans = shapeIR.spans;
   const shape = sir.shape;
@@ -2574,7 +2582,7 @@ ${needPeek ? '  const _ft = peek();\n' : ''}${tries}
 }
 
 function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeIR: ShapeIR, parentCtx: ShapeEmitCtx, ir: ParserIR): string {
-  const ctx = newShapeEmitCtx(r.name);
+  const ctx = newShapeEmitCtx(r.name, parentCtx.look);
   const finalize = (code: string): string => {
     mergeShapeEmitCtx(parentCtx, ctx);
     return code;
@@ -2737,7 +2745,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     ctx.pratt.group += r.nudBrackets.length;
     {
       bracketArms = r.nudBrackets.map((b, bi) => {
-        const armCtx = newShapeEmitCtx(r.name);
+        const armCtx = newShapeEmitCtx(r.name, ctx.look);
         const inner = txnInner(b.steps, armCtx);
         mergeShapeEmitCtx(ctx, armCtx);
         let finish: string;
@@ -2833,7 +2841,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   if (nudSeqSlot) {
     ctx.pratt.nudSeq += r.nudSeqs.length;
     seqArms = r.nudSeqs.map((seq, si) => {
-      const armCtx = newShapeEmitCtx(r.name);
+      const armCtx = newShapeEmitCtx(r.name, ctx.look);
       const inner = txnInner(seq, armCtx);
       mergeShapeEmitCtx(ctx, armCtx);
       let finish: string;
@@ -2857,7 +2865,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   if (nudCappedSlot) {
     ctx.pratt.nudCapped += r.nudCapped.length;
     cappedArms = r.nudCapped.map((c, ci) => {
-      const armCtx = newShapeEmitCtx(r.name);
+      const armCtx = newShapeEmitCtx(r.name, ctx.look);
       const inner = txnInner(c.steps, armCtx);
       mergeShapeEmitCtx(ctx, armCtx);
       let finish: string;
@@ -2935,7 +2943,7 @@ ${code}
       const lid = g.key as number;
       const hasBin = binLids.has(lid);
       const arms = g.members.map(({ item: b, index: i }, j) => {
-        const armCtx = newShapeEmitCtx(r.name);
+        const armCtx = newShapeEmitCtx(r.name, ctx.look);
         const inner = txnInner(b.steps, armCtx);
         mergeShapeEmitCtx(ctx, armCtx);
         let finish: string;
@@ -3391,7 +3399,7 @@ function emitShapeCoverageExport(cov: ShapeEmitCtx): string {
 }
 
 function emitShapeAstAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): string {
-  const cov = newShapeEmitCtx('(aggregate)');
+  const cov = newShapeEmitCtx('(aggregate)', ir.lookaheads);
   const fns = shapeIR.rules.map((sir: ShapeIRRule) => {
     const r = ir.rules.find((x) => x.name === sir.name);
     if (!r) return '';
@@ -3699,7 +3707,7 @@ function altLit(opts: [number, string][], kids: Cst[]): boolean {
   return false;
 }
 
-${matchTemplate}${ruleFns}
+${matchTemplate}${lookFns(ir, ids)}${ruleFns}
 
 // Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
 // parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
