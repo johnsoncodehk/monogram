@@ -59,7 +59,7 @@ function slotsOfStep(s: Step, leaves: Record<string, TokenLeafPolicy>): Slot[] {
       return s.steps.flatMap((x) => slotsOfStep(x, leaves));
     case 'suppress':
       return s.steps.flatMap((x) => slotsOfStep(x, leaves));
-    case 'not':
+    case 'look':
     case 'ahead':
     case 'sameLine':
       return [{ k: 'zw' }];
