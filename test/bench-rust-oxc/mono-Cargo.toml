@@ -1,0 +1,11 @@
+[package]
+name = "@NAME@"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+# Same release profile as test/oxc-parse-bench/Cargo.toml (cargo defaults otherwise:
+# opt-level = 3, lto = false (thin-local), codegen-units = 16, panic = unwind).
+[profile.release]
+debug = false
