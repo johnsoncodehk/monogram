@@ -79,8 +79,9 @@ done
 git show 2632c2c:src/gen-tm.ts > "$W/inputs/gen-tm.ts"
 git show 2632c2c:typescript.ts > "$W/inputs/typescript.ts"
 node "$HB/synth2mb.ts" "$W/inputs/synth2mb.ts"
+node "$H/synth-nonascii.ts" "$W/inputs/nonascii.ts"
 MAIN="checker.ts gen-tm.ts typescript.d.ts"
-INPUTS="$MAIN typescript.js parser.ts synth2mb.ts typescript.ts"
+INPUTS="$MAIN typescript.js parser.ts synth2mb.ts typescript.ts nonascii.ts"
 (cd "$W/inputs" && wc -c $INPUTS && sha256sum $INPUTS)
 cd "$W/inputs"
 
