@@ -16,11 +16,13 @@ export interface SharedAlgorithms {
   relexFamily(ir: ParserIR): string;
   // The token scanners, the tokens they cover, and the printed name of the scanner a dispatch
   // site calls for a token. A lowering with `spliceInline` gets the scanner's statements for its
-  // dispatch site instead (`out` declared and holding the scanner's result).
+  // dispatch site instead (`out` declared and holding the scanner's result). A skipped token's
+  // scanner also answers whether the text it matched holds a line terminator: a second result,
+  // or, spliced, the variable `nl` names (given for a skipped token and only then).
   lexScan(ir: ParserIR): string;
   scannedTokens(ir: ParserIR): LexTok[];
   scanner(token: string): string;
-  scanInline(ir: ParserIR, token: string, at: { s: string; p: string; out: string }): string[];
+  scanInline(ir: ParserIR, token: string, at: { s: string; p: string; out: string; nl?: string }): string[];
   // The printed name of the template span scanner, `(s, p, strict) -> int`: the position of the
   // delimiter that ends the span, -1 when unterminated, -2 - q for a malformed escape at q.
   tplSpan(): string;

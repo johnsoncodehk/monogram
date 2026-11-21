@@ -417,7 +417,8 @@ class Printer implements Cx {
         const fn = this.sigs.get(s.call.fn);
         if (!fn || fn.ret.length !== s.names.length) throw new Error(`algo-ir: ${s.call.fn} destructure arity`);
         const call = this.callCode(s.call);
-        if (s.k === 'letCall') s.names.forEach((n, i) => { if (n !== '_') this.env.set(n, { ty: fn.ret[i], owned: true }); });
+        // A returned string or list is the caller's; any other value is a copy, as with `let`.
+        if (s.k === 'letCall') s.names.forEach((n, i) => { if (n !== '_') this.env.set(n, { ty: fn.ret[i], owned: fn.ret[i] === 'str' || isList(fn.ret[i]) }); });
         else s.names.forEach((n, i) => { if (n !== '_' && this.env.get(n)?.ty !== fn.ret[i]) throw new Error(`algo-ir: setCall type of ${n}`); });
         return this.rx().stmt.destructure(this, {
           declare: s.k === 'letCall', names: s.names, ids: s.names.map((n) => this.id(n)), call,
@@ -472,23 +473,26 @@ const alwaysReturns = (ss: Stmt[]): boolean => {
   return !!l && (l.k === 'return' || (l.k === 'if' && alwaysReturns(l.then) && alwaysReturns(l.else ?? [])));
 };
 
-// Generation-time inlining: the body of `f` (one numeric result) as statements that leave the
-// result in a new local `out` instead of returning it. Params become the caller's `args`;
-// locals that would clash with them are renamed. A return inside a loop ends the loop, and what
-// follows the loop runs only while `out` still holds `unset`, a value `f` never returns.
-export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stmt[] {
-  if (f.ret.length !== 1 || !isNum(f.ret[0]) || args.length !== f.params.length) throw new Error(`algo-ir: cannot inline ${f.name}`);
+// Generation-time inlining: the body of `f` (a numeric first result, then any numbers or flags) as
+// statements that leave its results in new locals `outs` instead of returning them. Params become
+// the caller's `args`; locals that would clash with them are renamed. A return inside a loop ends
+// the loop, and what follows the loop runs only while the first out still holds `unset`, a value
+// `f` never returns.
+export function inlineFn(f: Fn, args: string[], outs: string[], unset: number): Stmt[] {
+  if (f.ret.length !== outs.length || !isNum(f.ret[0]) || f.ret.some((t) => !isNum(t) && t !== 'bool') || args.length !== f.params.length) throw new Error(`algo-ir: cannot inline ${f.name}`);
+  const out = outs[0];
   const ren = new Map(f.params.map((p, i) => [p.name, args[i]]));
   const locals = new Set<string>();
   const collect = (ss: Stmt[]): void => ss.forEach((s) => {
     if (s.k === 'let') locals.add(s.name);
+    else if (s.k === 'letCall') s.names.forEach((n) => locals.add(n));
     else if (s.k === 'if') { collect(s.then); collect(s.else ?? []); }
     else if (s.k === 'while') collect(s.body);
   });
   collect(f.body);
-  const taken = new Set([...args, out, ...locals]);
+  const taken = new Set([...args, ...outs, ...locals]);
   for (const n of locals) {
-    if (n !== out && !args.includes(n)) continue;
+    if (!outs.includes(n) && !args.includes(n)) continue;
     let m = n;
     for (let k = 1; taken.has(m); k++) m = `${n}${k}`;
     taken.add(m);
@@ -504,7 +508,6 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
     }
     return o as Expr;
   };
-  const setOut = (e: Expr): Stmt => ({ k: 'set', name: out, e: ex(e) });
   const guard = (rest: Stmt[]): Stmt[] => (rest.length ? [{ k: 'if', c: { k: 'bin', op: 'eq', a: { k: 'var', name: out }, b: { k: 'int', v: unset } }, then: go(rest, false) }] : []);
   const branch = (ss: Stmt[], inLoop: boolean): Stmt[] | undefined => (ss.length ? go(ss, inLoop) : undefined);
   function go(ss: Stmt[], inLoop: boolean): Stmt[] {
@@ -514,10 +517,11 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
       switch (s.k) {
         case 'let': res.push({ ...s, name: name(s.name), init: ex(s.init) }); continue;
         case 'set': res.push({ ...s, name: name(s.name), e: ex(s.e) }); continue;
+        case 'letCall': case 'setCall': res.push({ ...s, names: s.names.map(name), call: ex(s.call) as Expr & { k: 'call' } }); continue;
         case 'break': case 'comment': res.push(s); continue;
         case 'return':
-          if (s.es.length !== 1) throw new Error(`algo-ir: cannot inline ${f.name}`);
-          res.push(setOut(s.es[0]), ...(inLoop ? [{ k: 'break' } as Stmt] : []));
+          if (s.es.length !== outs.length) throw new Error(`algo-ir: cannot inline ${f.name}`);
+          res.push(...s.es.map((e, k): Stmt => ({ k: 'set', name: outs[k], e: ex(e) })), ...(inLoop ? [{ k: 'break' } as Stmt] : []));
           return res;
         case 'if': {
           const c = ex(s.c), t = s.then, e = s.else ?? [];
@@ -541,7 +545,8 @@ export function inlineFn(f: Fn, args: string[], out: string, unset: number): Stm
     }
     return res;
   }
-  return [{ k: 'let', name: out, ty: f.ret[0], init: { k: 'int', v: unset } }, ...go(f.body, false)];
+  const init = (t: Ty): Expr => (t === 'bool' ? { k: 'bool', v: false } : { k: 'int', v: unset });
+  return [...outs.map((o, k): Stmt => ({ k: 'let', name: o, ty: f.ret[k], init: init(f.ret[k]) })), ...go(f.body, false)];
 }
 
 export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = []): string {

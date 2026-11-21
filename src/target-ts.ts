@@ -84,12 +84,12 @@ function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: Le
   // token (comment) still records a newline it spans, so `sameLine` sees it.
   const kid = kidOf(ids, name);
   const push = t.skip
-    ? `if (/[\\n\\r\\u2028\\u2029]/.test(src.slice(pos, e))) pendingNl = true; `
+    ? `if (nl) pendingNl = true; `
     : `${stateful ? 'emit' : 'push'}(pos, e, ${kid}, lid_of(src.slice(pos, e))); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lx_ext(src, e); ' : '';
-  const scan = `{ let e = ${shared.scanner(name)}(src, pos); if (e >= 0) { ${ext}${push}pos = e; continue; } }`;
+  const scan = `{ ${t.skip ? 'const [e, nl]' : 'let e'} = ${shared.scanner(name)}(src, pos); if (e >= 0) { ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `    if (!prevIsValue()) ${scan}` : `    ${scan}`;
 }
 
@@ -3460,7 +3460,8 @@ const tsLowering: Lowering = {
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`${tsWrap(l, ATOM)}.length`, 'int', 'number'),
     code: (cx, s, i) => cx.atom(`${tsWrap(s, ATOM)}.charCodeAt(${i.c})`, 'int', 'number'),
-    hasAt: (cx, s, i, lit) => cx.atom(`${tsWrap(s, ATOM)}.startsWith(${J(lit)}, ${i.c})`, 'bool', 'bool'),
+    // A line or paragraph separator in the literal is printed escaped: raw, it reads as a line break.
+    hasAt: (cx, s, i, lit) => cx.atom(`${tsWrap(s, ATOM)}.startsWith(${J(lit).replace(/[\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16)}`)}, ${i.c})`, 'bool', 'bool'),
     inSet: (_cx, set, c) => ({ c: `${set}[${c.c}] === 1`, ty: 'bool', nat: 'bool', prec: TS_OPS.eq[1] }),
     own: (_cx, r) => r,
   },

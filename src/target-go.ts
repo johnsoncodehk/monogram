@@ -100,12 +100,12 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
   const name = t.name;
   const kid = kidOf(ids, name);
   const push = t.skip
-    ? `if strings.ContainsAny(src[pos:e], "\\n\\r\\u2028\\u2029") { pendingNl = true }; `
+    ? `if nl { pendingNl = true }; `
     : `${stateful ? 'emit' : 'pushTok'}(pos, e, ${kid}, lidOf(src[pos:e])); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'e = lxExt(src, e); ' : '';
-  const body = shared.scanInline(ir, name, { s: 'src', p: 'pos', out: 'e' });
+  const body = shared.scanInline(ir, name, { s: 'src', p: 'pos', out: 'e', ...(t.skip ? { nl: 'nl' } : {}) });
   const scan = ['{', ...goBlock([...body, `if e >= 0 { ${ext}${push}pos = e; continue }`]), '}'];
   const lines = rxTok !== undefined && name === rxTok ? ['if !prevIsValue() {', ...goBlock(scan), '}'] : scan;
   return lines.map((l) => `\t\t${l}`).join('\n');
@@ -2919,7 +2919,8 @@ const goLowering: Lowering = {
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`len(${l.c})`, 'int', 'int'),
     code: (cx, s, i) => cx.atom(`int(${goWrap(s, ATOM)}[${i.c}])`, 'int', 'int'),
-    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit)})`, 'bool', 'bool'),
+    // A line or paragraph separator in the literal is printed escaped: raw, it reads as a line break.
+    hasAt: (cx, s, i, lit) => cx.atom(`strings.HasPrefix(${goWrap(s, ATOM)}[${i.c}:], ${JSON.stringify(lit).replace(/[\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16)}`)})`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set}[${c.c}]`, 'bool', 'bool'),
     own: (_cx, r) => r,
   },

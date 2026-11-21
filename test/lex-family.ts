@@ -6,15 +6,21 @@
 //   2. in every emitted TS / Go / Rust lexer, each scanned token's scanner is defined exactly
 //      once and called from the dispatch loop — or, for a lowering that splices inline fns (Go),
 //      no scanner fn is printed and each scanner's statements appear at the dispatch;
+//   2b. a skipped token's dispatch site takes whether its text holds a line terminator from the
+//      scanner, which walked that text: it reads none of the skipped text again;
 //   3. the family, printed through the TS target and executed, scans a grammar covering every
 //      scanner kind (block comments with and without a guard after the opener, line comments,
 //      escaping strings, char runs, seq / alt / repeat / negated-lookahead patterns, and
 //      patterns whose regex has to back up out of a choice: an alternative, a repeat of one
 //      character, a bounded repeat, a lazy repeat) to the regex's end — and to -1 on
-//      unterminated or non-matching input, and at a negative position;
+//      unterminated or non-matching input, and at a negative position; a skipped token's
+//      scanner also answers whether the text it matched holds a line terminator, including
+//      where the scan read one in a choice it gave up;
 //   4b. a fast-path scanner kind is chosen only for a pattern of exactly that shape: a pattern
 //      that only begins and ends like a string or a comment is scanned by its own matcher;
 //   4. the same cases pass through every scanner spliced by generation-time inlining;
+//   6. every portable grammar's scanners end where their token regex's match ends, and a skipped
+//      token's scanner holds a line terminator exactly when that match does;
 //   5. those cases catch defects: each mutant of the printed scanners, and of the splicing
 //      (a loop return that does not end the loop, a missing after-loop guard), fails a case.
 //
@@ -59,11 +65,15 @@ const Hex = token(seq('0x', plus(oneOf(digit, range('a', 'f'))), notFollowedBy(o
 const Float = token(seq(plus(digit), '.', plus(digit)));
 const Int = token(plus(digit));
 const Ident = token(seq(identStart, star(oneOf(identStart, digit))), { identifier: true });
+// Skipped patterns that read a line terminator in a choice they give up: the first alternative
+// reads `a` and the line feed before it fails; the repeat runs to the end and backs up to the `!`.
+const Mark = token(seq('#', altPattern(seq('a', '\n', 'b'), 'a')), { skip: true });
+const Bang = token(seq('~', star(anyChar()), '!'), { skip: true });
 const Atom = rule(() => [Esc, Tag, Lazy, Hex, Float, Int, Str, Ident]);
 const Program = rule(() => [[many(Atom)]]);
 const kinds = defineGrammar({
   name: 'lexkinds',
-  tokens: { LineComment, DocComment, BlockComment, Esc, Tag, Lazy, Str, Hex, Float, Int, Ident },
+  tokens: { LineComment, DocComment, BlockComment, Mark, Bang, Esc, Tag, Lazy, Str, Hex, Float, Int, Ident },
   rules: { Atom, Program },
   entry: Program,
 });
@@ -71,7 +81,7 @@ const flat = (await import('../javascript.ts')).default as CstGrammar;
 
 const kindOf = (ir: ParserIR, name: string) => ir.tokens.find((t) => t.name === name);
 const ir = portableIR(kinds);
-const want: [string, string][] = [['LineComment', 'line'], ['DocComment', 'block'], ['BlockComment', 'block'], ['Esc', 'pattern'], ['Tag', 'pattern'], ['Lazy', 'pattern'], ['Str', 'string'], ['Hex', 'pattern'], ['Float', 'pattern'], ['Int', 'pattern'], ['Ident', 'run']];
+const want: [string, string][] = [['LineComment', 'line'], ['DocComment', 'block'], ['BlockComment', 'block'], ['Mark', 'pattern'], ['Bang', 'pattern'], ['Esc', 'pattern'], ['Tag', 'pattern'], ['Lazy', 'pattern'], ['Str', 'string'], ['Hex', 'pattern'], ['Float', 'pattern'], ['Int', 'pattern'], ['Ident', 'run']];
 for (const [name, k] of want) if (kindOf(ir, name)?.kind !== k) fail(`lexkinds: ${name} is ${kindOf(ir, name)?.kind}, want ${k}`);
 for (const name of ['JSDoc', 'BlockComment']) if (kindOf(portableIR(flat), name)?.kind !== 'block') fail(`javascript: ${name} is not a block`);
 
@@ -100,13 +110,16 @@ const HOSTS = [
   { name: 'rust', target: rustTarget, def: (n: string) => `fn ${n}(`, use: (n: string) => `${n}(src, pos as isize)` },
 ];
 const count = (s: string, sub: string) => s.split(sub).length - 1;
-// Occurrences of `block` as consecutive lines of `out`, ignoring indentation.
-const countBlock = (out: string[], block: string[]): number => {
+// Where `block` occurs as consecutive lines of `out`, ignoring indentation: the line after each.
+const blockEnds = (out: string[], block: string[]): number[] => {
   const b = block.map((l) => l.trim());
-  let n = 0;
-  for (let i = 0; i + b.length <= out.length; i++) if (b.every((l, k) => out[i + k] === l)) n++;
-  return n;
+  const ends: number[] = [];
+  for (let i = 0; i + b.length <= out.length; i++) if (b.every((l, k) => out[i + k] === l)) ends.push(i + b.length);
+  return ends;
 };
+const countBlock = (out: string[], block: string[]): number => blockEnds(out, block).length;
+// A dispatch site that slices the source between the token's start and end reads that text again.
+const RESCAN = /src\[pos\s*(\.\.|:)\s*e\]|src\.slice\(pos, e\)/;
 const GRAMMARS: [string, CstGrammar][] = [['lexkinds', kinds], ['javascript', flat], ['calc', (await import('./fixtures/calc.ts')).default], ['envtpl', (await import('./fixtures/envtpl.ts')).default]];
 for (const [gname, g] of GRAMMARS) {
   const gir = portableIR(g);
@@ -117,20 +130,24 @@ for (const [gname, g] of GRAMMARS) {
     for (const t of toks) {
       if (h.use === null) {
         if (out.includes(h.def('lexScan'))) fail(`${gname}/${h.name}: prints a scanner fn although it splices them`);
-        if (countBlock(lines, h.target.shared.scanInline(gir, t.name, { s: 'src', p: 'pos', out: 'e' })) < 1) fail(`${gname}/${h.name}: ${t.name}'s scanner is not spliced into the lexer`);
+        const ends = blockEnds(lines, h.target.shared.scanInline(gir, t.name, { s: 'src', p: 'pos', out: 'e', ...(t.skip ? { nl: 'nl' } : {}) }));
+        if (ends.length < 1) fail(`${gname}/${h.name}: ${t.name}'s scanner is not spliced into the lexer`);
+        if (t.skip) for (const i of ends) if (RESCAN.test(lines[i])) fail(`${gname}/${h.name}: ${t.name}'s dispatch site reads the skipped text again: ${lines[i]}`);
         continue;
       }
       const n = h.target.shared.scanner(t.name);
       if (count(out, h.def(n)) !== 1) fail(`${gname}/${h.name}: ${n} defined ${count(out, h.def(n))}×, want 1`);
       if (count(out, h.use(n)) < 1) fail(`${gname}/${h.name}: ${n} is never called by the lexer`);
+      if (t.skip) for (const l of lines) if (l.includes(h.use(n)) && RESCAN.test(l)) fail(`${gname}/${h.name}: ${t.name}'s dispatch site reads the skipped text again: ${l}`);
     }
     if (gir.tpl && toks.some((t) => t.name === gir.tpl!.token)) fail(`${gname}/${h.name}: the template token is scanned outside the template state machine`);
   }
-  console.log(`  ${gname}: ${portableIR(g).tokens.length} tokens; ts / rust define and call every scanner once, go splices each`);
+  console.log(`  ${gname}: ${portableIR(g).tokens.length} tokens; ts / rust define and call every scanner once, go splices each; no skipped text is read twice`);
 }
 
 // ── 3. the printed family, executed ──
-type Case = [token: string, src: string, pos: number, end: number];
+// `nl`: a skipped token's scanner also answers whether its match holds a line terminator.
+type Case = [token: string, src: string, pos: number, end: number, nl?: boolean];
 const CASES: Case[] = [
   ['BlockComment', '/* a /* b */ c */x', 0, 12],
   ['BlockComment', '/* a */ */', 0, 7],
@@ -179,29 +196,47 @@ const CASES: Case[] = [
   ['BlockComment', '/**/', -1, -1],
   ['Str', '"a"', -1, -1],
   ['Float', '1.5', -1, -1],
+  ['LineComment', '// a\rb\nx', 0, 6, true],
+  ['LineComment', '// a\u2028b', 0, 6, true],
+  ['LineComment', '// a\u2029', 0, 5, true],
+  ['LineComment', '// é\n', 0, 4, false],
+  ['BlockComment', '/* a\n */', 0, 8, true],
+  ['BlockComment', '/*\r*/', 0, 5, true],
+  ['BlockComment', '/* a */\n', 0, 7, false],
+  ['BlockComment', '/* a\n', 0, -1, false],
+  ['DocComment', '/** a\u2029 */', 0, 9, true],
+  ['Mark', '#a\nb', 0, 4, true],
+  ['Mark', '#a\nc', 0, 2, false],
+  ['Mark', '#a', -1, -1, false],
+  ['Bang', '~a\n!b', 0, 4, true],
+  ['Bang', '~a!\n', 0, 3, false],
+  ['Bang', '~a\n', 0, -1, false],
 ];
+const skipped = new Set(ir.tokens.filter((t) => t.skip).map((t) => t.name));
 
 const dir = scratchDir('lex-family');
 const printed = tsTarget.shared.lexScan(ir);
 const names = ir.tokens.map((t) => tsTarget.shared.scanner(t.name));
 // Each scanner spliced into a wrapper fn `inline<scanner>(src, pos)`, as a dispatch site gets it.
 const spliced = ir.tokens.map((t) => [
-  `export function inline${tsTarget.shared.scanner(t.name)}(src: string, pos: number): number {`,
-  ...tsTarget.shared.scanInline(ir, t.name, { s: 'src', p: 'pos', out: 'e' }).map((l) => `  ${l}`),
-  '  return e;',
+  `export function inline${tsTarget.shared.scanner(t.name)}(src: string, pos: number): ${t.skip ? '[number, boolean]' : 'number'} {`,
+  ...tsTarget.shared.scanInline(ir, t.name, { s: 'src', p: 'pos', out: 'e', ...(t.skip ? { nl: 'nl' } : {}) }).map((l) => `  ${l}`),
+  t.skip ? '  return [e, nl];' : '  return e;',
   '}',
 ].join('\n')).join('\n');
+type Scan = (s: string, p: number) => number | [number, boolean];
 let mod = 0;
-async function load(src: string): Promise<Record<string, (s: string, p: number) => number>> {
+async function load(src: string): Promise<Record<string, Scan>> {
   const f = join(dir, `scan${mod++}.ts`);
   writeFileSync(f, `${src}\nexport { ${names.join(', ')} };\n`);
   return import(pathToFileURL(f).href);
 }
-function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''): string[] {
+function run(scan: Record<string, Scan>, prefix = ''): string[] {
   const bad: string[] = [];
-  for (const [tok, src, pos, end] of CASES) {
-    const got = scan[prefix + tsTarget.shared.scanner(tok)]!(src, pos);
-    if (got !== end) bad.push(`${tok}(${JSON.stringify(src)}, ${pos}) = ${got}, want ${end}`);
+  for (const [tok, src, pos, end, nl] of CASES) {
+    const got = JSON.stringify(scan[prefix + tsTarget.shared.scanner(tok)]!(src, pos));
+    const want = JSON.stringify(skipped.has(tok) ? [end, nl ?? false] : end);
+    if (got !== want) bad.push(`${tok}(${JSON.stringify(src)}, ${pos}) = ${got}, want ${want}`);
   }
   return bad;
 }
@@ -213,7 +248,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
 
   // ── 5. mutants ──
   const MUTANTS: [string, RegExp, string][] = [
-    ['a block ignores its guard', /if \(g < 0\) return -1;/, ''],
+    ['a block ignores its guard', /if \(g < 0\) return \[-1, false\];/, ''],
     ['an alternative does not give way to the next', /(r = lexMatch\d+\(s, p\);\n\s+if \(r >= 0\) return r;\n\s+)r = lexMatch\d+\(s, p\);\n\s+if \(r >= 0\) return r;/, '$1'],
     ['a repeat of one character gives nothing back', /q = q - 1;/, 'q = p - 1;'],
     ['a lazy repeat tries one more first', /(const r: number = )(lexMatch\d+\(s, q\));/, '$1-1;'],
@@ -222,7 +257,11 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     ['seq drops its last item', /const (q\d+): number = lexMatch\d+\(s, (q\d+)\);\n\s+if \(\1 < 0 \|\| \1 > s\.length\) return -1;\n\s+return \1;/, 'return $2;'],
     ['run stops after the first character', /while \(e < s\.length\) \{\n(\s+)const d/, 'while (false) {\n$1const d'],
     ['repeat ignores its minimum', /if \(n < 1\) return -1;/g, ''],
-    ['a negative position is scanned', /if \(p < 0\) return -1;/g, ''],
+    ['a negative position is scanned', /if \(p < 0\) return (-1|\[-1, false\]);/g, ''],
+    ['a skipped scan misses a carriage return', /c === 13 \|\| /g, ''],
+    ['a skipped scan misses a non-ASCII line terminator', /c >= 128 && \(/g, 'false && ('],
+    ['a threaded call drops the line terminators its callee read', /\n\s+nlAt = nlAt\d+;/g, ''],
+    ['a skipped token counts a line terminator read past its end', /\[e, nlAt < e\]/g, '[e, nlAt < s.length]'],
   ];
   for (const [what, re, by] of MUTANTS) {
     if (!re.test(printed)) { fail(`mutant "${what}": pattern not found in the printed family`); continue; }
@@ -231,7 +270,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     else console.log(`  mutant "${what}": caught (${bad.length} case(s))`);
   }
   const SPLICE_MUTANTS: [string, RegExp, string][] = [
-    ['a return inside a loop does not end it', /(\n\s+e = [^;\n]+;)\n\s+break;/g, '$1'],
+    ['a return inside a loop does not end it', /(\n\s+e = [^;\n]+;(?:\n\s+nl = [^;\n]+;)?)\n\s+break;/g, '$1'],
     ['no guard after a loop that may return', /if \(e === -2\) e = -1;/g, ''],
   ];
   for (const [what, re, by] of SPLICE_MUTANTS) {
@@ -255,7 +294,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const toks = tsTarget.shared.scannedTokens(gir);
     const f = join(dir, `regex${mod++}.ts`);
     writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\nexport { ${toks.map((t) => tsTarget.shared.scanner(t.name)).join(', ')} };\n`);
-    const scan = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;
+    const scan = await import(pathToFileURL(f).href) as Record<string, Scan>;
     for (const t of toks) {
       const decl = g.tokens.find((d) => d.name === t.name)!;
       const re = new RegExp(tokenPatternToRegex(decl.pattern), 'y');
@@ -265,15 +304,17 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
         for (const src of [base, base + ' x', base + base, base + '\n;']) {
           re.lastIndex = 0;
           const m = re.exec(src);
-          const want = m && m[0].length > 0 ? m[0].length : -1;
-          const got = fn(src, 0);
+          const end = m && m[0].length > 0 ? m[0].length : -1;
+          // The interpreter's lexer: a skipped match holding a line terminator breaks the line.
+          const want = JSON.stringify(t.skip ? [end, end >= 0 && /[\n\r\u2028\u2029]/.test(m![0])] : end);
+          const got = JSON.stringify(fn(src, 0));
           checked++;
           if (got !== want && bad++ < 3) fail(`${g.name}/${t.name} (${t.kind}): ${JSON.stringify(src)} scans to ${got}, its regex to ${want}`);
         }
       }
     }
   }
-  console.log(`  every portable grammar: ${checked} token-edge texts scan to their token regex's end`);
+  console.log(`  every portable grammar: ${checked} token-edge texts scan to their token regex's end (and a skipped token's line terminator)`);
 
   // ── 7. the Rust / Go sources hold no raw control character a literal may not hold ──
   // A TS template literal that prints `'\n'` without doubling the backslash hands rustc / go a

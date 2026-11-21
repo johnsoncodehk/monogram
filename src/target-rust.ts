@@ -181,20 +181,21 @@ const RULE_NAMES: &[&str] = &[${ar.ruleNames.map(J).join(', ')}];
 // returns the whole lexer state through memory.
 const LEX_FROM_ATTR = '#[inline(always)]\n';
 
-// One token at a dispatch site: the shared scanner says where it ends; the lexer records it.
+// One token at a dispatch site: the shared scanner says where it ends (and, for a skipped token,
+// whether its text holds a line terminator); the lexer records it.
 function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined, identLike: Set<string>): string {
   const name = t.name;
   const nlVar = stateful ? 'st.pending_nl' : 'pending_nl';
   const kid = kidOf(ids, name);
   const push = t.skip
-    ? `if src[pos..e].chars().any(|c| matches!(c, '\\n' | '\\r' | '\\u{2028}' | '\\u{2029}')) { ${nlVar} = true; } `
+    ? `if nl { ${nlVar} = true; } `
     : stateful
       ? `st.emit(pos, e, ${kid}, lid_of(&src[pos..e])); `
       : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&src[pos..e]))); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
-  const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
+  const scan = `{ let ${t.skip ? '(e, nl)' : 'e'} = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
 
@@ -4945,7 +4946,8 @@ const rustLowering: Lowering = {
     call: (name, args) => `${name}(${args.join(', ')})`,
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
-    hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
+    // A line or paragraph separator in the literal is printed escaped: raw, it reads as a line break.
+    hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit).replace(/[\u2028\u2029]/g, (c) => `\\u{${c.charCodeAt(0).toString(16)}}`)}.as_bytes())`, 'bool', 'bool'),
     inSet: (cx, set, c) => cx.atom(`${set.toUpperCase()}[${cx.coerce(c, 'usize')}]`, 'bool', 'bool'),
     own: (cx, r) => {
       if (r.ty === 'str') return cx.atom(`${rsWrap(r, ATOM)}.to_string()`, 'str', 'str', { owned: true });
