@@ -35,6 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
+          # Before / after of perf/lexer-skip-scans-once: A = origin/master 36287f5, M = its head.
+          PROFILE_A: 36287f59f681b88567af2b315e5ac00a2e45ed6c
+          PROFILE_M: c2c9e89ebd58c6f93a9b51a16bd9c1d65e035bfa
 
       - uses: actions/upload-artifact@v4
         if: always()

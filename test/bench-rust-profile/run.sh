@@ -3,7 +3,7 @@
 # inputs: one parse per process under Callgrind (deterministic instruction counts), plus work
 # counts and heap traffic from a separate instrumented build. Usage (repo root, full history):
 #   test/bench-rust-profile/run.sh
-# Variants: A = cbb58a0 (master before the 2026-11-20 work), M = PROFILE_M (default fa2ac4b,
+# Variants: A = PROFILE_A (default cbb58a0, master before the 2026-11-20 work), M = PROFILE_M (default fa2ac4b,
 # origin/master when this profile was asked for), C = oxc (test/oxc-parse-bench, oxc_parser 0.126).
 #
 # Builds. Profiled (callgrind, native timing): every crate's [profile.release] is the benchmark's
@@ -21,7 +21,7 @@ rm -rf "$W"; mkdir -p "$W/inputs" "$OUT/cg" "$OUT/annotate" "$OUT/regions" "$OUT
 R=$OUT/results.txt; : > "$R"
 
 git fetch -q origin master
-A_SHA=$(git rev-parse cbb58a0)
+A_SHA=$(git rev-parse "${PROFILE_A:-cbb58a0}")
 M_SHA=$(git rev-parse "${PROFILE_M:-fa2ac4b}")
 VARIANTS="A:$A_SHA M:$M_SHA"
 
