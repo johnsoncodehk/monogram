@@ -35,9 +35,9 @@ jobs:
       - run: test/bench-rust-profile/run.sh
         env:
           PROFILE_WORK: ${{ runner.temp }}/prof-work
-          # Before / after of perf/token-set-test: A = origin/master ed23c51, M = its head a123fbe.
-          PROFILE_A: ed23c51f694c79bf46978c5459590eea94f947a2
-          PROFILE_M: a123fbe9a0e4ecd915c9bddf5b06d44d5e7f99a7
+          # Before / after of perf/peek-max-look: A = origin/master baee2cf, M = its head ef0ef4d.
+          PROFILE_A: baee2cfc4c35c266c7600c3652860269cb5e2188
+          PROFILE_M: ef0ef4d7d4c8d252665a6e93ef83f329d011b121
 
       - uses: actions/upload-artifact@v4
         if: always()
