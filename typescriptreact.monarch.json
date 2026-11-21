@@ -379,6 +379,8 @@
             "get": "keyword",
             "set": "keyword",
             "export": "keyword",
+            "const": "keyword",
+            "default": "keyword",
             "public": "keyword",
             "private": "keyword",
             "protected": "keyword",
@@ -398,7 +400,6 @@
             "satisfies": "operator",
             "meta": "keyword",
             "let": "keyword",
-            "const": "keyword",
             "var": "keyword",
             "if": "keyword",
             "else": "keyword",
@@ -419,7 +420,6 @@
             "using": "keyword",
             "of": "keyword",
             "case": "keyword",
-            "default": "keyword",
             "interface": "keyword",
             "type": "keyword",
             "enum": "keyword",
@@ -681,6 +681,14 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "const": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "default": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "public": {
               "token": "keyword",
               "switchTo": "@root"
@@ -754,10 +762,6 @@
               "switchTo": "@root"
             },
             "let": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "const": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -838,10 +842,6 @@
               "switchTo": "@root"
             },
             "case": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "default": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -1170,6 +1170,8 @@
             "get": "keyword",
             "set": "keyword",
             "export": "keyword",
+            "const": "keyword",
+            "default": "keyword",
             "public": "keyword",
             "private": "keyword",
             "protected": "keyword",
@@ -1189,7 +1191,6 @@
             "satisfies": "operator",
             "meta": "keyword",
             "let": "keyword",
-            "const": "keyword",
             "var": "keyword",
             "if": "keyword",
             "else": "keyword",
@@ -1210,7 +1211,6 @@
             "using": "keyword",
             "of": "keyword",
             "case": "keyword",
-            "default": "keyword",
             "interface": "keyword",
             "type": "keyword",
             "enum": "keyword",

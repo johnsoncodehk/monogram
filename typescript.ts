@@ -217,32 +217,51 @@ const mappedTypeStart = alt([alt('+', '-'), 'readonly'], [opt('readonly'), '[', 
 // starts with either, so the word rejects under both readings). What differs per word is one
 // further condition, held in `modifierExtra`:
 //   static              none                                (`static⏎x` is a static `x`)
-//   export              the start is not `as`, `*` or `default` (`export default: T` is
-//                       a member `export`, then a stray `default`)
+//   export              the start is not `as` or `*`; a `default` start is one `default`
+//                       takes (`export default class: T`; `export default: T` is a member
+//                       `export`, then a stray `default`), and a `type` start is followed by
+//                       one `export` takes (`export type⏎x: T`; `export type: T` and
+//                       `export type⏎as: T` are a member `export`, then a stray `type`)
+//   default             the start is `class`, `function` or `interface`, or `abstract` /
+//                       `async` with `class` / `function` on its line, on any line after
+//                       `default` (`default class() {}`; `default x` is a member `default`,
+//                       then a stray `x`)
+//   const               the start is `enum`, on any line (`{ const enum: T }`;
+//                       `{ const x: T }` rejects); in a class body, see below
 //   get / set           the start is not `*`                (`get⏎x() {}` is a getter)
 //   every other word    the start is on the word's own line (`public⏎x` is two members)
+// These are tsc's nextTokenCanFollowModifier, the lookahead its statements share (hence the
+// declaration keywords: `export default class`, `export type`, `const enum`). A class body is
+// the one member list that reads `const` as an ordinary same-line word (tsc's
+// permitConstAsModifier: `class C { const x }`), so its runs pass `sameLineConst`.
+// Not modelled: a decorator after a modifier (tsc reads `public export @d x() {}`,
+// `{ export⏎@d x() {} }`). tsc takes `export` / `default` as a modifier before one, and that
+// matters here only where it is the word after `type` / `default` (`export type⏎@d x() {}` is
+// a member `type`, then a decorated member); before the member itself no arm reads a decorator,
+// so the member start `memberAhead` asks for still fails there.
 // Every modifier run of class, object-literal and type members is built from `modifierWord`,
 // so no word is consumed as a modifier unchecked.
-// Not modelled, all three artifacts of tsc sharing this lookahead with statements:
-// `default` as a member modifier before a declaration keyword (`default class() {}`,
-// `export default class: T`), the further look of `export type` (tsc takes `export` as a
-// modifier there only when a member start follows `type`, so `{ export type: T }` rejects),
-// and `const` before `enum` (`{ const enum: T }`). Each needs a keyword literal (`class`,
-// `interface`, `type`, `enum`, …) in a member-position lookahead. Such a lookahead only
-// conditions what follows the modifier, and the highlighter generators read it so (a word in it
-// is not reserved: test/tm-lookahead-words.ts), so the three are owed to this grammar alone.
-const memberAhead = not(not(alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*')));
+const memberStart = alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*');
+const memberAhead = not(not(memberStart));
+// tsc's canFollowExportModifier and nextTokenCanFollowDefaultKeyword, read at the word after
+// `export` / `default`. (Each one-token alternation sits in its own double `not`, which the
+// emitted parsers test as one token set.)
+const exportAhead = [not(alt('as', '*')), not(not(alt(Decorator, memberStart)))];
+const defaultAhead = alt(not(not(alt('class', 'function', 'interface', Decorator))), ['abstract', sameLine, 'class'], ['async', sameLine, 'function']);
 const modifierExtra: Record<string, unknown[]> = {
   static: [],
-  export: [not(alt('as', '*')), not('default')],
+  export: [not(alt('as', '*')), not(['default', not(defaultAhead)]), not(['type', not(exportAhead)])],
+  default: [not(not(defaultAhead))],
+  const: [not(not('enum'))],
   get: [not('*')],
   set: [not('*')],
 };
-const modifierWord = (words: string[]) => {
-  const sameLineWords = words.filter(w => !(w in modifierExtra));
+const modifierWord = (words: string[], { sameLineConst = false } = {}) => {
+  const ruled = (w: string) => w in modifierExtra && !(sameLineConst && w === 'const');
+  const sameLineWords = words.filter(w => !ruled(w));
   return alt([
     alt(
-      ...words.filter(w => w in modifierExtra).map(w => [w, ...modifierExtra[w]]),
+      ...words.filter(ruled).map(w => [w, ...modifierExtra[w]]),
       ...(sameLineWords.length ? [[alt(...sameLineWords), sameLine]] : []),
     ),
     memberAhead,
@@ -254,14 +273,20 @@ const modifierWord = (words: string[]) => {
 // shape, `run1` the same with at least one word. It doubles the modifier-vs-name decision
 // points against the member arms, which explodes tree-sitter's GLR table, so tree-sitter
 // renders the plain repetition (tsRelax): a highlighter over-accepting `static static` is
-// harmless and measured.
-const modifierRun = (words: string[]) => {
-  const any = modifierWord(words), stat = modifierWord(['static']);
-  const rest = modifierWord(words.filter(w => w !== 'static'));
+// harmless and measured. tree-sitter renders no lookahead, so a word whose modifier reading
+// only the lookahead tells from a statement keyword (`const` in an object literal or object
+// type, where `{ const [e]: 1 }` and the block `{ const [a] = b }` share a prefix, as do an
+// arrow's `=> { const [` block and a return-type literal) is left out of its rendering
+// (`treeSitterOmits`): a highlighter missing `{ const enum: 1 }` is harmless.
+const modifierRun = (words: string[], opts: { sameLineConst?: boolean; treeSitterOmits?: string[] } = {}) => {
+  const strictAny = modifierWord(words, opts), stat = modifierWord(['static']);
+  const rest = modifierWord(words.filter(w => w !== 'static'), opts);
+  const shown = words.filter(w => !opts.treeSitterOmits?.includes(w));
+  const tsAny = shown.length === words.length ? strictAny : modifierWord(shown, opts);
   return {
-    any, stat, rest,
-    run: tsRelax([many(rest), opt(stat, many(rest))], many(any)),
-    run1: tsRelax(alt([many1(rest), opt(stat, many(rest))], [stat, many(rest)]), many1(any)),
+    any: tsAny === strictAny ? strictAny : tsRelax(strictAny, tsAny), stat, rest,
+    run: tsRelax([many(rest), opt(stat, many(rest))], many(tsAny)),
+    run1: tsRelax(alt([many1(rest), opt(stat, many(rest))], [stat, many(rest)]), many1(tsAny)),
   };
 };
 
@@ -272,13 +297,14 @@ const Prop = rule($ => {
   const propTail = (ctx) => ['(', sep(ctx(Param), ','), ')', opt(":", ReturnType), ctx(Block)];
   // tsc parses a full modifier soup before ANY object-literal member and a `?` then
   // `!` after its name (`{ static m() {} }`, `{ export p: 1 }`, `{ a! }`, `{ a?() {} }`
-  // are all parse-clean — rejecting them is the checker's job). `const`/`default` are
-  // not in the soup (see `modifierWord` for what tsc does with them).
+  // are all parse-clean — rejecting them is the checker's job). `const` and `default` are
+  // in the soup only before `enum` / a declaration keyword (`{ const enum: 1 }`,
+  // `{ default class() {} }`; see `modifierWord`).
   // A member NAMED like a modifier (`{ static: 1 }`, `{ public static() {} }`) is told
   // apart by `modifierWord`; `{ async }` / `{ get: 1 }` fall through to the plain shapes.
   // `async` is pulled out of the soup into the dedicated async method arms below (so the
   // body gets its [Await] context); `static`/`get`/… stay lenient modifiers.
-  const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out']);
+  const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out', 'const', 'default'], { treeSitterOmits: ['const'] });
   const propMod = mods.any;
   const asyncMod = modifierWord(['async']);
   return [
@@ -683,9 +709,9 @@ const TypeParams = rule($ => [
 // parseObjectTypeMembers and parseMappedType), so they are one rule.
 // The modifiers of a type member (tsc's parseTypeMember: parseModifiers without decorators,
 // after the call / construct signatures and before an accessor, index signature, property or
-// method). `const` and `default` are never modifiers before a member name here (tsc takes them
-// only before `enum` / a declaration keyword), so they are names.
-const typeMemberMods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'async']);
+// method). `const` and `default` are modifiers only before `enum` / a declaration keyword
+// (`const enum: T`, `default class: T`; see `modifierWord`), elsewhere names.
+const typeMemberMods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'async', 'const', 'default'], { treeSitterOmits: ['const'] });
 // tsc's isTypeMemberStart, which its member list tests before each member. A leading `(`, `<`,
 // `get` or `set` starts a member, and so does a `[` past the words that can be a modifier (tsc's
 // isModifierKind; line breaks included). Otherwise, past those words and a property name, the
@@ -764,7 +790,7 @@ const propertyOrMethodName = [not(indexSignatureStart), MemberName];
 // `async` is NOT a generic class-member modifier here: it leads the async/async-generator
 // method arms below (which give the body its [Await] context), so the modifier soup must
 // not swallow it into a plain method (the class analog of the Decl modifier-prefix fix).
-const classMods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const']);
+const classMods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'declare', 'export', 'in', 'out', 'const', 'default'], { sameLineConst: true });
 const Modifier = classMods.any;
 const modRun = classMods.run;
 const asyncMod = modifierWord(['async']);
