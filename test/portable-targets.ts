@@ -234,13 +234,16 @@ const CASES: Case[] = [
     // a tie between candidates reached through different Dispatch sections goes to the
     // earlier-declared one (`go;`, `self;` — the rule skeleton tells them apart), a SECOND guard
     // refuses only what cannot match (`x: y;` vs `x;`), and no SECOND guard sits on an
-    // alternative that can match one token (`{x}`).
+    // alternative that can match one token (`{x}`). A candidate that repeats an earlier one
+    // behind optional steps is still tried wherever one of them begins (`@a emit x;`,
+    // `pub emit x;`, `#(x);`).
     grammar: 'guardjs', path: './fixtures/guardjs.ts',
     accept: [
       'go;', 'stop;', 'x;', 'x: y;', 'x: go;', 'a: b: c;', '{x}', '{x!y}', '{x?}', '{[]}', 'self;', 'nil;',
       '(self);', 'self + 1;', '1 + x;', 'go; stop; x;',
+      'emit x;', '@a emit x;', 'pub emit x;', '@a @b pub emit x;', '(x);', '#(x);', '#(1 + x) + 2;', '(#(x));',
     ],
-    reject: ['x y;', 'x:', 'x: ;', '{}', '{x!}', 'go', '{x', ': x;'],
+    reject: ['x y;', 'x:', 'x: ;', '{}', '{x!}', 'go', '{x', ': x;', '@ emit x;', 'pub x;', '@a pub;', 'pub pub emit x;', '#x;', '##(x);'],
   },
   {
     // The REAL javascript.ts grammar (89 rules after the [Await]/[Yield] fork) — the proof
