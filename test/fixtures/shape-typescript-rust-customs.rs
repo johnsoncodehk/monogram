@@ -458,9 +458,8 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("ClassBody", 0, &SC_CLASSBODY),
         ("ClassHeritage", 0, &SC_CLASSHERITAGE),
         ("Decorator", 0, &SC_DECORATOR),
-        ("StaticBlock", 2, &SC_STATICBLOCK),
-        ("MethodDefinition", 1, &SC_METHODDEF_CTOR),
-        ("MethodDefinition", 3, &SC_METHODDEF),
+        ("StaticBlock", 1, &SC_STATICBLOCK),
+        ("MethodDefinition", 2, &SC_METHODDEF),
         ("MemberName", 0, &SC_MEMBERNAME),
         ("MemberName", 2, &SC_MEMBERNAME2),
         ("MemberName", 3, &SC_MEMBERNAME3),
@@ -491,7 +490,7 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("RestElement", 0, &SC_RESTELEM0),
         ("ExportSpecifier", 0, &SC_EXPORTSPEC),
         ("ExportNamedDeclaration", 15, &SC_EXPORTNAMED15),
-        ("TSModuleDeclaration", 24, &SC_TSMODULEDECL24),
+        ("TSModuleDeclaration", 23, &SC_TSMODULEDECL24),
         ("Identifier", 17, &SC_IDENT17),
         ("Type", 1, &SC_TSINDEXED1),
         ("Type", 7, &SC_TYPE7),
@@ -505,12 +504,12 @@ fn schema_for(etype: &str, alt: u32) -> &'static Schema {
         ("Declaration", 10, &SC_DECL10),
         ("Declaration", 12, &SC_DECL12),
         ("ExportNamedDeclaration", 18, &SC_EXPORTNAMED),
-        ("ExportDefaultDeclaration", 20, &SC_EXPORTDEFAULT),
+        ("ExportDefaultDeclaration", 19, &SC_EXPORTDEFAULT),
         ("ImportClause", 1, &SC_IMPORTCLAUSE1),
         ("ImportClause", 2, &SC_IMPORTCLAUSE2),
         ("ImportSpecifier", 0, &SC_IMPORTSPEC),
-        ("TSEnumDeclaration", 26, &SC_TSENUMDECL),
-        ("TSNamespaceExportDeclaration", 25, &SC_TSNS_EXPORT),
+        ("TSEnumDeclaration", 25, &SC_TSENUMDECL),
+        ("TSNamespaceExportDeclaration", 24, &SC_TSNS_EXPORT),
         ("TSEnumMember", 0, &SC_TSENUMMEMBER),
         ("TSInterfaceDeclaration", 4, &SC_TSINTERFACEDECL),
         ("TSPropertySignature", 2, &SC_TSPROPSIG),
@@ -3572,9 +3571,60 @@ fn leaf_tok_last(i: usize, off: u32, end: u32, src: &str) -> String {
 
 /// schema_for with span-aware dynamic selection: some (tag, alt) pairs carry
 /// several tree meanings that are distinguishable from the source text.
+/// Whether a `(MethodDefinition, 2)` event is a constructor definition: `constructor ( … ) { … }`,
+/// with no decorator, modifier, type parameters or return type, and a block body.
+fn is_bare_constructor(text: &str) -> bool {
+    let toks: Vec<&str> = lex(text).iter().map(|t| &text[t.off as usize..t.end as usize]).collect();
+    if toks.first() != Some(&"constructor") || toks.get(1) != Some(&"(") { return false; }
+    let (mut i, mut depth) = (1, 0i32);
+    while i < toks.len() {
+        match toks[i] { "(" => depth += 1, ")" => depth -= 1, _ => {} }
+        i += 1;
+        if depth == 0 { break; }
+    }
+    toks.get(i) == Some(&"{")
+}
+
+/// Whether a `(Declaration, 13)` event (Decl's prefix arm: decorators, then modifier words, then
+/// a declaration) took its named-class branch: past the prefix comes `class`, and a name after it.
+/// A decorator after a modifier word is not the prefix's (it starts the nested declaration).
+fn decl_prefix_named_class(text: &str) -> bool {
+    const MODS: [&str; 8] = ["abstract", "public", "private", "protected", "readonly", "static", "override", "accessor"];
+    let toks: Vec<&str> = lex(text).iter().map(|t| &text[t.off as usize..t.end as usize]).collect();
+    let (mut i, mut seen_mod) = (0, false);
+    while i < toks.len() {
+        let t = toks[i];
+        if !seen_mod && t.starts_with('@') {
+            i += 1;
+            // the decorator's tail: a call, type arguments, `!`, `.m`, `?.m`, a template
+            loop {
+                match toks.get(i).copied() {
+                    Some(open @ ("(" | "<" | "[")) => {
+                        let close = match open { "(" => ")", "<" => ">", _ => "]" };
+                        let mut depth = 0i32;
+                        while i < toks.len() {
+                            if toks[i] == open { depth += 1 } else if toks[i] == close { depth -= 1 }
+                            i += 1;
+                            if depth == 0 { break; }
+                        }
+                    }
+                    Some("!") => i += 1,
+                    Some("." | "?.") => i += 2,
+                    Some(t) if t.starts_with('`') => i += 1,
+                    _ => break,
+                }
+            }
+        } else if MODS.contains(&t) { seen_mod = true; i += 1; }
+        else { break; }
+    }
+    toks.get(i) == Some(&"class") && toks.get(i + 1).map_or(false, |t| !matches!(*t, "{" | "<" | "extends" | "implements"))
+}
+
 fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'static Schema {
     let text = &src[off as usize..end as usize];
     match (etype, alt) {
+        // Decl's prefix arm: a named class past its decorators / modifiers is a ClassDeclaration.
+        ("Declaration", 13) => { if decl_prefix_named_class(text) { &SC_CLASSDECL } else { schema_for(etype, alt) } }
         ("Type", 0) => { if text.starts_with('<') || text.starts_with('(') { &SC_TYPE_FN } else if text.contains('<') { &SC_TSTYPEREF_LT } else { schema_for(etype, alt) } }
         ("Type", 2) => { if text.contains("keyof") { &SC_TYPE_KEYOF } else { schema_for(etype, alt) } }
         // Prefix and postfix updates are both UpdateExpression events; the prefix one starts
@@ -3594,9 +3644,10 @@ fn schema_for_ev(etype: &str, alt: u32, off: u32, end: u32, src: &str) -> &'stat
             PropRunMember::BindingShorthand => &SC_PROP_SHORTHAND,
             PropRunMember::Generator => panic!("no schema for (Property, 1) `*` method"),
         },
-        ("MethodDefinition", 3) => {
+        ("MethodDefinition", 2) => {
             let ts = text.trim_start();
-            if ts.starts_with("abstract") || ts.starts_with("protected") || ts.starts_with("private") || ts.starts_with("async") || ts.starts_with("accessor") || ts.starts_with("static") { &SC_METHODDEF_MOD }
+            if is_bare_constructor(ts) { &SC_METHODDEF_CTOR }
+            else if ts.starts_with("abstract") || ts.starts_with("protected") || ts.starts_with("private") || ts.starts_with("async") || ts.starts_with("accessor") || ts.starts_with("static") { &SC_METHODDEF_MOD }
             else if ts.starts_with("get") || ts.starts_with("set") { &SC_METHODDEF_GETSET }
             else { schema_for(etype, alt) }
         }

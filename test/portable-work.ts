@@ -57,6 +57,7 @@ const CONSTRUCTS: Record<string, (d: number) => string> = {
   'abstract class': (d) => nest(d, (i) => `abstract class C${i} { m${i}() {`, '} }'),
   'export abstract class': (d) => nest(d, (i) => `export abstract class C${i} { m${i}() {`, '} }'),
   'decorated class': (d) => nest(d, (i) => `@dec class C${i} { @dec m${i}() {`, '} }'),
+  'decorated abstract class': (d) => nest(d, (i) => `@dec abstract class C${i} { m${i}() {`, '} }'),
   'decorated export class': (d) => nest(d, (i) => `@dec export class C${i} { m${i}() {`, '} }'),
   'export decorated class': (d) => nest(d, (i) => `export @dec class C${i} { m${i}() {`, '} }'),
   'object method': (d) => nest(d, (i) => `const o${i} = { m${i}() {`, '} };'),
@@ -93,12 +94,7 @@ const CONSTRUCTS: Record<string, (d: number) => string> = {
 // that parse it more than once. Each is owed its own change (a grammar decision, or an engine
 // mechanism that shares a sub-parse between candidates).
 const KNOWN_GROWTH: Record<string, string> = {
-  'class constructor': "ClassMember: the `constructor` alternative and the member alternative's `constructor` branch both parse the body",
-  'abstract class': "Decl: the class alternative (opt('abstract')) and the modifier-run alternative (`abstract` then a Decl) both parse the class",
-  'export abstract class': 'as `abstract class`, under `export`',
-  'decorated class': 'Decl: the class alternative (many(DecoratorExpr)) and the decorator-run alternative (decorators then a Decl) both parse the class, and Stmt tries it again as a decorated class expression',
-  'decorated export class': 'as `decorated class`: the decorator-run alternative and the `[many(DecoratorExpr), \'export\', …]` alternative both parse the declaration',
-  'export decorated class': 'as `decorated class`, under `export`',
+  'decorated class': "Stmt: after Decl matched `@dec class C {…}`, the expression-statement alternative parses it again as a decorated class expression (its lookahead does not exclude a leading decorator)",
   'if': 'Stmt: after Block matched `{ if (a) {…} }`, the expression-statement alternative parses it again as an object literal with a method named `if`',
   'while': 'as `if`: an object literal with a method named `while`',
   'labelled block': 'as `if`: the expression-statement alternative re-reads each block as an object literal',

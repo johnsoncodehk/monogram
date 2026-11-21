@@ -83,9 +83,9 @@ export const typescriptShape: ShapeSpec = {
       'Stmt → ExpressionStatement; a faithful ESTree Stmt map stays custom.',
     },
 
-    // Decl (28 alts) — same class of problem, worse.
+    // Decl (26 alts) — same class of problem, worse.
     Decl: custom('estreeDecl',
-      'Decl has 28 RD alts covering function*/async/interface/type/class/enum/declare/' +
+      'Decl has 26 RD alts covering function*/async/interface/type/class/enum/declare/' +
       'namespace/module/export-default/export-star/import/… with deep nested alts ' +
       '(export default alone inlines 8 function/class forms). Product types differ per arm; ' +
       'several arms WRAP another Decl/Stmt (`export Decl`, `declare Decl`) needing unwrap/' +
@@ -99,8 +99,8 @@ export const typescriptShape: ShapeSpec = {
           'TSInterfaceDeclaration', 'TSTypeAliasDeclaration', 'ClassDeclaration',
           'Declaration', 'Declaration', 'Declaration', 'Declaration', 'Declaration', 'Declaration', 'Declaration',
           'FunctionDeclaration', 'ExportNamedDeclaration', 'ExportNamedDeclaration', 'ExportNamedDeclaration', 'ExportNamedDeclaration',
-          'ExportAllDeclaration', 'ExportDefaultDeclaration', 'ImportDeclaration', 'TSImportEqualsDeclaration',
-          'TSModuleDeclaration', 'TSModuleDeclaration', 'TSNamespaceExportDeclaration', 'TSEnumDeclaration', 'TSInterfaceDeclaration',
+          'ExportDefaultDeclaration', 'ImportDeclaration', 'TSImportEqualsDeclaration',
+          'TSModuleDeclaration', 'TSModuleDeclaration', 'TSNamespaceExportDeclaration', 'TSEnumDeclaration',
         ],
       }),
 
@@ -426,10 +426,10 @@ export const typescriptShape: ShapeSpec = {
 
     // ─── Class / interface / enum members ──────────────────────────────
     ClassMember: custom('estreeClassMember',
-      '4 alts spanning empty/ctor/static-block/decorated-method-field-soup. ' +
-      'alt[3] alone is a giant nested alt of async/generator/get/set/index/constructor/' +
+      '3 alts spanning empty/static-block/decorated-method-field-soup. ' +
+      'alt[2] alone is a giant nested alt of async/generator/get/set/index/constructor/' +
       'method/field — tens of ESTree ClassBody element types. choice() would need recursive ' +
-      'nested choice (forbidden) or an explosion of arms; custom is the honest escape.', { types: ['UnknownClassMember', 'MethodDefinition', 'StaticBlock', 'MethodDefinition'] }),
+      'nested choice (forbidden) or an explosion of arms; custom is the honest escape.', { types: ['UnknownClassMember', 'StaticBlock', 'MethodDefinition'] }),
     EnumMember: {
       kind: 'node',
       type: 'TSEnumMember',
@@ -636,15 +636,13 @@ function estreeDecl(ctx: TsAstCustomCtx): unknown {
   const k = Array.isArray(ctx.kids) ? ctx.kids : [ctx.kids];
   if (arm === 17) return { type: 'ExportNamedDeclaration', declaration: k[0] };
   if (arm === 18) return { type: 'ExportNamedDeclaration', specifiers: flatKids(k) };
-  if (arm === 19) return { type: 'ExportAllDeclaration', source: k[0] };
-  if (arm === 20) return { type: 'ExportDefaultDeclaration', declaration: k[0] };
-  if (arm === 21) return { type: 'ImportDeclaration', specifiers: flatKids(k[1] ?? k), source: k[2] ?? k[1] };
-  if (arm === 22) return { type: 'TSImportEqualsDeclaration', id: k[0], moduleReference: k[1] };
-  if (arm === 23) return { type: 'TSModuleDeclaration', id: k[0], body: k[1] };
-  if (arm === 24) return { type: 'TSModuleDeclaration', id: k[0], body: k[1], declare: true };
-  if (arm === 25) return { type: 'TSNamespaceExportDeclaration', id: k[0] };
-  if (arm === 26) return { type: 'TSEnumDeclaration', id: k[0], members: flatKids(k[1] ?? []) };
-  if (arm === 27) return { type: 'TSInterfaceDeclaration', id: k[0], body: k[1] };
+  if (arm === 19) return { type: 'ExportDefaultDeclaration', declaration: k[0] };
+  if (arm === 20) return { type: 'ImportDeclaration', specifiers: flatKids(k[1] ?? k), source: k[2] ?? k[1] };
+  if (arm === 21) return { type: 'TSImportEqualsDeclaration', id: k[0], moduleReference: k[1] };
+  if (arm === 22) return { type: 'TSModuleDeclaration', id: k[0], body: k[1] };
+  if (arm === 23) return { type: 'TSModuleDeclaration', id: k[0], body: k[1], declare: true };
+  if (arm === 24) return { type: 'TSNamespaceExportDeclaration', id: k[0] };
+  if (arm === 25) return { type: 'TSEnumDeclaration', id: k[0], members: flatKids(k[1] ?? []) };
   if (arm === 4) return {
     type: 'TSInterfaceDeclaration',
     id: k[0],
@@ -653,13 +651,17 @@ function estreeDecl(ctx: TsAstCustomCtx): unknown {
     body: { type: 'TSInterfaceBody', body: flatKids(k[3] ?? []) },
   };
   if (arm === 5) return { type: 'TSTypeAliasDeclaration', id: k[0], typeParameters: k[1] ?? null, typeAnnotation: k[2] };
-  if (arm === 6) return {
+  // A named class: arm 6 bare, or arm 13's first branch after its decorator / modifier prefix
+  // (k[0]: the prefix's decorators; the modifier words leave no kid).
+  const classDecl = (decorators: unknown, c: unknown[]) => ({
     type: 'ClassDeclaration',
-    decorators: flatKids(k[0] ?? []),
-    id: k[1] ?? null,
-    superClass: flatKids(k[3] ?? [])[0] ?? null,
-    body: { type: 'ClassBody', body: flatKids(k[4] ?? []) },
-  };
+    decorators: flatKids(decorators ?? []),
+    id: c[0] ?? null,
+    superClass: flatKids(c[2] ?? [])[0] ?? null,
+    body: { type: 'ClassBody', body: flatKids(c[3] ?? []) },
+  });
+  if (arm === 6) return classDecl([], k);
+  if (arm === 13 && ctx.altPath[2] === 0) return classDecl(k[0], k[1] as unknown[]);
   if (arm === 0 || arm === 1 || arm === 2 || arm === 3) {
     const async = arm === 1 || arm === 3;
     const gen = arm === 2 || arm === 3;
@@ -1001,11 +1003,16 @@ function estreeClassMember(ctx: TsAstCustomCtx): unknown {
   // An empty class element (`;`, also the one after a block-bodied member) has no ESTree
   // node: an empty kid list, which the ClassBody's flatKids drops (null would fail the member).
   if (arm === 0) return [];
-  if (arm === 1) return { type: 'MethodDefinition', kind: 'constructor', key: I('constructor'), value: { type: 'FunctionExpression', params: flatKids(ctx.kids[0] ?? []), body: ctx.kids[1] }, static: false };
-  if (arm === 2) return { type: 'StaticBlock', body: ctx.kids[0] };
-  if (arm !== 3) return unhandledCustom('estreeClassMember', ctx);
+  if (arm === 1) return { type: 'StaticBlock', body: ctx.kids[0] };
+  if (arm !== 2) return unhandledCustom('estreeClassMember', ctx);
   const nested = ctx.altPath[1];
-  if (arm === 3 && nested === 8) {
+  // The `constructor` branch (7) with no decorator, modifier, type parameters or return type and
+  // a block body (`altPath` [2, 7, 0]): a constructor definition.
+  if (nested === 7 && ctx.altPath.length === 3 && ctx.altPath[2] === 0 && flatKids(ctx.kids[0] ?? []).length === 0) {
+    const tail = Array.isArray(ctx.kids[1]) ? ctx.kids[1] as unknown[] : [];
+    if (tail[0] == null && tail[2] == null) return { type: 'MethodDefinition', kind: 'constructor', key: I('constructor'), value: { type: 'FunctionExpression', params: flatKids(tail[1] ?? []), body: tail[3] }, static: false };
+  }
+  if (nested === 8) {
     const branch = Array.isArray(ctx.kids[1]) ? ctx.kids[1] as unknown[] : [];
     const tail = Array.isArray(branch[1]) ? branch[1] as unknown[] : [];
     return {
