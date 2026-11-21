@@ -554,12 +554,17 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
       }).join('; ');
       return `func() bool { ${peekInit}${tries}; return false }()`;
     }
-    case 'not': return `func() bool { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); m := ${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}; p.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return !m }()`;
+    case 'look': return `${s.is ? '' : '!'}p.look${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peek(); return t != nil && !t.Nl }()`;
     case 'suppress': return `func() bool { p.suppressNext = map[uint16]bool{${s.connectors.map((c) => `${lidOf(ids, c)}: true`).join(', ')}}; _r := (${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'}); p.suppressNext = nil; return _r }()`;
   }
+}
+
+// ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
+function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return ir.lookaheads.map((body, id) => `func (p *engine) look${id}() bool { save := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids); m := ${body.map((x) => stepCond(x, ids, ar)).join(' && ')}; p.pos = save; p.scratch = p.scratch[:sb]; p.nodes = p.nodes[:nb]; p.kids = p.kids[:kb]; return m }\n`).join('');
 }
 
 function predAltBody(branches: Step[][], ids: LexIdPlan, firsts: FirstSig[] | undefined, ar: ArenaIdPlan): string {
@@ -1473,7 +1478,7 @@ function stepCondW(s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
     case 'alt': return s.predictive
       ? `func() bool { ${predAltBodyW(s.branches, ids, ar, s.firsts, recv)} }()`
       : `func() bool { ${altBodyW(s.branches, ids, ar, s.firsts, recv)} }()`;
-    case 'not': return `func() bool { ${notBodyW(s.steps, ids, ar, recv)} }()`;
+    case 'look': return `${s.is ? '' : '!'}p.look${s.id}W()`;
     case 'ahead': return `p.aheadW(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'})`;
     case 'sameLine': return `func() bool { t := p.peekW(); return t != nil && !t.Nl }()`;
@@ -1493,8 +1498,9 @@ function altBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: F
   }).join('; ');
   return `${peekInit}${tries}; return false`;
 }
-function notBodyW(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
-  return `sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; m := ${steps.length ? steps.map((x) => stepCondW(x, ids, ar, recv)).join(' && ') : 'true'}; p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return !m`;
+// ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
+function lookFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
+  return ir.lookaheads.map((body, id) => `func (p *${recv}) look${id}W() bool { sp := p.pos; sb := len(p.scratch); ${arenaCkpt(recv)}; m := ${body.map((x) => stepCondW(x, ids, ar, recv)).join(' && ')}; p.pos = sp; p.scratch = p.scratch[:sb]; ${arenaRestore(recv)}; return m }\n`).join('');
 }
 function predAltBodyW(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts: FirstSig[] | undefined, recv: string): string {
   // Same-line `} else if` (native predAltBody joins with ' else '); newlines break Go ASI.
@@ -1978,7 +1984,7 @@ func (p *${recv}) altLitW(opts []struct{ Lid, TtId uint16 }) bool {
 \treturn false
 }
 
-${matchTemplateW}${ruleFnsW}
+${matchTemplateW}${lookFnsW(ir, ids, ar, recv)}${ruleFnsW}
 `;
 }
 
@@ -2609,12 +2615,13 @@ ${editReuse}
 // The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
 function tokenSetRuntimeGo(ir: ParserIR, ids: LexIdPlan): string {
   const b = tokenSetBits(ids, ir.tokenSets);
-  return `const _tokenSetStride = ${b.stride}
-const _tokenSetKid = ${b.kidBase}
-var _tokenSets = [...]uint32{${b.words.join(', ')}}
+  const rows: string[] = [];
+  for (let r = 0; r * b.width < b.words.length; r++) rows.push(`{${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}}`);
+  return `const _tokenSetKid = ${b.kidBase}
+var _tokenSets = [...][${b.width}]uint32{${rows.join(', ')}}
 func inTokenSet(k int, t *Tok) bool {
-\tr, l, c := k*_tokenSetStride, uint(t.Lid), uint(_tokenSetKid)+uint(t.Kid)
-\treturn ((_tokenSets[r+int(l>>5)]>>(l&31))|(_tokenSets[r+int(c>>5)]>>(c&31)))&1 != 0
+\tw := k >> 5
+\treturn (_tokenSets[t.Lid][w]|_tokenSets[_tokenSetKid+int(t.Kid)][w])&(1<<(k&31)) != 0
 }`;
 }
 
@@ -3213,7 +3220,7 @@ func (p *engine) altLit(opts []struct{ Lid uint16; TtId uint8 }) bool {
 \treturn false
 }
 
-${matchTemplate}${ruleFns}
+${matchTemplate}${lookFns(ir, ids, ar)}${ruleFns}
 
 func (p *engine) writeJSON(id int32, b *strings.Builder) { writeJSONWith(p.nodes, p.kids, p.toks, id, b) }
 

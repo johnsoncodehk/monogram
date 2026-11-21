@@ -11,7 +11,7 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan } from './emit-portable.ts';
 import { portableIR, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildArenaIdPlan, lidOf, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits } from './emit-portable.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import type { CstGrammar } from './types.ts';
@@ -193,7 +193,7 @@ function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: Le
       : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&src[pos..e]))); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
-  const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
+  const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(src, e) } else { e }; ' : '';
   const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
@@ -270,7 +270,7 @@ function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; field
             st.pending_nl = true;
             continue;
         }
-        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) && ch != '\\u{2028}' && ch != '\\u{2029}' { pos += w; continue; } } }
+        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) && ch != '\\u{2028}' && ch != '\\u{2029}' { pos += w; continue; } } }
 `;
   return {
     consts: `const _KID_NLTOK: u16 = ${kidOf(ids, nl.token)};
@@ -321,7 +321,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   // Byte-class dispatch folds whitespace/newline/template-open into the match's jump table so
   // the hot loop does one load + one match, instead of a chain of pre-checks per byte. Newline-mode
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
-  const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
+  const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
   const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; continue; }
         10 | 13 => { ${nlVar} = true; pos += 1; continue; }
@@ -372,12 +372,13 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     ? `st.emit(pos, e, ${identKid}, lid_of(&src[pos..e]));`
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, lid_of(&src[pos..e]))); pending_nl = false;`;
   const uniIdentOrPanic = identName
-    ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(b, pos) { ${uniIdentEmit} pos = e; continue; } }
-        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
-    : `        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
-  const lexUtf8Helpers = `#[inline(always)] fn _utf8_char_at(b: &[u8], pos: usize) -> Option<(char, usize)> {
-    let s = std::str::from_utf8(&b[pos..]).ok()?;
-    let ch = s.chars().next()?;
+    ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(src, pos) { ${uniIdentEmit} pos = e; continue; } }
+        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
+    : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
+  // The source is a &str, so the character at a position is std's own decode of it: one boundary
+  // check and the character's bytes, none past it. None where pos is no character boundary.
+  const lexUtf8Helpers = `#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
+    let ch = s.get(pos..)?.chars().next()?;
     Some((ch, ch.len_utf8()))
 }
 #[inline(always)] fn _is_js_ws(ch: char) -> bool {
@@ -394,12 +395,12 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 #[inline(always)] fn _is_uni_id_continue(ch: char) -> bool {
     ch == '$' || ch == '_' || ch == '\\u{200C}' || ch == '\\u{200D}' || ch.is_alphanumeric()
 }
-fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
-    let (ch, w) = _utf8_char_at(b, pos)?;
+fn _scan_uni_ident(s: &str, pos: usize) -> Option<usize> {
+    let (ch, w) = _char_at(s, pos)?;
     if !_is_uni_id_start(ch) { return None; }
     let mut e = pos + w;
-    while e < b.len() {
-        let Some((c2, w2)) = _utf8_char_at(b, e) else { break; };
+    while e < s.len() {
+        let Some((c2, w2)) = _char_at(s, e) else { break; };
         if !_is_uni_id_continue(c2) { break; }
         e += w2;
     }
@@ -407,11 +408,11 @@ fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
-fn _lx_ext(b: &[u8], e: usize) -> usize {
-    if e >= b.len() || b[e] < 0x80 { return e; }
+fn _lx_ext(s: &str, e: usize) -> usize {
+    if e >= s.len() || s.as_bytes()[e] < 0x80 { return e; }
     let mut ee = e;
-    while ee < b.len() {
-        let Some((c2, w2)) = _utf8_char_at(b, ee) else { break; };
+    while ee < s.len() {
+        let Some((c2, w2)) = _char_at(s, ee) else { break; };
         if !_is_uni_id_continue(c2) { break; }
         ee += w2;
     }
@@ -590,7 +591,7 @@ ${loopBody}
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlUniIdentOrPanic = identName
       ? rustNlScan(uniIdentOrPanic)
-      : `        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
+      : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
     const nlLoopBody = `        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
 ${nlUniIdentOrPanic}`;
@@ -692,7 +693,7 @@ function stepCond(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': return s.predictive
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(self)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(self)`;
-    case 'not': return `(|p: &mut Parser<'a, B>| -> bool { ${notBody(s.steps, ids, ar)} })(self)`;
+    case 'look': return `${s.is ? '' : '!'}self.look_${s.id}()`;
     case 'ahead': return `self.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCond(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(self.peek(), Some(t) if !t.nl)`;
@@ -712,7 +713,7 @@ function stepCondP(s: Step, ids: LexIdPlan, ar: ArenaIdPlan): string {
     case 'alt': return s.predictive
       ? `(|p: &mut Parser<'a, B>| -> bool { ${predAltBody(s.branches, ids, ar, s.firsts)} })(p)`
       : `(|p: &mut Parser<'a, B>| -> bool { ${altBody(s.branches, ids, ar, s.firsts)} })(p)`;
-    case 'not': return `(|p: &mut Parser<'a, B>| -> bool { ${notBody(s.steps, ids, ar)} })(p)`;
+    case 'look': return `${s.is ? '' : '!'}p.look_${s.id}()`;
     case 'ahead': return `p.ahead(${s.set}, ${s.is})`;
     case 'seq': return `(${s.steps.length ? s.steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'})`;
     case 'sameLine': return `matches!(p.peek(), Some(t) if !t.nl)`;
@@ -732,8 +733,9 @@ function altBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: F
   }).join(' ');
   return `${peekInit}${tries} false`;
 }
-function notBody(steps: Step[], ids: LexIdPlan, ar: ArenaIdPlan): string {
-  return `let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${steps.length ? steps.map((x) => stepCondP(x, ids, ar)).join(' && ') : 'true'}; p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); !m`;
+// ParserIR.lookaheads, one method each: whether the body matches here, undoing all it did.
+function lookFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+  return ir.lookaheads.map((body, id) => `    fn look_${id}(&mut self) -> bool { let p = self; let sp = p.pos; let sb = p.scratch.len(); let ck = p.b.checkpoint(); let m = ${body.map((x) => stepCondP(x, ids, ar)).join(' && ')}; p.pos = sp; p.scratch.truncate(sb); p.b.restore(ck); m }\n`).join('');
 }
 function predAltBody(branches: Step[][], ids: LexIdPlan, ar: ArenaIdPlan, firsts?: FirstSig[]): string {
   // FIRST dispatch; restore pos/scratch/builder on arm half-failure (like altBody).
@@ -1767,17 +1769,19 @@ impl Doc<CstBuilder> {
 // The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
 function tokenSetRuntimeRust(ir: ParserIR, ids: LexIdPlan): string {
   const b = tokenSetBits(ids, ir.tokenSets);
+  const rows: string[] = [];
+  for (let r = 0; r * b.width < b.words.length; r++) rows.push(`[${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}]`);
   return `#[allow(dead_code)]
-const TOKEN_SET_STRIDE: usize = ${b.stride};
-#[allow(dead_code)]
 const TOKEN_SET_KID: usize = ${b.kidBase};
 #[allow(dead_code)]
-static TOKEN_SETS: [u32; ${b.words.length}] = [${b.words.join(', ')}];
+static TOKEN_SETS: [[u32; ${b.width}]; ${rows.length}] = [${rows.join(', ')}];
 #[inline(always)]
 #[allow(dead_code)]
 fn in_token_set(k: usize, t: &Tok) -> bool {
-    let (r, l, c) = (k * TOKEN_SET_STRIDE, t.lid as usize, TOKEN_SET_KID + t.kid as usize);
-    ((TOKEN_SETS[r + (l >> 5)] >> (l & 31)) | (TOKEN_SETS[r + (c >> 5)] >> (c & 31))) & 1 != 0
+    // Rows are exact-size (one per lid, then one per kid) and a token's ids are always in range,
+    // as for the lexer's flag tables; k is a constant at every call site, so is word k >> 5.
+    let (l, c) = unsafe { (TOKEN_SETS.get_unchecked(t.lid as usize), TOKEN_SETS.get_unchecked(TOKEN_SET_KID + t.kid as usize)) };
+    (l[k >> 5] | c[k >> 5]) & (1 << (k & 31)) != 0
 }`;
 }
 
@@ -2178,7 +2182,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     }
     #[inline(always)]
     #[allow(dead_code)]
-    fn ahead(&mut self, k: usize, is: bool) -> bool { self.peek().map_or(false, |t| in_token_set(k, &t)) == is }
+    fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
     /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
     #[inline(always)]
     #[allow(dead_code)]
@@ -2283,7 +2287,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         false
     }
 
-${matchTemplate}${ruleFns}
+${matchTemplate}${lookFns(ir, ids, ar)}${ruleFns}
 }
 `;
 }
@@ -2478,7 +2482,7 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
       }
       case 'seq':
       case 'suppress': return walkSeq(s.steps);
-      case 'not':
+      case 'look':
       case 'ahead':
       case 'sameLine': return 'nullable'; // zero-width: consumes nothing
       case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
@@ -2747,6 +2751,7 @@ function emitRustAstRdAltSteps(
   steps: Step[],
   ids: LexIdPlan,
   leaves: Record<string, TokenLeafPolicy>,
+  look: readonly Alt[],   // ParserIR.lookaheads: the body a `look` step runs
   selfRule?: string,
   selfRuleUseBp?: boolean,
 ): { ok: string; okVar: string } {
@@ -2763,14 +2768,14 @@ function emitRustAstRdAltSteps(
       case 'sep': return visible(s.elem);
       case 'altlit': return s.opts.some((o) => !rustLeafDropped(o.ttype, leaves));
       case 'alt': return s.branches.some((b) => b.some(visible));
-      case 'not':
+      case 'look':
       case 'ahead':
       case 'sameLine': return false;
     }
   };
   /** M18: txn purity — true when the step's OUTER trace is confined to
    *  pos/vals (so a surrounding txn can use the 2-field light snapshot).
-   *  lit/tok/altlit touch pos + vals only; sameLine is read-only; not is
+   *  lit/tok/altlit touch pos + vals only; sameLine is read-only; look is
    *  self-restoring (full ck/restore inside) and externally transparent;
    *  suppress self-restores suppress_next. Visible star/opt/sep/alt write
    *  the arena via shape_pack_range/shape_list_from on success paths —
@@ -2783,7 +2788,7 @@ function emitRustAstRdAltSteps(
       case 'altlit': return true;
       case 'sameLine': return true;
       case 'ahead': return true;
-      case 'not': return true;
+      case 'look': return true;
       case 'suppress': return s.steps.every(pure);
       case 'seq': return s.steps.every(pure);
       case 'star': return !visible(s.step) && pure(s.step);
@@ -2842,19 +2847,20 @@ function emitRustAstRdAltSteps(
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
       case 'ahead':
         return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t)) != ${s.is} { ${okVar} = false; }`;
-      case 'not': {
+      case 'look': {
         // Gate on okVar to match TS `&&` short-circuit — otherwise probe still
         // runs after a failed predecessor and can re-enter recursive rules.
         const poke = local('probe');
-        const body = emitSteps(s.steps, poke);
-        const light = s.steps.every(pure);
+        const steps = look[s.id]!;
+        const body = emitSteps(steps, poke);
+        const light = steps.every(pure);
         return `if ${okVar} {
             ${txnCk('_ck', light)}
             let mut ${poke} = true;
             ${body}
             let _probe_hit = ${poke};
             ${txnRestore('_ck', light)}
-            if _probe_hit { ${okVar} = false; }
+            if _probe_hit != ${s.is} { ${okVar} = false; }
         }`;
       }
       case 'suppress': {
@@ -3085,6 +3091,7 @@ function emitRustRdMethod(
   sir: ShapeIRRule,
   ids: LexIdPlan,
   shapeIR: ShapeIR,
+  ir: ParserIR,
 ): string {
   const leaves = shapeIR.leaves;
   const ret = "SVal<'a>";
@@ -3096,7 +3103,7 @@ function emitRustRdMethod(
     const alt = rule.alts[altIdx]!;
     const g = guardFirst ? astGuardRs(rule.altGuard[altIdx]!, 't') : null;
     const guardExpr = g !== null ? `_ft.is_some() && { let t = _ft.unwrap(); ${g} }` : 'true';
-    const steps = emitRustAstRdAltSteps(alt, ids, leaves);
+    const steps = emitRustAstRdAltSteps(alt, ids, leaves, ir.lookaheads);
     const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk_base').replaceAll('__SPOFF__', 'sp_off');
     return `{
             let sp = self.pos;
@@ -3134,7 +3141,7 @@ function emitRustRdMethod(
         ...f.toks.map((k) => `Some((_, ${kidOf(ids, k)}))`),
       ].join(' | ');
       const alt = rule.alts[altIdx]!;
-      const steps = emitRustAstRdAltSteps(alt, ids, leaves);
+      const steps = emitRustAstRdAltSteps(alt, ids, leaves, ir.lookaheads);
       const finished = finish.replaceAll('__ALT__', String(altIdx)).replaceAll('__SK__', '_sk_base').replaceAll('__SPOFF__', 'sp_off');
       return `${pats} => {
                 let _sk_base = self.vals.len();
@@ -3305,7 +3312,7 @@ function emitRustRdMethod(
   if (sir.shape.kind === 'node') {
     const node = sir.shape;
     if (rule.alts.length === 1) {
-      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves);
+      const steps = emitRustAstRdAltSteps(rule.alts[0]!, ids, leaves, ir.lookaheads);
       return `    fn parse_ast_${rule.name}(&mut self) -> Option<${ret}> {
         let sp = self.pos;
         let sp_off = self.current_off();
@@ -3348,7 +3355,7 @@ function emitRustPrattMethod(
   const ret = "SVal<'a>";
   const tpl = ir.tpl;
   const emptySteps = (steps: Step[], selfBp = false) =>
-    emitRustAstRdAltSteps(steps, ids, leaves, selfBp ? rule.name : undefined, selfBp);
+    emitRustAstRdAltSteps(steps, ids, leaves, ir.lookaheads, selfBp ? rule.name : undefined, selfBp);
 
   /** Missing Pratt slot → keep (positional), matching TS emitAstPrattRule. */
   const slotOf = (declared: { kind: string } | undefined, present: boolean): { kind: string } | null => {
@@ -4111,8 +4118,10 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
       if (!supportedLeaf(step.name) || shapeIR.leaves[step.name]?.action === 'drop') note(rule, `step:tok-policy:${step.name}`);
     } else if (step.t === 'alt') {
       for (const branch of step.branches) for (const s of branch) walkStep(rule, s);
-    } else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress' || step.t === 'not') {
+    } else if (step.t === 'opt' || step.t === 'seq' || step.t === 'suppress') {
       for (const s of step.steps) walkStep(rule, s);
+    } else if (step.t === 'look') {
+      for (const s of ir.lookaheads[step.id]!) walkStep(rule, s);
     } else if (step.t === 'star') walkStep(rule, step.step);
     else if (step.t === 'sep') walkStep(rule, step.elem);
     // rule/ruleBp/altlit/sameLine: ok
@@ -4367,7 +4376,7 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
     const rule = ir.rules.find((r) => r.name === sir.name)!;
     return rule.kind === 'pratt'
       ? emitRustPrattMethod(rule, sir, ids, shapeIR, ir)
-      : emitRustRdMethod(rule, sir, ids, shapeIR);
+      : emitRustRdMethod(rule, sir, ids, shapeIR, ir);
   }).join('\n\n');
   _rustShapeRuleFirst = null;
   return `
