@@ -193,7 +193,7 @@ function scanTok(t: LexTok, shared: SharedAlgorithms, stateful: boolean, ids: Le
       : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, lid_of(&src[pos..e]))); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
   // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
-  const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
+  const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(src, e) } else { e }; ' : '';
   const scan = `{ let e = ${shared.scanner(name)}(src, pos as isize); if e >= 0 { let e = e as usize; ${ext}${push}pos = e; continue; } }`;
   return rxTok !== undefined && name === rxTok ? `        if !st.prev_is_value() ${scan}` : `        ${scan}`;
 }
@@ -270,7 +270,7 @@ function newlinePartsRs(nl: NewlineCfg, ids: LexIdPlan): { consts: string; field
             st.pending_nl = true;
             continue;
         }
-        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) && ch != '\\u{2028}' && ch != '\\u{2029}' { pos += w; continue; } } }
+        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) && ch != '\\u{2028}' && ch != '\\u{2029}' { pos += w; continue; } } }
 `;
   return {
     consts: `const _KID_NLTOK: u16 = ${kidOf(ids, nl.token)};
@@ -321,7 +321,7 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   // Byte-class dispatch folds whitespace/newline/template-open into the match's jump table so
   // the hot loop does one load + one match, instead of a chain of pre-checks per byte. Newline-mode
   // grammars keep the flow-aware whitespace arms (flow_depth) and do NOT use the folded arms.
-  const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _utf8_char_at(b, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
+  const nonAsciiWsCheck = nlRs ? '' : `        if c >= 0xC2 { if let Some((ch, w)) = _char_at(src, pos) { if _is_js_ws(ch) { if ch == '\\u{2028}' || ch == '\\u{2029}' { ${nlVar} = true; } pos += w; continue; } } }
 `;
   const wsNlArms = nlRs ? '' : `        9 | 11 | 12 | 32 => { pos += 1; continue; }
         10 | 13 => { ${nlVar} = true; pos += 1; continue; }
@@ -372,12 +372,13 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
     ? `st.emit(pos, e, ${identKid}, lid_of(&src[pos..e]));`
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, lid_of(&src[pos..e]))); pending_nl = false;`;
   const uniIdentOrPanic = identName
-    ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(b, pos) { ${uniIdentEmit} pos = e; continue; } }
-        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
-    : `        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
-  const lexUtf8Helpers = `#[inline(always)] fn _utf8_char_at(b: &[u8], pos: usize) -> Option<(char, usize)> {
-    let s = std::str::from_utf8(&b[pos..]).ok()?;
-    let ch = s.chars().next()?;
+    ? `        if c >= 0x80 { if let Some(e) = _scan_uni_ident(src, pos) { ${uniIdentEmit} pos = e; continue; } }
+        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`
+    : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
+  // The source is a &str, so the character at a position is std's own decode of it: one boundary
+  // check and the character's bytes, none past it. None where pos is no character boundary.
+  const lexUtf8Helpers = `#[inline(always)] fn _char_at(s: &str, pos: usize) -> Option<(char, usize)> {
+    let ch = s.get(pos..)?.chars().next()?;
     Some((ch, ch.len_utf8()))
 }
 #[inline(always)] fn _is_js_ws(ch: char) -> bool {
@@ -394,12 +395,12 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
 #[inline(always)] fn _is_uni_id_continue(ch: char) -> bool {
     ch == '$' || ch == '_' || ch == '\\u{200C}' || ch == '\\u{200D}' || ch.is_alphanumeric()
 }
-fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
-    let (ch, w) = _utf8_char_at(b, pos)?;
+fn _scan_uni_ident(s: &str, pos: usize) -> Option<usize> {
+    let (ch, w) = _char_at(s, pos)?;
     if !_is_uni_id_start(ch) { return None; }
     let mut e = pos + w;
-    while e < b.len() {
-        let Some((c2, w2)) = _utf8_char_at(b, e) else { break; };
+    while e < s.len() {
+        let Some((c2, w2)) = _char_at(s, e) else { break; };
         if !_is_uni_id_continue(c2) { break; }
         e += w2;
     }
@@ -407,11 +408,11 @@ fn _scan_uni_ident(b: &[u8], pos: usize) -> Option<usize> {
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
 // ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
-fn _lx_ext(b: &[u8], e: usize) -> usize {
-    if e >= b.len() || b[e] < 0x80 { return e; }
+fn _lx_ext(s: &str, e: usize) -> usize {
+    if e >= s.len() || s.as_bytes()[e] < 0x80 { return e; }
     let mut ee = e;
-    while ee < b.len() {
-        let Some((c2, w2)) = _utf8_char_at(b, ee) else { break; };
+    while ee < s.len() {
+        let Some((c2, w2)) = _char_at(s, ee) else { break; };
         if !_is_uni_id_continue(c2) { break; }
         ee += w2;
     }
@@ -590,7 +591,7 @@ ${loopBody}
       .replace(/pending_nl/g, 'st.pending_nl');
     const nlUniIdentOrPanic = identName
       ? rustNlScan(uniIdentOrPanic)
-      : `        panic!("Unexpected character at offset {}: '{}'", pos, _utf8_char_at(b, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
+      : `        panic!("Unexpected character at offset {}: '{}'", pos, _char_at(src, pos).map(|(ch, _)| ch).unwrap_or(b[pos] as char));`;
     const nlLoopBody = `        let c = b[pos] as u32;
 ${nlRs!.wsFrom}${rustNlScan(cascade)}
 ${nlUniIdentOrPanic}`;
