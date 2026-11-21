@@ -160,7 +160,7 @@ module.exports = grammar({
 
     import_clause: $ => choice(seq($.ident, optional(seq(",", choice(seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", $.ident))))), seq("{", optional(seq($.import_specifier, repeat(seq(",", $.import_specifier)), optional(","))), "}"), seq("*", "as", $.ident)),
 
-    import_specifier: $ => choice(seq($.ident, optional(seq("as", $.ident))), seq($.string, "as", $.ident)),
+    import_specifier: $ => choice(seq($.ident, "as", $.ident), $.ident, seq($.string, "as", $.ident)),
 
     export_specifier: $ => seq(choice($.ident, $.string), optional(seq("as", choice($.ident, $.string)))),
 

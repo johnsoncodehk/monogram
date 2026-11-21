@@ -1891,10 +1891,16 @@ function collectNameFields(grammar: CstGrammar): NameFieldPlan {
   }
 
   // Does an item carry the identifier token name (possibly the body of an
-  // optional like `opt(Ident)`)? Used to locate anonymous-decl name slots.
+  // optional like `opt(Ident)`, or like `opt(notReserved, Ident)`: a zero-width lookahead
+  // before the identifier, as between the keyword and the name)? Used to locate
+  // anonymous-decl name slots.
   function isIdentRef(item: RuleExpr): RuleExpr | null {
     if (item.type === 'ref' && item.name === identName && tokenNames.has(item.name)) return item;
     if (item.type === 'quantifier' || item.type === 'group') return isIdentRef(item.body);
+    if (item.type === 'seq') {
+      const rest = item.items.filter(i => i.type !== 'not');
+      return rest.length === 1 ? isIdentRef(rest[0]) : null;
+    }
     return null;
   }
   // Is this item a "skippable" decoration between the keyword and the name —
