@@ -357,6 +357,19 @@ const CASES: Case[] = [
       // `async` is a modifier like the others, so it also precedes a field; the line rule holds for it too.
       'class C { async x; }', 'class C { static async x = 1; }', 'class C { async public\nx() {} }', 'class C { static async static\nx = 1; }',
       'x = { static: 1, public() {}, get: 2 };', 'x = { public static x() {}, static get y() { return 1; } };',
+      // `default` is a modifier when `class`, `function`, `interface`, or `abstract` / `async` then
+      // `class` / `function` on their line follows (line breaks before them allowed); `export` is
+      // one before such a `default`, and before `type` only when a member start other than `as` /
+      // `*` follows the `type`; `const` before `enum` (any line), and in a class body before any
+      // member start on its line. The same in every member list.
+      'class C { default class() {} }', 'class C { default function(): T }', 'class C { export default class: T }',
+      'declare class C { default interface: T }', '(class { default\nclass() {} })', 'class C { default abstract class() {} }',
+      'class C { default async function() {} }', 'class C { static default class = 1 }', 'x = { default class() {} };',
+      'x = { export default function: 1 };', 'x = { default\ninterface: 1 };', 'interface I { default class: T }',
+      'interface I { export default interface(): T }', 'type A = { default abstract class?: T };',
+      'type A = { export\ndefault\nfunction: T };', 'interface I { const enum: T }', 'x = { const enum: 1 };',
+      'type A = { const\nenum: T };', 'x = { export const enum() {} };', 'class C { const enum: T }', 'class C { const\nenum: T }',
+      'interface I { export type\nx: T }', 'class C { export type\n[k]: T }', 'class C { static export type\nx = 1 }',
       // `this is T` is a TYPE (tsc: parseNonArrayType), so it stands wherever a type does; its
       // target is a whole type. `x is T` exists only as a return type. `is` binds on the same line.
       'var x: this is string;', 'function f(x: this is string) { }', 'declare class W { set p(x: this is string); }',
@@ -496,6 +509,15 @@ const CASES: Case[] = [
       'type A = { get g() {}; }', 'type A = { get g() {}, }', 'type A = { get\nx: T }', 'type A = { get g }',
       'type A = { public\nget g(): T }', 'interface I { public\nget g(): T }', 'interface I { readonly public\nget g(): T }',
       'type A = { export default: T }', 'interface I { export default: T }', 'class C { export default: T }', 'x = { export default: 1 };',
+      // `default` before anything but a declaration keyword is the member's name; so is `export`
+      // before such a `default`, or before a `type` that no member start other than `as` / `*`
+      // follows; `const` outside a class body is no modifier but before `enum`.
+      'class C { default abstract\nclass() {} }', 'class C { default async\nfunction() {} }', 'interface I { default default: T }',
+      'class C { export default default: T }', 'class C { default static {} }', 'x = { default x: 1 };', 'type A = { default enum: T };',
+      'type A = { export type: T };', 'interface I { export type?: T }', 'class C { export type() {} }', 'class C { export type\nas() {} }',
+      'class C { export type *g() {} }', 'interface I { export type as: T }', 'x = { export type: 1 };', 'x = { export type\nas: 1 };',
+      'interface I { export type x: T }', 'interface I { const x: T }', 'x = { const x: 1 };', 'type A = { const const: T };',
+      'x = { const\nx: 1 };', 'interface I { export const x: T }', 'interface I { const enum x: T }',
       // A mapped type ends in a statement end, not a `,`, and takes no other `+` / `-`; a member
       // takes neither.
       'type A = { [K in T]: U, }', 'type A = { -[K in T]: U }', 'type A = { [K in T]-: U }', 'type A = { +readonly [k: string]: T }',

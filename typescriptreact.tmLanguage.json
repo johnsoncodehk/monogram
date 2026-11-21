@@ -190,13 +190,13 @@
       "include": "#scope-keyword-control-export"
     },
     {
+      "include": "#scope-keyword-control-switch"
+    },
+    {
       "include": "#scope-keyword-control-flow"
     },
     {
       "include": "#scope-keyword-control-conditional"
-    },
-    {
-      "include": "#scope-keyword-control-switch"
     },
     {
       "include": "#scope-keyword-control-trycatch"
@@ -223,10 +223,10 @@
       "include": "#scope-storage-type-property"
     },
     {
-      "include": "#scope-storage-type-class"
+      "include": "#scope-storage-type"
     },
     {
-      "include": "#scope-storage-type"
+      "include": "#scope-storage-type-class"
     },
     {
       "include": "#scope-storage-type-interface-decl"
@@ -955,7 +955,7 @@
     },
     "regex-literal-prefix-ops": {
       "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\bget)|(?<=\\bset)|(?<=\\bstatic)|(?<=\\bexport)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\boverride)|(?<=\\babstract)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\bget)|(?<=\\bset)|(?<=\\bstatic)|(?<=\\bexport)|(?<=\\bconst)|(?<=\\bdefault)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\boverride)|(?<=\\babstract)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.tsx"
@@ -2989,7 +2989,7 @@
     },
     "type-annotation-var": {
       "name": "meta.type.annotation.tsx",
-      "begin": "\\b(let|const|var|using)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
+      "begin": "\\b(const|let|var|using)\\s+((?:[a-zA-Z_$\\p{L}\\p{Nl}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(\\s*:)",
       "beginCaptures": {
         "1": {
           "name": "storage.type.tsx"
@@ -3099,6 +3099,14 @@
       "match": "\\b(export)\\b",
       "name": "keyword.control.export.tsx"
     },
+    "scope-storage-type": {
+      "match": "\\b(const|let|var|using)\\b",
+      "name": "storage.type.tsx"
+    },
+    "scope-keyword-control-switch": {
+      "match": "\\b(default|switch|case)\\b",
+      "name": "keyword.control.switch.tsx"
+    },
     "scope-storage-type-class": {
       "match": "\\b(class)\\b",
       "name": "storage.type.class.tsx"
@@ -3107,17 +3115,9 @@
       "match": "\\b(yield|await|return)\\b",
       "name": "keyword.control.flow.tsx"
     },
-    "scope-storage-type": {
-      "match": "\\b(let|const|var|using)\\b",
-      "name": "storage.type.tsx"
-    },
     "scope-keyword-control-conditional": {
       "match": "\\b(if|else)\\b",
       "name": "keyword.control.conditional.tsx"
-    },
-    "scope-keyword-control-switch": {
-      "match": "\\b(switch|case|default)\\b",
-      "name": "keyword.control.switch.tsx"
     },
     "scope-keyword-control-trycatch": {
       "match": "\\b(throw|try|catch|finally)\\b",
@@ -3758,7 +3758,7 @@
     },
     "regex": {
       "name": "string.regexp.tsx",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\bget)|(?<=\\bset)|(?<=\\bstatic)|(?<=\\bexport)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\boverride)|(?<=\\babstract)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bdefault)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~,\\[(?:{.;])|(?<=\\bkeyof)|(?<=\\btypeof)|(?<=\\breadonly)|(?<=\\bis)|(?<=\\bnew)|(?<=\\bextends)|(?<=\\bunique)|(?<=\\bin)|(?<=\\bas)|(?<=\\bget)|(?<=\\bset)|(?<=\\bstatic)|(?<=\\bexport)|(?<=\\bconst)|(?<=\\bdefault)|(?<=\\b@new)|(?<=\\binstanceof)|(?<=\\bclass)|(?<=\\basync)|(?<=\\byield)|(?<=\\bsatisfies)|(?<=\\bfunction)|(?<=\\belse)|(?<=\\bdo)|(?<=\\breturn)|(?<=\\bthrow)|(?<=\\btry)|(?<=\\bfinally)|(?<=\\bcatch)|(?<=\\bpublic)|(?<=\\bprivate)|(?<=\\bprotected)|(?<=\\boverride)|(?<=\\babstract)|(?<=\\baccessor)|(?<=\\bdeclare)|(?<=\\bout)|(?<=\\bof)|(?<=\\bcase)|(?<=\\busing)|(?<=\\bimport)|(?<=\\btype)|(?<=\\bconstructor)|(?<=\\bvoid)|(?<=\\bdelete)|(?<=\\bawait)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.tsx"
