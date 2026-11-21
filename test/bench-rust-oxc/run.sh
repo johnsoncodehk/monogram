@@ -69,7 +69,8 @@ done
 cp "$W/src-B/src/gen-tm.ts" "$W/inputs/gen-tm.ts"
 cp "$W/src-B/typescript.ts" "$W/inputs/typescript.ts"
 node "$H/synth2mb.ts" "$W/inputs/synth2mb.ts"
-INPUTS="typescript.js checker.ts synth2mb.ts typescript.d.ts parser.ts gen-tm.ts typescript.ts"
+node "$H/synth-nonascii.ts" "$W/inputs/nonascii.ts"
+INPUTS="typescript.js checker.ts synth2mb.ts typescript.d.ts parser.ts gen-tm.ts typescript.ts nonascii.ts"
 (cd "$W/inputs" && wc -c $INPUTS && sha256sum $INPUTS)
 
 echo "=== acceptance (one untimed parse per input per parser)"
