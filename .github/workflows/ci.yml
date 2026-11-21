@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# The pinned TypeScript conformance corpus: the `test` job's conformance/js-corpus gate and the
+# emit-parity breadth gate read it at /tmp/ts-repo (same pin as the readme-bench workflow).
+env:
+  TS_REPO_SHA: '6fbce89821d93a5b761581d9ac540455f38e9acb'
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -42,6 +47,19 @@ jobs:
 
       - name: Typecheck
         run: npx tsc --noEmit
+
+      # conformance/js-corpus measures the JS grammar over this corpus; without it the gate
+      # says NOT RUN and fails.
+      - name: Clone the pinned TS corpus
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ts-repo; mkdir -p /tmp/ts-repo
+          git -C /tmp/ts-repo init -q
+          git -C /tmp/ts-repo remote add origin https://github.com/microsoft/TypeScript
+          git -C /tmp/ts-repo config core.sparseCheckout true
+          printf 'tests/cases/\n' > /tmp/ts-repo/.git/info/sparse-checkout
+          git -C /tmp/ts-repo fetch -q --depth 1 --filter=blob:none origin "$TS_REPO_SHA"
+          git -C /tmp/ts-repo checkout -q FETCH_HEAD
 
       # Every correctness GATE through ONE runner — sanity / agnostic / conformance /
       # highlighter / yaml / the generative scope≡role check / the gap-ledger selftest
@@ -99,7 +117,7 @@ jobs:
           git -C /tmp/ts-repo remote add origin https://github.com/microsoft/TypeScript
           git -C /tmp/ts-repo config core.sparseCheckout true
           printf 'tests/cases/\n' > /tmp/ts-repo/.git/info/sparse-checkout
-          git -C /tmp/ts-repo fetch -q --depth 1 --filter=blob:none origin 6fbce89821d93a5b761581d9ac540455f38e9acb
+          git -C /tmp/ts-repo fetch -q --depth 1 --filter=blob:none origin "$TS_REPO_SHA"
           git -C /tmp/ts-repo checkout -q FETCH_HEAD
 
       - name: Engine-parity over the full corpus

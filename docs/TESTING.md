@@ -14,12 +14,18 @@ The suite produces **four kinds of report**, each answering a different question
 
 ## 1. Gates — `npm run check`
 
-The CI-blocking pass/fail checks (no external corpus needed). One runner, one ✓/✗ table, one
+The CI-blocking pass/fail checks. One runner, one ✓/✗ table, one
 exit code — instead of a dozen scripts with a dozen formats. Covers: sanity / agnostic /
-refactor-guard / issue-cases · conformance (js, tsx, jsx, html) · highlighter guards + RedCMD
+refactor-guard / issue-cases · conformance (js, js-corpus, tsx, jsx, html) · highlighter guards + RedCMD
 diagnostics + Monarch + HTML embed/lexer · YAML
 issue-12 + depth-witnesses · the generative **scope≡role** check + the gap-ledger selftest +
 `--check`. `node test/check.ts <substr>` runs a subset (e.g. `… yaml`).
+
+One gate needs an external corpus: `conformance/js-corpus` measures the JS grammar against tsc's
+JS-mode parser over the pinned TypeScript conformance corpus at `/tmp/ts-repo` (CI clones it; the
+step is in the CI workflow). Its result is pinned in the generated record `docs/JS-CONFORMANCE.md`
+(regenerate: `node test/js-conformance-corpus.ts --write`), so any file moving between cells fails
+it until recorded. Without the corpus the gate says NOT RUN and fails.
 
 A gate is binary and authoritative: if `npm run check` is green, every guaranteed property holds.
 
