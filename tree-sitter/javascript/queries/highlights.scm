@@ -12,12 +12,14 @@
 ;; Declaration names (via the `name` field) → @function / @type.
 (expr name: (ident) @type)
 (expr name: (ident) @function)
+(class_heritage name: (ident) @type)
 (decl name: (ident) @function)
 (decl name: (ident) @type)
 
 ;; Declaration names, keyword-anchored (disambiguates shared decl rules).
 (expr "class" (ident) @type)
 (expr "function" (ident) @function)
+(class_heritage "class" (ident) @type)
 (decl "function" (ident) @function)
 (decl "class" (ident) @type)
 

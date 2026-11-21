@@ -332,7 +332,7 @@ async function main(): Promise<void> {
     check(tsMod.shapeCoverage.unsupported.length === 0, 'typescript coverage unsupported=0');
     printCoverage('typescript', tsMod.shapeCoverage);
     const want: Record<string, number> = {
-      led: 120, nudSeq: 28, nudCapped: 16, postfix: 8, postfixTok: 8,
+      led: 124, nudSeq: 28, nudCapped: 16, postfix: 8, postfixTok: 12,
       group: 220, prefix: 44, binary: 156, template: 8,
     };
     const got = tsMod.shapeCoverage.pratt;

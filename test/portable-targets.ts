@@ -348,6 +348,14 @@ const CASES: Case[] = [
       'import let, { yield as static } from "m";', 'import type from "m";', 'import * as from from "m";',
       'import { if as x, default as y } from "m";', 'export { x as if, y as default };', 'export { if } from "m";',
       'export * as if from "m";', 'class C { if() {} static in = 1 }', 'x = { if() {}, in: 1 };',
+      // A class heritage is a LeftHandSideExpression: a class expression, a parenthesised
+      // expression, an optional chain, an element access or a tagged template is a base. A `new`
+      // callee is a MemberExpression, `new MemberExpression Arguments` included. (Inside an
+      // argument list, so no reading as several statements can stand in for these.)
+      'f(class extends class {} {});', 'f(class extends class Q extends P {} {});', 'f(class extends (a) {});',
+      'f(class extends (a ? b : c) {});', 'f(class extends (a, b) {});', 'f(class extends a?.b {});', 'f(class extends a?.b() {});',
+      'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a.b(c).d {});', 'class A extends (B) {}',
+      'f(new new Foo()());', 'f(new new Foo());', 'f(new new Foo().b());', 'f(new new new A()()());',
     ],
     reject: ['function (', 'a +;', 'if x {}', '{ a: }', 'for (;;', 'a ? b ;',
       // ... so no parameter list takes a reserved word as a name, `this` included (a `this`
@@ -379,7 +387,11 @@ const CASES: Case[] = [
       'a + b = c;', 'a++ = 1;', '-a = 1;', '++ -x;', '++x++;', '++ ++x;',
       // … wherever the expression is optional or repeated: a refused operand is not skipped.
       'a = [++ ++y];', '[++-x];', '[++x++];', 'a = [1, ++-x];', 'f(++ ++y);', 'f(a, ++ ++y);', 'new A(++ ++y);',
-      '[x++ ++];', 'f(a, x++ --);', '[-x = 1];', 'f(a + b = 1);', '[-x ** 2];', 'f(a, typeof x ** 2);', 'x = { a: ++ ++y };'],
+      '[x++ ++];', 'f(a, x++ --);', '[-x = 1];', 'f(a + b = 1);', '[-x ** 2];', 'f(a, typeof x ** 2);', 'x = { a: ++ ++y };',
+      // … but not an operator expression, and a class expression base still needs its body.
+      'f(class extends a + b {});', 'f(class extends void a {});', 'f(class extends a = b {});', 'f(class extends typeof a {});',
+      'f(class extends a => b {});', 'f(class extends class {});', 'f(class extends if {});', 'f(class extends class extends {} {});',
+      'f(new new Foo()?.b);'],
   },
   {
     // The real typescript.ts grammar — the second, most complex full language proving the
@@ -387,6 +399,8 @@ const CASES: Case[] = [
     grammar: 'typescript', path: '../typescript.ts',
     accept: [
       ...NO_IN_HEADS.accept,
+      // A class heritage is a LeftHandSideExpression (see the JavaScript cases).
+      'f(class extends (a, b) {});', 'f(class extends a[0] {});', 'f(class extends a`t` {});', 'f(class extends a?.b() {});',
       'const a: number = 1;', 'let s: string;', 'type Alias = { a: number; b?: string };',
       'type U = "a" | "b" | "c";', 'function gen2<T, U extends T>(x: T, y: U): T { return x; }',
       'interface I<T> extends A<T> { m(x: T): T; }', 'const c = x as const;',
@@ -548,6 +562,7 @@ const CASES: Case[] = [
       // A refused operand is not skipped where the expression is optional or repeated.
       'a = [++ ++y];', '[++-x];', '[++x++];', 'a = [1, ++-x];', 'f(++ ++y);', 'f(a, ++ ++y);', 'new A(++ ++y);', 'f<T>(++ ++y);',
       '[x++ ++];', 'f(a, x++ --);', '[-x = 1];', 'f(a + b = 1);', '[-x ** 2];', 'f(a, typeof x ** 2);', 'x = { a: ++ ++y };', 'class C { p = ++ ++y }',
+      'f(class extends a + b {});', 'f(class extends void a {});', 'f(class extends class {});', 'f(class extends if {});',
       'a > > b;', 'a >> = b;', 'a >\n= b;', 'a >>>>= b;',
       // Once a word is the member's name, nothing but the member's own tail may follow it.
       'class C { static static x; }', 'class C { public static<T> x; }', 'class C { public static?!: T; }', 'class C { public static x y; }', 'class C { public static = ; }',

@@ -312,27 +312,53 @@ const Prop = rule($ => {
   ];
 });
 
-const ClassHeritage = rule($ => [
-  Ident,
-  // Non-constructor primaries: parse-clean in tsc/V8 grammar terms (runtime/checker errors).
+// A class heritage (`extends LeftHandSideExpression`) and a `new` callee (a MemberExpression)
+// are ECMAScript productions, so their forms are stated here once and TypeScript's rules are
+// built from them. A rule binds the rules it names when it is defined, so each grammar builds
+// its own rule from these arms with its own `Expr` (and passes the forms its type layer adds).
+//
+// Heritage: `extends` takes a LeftHandSideExpression, not an operator expression. Its forms:
+// a literal or a non-reserved identifier (a literal base parses; rejecting it is a checker's
+// job), a parenthesised expression, a class expression (`classExpression`, which carries the
+// grammar's own class body), and the member, optional-chain, call and tagged-template tails.
+// The identifier is reserved-guarded as the expression NUD is (`extends if {}` has no base).
+// Literals come first so a tie keeps their leaf scope.
+export const classHeritageArms = ($, Expr, classExpression, typeArgs = []) => [
   Number_, String_, 'true', 'false', 'null', 'undefined',
-  [$, '.', Ident],
+  [notReservedExpr, Ident],
+  ['(', Expr, many(',', Expr), ')'],
+  classExpression,
+  [$, '.', alt(Ident, PrivateField)],
+  [$, '?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'], Template)],
+  [$, '[', Expr, ']'],
+  ...typeArgs,
   [$, '(', sep(Expr, ','), ')'],
-]);
+  [$, Template],
+];
 
 // The callee of `new` is a MemberExpression, never a CallExpression (`new a.b()` constructs
 // `a.b`), so it has its own rule: Expr's call LED must not reach it. A template is part of it
 // twice over — `PrimaryExpression : TemplateLiteral` and `MemberExpression : MemberExpression
 // TemplateLiteral` — so in `new tag`x`()` the tagged template is the callee and `( )` are the
-// `new` Arguments.
-const NewTarget = rule($ => [
+// `new` Arguments. A `new` with its Arguments is a MemberExpression too (`MemberExpression :
+// new MemberExpression Arguments`), and one without is a NewExpression, so `new new Foo()()` and
+// `new new Foo` chain: `newArgs` is the inner `new`'s optional Arguments, `taggedTemplate` any
+// further tagged-template form of the grammar.
+export const newTargetArms = ($, Expr, newArgs, taggedTemplate = []) => [
   Ident,
+  ['new', not('<'), $, newArgs],
   Template,
   [$, '.', Ident],
   [$, '[', Expr, ']'],
   [$, Template],
-  ['(', Expr, ')'],
-]);
+  ...taggedTemplate,
+  ['(', Expr, many(',', Expr), ')'],
+];
+
+const ClassHeritage = rule($ => classHeritageArms($, Expr,
+  ['class', opt(...bindingIdentifier), opt('extends', $), '{', many(ClassMember), '}']));
+
+const NewTarget = rule($ => newTargetArms($, Expr, opt('(', sep(Expr, ','), ')')));
 
 const Expr = rule($ => [
   // A standalone identifier expression, but never a reserved word that has no expression
