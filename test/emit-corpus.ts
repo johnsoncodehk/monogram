@@ -14,8 +14,7 @@
 // This is what makes the parity check CORPUS-FREE, so it runs in `npm run check` on every
 // machine and every CI run — the mechanism that forces a gen-parser change to propagate to
 // emit-parser (issue #45 A2/A4). When the optional /tmp/ts-repo corpus is also present the
-// gates additionally sweep it for breadth; absent, that sweep is silently skipped (the same
-// pattern js-conformance.ts uses for its TS-conformance corpus).
+// gates additionally sweep it for breadth; absent, that sweep is skipped.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

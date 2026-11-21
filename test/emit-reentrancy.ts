@@ -65,8 +65,7 @@ function trace(tree: Tree, tok: (i: number) => Token, run: (f: Fns) => void, src
 
 const dir = scratchDir('emit-reentrancy');
 for (const c of CASES) {
-  let grammar: CstGrammar;
-  try { grammar = (await import(c.path)).default; } catch { console.log(`  ${c.name}: (grammar not present — skipped)`); continue; }
+  const grammar: CstGrammar = (await import(c.path)).default;
   const src = emitParser(grammar, jsTarget);
   const file = join(dir, `${c.name}.ts`);
   writeFileSync(file, src);

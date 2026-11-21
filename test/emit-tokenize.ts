@@ -79,8 +79,7 @@ const json = (v: unknown) => JSON.stringify(v);
 const FIELDS = ['type', 'text', 'offset', 'k', 't', 'newlineBefore', 'commentBefore', 'multilineFlowBefore'];
 
 for (const c of CASES) {
-  let grammar: CstGrammar;
-  try { grammar = (await import(c.path)).default; } catch { console.log(`  ${c.name}: (grammar not present — skipped)`); continue; }
+  const grammar: CstGrammar = (await import(c.path)).default;
   const src = emitParser(grammar, jsTarget);
   const file = join(dir, `${c.name}.ts`);
   writeFileSync(file, src);

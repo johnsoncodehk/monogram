@@ -7,18 +7,13 @@
 //   1. A curated set of valid-JS snippets (below). These contain NO type syntax,
 //      so they are the real target: the JS grammar MUST accept all of them.
 //
-//   2. The TS conformance corpus (single-file cases) reparsed under ScriptKind.JS.
-//      This is a big, adversarial body of code. NOTE: TS's .js parser is extremely
-//      lenient — it accepts type annotations, `enum`, `interface`, non-null `!`,
-//      etc. at PARSE time and defers the "not allowed in a .js file" errors to the
-//      type checker. Our grammar instead lacks those productions and rejects them,
-//      so a large share of "we-reject / TS-.js-accepts" is our CORRECT strictness
-//      on TypeScript-only syntax, not a JS gap. The matrix prints both directions
-//      so the two can be told apart; the curated set is the hard acceptance gate.
+//   2. TypeScript-only syntax the JS grammar has no production for: it must reject all of them.
+//
+// The TS conformance corpus reparsed as .js is its own gate, with its pinned record:
+// test/js-conformance-corpus.ts → docs/JS-CONFORMANCE.md.
 import { createParser } from '../src/gen-parser.ts';
-import { readdirSync, readFileSync } from 'fs';
-import { join } from 'path';
 import ts from 'typescript';
+import { isInputError } from './input-error.ts';
 
 const grammar = (await import('../javascript.ts')).default;
 const { parse } = createParser(grammar);
@@ -28,7 +23,8 @@ const jsAccepts = (code: string, file = 't.js') => {
   return ((sf as any).parseDiagnostics as ts.Diagnostic[] | undefined)?.length ? false : true;
 };
 const weAccept = (code: string) => {
-  try { parse(code); return true; } catch { return false; }
+  // a crash is not a rejection: it propagates and fails the gate
+  try { parse(code); return true; } catch (e) { if (isInputError(e)) return false; throw e; }
 };
 
 // ── Corpus 1: curated valid JavaScript (no type syntax) — must all parse ──
@@ -153,42 +149,4 @@ console.log(`  Rejected: ${r_ok}/${tsOnly.length}`);
 if (r_leak.length) {
   console.log('  LENIENTLY ACCEPTED (contextual-keyword over-accept class):');
   for (const c of r_leak) console.log('    - ' + c);
-}
-
-// ── Corpus 3: TS conformance corpus reparsed as .js (bidirectional matrix) ──
-const base = '/tmp/ts-repo/tests/cases/conformance';
-function walk(d: string): string[] {
-  let o: string[] = [];
-  for (const e of readdirSync(d, { withFileTypes: true })) {
-    const f = join(d, e.name);
-    if (e.isDirectory()) o = o.concat(walk(f));
-    else if (e.name.endsWith('.ts') && !e.name.endsWith('.d.ts')) o.push(f);
-  }
-  return o;
-}
-const isMulti = (t: string) => /^\s*\/\/\s*@filename:/im.test(t);
-
-let TP = 0, FN = 0, FP = 0, TN = 0;
-const fns: string[] = [];
-try {
-  for (const f of walk(base)) {
-    const code = readFileSync(f, 'utf8');
-    if (isMulti(code)) continue;
-    const tsA = jsAccepts(code);
-    const weA = weAccept(code);
-    if (tsA && weA) TP++;
-    else if (tsA && !weA) { FN++; fns.push(f.replace(base + '/', '')); }
-    else if (!tsA && weA) FP++;
-    else TN++;
-  }
-  const total = TP + FN + FP + TN;
-  console.log(`\n── Corpus 3: TS conformance corpus as .js (${total} single-file cases) ──`);
-  console.log('                       WE accept      WE reject');
-  console.log(`  TS-.js accept    ${String(TP).padStart(6)} (agree)   ${String(FN).padStart(5)} (we stricter)`);
-  console.log(`  TS-.js reject    ${String(FP).padStart(6)} (over-acc) ${String(TN).padStart(5)} (agree)`);
-  console.log(`\n  Bidirectional agree : ${((TP + TN) / total * 100).toFixed(2)}%  (${TP + TN}/${total})`);
-  console.log(`  (FN = we reject what TS's lenient .js parser accepts — overwhelmingly TS-only`);
-  console.log(`   type syntax our grammar deliberately lacks, not a JavaScript gap.)`);
-} catch (e) {
-  console.log(`\n── Corpus 3 skipped (corpus not found at ${base}) ──`);
 }
