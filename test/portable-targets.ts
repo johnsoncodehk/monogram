@@ -422,6 +422,15 @@ const CASES: Case[] = [
       'type A = { get = 1, set = 2 }', 'type A = { public [e] = 1 }', 'type A = { readonly a: T = x => x, b: U }', "type A = { 's': T = a ? b : c\n}",
       'type A = { a\n= 1 }', 'type A = { public\n= 1 }', 'type A = { #p\n= 1 }', 'type A = { 0?: T = 1, 1n: U = 2 }', 'type A = { a: T = x\n.y }',
       'type A = { [K in T]: U; a: T = 1 }', 'function f(p: { a: T = 1 }): { b?: U = 2 } { return p }', 'type A = B<{ a: () => T = b = c }>;',
+      // An index signature is one form in a class and an object type (tsc's isIndexSignature,
+      // then parseIndexSignatureDeclaration): after any member modifiers, `async` included, its
+      // brackets are a parameter list. A bracket tsc does not read as one is a computed name.
+      'class C { async [k: string]: T }', 'declare class C { async [k: string]: T }', 'class C { static async [k: string]: T }',
+      'class C { async static readonly [k: string]: T, x }', 'class C { @d async [k: string]: T }', 'class C { const [k: T]: U }',
+      'class C { []: T }', 'class C { [a?]: T }', 'class C { [public a]: T }', 'class C { [a: T, b: U]: V }', 'class C { [...k: T[]]: U }',
+      'class C { [a, b] }', 'class C { [a,]: T\nx }', 'declare class C { [k: T, ]: U; [a?] }', 'class C { [public: T]: U }',
+      'class C { [e]: T; [e]() {} [e] = 1; [public]: T }', 'class C { [async (x) => x]: T }', 'type A = { [async (x) => x]: T }',
+      'class C { async\n[k: T]: U }', 'class C { [a = 1]: T }',
     ],
     // Operators that require an assignment target or forbid a unary left operand.
     reject: ['interface {}', 'const x: = 1;', 'enum {}', 'a + ;',
@@ -499,7 +508,14 @@ const CASES: Case[] = [
       'type A = { readonly = 1 }', 'type A = { public get = 1 }', 'interface I { a = 1, b: T }', 'type A = { a; b = 1 }',
       'type A = { m(): T = 1 }', 'type A = { (): T = 1 }', 'type A = { new (): T = 1 }', 'interface I { [k: string]: T = 1 }',
       'type A = { get g(): T = 1 }', 'type A = { get a = 1 }', 'type A = { [K in T]: U = 1 }', 'type A = { a: T = }',
-      'type A = { a: T = 1 b: U }', 'interface I { a: T == 1 }', 'type A = { a: T = 1 = }', 'type A = { a: T = x\n++y }'],
+      'type A = { a: T = 1 b: U }', 'interface I { a: T == 1 }', 'type A = { a: T = 1 = }', 'type A = { a: T = x\n++y }',
+      // A bracket that starts as an index signature is one, in a class as in an object type, so
+      // it is neither a computed name (`[async x => x]`) nor a method, field or accessor name, and
+      // it ends as a type member does. One that does not start so is no parameter list.
+      'class C { [a, b](): T }', 'class C { [a?](): T }', 'class C { [k: T]() {} }', 'class C { async [k: T]() {} }',
+      'class C { [a: T] = 1 }', 'class C { [a, b] = 1 }', 'class C { [k: T]!: U }', 'class C { [k: T]?: U }', 'class C { async [k: T]: U x }',
+      'class C { [async x => x]: T }', 'class C { async [async x => x]() {} }', 'interface I { [async x => x]: T }', 'type A = { [async x => x](): T }',
+      'class C { get [k: T]: U }', 'class C { [{ a }: T]: U }', 'interface I { [{ a }: T]: U }', 'class C { [k: T] {} }', 'class C { [k: T]<U>(): V }'],
   },
 ];
 

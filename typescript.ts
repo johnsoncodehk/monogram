@@ -712,16 +712,14 @@ const TypeMember = rule($ => {
     [accessorMod, MemberName, ...sig, alt(resetCtx(Block), [not('{'), typeMemberEnd()])],
     // named / computed member (MemberName includes `[Expr]`) — branch method | property
     // (bare = implicit any). `get` / `set` before a member name is the accessor keyword (tsc
-    // commits to the accessor), so it is not a name there: `get⏎x: T` rejects. Placed before
-    // the index signature so a bare `[expr]` parses as a computed property (TS: `[p]` is a
-    // computed property, not an indexer; so is `[K in T]`: a member is never a mapped type).
+    // commits to the accessor), so it is not a name there: `get⏎x: T` rejects. A bracket that
+    // starts an index signature is no name (`propertyOrMethodName`); any other is a computed
+    // name (`[p]`, and `[K in T]`: a member is never a mapped type).
     // A property signature may have an initializer (tsc's parsePropertyOrMethodSignature reads
     // one at a `=`; that an object type's property cannot have one is a checker error).
-    [not(notTypeMemberStart), typeMemberMods.run, not(accessorMod), MemberName, opt('?'), alt(sig, [opt(':', Type), opt('=', Expr)]), typeMemberEnd()],
-    // index signature: modifiers [ Param,* ] (: T)?  — TS parses the brackets
-    // as a full parameter list, so `[]`, `[a?]`, `[public a]`, `[a: T, b: U]` all parse
-    // (the extra forms are grammar-errors TS reports post-parse, but the parser accepts).
-    [typeMemberMods.run, '[', sep(typeFnParam(), ','), ']', opt(':', Type), typeMemberEnd()],
+    [not(notTypeMemberStart), typeMemberMods.run, not(accessorMod), ...propertyOrMethodName, opt('?'), alt(sig, [opt(':', Type), opt('=', Expr)]), typeMemberEnd()],
+    // index signature: modifiers, then the one form a class member shares (`indexSignature`).
+    [typeMemberMods.run, ...indexSignature],
   ];
 });
 
@@ -736,6 +734,23 @@ const MemberName = rule($ => [
   BigInt_,
   ['[', Expr, ']'],
 ]);
+
+// An index signature is one form wherever a member may be one: parseTypeMember and
+// parseClassElement both test tsc's isIndexSignature after the member's modifiers, and both
+// parse it with parseIndexSignatureDeclaration. The test reads past the `[`: a `...` or `]`; a
+// modifier word and then an identifier; or an identifier (or a modifier word) and then `:`, `,`
+// or a `?` that `:`, `,` or `]` follows. Such a bracket holds a parameter list (`[]`, `[a?]`,
+// `[public a]`, `[a: T, b: U]`; what an index signature may not hold is reported after parsing)
+// and is nothing else, so a member name is read only where the test fails
+// (`propertyOrMethodName`): `[e]`, `[a = 1]` and `[async (x) => x]` are computed names, and
+// `[async x => x]` and `[{ a }: T]` are no member at all.
+const indexSignatureStart = ['[', alt(
+  '...', ']',
+  [modifierKindWord, notReserved, Ident],
+  [alt(modifierKindWord, [notReserved, Ident]), alt(':', ',', ['?', alt(':', ',', ']')])],
+)];
+const indexSignature = [not(not(indexSignatureStart)), '[', sep(typeFnParam(), ','), ']', opt(':', Type), typeMemberEnd()];
+const propertyOrMethodName = [not(indexSignatureStart), MemberName];
 
 // Branched: parse the modifier list ONCE, then branch on the member kind, so a
 // member's shared `modifiers …` prefix isn't re-parsed per alternative. Inner
@@ -794,10 +809,12 @@ const ClassMember = rule($ => [
       [asyncMod, many(Modifier), '*', MemberName, opt('?'), opt(TypeParams), ...memTail(asyncGenCtx)],   // async generator method
       [asyncMod, many(Modifier), accessorMod, MemberName, opt(TypeParams), '(', opt(sep(awaitCtx(Param), ',')), ')', opt(":", ReturnType), awaitCtx(fnBodyOrAsi())],  // async accessor (semantic error; parses)
       [asyncMod, many(Modifier), 'static', awaitCtx(Block)],                              // `async static { }` (semantic error; parses)
-      [asyncMod, many(Modifier), not(accessorMod), MemberName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],   // async method
+      [asyncMod, many(Modifier), not(accessorMod), ...propertyOrMethodName, opt('?'), opt(TypeParams), ...memTail(awaitCtx)],   // async method
       ['*', MemberName, opt('?'), opt(TypeParams), ...memTail(yieldCtx)],                // generator method
       [accessorMod, MemberName, opt(TypeParams), '(', opt(sep(resetCtx(Param), ',')), ')', opt(":", ReturnType), resetCtx(fnBodyOrAsi())],  // accessor (type params parse; semantic error)
-      ['[', Ident, ':', Type, opt(','), ']', opt(':', Type), typeMemberEnd()],   // index signature: ends as a type member does (tsc's parseIndexSignatureDeclaration)
+      // index signature, after any modifiers (`async` among them, as in tsc): the type member's
+      // one form (`indexSignature`), so a bracket that starts one is no method or field name.
+      [opt(asyncMod, many(Modifier)), ...indexSignature],
       // a bare identifier `constructor` member MUST be a call signature — tsc rejects a
       // `constructor` field/property ("'(' expected"): `constructor;`, `constructor = 1`,
       // `constructor: T`, even modified (`public constructor;`). TypeParams parse; `?`/`!`
@@ -806,13 +823,13 @@ const ClassMember = rule($ => [
       ['constructor', opt(TypeParams), ...memTail(resetCtx)],
       // `get` / `set` before an accessor name IS the accessor keyword (tsc commits to the
       // accessor), so it is not available as a field name there: `get⏎x = 1` rejects.
-      [not('constructor'), not(accessorMod), MemberName, alt(
+      [not('constructor'), not(accessorMod), ...propertyOrMethodName, alt(
         [opt('?'), opt(TypeParams), ...memTail(resetCtx)],                       // method (requires `(`)
         fieldTail,
       )],
       // `async` is a modifier like any other to tsc, so it may also precede a field
       // (`async x;` parses; the checker rejects it).
-      [asyncMod, many(Modifier), not('constructor'), not(accessorMod), MemberName, ...fieldTail],
+      [asyncMod, many(Modifier), not('constructor'), not(accessorMod), ...propertyOrMethodName, ...fieldTail],
     ),
   ],
 ]);
