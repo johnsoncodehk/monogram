@@ -1768,17 +1768,19 @@ impl Doc<CstBuilder> {
 // The `ahead` test's table: whether a token is in tokenSets[k] (see tokenSetBits).
 function tokenSetRuntimeRust(ir: ParserIR, ids: LexIdPlan): string {
   const b = tokenSetBits(ids, ir.tokenSets);
+  const rows: string[] = [];
+  for (let r = 0; r * b.width < b.words.length; r++) rows.push(`[${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}]`);
   return `#[allow(dead_code)]
-const TOKEN_SET_STRIDE: usize = ${b.stride};
-#[allow(dead_code)]
 const TOKEN_SET_KID: usize = ${b.kidBase};
 #[allow(dead_code)]
-static TOKEN_SETS: [u32; ${b.words.length}] = [${b.words.join(', ')}];
+static TOKEN_SETS: [[u32; ${b.width}]; ${rows.length}] = [${rows.join(', ')}];
 #[inline(always)]
 #[allow(dead_code)]
 fn in_token_set(k: usize, t: &Tok) -> bool {
-    let (r, l, c) = (k * TOKEN_SET_STRIDE, t.lid as usize, TOKEN_SET_KID + t.kid as usize);
-    ((TOKEN_SETS[r + (l >> 5)] >> (l & 31)) | (TOKEN_SETS[r + (c >> 5)] >> (c & 31))) & 1 != 0
+    // Rows are exact-size (one per lid, then one per kid) and a token's ids are always in range,
+    // as for the lexer's flag tables; k is a constant at every call site, so is word k >> 5.
+    let (l, c) = unsafe { (TOKEN_SETS.get_unchecked(t.lid as usize), TOKEN_SETS.get_unchecked(TOKEN_SET_KID + t.kid as usize)) };
+    (l[k >> 5] | c[k >> 5]) & (1 << (k & 31)) != 0
 }`;
 }
 
@@ -2179,7 +2181,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     }
     #[inline(always)]
     #[allow(dead_code)]
-    fn ahead(&mut self, k: usize, is: bool) -> bool { self.peek().map_or(false, |t| in_token_set(k, &t)) == is }
+    fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
     /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
     #[inline(always)]
     #[allow(dead_code)]

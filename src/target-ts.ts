@@ -3582,12 +3582,12 @@ function _matchComp(lid: number): boolean {
 // The `ahead` test: whether the next token is in tokenSets[k] (see tokenSetBits), compared with `is`.
 function tokenSetRuntime(ir: ParserIR, ids: LexIdPlan): string {
   const b = tokenSetBits(ids, ir.tokenSets);
-  return `const _SET_STRIDE = ${b.stride};
+  return `const _SET_WIDTH = ${b.width};
 const _SET_KID = ${b.kidBase};
 const _SETS = new Uint32Array([${b.words.join(', ')}]);
 function inSet(k: number, t: Tok): boolean {
-  const r = k * _SET_STRIDE, c = _SET_KID + t.kid;
-  return (((_SETS[r + (t.lid >>> 5)]! >>> (t.lid & 31)) | (_SETS[r + (c >>> 5)]! >>> (c & 31))) & 1) === 1;
+  const w = k >>> 5;
+  return (((_SETS[t.lid * _SET_WIDTH + w]! | _SETS[(_SET_KID + t.kid) * _SET_WIDTH + w]!) >>> (k & 31)) & 1) === 1;
 }
 function ahead(k: number, is: boolean): boolean {
   const t = peek();
