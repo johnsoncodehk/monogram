@@ -1972,7 +1972,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 }
 `).join('');
   const pushLeafW = `func (p *${recv}) pushLeafW(ttId uint16, tokIdx, off, end uint32) {
-\t_ = p.b.Leaf(&p.scratch, ttId, tokIdx, off, end)
+\tif !p.drops[uint8(ttId)] { _ = p.b.Leaf(&p.scratch, ttId, tokIdx, off, end) }
 }`;
   const finishW = `func (p *${recv}) finishW(ruleId uint16, sb, fallbackOff, tokStart int) spanned {
 \th, off, present := p.b.Finish(&p.scratch, sb, ruleId, uint32(fallbackOff), uint32(tokStart), uint32(p.pos), p.toks)
@@ -1990,6 +1990,7 @@ function emitParserMethodsW(recv: string, ir: ParserIR, ids: LexIdPlan, ar: Aren
 \ttail bool  // whether the node the last nud_ call returned closes the access tail
 \tsrc string
 \tb Builder
+\tdrops *[256]bool // the leaf types b never keeps (dropsOf): such a leaf is not offered
 \tscratch []int32${entriesField}`;
   return `type ${recv} struct {
 ${structFields}
@@ -2011,7 +2012,7 @@ func (p *${recv}) matchLitW(lid uint16) bool {
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Lid != lid { return false }
 \tt := &p.toks[i]
-\tp.b.Leaf(&p.scratch, litTt(lid), uint32(i), t.Off, t.End)
+\tif tt := litTt(lid); !p.drops[uint8(tt)] { p.b.Leaf(&p.scratch, tt, uint32(i), t.Off, t.End) }
 \tp.pos = i + 1
 \treturn true
 }
@@ -2020,7 +2021,7 @@ func (p *${recv}) matchTokW(kid uint16) bool {
 \tp.peekEnd = i + 1
 \tif i >= len(p.toks) || p.toks[i].Kid != kid { return false }
 \tt := &p.toks[i]
-\tp.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End)
+\tif !p.drops[uint8(kid)] { p.b.Leaf(&p.scratch, kid, uint32(i), t.Off, t.End) }
 \tp.pos = i + 1
 \treturn true
 }
@@ -2137,7 +2138,7 @@ func (b *CstBuilder) Shift(h int32, byteDelta, tokDelta int) int32 {
 
   const parseWithMetaW = `
 ${entryMetaType}func parseWithMetaW(text string, meta []alignMeta, b Builder) (h int32, entries []EntryMeta, entryHs []int32, ok bool) {
-	p := &parserW{cursor: cursor{toks: toksFromMeta(text, meta)}, src: text, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(text, meta)}, src: text, b: b, drops: dropsOf(b), scratch: nil}
 	fr, pok := p.parse${entry}W()
 	recordToks(b, p.toks)
 	if !pok || p.pos != len(p.toks) {
@@ -2174,7 +2175,7 @@ func tryReuseTopW(b Builder, sh Shifter, oldHs []int32, oldEntries []EntryMeta, 
 	prefixMeta := append([]EntryMeta(nil), oldEntries[:prefixLen]...)
 	suffixMeta := append([]EntryMeta(nil), oldEntries[suffixStart:]...)
 	rel, minRel := tailRel(oldN, suffixMeta)
-	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
 	} else {
@@ -2315,7 +2316,7 @@ func tryReuseSegW(b Builder, sh Shifter, oldRootHs []int32, oldSegs []Seg, oldEn
 		}
 	}
 	rel, minRel := tailRel(oldN, suffixMeta)
-	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, scratch: nil}
+	p := &parserW{cursor: cursor{toks: toksFromMeta(newText, newMeta)}, src: newText, b: b, drops: dropsOf(b), scratch: nil}
 	if prefixLen > 0 {
 		p.pos = prefixMeta[prefixLen-1].TokEnd
 	} else {
@@ -2676,12 +2677,6 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): stri
     })
     .filter((x): x is number => x !== null);
   const punctId = TT_SKIP_PUNCT;
-  const slimDropCases = dropTtIds.length
-    ? dropTtIds.map((id) => `${id}`).join(', ')
-    : '/* none */';
-  const slimDropBody = dropTtIds.length
-    ? `\tswitch ttId {\n\tcase ${slimDropCases}:\n\t\treturn false\n\t}\n`
-    : '';
   // Selection: *CstBuilder parses with the direct engine (parseWithCst); other Builders use the
   // builder engine parserW. Why two engines: measured 2026-11-22 on 7fe75f9 (measure-profile,
   // Go Callgrind instructions per reuse parse, checker.ts / gen-tm.ts / typescript.d.ts /
@@ -2852,9 +2847,22 @@ func (b *SlimBuilder) Checkpoint() (nb, kb int) { return len(b.Nodes), len(b.Kid
 func (b *SlimBuilder) Restore(nb, kb int) { b.Nodes = b.Nodes[:nb]; b.Kids = b.Kids[:kb] }
 func (b *SlimBuilder) Leaf(scratch *[]int32, ttId uint16, tokIdx, off, end uint32) bool {
 \t_ = off; _ = end
-${slimDropBody}\tif ttId == ${punctId} { return false }
+\tif slimDrops[uint8(ttId)] { return false }
 \t*scratch = append(*scratch, encodeLeaf(tokIdx, uint8(ttId)))
 \treturn true
+}
+// slimDrops: the leaf types a SlimBuilder never keeps (punctuation, keywords, operators).
+var slimDrops = [256]bool{${[...new Set([...dropTtIds, punctId])].map((id) => `${id}: true`).join(', ')}}
+func (b *SlimBuilder) dropsLeaves() *[256]bool { return &slimDrops }
+// leafDropper: a built-in builder that declares the leaf types it never keeps, read once per parse
+// (dropsOf), so that the builder engine does not offer them: a Leaf call through the Builder
+// interface is a dynamic call in Go (Rust's builder engine is monomorphised and inlines the test).
+// Any other Builder is offered every leaf.
+type leafDropper interface{ dropsLeaves() *[256]bool }
+var keepAllLeaves [256]bool
+func dropsOf(b Builder) *[256]bool {
+\tif d, ok := b.(leafDropper); ok { return d.dropsLeaves() }
+\treturn &keepAllLeaves
 }
 // Finish is builderFinishDefault with the spans read in place and Node's collapse inline.
 func (b *SlimBuilder) Finish(scratch *[]int32, sb int, ruleId uint16, fallbackOff, tokStart, tokEnd uint32, toks []Tok) (int32, uint32, bool) {
@@ -2928,7 +2936,7 @@ func parseWithW(src string, b Builder) (int32, bool) {
 \tif o, is := b.(WorkspaceOwner); is { w = o.Workspace() } else { w = &Workspace{} }
 \tb.Restore(0, 0)
 \tp := &w.w
-\t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
+\t*p = parserW{cursor: cursor{toks: lexInto(src, toksOf(b), &w.lex)}, src: src, b: b, drops: dropsOf(b), scratch: p.scratch[:0]${reuse ? ', entries: p.entries[:0], entryHs: p.entryHs[:0]' : ''}}
 \tfr, ok := p.parse${ir.entry}W()
 \trecordToks(b, p.toks)
 \tok = ok && p.pos == len(p.toks)
